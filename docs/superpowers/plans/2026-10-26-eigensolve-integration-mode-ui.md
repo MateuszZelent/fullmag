@@ -347,3 +347,10 @@ CI 40612294926 dla 0a02ca809: default-feature runner 1821 PASS oraz osobny, jawn
 ### Integracja mastera — przygotowane rozwiązanie
 
 [Decyzje i dowody](../../audits/2026-10-28-eigensolve-master-merge-resolution.md) obejmują 12 konfliktów, shared-cache/recovery z mastera i zachowanie poprawek FMS/viewportu. Trzy grupy regresji Python: 473/131/192 PASS; to nie suma unikalnych testów. Czternaście cudzych plików pozostaje poza stagingiem i ma identyczne SHA-256. Konieczny commit merge oraz CI dla scalonego drzewa. Docker i aktualny runtime nadal niedostępne.
+
+
+## I5 — zakończona integracja źródeł, 28.10.2026
+
+Master `2c67d8f904b1dede9268bbbc8bf6257cbe33aa4f` scalono w `060cb0c7910d92880f1002c39e3594662ea5775e` i wypchnięto na branch zadania. Wszystkie odrębne workflowy tego SHA przeszły, w tym pełny bootstrap, metody, UI, API i konsumenci dyspersji. Czternaście cudzych plików WIP zachowano. Szczegóły i adresy CI: [decyzje integracji](../../audits/2026-10-28-eigensolve-master-merge-resolution.md).
+
+Pozostaje wdrożenie i końcowy odbiór po przywróceniu Dockera (aktualnie socket i UI niedostępne). Nie oznacza to integracji do mastera ani zamknięcia I0/I1/I6/I7. Wcześniejsze wyniki 15 próbek i wykresy są zachowane; nie ponowiono Solve.

@@ -5,7 +5,7 @@
     "master": "2c67d8f904b1dede9268bbbc8bf6257cbe33aa4f"
   },
   "merge_base": "1afcb531630d6cd5b8caba1f8a4d4593bb29cdb7",
-  "status": "resolved-index-awaiting-merge-commit-and-ci",
+  "status": "merged-and-pushed-source-ci-pass-runtime-unavailable",
   "resolved": [
     {
       "path": "apps/control-room/src/kernel/api/ControlRoomApi.ts",
@@ -170,5 +170,112 @@
     "generated OpenAPI source parity",
     "managed runtime recovery and final post-import strict Gamma",
     "PR review, master promotion and qualified cleanup"
-  ]
+  ],
+  "merge_commit": "060cb0c7910d92880f1002c39e3594662ea5775e",
+  "ci_runs": [
+    {
+      "id": 40614876139,
+      "name": "bootstrap",
+      "head_sha": "060cb0c7910d92880f1002c39e3594662ea5775e",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "html_url": "https://github.com/MateuszZelent/fullmag/actions/runs/40614876139"
+    },
+    {
+      "id": 40614873334,
+      "name": "eigensolve-method-contracts",
+      "head_sha": "060cb0c7910d92880f1002c39e3594662ea5775e",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "html_url": "https://github.com/MateuszZelent/fullmag/actions/runs/40614873334"
+    },
+    {
+      "id": 40614870524,
+      "name": "eigensolve-api-source-contracts",
+      "head_sha": "060cb0c7910d92880f1002c39e3594662ea5775e",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/MateuszZelent/fullmag/actions/runs/40614870524"
+    },
+    {
+      "id": 40614867705,
+      "name": "eigensolve-ui-method-contracts",
+      "head_sha": "060cb0c7910d92880f1002c39e3594662ea5775e",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/MateuszZelent/fullmag/actions/runs/40614867705"
+    },
+    {
+      "id": 40614777208,
+      "name": "contract-guard",
+      "head_sha": "060cb0c7910d92880f1002c39e3594662ea5775e",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/MateuszZelent/fullmag/actions/runs/40614777208"
+    },
+    {
+      "id": 40614777119,
+      "name": "eigensolve-ui-method-contracts",
+      "head_sha": "060cb0c7910d92880f1002c39e3594662ea5775e",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/MateuszZelent/fullmag/actions/runs/40614777119"
+    },
+    {
+      "id": 40614777179,
+      "name": "Public documentation",
+      "head_sha": "060cb0c7910d92880f1002c39e3594662ea5775e",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/MateuszZelent/fullmag/actions/runs/40614777179"
+    },
+    {
+      "id": 40614777138,
+      "name": "dispersion-artifact-consumers",
+      "head_sha": "060cb0c7910d92880f1002c39e3594662ea5775e",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/MateuszZelent/fullmag/actions/runs/40614777138"
+    },
+    {
+      "id": 40614777144,
+      "name": "Shifted KSP true-convergence regression",
+      "head_sha": "060cb0c7910d92880f1002c39e3594662ea5775e",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/MateuszZelent/fullmag/actions/runs/40614777144"
+    },
+    {
+      "id": 40614777177,
+      "name": "eigensolve-method-contracts",
+      "head_sha": "060cb0c7910d92880f1002c39e3594662ea5775e",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/MateuszZelent/fullmag/actions/runs/40614777177"
+    },
+    {
+      "id": 40614777204,
+      "name": "bootstrap",
+      "head_sha": "060cb0c7910d92880f1002c39e3594662ea5775e",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/MateuszZelent/fullmag/actions/runs/40614777204"
+    }
+  ],
+  "ci_cancelled_duplicates": [
+    40614876139,
+    40614873334
+  ],
+  "generated_api_parity": {
+    "artifact_id": 12784119408,
+    "source_commit": "060cb0c7910d92880f1002c39e3594662ea5775e",
+    "files_compared": 4,
+    "result": "byte-identical; OpenAPI compared after excluding instance/build provenance"
+  },
+  "current_runtime_check": {
+    "docker": "unix socket unavailable",
+    "ui": "http://localhost:3217/workspace unreachable",
+    "merged_source_deployed": false,
+    "solve_replayed": false
+  }
 }

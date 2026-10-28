@@ -39,3 +39,14 @@ Pełny CI dla scalonego drzewa jest wymagany po zapisie merge. Dotychczasowe 182
 Docker nadal nie odpowiada. Nie restartowano współdzielonego środowiska ani nie powtarzano Solve. Zapisane FMS i signed15 pozostają dowodami wcześniejszego runtime. Końcowy strict Gamma, działające UI, naukowa zbieżność/COMSOL oraz PR/master/cleanup pozostają otwarte. Dane techniczne i grupę trzeba odtworzyć zarządzanym launcherem po przywróceniu Dockera, z zachowaniem nowych granic shared-cache.
 
 [Dowód JSON](2026-10-28-eigensolve-master-merge-resolution.evidence.json).
+
+## Wynik integracji i CI
+
+Merge `060cb0c7910d92880f1002c39e3594662ea5775e` zapisano i wypchnięto na branch zadania. Master nie był modyfikowany. Wszystkie osiem odrębnych workflowów uruchomionych dla tego SHA zakończyło się sukcesem; dodatkowy ręczny przebieg UI również przeszedł. Dwa zbędne ręczne duplikaty anulowano po potwierdzeniu odpowiadających im przebiegów automatycznych — nie były to błędy testów.
+
+- [Bootstrap](https://github.com/MateuszZelent/fullmag/actions/runs/40614777204): PASS, w tym Rust, frontend, kontrakty Python/Windows i browser fixture. Frontend: 9018 testów PASS, 13 pominiętych; osobny zestaw 3 PASS. Opcjonalne niewykonane zadania naukowe nie stanowią kwalifikacji.
+- [UI eigensolve](https://github.com/MateuszZelent/fullmag/actions/runs/40614867705): PASS, 1257 testów w 53 plikach, typowanie, architektura i React Doctor.
+- [Metody](https://github.com/MateuszZelent/fullmag/actions/runs/40614777177), [API](https://github.com/MateuszZelent/fullmag/actions/runs/40614870524), konsumenci dyspersji, shifted KSP, contract-guard i public documentation: PASS.
+- Artefakt generowania API `12784119408` potwierdza SHA merge. Cztery pliki są zgodne z zapisanym kontraktem; dla OpenAPI wyłączono jedynie zmienne provenance instancji/builda.
+
+Ponowny odczyt potwierdza niedostępny socket Docker i brak odpowiedzi UI na porcie 3217. Przebudowana przeglądarka i wcześniejszy rzeczywisty odbiór signed15 pozostają zachowane, lecz scalone źródło nie zostało jeszcze wdrożone. Końcowy strict po imporcie i odzyskanie runtime pozostają otwarte. Nie wykonano restartu platformy ani ponownego Solve.
