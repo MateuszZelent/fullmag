@@ -61,3 +61,12 @@ jobs:
         env:
           RUST_MIN_STACK: 16777216
         run: cargo test -p fullmag-runner --lib --no-fail-fast
+
+      - name: Verify persisted checkpoint with the configured Python inspector
+        env:
+          RUST_MIN_STACK: 16777216
+          FULLMAG_CHECKPOINT_INSPECTOR_PYTHON: python3
+        run: |
+          set -euo pipefail
+          cargo test -p fullmag-runner --lib fem::single_k_checkpoint::tests::checkpoint_inspector_accepts_actual_persisted_manifest -- --exact --ignored --nocapture | tee "$RUNNER_TEMP/eigen-checkpoint-inspector.log"
+          grep -F "test result: ok. 1 passed;" "$RUNNER_TEMP/eigen-checkpoint-inspector.log"

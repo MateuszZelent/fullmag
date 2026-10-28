@@ -25,13 +25,13 @@ Nie usuwamy niezintegrowanych worktree, wyników, cache ani aktywnych zasobów. 
 | Etap | Stan | Kryterium odbioru |
 |---|---|---|
 | I0: audyt, tożsamość i kopia WIP | Częściowo wykonany | Audyt przeczytany, baza sprawdzona, 40 plików zabezpieczone; pozostałe stare linie zachowane, ich semantyczne review nadal otwarte |
-| I1: mapa selektywnej integracji | W toku; częściowe review historycznego fixa exact Gamma f0986ede, adaptacja 148075e43 | Każdy istotny fix ma decyzję: przenieść / obecny odpowiednik / zastąpiony / otwarty; klasyfikacja po ścieżce nie wystarcza |
+| I1: mapa selektywnej integracji | W toku; review trzech krytycznych WIP rekonstrukcji potwierdza identyczne obecne odpowiedniki (28.10); pozostałe historyczne fragmenty otwarte | Każdy istotny fix ma decyzję: przenieść / obecny odpowiednik / zastąpiony / otwarty; klasyfikacja po ścieżce nie wystarcza |
 | I2: podpisane osie i tożsamość punktu | Kod wypchnięty; CI UI i browser fixture PASS | Wybór osi kx/ky/kz/path, SI, brak wymyślania znaku, stabilna próbka/mod po zmianie osi; aktualne typecheck/lint/CI |
-| I3: właściciel pola i akcja punkt → mod | Owner-bound JSON/meta/binary i pięć rzeczywistych przejść punkt → mod (próbki 0/3/7/11/14) PASS; FMS runtime otwarte | Run/stage/sample/mode/equilibrium oraz generacja artefaktu spójne; odrzucenie brakujących/sprzecznych powiązań |
+| I3: właściciel pola i akcja punkt → mod | Owner-bound JSON/meta/binary i pięć rzeczywistych przejść punkt → mod (próbki 0/3/7/11/14) PASS; import FMS cold oraz visualization_only PASS, końcowy strict i bieżący runtime otwarte | Run/stage/sample/mode/equilibrium oraz generacja artefaktu spójne; odrzucenie brakujących/sprzecznych powiązań |
 | I4: rzeczywisty mod w UI | Gamma nearest i ±10: rzeczywiste pola, Real/Imag/Abs/Phase, WebGL2, animacja i zrzut samego magnetyka PASS; pełny sweep pozostaje w I7 | Import wyniku/FMS lub przypięta mała symulacja; widoczny mod, real/imag/abs/phase, faza i animacja; WebGL bez utraty kontekstu i niezerowy buffer |
 | I5: review, PR, master i cleanup | Otwarte | Wymagane CI/review, merge PR, lokalny fast-forward bez naruszania WIP; cleanup tylko potwierdzonego, czystego i nieużywanego worktree |
 | I6: pozostała integracja solvera | Otwarte | Projekcja zespolona/transport bazy/periodyczne węzły, guards, artefakty, worker identity/journals, tracking; każda zmiana osobno zweryfikowana |
-| I7: kwalifikacja naukowa | 15/15 z Gamma window opublikowane w aktualnym API; kompletność, zbieżność, serial/adaptive i COMSOL nadal NOT VERIFIED | Gamma + signed sweep, residuale, kompletność okna, serial/adaptive, zbieżność i COMSOL A1 ≤0,5% |
+| I7: kwalifikacja naukowa | 15/15 z Gamma window zachowane w FMS i potwierdzone po imporcie; kompletność, zbieżność, serial/adaptive i COMSOL nadal NOT VERIFIED | Gamma + signed sweep, residuale, kompletność okna, serial/adaptive, zbieżność i COMSOL A1 ≤0,5% |
 
 Nie podajemy zbiorczego procentu: liczba commitów poza masterem nie mierzy ukończenia funkcji. S00–S12 oraz U1–U7 nie są zamknięte przez ten checkpoint.
 
@@ -331,3 +331,9 @@ Nie zamyka to I0/I1/I5/I6 ani naukowych bramek I7 (kompletność widma, zbieżno
 Pełne wyniki ponowiono w `run-live-93df870d6af7a8e9d70a3742a0de6e7860b5a072c98b7359c3463c18b49113de` na backendzie ga63; wszystkie 15 częstotliwości jest identycznych z poprzednim wykonaniem. Obie referencje są w nowym UI. Przeszły workbench (15 punktów, pięć pól, osie i okna) oraz strict Gamma z reprezentacjami i animacją. Zero błędów HTTP/JS w odbiorze; wdrożony ograniczony ETag zamyka poprzedni błąd katalogu. Zapisano rzeczywisty solved FMS z referencjami.
 
 Dowód: `docs/audits/2026-10-28-eigensolve-modal-runtime-results.md` / `.evidence.json`. Wykres i mod są dostępne w aktualnym UI. FMS export nie oznacza round trip: rzeczywisty import ujawnił limity 10 MiB proxy oraz 128 MiB JSON, a archiwum referencji wymaga poprawnego rozdzielenia revision dokumentu i execution input. Naprawy L1–L4: `2026-10-28-eigensolve-large-fms-transport.md`. To otwarta część I3/I6; nie zamyka I0/I1/I5/I6/I7.
+
+## I1 — review zachowanego WIP, 28.10.2026
+
+[Decyzja integracyjna](../../audits/2026-10-28-eigensolve-reconstruction-integration-review.md) porównuje trzy funkcje rekonstrukcji, ekspansji węzłów i transportu baz z zahashowaną kopią WIP. Obecne ciała funkcji są identyczne z zachowanymi; konsumenci zachowują rozdzielenie scalar reference / Full2x2 reference / native. Nie skopiowano ponownie starych plików. Pełny runner CI 40611719529 dla e805d0774: SUCCESS, 1821 passed / 0 failed / 1 ignored. Sprawdzono log: wszystkie dziewięć nazwanych regresji rekonstrukcji, guardów i publikacji wykonane z wynikiem ok. Nie jest to odbiór natywnego runtime/GPU.
+
+Aktualny runtime jest niedostępny po utracie demona Docker. Potwierdzone pozostają wcześniejsze cold import, visualization_only, identyczność 15 wartości z Pythonem i pięć modów w workbench; końcowy strict po naprawie compute_fields pozostaje otwarty. Nie utożsamiać wcześniejszego PASS I4 z bieżącą dostępnością UI ani z nowym strict po imporcie. Źródło szczegółów: audyt modal-ui-file-restore z 28.10.

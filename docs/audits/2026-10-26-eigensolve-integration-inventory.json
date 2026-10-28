@@ -6282,5 +6282,21 @@
       ],
       "disposition": "pending-semantic-review"
     }
+  ],
+  "wip_reviews": [
+    {
+      "id": "reference-reconstruction-periodic-frame",
+      "report": "docs/audits/2026-10-28-eigensolve-reconstruction-integration-review.md",
+      "evidence": "docs/audits/2026-10-28-eigensolve-reconstruction-integration-review.evidence.json",
+      "disposition": "present-current-equivalent-source-review",
+      "reviewed_head": "e805d0774640dfa2aaa193790e2f4cabd1b26b16",
+      "preserved_source_head": "9063e52cbdeb5d805bd23da7703ea7c582548fc8",
+      "symbols": [
+        "project_complex_mode_to_tangent_basis",
+        "expand_reference_mode_to_periodic_nodes",
+        "validate_materialized_tangent_frame_transport"
+      ],
+      "remaining": "compiled current gate pending; not a disposition of all 40 WIP files or 388 commits"
+    }
   ]
 }
