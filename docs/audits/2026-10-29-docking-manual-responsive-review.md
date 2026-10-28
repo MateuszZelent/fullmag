@@ -34,3 +34,17 @@ nadal zachowują własne akcje. Zmiana nie przenosi rodziców modułów w React.
 
 Status: implementacja gotowa; weryfikacja w toku. Dowód layoutu na telefonie
 nie oznacza, że kilka równoległych paneli ma tam ergonomię dużego monitora.
+
+## Korekty wykryte podczas wykonywania próby
+
+Pierwsza próba nowej obsługi nagłówka wykryła przechwytywanie pointerdown
+z elementów menu renderowanych w portalu: zdarzenie bąbelkowało w drzewie
+React, mimo że menu nie jest potomkiem nagłówka w DOM. Potwierdzone w
+[oficjalnej dokumentacji React createPortal](https://react.dev/reference/react-dom/createPortal)
+przez Context7. Nagłówek sprawdza teraz `currentTarget.contains(target)`;
+nie tłumi cudzych zdarzeń i nie zamienia wyboru menu w ruch panelu.
+Browser probe sprawdza rzeczywiste kliknięcie menu i zmianę trybu.
+
+Pomiar stylów wskazał też, że ogólny wariant przycisku icon nadpisywał minimum
+uchwytu. Selektor uchwytu otrzymał właściwą specyficzność bez `!important`.
+Końcowy probe wymaga fizycznych wymiarów minimum 32×32 px.

@@ -229,7 +229,8 @@ export function PanelFrame({ id, title, visible, children, dockHandle, placement
       tabIndex: -1,
       onPointerDown: event => {
         const target = event.target as Element;
-        if (target.closest("button, a, input, select, textarea, [role=tab], [role=button], [role=slider], [contenteditable], [data-no-panel-drag]")) return;
+        // Menu portals bubble React events through the header despite living outside it.
+        if (!event.currentTarget.contains(target) || target.closest("button, a, input, select, textarea, [role=tab], [role=button], [role=slider], [contenteditable], [data-no-panel-drag]")) return;
         begin(event, "move");
       },
       onPointerMove: move, onPointerUp: end,

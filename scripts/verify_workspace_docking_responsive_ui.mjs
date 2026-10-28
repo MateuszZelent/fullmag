@@ -9,7 +9,7 @@ try{
 await p.goto('http://localhost:3217/workspace',{waitUntil:'domcontentloaded'});
 const panel=p.locator('[data-panel-frame="panel-right"]');await panel.waitFor();console.log('Inspector ready');
 await panel.getByRole('button',{name:'Inspector panel menu',exact:true}).click();await p.getByRole('menuitem',{name:'Dock to right of workspace',exact:true}).click();await p.waitForTimeout(500);
-e.beforeReload=await panel.getAttribute('data-panel-mode');await p.reload({waitUntil:'domcontentloaded'});await panel.waitFor();await p.waitForTimeout(700);e.afterReload=await panel.getAttribute('data-panel-mode');
+await p.waitForFunction(()=>document.querySelector('[data-panel-frame="panel-right"]')?.getAttribute('data-panel-mode')==='docked');e.beforeReload=await panel.getAttribute('data-panel-mode');await p.reload({waitUntil:'domcontentloaded'});await panel.waitFor();await p.waitForTimeout(700);e.afterReload=await panel.getAttribute('data-panel-mode');
 await p.screenshot({path:out+'/compact-reload.png'});
 for(const width of [1600,1180,895,640,390]){console.log('width',width);await p.setViewportSize({width,height:1000});await p.waitForTimeout(300);e.widths.push(await p.evaluate(()=>({width:innerWidth,scroll:document.documentElement.scrollWidth,panels:[...document.querySelectorAll('[data-workspace-pane]')].map(x=>{const f=x.querySelector('[data-panel-frame]'),g=f?.querySelector('.fm-panel-frame__move'),r=g?.getBoundingClientRect();return {id:x.getAttribute('data-workspace-pane'),mode:f?.getAttribute('data-panel-mode'),grip:r?{x:r.x,y:r.y,w:r.width,h:r.height}:null};})})));await p.screenshot({path:out+`/width-${width}.png`});}
 await p.setViewportSize({width:1600,height:1100});await p.waitForTimeout(400);
@@ -24,7 +24,7 @@ await p.setViewportSize({width:895,height:1000});
 await p.getByRole('button',{name:'Arrange modes left and spectrum right',exact:true}).click();await p.waitForTimeout(400);
 e.emptyPreset=await p.locator('.fm-viewport-tabs__surface').boundingBox();
 await p.screenshot({path:out+'/narrow-preset.png'});
-e.pass=e.beforeReload==='docked'&&e.afterReload==='docked'&&e.titleClick==='docked'&&e.titleDrag==='floating'&&e.cancelMode==='docked'&&e.titleDrop==='docked'&&e.emptyPreset.height>100&&!e.errors.length&&!e.blocked.length&&e.widths.every(x=>x.width===x.scroll);
+e.pass=e.beforeReload==='docked'&&e.afterReload==='docked'&&e.titleClick==='docked'&&e.titleDrag==='floating'&&e.cancelMode==='docked'&&e.titleDrop==='docked'&&e.emptyPreset.height>100&&!e.errors.length&&!e.blocked.length&&e.widths.every(x=>x.width===x.scroll&&x.panels.every(y=>!y.grip||y.grip.w>=32&&y.grip.h>=32));
 if(!e.pass)throw Error('Responsive docking assertion failed');
-}catch(err){e.failure=String(err);}
+}catch(err){e.failure=String(err);await p.screenshot({path:out+'/failure.png'}).catch(()=>{});}
 await writeFile(out+'/probe.json',JSON.stringify(e,null,2));console.log(JSON.stringify(e));await b.close();if(e.failure||!e.pass)process.exitCode=1;
