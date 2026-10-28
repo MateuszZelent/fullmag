@@ -13004,6 +13004,11 @@
         ],
         "type": "string"
       },
+      "FmsFileUpload": {
+        "description": "Owned binary upload. OpenAPI describes the bytes, not a JSON number array.",
+        "format": "binary",
+        "type": "string"
+      },
       "FrameEntry": {
         "description": "One saved frame of a results folder (an entry of `frames.json`).",
         "properties": {
@@ -47131,6 +47136,50 @@
         ]
       }
     },
+    "/v2/persistence/imports/file-inspections": {
+      "post": {
+        "operationId": "persistence_post_persistence_imports_file_inspections",
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "$ref": "#/components/schemas/FmsFileUpload"
+              }
+            }
+          },
+          "description": "Original .fms ZIP bytes; nonempty, at most 512 MiB",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionImportInspectResponse"
+                }
+              }
+            },
+            "description": "Project archive inspection"
+          },
+          "400": {
+            "description": "Invalid archive"
+          },
+          "408": {
+            "description": "Upload timed out"
+          },
+          "413": {
+            "description": "Archive exceeds the file upload limit"
+          },
+          "415": {
+            "description": "Unsupported upload content type or encoding"
+          }
+        },
+        "summary": "Upload the original ZIP bytes; no base64 expansion or JSON body buffer.",
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
     "/v2/persistence/imports/inspections": {
       "post": {
         "operationId": "persistence_post_persistence_imports_inspections",
@@ -67102,6 +67151,66 @@
           },
           "404": {
             "description": "No active workspace or artifact not found"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/sessions/current/persistence/file-imports": {
+      "post": {
+        "operationId": "persistence_post_sessions_current_persistence_file_imports",
+        "parameters": [
+          {
+            "description": "Explicit archive restore policy",
+            "in": "query",
+            "name": "restore_mode",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SessionRestoreMode"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "$ref": "#/components/schemas/FmsFileUpload"
+              }
+            }
+          },
+          "description": "Original .fms ZIP bytes; nonempty, at most 512 MiB",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionImportCommitResponse"
+                }
+              }
+            },
+            "description": "Session import committed"
+          },
+          "400": {
+            "description": "Invalid archive or restore policy"
+          },
+          "408": {
+            "description": "Upload timed out"
+          },
+          "409": {
+            "description": "Current session changed or restore is unsupported"
+          },
+          "413": {
+            "description": "Archive exceeds the file upload limit"
+          },
+          "415": {
+            "description": "Unsupported upload content type or encoding"
           }
         },
         "tags": [

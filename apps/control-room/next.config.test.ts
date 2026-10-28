@@ -22,6 +22,11 @@ import nextConfig, {
 } from "./next.config";
 
 describe("control-room Next dev proxy config", () => {
+  it("preserves bounded full archive uploads through the API proxy", () => {
+    expect(nextConfig.experimental?.proxyClientMaxBodySize).toBe(512 * 1024 * 1024);
+    expect(nextConfig.experimental?.proxyTimeout).toBe(360_000);
+  });
+
   it("redirects the bootstrap root before lazily compiling the workspace", async () => {
     await expect(nextConfig.redirects?.()).resolves.toContainEqual({
       source: "/",

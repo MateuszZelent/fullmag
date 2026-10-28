@@ -2921,6 +2921,62 @@ describe("study runtime command contributions", () => {
     expect(resources.getRevision(PERSISTENCE_IMPORTS_PATH)).toBeNull();
   });
 
+  it("imports a selected File without base64 and keeps the requested restore policy", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const layout = new LayoutController(bus);
+    const resources = new ResourceInvalidationController(bus);
+    const file = new Blob(["selected archive"]);
+    const commit = vi.fn();
+    const commitFile = vi.fn(async () => ({ session_id: "session-file", restore_class: "visualization_only", warnings: [] }));
+    const result = await registry.execute("study.import-state", {
+      api: { persistence: { imports: { commit, commitFile } }, sessions: { current: { status: async () => ({
+        session: { session_id: "session-file", session_epoch: "session-file@2", request_scope_epoch: "api:2" },
+      }) } } } as never,
+      input: { fmsFile: file, restoreMode: "visualization_only" }, layout, resources,
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1", source: "test",
+    });
+    expect(result.status).toBe("completed");
+    expect(commit).not.toHaveBeenCalled();
+    expect(commitFile).toHaveBeenCalledWith(file, "visualization_only", {
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
+    });
+    expect(resources.getRevision(SESSION_STATUS_RESOURCE_KEY)).toBe("session-file");
+  });
+
+  it("inspects a selected result archive before choosing visualization import", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const file = new Blob(["result archive"]);
+    const inspectFile = vi.fn(async () => ({ inspection: { restore_class: "initial_condition_import" } }));
+    const commitFile = vi.fn(async () => ({ session_id: "session-file", warnings: [] }));
+    const result = await registry.execute("study.import-state", {
+      api: { persistence: { imports: { inspectFile, commitFile } }, sessions: { current: { status: async () => ({
+        session: { session_id: "session-file", session_epoch: "session-file@2", request_scope_epoch: "api:2" },
+      }) } } } as never,
+      input: { fmsFile: file }, source: "test",
+    });
+    expect(result.status).toBe("completed");
+    expect(inspectFile).toHaveBeenCalledWith(file, undefined);
+    expect(commitFile).toHaveBeenCalledWith(file, "visualization_only", undefined);
+  });
+
+  it("cancels file import when the session changes during inspection", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    let current = true;
+    const commitFile = vi.fn();
+    const inspectFile = vi.fn(async () => {
+      current = false;
+      return { inspection: { restore_class: "initial_condition_import" } };
+    });
+    const result = await registry.execute("study.import-state", {
+      api: { persistence: { imports: { inspectFile, commitFile } } } as never,
+      input: { fmsFile: new Blob(["result archive"]) },
+      isCurrentSessionScope: () => current, source: "test",
+    });
+    expect(result.status).toBe("cancelled");
+    expect(commitFile).not.toHaveBeenCalled();
+  });
+
   it("imports state through the persistence facade and invalidates restored session resources", async () => {
     const registry = registryWithStudyRuntimeCommands();
     const bus = new EventBus<KernelEventMap>();

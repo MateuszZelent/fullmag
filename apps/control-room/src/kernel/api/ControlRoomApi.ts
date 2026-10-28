@@ -1,3 +1,4 @@
+import { fmsFileSizeError, MAX_FMS_FILE_BYTES } from "@/shared/domain/persistence/fmsFileTransport";
 import { artifactFieldResponseIdentityError } from "./artifactFieldResponseIdentity";
 import { objectMeshPolicyWireRequest } from "./objectMeshPolicyWire";
 import { API_INSTANCE_HEADER, isApiInstanceId, resolveApiInstancePin } from "./apiInstancePin";
@@ -198,6 +199,8 @@ import {
   PERSISTENCE_FIELD_STATE_IMPORTS_PATH,
   PERSISTENCE_IMPORT_INSPECTIONS_PATH,
   PERSISTENCE_IMPORTS_PATH,
+  PERSISTENCE_FILE_IMPORTS_PATH,
+  PERSISTENCE_FILE_IMPORT_INSPECTIONS_PATH,
   PERSISTENCE_PROJECT_OPEN_PATH,
   PERSISTENCE_PROJECT_AUTHORING_PATH,
   PERSISTENCE_PROJECT_FROM_SCRIPT_PATH,
@@ -3181,6 +3184,10 @@ export class ControlRoomApi {
         ),
     },
     imports: {
+      inspectFile: (file: Blob, options?: RequestOptions) =>
+        this.postFile<SessionImportInspectResponse>(PERSISTENCE_FILE_IMPORT_INSPECTIONS_PATH, file, options),
+      commitFile: (file: Blob, restoreMode: SessionImportCommitRequest["restore_mode"], options?: RequestOptions) =>
+        this.postFile<SessionImportCommitResponse>(PERSISTENCE_FILE_IMPORTS_PATH, file, options, restoreMode),
       commit: (request: SessionImportCommitRequest, options?: RequestOptions) =>
         this.postJson<SessionImportCommitResponse, SessionImportCommitRequest>(
           PERSISTENCE_IMPORTS_PATH,
@@ -3881,6 +3888,35 @@ export class ControlRoomApi {
       await this.materializeFieldsForQuantity(quantityId, options);
       return this.retryFieldMetaUntilReady(quantityId, path, params, options);
     }
+  }
+
+  private async postFile<TResponse>(
+    path: OpenApiV2Path,
+    file: Blob,
+    options: RequestOptions = {},
+    restoreMode?: SessionImportCommitRequest["restore_mode"],
+  ): Promise<TResponse> {
+    const sizeError = fmsFileSizeError(file.size);
+    if (sizeError) {
+      throw new ControlRoomApiError(sizeError, file.size > MAX_FMS_FILE_BYTES ? 413 : 400,
+        null, file.size > MAX_FMS_FILE_BYTES ? "fms_archive_too_large" : "invalid_fms_file");
+    }
+    const query = restoreMode === undefined ? "" : `?restore_mode=${encodeURIComponent(restoreMode)}`;
+    const url = `${this.baseUrl}${path}${query}`;
+    // Keep the Blob intact. OpenAPI's generic Request normalization buffers
+    // bodies for JSON diagnostics; the shared fetch boundary below already
+    // provides instance/scope headers, diagnostics, cancellation and no POST retries.
+    const response = await this.executeFetchRequest(url, "POST", {
+      body: file,
+      headers: { ...sessionScopeHeaders(options), "content-type": "application/octet-stream" },
+      signal: options.signal,
+    }, new Set(), false);
+    this.requireApiInstanceCurrent();
+    const text = await response.text();
+    let payload: unknown;
+    try { payload = JSON.parse(text); } catch { payload = text; }
+    return readOpenApiResult<TResponse>({ response,
+      ...(response.ok ? { data: payload } : { error: payload }) });
   }
 
   private async postJson<TResponse, TBody>(

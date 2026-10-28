@@ -30,6 +30,7 @@ import {
   SIMULATION_RUN_CURRENT_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
 } from "@/kernel/api/apiPaths";
+import { defaultFmsRestoreMode, type FmsRestoreMode } from "@/shared/domain/persistence/fmsFileTransport";
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import type {
   CheckpointEntry,
@@ -165,7 +166,7 @@ interface StudyInspectorPanelState {
   importDialogOpen: boolean;
   importError: string | null;
   importFileName: string | null;
-  importFmsBase64: string | null;
+  importFmsFile: File | null;
   importInspection: SessionImportInspectResponse["inspection"] | null;
   importInspecting: boolean;
   importRestoreMode: string;
@@ -219,7 +220,8 @@ type StudyInspectorPanelAction =
   | { type: "prepareImportFile"; fileName: string | null }
   | {
       type: "importInspectSuccess";
-      fmsBase64: string;
+      restoreMode: FmsRestoreMode;
+      fmsFile: File;
       inspection: SessionImportInspectResponse["inspection"];
     }
   | { type: "importInspectFailure"; message: string };
@@ -237,7 +239,7 @@ const STUDY_INSPECTOR_INITIAL_STATE: StudyInspectorPanelState = {
   importDialogOpen: false,
   importError: null,
   importFileName: null,
-  importFmsBase64: null,
+  importFmsFile: null,
   importInspection: null,
   importInspecting: false,
   importRestoreMode: "resume",
@@ -412,7 +414,7 @@ function studyInspectorPanelReducer(
         ...state,
         importError: null,
         importFileName: action.fileName,
-        importFmsBase64: null,
+        importFmsFile: null,
         importInspection: null,
         importInspecting: action.fileName !== null,
       };
@@ -420,10 +422,10 @@ function studyInspectorPanelReducer(
       return {
         ...state,
         importError: null,
-        importFmsBase64: action.fmsBase64,
+        importFmsFile: action.fmsFile,
         importInspection: action.inspection,
         importInspecting: false,
-        importRestoreMode: action.inspection.restore_class ?? "resume",
+        importRestoreMode: action.restoreMode,
       };
     case "importInspectFailure":
       return {
@@ -700,14 +702,20 @@ export function useStudyInspectorPanelController(
     STUDY_INSPECTOR_INITIAL_STATE,
   );
   const importInspectionGeneration = useRef(0);
+  const importInspectionAbort = useRef<AbortController | null>(null);
   const importScopeRef = useRef(sessionScopeKey);
   useEffect(() => {
     if (importScopeRef.current === sessionScopeKey) return;
     importScopeRef.current = sessionScopeKey;
+    importInspectionAbort.current?.abort();
     importInspectionGeneration.current += 1;
     dispatch({ type: "prepareImportFile", fileName: null });
     dispatch({ type: "setImportDialogOpen", open: false });
   }, [sessionScopeKey]);
+  useEffect(() => () => {
+    importInspectionGeneration.current += 1;
+    importInspectionAbort.current?.abort();
+  }, []);
   const runtimeStatus = useSessionStatusSelector(
     selectStudyInspectorRuntimeStatus,
     { isEqual: studyInspectorRuntimeStatusEquals },
@@ -970,34 +978,38 @@ export function useStudyInspectorPanelController(
     void kernel.commands.execute(commandId, commandContext, input);
   };
   const inspectImportFile = async (file: File | null) => {
+    importInspectionAbort.current?.abort();
+    const controller = new AbortController();
+    importInspectionAbort.current = controller;
     const generation = ++importInspectionGeneration.current;
     const scopeAtSelection = sessionScopeKey;
     dispatch({
       type: "prepareImportFile",
       fileName: file?.name ?? null,
     });
-    if (!file) return;
+    if (!file) {
+      if (importInspectionAbort.current === controller) importInspectionAbort.current = null;
+      return;
+    }
 
     try {
-      const fmsBase64 = await readFileAsBase64(file);
       if (
         generation !== importInspectionGeneration.current ||
         scopeAtSelection !== importScopeRef.current
       ) return;
-      const inspection = await kernel.api.persistence.imports.inspect({
-        fms_base64: fmsBase64,
-      });
+      const inspection = await kernel.api.persistence.imports.inspectFile(file, { signal: controller.signal });
       if (
         generation !== importInspectionGeneration.current ||
         scopeAtSelection !== importScopeRef.current
       ) return;
       dispatch({
         type: "importInspectSuccess",
-        fmsBase64,
+        restoreMode: defaultFmsRestoreMode(inspection.inspection.restore_class),
+        fmsFile: file,
         inspection: inspection.inspection,
       });
     } catch (error) {
-      if (
+      if (controller.signal.aborted ||
         generation !== importInspectionGeneration.current ||
         scopeAtSelection !== importScopeRef.current
       ) return;
@@ -1006,7 +1018,17 @@ export function useStudyInspectorPanelController(
         message:
           error instanceof Error ? error.message : "Failed to inspect .fms file.",
       });
+    } finally {
+      if (importInspectionAbort.current === controller) importInspectionAbort.current = null;
     }
+  };
+  const setImportDialogOpen = (open: boolean) => {
+    if (!open && importInspectionAbort.current) {
+      importInspectionGeneration.current += 1;
+      importInspectionAbort.current.abort();
+      dispatch({ type: "prepareImportFile", fileName: null });
+    }
+    dispatch({ type: "setImportDialogOpen", open });
   };
   const commandEnabled = (commandId: string) =>
     kernel.commands.isEnabled(commandId, commandContext);
@@ -1420,6 +1442,7 @@ export function useStudyInspectorPanelController(
     energyCurrent,
     energyHistory,
     inspectImportFile,
+    setImportDialogOpen,
     latestCheckpoint,
     k0ModalReadinessFor,
     model,
@@ -1454,6 +1477,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
     energyCurrent,
     energyHistory,
     inspectImportFile,
+    setImportDialogOpen,
     latestCheckpoint,
     k0ModalReadinessFor,
     model,
@@ -1737,19 +1761,17 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
         open={state.importDialogOpen}
         restoreMode={state.importRestoreMode}
         onConfirm={() => {
-          if (!state.importFmsBase64) return;
+          if (!state.importFmsFile) return;
           dispatch({ type: "setImportDialogOpen", open: false });
           runCommand("study.import-state", {
-            fmsBase64: state.importFmsBase64,
+            fmsFile: state.importFmsFile,
             restoreMode: state.importRestoreMode,
           });
         }}
         onFileSelected={(file) => {
           void inspectImportFile(file);
         }}
-        onOpenChange={(open) =>
-          dispatch({ type: "setImportDialogOpen", open })
-        }
+        onOpenChange={setImportDialogOpen}
         onRestoreModeChange={(mode) =>
           dispatch({ type: "setImportRestoreMode", mode })
         }
@@ -3101,22 +3123,4 @@ function CommandDetailRow({ label, value }: { label: string; value: string }) {
       <dd className="fm-dialog__details-value">{value}</dd>
     </div>
   );
-}
-
-function readFileAsBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => {
-      reject(reader.error ?? new Error("Failed to read file."));
-    };
-    reader.onload = () => {
-      const value = reader.result;
-      if (typeof value !== "string") {
-        reject(new Error("Failed to read file as base64."));
-        return;
-      }
-      resolve(value.includes(",") ? value.split(",").pop() ?? "" : value);
-    };
-    reader.readAsDataURL(file);
-  });
 }
