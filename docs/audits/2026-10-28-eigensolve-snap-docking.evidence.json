@@ -1,8 +1,8 @@
 {
-  "source_commit": "7fbe626bd1b7e3e2e69c09037fcb480571b0710c",
+  "source_commit": "c963dfefaefa22dd0086d797d20040ae430d4e34",
   "scope": "viewport-main drag-to-edge snap docking on completed FEM k10 result; no solver submissions; Chromium SwiftShader",
   "ci": {
-    "url": "https://github.com/MateuszZelent/fullmag/actions/runs/40781408280",
+    "url": "https://github.com/MateuszZelent/fullmag/actions/runs/40782089478",
     "conclusion": "success",
     "test_files": 62,
     "tests_passed": 1445,
@@ -12,11 +12,20 @@
     "react_doctor_issues": 12
   },
   "browser": {
-    "capturedAt": "2026-10-28T22:35:09.561Z",
+    "capturedAt": "2026-10-28T22:42:14.783Z",
     "origin": "http://localhost:3217",
     "runId": "run-live-bf62fc7d346d46ad1cca97c205d6d59a96eeca8f708d37fefacf09dd5cdb5c01",
     "pass": true,
     "windowActions": [
+      {
+        "name": "grip click keeps dock",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 349,
+          "h": 479
+        }
+      },
       {
         "name": "preview left",
         "retained": true,
@@ -122,28 +131,28 @@
   },
   "artifacts": [
     {
-      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/snap-docking-20261028/first/probe.json",
-      "sha256": "ced28de7e028d201fc1bf86d27ef9719075e1fb371dbc4bd3bb7a50477787b45"
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/snap-docking-20261028/final/probe.json",
+      "sha256": "efa9e6a0ae95f55aa286cbbc9f2a346d4c3ec2344671483fd82518780c42b1e9"
     },
     {
-      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/snap-docking-20261028/first/preview-left.png",
-      "sha256": "8610f92af2491a59716dd2086967984bc62961666d7bfe2478e273f066245f9f"
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/snap-docking-20261028/final/preview-left.png",
+      "sha256": "2a04394d0991eaf84862a66629d03e2e3c6dd67838b054e18dc9b8f5f845b0eb"
     },
     {
-      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/snap-docking-20261028/first/preview-bottom.png",
-      "sha256": "273fcd870b3d16e4828e9589684dbfaaad7d5de4d0ed412943c4197d4b5baf77"
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/snap-docking-20261028/final/preview-bottom.png",
+      "sha256": "b0289a19f09a02e35dd86a8527efc7b94f0fbd830d1d6a5e58054dd484a73971"
     },
     {
-      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/snap-docking-20261028/first/docked-right.png",
-      "sha256": "4dfaa776daebd59bd58e2973ebd5a90562723feec53a246dda67b5030eeeb61c"
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/snap-docking-20261028/final/docked-right.png",
+      "sha256": "b7f23abd6c4bc9c8f919c06bf3f25504e02b7d095ab8b23459d06fa79be1f6ea"
     },
     {
-      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/snap-docking-20261028/first/docked-bottom.png",
-      "sha256": "89a4fb329c9f3924a50e5964d28d26cb158487f14c13c8c8eb242265f4927331"
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/snap-docking-20261028/final/docked-bottom.png",
+      "sha256": "edd7ff493dd3250905b53da4af740b4c81d601f606630b2be12e9af5e86e8072"
     },
     {
-      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/snap-docking-20261028/first/snap-final.png",
-      "sha256": "1c5f6c2db9d8296672c3390c4eddc65642d83c3a2db6cc3d76ab1878e3daa80e"
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/snap-docking-20261028/final/snap-final.png",
+      "sha256": "ddb7fd02ab253a0146d6c4eaa8a32b0ebd7515407964ed21efaa97f95cfb6bd6"
     }
   ],
   "source_files": [
@@ -157,7 +166,7 @@
     },
     {
       "path": "apps/control-room/src/shared/ui/PanelFrame.tsx",
-      "sha256": "6f576f392bd793507ac6c84c3e72260384d5f8e7cf49ce3604c0b2f919d964ec"
+      "sha256": "12a20b13c457d0bcfe3e0ddbb9aa5fd99fb5d165cdd821b772d4cd58bf4058dd"
     },
     {
       "path": "apps/control-room/src/shared/ui/Resizable.tsx",
@@ -169,7 +178,7 @@
     },
     {
       "path": "scripts/verify_eigensolve_snap_ui.mjs",
-      "sha256": "3deae7e7bfe0ec77c12ecedfb283f179aa221e88b353494e58bdf27a1665a441"
+      "sha256": "6ef40bfce84f20a0f6fcea09629240f1dbded63b0693ab597c234c6409d96e1b"
     }
   ],
   "foreign_wip": {
