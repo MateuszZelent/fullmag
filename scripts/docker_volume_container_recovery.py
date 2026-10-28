@@ -1671,7 +1671,8 @@ def _prove_foreign_alias_for_abrupt(control, backend, container, alias, compose)
 
 
 def _assert_no_foreign_storage_consumers(control, backend, frontend, compose=None, *,
-                                         prove_foreign_disjoint=None):
+                                         prove_foreign_disjoint=None,
+                                         prove_foreign_windows=None):
     """Fence every Docker consumer, including stopped containers able to restart."""
     protected = set()
     for container in (backend, frontend):
@@ -1723,9 +1724,11 @@ def _assert_no_foreign_storage_consumers(control, backend, frontend, compose=Non
             kind = mount.get("Type")
             if kind == "bind":
                 source = mount.get("Source")
-                if (not isinstance(source, str) or not source.startswith("/") or source.startswith("//")
+                from docker_windows_bind_identity import is_windows_bind_source
+                if (not is_windows_bind_source(source) and (not isinstance(source, str)
+                        or not source.startswith("/") or source.startswith("//")
                         or ".." in PurePosixPath(source).parts
-                        or str(PurePosixPath(source)) != source):
+                        or str(PurePosixPath(source)) != source)):
                     _fail("foreign Docker consumer bind source is unsafe")
                 raw_key = (kind, source)
             elif kind == "volume":
@@ -1751,13 +1754,30 @@ def _assert_no_foreign_storage_consumers(control, backend, frontend, compose=Non
                     for kind, path in protected)
             if raw_overlap:
                 _fail("a foreign Docker container references the recovery store/control/ledger")
-            if (isinstance(alias, str)
-                    and any(alias == prefix.rstrip("/") or alias.startswith(prefix)
-                            for prefix in _DESKTOP_HOST_PREFIXES)
-                    and not alias.startswith("/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/")):
-                # Docker Desktop host-drive paths belong to the daemon's
-                # Windows namespace; they are not local POSIX source proof.
-                _fail("foreign Windows Docker Desktop bind has unresolved storage identity")
+            from docker_windows_bind_identity import is_windows_bind_source
+            if is_windows_bind_source(alias):
+                try:
+                    from docker_windows_bind_identity import (
+                        prove_foreign_windows_bind_disjoint,
+                        validate_foreign_windows_bind_disjoint_proof,
+                    )
+                    reference = _retained_compose_state_root(backend, compose)
+                    ledger = next(m for m in backend["Mounts"] if m.get("Destination") == "/host-ledger")
+                    if ledger.get("Type") != "volume":
+                        _fail("Windows exclusion requires an exact named ledger")
+                    callback = prove_foreign_windows or (
+                        lambda current, source: prove_foreign_windows_bind_disjoint(
+                            control, backend, current, source, reference))
+                    proof = callback(item, alias)
+                    validate_foreign_windows_bind_disjoint_proof(
+                        proof, source=alias, container_id=item["Id"], reference_root=reference,
+                        control_volume=control.volume, ledger_volume=ledger["Name"],
+                        engine_id=_docker_engine_id())
+                except Exception as error:
+                    _fail("foreign Windows Docker Desktop bind has unresolved storage identity: " + str(error))
+                # The full mount loop continues: nested resources are never
+                # authorized merely by qualification of their parent bind.
+                continue
             if (isinstance(alias, str)
                     and alias.startswith("/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/")):
                 # Alias hashes are not identities. A missing/denied registered

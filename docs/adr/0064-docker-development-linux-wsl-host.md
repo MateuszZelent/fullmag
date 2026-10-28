@@ -106,6 +106,10 @@ Kwalifikacja operacyjna pozostaje `NOT VERIFIED` do czasu rzeczywistej próby.
 Wycofanie nie usuwa archiwów ani wyników i nie przywraca starych bajtów, jeśli
 istnieją aktywni konsumenci lub zdążyło nastąpić kolejne admission.
 
+Obserwator obcych bind mountów Windows ma osobny [kontrakt i ograniczenia](../guides/windows-wsl-bind-observer.md).
+Korelacja VHD/VPD83 nie autoryzuje naprawy bez dowodu aktywnego pliku VM;
+publiczna bramka pozostaje zablokowana.
+
 ## Obowiązki i weryfikacja
 
 Adapter klienta i host paths: `docker_dev_host.py`; build kontrolny:
