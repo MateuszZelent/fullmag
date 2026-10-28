@@ -133,6 +133,13 @@ class RetirementTransportTests(unittest.TestCase):
                     with self.assertRaises(helper.RetirementOutcomeUnknown):
                         helper._retire_current_workspace_transport("docker-volume-op-1")
 
+    def test_imported_read_only_retirement_is_not_reported_as_a_completed_solve(self):
+        response = _retirement()
+        response["terminal_outcome"] = "imported_read_only"
+        _patch_opener(self.monkeypatch, [_Response(200, _status()), _Response(200, response)])
+        result = helper._retire_current_workspace_transport("docker-volume-op-1")
+        self.assertEqual(result["terminal_outcome"], "imported_read_only")
+
     def test_empty_current_workspace_is_a_safe_noop(self):
         monkeypatch = self.monkeypatch
         opener = _patch_opener(

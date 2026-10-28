@@ -190,7 +190,20 @@ async fn acquire_workspace_for_restart_inner(
             }
         }
         Some(snapshot) => {
-            let kind = validate_runtime_status(snapshot)?;
+            let imported = allow_restored_terminal_without_display_timestamp
+                && crate::live_retirement::validate_imported_retirement_source(
+                    &crate::session_persistence::session_store_root(state).join("imports"), snapshot,
+                ).map_err(|error| not_restartable(format!("import retirement source: {error:#}")))?;
+            if imported && state.accepted_run_reattach_identity.read().await.is_some() {
+                return Err(not_restartable("import unexpectedly owns an accepted worker"));
+            }
+            // Validate the same completed, idle projection without changing the
+            // published imported/read-only status or enabling solver commands.
+            let kind = if imported {
+                let mut projection = snapshot.clone();
+                projection.runtime_status.code = "completed".to_string();
+                validate_runtime_status(&projection)?
+            } else { validate_runtime_status(snapshot)? };
             validate_preparation(snapshot)?;
             validate_current_mesh_workspace(snapshot)?;
             let scene_document = snapshot
@@ -244,7 +257,7 @@ async fn acquire_workspace_for_restart_inner(
                 Some(validate_terminal_run(
                     snapshot,
                     kind,
-                    allow_restored_terminal_without_display_timestamp && trusted_terminal_restore,
+                    allow_restored_terminal_without_display_timestamp && (trusted_terminal_restore || imported),
                 )?)
             };
             validate_connectivity(state, is_scratch).await?;

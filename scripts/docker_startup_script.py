@@ -835,7 +835,7 @@ def _validate_retirement_response(
         if type(response.get(field)) is not int or response[field] < 0:
             raise StartupScriptError(f"workspace retirement response {field} is invalid")
     # `startup_failed` retires a workspace whose script never admitted a RunIntent.
-    if response.get("terminal_outcome") not in {"completed", "failed", "cancelled", "startup_failed"}:
+    if response.get("terminal_outcome") not in {"completed", "failed", "cancelled", "startup_failed", "imported_read_only"}:
         raise StartupScriptError("workspace retirement response outcome is invalid")
     if response.get("ui_state_scope") != "backend_typed_workspace":
         raise StartupScriptError("workspace retirement response UI scope is invalid")

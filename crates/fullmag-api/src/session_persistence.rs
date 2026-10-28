@@ -1240,7 +1240,7 @@ struct HysteresisMagnetizationSnapshotArtifact {
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
-fn session_store_root(state: &AppState) -> std::path::PathBuf {
+pub(crate) fn session_store_root(state: &AppState) -> std::path::PathBuf {
     session_store_path(
         &state.repo_root,
         state.current_command_journal_store_root.as_deref(),

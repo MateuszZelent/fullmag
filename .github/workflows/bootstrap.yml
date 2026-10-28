@@ -134,6 +134,7 @@ jobs:
           cargo test -p fullmag-plan --lib preparation::tests::fdm_
           cargo test -p fullmag-api --bin fullmag-api docker_startup::tests
           cargo test -p fullmag-api --bin fullmag-api live_retirement --no-fail-fast
+          cargo test -p fullmag-api --bin fullmag-api development_restart::tests --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api session_output_target_tests --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api live_accepted_execution::tests
           cargo test -p fullmag-api --bin fullmag-api development_accepted_restore::tests
