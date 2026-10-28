@@ -8981,6 +8981,20 @@
       "symbol": "bind_declared_execution",
       "responsibility": "Zachowanie authored execution w producerze accepted; brak zmiany fizyki i brak kwalifikacji solvera.",
       "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "sushruth-coni-sampling-example",
+      "path": "examples/fem_antenna_sushruth_2020_gsg.py",
+      "symbol": "study",
+      "responsibility": "Domena obserwacji w magnetycznej grubości stosu pod Cu/Ta; bez aktywacji LLG.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "sushruth-coni-sampling-regression",
+      "path": "scripts/test_compare_sushruth_2020_gsg.py",
+      "symbol": "test_old_sampling_slab_is_rejected_before_field_comparison",
+      "responsibility": "Odmowa dawnego zakresu z; nie dowód wykonania solvera.",
+      "evidence_status": "implementation_unqualified"
     }
   ],
   "public_api": {

@@ -27,7 +27,7 @@ class GsgComparisonTests(unittest.TestCase):
                 points.append((x, y, z))
                 voltage.append(-density * y / ref.CONDUCTIVITY_SPM)
                 current.extend((0., density, 0.))
-        hp = list(itertools.product((-2e-6, 2e-6), (-50e-9, 50e-9), (-10e-9, 0.)))
+        hp = list(itertools.product((-2e-6, 2e-6), (-50e-9, 50e-9), (ref.MAGNETIC_BOTTOM_M, ref.MAGNETIC_TOP_M)))
         hp.extend(((0., 0., -5e-9), (100e-9, 0., -5e-9)))
         cls.expected_h = {p: ref.gsg_field(p) for p in hp}
         cls.samples = {
@@ -90,6 +90,14 @@ class GsgComparisonTests(unittest.TestCase):
         data = copy.deepcopy(self.samples)
         points, values = data["V_electric"]
         data["V_electric"] = (points[:16], values[:16])
+        with self.assertRaises(check.SmokeError):
+            self.compare(data)
+
+    def test_old_sampling_slab_is_rejected_before_field_comparison(self):
+        data = copy.deepcopy(self.samples)
+        points, values = data["H_ant"]
+        data["H_ant"] = ([(x, y, 0. if z == check.ref.MAGNETIC_TOP_M else -10e-9)
+                          for x, y, z in points], values)
         with self.assertRaises(check.SmokeError):
             self.compare(data)
 

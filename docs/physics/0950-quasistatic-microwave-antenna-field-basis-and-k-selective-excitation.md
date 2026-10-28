@@ -10954,12 +10954,56 @@ nie jest artefaktem zaakceptowanego runu.
 
 
 
+(antenna-sushruth-coni-sampling)=
+### Domena obserwacji Co/Ni w nominalnym scenariuszu GSG
+
+W przykładzie `examples/fem_antenna_sushruth_2020_gsg.py` zero osi z oznacza
+wierzch całego stosu metalicznego pod SiO2. Sekcja IV A publikacji podaje
+21 powtórzeń Ni(0.6)/Co(0.2) i dodatkowe Ni(0.6), zatem magnetyczna grubość
+wynosi 17.4 nm. Górne Cu(2.5)/Ta(2.5) zajmuje 5 nm. Domena obserwacji
+magnetycznej części stosu leży więc na z od −22.4 do −5 nm, podczas gdy
+Al anteny pozostaje na z od 30 do 120 nm. To geometryczne wyprowadzenie
+z grubości warstw, nie dopasowany odstęp 80 nm z rysunku 6.
+
+Zachowujemy autorskie centralne okno 4 µm × 100 nm. Nie jest ono pełnym
+falowodem szerokości 20 µm. Obiekt `sampling` pozostaje niemagnetyczną
+domeną pomiaru H: jego nazwa nie włącza materiału, demag ani LLG. Próbkowanie
+pola na miejscu próbki jest niezależne od późniejszego wyboru homogenizacji
+lub jawnego rozdzielenia materiałów Ni/Co. Nie deklarujemy odpowiedzi m(k,f).
+
+| Parametr przykładu | Typ | Wartość | SI | Znaczenie i istniejące obniżanie |
+|---|---|---|---|---|---|
+| magnetic_thickness_m | float | 17.4e-9 | $\mathrm m$ | dodatnia grubość Box domeny sampling; suma warstw magnetycznych |
+| cap_thickness_m | float | 5e-9 | $\mathrm m$ | dodatnia grubość Cu/Ta; przesunięcie Box w osi z |
+| sampling_depth_m | float | magnetic_thickness_m | $\mathrm m$ | istniejąca geometria Box; nie nowy parametr publicznego DSL |
+
+Istniejące `fm.Box(...).translate(...)` i `FieldTarget.object("sampling")`
+pozostają bez zmian kontraktu API/IR. Wykonanie scenariusza dotyczy FEM CPU
+w double. FEM GPU i obie realizacje FDM nie uzyskują przez tę zmianę wsparcia
+tego solve ani kwalifikacji. Brak nowych endpointów, schematów i pól archiwum.
+
+Porównywarka wymaga teraz dokładnie tej domeny i nowego hasha scenariusza;
+wynik starego okna −10..0 nm jest odrzucany przed porównaniem H. Stare wyniki
+pozostają zapisane i nie otrzymują nowej interpretacji współrzędnych. Progi
+J/V/H pozostają niezmienione. Regresja domeny: `scripts/test_compare_sushruth_2020_gsg.py`
++ `test_old_sampling_slab_is_rejected_before_field_comparison`.
+Mapowanie stałych: `scripts/reference_sushruth_2020_gsg_current.py` +
+`MAGNETIC_BOTTOM_M`, `MAGNETIC_TOP_M`; przykład + `study`.
+| Kontrakt | Ścieżka | Symbol | Stan |
+|---|---|---|---|
+| Domena Co/Ni | examples/fem_antenna_sushruth_2020_gsg.py | study | źródła; wykonanie solvera NOT VERIFIED |
+| Odmowa starej domeny | scripts/test_compare_sushruth_2020_gsg.py | test_old_sampling_slab_is_rejected_before_field_comparison | 12 regresji porównywarki PASS w helperze grupy Docker; mock HTTP |
+
+Status wykonania nowego scenariusza i kwalifikacji: NOT VERIFIED.
+Dowód testów: wolumen kontrolny grupy,
+`verification/sushruth-coni-sampling-20261028/result.json` i `tests.log`.
+
 (antenna-sushruth-gsg-http-comparison)=
 ### Porównanie rzeczywistego GSG z wzorcem — progi przed pierwszym wynikiem
 
 scripts/compare_sushruth_2020_gsg.py porównuje wyniki wyłącznie nominalnego
 przykładu przypiętego SHA256
-2510d8ed87f00437ca7c0d37fd5f416895ed884f83579354cbf15f2f9d99d5bd.
+38283e09ad133c4be7cb69d329407d2b7404d97e323f4f9a63a58ecac36c3f6e.
 Wymaga zakończonego receiptu aktywacji tego skryptu, zgodnych session/run/stage,
 surowych jednostek V, A/m² i A/m oraz payloadów o sprawdzonych hashach.
 Korzysta z istniejącego API i smoke_antenna_artifact_fields.verify; nie uruchamia

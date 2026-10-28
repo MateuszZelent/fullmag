@@ -4997,3 +4997,57 @@ Stan tego checkpointu: sprawdzono źródła oraz sekcje artykułu, zapisano wyb�
 użytkownika i rozdzielono parametry. Nie dodano materiału do sceny, nie
 uruchomiono nowego Solve, nie zmieniono kwalifikacji źródła. Runtime nadal
 wymaga zakończenia kontroli recovery; wyniki i historia pozostają zachowane.
+
+
+## Kontynuacja reprodukcji publikacji — 28.10.2026, po PR #247
+
+Cel użytkownika: rozwinąć moduł aż do odtworzenia wyników Sushruth et al.,
+PR Research 2, 043203. PR #247 jest zmergowany; nie oznacza to zakończenia
+kwalifikacji naukowej. Kolejność i warunki odbioru:
+
+1. Parametry i domeny: rozdzielić nominalną próbkę, model tabeli I i fit rys. 6;
+   sprawdzić kanoniczne obniżanie geometrii oraz zachowanie SI.
+2. Prąd i pole: zamknięcie obwodu GSG, zbieżność źródła i próbkowania,
+   niezależne porównanie V/J/H na domenie Co/Ni, zachowany wynik i provenance.
+3. Sprzężenie: kwalifikacja źródła i projekcja H/I na osobną siatkę magnetyczną;
+   rzeczywisty stan równowagi, pole poprzeczne i H(k), bez ponownego transportu
+   przy każdym kroku LLG.
+4. Odpowiedź: rzeczywisty Run i m(k,f), odbiór indukcyjny oraz zespolone R/T;
+   zbieżność kroku czasu, przestrzeni i okna obserwacji. Parametry niepodane
+   dla eksperymentu nie mogą być po cichu wzięte z tabeli I.
+5. Porównanie i UI: liczbowy raport różnic do wskazanych krzywych publikacji,
+   oddzielnie model i eksperyment; odczyt zachowanych pól/widm w UI i smoke WebGL.
+
+Pierwsza poprawka: domena sampling w istniejącym GSG obejmuje teraz magnetyczne
+17.4 nm pod 5 nm Cu/Ta, z=-22.4..-5 nm względem wierzchu stosu. Centralne okno
+4 µm × 100 nm nadal jest autorskie, nie pełnym falowodem. Pole jest próbkowane
+w miejscu próbki, ale obiekt nie aktywuje jeszcze materiału ani LLG.
+Porównywarka odrzuca stare z=-10..0 nm i wymaga nowego hasha skryptu.
+12 testów interpretowanych PASS w zarządzanym helperze grupy; nie jest to
+wykonanie solvera. Dowód: verification/sushruth-coni-sampling-20261028/result.json
+w wolumenie kontrolnym.
+
+Audyt sprzężenia ujawnił dodatkową lukę: closed_loop_v2::require_qualified nie
+ma konsumenta. Loader LLG i loader widma po poprawnej weryfikacji v2 próbują
+parsowania legacy StoredSolutionManifest. Potrzebny jest jawny dispatch oraz,
+osobno, prawdziwa kwalifikacja naukowa i adapter v2 do wspólnej projekcji.
+CPWAntennaLayout nie ma pełnego obwodu; taki model istnieje tylko dla microstrip.
+Nie wolno włączyć GSG do LLG przez usunięcie odmowy albo zmianę etykiety.
+
+Runtime: odczyt Docker potwierdził, że dawny Fullmag_build_runner nadal działa,
+a nasz backend/frontend nie działa. Poprzednia zgoda obejmowała SIGTERM;
+proponowane wymuszone zakończenie nadal nie ma osobnej odpowiedzi. Żadnego
+sygnału ani Solve w tym etapie nie wysłano. Kontrole źródeł są niezależne od
+tej blokady; wyników publikacji nadal nie odtworzono.
+
+
+Weryfikacja fragmentu: 12 regresji porównywarki, 5 testów niezależnego
+wzorca V/J/H oraz 2 testy publicznego DSL/eksportu przeszły (19 PASS).
+Walidator noty 0950 i source-map zwrócił zero błędów. Test DSL używa
+include_geometry_assets=False; nie wygenerował siatki ani nie uruchomił
+solvera. Pierwsza próba pełnego to_ir zatrzymała się na readonly cache;
+nie stanowi dowodu meshingu. Szczegóły w tym samym wolumenie: tests.log,
+lowering-tests.log, reference-tests.log, documentation-errors.json.
+Nowa dokumentacja docker-isolated-session-recovery wprost rozdziela
+strukturalną walidację od kwalifikacji kopiowania/startu; sam wybór nowej
+przestrzeni nie zastępuje odzyskania runtime.

@@ -17,7 +17,7 @@ from smoke_antenna_external_lead_inspection import (
     session_scope, validate_origin, validate_resource, verify_binary,
 )
 
-SOURCE_SHA256 = "2510d8ed87f00437ca7c0d37fd5f416895ed884f83579354cbf15f2f9d99d5bd"
+SOURCE_SHA256 = "38283e09ad133c4be7cb69d329407d2b7404d97e323f4f9a63a58ecac36c3f6e"
 SOURCE_RELATIVE = "examples/fem_antenna_sushruth_2020_gsg.py"
 GATES = {"current_relative": 1e-6, "potential_absolute_v": 1e-8,
          "field_absolute_apm": 0.01, "field_relative": 1e-5}
@@ -64,7 +64,7 @@ def compare_samples(data):
     jp, current_raw = data["J_charge"]
     hp, field_raw = data["H_ant"]
     vgroups, jgroups = _branches(vp), _branches(jp)
-    _positions(hp, (-2e-6, -50e-9, -10e-9), (2e-6, 50e-9, 0.0))
+    _positions(hp, (-2e-6, -50e-9, ref.MAGNETIC_BOTTOM_M), (2e-6, 50e-9, ref.MAGNETIC_TOP_M))
     require(len(hp) <= 4096, "reference comparison exceeds 4096 H samples")
     current, observed_field = _vectors(current_raw), _vectors(field_raw)
     branches = {}
