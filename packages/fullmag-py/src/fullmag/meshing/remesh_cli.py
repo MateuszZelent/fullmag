@@ -38,6 +38,7 @@ from fullmag.meshing.gmsh_bridge import (
 )
 from fullmag.meshing.quality import (
     build_typed_quality_summary,
+    measure_adjacent_size_growth,
     validate_adjacent_size_growth,
 )
 from fullmag.meshing.fmmq import _canonical_json, build_fmmq_v2_spec, write_fmmq_v2
@@ -665,6 +666,7 @@ def _mesh_result_payload(
     object_region_markers: list[dict[str, Any]] | None = None,
     topology_artifact_dir: str | Path | None = None,
     inline_topology_max_bytes: int | None = None,
+    enforce_growth_gate: bool = False,
 ) -> dict[str, Any]:
     mesh = mesh_data.oriented_copy()
     mesh.validate_strict(require_positive_orientation=True)
@@ -688,16 +690,28 @@ def _mesh_result_payload(
             positive=True,
             allow_numeric_string=True,
         )
-        growth_report = validate_adjacent_size_growth(
-            mesh,
-            resolved_growth_rate=float(growth_value),
-            tolerance=0.0,
-            # A declared post-mesh growth law is a qualification contract,
-            # not merely a Gmsh hint.  A mesh with no measurable face-neighbor
-            # pair must fail closed instead of publishing an ``unknown``
-            # quality result that looks valid to downstream consumers.
-            require_pairs=True,
-        )
+        if enforce_growth_gate:
+            # A qualification request turns the growth law into a contract.  A
+            # mesh with no measurable face-neighbor pair must fail closed
+            # instead of publishing an ``unknown`` quality result that looks
+            # valid to downstream consumers.
+            growth_report = validate_adjacent_size_growth(
+                mesh,
+                resolved_growth_rate=float(growth_value),
+                tolerance=0.0,
+                require_pairs=True,
+            )
+        else:
+            # An authored ``growth_rate`` is a Gmsh grading hint
+            # (``Mesh.SmoothRatio``).  Gmsh does not bound face-neighbor
+            # ratios, so the realized ratios are published as a diagnostic
+            # instead of rejecting every build (note 0105, section 8.2).
+            growth_report = measure_adjacent_size_growth(
+                mesh,
+                resolved_growth_rate=float(growth_value),
+                tolerance=0.0,
+                require_pairs=False,
+            )
     # Do not publish topology or quality artifacts until every declared
     # post-mesh gate has passed.  In particular, an invalid growth report must
     # leave no partial artifact that downstream readers could mistake for a
@@ -771,10 +785,13 @@ def _mesh_result_payload(
     # ``Mesh.SmoothRatio`` is only a generator hint.  When a resolved growth
     # target is present, publish an independent post-mesh measurement so
     # callers can distinguish the requested value from the realized face-
-    # neighbor ratios.  Invalid growth is rejected above before this payload
-    # is published; a successful report is therefore a hard post-mesh gate.
+    # neighbor ratios.  ``enforced`` tells whether the report passed a hard
+    # gate (invalid growth was rejected above) or is a diagnostic only.
     if growth_report is not None:
-        result["adjacent_size_growth"] = growth_report.to_dict()
+        result["adjacent_size_growth"] = {
+            **growth_report.to_dict(),
+            "enforced": bool(enforce_growth_gate),
+        }
 
     if region_markers is not None:
         result["region_markers"] = region_markers
@@ -1079,6 +1096,7 @@ def main() -> None:
                 if shared_domain_report is not None
                 else None
             ),
+            enforce_growth_gate=config.get("enforce_growth_gate") is True,
         )
 
         json.dump(result, sys.stdout, separators=(",", ":"))

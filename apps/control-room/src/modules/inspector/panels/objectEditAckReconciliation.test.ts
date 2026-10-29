@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import type { GeometryObjectDraft } from "@/kernel/authoring/object-edit/objectEditTypes";
 
-import { objectEditMetadataEquals, reconcileObjectEditAck, reconcileObjectIdentityAck } from "./objectEditAckReconciliation";
+import {
+  objectEditMetadataEquals,
+  rebaseDirtyDraftOntoUnchangedObject,
+  reconcileObjectEditAck,
+  reconcileObjectIdentityAck,
+} from "./objectEditAckReconciliation";
 
 const canonicalDraft: GeometryObjectDraft = {
   archHeight: "5e-8",
@@ -142,5 +147,31 @@ describe("reconcileObjectEditAck", () => {
       dirty: false,
       draft: canonicalDraft,
     });
+  });
+});
+
+describe("rebaseDirtyDraftOntoUnchangedObject", () => {
+  const dirty: GeometryObjectDraft = { ...canonicalDraft, name: "Edited name" };
+
+  it("moves a dirty draft onto a newer revision when the object is unchanged", () => {
+    const newer = { ...canonicalDraft, baseRevision: 12 };
+    expect(rebaseDirtyDraftOntoUnchangedObject(dirty, canonicalDraft, newer)).toEqual({
+      ...dirty,
+      baseRevision: 12,
+    });
+  });
+
+  it("keeps the old base when the object itself changed", () => {
+    const moved: GeometryObjectDraft = {
+      ...canonicalDraft,
+      baseRevision: 12,
+      translation: ["2e-7", "0", "0"],
+    };
+    expect(rebaseDirtyDraftOntoUnchangedObject(dirty, canonicalDraft, moved)).toBeNull();
+  });
+
+  it("keeps a draft that was not based on the previous canonical revision", () => {
+    const older = { ...dirty, baseRevision: 10 };
+    expect(rebaseDirtyDraftOntoUnchangedObject(older, canonicalDraft, { ...canonicalDraft, baseRevision: 12 })).toBeNull();
   });
 });

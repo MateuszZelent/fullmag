@@ -216,6 +216,26 @@ describe("ObjectRegionMagneticParametersPanel session fence", () => {
       dom.restore();
     }
   });
+  it("shows a retained spatial override without editable scalar controls", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    const props = panelProps();
+    props.draft.materialOverrides = [{
+      parameter: "ms", value: 800e3, unit: "A/m", priority: 0, conflictPolicy: "error",
+      preservedOverride: { parameter: "ms", value: { kind: "linear", base: 800e3, gradient: [1, 0, 0], frame: "object" } },
+    }];
+    try {
+      await act(async () => root.render(<ObjectRegionMagneticParametersPanel {...props} />));
+      expect(container.textContent).toContain("ms · linear");
+      expect(container.textContent).toContain("preserved unchanged");
+      expect(container.textContent).not.toContain("Local override");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
 });
 
 function panelProps(): RegionSubPanelProps {

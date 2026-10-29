@@ -2440,6 +2440,12 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
         ),
       });
       if (outcome.kind === "rejected") return outcome.result;
+      if (outcome.kind === "server-prepares") {
+        return {
+          message: "No live preparation is published; Compute prepares the accepted run.",
+          status: "failed",
+        };
+      }
       const planFingerprint =
         outcome.kind === "materialized"
           ? outcome.resource.plan_fingerprint

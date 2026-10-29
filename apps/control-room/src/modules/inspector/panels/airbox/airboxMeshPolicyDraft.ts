@@ -56,6 +56,8 @@ export interface AirboxMeshPolicyDraft {
   airboxCenterZ: string;
   /** Resource revision the draft was edited from; sent as expected_revision. */
   baseRevision?: number;
+  /** Authored config the draft was edited from; decides whether a newer revision may be adopted. */
+  baseConfigText?: string;
 }
 
 export function defaultUniverseMeshPolicyResource(): MeshUniverseConfigResource {
@@ -80,6 +82,7 @@ export function draftFromUniverseMeshPolicyResource(
 
   return {
     baseRevision: resource.revision,
+    baseConfigText: formatUniverseMeshPolicyConfig(resource.config),
     authoredConfigPresent: resource.config !== null && resource.config !== undefined,
     airboxGradingAuthored: Object.hasOwn(config, "airbox_grading"),
     airboxGrading: readAirboxGrading(config.airbox_grading),
@@ -129,6 +132,27 @@ export function draftIdentityKeyForUniverseMeshPolicyResource(): string {
   return "universe";
 }
 
+/**
+ * The policy revision is the session mesh revision, which every scene commit
+ * advances. A draft therefore adopts the latest revision when the authored
+ * Universe policy itself is unchanged since the draft was opened; a real
+ * concurrent policy edit keeps the old revision and still conflicts.
+ */
+export function rebaseAirboxMeshPolicyDraft(
+  draft: AirboxMeshPolicyDraft,
+  latest: MeshUniverseConfigResource | null,
+): AirboxMeshPolicyDraft {
+  if (
+    !latest ||
+    draft.baseConfigText === undefined ||
+    draft.baseRevision === latest.revision ||
+    formatUniverseMeshPolicyConfig(latest.config) !== draft.baseConfigText
+  ) {
+    return draft;
+  }
+  return { ...draft, baseRevision: latest.revision };
+}
+
 export function airboxMeshPolicyDraftDirty(
   draft: AirboxMeshPolicyDraft,
   baseDraft: AirboxMeshPolicyDraft,
@@ -142,7 +166,12 @@ export function airboxMeshPolicyDraftDirty(
 function normalizeLengthDraftForComparison(
   draft: AirboxMeshPolicyDraft,
 ): AirboxMeshPolicyDraft {
-  const normalized = { ...draft, quantityUnits: undefined, baseRevision: undefined };
+  const normalized = {
+    ...draft,
+    quantityUnits: undefined,
+    baseRevision: undefined,
+    baseConfigText: undefined,
+  };
   for (const field of AIRBOX_LENGTH_FIELDS) {
     const input = parseQuantityInput(
       draft[field],
@@ -172,7 +201,7 @@ function synchronizeAirboxMeshPolicyJson(draft: AirboxMeshPolicyDraft): AirboxMe
   const changes: Partial<AirboxMeshPolicyDraft> = {};
   const resetUnits: Partial<Record<AirboxLengthPolicyField, AirboxLengthUnit>> = {};
   for (const key of Object.keys(nextFields) as (keyof AirboxMeshPolicyDraft)[]) {
-    if (["baseRevision", "configText", "syncedConfigText", "configSynchronized", "authoredConfigPresent", "quantityUnits"].includes(key)) continue;
+    if (["baseRevision", "baseConfigText", "configText", "syncedConfigText", "configSynchronized", "authoredConfigPresent", "quantityUnits"].includes(key)) continue;
     if (!Object.is(previousFields[key], nextFields[key])) {
       let value = nextFields[key];
       if (isAirboxLengthPolicyField(key) && typeof value === "string") {

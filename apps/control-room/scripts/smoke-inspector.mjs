@@ -455,6 +455,90 @@ try {
       `Inspector did not mount. Fixture requests: ${JSON.stringify(fixture.requests.slice(-40))}. Browser errors: ${JSON.stringify(consoleErrors)}. Body text: ${JSON.stringify(bodyText?.slice(0, 3000))}. ${error}`,
     );
   }
+  if (fixture.materialBoundaryAuditEnabled) {
+    const requestStart = fixture.requests.length;
+    try {
+      const simulationMethod = page.getByLabel("Simulation method", { exact: true });
+      await simulationMethod.waitFor({ state: "visible", timeout: 30_000 });
+      await page.waitForFunction(() =>
+        document.querySelector('[aria-label="Simulation method"]')?.getAttribute("data-method") === "fem",
+      );
+      assert((await simulationMethod.innerText()).trim() === "FEM",
+        "The focused Inspector fixture must identify the FEM session before visualization qualification.");
+
+      // Qualify Object/Airbox against the fresh visualization topology before
+      // the region metadata PATCH advances the fixture scene revision.
+      const visualizationObservations = await qualifyVisualizationMutationStability(page, inspector, fixture);
+      const regionProof = await qualifyRegionMaterialMetadataStability(page, inspector, fixture);
+      await waitForInspectorRequestQuiet(page, fixture);
+      const browserErrors = await classifyInspectorBrowserErrors();
+      assert(fixture.requestBudgetViolation === null,
+        `Material-boundary Inspector request budget exceeded: ${JSON.stringify(inspectorRequestBudgetDiagnostics(fixture))}`);
+      assert(fixture.unknownGetPaths.length === 0,
+        `Material-boundary fixture received unknown GET resources: ${JSON.stringify(fixture.unknownGetPaths)}`);
+      assert(fixture.unknownMutationPaths.length === 0,
+        `Material-boundary fixture received unknown mutations: ${JSON.stringify(fixture.unknownMutationPaths)}`);
+      assert(previewRequests.length === 0,
+        `Material-boundary Inspector requested preview media: ${previewRequests.join(", ")}`);
+      assert(browserErrors.unexpected404Responses.length === 0 &&
+          browserErrors.optional404ConsoleErrors.length === browserErrors.optional404Responses.length,
+        `Material-boundary fixture had unexpected 404 evidence: ${JSON.stringify(browserErrors)}`);
+      assert(browserErrors.unexpectedBrowserErrors.length === 0,
+        `Material-boundary browser errors: ${browserErrors.unexpectedBrowserErrors.join("\n")}`);
+      assert(browserErrors.expectedConflictErrors.length <= 1,
+        `Material-boundary browser had repeated expected conflict responses: ${JSON.stringify(browserErrors.expectedConflictErrors)}`);
+      const scopedRequests = fixture.requests.slice(requestStart);
+      const countRequest = (entry) => scopedRequests.filter((request) => request === entry).length;
+      const visualizationPatchCount = countRequest("PATCH /v2/sessions/current/visualization/state");
+      const objectVisualization = visualizationObservations.find(({ target }) => target === "Object");
+      const airboxVisualization = visualizationObservations.find(({ target }) => target === "Airbox");
+      const targetedVisualizationPatchCount = visualizationObservations.reduce(
+        (total, observation) => total + observation.patchCount,
+        0,
+      );
+      assert(
+        objectVisualization && airboxVisualization &&
+          objectVisualization.patchCount > 0 &&
+          objectVisualization.patchCount <= objectVisualization.interactions &&
+          airboxVisualization.patchCount > 0 &&
+          airboxVisualization.patchCount <= airboxVisualization.interactions &&
+          targetedVisualizationPatchCount <= 20 && visualizationPatchCount <= 20,
+        `Object/Airbox visualization request budget or target coverage failed: ${JSON.stringify({
+          object: objectVisualization ?? null,
+          airbox: airboxVisualization ?? null,
+          targetedVisualizationPatchCount,
+          scopedVisualizationPatchCount: visualizationPatchCount,
+        })}`,
+      );
+      const proof = {
+        schema: "material_boundaries_inspector_browser_proof.v1",
+        qualification: "fixture_only_playwright_browser",
+        live_api_verified: false,
+        science_verified: false,
+        gpu_verified: false,
+        production_verified: false,
+        region: regionProof,
+        visualization_stability: {
+          targets: visualizationObservations,
+          targeted_visualization_patch_count: targetedVisualizationPatchCount,
+          scoped_visualization_patch_count: visualizationPatchCount,
+        },
+        scoped_request_count: scopedRequests.length,
+        scoped_requests: scopedRequests,
+        request_budget_violation: fixture.requestBudgetViolation,
+        unknown_get_paths: fixture.unknownGetPaths,
+        unknown_mutation_paths: fixture.unknownMutationPaths,
+        preview_request_count: previewRequests.length,
+        browser_errors: browserErrors,
+      };
+      await writeFile(resolve(outputDir, "material-boundaries-inspector-browser-proof.json"),
+        JSON.stringify(proof, null, 2) + "\n", "utf8");
+      console.log(JSON.stringify(proof, null, 2));
+    } finally {
+      await browser.close();
+    }
+    process.exit(0);
+  }
   const screenshotFiles = [];
   const simulationMethod = page.getByLabel("Simulation method", { exact: true });
   await simulationMethod.waitFor({ state: "visible", timeout: 30_000 });
@@ -1130,6 +1214,177 @@ try {
   await browser.close();
 }
 
+async function qualifyRegionMaterialMetadataStability(page, inspector, fixture) {
+  const regionId = "material-audit-core";
+  const regionNodeId = "model:object:film:regions:" + regionId;
+  const materialNodeId = regionNodeId + ":magnetic-parameters";
+  const identity = "region-material-metadata-stability";
+  const renamedRegion = "Material Audit Core Renamed";
+
+  await page.setViewportSize({ width: 1600, height: 660 });
+  try {
+    for (const id of ["model:objects", "model:object:film", "model:object:film:regions", regionNodeId]) {
+      await expandInspectorNode(page, id, fixture);
+    }
+    await selectInspectorNode(page, inspector, regionNodeId, { owner: "object-region", label: "Object region" });
+    const name = inspector.getByRole("textbox", { name: "Region name", exact: true });
+    const apply = inspector.getByRole("button", { name: "Apply Region", exact: true });
+    const unrelated = inspector.getByRole("combobox", { name: "Frame", exact: true });
+    await name.waitFor({ state: "visible" });
+    await unrelated.waitFor({ state: "visible" });
+    assert((await name.inputValue()) === "Material Audit Core", "Authored region fixture did not mount.");
+
+    await name.fill(renamedRegion);
+    assert(!(await apply.isDisabled()), "Region name edit did not enable Apply Region.");
+    await name.focus();
+    const baseline = await captureInspectorMutationSnapshot(inspector, { marker: identity, scrollTop: 80 });
+    assert(baseline.scrollTop > 0, "Region Inspector fixture was not scrollable.");
+    const requestStart = fixture.requests.length;
+    fixture.regionPatchDelayMs = 350;
+    await apply.evaluate((button) => button.click());
+    await waitForFixtureCondition(() => fixture.regionMutationBodies.length === 1, "Region PATCH was not observed.");
+    await page.waitForTimeout(45);
+    const during = await captureInspectorMutationSnapshot(inspector);
+    assertRegionMetadataStable(baseline, during, identity, "pending");
+    assert(!(await unrelated.isDisabled()), "Pending region PATCH disabled the unrelated Frame control.");
+    assert(await apply.isDisabled(), "Apply Region was not pending during delayed ACK.");
+
+    await inspector.getByText("Object region updated.", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+    const afterAck = await captureInspectorMutationSnapshot(inspector);
+    assertRegionMetadataStable(baseline, afterAck, identity, "ACK");
+    assert((await name.inputValue()) === renamedRegion, "Acknowledged region name was not displayed.");
+
+    const requests = fixture.requests.slice(requestStart);
+    const patchPath = "PATCH /v2/sessions/current/model/objects/film/regions/" + regionId;
+    assert(
+      requests.filter((entry) => entry === patchPath).length === 1 &&
+        requests.filter((entry) => entry === "POST /v2/sessions/current/model/syncs").length === 1 &&
+        requests.length <= 12,
+      "Region metadata request budget failed: " + JSON.stringify(requests),
+    );
+    const normalize = (items) => items.map(({ parameter, priority, conflict_policy, value }) => ({
+      parameter, priority: priority ?? null, conflict_policy: conflict_policy ?? null, value,
+    }));
+    const submitted = fixture.regionMutationBodies[0]?.patch?.material_overrides ?? [];
+    const expectedProfileOverrides = fixture.materialAuditOriginalOverrides
+      .filter((override) => ["ms", "ku1"].includes(override.parameter));
+    const scalarPayload = Object.fromEntries(submitted
+      .filter((override) => ["aex", "alpha"].includes(override.parameter))
+      .map((override) => [override.parameter, override]));
+    assert(
+      Object.keys(scalarPayload).length === 2 &&
+        scalarPayload.aex?.priority === 1 && scalarPayload.aex?.conflict_policy === "error" &&
+        scalarPayload.aex?.value?.kind === "constant" && scalarPayload.aex?.value?.value === 0 && scalarPayload.aex?.value?.unit === "J/m" &&
+        scalarPayload.alpha?.priority === 2 && scalarPayload.alpha?.conflict_policy === "error" &&
+        scalarPayload.alpha?.value?.kind === "constant" && scalarPayload.alpha?.value?.value === 0 &&
+        (scalarPayload.alpha?.value?.unit == null || scalarPayload.alpha?.value?.unit === ""),
+      "Metadata PATCH changed Aex/alpha zero or canonical scalar metadata: " + JSON.stringify(scalarPayload),
+    );
+    assert(
+      JSON.stringify(normalize(submitted.filter((override) => ["ms", "ku1"].includes(override.parameter)))) ===
+          JSON.stringify(normalize(expectedProfileOverrides)) &&
+        JSON.stringify(normalize((fixture.materialAuditRegionResources[0]?.material_overrides ?? [])
+          .filter((override) => ["ms", "ku1"].includes(override.parameter)))) ===
+          JSON.stringify(normalize(expectedProfileOverrides)),
+      "Metadata PATCH changed the read-only linear/radial profile payload.",
+    );
+
+    await page.locator('[data-node-id="' + materialNodeId + '"]').click();
+    await inspector.getByRole("heading", { name: "Material Overrides", exact: true }).waitFor();
+    const scalarOverrides = await inspector.locator(".fm-region-override").evaluateAll((cards) => cards
+      .filter((card) => card.querySelector('input[aria-label="Local override"]'))
+      .map((card) => {
+        const inputs = Array.from(card.querySelectorAll("input"));
+        const selects = Array.from(card.querySelectorAll("select"));
+        const input = (label) => inputs.find((item) => item.labels?.[0]?.textContent?.trim() === label)?.value ?? null;
+        return {
+          parameter: selects[0]?.value ?? null,
+          value: input("Local override"), unit: input("Unit"),
+          priority: input("Override priority"), conflict: selects[1]?.value ?? null,
+          removeCount: Array.from(card.querySelectorAll("button")).filter((button) => button.textContent?.trim() === "Remove Override").length,
+        };
+      }),
+    );
+    const profiles = await inspector.locator(".fm-region-override").evaluateAll((items) =>
+      items.filter((item) => item.textContent?.includes("This profile is preserved unchanged."))
+        .map((item) => ({
+          inputs: item.querySelectorAll("input").length,
+          removeCount: Array.from(item.querySelectorAll("button")).filter((button) => button.textContent?.trim() === "Remove Override").length,
+          text: item.textContent?.replace(/\s+/g, " ").trim() ?? "",
+        })),
+    );
+    const removeCount = await inspector.getByRole("button", { name: "Remove Override", exact: true }).count();
+    const scalarByParameter = Object.fromEntries(scalarOverrides.map((item) => [item.parameter, item]));
+    assert(
+      scalarOverrides.length === 2 && scalarByParameter.aex?.value === "0" && scalarByParameter.alpha?.value === "0" &&
+        scalarByParameter.aex?.unit === "J/m" && scalarByParameter.alpha?.unit === "" &&
+        scalarByParameter.aex?.priority === "1" && scalarByParameter.alpha?.priority === "2" &&
+        scalarByParameter.aex?.conflict === "error" && scalarByParameter.alpha?.conflict === "error",
+      "Aex/alpha zero or canonical unit/priority/conflict metadata changed after rename: " + JSON.stringify(scalarOverrides),
+    );
+    assert(
+      profiles.length === 2 && profiles.every((item) => item.inputs === 0 && item.removeCount === 1) && removeCount === 4 &&
+        profiles.some((item) => item.text.includes("ms · linear")) &&
+        profiles.some((item) => item.text.includes("ku1 · radial")),
+      "Linear/radial profiles were not preserved as read-only removable overrides.",
+    );
+
+    const screenshot = "region-material-metadata-stability.png";
+    await inspector.screenshot({ path: resolve(outputDir, screenshot) });
+    await writeFile(resolve(outputDir, "region-material-metadata-browser-proof.json"), JSON.stringify({
+      schema: "material_boundary_region_metadata_browser_proof.v1",
+      fixture_only: true, live_api_verified: false, science_verified: false, gpu_verified: false,
+      region_id: regionId, acknowledged_name: renamedRegion, retained_overrides: submitted,
+      scalar_overrides_visible: scalarOverrides, preserved_profiles: profiles.map((item) => item.text),
+      requests, baseline, during, afterAck, screenshot,
+    }, null, 2) + "\n", "utf8");
+    return { screenshot, regionId, requestCount: requests.length, scalarOverrides };
+  } finally {
+    fixture.regionPatchDelayMs = 0;
+    await page.setViewportSize({ width: 1600, height: 900 });
+  }
+}
+
+function assertRegionMetadataStable(before, after, identity, phase) {
+  assert(after.connected && after.marker === identity && after.owner === before.owner,
+    "Object region Inspector root changed during " + phase + ".");
+  assert(after.focusedLabel === "Region name", "Region name focus was lost during " + phase + ".");
+  assert(after.opacity === before.opacity && after.opacityAnimations === 0,
+    "Region Inspector opacity changed or animated during " + phase + ".");
+  assert(Math.abs(after.scrollTop - before.scrollTop) <= 1,
+    "Region Inspector scroll changed during " + phase + ".");
+}
+
+async function captureInspectorMutationSnapshot(locator, options = {}) {
+  return locator.evaluate((element, settings) => {
+    if (settings.marker) element.dataset.mutationStabilityMarker = settings.marker;
+    const inspectorRoot = element.closest(".fm-inspector") ?? element;
+    const scroller = inspectorRoot.querySelector(".fm-scroll-area__viewport");
+    if (typeof settings.scrollTop === "number" && scroller) {
+      scroller.scrollTop = Math.min(
+        settings.scrollTop,
+        Math.max(0, scroller.scrollHeight - scroller.clientHeight),
+      );
+    }
+    const opacityAnimations = element
+      .getAnimations({ subtree: true })
+      .filter((animation) => {
+        const frames = animation.effect?.getKeyframes?.() ?? [];
+        return frames.some((frame) => Object.hasOwn(frame, "opacity"));
+      });
+    return {
+      connected: element.isConnected,
+      focusedLabel: document.activeElement?.getAttribute("aria-label") ??
+        document.activeElement?.labels?.[0]?.textContent?.trim() ?? null,
+      marker: element.dataset.mutationStabilityMarker,
+      opacity: getComputedStyle(element).opacity,
+      opacityAnimations: opacityAnimations.length,
+      owner: inspectorRoot.getAttribute("data-inspector-owner"),
+      scrollTop: scroller?.scrollTop ?? 0,
+    };
+  }, options);
+}
+
 async function qualifyVisualizationMutationStability(page, inspector, fixture) {
   const targets = [
     { iterations: 4, label: "Object", nodeId: "model:object:film:visualization" },
@@ -1137,8 +1392,11 @@ async function qualifyVisualizationMutationStability(page, inspector, fixture) {
   ];
   fixture.visualizationPatchDelayMs = 180;
   fixture.visualizationPatchRejectOnce = true;
+  const observations = [];
   try {
     for (const target of targets) {
+      await waitForInspectorRequestQuiet(page, fixture);
+      const targetRequestStart = fixture.requests.length;
       await selectInspectorNode(page, inspector, target.nodeId, {
         owner: target.label === "Airbox" ? "airbox-visualization" : "object-visualization",
         label: target.label === "Airbox" ? "Airbox" : "Film",
@@ -1174,15 +1432,12 @@ async function qualifyVisualizationMutationStability(page, inspector, fixture) {
       await mutationControl.waitFor({ state: "visible" });
 
       const identity = `${target.label.toLowerCase()}-visualization-stability`;
-      const baseline = await overview.evaluate((element, marker) => {
-        element.dataset.mutationStabilityMarker = marker;
-        const scroller = element.closest(".fm-inspector");
-        if (scroller) scroller.scrollTop = Math.min(80, scroller.scrollHeight - scroller.clientHeight);
-        return {
-          opacity: getComputedStyle(element).opacity,
-          scrollTop: scroller?.scrollTop ?? 0,
-        };
-      }, identity);
+      await mutationControl.scrollIntoViewIfNeeded();
+      await focusControl.focus();
+      const baseline = await captureInspectorMutationSnapshot(overview, {
+        marker: identity,
+        scrollTop: 80,
+      });
 
       for (let iteration = 0; iteration < target.iterations; iteration += 1) {
         await focusControl.focus();
@@ -1193,24 +1448,7 @@ async function qualifyVisualizationMutationStability(page, inspector, fixture) {
           await mutationControl.evaluate((control) => control.click());
         }
         await page.waitForTimeout(40);
-        const duringMutation = await overview.evaluate((element) => {
-          const scroller = element.closest(".fm-inspector");
-          const opacityAnimations = element
-            .getAnimations({ subtree: true })
-            .filter((animation) => {
-              const frames = animation.effect?.getKeyframes?.() ?? [];
-              return frames.some((frame) => Object.hasOwn(frame, "opacity"));
-            });
-          return {
-            connected: element.isConnected,
-            focusedLabel: document.activeElement?.getAttribute("aria-label") ??
-              document.activeElement?.labels?.[0]?.textContent?.trim() ?? null,
-            marker: element.dataset.mutationStabilityMarker,
-            opacity: getComputedStyle(element).opacity,
-            opacityAnimations: opacityAnimations.length,
-            scrollTop: scroller?.scrollTop ?? 0,
-          };
-        });
+        const duringMutation = await captureInspectorMutationSnapshot(overview);
         assert(
           duringMutation.connected && duringMutation.marker === identity,
           `${target.label}: Visualization Inspector remounted during mutation.`,
@@ -1225,7 +1463,8 @@ async function qualifyVisualizationMutationStability(page, inspector, fixture) {
         );
         assert(
           Math.abs(duringMutation.scrollTop - baseline.scrollTop) <= 1,
-          `${target.label}: mutation changed Inspector scroll position.`,
+          `${target.label}: mutation changed Inspector scroll position: baseline=${baseline.scrollTop}, ` +
+            `during=${duringMutation.scrollTop}, delta=${duringMutation.scrollTop - baseline.scrollTop}.`,
         );
         assert(
           duringMutation.focusedLabel === expectedFocusedLabel,
@@ -1243,7 +1482,17 @@ async function qualifyVisualizationMutationStability(page, inspector, fixture) {
           );
         }
       }
+      await waitForInspectorRequestQuiet(page, fixture);
+      observations.push({
+        target: target.label,
+        interactions: target.iterations,
+        patchCount: fixture.requests
+          .slice(targetRequestStart)
+          .filter((request) => request === "PATCH /v2/sessions/current/visualization/state")
+          .length,
+      });
     }
+    return observations;
   } finally {
     fixture.visualizationPatchDelayMs = 0;
     fixture.visualizationPatchRejectOnce = false;
@@ -3783,7 +4032,28 @@ async function assertHealthyViewportCanvas(page, label) {
 function createInspectorFixture() {
   const fdmBuildGridMode =
     process.env.CONTROL_ROOM_INSPECTOR_FDM_BUILD_GRID === "1";
+  const materialBoundaryAuditEnabled =
+    process.env.CONTROL_ROOM_INSPECTOR_MATERIAL_AUDIT === "1";
   const revision = 12;
+  const materialAuditOriginalOverrides = [
+    { parameter: "aex", priority: 1, conflict_policy: "error", value: { kind: "constant", value: 0, unit: "J/m" } },
+    { parameter: "alpha", priority: 2, conflict_policy: "error", value: { kind: "constant", value: 0, unit: "" } },
+    { parameter: "ms", priority: 3, conflict_policy: "error", value: { kind: "linear", base: 800e3, gradient: [2e9, 0, 0], frame: "object", unit: "A/m" } },
+    { parameter: "ku1", priority: 4, conflict_policy: "error", value: { kind: "radial", center: [0, 0, 0], inside: 1e4, outside: 2e4, radius: 20e-9, frame: "object", unit: "J/m^3" } },
+  ];
+  const materialAuditSceneRegion = {
+    enabled: true, frame: "object", material_overrides: structuredClone(materialAuditOriginalOverrides),
+    name: "Material Audit Core", priority: 2, region_id: "material-audit-core",
+    shape: { kind: "box", center: [0, 0, 0], size: [40e-9, 20e-9, 1e-9] },
+  };
+  const materialAuditRegionResources = materialBoundaryAuditEnabled ? [{
+    bounds_max: [20e-9, 10e-9, 0.5e-9], bounds_min: [-20e-9, -10e-9, -0.5e-9],
+    enabled: true, interaction_refs: [], material_overrides: structuredClone(materialAuditOriginalOverrides),
+    material_ref: "unassigned", mesh_part_ids: [], name: materialAuditSceneRegion.name,
+    owner_object_id: "film", priority: materialAuditSceneRegion.priority,
+    region_id: materialAuditSceneRegion.region_id, shape: structuredClone(materialAuditSceneRegion.shape),
+    source: "authored_object_region", source_body_ids: [], source_object_ids: ["film"],
+  }] : [];
   const scene = {
     metadata: {
       authoring_schema: "scene-document.v1",
@@ -3832,7 +4102,9 @@ function createInspectorFixture() {
         material_ref: null,
         name: "Film",
         region_name: "film",
-        regions: [],
+        regions: materialBoundaryAuditEnabled
+          ? [structuredClone(materialAuditSceneRegion)]
+          : [],
         role: "magnet",
         physics_stack: [
           {
@@ -3873,6 +4145,11 @@ function createInspectorFixture() {
   );
   return {
     fdmBuildGridMode,
+    materialBoundaryAuditEnabled,
+    materialAuditOriginalOverrides,
+    materialAuditRegionResources,
+    regionMutationBodies: [],
+    regionPatchDelayMs: 0,
     gridCommandBodies: [],
     manifest: {
       generation_id: INSPECTOR_MODAL_DOMAIN_GENERATION_ID,
@@ -3922,6 +4199,27 @@ function createInspectorFixture() {
     visualizationPatchDelayMs: 0,
     visualizationPatchRejectOnce: false,
     visualization: inspectorVisualizationState(),
+  };
+}
+
+function inspectorMaterialAuditMembership(fixture) {
+  return {
+    boundary_face_indices: [4, 5, 6, 7],
+    element_indices: [1],
+    freshness: "current",
+    mesh_generation_id: fixture.manifest.generation_id,
+    mesh_id: "inspector-fixture-mesh",
+    mesh_part_ids: ["film-part"],
+    mesh_revision: fixture.manifest.revision,
+    node_indices: [4, 5, 6, 7],
+    owner_object_id: "film",
+    realization: "certified",
+    realization_method: "fixture-authored-region",
+    realization_warnings: [],
+    region_id: "material-audit-core",
+    region_membership_revision: fixture.revision,
+    source: "fixture",
+    topology_fingerprint: fixture.manifest.topology_fingerprint,
   };
 }
 
@@ -4187,6 +4485,32 @@ async function installInspectorFixtureApi(page, fixture) {
         status: body.status ?? "ready",
       });
     }
+    if (
+      fixture.materialBoundaryAuditEnabled &&
+      path === "/v2/sessions/current/model/objects/film/regions/material-audit-core" &&
+      request.method() === "PATCH"
+    ) {
+      const body = request.postDataJSON() ?? {};
+      if (body.base_revision !== fixture.revision || typeof body.patch?.name !== "string" ||
+          !Array.isArray(body.patch.material_overrides)) {
+        fixture.unknownMutationPaths.push(request.method() + " " + path + ":invalid-region-metadata-patch");
+        return fulfillJson(route, { error: { code: "inspector_fixture_invalid_region_patch" } }, 422);
+      }
+      fixture.regionMutationBodies.push(structuredClone(body));
+      if (fixture.regionPatchDelayMs > 0) await new Promise((done) => setTimeout(done, fixture.regionPatchDelayMs));
+      const sceneRegion = fixture.scene.objects.find((item) => item.id === "film")?.regions?.[0];
+      const region = fixture.materialAuditRegionResources[0];
+      if (!sceneRegion || !region) return fulfillJson(route, { error: { code: "inspector_fixture_region_missing" } }, 404);
+      sceneRegion.name = region.name = body.patch.name;
+      fixture.revision += 1;
+      fixture.scene.revision = fixture.revision;
+      fixture.manifest.source_scene_revision = fixture.revision;
+      fixture.visualization.revision = fixture.revision;
+      return fulfillJson(route, {
+        committed_scene: fixture.scene, scene_revision: fixture.revision,
+        transaction_kind: "patch_object_region",
+      });
+    }
     if (path === "/v2/sessions/current/model/transactions" && request.method() === "POST") {
       const body = request.postDataJSON() ?? {};
       if (body.kind === "patch_object_geometry") {
@@ -4424,7 +4748,57 @@ async function installInspectorFixtureApi(page, fixture) {
       definitions: [],
       revision: fixture.revision,
     });
-    if (path === "/v2/sessions/current/model/regions") return fulfillJson(route, { regions: [], revision: fixture.revision });
+    if (path === "/v2/sessions/current/model/regions") {
+      if (!fixture.materialBoundaryAuditEnabled) {
+        return fulfillJson(route, { regions: [], revision: fixture.revision });
+      }
+      return fulfillJson(route, {
+        geometry_realization_revision: fixture.revision,
+        region_coefficients_revision: fixture.revision,
+        region_initial_state_revision: fixture.revision,
+        region_membership_revision: fixture.revision,
+        region_topology_revision: fixture.revision,
+        regions: fixture.materialAuditRegionResources,
+        scene_revision: fixture.revision,
+      });
+    }
+    if (
+      fixture.materialBoundaryAuditEnabled &&
+      path === "/v2/sessions/current/model/region-diagnostics" &&
+      request.method() === "GET"
+    ) {
+      return fulfillJson(route, {
+        diagnostics: [],
+        region_coefficients_revision: fixture.revision,
+        region_initial_state_revision: fixture.revision,
+        region_membership_revision: fixture.revision,
+        region_topology_revision: fixture.revision,
+        scene_revision: fixture.revision,
+      });
+    }
+    if (
+      fixture.materialBoundaryAuditEnabled &&
+      path === "/v2/sessions/current/data/mesh-region-memberships" &&
+      request.method() === "GET"
+    ) {
+      return fulfillJson(route, {
+        mesh_id: "inspector-fixture-mesh",
+        mesh_revision: fixture.manifest.revision,
+        memberships: [inspectorMaterialAuditMembership(fixture)],
+        unresolved_regions: [],
+      });
+    }
+    const materialMembershipMatch =
+      /^\/v2\/sessions\/current\/data\/mesh-region-membership\/([^/]+)$/.exec(path);
+    if (
+      fixture.materialBoundaryAuditEnabled &&
+      request.method() === "GET" &&
+      materialMembershipMatch &&
+      decodeURIComponent(materialMembershipMatch[1]) === "material-audit-core" &&
+      url.searchParams.get("owner_object_id") === "film"
+    ) {
+      return fulfillJson(route, inspectorMaterialAuditMembership(fixture));
+    }
     if (path === "/v2/sessions/current/model/material-fields") return fulfillJson(route, { fields: [], revision: fixture.revision });
     if (path === "/v2/sessions/current/model/couplings") return fulfillJson(route, { couplings: [], revision: fixture.revision });
     if (path === "/v2/sessions/current/model/physics-graph") return fulfillJson(route, { interactions: [], revision: fixture.revision });
@@ -4550,7 +4924,7 @@ async function installInspectorFixtureApi(page, fixture) {
           source_scene_revision: fixture.revision,
           status: "completed",
         },
-        mesh_pipeline_status: failedCandidate ? "failed" : "ready",
+        mesh_pipeline_status: [{ id: "fixture-complete", status: failedCandidate ? "failed" : "completed" }],
         revision: 7,
       });
     }

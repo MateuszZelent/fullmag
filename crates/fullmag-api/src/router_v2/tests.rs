@@ -11303,6 +11303,41 @@ async fn mesh_semantics_returns_three_level_projection() {
 }
 
 #[tokio::test]
+async fn mesh_capabilities_advertise_only_the_session_lane() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.mesh_workspace = None;
+        snapshot.session.requested_backend = "fem".into();
+        snapshot.session.resolved_backend = Some("fem".into());
+        snapshot.session.resolved_device = Some("cpu".into());
+        snapshot.session.resolved_precision = Some("double".into());
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/capabilities")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    let capabilities = json["mesh_capabilities"]
+        .as_object()
+        .expect("the session lane should be advertised before the first build");
+    for id in ["fem", "cpu", "double"] {
+        assert_eq!(capabilities[id]["status"], "supported", "{id}");
+    }
+    for id in ["fdm", "gpu", "single", "multilayer", "pbc"] {
+        assert!(!capabilities.contains_key(id), "{id}");
+    }
+}
+
+#[tokio::test]
 async fn mesh_capabilities_replace_stale_workspace_mixed_features_fail_closed() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -21214,7 +21249,7 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
 }
 
 #[tokio::test]
-async fn material_field_data_resource_returns_realized_samples() {
+async fn material_field_data_resource_does_not_relabel_global_samples_as_region_assignment() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
     scene.revision = 31;
@@ -21297,7 +21332,7 @@ async fn material_field_data_resource_returns_realized_samples() {
         list["fields"][0]["href"],
         "/v2/sessions/current/data/material-fields/body_core_ms_gradient"
     );
-    assert_eq!(list["fields"][0]["sample_count"], 4);
+    assert_eq!(list["fields"][0]["sample_count"], 0);
 
     let detail_response = app
         .oneshot(
@@ -21319,14 +21354,14 @@ async fn material_field_data_resource_returns_realized_samples() {
     assert_eq!(detail["parameter"], "ms");
     assert_eq!(detail["unit"], "A/m");
     assert_eq!(detail["frame"], "object");
-    assert_eq!(detail["realization_status"], "realized");
-    assert_eq!(detail["sample_count"], 4);
-    assert_eq!(detail["min"], 760000.0);
-    assert_eq!(detail["max"], 790000.0);
-    assert_eq!(detail["mean"], 775000.0);
+    assert_eq!(detail["realization_status"], "authored_pending_realization");
+    assert_eq!(detail["sample_count"], 0);
+    assert!(detail["min"].is_null());
+    assert!(detail["max"].is_null());
+    assert!(detail["mean"].is_null());
     assert_eq!(
         detail["values"],
-        serde_json::json!([760000.0, 770000.0, 780000.0, 790000.0])
+        serde_json::json!([])
     );
 }
 

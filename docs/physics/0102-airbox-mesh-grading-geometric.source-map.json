@@ -262,6 +262,20 @@
   ],
   "sources": [
     {
+      "id": "study-default-body-clamp",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "_study_default_body_clamp_fields",
+      "responsibility": "Keeps bodies without a per-object recipe at the study maximum element size when the air policy raises the background size.",
+      "evidence_status": "interpreted-gmsh-regression"
+    },
+    {
+      "id": "body-target-regression",
+      "path": "packages/fullmag-py/tests/test_shared_domain_body_hmax.py",
+      "symbol": "class SharedDomainBodyHmaxTests",
+      "responsibility": "Two spheres with airbox_hmax above the body target realize and follow the body target.",
+      "evidence_status": "interpreted-gmsh-regression"
+    },
+    {
       "id": "universe-api",
       "path": "packages/fullmag-py/src/fullmag/world.py",
       "symbol": "class StudyUniverseHandle",

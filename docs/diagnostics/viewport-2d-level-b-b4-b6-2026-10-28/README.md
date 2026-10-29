@@ -58,3 +58,18 @@ płaszczyzna 523 ms z budową BVH) — przy 164k elementów indeks nie daje mier
 end-to-end (dominują inne etapy żądania). Punkt 2M elementów nie został uruchomiony (generowanie
 siatki tej skali w grupie DEV), więc korzyść wydajnościowa PM-N17 pozostaje niewykazana.
 
+### PM-N17 — skala 2M elementów (2026-10-29)
+Fixture `examples/viewport_2d_fem_2m_mesh_smoke.py` (ten sam film, h = 0,82 nm, dt = 1,2e-15 s ze względu
+na limit stabilności wymiany): 2 261 783 Tet4, 356 617 węzłów; grupa DEV
+`viewport-2d-pm-n17-scale-20261029`, build z `master` (`c276a163b`, indeks operatora włączony).
+- Poprawność (`pm_n17_probe_check.py`, `pm_n17_2m_probe_check.json`): 4 przekroje (19 778–39 091
+  przeciętych elementów), 300 pikseli: 168/168 zajętych pikseli bitowo równych sondzie (skan
+  bezpośredni), 0 zgubionych elementów; ten sam pojedynczy piksel brzegowy co przy 164k (raster zajęty,
+  sonda pusta — różnica tolerancji brzegu, nie indeks).
+- Czas (`pm_n17_ab.py … 512`, `pm_n17_2m_B.json`): 12 świeżych płaszczyzn 512², meta z budową operatora
+  mediana 11,6 s (9,6–15,5 s; pierwsza 15,5 s z budową BVH).
+- Wariant bez indeksu przy 2M **nie został zmierzony**: build `e9f0799bc` nie przyjmuje sesji zapisanej
+  przez nowszy build (`accepted_run_recovery_required` — trwały run z niekompletnym przygotowaniem),
+  a siatka nie jest deterministyczna między startami grupy. Korzyść czasowa indeksu pozostaje
+  niewykazana; czas żądania przy 2M zdominowany jest przez etapy poza rasteryzacją (do profilowania).
+

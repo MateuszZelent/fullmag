@@ -10,7 +10,11 @@ import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectio
 import {
   sessionRequestScopeKey,
 } from "@/kernel/resources/sessionResourceIdentity";
-import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
+import {
+  SESSION_STATUS_RESOURCE_KEY,
+  useSessionResourceIdentity,
+} from "@/kernel/resources/useSessionStatus";
+import { useRuntimeCommandControlResourceData } from "@/kernel/resources/studyRuntimeResources";
 import {
   MESH_BUILD_CURRENT_RESOURCE_KEY,
   MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY,
@@ -55,6 +59,7 @@ import {
   draftFromUniverseMeshPolicyResource,
   draftIdentityKeyForUniverseMeshPolicyResource,
   draftKeyForUniverseMeshPolicyResource,
+  rebaseAirboxMeshPolicyDraft,
   type AirboxMeshPolicyDraft,
   type AirboxLengthPolicyField,
   type AirboxLengthUnit,
@@ -292,14 +297,20 @@ export function AirboxMeshParametersPanel({
     isDirty: airboxMeshPolicyDraftDirty,
     state: draftState,
   });
+  // Mesh commands resolve their lane from the session status in the context.
+  const runtimeResourceData = useRuntimeCommandControlResourceData({
+    includeSharedDomainReadiness: false,
+    includeStageExecution: false,
+  });
   const commandContext = useMemo(
     () =>
       createCommandContext("inspector", kernel, {
+        resourceData: runtimeResourceData,
         sessionScopeKey,
         sourceDetail: "airbox-mesh-parameters",
         input: { origin: "airbox" },
       }),
-    [kernel, sessionScopeKey],
+    [kernel, runtimeResourceData, sessionScopeKey],
   );
   const inspectorEditSession = useInspectorEditSession();
   const effectiveMode = draft.airboxMode.trim() || "auto";
@@ -402,9 +413,10 @@ export function AirboxMeshParametersPanel({
       identityKey,
       sessionScopeKey: operationSessionScopeKey,
     });
+    const submittedDraft = draft;
     try {
       const submission = await submitAirboxPolicyDraft(
-        draft,
+        rebaseAirboxMeshPolicyDraft(draft, policy.data ?? null),
         (request, requestOptions) => api.meshing.replaceUniversePolicy(request, requestOptions),
         { lane, sessionScopeKey: operationSessionScopeKey },
       );
@@ -418,6 +430,21 @@ export function AirboxMeshParametersPanel({
         return true;
       }
       const next = submission.resource;
+      // Adopt the committed policy as the clean draft base. The server
+      // canonicalizes the config (e.g. it marks it authored), so comparing the
+      // submitted draft with the new base would stay dirty forever. Edits made
+      // while the request was in flight are kept.
+      setDraftState((current) =>
+        current.identityKey === identityKey &&
+        current.dirty &&
+        airboxMeshPolicyDraftDirty(current.draft, submittedDraft)
+          ? current
+          : initialInspectorDraftState({
+            baseDraft: draftFromUniverseMeshPolicyResource(next),
+            baseKey: `${operationSessionScopeKey}:${draftKeyForUniverseMeshPolicyResource(next)}`,
+            identityKey,
+          }),
+      );
       publishCommittedMeshPolicyResource?.(
         resources,
         MESH_UNIVERSE_POLICY_RESOURCE_KEY,
@@ -427,6 +454,11 @@ export function AirboxMeshParametersPanel({
       resources.invalidate(MESH_UNIVERSE_POLICY_RESOURCE_KEY, next.revision);
       resources.invalidate(MESH_BUILD_CURRENT_RESOURCE_KEY, next.revision);
       resources.invalidate(MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY, next.revision);
+      // The policy is stored in the scene document and bumps the scene and
+      // mesh revisions without a realtime event. Refetch both, so open object
+      // drafts and the build dialog's mesh_revision precondition stay current.
+      resources.invalidate(SCENE_RESOURCE_KEY, `mesh-policy:universe:${next.revision}`);
+      resources.invalidate(SESSION_STATUS_RESOURCE_KEY, `mesh-policy:universe:${next.revision}`);
       let fdmReplanMessage: Feedback | null = null;
       if (isFdm && runtimeLane === "fdm") {
         try {

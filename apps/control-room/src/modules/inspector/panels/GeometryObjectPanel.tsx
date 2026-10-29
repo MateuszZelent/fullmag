@@ -53,7 +53,12 @@ import {
   summarizeGeometryValidationMessages,
   type GeometryObjectDraft,
 } from "./geometryObjectPanelModel";
-import { objectEditMetadataEquals, reconcileObjectEditAck, reconcileObjectIdentityAck } from "./objectEditAckReconciliation";
+import {
+  objectEditMetadataEquals,
+  rebaseDirtyDraftOntoUnchangedObject,
+  reconcileObjectEditAck,
+  reconcileObjectIdentityAck,
+} from "./objectEditAckReconciliation";
 
 type Feedback = {
   kind: "error" | "success" | "warning";
@@ -208,7 +213,11 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     // Publishing the same confirmed revision must not normalize that text away.
     const currentDraft = objectEditSession.getSnapshot().draft;
     if (!Number.isFinite(baseDraft.baseRevision) || currentDraft?.baseRevision !== baseDraft.baseRevision) {
-      objectEditSession.refreshCanonical(identity, canonicalDraftInSelectedUnits(baseDraft, currentDraft ?? baseDraft));
+      objectEditSession.refreshCanonical(
+        identity,
+        canonicalDraftInSelectedUnits(baseDraft, currentDraft ?? baseDraft),
+        rebaseDirtyDraftOntoUnchangedObject,
+      );
     }
   }, [baseDraft, currentSessionScopeKey, objectEditSession, targetKey]);
 

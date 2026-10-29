@@ -51,6 +51,7 @@ import { resolveDiagnosticRecorderConfig } from "./performance/diagnostic-record
 import { KernelContext } from "./KernelContext";
 import { LayoutController } from "./layout/LayoutController";
 import { SHELL_COMMANDS } from "./layout/shellCommands";
+import { useDomainSetupNavigation } from "./layout/domainSetupNavigation";
 import { ModuleRegistry } from "./module/ModuleRegistry";
 import { startBrowserActivityDiagnostics } from "./performance/browserActivityDiagnostics";
 import { startPerformanceMeasureDiagnostics } from "./performance/performanceMeasureDiagnostics";
@@ -506,6 +507,9 @@ function AvailableSessionRuntimeConnectors({ kernel, collection }: {
     clearRuntimeSelection();
     return clearRuntimeSelection;
   }, [kernel, scopeKey]);
+  // Declared after the clearing effect so a requested Universe selection is
+  // applied after the session-transition clear, not wiped by it.
+  useDomainSetupNavigation(kernel, confirmedIdentity?.sessionId ?? null, scopeKey);
   if (!confirmedIdentity) return null;
   return (
     <>
