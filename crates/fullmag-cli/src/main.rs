@@ -1746,6 +1746,7 @@ mod tests {
             air_box_config: None,
             interfacial_dmi: None,
             rotated_interfacial_dmi: None,
+            rotated_interfacial_dmi_object_ids: None,
             bulk_dmi: None,
             dmi_interface_normal: None,
             dind_field: None,

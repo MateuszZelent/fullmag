@@ -615,6 +615,7 @@ mod tests {
 
     fn valid_multilayer_plan() -> FdmMultilayerPlanIR {
         let layer = |name: &str, origin_z: f64, magnetization: [f64; 3]| FdmLayerPlanIR {
+            rotated_interfacial_dmi: None,
             magnet_name: name.to_string(),
             layer_id: format!("layer:{name}"),
             object_id: name.to_string(),

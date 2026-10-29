@@ -280,6 +280,9 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "demag_realization": _export_demag_realization(base_problem),
         "external_field": _problem_external_field(base_problem),
         "rotated_interfacial_dmi": _problem_rotated_interfacial_dmi(base_problem),
+        "rotated_interfacial_dmi_object_ids": (
+            _problem_rotated_interfacial_dmi_object_ids(base_problem)
+        ),
         "solver": {
             "integrator": base_dynamics.integrator if base_dynamics is not None else None,
             "fixed_timestep": _text_number(base_dynamics.fixed_timestep) if base_dynamics is not None else None,
@@ -10907,7 +10910,9 @@ def _script_api_surface(
     # instead of rendering an invalid ``fm.terms`` call (or dropping it).
     has_rotated_dmi = any(
         isinstance(term, RotatedInterfacialDMI) for term in problem.energy
-    ) or _number_or_none(rotated_dmi_override) is not None
+    ) or _number_or_none(rotated_dmi_override) is not None or (
+        overrides.get("rotated_interfacial_dmi_object_ids") is not None
+    )
     if problem.couplings or (
         isinstance(couplings_override, list) and len(couplings_override) > 0
     ) or problem.monitors or (
@@ -11013,11 +11018,27 @@ def _problem_external_field(problem: Problem) -> list[float] | None:
     return None
 
 
-def _problem_rotated_interfacial_dmi(problem: Problem) -> float | None:
+def _problem_rotated_interfacial_dmi_term(
+    problem: Problem,
+) -> RotatedInterfacialDMI | None:
     for term in problem.energy:
         if isinstance(term, RotatedInterfacialDMI):
-            return term.D
+            return term
     return None
+
+
+def _problem_rotated_interfacial_dmi(problem: Problem) -> float | None:
+    term = _problem_rotated_interfacial_dmi_term(problem)
+    return term.D if term is not None else None
+
+
+def _problem_rotated_interfacial_dmi_object_ids(
+    problem: Problem,
+) -> list[str] | None:
+    term = _problem_rotated_interfacial_dmi_term(problem)
+    if term is None or term.object_ids is None:
+        return None
+    return list(term.object_ids)
 
 
 def _render_rotated_interfacial_dmi(
@@ -11026,15 +11047,43 @@ def _render_rotated_interfacial_dmi(
     overrides: Mapping[str, object],
     surface: str,
 ) -> list[str]:
-    value = _number_or_none(overrides.get("rotated_interfacial_dmi"))
-    if "rotated_interfacial_dmi" not in overrides:
-        value = _problem_rotated_interfacial_dmi(problem)
+    term = _problem_rotated_interfacial_dmi_term(problem)
+    if "rotated_interfacial_dmi" in overrides:
+        value = _number_or_none(overrides.get("rotated_interfacial_dmi"))
+    else:
+        value = term.D if term is not None else None
+    if "rotated_interfacial_dmi_object_ids" in overrides:
+        object_ids: object = overrides.get("rotated_interfacial_dmi_object_ids")
+    else:
+        object_ids = term.object_ids if term is not None else None
     if value is None:
+        if object_ids is not None:
+            raise ValueError(
+                "rotated_interfacial_dmi_object_ids requires a rotated_interfacial_dmi value"
+            )
         return []
     if surface != "study":
         raise ValueError("rotated interfacial DMI requires the canonical study API surface")
+    normalized = RotatedInterfacialDMI(D=value, object_ids=object_ids)
+    if normalized.object_ids is not None:
+        magnetic_object_ids = {
+            magnet.object_id if magnet.object_id is not None else magnet.name
+            for magnet in problem.magnets
+        }
+        unknown_object_ids = sorted(set(normalized.object_ids) - magnetic_object_ids)
+        if unknown_object_ids:
+            raise ValueError(
+                "rotated_interfacial_dmi references unknown magnetic object_id(s): "
+                + ", ".join(unknown_object_ids)
+            )
+    object_ids_arg = (
+        f", object_ids={_py_literal(normalized.object_ids)}"
+        if normalized.object_ids is not None
+        else ""
+    )
     return [
-        f"study.terms.add(fm.RotatedInterfacialDMI(D={_py_float_roundtrip(value)}))"
+        "study.terms.add(fm.RotatedInterfacialDMI("
+        f"D={_py_float_roundtrip(value)}{object_ids_arg}))"
     ]
 
 
@@ -11555,7 +11604,12 @@ def _py_literal(value: object) -> str:
     if isinstance(value, str):
         return _py_repr(value)
     if isinstance(value, tuple):
-        return "(" + ", ".join(_py_literal(item) for item in value) + ")"
+        return (
+            "("
+            + ", ".join(_py_literal(item) for item in value)
+            + ("," if len(value) == 1 else "")
+            + ")"
+        )
     if isinstance(value, list):
         return "[" + ", ".join(_py_literal(item) for item in value) + "]"
     if isinstance(value, dict):

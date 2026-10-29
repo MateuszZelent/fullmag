@@ -375,6 +375,17 @@ fn validate_dmi_scope_exclusivity(
             "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition",
         ));
     }
+    if let Some(ids) = &scene.study.rotated_interfacial_dmi_object_ids {
+        let mut seen = BTreeSet::new();
+        if scene.study.rotated_interfacial_dmi.is_none() || ids.is_empty() {
+            return Err(SceneDocumentValidationError::new("rotated_interfacial_dmi_object_ids requires a D coefficient and nonempty scope"));
+        }
+        for id in ids {
+            if id.trim().is_empty() || !seen.insert(id) || !crate::scene_solve_objects(scene).any(|object| object.id == *id) {
+                return Err(SceneDocumentValidationError::new("rotated_interfacial_dmi_object_ids must reference unique existing objects"));
+            }
+        }
+    }
     let mut conflicts = BTreeSet::new();
     for object in &scene.objects {
         let mut interfacial_present = false;

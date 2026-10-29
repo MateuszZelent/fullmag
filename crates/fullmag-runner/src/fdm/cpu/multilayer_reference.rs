@@ -1454,7 +1454,9 @@ fn build_contexts_and_states(
                             .unwrap_or([0.0, 1.0, 0.0]),
                     }),
                 interfacial_dmi: plan.interfacial_dmi,
-                rotated_interfacial_dmi: plan.rotated_interfacial_dmi,
+                rotated_interfacial_dmi: layer
+                    .rotated_interfacial_dmi
+                    .or(plan.rotated_interfacial_dmi),
                 bulk_dmi: plan.bulk_dmi,
                 zhang_li_stt: None,
                 slonczewski_stt: None,
@@ -2812,6 +2814,7 @@ mod tests {
     fn make_plan(enable_demag: bool) -> FdmMultilayerPlanIR {
         let layers = vec![
             FdmLayerPlanIR {
+                rotated_interfacial_dmi: None,
                 magnet_name: "free".to_string(),
                 layer_id: "layer:free".to_string(),
                 object_id: "free".to_string(),
@@ -2835,6 +2838,7 @@ mod tests {
                 transfer_kind: "identity".to_string(),
             },
             FdmLayerPlanIR {
+                rotated_interfacial_dmi: None,
                 magnet_name: "ref".to_string(),
                 layer_id: "layer:ref".to_string(),
                 object_id: "ref".to_string(),
@@ -4052,6 +4056,50 @@ mod tests {
             rhs.iter().any(|layer| max_norm(layer) > 0.0),
             "rotated DMI must contribute to the multilayer RHS"
         );
+    }
+
+    #[test]
+    fn multilayer_reference_cpu_uses_layer_scoped_rotated_dmi() {
+        let mut plan = make_plan(false);
+        plan.enable_exchange = false;
+        plan.interfacial_dmi = None;
+        plan.bulk_dmi = None;
+        plan.rotated_interfacial_dmi = None;
+        plan.layers[0].rotated_interfacial_dmi = Some(4.0e-3);
+        plan.layers[1].rotated_interfacial_dmi = Some(0.0);
+        for layer in &mut plan.layers {
+            let layer_nx = layer.native_grid[0] as usize;
+            for (index, value) in layer.initial_magnetization.iter_mut().enumerate() {
+                let x = (index % layer_nx) as f64;
+                let y = (index / layer_nx) as f64;
+                *value = [0.25 + 0.04 * x, -0.3 + 0.03 * y, 0.5 - 0.02 * x];
+            }
+        }
+
+        let (contexts, states) =
+            build_contexts_and_states(&plan, fullmag_engine::TimeIntegrator::Heun, false)
+                .expect("layer-scoped rotated-DMI contexts should build");
+        assert_eq!(
+            contexts[0].problem.terms.rotated_interfacial_dmi,
+            Some(4.0e-3)
+        );
+        assert_eq!(
+            contexts[1].problem.terms.rotated_interfacial_dmi,
+            Some(0.0)
+        );
+
+        let observables = observe_multilayer(&contexts, &states, None)
+            .expect("layer-scoped rotated-DMI observables should compute");
+        let split = plan.layers[0].initial_magnetization.len();
+        assert!(max_norm(&observables.rotated_dmi_field[..split]) > 0.0);
+        assert!(observables.rotated_dmi_field[split..]
+            .iter()
+            .flatten()
+            .all(|component| *component == 0.0));
+        assert_eq!(observables.per_object_scalars["free"]["e_rotated_dmi"],
+            contexts[0].problem.rotated_interfacial_dmi_energy_from_vectors(
+                states[0].magnetization()));
+        assert_eq!(observables.per_object_scalars["ref"]["e_rotated_dmi"], 0.0);
     }
 
     #[test]

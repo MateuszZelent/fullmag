@@ -61,6 +61,67 @@ struct LayerContext {
     problem: ExchangeLlgProblem,
 }
 
+fn effective_rotated_interfacial_dmi(
+    plan: &FdmMultilayerPlanIR,
+    layer: &FdmLayerPlanIR,
+) -> Option<f64> {
+    layer.rotated_interfacial_dmi.or(plan.rotated_interfacial_dmi)
+}
+
+fn has_rotated_interfacial_dmi(plan: &FdmMultilayerPlanIR) -> bool {
+    plan.rotated_interfacial_dmi.is_some()
+        || plan
+            .layers
+            .iter()
+            .any(|layer| layer.rotated_interfacial_dmi.is_some())
+}
+
+fn output_field_was_sampled_at(
+    name: &str,
+    time: f64,
+    field_schedules: &[crate::schedules::OutputSchedule],
+) -> bool {
+    field_schedules.iter().any(|schedule| {
+        schedule.name == name
+            && schedule
+                .last_sampled_time
+                .is_some_and(|sampled_time| sampled_time == time)
+    })
+}
+
+fn record_accepted_step_autosave_fields(
+    names: &[String],
+    observables: &StateObservables,
+    step: u64,
+    time: f64,
+    solver_dt: f64,
+    field_schedules: &[crate::schedules::OutputSchedule],
+    artifacts: &mut ArtifactRecorder,
+) -> Result<(), RunError> {
+    for name in names {
+        if output_field_was_sampled_at(name, time, field_schedules) {
+            continue;
+        }
+        artifacts.record_field_snapshot(FieldSnapshot {
+            name: name.clone(),
+            step,
+            time,
+            solver_dt,
+            component_count: 3,
+            component_order: "xyz".into(),
+            location: "sample".into(),
+            scope: "full".into(),
+            revision: step.saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(select_state_observable_field(
+                observables,
+                name,
+                false,
+            )?),
+        })?;
+    }
+    Ok(())
+}
+
 struct LayerGpuContext {
     backend: NativeFdmBackend,
     cell_count: usize,
@@ -530,17 +591,21 @@ fn validate_device_resident_cuda_multilayer_lane(
                 .to_string(),
         });
     };
+    if let Some(message) = fullmag_plan::fdm_multilayer_cuda_aligned_embedding_error(plan) {
+        return Err(RunError { message });
+    }
+    let aligned = fullmag_plan::fdm_multilayer_cuda_aligned_embedding_eligible(&plan.layers);
     let common_cell_size = first_layer.convolution_cell_size;
     for layer in &plan.layers {
-        if layer.transfer_kind != "identity"
-            || layer.native_grid != layer.convolution_grid
+        if (!aligned && (layer.transfer_kind != "identity"
+            || layer.native_grid != layer.convolution_grid))
             || layer.native_cell_size != layer.convolution_cell_size
             || layer.convolution_grid != plan.common_cells
             || layer.convolution_cell_size != common_cell_size
         {
             return Err(RunError {
                 message: format!(
-                    "fdm_cuda_device_resident_multilayer_identity_common_grid_required: layer '{}' must use an identity native/scratch descriptor on the common grid",
+                    "fdm_cuda_device_resident_multilayer_identity_common_grid_required: layer '{}' must use identity or a qualified centered insertion/crop descriptor on the common grid",
                     layer.layer_id
                 ),
             });
@@ -607,6 +672,9 @@ pub(crate) fn validate_accepted_fdm_multilayer_cuda_lane(
 /// or FFI.
 fn validate_cuda_multilayer_execution_contract(plan: &FdmMultilayerPlanIR) -> Result<(), RunError> {
     reject_cuda_multilayer_containment(plan.enable_demag, &plan.mode, &plan.layers)?;
+    if let Some(message) = fullmag_plan::fdm_multilayer_cuda_aligned_embedding_error(plan) {
+        return Err(RunError { message });
+    }
     if let Some(message) = fullmag_plan::fdm_multilayer_cuda_material_field_errors(&plan.layers)
         .into_iter()
         .next()
@@ -649,9 +717,9 @@ fn validate_cuda_multilayer_execution_contract(plan: &FdmMultilayerPlanIR) -> Re
     Ok(())
 }
 
-/// Return whether the native single-grid/v2 descriptor can represent every
-/// layer without a hidden transfer. `push_pull` is not promoted because the
-/// current CUDA runner does not consume its canonical transfer contract.
+/// Return whether the identity-only stacked/assisted selector can represent
+/// every layer without a transfer. Centered embedding has a separate resident
+/// lane and must never be collapsed into this identity descriptor.
 fn native_cuda_identity_descriptor_eligible(plan: &FdmMultilayerPlanIR) -> Result<bool, RunError> {
     for layer in &plan.layers {
         match layer.transfer_kind.as_str() {
@@ -732,9 +800,11 @@ fn build_contexts_and_states(
                 external_field: plan.external_field,
                 per_node_field: None,
                 magnetoelastic: None,
-                uniaxial_anisotropy: layer.material.uniaxial_anisotropy_ku1.map(|ku1| {
+                uniaxial_anisotropy: (layer.material.uniaxial_anisotropy_ku1.is_some()
+                    || layer.material.uniaxial_anisotropy_ku2.is_some())
+                .then(|| {
                     UniaxialAnisotropyConfig {
-                        ku1,
+                        ku1: layer.material.uniaxial_anisotropy_ku1.unwrap_or(0.0),
                         ku2: layer.material.uniaxial_anisotropy_ku2.unwrap_or(0.0),
                         axis: layer.material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]),
                     }
@@ -758,7 +828,9 @@ fn build_contexts_and_states(
                             .unwrap_or([0.0, 1.0, 0.0]),
                     }),
                 interfacial_dmi: plan.interfacial_dmi,
-                rotated_interfacial_dmi: plan.rotated_interfacial_dmi,
+                rotated_interfacial_dmi: layer
+                    .rotated_interfacial_dmi
+                    .or(plan.rotated_interfacial_dmi),
                 bulk_dmi: plan.bulk_dmi,
                 zhang_li_stt: None,
                 slonczewski_stt: None,
@@ -1550,12 +1622,22 @@ fn execute_native_device_resident_cuda_multilayer(
         artifacts.record_scalar(&initial_stats)?;
         steps.push(initial_stats.clone());
     }
+    let initial_autosave_fields = artifacts.due_accepted_step_fields(0, false);
     record_due_fields(
         &initial_observables,
         0,
         0.0,
         0.0,
         &mut field_schedules,
+        &mut artifacts,
+    )?;
+    record_accepted_step_autosave_fields(
+        &initial_autosave_fields,
+        &initial_observables,
+        0,
+        0.0,
+        0.0,
+        &field_schedules,
         &mut artifacts,
     )?;
     let mut latest_observables = Some((0, 0.0, initial_observables));
@@ -1574,9 +1656,11 @@ fn execute_native_device_resident_cuda_multilayer(
         stage_telemetry =
             Some(backend.snapshot_multilayer_demag_stage_telemetry(plan.layers.len() as u64)?);
 
-        let field_output_due = field_schedules
-            .iter()
-            .any(|schedule| is_due(native_stats.time, schedule.next_time));
+        let autosave_fields = artifacts.due_accepted_step_fields(native_stats.step, false);
+        let field_output_due = !autosave_fields.is_empty()
+            || field_schedules
+                .iter()
+                .any(|schedule| is_due(native_stats.time, schedule.next_time));
         let live_snapshot_due = live.as_ref().is_some_and(|(_, field_every_n, _, _)| {
             crate::types::fdm_multilayer_live_field_due(native_stats.step, *field_every_n)
         });
@@ -1638,6 +1722,15 @@ fn execute_native_device_resident_cuda_multilayer(
                 stats.time,
                 stats.dt,
                 &mut field_schedules,
+                &mut artifacts,
+            )?;
+            record_accepted_step_autosave_fields(
+                &autosave_fields,
+                observables,
+                stats.step,
+                stats.time,
+                stats.dt,
+                &field_schedules,
                 &mut artifacts,
             )?;
         }
@@ -1704,11 +1797,13 @@ fn execute_native_device_resident_cuda_multilayer(
     }
 
     let final_native_stats = latest_native_stats.unwrap_or_default();
-    let final_field_output_due = field_schedules.iter().any(|schedule| {
-        !schedule
-            .last_sampled_time
-            .is_some_and(|time| same_time(time, final_native_stats.time))
-    });
+    let final_autosave_fields = artifacts.due_accepted_step_fields(final_native_stats.step, true);
+    let final_field_output_due = !final_autosave_fields.is_empty()
+        || field_schedules.iter().any(|schedule| {
+            !schedule
+                .last_sampled_time
+                .is_some_and(|time| same_time(time, final_native_stats.time))
+        });
     let mut terminal_observation_error = None;
     let final_observables = match latest_observables {
         Some((step, time, observables))
@@ -1801,6 +1896,23 @@ fn execute_native_device_resident_cuda_multilayer(
                 false,
             )?),
         })?;
+        schedule.last_sampled_time = Some(final_stats.time);
+    }
+    if !final_autosave_fields.is_empty() {
+        let observables = final_observables.as_ref().ok_or_else(|| RunError {
+            message: terminal_observation_error.clone().unwrap_or_else(|| {
+                "CUDA multilayer terminal autosave field snapshot is unavailable".into()
+            }),
+        })?;
+        record_accepted_step_autosave_fields(
+            &final_autosave_fields,
+            observables,
+            final_stats.step,
+            final_stats.time,
+            final_stats.dt,
+            &field_schedules,
+            &mut artifacts,
+        )?;
     }
 
     artifacts.update_provenance(device_resident_multilayer_provenance(
@@ -1912,7 +2024,7 @@ fn snapshot_native_multilayer_observables(
         let mut h_ex = backend.copy_layer_h_ex(layer_index as u32, cell_count)?;
         let mut h_ani = backend.copy_layer_h_ani(layer_index as u32, cell_count)?;
         let mut h_dmi = backend.copy_layer_h_dmi(layer_index as u32, cell_count)?;
-        let mut h_rotated_dmi = if plan.rotated_interfacial_dmi.is_some() {
+        let mut h_rotated_dmi = if has_rotated_interfacial_dmi(plan) {
             backend.copy_layer_h_rotated_dmi(layer_index as u32, cell_count)?
         } else {
             vec![[0.0; 3]; cell_count]
@@ -1943,7 +2055,7 @@ fn snapshot_native_multilayer_observables(
         // conventional-DMI snapshots (six fields) while retaining the
         // seventh device-to-host vector for an active rDMI term.
         let observed_vector_fields =
-            observed_snapshot_vector_field_count(plan.rotated_interfacial_dmi.is_some());
+            observed_snapshot_vector_field_count(has_rotated_interfacial_dmi(plan));
         for _ in 0..observed_vector_fields {
             transfer_counters.record_observed_snapshot_d2h_vector(cell_count);
         }
@@ -3278,6 +3390,15 @@ fn build_native_stacked_cuda_plan(
         return Ok(None);
     };
 
+    let stacked_rotated_interfacial_dmi =
+        effective_rotated_interfacial_dmi(plan, first_layer);
+    if plan.layers.iter().skip(1).any(|layer| {
+        effective_rotated_interfacial_dmi(plan, layer)
+            != stacked_rotated_interfacial_dmi
+    }) {
+        return Ok(None);
+    }
+
     let reference_material = &first_layer.material;
     let reference_cell_size = first_layer.native_cell_size;
     if plan.layers.iter().any(|layer| {
@@ -3593,7 +3714,7 @@ fn build_native_stacked_cuda_plan(
             temperature: None,
             thermal_seed_config: None,
             interfacial_dmi: plan.interfacial_dmi,
-            rotated_interfacial_dmi: plan.rotated_interfacial_dmi,
+            rotated_interfacial_dmi: stacked_rotated_interfacial_dmi,
             bulk_dmi: plan.bulk_dmi,
             dind_field: None,
             dbulk_field: None,
@@ -4056,7 +4177,9 @@ fn single_layer_cuda_plan(plan: &FdmMultilayerPlanIR, layer: &FdmLayerPlanIR) ->
         temperature: None,
         thermal_seed_config: None,
         interfacial_dmi: plan.interfacial_dmi,
-        rotated_interfacial_dmi: plan.rotated_interfacial_dmi,
+        rotated_interfacial_dmi: layer
+            .rotated_interfacial_dmi
+            .or(plan.rotated_interfacial_dmi),
         bulk_dmi: plan.bulk_dmi,
         dind_field: None,
         dbulk_field: None,
@@ -5822,6 +5945,26 @@ mod tests {
         RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION, SELECTION_CERTIFICATE_SCHEMA_VERSION,
     };
 
+    #[test]
+    fn accepted_step_autosave_fields_dedupe_output_capture_by_name_and_time() {
+        let time = 2.0e-12;
+        let schedules = vec![crate::schedules::OutputSchedule {
+            name: "m".to_string(),
+            every_seconds: 1.0e-12,
+            next_time: 3.0e-12,
+            last_sampled_time: Some(time),
+        }];
+
+        assert!(output_field_was_sampled_at("m", time, &schedules));
+        assert!(!output_field_was_sampled_at("m", time + 5.0e-19, &schedules));
+        assert!(!output_field_was_sampled_at("m", 3.0e-12, &schedules));
+        assert!(!output_field_was_sampled_at(
+            "H_rotated_dmi",
+            time,
+            &schedules
+        ));
+    }
+
     fn frozen_plan_for_mask(mask: Vec<bool>, grid_fingerprint: &str) -> ResolvedFrozenSpinsPlanIR {
         let frozen_dof_count = mask.iter().filter(|is_frozen| **is_frozen).count() as u64;
         let active_dof_count = mask.len() as u64;
@@ -6008,6 +6151,7 @@ mod tests {
             resolved_periodic_images: None,
             layers: vec![
                 FdmLayerPlanIR {
+                    rotated_interfacial_dmi: None,
                     magnet_name: "free".to_string(),
                     layer_id: "layer:free".to_string(),
                     object_id: "free".to_string(),
@@ -6031,6 +6175,7 @@ mod tests {
                     transfer_kind: "identity".to_string(),
                 },
                 FdmLayerPlanIR {
+                    rotated_interfacial_dmi: None,
                     magnet_name: "ref".to_string(),
                     layer_id: "layer:ref".to_string(),
                     object_id: "ref".to_string(),
@@ -6514,6 +6659,7 @@ mod tests {
     fn native_cuda_push_pull_fails_containment_before_assisted_execution() {
         let mut plan = make_plan(true, ExecutionPrecision::Double);
         plan.layers[0].transfer_kind = "push_pull".to_string();
+        plan.layers[0].native_origin[0] += 0.5e-9;
         assert_eq!(
             native_cuda_identity_descriptor_eligible(&plan)
                 .expect("push_pull is a known non-native descriptor"),
@@ -6536,6 +6682,7 @@ mod tests {
             field_refresh: None,
             layers: vec![
                 FdmLayerPlanIR {
+                    rotated_interfacial_dmi: None,
                     magnet_name: "bottom".to_string(),
                     layer_id: "layer:bottom".to_string(),
                     object_id: "bottom".to_string(),
@@ -6559,6 +6706,7 @@ mod tests {
                     transfer_kind: "identity".to_string(),
                 },
                 FdmLayerPlanIR {
+                    rotated_interfacial_dmi: None,
                     magnet_name: "top".to_string(),
                     layer_id: "layer:top".to_string(),
                     object_id: "top".to_string(),
@@ -6664,6 +6812,38 @@ mod tests {
     }
 
     #[test]
+    fn cuda_assisted_contexts_preserve_layer_scoped_rdmi_and_ku2_only() {
+        let mut plan = make_assisted_plan(false, ExecutionPrecision::Double);
+        plan.enable_exchange = true;
+        plan.interfacial_dmi = None;
+        plan.bulk_dmi = None;
+        plan.rotated_interfacial_dmi = None;
+        plan.layers[0].rotated_interfacial_dmi = Some(4.0e-3);
+        plan.layers[1].rotated_interfacial_dmi = Some(0.0);
+        plan.layers[1].material.uniaxial_anisotropy_ku1 = None;
+        plan.layers[1].material.uniaxial_anisotropy_ku2 = Some(2.5e4);
+
+        let (contexts, _) = build_contexts_and_states(&plan, false)
+            .expect("CUDA-assisted layer contexts should materialize");
+        assert_eq!(
+            contexts[0].problem.terms.rotated_interfacial_dmi,
+            Some(4.0e-3)
+        );
+        assert_eq!(
+            contexts[1].problem.terms.rotated_interfacial_dmi,
+            Some(0.0)
+        );
+        let anisotropy = contexts[1]
+            .problem
+            .terms
+            .uniaxial_anisotropy
+            .expect("Ku2 alone must activate the native assisted anisotropy context");
+        assert_eq!(anisotropy.ku1, 0.0);
+        assert_eq!(anisotropy.ku2, 2.5e4);
+        assert!(has_rotated_interfacial_dmi(&plan));
+    }
+
+    #[test]
     fn native_stacked_cuda_plan_preserves_global_dmi_constants() {
         let mut plan = make_auto_plan(false, ExecutionPrecision::Double);
         add_global_dmi_texture(&mut plan);
@@ -6674,6 +6854,23 @@ mod tests {
 
         assert_eq!(native.combined_plan.interfacial_dmi, plan.interfacial_dmi);
         assert_eq!(native.combined_plan.bulk_dmi, plan.bulk_dmi);
+    }
+
+    #[test]
+    fn native_stacked_cuda_plan_uses_only_uniform_effective_rdmi() {
+        let mut plan = make_auto_plan(false, ExecutionPrecision::Double);
+        plan.rotated_interfacial_dmi = None;
+        plan.layers[0].rotated_interfacial_dmi = Some(4.0e-3);
+        plan.layers[1].rotated_interfacial_dmi = Some(0.0);
+        assert!(build_native_stacked_cuda_plan(&plan)
+            .expect("different layer DMI coefficients should be a lane fallback")
+            .is_none());
+
+        plan.layers[1].rotated_interfacial_dmi = Some(4.0e-3);
+        let native = build_native_stacked_cuda_plan(&plan)
+            .expect("uniform layer DMI should remain eligible")
+            .expect("uniform layer DMI should use the collapsed path");
+        assert_eq!(native.combined_plan.rotated_interfacial_dmi, Some(4.0e-3));
     }
 
     #[test]

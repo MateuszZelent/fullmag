@@ -284,6 +284,9 @@ pub struct FdmMultilayerPlanIR {
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct FdmLayerPlanIR {
+    /// Explicit layer coefficient; None inherits the legacy study-wide value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotated_interfacial_dmi: Option<f64>,
     pub magnet_name: String,
     /// Stable layer identity derived from the authored object identity.
     pub layer_id: String,
@@ -310,6 +313,8 @@ pub struct FdmLayerPlanIR {
 
 #[derive(Debug, Clone, Deserialize)]
 struct FdmLayerPlanWireIR {
+    #[serde(default)]
+    rotated_interfacial_dmi: Option<f64>,
     magnet_name: String,
     #[serde(default)]
     layer_id: Option<String>,
@@ -338,7 +343,11 @@ impl<'de> Deserialize<'de> for FdmLayerPlanIR {
         D: Deserializer<'de>,
     {
         let wire = FdmLayerPlanWireIR::deserialize(deserializer)?;
+        if wire.rotated_interfacial_dmi.is_some_and(|d| !d.is_finite()) {
+            return Err(serde::de::Error::custom("layer rotated_interfacial_dmi must be finite"));
+        }
         Ok(Self {
+            rotated_interfacial_dmi: wire.rotated_interfacial_dmi,
             layer_id: wire
                 .layer_id
                 .unwrap_or_else(|| format!("layer:{}", wire.magnet_name)),
@@ -1116,6 +1125,7 @@ mod multilayer_contract_tests {
 
     fn legacy_plan_fixture() -> FdmMultilayerPlanIR {
         let layers = vec![FdmLayerPlanIR {
+            rotated_interfacial_dmi: None,
             magnet_name: "free".to_string(),
             layer_id: "layer:free".to_string(),
             object_id: "free".to_string(),

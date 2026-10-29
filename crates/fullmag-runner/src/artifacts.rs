@@ -6950,6 +6950,7 @@ mod tests {
                 resolved_periodic_images: None,
                 layers: vec![
                     FdmLayerPlanIR {
+                        rotated_interfacial_dmi: None,
                         magnet_name: "bottom".to_string(),
                         layer_id: "layer:bottom".to_string(),
                         object_id: "bottom".to_string(),
@@ -6967,6 +6968,7 @@ mod tests {
                         transfer_kind: "identity".to_string(),
                     },
                     FdmLayerPlanIR {
+                        rotated_interfacial_dmi: None,
                         magnet_name: "top".to_string(),
                         layer_id: "layer:top".to_string(),
                         object_id: "top".to_string(),

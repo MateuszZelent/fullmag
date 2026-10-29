@@ -2183,6 +2183,7 @@ mod tests {
             fdm: None,
             external_field: None,
             rotated_interfacial_dmi: None,
+            rotated_interfacial_dmi_object_ids: None,
             solver: fullmag_authoring::ScriptBuilderSolverState {
                 integrator: "rk45".to_string(),
                 fixed_timestep: String::new(),

@@ -158,6 +158,8 @@ struct DeviceMultilayerLayer {
     double Ku1 = 0.0;
     double Ku2 = 0.0;
     double anisU[3] = {0.0, 0.0, 1.0};
+    bool has_rotated_interfacial_dmi = false;
+    double D_rotated_interfacial = 0.0;
     bool has_cubic_anisotropy = false;
     double Kc1 = 0.0;
     double Kc2 = 0.0;

@@ -2384,10 +2384,47 @@ fn has_referenced_material_anisotropy(problem: &ProblemIR) -> bool {
     })
 }
 
+/// Material-scoped conventional DMI must never be lost or promoted across objects.
+/// Current FDM execution represents these coefficients only as global terms.
+fn validate_fdm_material_dmi(problem: &ProblemIR) -> Result<(), PlanError> {
+    for (name, bulk) in [("interfacial", false), ("bulk", true)] {
+        let declared = problem.magnets.iter().filter_map(|magnet| {
+            problem.materials.iter().find(|m| m.name == magnet.material)
+                .map(|m| if bulk { m.bulk_dmi } else { m.interfacial_dmi })
+        }).collect::<Vec<_>>();
+        if !declared.iter().any(Option::is_some) { continue; }
+        let coefficient = declared.first().copied().flatten().unwrap_or(0.0);
+        if declared.iter().any(|d| d.unwrap_or(0.0) != coefficient) {
+            return Err(PlanError { reasons: vec![format!(
+                "per-object {name} material DMI differs between magnets; current FDM requires a uniform global coefficient and cannot promote the first material value"
+            )] });
+        }
+        let global = problem.energy_terms.iter().find_map(|term| match term {
+            EnergyTermIR::InterfacialDmi { d, .. } if !bulk => Some(*d),
+            EnergyTermIR::BulkDmi { d } if bulk => Some(*d),
+            _ => None,
+        }).unwrap_or(0.0);
+        if global != coefficient {
+            return Err(PlanError { reasons: vec![format!(
+                "{name} material DMI is not represented by the FDM global energy term; specify a matching explicit term or remove material DMI"
+            )] });
+        }
+    }
+    Ok(())
+}
+
+/// Resolve a study-level rDMI term onto one complete magnetic object.
+/// An explicit zero preserves the exclusion rather than inheriting global D.
+fn object_rotated_dmi(d: f64, object_ids: Option<&[String]>, magnet: &fullmag_ir::MagnetIR) -> f64 {
+    let id = magnet.object_id.as_deref().unwrap_or(magnet.name.as_str());
+    if object_ids.is_none_or(|ids| ids.iter().any(|candidate| candidate == id)) { d } else { 0.0 }
+}
+
 pub(crate) fn plan_fdm(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
 ) -> Result<ExecutionPlanIR, PlanError> {
+    validate_fdm_material_dmi(problem)?;
     let mut errors = Vec::new();
     let active_transport_graph =
         crate::spin_transport::resolve_active_fdm_transport_graph(problem)?;
@@ -2455,9 +2492,10 @@ pub(crate) fn plan_fdm(
             EnergyTermIR::BulkDmi { .. } => {
                 has_bulk_dmi = true;
             }
-            EnergyTermIR::RotatedInterfacialDmi { d } => {
+            EnergyTermIR::RotatedInterfacialDmi { d, object_ids } => {
                 has_rotated_interfacial_dmi = true;
-                has_nonzero_rotated_interfacial_dmi |= *d != 0.0;
+                has_nonzero_rotated_interfacial_dmi |= problem.magnets.first()
+                    .is_some_and(|magnet| object_rotated_dmi(*d, object_ids.as_deref(), magnet) != 0.0);
             }
             EnergyTermIR::ThermalNoise { temperature, seed } => {
                 if has_thermal_noise {
@@ -3543,8 +3581,8 @@ pub(crate) fn plan_fdm(
             EnergyTermIR::BulkDmi { d } => {
                 fdm_plan.bulk_dmi = Some(*d);
             }
-            EnergyTermIR::RotatedInterfacialDmi { d } => {
-                fdm_plan.rotated_interfacial_dmi = Some(*d);
+            EnergyTermIR::RotatedInterfacialDmi { d, object_ids } => {
+                fdm_plan.rotated_interfacial_dmi = Some(object_rotated_dmi(*d, object_ids.as_deref(), magnet));
             }
             _ => {}
         }
@@ -4002,6 +4040,72 @@ pub fn fdm_multilayer_cuda_material_field_errors(layers: &[FdmLayerPlanIR]) -> V
         .collect()
 }
 
+/// Whether native voxels can be embedded exactly into a centered common grid.
+///
+/// This is a same-cell insertion/crop, not interpolation: XY offsets are
+/// integral and centered, and Z starts at the layer's own scratch origin.
+/// The shifted pair kernel carries the physical displacement between layers.
+/// Generic overlap/resampling remains outside this CUDA contract.
+pub fn fdm_multilayer_cuda_aligned_embedding_eligible(layers: &[FdmLayerPlanIR]) -> bool {
+    let Some(first) = layers.first() else { return false; };
+    let common = first.convolution_grid;
+    let cell = first.convolution_cell_size;
+    if common.iter().any(|&n| n == 0)
+        || cell.iter().any(|v| !v.is_finite() || *v <= 0.0)
+    { return false; }
+    layers.iter().all(|layer| {
+        if layer.convolution_grid != common
+            || layer.convolution_cell_size != cell
+            || layer.native_cell_size != cell
+            || !matches!(layer.transfer_kind.as_str(), "identity" | "push_pull")
+            || layer.native_grid.iter().zip(common).any(|(&n, c)| n == 0 || n > c)
+            || layer.native_origin.iter().chain(layer.convolution_origin.iter())
+                .any(|v| !v.is_finite())
+        { return false; }
+        for axis in 0..3 {
+            let difference = common[axis] - layer.native_grid[axis];
+            if axis < 2 && difference % 2 != 0 { return false; }
+            let offset = if axis < 2 { (difference / 2) as f64 } else { 0.0 };
+            let actual = (layer.native_origin[axis] - layer.convolution_origin[axis]) / cell[axis];
+            // Only accommodate arithmetic roundoff in resolved grid origins.
+            // The bound is dimensionless and scales with the coordinate ULP,
+            // not with an arbitrary physical geometry tolerance.
+            let scale = (layer.native_origin[axis] / cell[axis]).abs()
+                .max((layer.convolution_origin[axis] / cell[axis]).abs())
+                .max(common[axis] as f64).max(1.0);
+            if !actual.is_finite() || !scale.is_finite()
+                || (actual - offset).abs() > 64.0 * f64::EPSILON * scale { return false; }
+            if axis < 2 && (layer.convolution_origin[axis] - first.convolution_origin[axis]).abs()
+                > 64.0 * f64::EPSILON * scale * cell[axis]
+            { return false; }
+            if layer.transfer_kind == "identity" &&
+                (layer.native_grid[axis] != common[axis] || actual != 0.0)
+            { return false; }
+        }
+        true
+    })
+}
+
+/// Narrow execution contract for the new exact embedding lane. Identity plans
+/// retain their existing supported integrators and precisions.
+pub fn fdm_multilayer_cuda_aligned_embedding_error(plan: &FdmMultilayerPlanIR) -> Option<String> {
+    if !plan.enable_demag || !plan.layers.iter().any(|l| l.transfer_kind == "push_pull") {
+        return None;
+    }
+    let geometry_ok = fdm_multilayer_cuda_aligned_embedding_eligible(&plan.layers)
+        && plan.layers.first().is_some_and(|l| l.convolution_grid == plan.common_cells);
+    let open = plan.periodicity.as_ref().map_or(true, |p| p.axes.iter().all(|axis| matches!(axis, AxisBoundary::Open)));
+    if !geometry_ok || !open || plan.mode != "three_d"
+        || plan.planner_summary.resolved_mode != "three_d"
+        || plan.precision != fullmag_ir::ExecutionPrecision::Double
+        || plan.integrator != IntegratorChoice::Heun
+        || !plan.fixed_timestep.is_some_and(|dt| dt.is_finite() && dt > 0.0)
+        || plan.frozen_spins.is_some()
+    {
+        Some("fdm_cuda_multilayer_aligned_embedding_contract: centered integer-cell insertion/crop requires common equal cells, open three_d, double precision, fixed-step Heun, and no frozen spins".to_string())
+    } else { None }
+}
+
 /// Return stable reason codes for multilayer operator classes which the
 /// current CUDA runner cannot execute with the canonical CPU semantics.
 pub fn fdm_multilayer_cuda_containment_reason_codes(
@@ -4016,10 +4120,8 @@ pub fn fdm_multilayer_cuda_containment_reason_codes(
     if mode == "two_d_stack" {
         reasons.push(FDM_CUDA_MULTILAYER_TWO_D_STACK_UNQUALIFIED);
     }
-    if layers
-        .iter()
-        .any(|layer| layer.transfer_kind == "push_pull")
-    {
+    let aligned_embedding = fdm_multilayer_cuda_aligned_embedding_eligible(layers);
+    if !aligned_embedding && layers.iter().any(|layer| layer.transfer_kind == "push_pull") {
         reasons.push(FDM_CUDA_MULTILAYER_PUSH_PULL_UNQUALIFIED);
     }
     if let Some(reference_hz) = layers.first().map(|layer| layer.native_cell_size[2]) {
@@ -4035,6 +4137,7 @@ pub fn fdm_multilayer_cuda_containment_reason_codes(
             .iter()
             .map(fdm_layer_xy_center)
             .any(|center| center != reference_center)
+            && !aligned_embedding
         {
             reasons.push(FDM_CUDA_MULTILAYER_XY_OFFSET_UNQUALIFIED);
         }
@@ -4070,6 +4173,7 @@ pub fn fdm_multilayer_cuda_native_single_grid_eligible(layers: &[FdmLayerPlanIR]
     let reference_cell_size = first_layer.native_cell_size;
     if layers.iter().any(|layer| {
         layer.material != *reference_material || layer.native_cell_size != reference_cell_size
+            || layer.rotated_interfacial_dmi != first_layer.rotated_interfacial_dmi
     }) {
         return false;
     }
@@ -4157,6 +4261,7 @@ pub(crate) fn plan_fdm_multilayer(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
 ) -> Result<ExecutionPlanIR, PlanError> {
+    validate_fdm_material_dmi(problem)?;
     let mut errors = Vec::new();
     let active_transport_graph =
         crate::spin_transport::resolve_active_fdm_transport_graph(problem)?;
@@ -4229,6 +4334,7 @@ pub(crate) fn plan_fdm_multilayer(
     let mut external_field = None;
     let mut interfacial_dmi = None;
     let mut rotated_interfacial_dmi = None;
+    let mut rotated_dmi_object_ids: Option<&[String]> = None;
     let mut bulk_dmi = None;
     for term in &problem.energy_terms {
         match term {
@@ -4279,7 +4385,8 @@ pub(crate) fn plan_fdm_multilayer(
                 }
                 bulk_dmi = Some(*d);
             }
-            fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { d } => {
+            fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { d, object_ids } => {
+                rotated_dmi_object_ids = object_ids.as_deref();
                 if rotated_interfacial_dmi.replace(*d).is_some() {
                     errors.push("RotatedInterfacialDmi is declared more than once".to_string());
                 }
@@ -4573,7 +4680,7 @@ pub(crate) fn plan_fdm_multilayer(
             "Aex",
         ) {
             Ok(values) => {
-                if rotated_interfacial_dmi.is_some_and(|d| d != 0.0) {
+                if rotated_interfacial_dmi.is_some_and(|d| object_rotated_dmi(d, rotated_dmi_object_ids, magnet) != 0.0) {
                     if let Err(reason) = validate_rotated_dmi_boundary_exchange_stiffness(
                         problem,
                         grid_cells,
@@ -5015,7 +5122,11 @@ pub(crate) fn plan_fdm_multilayer(
             let native_matches_scratch = body.native_grid == common_cells
                 && body.native_cell_size == convolution_cell_size
                 && body.native_origin == convolution_origin;
+            let layer_rotated_dmi = rotated_dmi_object_ids.map(|ids| {
+                if ids.iter().any(|id| id == &object_id) { rotated_interfacial_dmi.unwrap_or(0.0) } else { 0.0 }
+            });
             FdmLayerPlanIR {
+                rotated_interfacial_dmi: layer_rotated_dmi,
                 magnet_name: body.magnet_name,
                 layer_id,
                 object_id,
@@ -5171,7 +5282,7 @@ pub(crate) fn plan_fdm_multilayer(
         fft,
         external_field,
         interfacial_dmi,
-        rotated_interfacial_dmi,
+        rotated_interfacial_dmi: if rotated_dmi_object_ids.is_some() { None } else { rotated_interfacial_dmi },
         bulk_dmi,
         gyromagnetic_ratio,
         precision: problem.backend_policy.execution_precision,
@@ -5195,7 +5306,7 @@ pub(crate) fn plan_fdm_multilayer(
             warnings: {
                 let mut warnings = if has_distinct_xy_geometry {
                     vec![
-                    "xy_geometry_uses_common_scratch_transfer; native CUDA identity lane remains fail-closed until it consumes per-layer insertion/crop descriptors".to_string(),
+                    "xy_geometry_uses_common_scratch_transfer; CUDA accepts only centered integer-cell insertion/crop under the bounded FP64 fixed-Heun contract".to_string(),
                     ]
                 } else {
                     Vec::new()
@@ -5212,6 +5323,12 @@ pub(crate) fn plan_fdm_multilayer(
             },
         },
     };
+
+    if runtime_requests_cuda(problem) {
+        if let Some(message) = fdm_multilayer_cuda_aligned_embedding_error(&plan) {
+            return Err(PlanError { reasons: vec![message] });
+        }
+    }
 
     let study_note = if let Some(control) = plan.relaxation.as_ref() {
         format!(

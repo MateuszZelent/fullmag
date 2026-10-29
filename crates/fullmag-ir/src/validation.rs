@@ -2351,8 +2351,23 @@ pub(crate) fn validate_dmi_energy_terms(problem: &ProblemIR, errors: &mut Vec<St
                     }
                 }
             }
-            EnergyTermIR::RotatedInterfacialDmi { d } => {
+            EnergyTermIR::RotatedInterfacialDmi { d, object_ids } => {
                 rotated_interfacial_dmi_count += 1;
+                if let Some(ids) = object_ids {
+                    if ids.is_empty() {
+                        errors.push(format!("energy_terms[{index}] rotated_interfacial_dmi object_ids must not be empty"));
+                    }
+                    let mut seen = BTreeSet::new();
+                    for id in ids {
+                        if id.trim().is_empty() || !seen.insert(id) {
+                            errors.push(format!("energy_terms[{index}] rotated_interfacial_dmi object_ids must be nonempty and unique"));
+                        }
+                        if !problem.magnets.iter().any(|magnet| magnet.object_id.as_deref().unwrap_or(magnet.name.as_str()) == id) {
+                            errors.push(format!("energy_terms[{index}] rotated_interfacial_dmi references unknown magnet object_id '{id}'"));
+                        }
+                    }
+                }
+
                 if !d.is_finite() {
                     errors.push(format!(
                         "energy_terms[{index}] rotated_interfacial_dmi D must be finite"
