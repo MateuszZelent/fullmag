@@ -2835,7 +2835,10 @@ mod tests {
                 sampling: fullmag_ir::SamplingIR {
                     table_autosave: None,
                     stage_autosave: None,
-                    outputs: Vec::new(),
+                    outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
+                        quantity: "eigenfrequency".to_string(),
+                        scope: None,
+                    }],
                 },
                 mode_tracking: None,
             },
@@ -2872,7 +2875,9 @@ mod tests {
                 sampling: fullmag_ir::SamplingIR {
                     table_autosave: None,
                     stage_autosave: None,
-                    outputs: Vec::new(),
+                    outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
+                        observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
+                    }],
                 },
             },
         )

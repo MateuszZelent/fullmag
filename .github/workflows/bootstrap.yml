@@ -1310,5 +1310,5 @@ jobs:
         run: python -B scripts/test_local_runner_docker_logs.py -v
 
   native-receipt-contracts:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.contract_scope == 'native-receipt' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.contract_scope == 'native-receipt' }}
     uses: ./.github/workflows/eigensolve-native-receipt-contracts.yml
