@@ -13223,7 +13223,7 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
                     destination_marker: None,
                     marker_a: 10,
                     marker_b: 11,
-                    translation: None,
+                    translation: Some([1.0, 0.0, 0.0]),
                     tolerance: None,
                     axis_hint: None,
                     orientation: None,
@@ -13365,6 +13365,67 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
         assert!(fem.spin_wave_bc.boundary_pair_ids().is_empty());
         assert_eq!(fem.solver_policy.as_ref().unwrap().max_linear_iterations, Some(4));
     } else { panic!("expected FEM eigen all-pairs plan"); }
+
+    let mut signed_k_ir = ir.clone();
+    if let fullmag_ir::StudyIR::Eigenmodes { k_sampling, .. } = &mut signed_k_ir.study {
+        *k_sampling = Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [-1.0e7, 0.0, 0.0],
+        });
+    }
+    plan(&signed_k_ir).expect("signed finite k must remain on the bounded Floquet lane");
+
+    let mut signed_path_ir = ir.clone();
+    if let fullmag_ir::StudyIR::Eigenmodes { k_sampling, .. } = &mut signed_path_ir.study {
+        *k_sampling = Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![
+                fullmag_ir::KPointIR::gamma(),
+                fullmag_ir::KPointIR {
+                    label: Some("signed".to_string()),
+                    k_vector: [-1.0e7, 0.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![1],
+            closed: false,
+        });
+    }
+    plan(&signed_path_ir).expect("all finite signed path points must remain admitted");
+
+    let mut open_axis_ir = ir.clone();
+    if let fullmag_ir::StudyIR::Eigenmodes { k_sampling, .. } = &mut open_axis_ir.study {
+        *k_sampling = Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [1.0e7, 0.0, 1.0e-15],
+        });
+    }
+    let open_axis_error = plan(&open_axis_ir)
+        .expect_err("a nonzero open-axis component at 1e-15 must fail before provider resolution");
+    assert!(open_axis_error.reasons.iter().any(|reason| {
+        reason.contains("floquet_airbox_dynamic_demag_admission")
+            && reason.contains("exactly zero on an open axis")
+    }));
+
+    for translation in [
+        None,
+        Some([f64::NAN, 0.0, 0.0]),
+        Some([0.0, 0.0, 0.0]),
+        Some([1.0, 1.0, 0.0]),
+        Some([0.0, 1.0, 0.0]),
+    ] {
+        let mut invalid_mesh_ir = ir.clone();
+        let mesh = invalid_mesh_ir
+            .geometry_assets
+            .as_mut()
+            .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+            .and_then(|asset| asset.mesh.as_mut())
+            .expect("the dynamic demag fixture must carry an inline mesh");
+        mesh.periodic_boundary_pairs[0].translation = translation;
+        mesh.periodic_boundary_pairs[0].axis_hint = Some("x".to_string());
+        let error = plan(&invalid_mesh_ir)
+            .expect_err("a hint must not substitute invalid or conflicting translation metadata");
+        assert!(error.reasons.iter().any(|reason| {
+            reason.contains("floquet_airbox_dynamic_demag_admission")
+                && reason.contains("periodic pair 'x_faces'")
+        }));
+    }
 
     let mut subset_ir = ir.clone();
     let subset_mesh = subset_ir.geometry_assets.as_mut().unwrap()

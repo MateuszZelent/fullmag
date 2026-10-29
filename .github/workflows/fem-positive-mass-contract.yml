@@ -17,6 +17,8 @@ on:
         default: positive-mass
         options:
           - positive-mass
+          - tracking-mass-mfem
+          - tracking-mass-stub
           - floquet-source-moments
           - floquet-modal-slepc
           - generic-modal-slepc
@@ -40,6 +42,10 @@ jobs:
 
       - name: Verify native failure receipt observations before dependency build
         run: python3 -B -m unittest discover -s scripts/ci -p "test_fem_contract_failure_receipt.py" -v
+
+      - name: Verify tracking-mass profile selection before dependency build
+        if: inputs.contract_profile == 'tracking-mass-mfem' || inputs.contract_profile == 'tracking-mass-stub'
+        run: python3 -B -m unittest discover -s scripts/ci -p "test_fem_tracking_mass_contract_profile.py" -v
 
       - name: Build pinned CPU MFEM image and run the selected source contract
         id: contract

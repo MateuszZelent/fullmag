@@ -30,7 +30,7 @@ Nie usuwamy niezintegrowanych worktree, wyników, cache ani aktywnych zasobów. 
 | I3: właściciel pola i akcja punkt → mod | Owner-bound JSON/meta/binary i pięć rzeczywistych przejść punkt → mod (próbki 0/3/7/11/14) PASS; import FMS cold oraz visualization_only PASS, końcowy strict i bieżący runtime otwarte | Run/stage/sample/mode/equilibrium oraz generacja artefaktu spójne; odrzucenie brakujących/sprzecznych powiązań |
 | I4: rzeczywisty mod w UI | Gamma nearest i ±10: rzeczywiste pola, Real/Imag/Abs/Phase, WebGL2, animacja i zrzut samego magnetyka PASS; pełny sweep pozostaje w I7 | Import wyniku/FMS lub przypięta mała symulacja; widoczny mod, real/imag/abs/phase, faza i animacja; WebGL bez utraty kontekstu i niezerowy buffer |
 | I5: review, PR, master i cleanup | Master 6caa3e226 scalony bez konfliktów jako 2bf23f6ff; naprawy na branchu PR #262; CI Rust/Control Room/browser dla acb0330ea PASS; source-map poprawiony lokalnie, native 20/21 i nowa regresja do ponowienia; publikacja master i cleanup otwarte | Wymagane CI/review, merge PR, lokalny fast-forward bez naruszania WIP; cleanup tylko potwierdzonego, czystego i nieużywanego worktree |
-| I6: pozostała integracja solvera | Pusty selektor Floqueta, otwarte osie k, panic resolvera osi i pełny cel refill poprawione; Rust CI PASS, native refill PASS. Korekta zakresu historycznych liczników KSP oczekuje CI; native tracking i pozostałe disposition otwarte | Projekcja zespolona/transport bazy/periodyczne węzły, guards, artefakty, worker identity/journals, tracking; każda zmiana osobno zweryfikowana |
+| I6: pozostała integracja solvera | Pusty selektor/refill mają wcześniejsze dowody. Wspólny strict guard planera/runnera oraz autorytatywny native CSR z readerami Rust/Python v1/v2 zaimplementowane; nowe hosted/native/runtime bramki oczekują, pozostałe disposition otwarte | Projekcja zespolona/transport bazy/periodyczne węzły, guards, artefakty, worker identity/journals, tracking; każda zmiana osobno zweryfikowana |
 | I7: kwalifikacja naukowa | 15/15 z Gamma window zachowane w FMS i potwierdzone po imporcie; kompletność, zbieżność, serial/adaptive i COMSOL nadal NOT VERIFIED | Gamma + signed sweep, residuale, kompletność okna, serial/adaptive, zbieżność i COMSOL A1 ≤0,5% |
 
 Nie podajemy zbiorczego procentu: liczba commitów poza masterem nie mierzy ukończenia funkcji. S00–S12 oraz U1–U7 nie są zamknięte przez ten checkpoint.
@@ -374,3 +374,23 @@ oraz A1 ≤0,5% pozostają otwarte.
 Dokładne bieżące wyniki source CI, native 20/21, korekta metodologii probe
 oraz plan zamknięcia są w [raporcie integracji](../../../audits/2026-10-29-eigensolve-final-integration.md).
 Chronione 14 plików nie jest zatwierdzone, kasowane ani nadpisywane bez review.
+
+
+## Checkpoint I6 — native P1 i wspólne admission, 29.10
+
+Native provider Tet4/Prism6, immutable C ABI i wrapper odzyskane z historycznych
+atomów oraz podłączone do rzeczywistego serial/bias/adaptive tracking. CSR jest
+używany w iloczynie M, normalizacji i transporcie; nie jest tylko sidecarem.
+Addytywny artifact v2 ma reader Rust i niezależną walidację geometryczną
+Python; zachowano stare v1. Bez rozszerzania produkcji MeshTopology poza Tet4.
+Naprawiono też source identity direct Compose przez wspólny runtime build-info.
+Nowe profile GitHub Actions: tracking-mass-mfem (DIRECT_COMPOSE=1) i
+tracking-mass-stub. Brak lokalnej kompilacji testów. Stan kodu nie zamyka I6:
+nowe CI, natywny build, rzeczywisty sweep i zgodność replay pozostają wymagane.
+
+Nowy run Gamma ffe91832… zakończył się failed, etap Relax succeeded, etap eigen
+failed/disconnected. Nie ma nowej częstotliwości ani artefaktu modu. Przyczyna
+jest diagnozowana na podstawie terminalnych journal/receipt, bez ponownego
+Solve. Czternaście operacji paneli zachowało aktywny run w trakcie testu;
+pełny odbiór R6 tej generacji oraz I7 pozostają otwarte. Zachowano starsze
+archiwum signed15, import UI i dane do porównania.

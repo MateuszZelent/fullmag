@@ -584,6 +584,10 @@
     "completion": "pending; actual native worker still live",
     "status": "not_yet_qualified",
     "action_progress_path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/final-integration-20261029/gamma-r6/progress.json",
-    "action_progress_sha256": "c4685f64f9885a5f968595a882504c039a3bfd6036efb0c702fb21e9c88b5c01"
+    "action_progress_sha256": "c4685f64f9885a5f968595a882504c039a3bfd6036efb0c702fb21e9c88b5c01",
+    "terminal_state": "failed",
+    "terminal_native_reason": "frequency_window_subwindow_failed: no complete base cluster",
+    "completion_and_spectrum_qualification": "NOT VERIFIED",
+    "operations_qualification": "14 operations retained same running run before/after; no numerical mutations"
   }
 }

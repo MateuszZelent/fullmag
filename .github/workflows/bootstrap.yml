@@ -297,6 +297,7 @@ jobs:
       - name: Run tracking confidence and branch writer contracts
         run: |
           cargo test -p fullmag-runner eigen::tracking::tests --lib --no-fail-fast
+          cargo test -p fullmag-runner eigen::tracking_mass --lib --no-fail-fast
           cargo test -p fullmag-runner tracked_pair_overlap_is_published_as_confidence_in_json_and_csv --lib
           cargo test -p fullmag-runner tracking_only_mode_contributes_to_overlap_summary_without_public_mode_selection --lib
 
@@ -347,6 +348,7 @@ jobs:
         run: |
           cargo test -p fullmag-plan fem_eigen_modal_solver_policy --lib
           cargo test -p fullmag-plan fem_eigen_floquet --lib
+          cargo test -p fullmag-ir strict_floquet_admission --lib
           cargo test -p fullmag-runner floquet_payload_tests --lib
           cargo test -p fullmag-runner terminal_action_after_completed_pool_does_not_interrupt_but_active_actions_do --lib
           cargo test -p fullmag-runner fem::eigen_progress::tests --lib

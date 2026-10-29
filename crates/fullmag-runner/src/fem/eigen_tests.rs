@@ -6880,6 +6880,23 @@ fn floquet_dynamic_demag_provider_uses_certificate_translation_axes() {
     assert!(!native_cpu_modal_window_has_floquet_dynamic_demag_path(
         &plan
     ));
+
+    for translation in [
+        None,
+        Some([f64::NAN, 0.0, 0.0]),
+        Some([0.0, 0.0, 0.0]),
+        Some([1.0e-15, 0.0, 0.0]),
+        Some([1.0, 1.0, 0.0]),
+        Some([0.0, 1.0, 0.0]),
+    ] {
+        let mut hinted_invalid = bounded_floquet_dynamic_demag_execution_plan();
+        hinted_invalid.mesh.periodic_boundary_pairs[0].axis_hint = Some("x".to_owned());
+        hinted_invalid.mesh.periodic_boundary_pairs[0].translation = translation;
+        assert!(
+            !native_cpu_modal_window_has_floquet_dynamic_demag_path(&hinted_invalid),
+            "hint must not substitute invalid or conflicting translation metadata: {translation:?}"
+        );
+    }
 }
 
 #[test]

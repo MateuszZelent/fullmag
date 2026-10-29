@@ -5891,6 +5891,21 @@ pub(crate) fn plan_fem_eigen(
                 reasons: vec![reason],
             }
         })?;
+    if floquet_airbox_dynamic_demag_cpu_path {
+        if let Err(admission_errors) =
+            fullmag_ir::validate_bounded_floquet_dynamic_demag_admission(
+                &mesh,
+                spin_wave_bc,
+                k_sampling.as_ref(),
+            )
+        {
+            errors.extend(admission_errors.into_iter().map(|reason| {
+                format!(
+                    "fem_eigen.floquet_airbox_dynamic_demag_admission: {reason}"
+                )
+            }));
+        }
+    }
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });
     }

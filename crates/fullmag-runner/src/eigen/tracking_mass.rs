@@ -1,7 +1,12 @@
-//! Exact consistent P1 tetra mass embedding for Cartesian mode tracking.
+//! Geometric consistent P1 metric for Cartesian mode tracking.
+//! Native CSR is authoritative on native paths; Tet4 embeddings retain v1 replay.
 //! This is postprocessing, not a FEM solver or a spectral certificate.
 
 use num_complex::Complex64;
+
+#[path = "tracking_mass_csr.rs"]
+mod csr;
+use csr::NativeCsrMass;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConsistentP1TrackingMetric {
@@ -10,6 +15,7 @@ pub struct ConsistentP1TrackingMetric {
     tetra: Vec<[usize; 4]>,
     sqrt_factors: Vec<f64>,
     volumes_m3: Vec<f64>,
+    native_csr: Option<NativeCsrMass>,
 }
 
 #[derive(serde::Deserialize)]
@@ -21,6 +27,16 @@ struct PersistedConsistentP1Metric {
     physical_node_indices: Vec<usize>,
     tetra: Vec<[usize; 4]>,
     volumes_m3: Vec<f64>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedNativeP1Metric {
+    schema: String,
+    definition_id: String,
+    source_mesh_topology_sha256: String,
+    physical_node_indices: Vec<usize>,
+    native_snapshot: NativeCsrMass,
 }
 
 impl ConsistentP1TrackingMetric {
@@ -74,10 +90,107 @@ impl ConsistentP1TrackingMetric {
             tetra,
             sqrt_factors,
             volumes_m3: volumes_m3.to_vec(),
+            native_csr: None,
         })
     }
 
+    fn from_csr(
+        mesh_identity: String,
+        nodes: Vec<usize>,
+        csr: NativeCsrMass,
+    ) -> Result<Self, String> {
+        if mesh_identity.is_empty() {
+            return Err("native consistent mass requires mesh identity".into());
+        }
+        csr.validate(&nodes)?;
+        Ok(Self {
+            mesh_identity,
+            physical_node_indices: nodes,
+            tetra: Vec::new(),
+            sqrt_factors: Vec::new(),
+            volumes_m3: Vec::new(),
+            native_csr: Some(csr),
+        })
+    }
+
+    #[cfg(any(feature = "fem-native", feature = "fem-gpu"))]
+    pub(crate) fn from_native_snapshot(
+        mesh_identity: String,
+        nodes: Vec<usize>,
+        snapshot: &crate::native_fem::TrackingMassSnapshot,
+    ) -> Result<Self, String> {
+        Self::from_csr(mesh_identity, nodes, NativeCsrMass::from_snapshot(snapshot))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn native_test_metric(mesh_identity: String) -> Self {
+        Self::from_csr(
+            mesh_identity,
+            vec![0, 2, 3, 4],
+            NativeCsrMass::test_tetra_with_air(),
+        )
+        .unwrap()
+    }
+
+    pub fn definition_id(&self) -> &'static str {
+        if self.native_csr.is_some() {
+            "consistent_p1_native_csr_cartesian_nodal_envelope.v2"
+        } else {
+            "consistent_p1_tet4_cartesian_nodal_envelope.v1"
+        }
+    }
+
+    pub fn native_snapshot_identity_sha256(&self) -> Option<String> {
+        self.native_csr.as_ref().map(|csr| {
+            csr.identity_sha256
+                .iter()
+                .map(|v| format!("{v:02x}"))
+                .collect()
+        })
+    }
+
+    /// Scale-free geometric FE inner product, never M applied on both sides.
+    pub fn inner_product(&self, lhs: &[Complex64], rhs: &[Complex64]) -> Option<Complex64> {
+        if let Some(csr) = &self.native_csr {
+            return csr.inner_product(&self.physical_node_indices, lhs, rhs);
+        }
+        if self.physical_node_indices.len().checked_mul(3)? != lhs.len()
+            || lhs.len() != rhs.len()
+            || lhs
+                .iter()
+                .chain(rhs)
+                .any(|v| !v.re.is_finite() || !v.im.is_finite())
+        {
+            return None;
+        }
+        let mut result = Complex64::new(0.0, 0.0);
+        for (cell, factor) in self.tetra.iter().zip(&self.sqrt_factors) {
+            for component in 0..3 {
+                let mut left_sum = Complex64::new(0.0, 0.0);
+                let mut right_sum = Complex64::new(0.0, 0.0);
+                for node in cell {
+                    let left = lhs[3 * node + component];
+                    let right = rhs[3 * node + component];
+                    result += factor * factor * left.conj() * right;
+                    left_sum += left;
+                    right_sum += right;
+                }
+                result += factor * factor * left_sum.conj() * right_sum;
+            }
+        }
+        (result.re.is_finite() && result.im.is_finite()).then_some(result)
+    }
+
     pub fn artifact_json(&self) -> serde_json::Value {
+        if let Some(csr) = &self.native_csr {
+            return serde_json::json!({
+                "schema": "fullmag.tracking_consistent_p1_metric.v2",
+                "definition_id": self.definition_id(),
+                "source_mesh_topology_sha256": self.mesh_identity,
+                "physical_node_indices": self.physical_node_indices,
+                "native_snapshot": csr,
+            });
+        }
         serde_json::json!({
             "schema": "fullmag.tracking_consistent_p1_metric.v1",
             "definition_id": "consistent_p1_tet4_cartesian_nodal_envelope.v1",
@@ -92,6 +205,24 @@ impl ConsistentP1TrackingMetric {
         value: &serde_json::Value,
         expected_mesh_identity: &str,
     ) -> Result<Self, String> {
+        if value.get("schema").and_then(serde_json::Value::as_str)
+            == Some("fullmag.tracking_consistent_p1_metric.v2")
+        {
+            let record: PersistedNativeP1Metric = serde_json::from_value(value.clone())
+                .map_err(|error| format!("invalid persisted native consistent mass: {error}"))?;
+            if record.definition_id != "consistent_p1_native_csr_cartesian_nodal_envelope.v2"
+                || record.source_mesh_topology_sha256 != expected_mesh_identity
+            {
+                return Err(
+                    "persisted native consistent mass schema or mesh identity mismatch".into(),
+                );
+            }
+            return Self::from_csr(
+                record.source_mesh_topology_sha256,
+                record.physical_node_indices,
+                record.native_snapshot,
+            );
+        }
         let record: PersistedConsistentP1Metric = serde_json::from_value(value.clone())
             .map_err(|error| format!("invalid persisted consistent mass: {error}"))?;
         if record.schema != "fullmag.tracking_consistent_p1_metric.v1"
@@ -214,6 +345,9 @@ impl ConsistentP1TrackingMetric {
     }
 
     pub fn embed(&self, vector: &[Complex64]) -> Option<Vec<Complex64>> {
+        if self.native_csr.is_some() {
+            return None;
+        }
         if self.physical_node_indices.len().checked_mul(3)? != vector.len()
             || vector
                 .iter()
@@ -257,8 +391,7 @@ impl ConsistentP1TrackingMetric {
             .iter()
             .map(|value| *value / scale)
             .collect::<Vec<_>>();
-        let field = self.embed(&scaled)?;
-        let norm = field.iter().map(Complex64::norm_sqr).sum::<f64>();
+        let norm = self.inner_product(&scaled, &scaled)?.re;
         if !norm.is_finite() || norm <= 0.0 {
             return None;
         }
@@ -268,16 +401,11 @@ impl ConsistentP1TrackingMetric {
             for node in 0..self.physical_node_indices.len() {
                 constant[3 * node + component] = Complex64::new(1.0, 0.0);
             }
-            let basis = self.embed(&constant)?;
-            let basis_norm = basis.iter().map(Complex64::norm_sqr).sum::<f64>();
+            let basis_norm = self.inner_product(&constant, &constant)?.re;
             if !basis_norm.is_finite() || basis_norm <= 0.0 {
                 return None;
             }
-            let inner = basis
-                .iter()
-                .zip(&field)
-                .map(|(a, b)| a.conj() * b)
-                .sum::<Complex64>();
+            let inner = self.inner_product(&constant, &scaled)?;
             score += inner.norm_sqr() / (norm * basis_norm);
         }
         (score.is_finite() && score <= 1.0 + 1e-12).then(|| score.clamp(0.0, 1.0))
@@ -286,6 +414,9 @@ impl ConsistentP1TrackingMetric {
     /// Left inverse on the range of embed, including linear combinations of
     /// embedded orthonormal basis vectors after Procrustes transport.
     pub fn recover(&self, embedded: &[Complex64]) -> Option<Vec<Complex64>> {
+        if self.native_csr.is_some() {
+            return None;
+        }
         if self.tetra.len().checked_mul(15)? != embedded.len()
             || embedded
                 .iter()
@@ -490,5 +621,85 @@ mod persisted_metric_tests {
                 &phases
             )
             .is_err());
+    }
+}
+
+#[cfg(test)]
+mod native_csr_tests {
+    use super::*;
+    fn metric() -> ConsistentP1TrackingMetric {
+        ConsistentP1TrackingMetric::from_csr(
+            "mesh-native".into(),
+            vec![0, 2, 3, 4],
+            NativeCsrMass::test_tetra_with_air(),
+        )
+        .unwrap()
+    }
+    #[test]
+    fn native_csr_overlap_uses_single_mass_and_excludes_air_rows() {
+        let m = metric();
+        let mut x = vec![Complex64::new(0.0, 0.0); 12];
+        x[0] = Complex64::new(1.0, 0.0);
+        let mut y = x.clone();
+        y[0] = Complex64::new(0.0, 0.0);
+        y[3] = Complex64::new(1.0, 0.0);
+        let overlap = m.inner_product(&x, &y).unwrap().norm()
+            / (m.inner_product(&x, &x).unwrap().re * m.inner_product(&y, &y).unwrap().re).sqrt();
+        assert!((overlap - 0.5).abs() < 1e-12);
+        assert!((m.uniform_projection_squared(&x).unwrap() - 0.625).abs() < 1e-12);
+        assert!(
+            m.embed(&x).is_none(),
+            "native CSR must not be presented as a Euclidean square-root embedding"
+        );
+        assert!(m.inner_product(&x[..9], &y).is_none());
+        let mut invalid = y.clone();
+        invalid[0].im = f64::NAN;
+        assert!(m.inner_product(&x, &invalid).is_none());
+    }
+    #[test]
+    fn native_csr_v2_roundtrip_binds_csr_maps_source_and_mesh() {
+        let m = metric();
+        let encoded = serde_json::to_vec(&m.artifact_json()).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(json["schema"], "fullmag.tracking_consistent_p1_metric.v2");
+        let restored =
+            ConsistentP1TrackingMetric::from_artifact_json(&json, "mesh-native").unwrap();
+        assert!(m.compatible(&restored));
+        assert!(ConsistentP1TrackingMetric::from_artifact_json(&json, "different-mesh").is_err());
+        for (key, replacement) in [
+            ("values_m3", serde_json::json!([1.0])),
+            ("identity_sha256", serde_json::json!(vec![0; 32])),
+            ("scalar_dof_ids", serde_json::json!([1, 0, 2, 3, 4])),
+            ("generation", serde_json::json!(0)),
+            ("source_snapshot_sha256", serde_json::json!(vec![0; 32])),
+        ] {
+            let mut corrupt = json.clone();
+            corrupt["native_snapshot"][key] = replacement;
+            assert!(
+                ConsistentP1TrackingMetric::from_artifact_json(&corrupt, "mesh-native").is_err(),
+                "{key}"
+            );
+        }
+        let mut scaled = json.clone();
+        for value in scaled["native_snapshot"]["values_m3"]
+            .as_array_mut()
+            .unwrap()
+        {
+            *value = serde_json::json!(value.as_f64().unwrap() * 2.0);
+        }
+        scaled["native_snapshot"]["magnetic_volume_m3"] = serde_json::json!(1.2e-23);
+        assert!(
+            ConsistentP1TrackingMetric::from_artifact_json(&scaled, "mesh-native").is_err(),
+            "a symmetric positive scaled matrix must still match its native digest"
+        );
+        let mut different_source = json.clone();
+        different_source["native_snapshot"]["source_snapshot_sha256"][0] = serde_json::json!(5);
+        assert!(
+            ConsistentP1TrackingMetric::from_artifact_json(&different_source, "mesh-native")
+                .is_err()
+        );
+        let mut corrupt = json.clone();
+        corrupt["native_snapshot"]["values_m3"][1] = serde_json::json!(3.5e-25);
+        assert!(ConsistentP1TrackingMetric::from_artifact_json(&corrupt, "mesh-native").is_err());
     }
 }

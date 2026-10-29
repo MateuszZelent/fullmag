@@ -57,6 +57,9 @@ jobs:
                   f"FULLMAG_PROJECT_STORAGE_ROOT={layout['storage_root']}\n"
               )
           PY
+      - name: Validate independent native tracking metric replay
+        run: python3 -B -m unittest discover -s scripts -p "test_comsol_tracking_metric.py" -v
+
       - name: Run complete default-feature runner contracts
         env:
           RUST_MIN_STACK: 16777216

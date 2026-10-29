@@ -39,14 +39,31 @@
     "activation_attempt": "db0bdb00b71244ffb6c3528c6a43a811",
     "run_id": "run-live-ffe91832f1f9a883c7ac8f0b227e89bbed56580f3304d119a6bfdef7734720be",
     "activation_state": "succeeded",
-    "last_observed_state": "running",
+    "last_observed_state": "failed",
     "new_frequency_hz": null,
     "r6_action_count": 14,
     "all_actions_same_running_run_before_after": true,
     "numeric_mutations": [],
     "completion_and_spectrum_required": true,
     "progress_sha256": "c4685f64f9885a5f968595a882504c039a3bfd6036efb0c702fb21e9c88b5c01",
-    "progress_path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/final-integration-20261029/gamma-r6/progress.json"
+    "progress_path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/final-integration-20261029/gamma-r6/progress.json",
+    "terminal_failure_diagnosis": {
+      "worker_exit_code": 1,
+      "timed_out": false,
+      "stop_requested": false,
+      "native_error": "production shared-domain K0 Schur window preserved no complete base cluster",
+      "native_stop_reason": "frequency_window_subwindow_failed",
+      "slepc_converged_reason": "not_available",
+      "slepc_process_quarantined": false,
+      "operator_context_invalidated": false,
+      "eps_lifetime_unsafe": false,
+      "window_certificate": "not retained before 1024-character failure truncation; diagnostic persistence fix in progress"
+    },
+    "r6_current_generation_qualification": "operations_passed_final_spectrum_not_verified",
+    "terminal_evidence": {
+      "path": "docs/audits/2026-10-29-eigensolve-gamma-runtime-failure.evidence.json",
+      "sha256": "a677ce146a09923bd468a4cc7d8dd8ca2e7ac9c459b40444c1f4dcf0c4487ce5"
+    }
   },
   "ci": {
     "source_commit": "acb0330ea4f051d1f4bb3cc6181529ef9ba09851",
@@ -58,15 +75,35 @@
     "native_tests_passed": 20,
     "native_tests_total": 21,
     "native_failure": "nearest hard KSP fixture incorrectly requires zero EPS-lifetime probe attempts; actual six attempts have declared positive-default scope; correction pending hosted verification",
-    "scientific_source_map": "static validator PASS after adding source-code index and unique C++ declaration; remote rerun pending"
+    "scientific_source_map": "static validator PASS after adding source-code index and unique C++ declaration; remote rerun pending",
+    "native_history_followup": {
+      "source_commit": "21f3f0438c2b08a7460ef28345c96c3bc909cd5f",
+      "run": 40897875054,
+      "status": "failure",
+      "tests_passed": 20,
+      "tests_total": 21,
+      "failure": "fixture looked for candidate diagnostic directly under failure_probe; actual depth-1 member belongs under last_true_probe; scope fixed, hosted recheck pending"
+    }
   },
   "open": [
     "I1 semantic integration inventory",
     "native CTest corrected-history recheck",
     "current Gamma completion and spectrum",
     "current full signed15 replay",
-    "I6 remaining native tracking provider",
+    "I6 native tracking hosted/runtime qualification and remaining dispositions",
     "I7 completeness, convergence, serial/adaptive, COMSOL A1",
     "PR/master/local WIP-safe integration and cleanup"
-  ]
+  ],
+  "i6": {
+    "state": "implemented_source_qualification_pending",
+    "native_csr": "authoritative geometric M for native modal tracking",
+    "persistence": "additive v2; legacy v1 retained",
+    "readers": [
+      "Rust",
+      "independent Python Tet4 validation"
+    ],
+    "direct_compose_source_identity": "runtime build-info helper; hosted direct-compose profile added",
+    "local_test_compilation": false,
+    "new_native_runtime": "NOT VERIFIED"
+  }
 }

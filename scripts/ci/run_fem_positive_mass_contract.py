@@ -70,6 +70,69 @@ CONTRACT_PROFILES: dict[str, dict[str, Any]] = {
             "native_build_test_seconds": NATIVE_BUILD_TEST_TIMEOUT_SECONDS,
         },
     },
+    "tracking-mass-mfem": {
+        "slug": "fem-tracking-mass-mfem-contract",
+        "schema": "fullmag.ci.fem.tracking_mass_mfem_contract.v1",
+        "preflight_schema": "fullmag.ci.fem.tracking_mass_mfem_preflight.v1",
+        "qualification_scope": "mfem_cpu_tracking_mass_provider_and_snapshot_source_contract_only",
+        "route_kind": "github_hosted_cpu_mfem_tracking_mass_contract",
+        "tests": [
+            {
+                "name": "fem_tracking_mass_provider_contract",
+                "source_suffix": "backends/fem/tests/frequency_domain/tracking_mass_provider_test.cpp",
+                "marker": "PASS: fem_tracking_mass_provider_geometric_csr_contract",
+                "compile_definitions": ["-DFULLMAG_HAS_MFEM_STACK=1"],
+            },
+            {
+                "name": "fem_tracking_mass_snapshot_contract",
+                "source_suffix": "backends/fem/tests/frequency_domain/tracking_mass_snapshot_contract_test.cpp",
+                "marker": "PASS: fem_tracking_mass_snapshot_cabi_contract",
+                "compile_definitions": [
+                    "-DFULLMAG_HAS_MFEM_STACK=1",
+                    "-DFULLMAG_FEM_SOURCE_SNAPSHOT_SHA256",
+                ],
+            },
+        ],
+        "uses_slepc": False,
+        "uses_mfem_stack": True,
+        "requires_source_snapshot": True,
+        "direct_compose": True,
+        "timeout": {
+            "workflow_minutes": WORKFLOW_TIMEOUT_MINUTES,
+            "orchestration_minutes": ORCHESTRATION_TIMEOUT_MINUTES,
+            "execution_minutes": BUILD_EXECUTION_TIMEOUT_MINUTES,
+            "dependency_build_seconds": DEPENDENCY_BUILD_TIMEOUT_SECONDS,
+            "native_build_test_seconds": NATIVE_BUILD_TEST_TIMEOUT_SECONDS,
+        },
+    },
+    "tracking-mass-stub": {
+        "slug": "fem-tracking-mass-stub-contract",
+        "schema": "fullmag.ci.fem.tracking_mass_stub_contract.v1",
+        "preflight_schema": "fullmag.ci.fem.tracking_mass_stub_preflight.v1",
+        "qualification_scope": "no_stack_tracking_mass_abi_unavailable_contract_only",
+        "route_kind": "github_hosted_cpu_no_mfem_abi_contract",
+        "tests": [
+            {
+                "name": "fem_tracking_mass_snapshot_contract",
+                "source_suffix": "backends/fem/tests/frequency_domain/tracking_mass_snapshot_contract_test.cpp",
+                "marker": "PASS: fem_tracking_mass_snapshot_stub_contract",
+                "compile_definitions": [
+                    "-DFULLMAG_HAS_MFEM_STACK=0",
+                    "-DFULLMAG_FEM_SOURCE_SNAPSHOT_SHA256",
+                ],
+            },
+        ],
+        "uses_slepc": False,
+        "uses_mfem_stack": False,
+        "requires_source_snapshot": True,
+        "timeout": {
+            "workflow_minutes": WORKFLOW_TIMEOUT_MINUTES,
+            "orchestration_minutes": ORCHESTRATION_TIMEOUT_MINUTES,
+            "execution_minutes": BUILD_EXECUTION_TIMEOUT_MINUTES,
+            "dependency_build_seconds": DEPENDENCY_BUILD_TIMEOUT_SECONDS,
+            "native_build_test_seconds": NATIVE_BUILD_TEST_TIMEOUT_SECONDS,
+        },
+    },
     "floquet-modal-slepc": {
         "slug": "fem-floquet-modal-slepc-contract",
         "schema": "fullmag.ci.fem.floquet_modal_slepc_contract.v1",
@@ -616,6 +679,41 @@ def _assert_source_identity(
         )
 
 
+def _capture_source_snapshot_sha256(output_path: Path) -> str:
+    command = [
+        sys.executable,
+        str(REPO_ROOT / "scripts" / "capture_source_snapshot_identity.py"),
+        "--repo-root",
+        str(REPO_ROOT),
+        "--output",
+        str(output_path),
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ContractRunError("could not capture the managed source snapshot identity") from error
+    if result.returncode != 0:
+        raise ContractRunError(
+            "source snapshot identity capture failed: "
+            + (result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}")
+        )
+    try:
+        identity = json.loads(output_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ContractRunError("source snapshot identity output is missing or invalid") from error
+    digest = identity.get("source_snapshot_sha256") if isinstance(identity, dict) else None
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise ContractRunError("source snapshot identity lacks a lowercase SHA-256 digest")
+    return digest
+
+
 def _dockerfile_values() -> dict[str, str]:
     text = DOCKERFILE.read_text(encoding="utf-8")
     values: dict[str, str] = {}
@@ -1098,6 +1196,7 @@ def _execute_contract(args: Any) -> int:
     native_execution_status = "not_started"
     native_build_dir = build_dir / "native"
     ctest_log_path = run_dir / "native-build-and-ctest.log"
+    source_snapshot_sha256: str | None = None
     try:
         env = os.environ.copy()
         global _ORCHESTRATION_DEADLINE
@@ -1119,6 +1218,16 @@ def _execute_contract(args: Any) -> int:
             args.git_head, args.github_sha, env=env, stage="before Docker execution"
         )
         receipt["source"]["identity_verified_before_docker"] = True
+        if profile.get("requires_source_snapshot", False):
+            source_snapshot_identity_path = run_dir / "source-snapshot-identity.json"
+            source_snapshot_sha256 = _capture_source_snapshot_sha256(
+                source_snapshot_identity_path
+            )
+            receipt["source"]["source_snapshot_sha256"] = source_snapshot_sha256
+            receipt["source"]["source_snapshot_identity_path"] = str(
+                source_snapshot_identity_path
+            )
+            _write_json(receipt_path, receipt)
 
         dockerfile_pins = _dockerfile_values()
         run_id = env["GITHUB_RUN_ID"]
@@ -1415,14 +1524,21 @@ def _execute_contract(args: Any) -> int:
         container_build_dir = f"/fullmag-storage/{storage_relative_build}/native"
         container_temp_dir = f"/fullmag-storage/{storage_relative_temp}"
         slepc_enabled = "ON" if profile["uses_slepc"] else "OFF"
+        mfem_stack_enabled = "ON" if profile.get("uses_mfem_stack", True) else "OFF"
         cmake_flags = [
             "-DCMAKE_BUILD_TYPE=Release",
             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
             "-DFULLMAG_ENABLE_CUDA=OFF",
             "-DFULLMAG_ENABLE_FEM_GPU=OFF",
-            "-DFULLMAG_USE_MFEM_STACK=ON",
+            f"-DFULLMAG_USE_MFEM_STACK={mfem_stack_enabled}",
             f"-DFULLMAG_FEM_WITH_SLEPC={slepc_enabled}",
         ]
+        if source_snapshot_sha256 is not None:
+            cmake_flags.append(
+                f"-DFULLMAG_FEM_SOURCE_SNAPSHOT_SHA256={source_snapshot_sha256}"
+            )
+        if profile.get("direct_compose", False):
+            cmake_flags.append("-DFULLMAG_DIRECT_COMPOSE=1")
         if profile["uses_slepc"]:
             cmake_flags.append(f"-DCMAKE_PREFIX_PATH={INSTALL_PREFIX}")
         test_targets = _test_targets(profile)
@@ -1436,7 +1552,7 @@ def _execute_contract(args: Any) -> int:
             ("FM_BUILD_DIR", container_build_dir),
             ("FM_TEMP_DIR", container_temp_dir),
             ("CMAKE_BUILD_PARALLEL_LEVEL", str(NATIVE_BUILD_JOBS)),
-            ("FULLMAG_USE_MFEM_STACK", "ON"),
+            ("FULLMAG_USE_MFEM_STACK", mfem_stack_enabled),
             ("FULLMAG_MANAGED_FEM_DEVICE", "cpu"),
             ("FULLMAG_FEM_REQUIRE_GPU", "0"),
             ("FULLMAG_FEM_REQUIRE_CEED", "0"),
@@ -1527,7 +1643,12 @@ def _execute_contract(args: Any) -> int:
 
         cache = _parse_cache(native_build_dir / "CMakeCache.txt")
         expected_cache = dict(COMMON_CACHE_OPTIONS)
+        expected_cache["FULLMAG_USE_MFEM_STACK"] = mfem_stack_enabled
         expected_cache["FULLMAG_FEM_WITH_SLEPC"] = slepc_enabled
+        if source_snapshot_sha256 is not None:
+            expected_cache["FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256"] = source_snapshot_sha256
+        if profile.get("direct_compose", False):
+            expected_cache["FULLMAG_DIRECT_COMPOSE"] = "1"
         if profile["uses_slepc"]:
             expected_cache["CMAKE_PREFIX_PATH"] = INSTALL_PREFIX
         observed_cache = {name: cache.get(name) for name in expected_cache}

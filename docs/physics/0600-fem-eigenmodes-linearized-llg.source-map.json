@@ -819,6 +819,72 @@
       "path": "backends/fem/tests/frequency_domain/shifted_ksp_true_convergence_test.cpp",
       "symbol": "bool run_ksp_case",
       "responsibility": "Exercise actual PETSc immediate breakdown and later build-solution breakdown after a positive default callback; preserve truthful probe attempts, completed counts and unavailable measurements."
+    },
+    {
+      "id": "source-ir-strict-floquet-admission",
+      "path": "crates/fullmag-ir/src/spectral_validation.rs",
+      "symbol": "validate_bounded_floquet_dynamic_demag_admission",
+      "responsibility": "Share strict materialized translation/hint/axis and finite k admission between planner and native runner."
+    },
+    {
+      "id": "source-native-p1-tracking-provider",
+      "path": "backends/fem/cpu/frequency_domain/modal/tracking_mass_provider.cpp",
+      "symbol": "TrackingMassProviderResult assemble_consistent_p1_tracking_mass",
+      "responsibility": "Assemble phase-free geometric P1 mass on magnetic volumes using canonical physical vertex rows."
+    },
+    {
+      "id": "source-native-p1-tracking-snapshot",
+      "path": "backends/fem/src/frequency_domain/tracking_mass_snapshot.cpp",
+      "symbol": "fullmag_fem_tracking_mass_snapshot_create_v1",
+      "responsibility": "Publish an immutable bounded native CSR snapshot with mask/map/source and identity digests."
+    },
+    {
+      "id": "source-rust-native-p1-tracking-wrapper",
+      "path": "crates/fullmag-runner/src/native_fem/tracking_mass.rs",
+      "symbol": "from_mesh",
+      "responsibility": "Validate native snapshot extents, canonical maps, mask, volume and compiled source identity before copying ownership."
+    },
+    {
+      "id": "source-rust-native-p1-csr-product",
+      "path": "crates/fullmag-runner/src/eigen/tracking_mass_csr.rs",
+      "symbol": "inner_product",
+      "responsibility": "Apply one phase-free geometric CSR in the Cartesian nodal mass inner product without substituting M squared."
+    },
+    {
+      "id": "source-rust-native-p1-csr-validation",
+      "path": "crates/fullmag-runner/src/eigen/tracking_mass_csr.rs",
+      "symbol": "validate",
+      "responsibility": "Validate persisted CSR support, symmetry, air rows, volume and native canonical CSR/map/identity digests."
+    },
+    {
+      "id": "source-rust-native-p1-tracking-adapter",
+      "path": "crates/fullmag-runner/src/fem/eigen_path.rs",
+      "symbol": "eigen_path_consistent_tracking_metric",
+      "responsibility": "Choose native CSR on native modal paths, retain explicit reference Tet4 mass, and share one per mesh generation."
+    },
+    {
+      "id": "source-rust-native-p1-metric-reader",
+      "path": "crates/fullmag-runner/src/eigen/tracking_mass.rs",
+      "symbol": "from_artifact_json",
+      "responsibility": "Read legacy v1 and additive native CSR v2 without rewriting retained archives."
+    },
+    {
+      "id": "source-rust-native-p1-subspace",
+      "path": "crates/fullmag-runner/src/eigen/tracking_subspace.rs",
+      "symbol": "weighted_orthonormal_basis",
+      "responsibility": "Use the same consistent FE mass for orthonormalization and transport while preserving diagonal weighting."
+    },
+    {
+      "id": "source-rust-native-p1-subspace-test",
+      "path": "crates/fullmag-runner/src/eigen/tracking.rs",
+      "symbol": "native_csr_subspace_transport_preserves_rotated_degenerate_span",
+      "responsibility": "Regress a complex rotated span and physical-space unit norms in the native CSR representation."
+    },
+    {
+      "id": "source-python-native-p1-metric-reader",
+      "path": "scripts/comsol_tracking_metric.py",
+      "symbol": "_validate_native_v2_metric",
+      "responsibility": "Validate native CSR v2 against independently reconstructed Tet4 geometry, SI volume and canonical digests while retaining v1."
     }
   ],
   "public_api": {

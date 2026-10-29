@@ -85,7 +85,10 @@ pub use quantities::{
     field_to_quantity_output, scalar_to_quantity_output, OutputSinkIR, QuantityOutputIR,
 };
 pub use selection::*;
-pub use spectral_validation::BlochWavevectorIR;
+pub use spectral_validation::{
+    validate_bounded_floquet_dynamic_demag_admission, BlochWavevectorIR,
+    FLOQUET_TRANSLATION_AXIS_TOLERANCE_M,
+};
 pub use spin_transport::*;
 pub use antenna_lead_preparation::*;
 pub use study::*;

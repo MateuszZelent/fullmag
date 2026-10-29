@@ -231,8 +231,8 @@ impl<'a> TrackingMassView<'a> {
                     .iter()
                     .map(|value| *value / scale)
                     .collect::<Vec<_>>();
-                let mut embedded = metric.embed(&scaled)?;
-                let norm = embedded.iter().map(Complex64::norm_sqr).sum::<f64>().sqrt();
+                let mut embedded = scaled;
+                let norm = metric.inner_product(&embedded, &embedded)?.re.sqrt();
                 if !norm.is_finite() || norm <= 0.0 {
                     return None;
                 }
@@ -243,10 +243,19 @@ impl<'a> TrackingMassView<'a> {
             }
         }
     }
+    fn dot(self, lhs: &[Complex64], rhs: &[Complex64]) -> Option<Complex64> {
+        match self {
+            Self::Consistent(metric) => metric.inner_product(lhs, rhs),
+            Self::Diagonal(_) => weighted_dot(lhs, rhs),
+        }
+    }
     fn recover(self, weighted: &[Complex64]) -> Option<Vec<Complex64>> {
         match self {
             Self::Diagonal(weights) => unweight_vector(weighted, weights),
-            Self::Consistent(metric) => metric.recover(weighted),
+            Self::Consistent(metric) => {
+                let norm = metric.inner_product(weighted, weighted)?.re;
+                (norm.is_finite() && norm > 0.0).then(|| weighted.to_vec())
+            }
         }
     }
 }
@@ -263,13 +272,13 @@ fn weighted_orthonormal_basis(
         // solver vectors can be close to linearly dependent after weighting.
         for _ in 0..2 {
             for existing in &basis {
-                let coefficient = weighted_dot(existing, &candidate)?;
+                let coefficient = metric.dot(existing, &candidate)?;
                 for (value, basis_value) in candidate.iter_mut().zip(existing) {
                     *value -= coefficient * *basis_value;
                 }
             }
         }
-        let norm_squared = weighted_dot(&candidate, &candidate)?.re;
+        let norm_squared = metric.dot(&candidate, &candidate)?.re;
         if !norm_squared.is_finite() || norm_squared <= 1.0e-20 {
             return None;
         }
@@ -347,9 +356,10 @@ pub(super) fn mass_weighted_subspace_transport(
     }
 
     let cross_gram = DMatrix::from_fn(dimension, dimension, |row, column| {
-        // Both bases already contain the square-root mass factor, so this is
-        // the original FE inner product rather than a node-count metric.
-        weighted_dot(&previous_basis[row], &current_basis[column])
+        // Consistent modes remain in physical nodal coordinates and use M;
+        // diagonal modes use their existing square-root weighted coordinates.
+        metric
+            .dot(&previous_basis[row], &current_basis[column])
             .unwrap_or_else(|| Complex64::new(f64::NAN, f64::NAN))
     });
     let svd = cross_gram.svd(true, true);

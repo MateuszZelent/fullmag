@@ -1,6 +1,6 @@
-use super::eigen_certificate::modal_v6_pair_axis_mask;
-use super::eigen_constants::GAMMA_K_TOLERANCE_RAD_PER_M;
-use super::eigen_constants::SHARED_DOMAIN_K0_RUNTIME_UNAVAILABLE_REASON;
+use super::eigen_constants::{
+    GAMMA_K_TOLERANCE_RAD_PER_M, SHARED_DOMAIN_K0_RUNTIME_UNAVAILABLE_REASON,
+};
 use super::eigen_policy::{
     k_sampling_is_single_k0, native_cpu_modal_window_has_bloch_floquet_payload_path,
     native_cpu_modal_window_has_periodic_k0_runner_operator_path, native_modal_target_frequency_hz,
@@ -113,30 +113,22 @@ pub(crate) fn native_cpu_modal_window_has_floquet_dynamic_demag_path(
         return false;
     }
 
-    let Some(periodic_axes) = plan.mesh.periodic_boundary_pairs.iter().try_fold(
-        0_u32,
-        |mask, pair| modal_v6_pair_axis_mask(pair).map(|axis| mask | axis),
-    ) else {
+    if fullmag_ir::validate_bounded_floquet_dynamic_demag_admission(
+        &plan.mesh,
+        &plan.spin_wave_bc,
+        plan.k_sampling.as_ref(),
+    )
+    .is_err()
+    {
         return false;
-    };
-    let k_supported = |k: &[f64; 3]| {
-        k.iter().enumerate().all(|(axis, value)| {
-            value.is_finite() && (periodic_axes & (1_u32 << axis) != 0 || *value == 0.0)
-        })
-    };
+    }
 
     match plan.k_sampling.as_ref() {
-        Some(fullmag_ir::KSamplingIR::Single { k_vector }) => {
-            k_supported(k_vector)
-                && k_vector
-                    .iter()
-                    .any(|value| value.abs() > GAMMA_K_TOLERANCE_RAD_PER_M)
-        }
+        Some(fullmag_ir::KSamplingIR::Single { k_vector }) => k_vector
+            .iter()
+            .any(|value| value.abs() > GAMMA_K_TOLERANCE_RAD_PER_M),
         Some(fullmag_ir::KSamplingIR::Path { points, .. }) => {
             !points.is_empty()
-                && points
-                    .iter()
-                    .all(|point| k_supported(&point.k_vector))
                 && points.iter().any(|point| {
                     point
                         .k_vector

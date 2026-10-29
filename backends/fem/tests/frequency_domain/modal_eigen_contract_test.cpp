@@ -9937,7 +9937,7 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
                   "absent true-probe history keeps its ordinal and reason unavailable");
         }
         const std::string candidate = json_object_after_key(
-            failure_probe.c_str(), "\"candidate_operator_diagnostic\":");
+            last_probe.c_str(), "\"candidate_operator_diagnostic\":");
         check(contains(candidate.c_str(),
                        "\"schema_version\":\"floquet_candidate_operator_diagnostic.v1\"") &&
                   json_member_has_literal(candidate.c_str(), "\"requested\":", "true"),

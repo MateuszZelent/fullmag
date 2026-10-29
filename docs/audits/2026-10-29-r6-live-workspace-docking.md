@@ -76,3 +76,18 @@ przebiegach pozostaje historycznym dowodem o opisanym powyżej zakresie.
 Aktualna powtórka i hash pliku z 14 operacjami są w polu
 current_generation_recheck istniejącego evidence JSON. Pełny bieżący stan:
 [raport integracji](2026-10-29-eigensolve-final-integration.md).
+
+
+## Terminalny wynik bieżącego recheck acb0330ea
+
+Run Gamma ffe91832… zakończył się failed około 15:18 UTC. Autorytatywny
+worker exit to 1, timed_out=false, stop_requested=false. Przyczyna native:
+`production shared-domain K0 Schur window preserved no complete base cluster`,
+`frequency_window_subwindow_failed`. Etap Relax succeeded, eigen nie
+opublikował żadnego modu. Nie ma końcowego spectrum wymaganego dla odbioru.
+Czternaście operacji paneli zachowało ten sam aktywny run i brak mutacji
+numerycznych. Ich dowód pozostaje PASS w swoim zakresie; pełny recheck tej
+generacji pozostaje NOT VERIFIED. Historycznych kwalifikujących przebiegów
+R6 nie przepisano na wynik nowego uruchomienia. Bieżący szczegółowy certyfikat
+podokna został utracony przez obcięcie error message do1024 znaków; naprawa
+zachowania diagnostyki jest osobnym zadaniem, bez obniżania progów fizycznych.

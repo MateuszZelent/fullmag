@@ -275,9 +275,17 @@ fn modal_overlap_views(prev: TrackingModeView<'_>, current: TrackingModeView<'_>
                 }
                 Some(vector.iter().map(|v| *v / scale).collect())
             };
-            let left = a.embed(&normalize(prev.reduced_vector?)?)?;
-            let right = b.embed(&normalize(current.reduced_vector?)?)?;
-            return normalized_complex_overlap(&left, &right);
+            let left = normalize(prev.reduced_vector?)?;
+            let right = normalize(current.reduced_vector?)?;
+            let left_norm = a.inner_product(&left, &left)?.re;
+            let right_norm = a.inner_product(&right, &right)?.re;
+            if left_norm <= 0.0 || right_norm <= 0.0 {
+                return None;
+            }
+            let overlap =
+                a.inner_product(&left, &right)?.norm() / (left_norm.sqrt() * right_norm.sqrt());
+            return (overlap.is_finite() && overlap <= 1.0 + 1e-12)
+                .then(|| overlap.clamp(0.0, 1.0));
         }
         (Some(_), None) | (None, Some(_)) => return None,
         (None, None) => {}
@@ -2840,6 +2848,41 @@ mod tests {
         for frame in &transport.transported_frames {
             let embedded = metric.embed(frame).unwrap();
             let norm = embedded.iter().map(Complex64::norm_sqr).sum::<f64>();
+            assert!((norm - 1.0).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn native_csr_subspace_transport_preserves_rotated_degenerate_span() {
+        let mut x = [Complex64::new(0.0, 0.0); 12];
+        x[0] = Complex64::new(1.0, 0.0);
+        let mut y = [Complex64::new(0.0, 0.0); 12];
+        y[3] = Complex64::new(1.0, 0.0);
+        let metric = std::sync::Arc::new(ConsistentP1TrackingMetric::native_test_metric(
+            "mesh:a".into(),
+        ));
+        let mut previous = [mode(0, 1e9, x), mode(1, 1e9, y)];
+        let angle = std::f64::consts::FRAC_1_SQRT_2;
+        let p = std::array::from_fn::<_, 12, _>(|i| (x[i] + y[i]) * angle);
+        let q =
+            std::array::from_fn::<_, 12, _>(|i| Complex64::new(0.0, 1.0) * (x[i] - y[i]) * angle);
+        let mut current = [mode(0, 1e9, p), mode(1, 1e9, q)];
+        for m in previous.iter_mut().chain(&mut current) {
+            m.consistent_p1_metric = Some(metric.clone());
+        }
+        let transport = mass_weighted_subspace_transport(
+            &previous.each_ref().map(mode_view),
+            &current.each_ref().map(mode_view),
+            1.0,
+        )
+        .unwrap();
+        assert!(transport.principal_minimum > 1.0 - 1e-12);
+        assert!(transport
+            .transported_frames
+            .iter()
+            .all(|frame| frame.len() == 12));
+        for frame in &transport.transported_frames {
+            let norm = metric.inner_product(frame, frame).unwrap().re;
             assert!((norm - 1.0).abs() < 1e-12);
         }
     }

@@ -386,3 +386,41 @@ ma status running. Rzeczywisty worker PID 29195 zwiększa zużyty czas CPU;
 nie jest to wyłącznie wiszący status API. Nie aktywowano drugiego runu ani
 nie restartowano usług. Dowód 14 operacji R6 pozostaje zachowany wraz z
 nieukończonym jeszcze oczekiwaniem na końcowe wyniki tej generacji.
+
+
+## I6 — podłączony native P1 CSR, odbiór oczekuje
+
+Provider Tet4/Prism6 i bounded immutable C ABI odtworzono z atomów historycznych.
+Natywny CSR faktycznie wyznacza iloczyn M w serial/adaptive/bias tracking,
+normalizacji i Procrustes transport. Nie użyto M^2 ani sidecaru ignorowanego
+przez konsumenta. Starszy Rust Tet4 v1 pozostaje dla jawnej referencji i replay.
+Nowe v2 ma czytniki Rust i niezależną kontrolę Tet4 w Pythonie: jednostki m^3,
+pełne węzły, puste wiersze powietrza, mapy, CSR i typed hashe źródeł.
+
+Review wykrył i naprawił brak source SHA w direct Compose: snapshot korzysta
+ze wspólnego runtime build-info, a hosted profil MFEM testuje generated-header
+route (DIRECT_COMPOSE=1). Dodano oddzielny no-MFEM unavailable profile.
+Review wykrył też nierówne długości adjacent strict zip w nowym readerze
+Python; poprawiono je przed wykonaniem testów. Statyczny parser i mapa naukowa
+PASS; nowe testy i kompilacja native/Rust pozostają wyłącznie w GitHub Actions.
+Zmiany nie rozszerzają produkcyjnego MeshTopology poza Tet4.
+
+Run Gamma ffe91832… zakończył się failed o około 15:18 UTC. Relax ma succeeded,
+eigen failed/disconnected i zero artefaktów modalnych. Nie ma nowej częstotliwości.
+Backend i frontend pozostały healthy. Trwa diagnoza autorytatywnej przyczyny;
+nie przypisujemy jej diskowi, solverowi ani panelom bez dowodu. R6 zachowuje
+14 poprawnych operacji podczas pracy, ale wymaganego końcowego spectrum nie ma.
+Wcześniejszy podpisany sweep15 i zrzuty UI pozostają odrębnym dowodem.
+
+
+Autorytatywna diagnoza Gamma: worker exit1, bez timeout i stop request;
+`frequency_window_subwindow_failed`, brak kompletnego bazowego klastra.
+Brak dowodu awarii dysku lub przekroczenia limitu revision10000. Obcięcie
+failure message do1024 znaków zgubiło window_certificate i dokładną przyczynę
+pierwszego nieudanego podokna. Następny krok to bounded failure-only sidecar
+przed truncation, następnie diagnoza tej samej fizyki i ponowny pilot.
+
+Review kolejnego CI40897875054 ustalił błędny zakres odczytu fixture'u:
+`candidate_operator_diagnostic` jest pod `last_true_probe`, nie bezpośrednio
+pod failure_probe. Poprawiono depth-1 lookup; równość z faktycznym callbackiem
+pozostaje sprawdzana. Nie zmieniono produkcji, KSP ani physical acceptance.

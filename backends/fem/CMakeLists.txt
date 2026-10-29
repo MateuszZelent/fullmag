@@ -269,6 +269,8 @@ if(FULLMAG_USE_MFEM_STACK)
         cpu/mfem/workflows/antenna_field_solve/accepted_terminal_charge_source.cpp
         cpu/mfem/workflows/antenna_field_solve/accepted_surface_rt0.cpp
           cpu/mfem/workflows/antenna_field_solve/accepted_external_lead_source.cpp
+        cpu/frequency_domain/modal/tracking_mass_provider.cpp
+        src/frequency_domain/tracking_mass_snapshot.cpp
         cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp
         cpu/mfem/interactions/oersted/surface_rt0.cpp
         cpu/mfem/interactions/oersted/vector_potential.cpp
@@ -360,6 +362,10 @@ if(FULLMAG_USE_MFEM_STACK)
             list(APPEND FEM_SOURCES gpu/frequency_domain/modal_petsc_slepc.cpp)
         endif()
     endif()
+else()
+    # Keep the exported tracking-mass ABI available in builds without MFEM.
+    # The stub fails closed and does not pull MFEM types into this configuration.
+    list(APPEND FEM_SOURCES src/frequency_domain/tracking_mass_snapshot_stub.cpp)
 endif()
 
 # A managed capsule is identified by content rather than preserved mtimes.
@@ -499,6 +505,47 @@ file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/fullmag-fem-library-path.txt"
 enable_testing()
 
 if(FULLMAG_USE_MFEM_STACK)
+    add_executable(
+        fem_tracking_mass_provider_contract
+        tests/frequency_domain/tracking_mass_provider_test.cpp
+    )
+    target_link_libraries(fem_tracking_mass_provider_contract PRIVATE fullmag_fem)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_tracking_mass_provider_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_tracking_mass_provider_contract PRIVATE mfem)
+    endif()
+    target_include_directories(fem_tracking_mass_provider_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    add_test(
+        NAME fem_tracking_mass_provider_contract
+        COMMAND fem_tracking_mass_provider_contract)
+
+    add_executable(
+        fem_tracking_mass_snapshot_contract
+        tests/frequency_domain/tracking_mass_snapshot_contract_test.cpp
+    )
+    target_link_libraries(fem_tracking_mass_snapshot_contract PRIVATE fullmag_fem)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_tracking_mass_snapshot_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_tracking_mass_snapshot_contract PRIVATE mfem)
+    endif()
+    target_include_directories(fem_tracking_mass_snapshot_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_compile_definitions(fem_tracking_mass_snapshot_contract PRIVATE FULLMAG_HAS_MFEM_STACK=1)
+    if(NOT FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256 STREQUAL "")
+        target_compile_definitions(fem_tracking_mass_snapshot_contract PRIVATE
+            FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256="${FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256}")
+    endif()
+    add_test(
+        NAME fem_tracking_mass_snapshot_contract
+        COMMAND fem_tracking_mass_snapshot_contract)
+
     add_executable(
         fem_mesh_space_preparation_contract
         tests/mesh_space_preparation_contract.cpp
@@ -1966,6 +2013,26 @@ add_executable(fem_contract_validation tests/contract_validation.cpp)
 target_link_libraries(fem_contract_validation PRIVATE fullmag_fem)
 target_include_directories(fem_contract_validation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME fem_contract_validation COMMAND fem_contract_validation)
+
+if(NOT FULLMAG_USE_MFEM_STACK)
+    add_executable(
+        fem_tracking_mass_snapshot_contract
+        tests/frequency_domain/tracking_mass_snapshot_contract_test.cpp
+    )
+    target_link_libraries(fem_tracking_mass_snapshot_contract PRIVATE fullmag_fem)
+    target_include_directories(fem_tracking_mass_snapshot_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_compile_definitions(fem_tracking_mass_snapshot_contract PRIVATE FULLMAG_HAS_MFEM_STACK=0)
+    if(NOT FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256 STREQUAL "")
+        target_compile_definitions(fem_tracking_mass_snapshot_contract PRIVATE
+            FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256="${FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256}")
+    endif()
+    add_test(
+        NAME fem_tracking_mass_snapshot_contract
+        COMMAND fem_tracking_mass_snapshot_contract)
+endif()
 
 # S14: PA vs Assembled benchmark (opt-in)
 if(FULLMAG_USE_MFEM_STACK)
