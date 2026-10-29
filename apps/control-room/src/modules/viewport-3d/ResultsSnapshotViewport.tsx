@@ -18,6 +18,8 @@ import {
 import { sessionResourceIdentityKey } from "@/kernel/resources/sessionResourceIdentity";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 
+import { formatResultsSampleOrdinal } from "@/kernel/results-browser/resultsSampleLabels";
+import { useResultsHistoryExitOwner } from "@/kernel/visualization/ResultsHistoryExitOwnerContext";
 import { returnResultsToLive } from "@/kernel/visualization/returnResultsToLive";
 import { useSnapshotVisualization } from "@/kernel/visualization/useSnapshotVisualization";
 import { formatTooltipValue } from "@/shared/analysis-charts/scientificChartFormatting";
@@ -68,13 +70,13 @@ function coordinateCaption(array: ResultsArray, sampleIndex: number): string {
     (candidate) => candidate.sample_index === sampleIndex,
   );
   if (!coordinate) {
-    return `Sample index ${sampleIndex}`;
+    return "Coordinate unavailable";
   }
   const value = coordinate.value;
   if (coordinate.kind === "physical_time") {
     return typeof value === "number" && Number.isFinite(value)
       ? `Physical time ${formatNumber(value * 1e9)} ns`
-      : `Sample index ${sampleIndex}`;
+      : "Coordinate unavailable";
   }
   const acceptedStep = (
     coordinate as typeof coordinate & { accepted_step?: string | null }
@@ -84,7 +86,7 @@ function coordinateCaption(array: ResultsArray, sampleIndex: number): string {
   }
   return typeof value === "number" && Number.isSafeInteger(value)
     ? `Accepted step ${value}`
-    : `Sample index ${sampleIndex}`;
+    : "Coordinate unavailable";
 }
 
 function validFdmGeometry(geometry: ResultsFdmGeometry): string | null {
@@ -151,6 +153,7 @@ export function ResultsSnapshotViewport({
   className = "fm-results-snapshot-viewport",
 }: ResultsSnapshotViewportProps) {
   const kernel = useKernel();
+  const resultsHistoryExitOwner = useResultsHistoryExitOwner();
   const snapshotState = useSnapshotVisualization();
   const activeKey = snapshotState.activeKey;
   const definition = activeKey
@@ -372,7 +375,7 @@ export function ResultsSnapshotViewport({
       sampleIndex,
       coordinateCaption: array
         ? coordinateCaption(array, sampleIndex)
-        : `Sample index ${sampleIndex}`,
+        : "Coordinate unavailable",
       legendComponent: array?.component_count === 1
         ? "scalar"
         : definition?.appearance.component ?? "z",
@@ -418,7 +421,11 @@ export function ResultsSnapshotViewport({
   const unit = array?.unit ?? "Unit not recorded";
   const requestedCaptionCoordinate = array
     ? coordinateCaption(array, sampleIndex)
-    : `Sample index ${sampleIndex}`;
+    : "Coordinate unavailable";
+  const requestedSampleLabel = formatResultsSampleOrdinal(
+    sampleIndex,
+    array?.sample_count,
+  );
   const displayedSampleIndex = readyPresentation?.colors
     ? sampleIndex
     : retainedFrame?.sampleIndex ?? null;
@@ -428,8 +435,11 @@ export function ResultsSnapshotViewport({
       : readyPresentation?.colors
         ? array
           ? coordinateCaption(array, displayedSampleIndex)
-          : `Sample index ${displayedSampleIndex}`
-        : retainedFrame?.coordinateCaption ?? `Sample index ${displayedSampleIndex}`;
+          : "Coordinate unavailable"
+        : retainedFrame?.coordinateCaption ?? "Coordinate unavailable";
+  const displayedSampleLabel = displayedSampleIndex === null
+    ? "Sample unavailable"
+    : formatResultsSampleOrdinal(displayedSampleIndex, array?.sample_count);
   const displayedRange = readyPresentation?.colors
     ? readyPresentation.range
     : retainedFrame?.range ?? null;
@@ -459,12 +469,14 @@ export function ResultsSnapshotViewport({
         role="status"
         style={{ background: "var(--fm-bg-panel)", color: "var(--fm-text-primary)", padding: "8px 12px" }}
       >
-        Historical snapshot · {quantity} · Displayed: index {displayedSampleIndex ?? "—"} ({displayedCaptionCoordinate}) · {unit} · {displayedSampleIndex === null ? "—" : `${displayedSampleIndex + 1}/${array?.sample_count ?? "—"}`}
-        {requestedDiffers ? ` · Requested: index ${sampleIndex} (${requestedCaptionCoordinate})` : null}
+        Historical snapshot · {quantity} · Displayed: {displayedSampleLabel} ({displayedCaptionCoordinate}) · {unit}
+        {requestedDiffers ? ` · Requested: ${requestedSampleLabel} (${requestedCaptionCoordinate})` : null}
         {error ? <span role="alert"> · {error}</span> : !ready ? " · Loading saved output…" : null}
-        <Button size="sm" type="button" variant="secondary" onClick={returnToLive}>
-          {exitLabel}
-        </Button>
+        {resultsHistoryExitOwner === null ? (
+          <Button size="sm" type="button" variant="secondary" onClick={returnToLive}>
+            {exitLabel}
+          </Button>
+        ) : null}
       </header>
 
       {geometryResult.geometry ? (

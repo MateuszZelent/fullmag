@@ -110,6 +110,15 @@ const zarrGroupMetadata: ResultsEntry = {
   size_bytes: 18,
   array_id: null,
 };
+const zarrArrayMetadata: ResultsEntry = {
+  id: "file-array-zattrs",
+  path: "fields/m/.zattrs",
+  parent_id: "array-m",
+  name: ".zattrs",
+  kind: "file",
+  size_bytes: 24,
+  array_id: null,
+};
 
 const catalog: ResultsCatalog = {
   schema: "fullmag.results-catalog.v1",
@@ -133,10 +142,13 @@ const nestedCatalog: ResultsCatalog = {
 const noopUi: ResultsBrowserUiBinding = {
   query: "",
   collapsedIds: [],
+  expandedIds: [],
   focusedEntryId: null,
   setQuery: vi.fn(),
   toggleCollapsed: vi.fn(),
   setCollapsed: vi.fn(),
+  toggleExpanded: vi.fn(),
+  setExpanded: vi.fn(),
   setFocusedEntryId: vi.fn(),
 };
 
@@ -156,9 +168,10 @@ const noopProps: Omit<ResultsOutputTreeProps, "ui"> = {
 function StatefulResultsOutputTree(
   props: Omit<ResultsOutputTreeProps, "ui">,
 ) {
-  const [state, setState] = useState<Pick<ResultsBrowserUiBinding, "query" | "collapsedIds" | "focusedEntryId">>({
+  const [state, setState] = useState<Pick<ResultsBrowserUiBinding, "query" | "collapsedIds" | "expandedIds" | "focusedEntryId">>({
     query: "",
     collapsedIds: [],
+    expandedIds: [],
     focusedEntryId: null,
   });
   const ui: ResultsBrowserUiBinding = {
@@ -177,6 +190,51 @@ function StatefulResultsOutputTree(
           ? current.collapsedIds
           : [...current.collapsedIds, entryId]
         : current.collapsedIds.filter((id) => id !== entryId),
+    })),
+    toggleExpanded: (entryId, defaultCollapsed) => setState((current) => {
+      const expanded = defaultCollapsed
+        ? current.expandedIds.includes(entryId) && !current.collapsedIds.includes(entryId)
+        : !current.collapsedIds.includes(entryId);
+      if (defaultCollapsed) {
+        return {
+          ...current,
+          collapsedIds: expanded
+            ? [...current.collapsedIds, entryId]
+            : current.collapsedIds.filter((id) => id !== entryId),
+          expandedIds: expanded
+            ? current.expandedIds.filter((id) => id !== entryId)
+            : current.expandedIds.includes(entryId)
+              ? current.expandedIds
+              : [...current.expandedIds, entryId],
+        };
+      }
+      return {
+        ...current,
+        collapsedIds: expanded
+          ? [...current.collapsedIds, entryId]
+          : current.collapsedIds.filter((id) => id !== entryId),
+      };
+    }),
+    setExpanded: (entryId, expanded, defaultCollapsed) => setState((current) => ({
+      ...current,
+      collapsedIds: defaultCollapsed
+        ? expanded
+          ? current.collapsedIds.filter((id) => id !== entryId)
+          : current.collapsedIds.includes(entryId)
+            ? current.collapsedIds
+            : [...current.collapsedIds, entryId]
+        : expanded
+          ? current.collapsedIds.filter((id) => id !== entryId)
+          : current.collapsedIds.includes(entryId)
+            ? current.collapsedIds
+            : [...current.collapsedIds, entryId],
+      expandedIds: defaultCollapsed
+        ? expanded
+          ? current.expandedIds.includes(entryId)
+            ? current.expandedIds
+            : [...current.expandedIds, entryId]
+          : current.expandedIds.filter((id) => id !== entryId)
+        : current.expandedIds,
     })),
     setFocusedEntryId: (focusedEntryId) => setState((current) => ({ ...current, focusedEntryId })),
   };
@@ -247,7 +305,48 @@ describe("ResultsOutputTree", () => {
     expect(html).toContain("fm-results-output__bytes");
     expect(html).toContain('title="fields/deep/final-state.json — file · 42 B"');
     expect(html).toContain("max-w-full");
-    expect(html).toContain("overflow-x-hidden");
+    expect(html).toContain("overflow-x-clip");
+    expect(html).not.toMatch(/<(?:li|ul)[^>]*class="[^"]*\boverflow-hidden\b/);
+  });
+
+  it("defaults Zarr arrays closed while ordinary folders remain open", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const arrayCatalog: ResultsCatalog = {
+      ...nestedCatalog,
+      entries: [...nestedCatalog.entries, zarrArrayMetadata, resultsGroup, resultsArray],
+      total_count: 9,
+    };
+
+    try {
+      await act(async () => {
+        root.render(
+          <StatefulResultsOutputTree
+            {...noopProps}
+            catalog={arrayCatalog}
+          />,
+        );
+      });
+
+      expect(findTreeRow(container, "dir-fields").getAttribute("aria-expanded")).toBe("true");
+      expect(findTreeRow(container, "group-results").getAttribute("aria-expanded")).toBe("true");
+      expect(findTreeRow(container, "array-results-m").getAttribute("aria-expanded")).toBeNull();
+      const arrayRow = findTreeRow(container, "array-m");
+      expect(arrayRow.getAttribute("aria-expanded")).toBe("false");
+      expect(() => findTreeRow(container, zarrArrayMetadata.id)).toThrow();
+
+      arrayRow.focus();
+      await act(async () => press(arrayRow, "ArrowRight"));
+      expect(arrayRow.getAttribute("aria-expanded")).toBe("true");
+      expect(findTreeRow(container, zarrArrayMetadata.id)).toBeTruthy();
+      await act(async () => press(arrayRow, "ArrowLeft"));
+      expect(arrayRow.getAttribute("aria-expanded")).toBe("false");
+      expect(dom.document.activeElement).toBe(arrayRow);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
   });
 
   it("keeps long catalog metadata inside a shrinkable single grid track", () => {
@@ -343,6 +442,20 @@ describe("ResultsOutputTree", () => {
     expect(html).not.toContain("Return to live");
     expect(html).toContain("Run: —");
     expect(html).not.toContain("Current session");
+  });
+
+  it("can leave the historical exit action to the owning shell", () => {
+    const html = renderToStaticMarkup(
+      <ResultsOutputTree
+        {...noopProps}
+        isHistoricalActive
+        showReturnAction={false}
+        ui={noopUi}
+      />,
+    );
+
+    expect(html).not.toContain("Return to live");
+    expect(html).not.toContain("Close results");
   });
 
   it("routes entry selection and refresh actions through props", async () => {

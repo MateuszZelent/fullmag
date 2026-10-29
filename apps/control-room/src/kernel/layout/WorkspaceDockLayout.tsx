@@ -71,18 +71,20 @@ function WorkspaceColumnContent({
       <>
       <PanelChrome><span className="fm-panel-chrome__title">Saved folder</span></PanelChrome>
       <section aria-label="Saved result folder summary" className="fm-saved-results-playback__summary" data-saved-results-folder-summary="read-only">
-        <h2 className="fm-saved-results-playback__summary-title">Saved result folder</h2>
-        <dl className="fm-saved-results-playback__summary-data">
-          <div className="fm-saved-results-playback__summary-row">
-            <dt>Name</dt>
-            <dd title={playbackSelection.name}>{playbackSelection.name}</dd>
-          </div>
-          <div className="fm-saved-results-playback__summary-row">
-            <dt>Workspace item</dt>
-            <dd title={playbackSelection.itemId}>{playbackSelection.itemId}</dd>
-          </div>
-        </dl>
         <ResultsOutputExplorer source={folderSource} />
+        <details>
+          <summary className="fm-saved-results-playback__summary-title">Folder details</summary>
+          <dl className="fm-saved-results-playback__summary-data">
+            <div className="fm-saved-results-playback__summary-row">
+              <dt>Name</dt>
+              <dd title={playbackSelection.name}>{playbackSelection.name}</dd>
+            </div>
+            <div className="fm-saved-results-playback__summary-row">
+              <dt>Workspace item</dt>
+              <dd title={playbackSelection.itemId}>{playbackSelection.itemId}</dd>
+            </div>
+          </dl>
+        </details>
         <p className="fm-saved-results-playback__summary-note">
           Published data is read directly from this folder. The source project is unchanged and no session is started.
         </p>

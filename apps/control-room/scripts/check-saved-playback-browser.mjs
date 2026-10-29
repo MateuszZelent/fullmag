@@ -201,6 +201,10 @@ try {
   scenarioPhase="saved-folder-playback";
   await row.click();
   await page.locator('button[data-action="open-results-viewer"]').click();
+  const savedHeader=page.getByRole("region",{name:"Saved results playback",exact:true});
+  await savedHeader.getByRole("button",{name:"Return to live",exact:true}).waitFor({state:"visible"});
+  assert.equal(await savedHeader.getByRole("button",{name:"Return to live",exact:true}).count(),1,"Saved playback has one primary exit action.");
+  assert.equal(await page.getByRole("button",{name:"Return to live",exact:true}).count(),1,"Saved playback exposes duplicate exit actions.");
   const inspector=page.getByRole("region",{name:"Saved results playback Inspector"});
   await inspector.waitFor({state:"visible"});
   const inspectorHandle=await inspector.elementHandle();
@@ -228,6 +232,7 @@ try {
     },{index});
     await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
     await page.waitForFunction(({index})=>document.querySelector('[aria-label="Saved frame index"]')?.getAttribute("aria-valuenow")===String(index),{index});
+    assert.equal(await slider.getAttribute("aria-valuetext"),`Sample ${index+1} of ${stage.frame_count}`,"Legacy slider announces the data index instead of the sample ordinal.");
     assert(await inspectorHandle.evaluate(node=>node.isConnected),"Inspector was remounted during scrubbing.");
     const expectedTime=stage.times_s[index]*1e9;
     assert((await source.textContent()).includes(expectedTime.toFixed(3)+" ns"));
@@ -297,10 +302,63 @@ try {
   }
   const outputRow=page.locator('[data-entry-id="'+selectedOutput.entry.id+'"] > div > [data-entry-select="true"]');
   for(let count=0;count<50 && !await outputRow.count();count++)await page.getByRole("button",{name:"Next page",exact:true}).click();
+  const savedOutputRegion=page.getByRole("region",{name:"Saved result outputs",exact:true});
+  const savedTreeLayout=await savedOutputRegion.evaluate(region=>({
+    rows:[...region.querySelectorAll('[data-entry-select="true"]')].map(node=>{const r=node.getBoundingClientRect();return {label:node.getAttribute("aria-label"),y:r.y,bottom:r.bottom,height:r.height};}),
+    groups:[...region.querySelectorAll('[role="group"]')].map(node=>{const r=node.getBoundingClientRect(),style=getComputedStyle(node);return {height:r.height,client_height:node.clientHeight,scroll_height:node.scrollHeight,overflow_x:style.overflowX,overflow_y:style.overflowY};})
+  }));
+  result={...result,saved_tree_layout:savedTreeLayout};
+  for(let index=1;index<savedTreeLayout.rows.length;index++) {
+    const previous=savedTreeLayout.rows[index-1],row=savedTreeLayout.rows[index];
+    assert(row.height>0 && row.y>=previous.bottom-1,"Saved tree rows overlap or collapse: "+previous.label+" -> "+row.label);
+  }
+  const treeHitChecks=[];
+  for(const row of await savedOutputRegion.locator('[data-entry-select="true"][data-entry-kind="zarr_array"]').all()) {
+    await row.scrollIntoViewIfNeeded();
+    await row.click({trial:true,timeout:10_000});
+    treeHitChecks.push(await row.evaluate(node=>{const r=node.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return {label:node.getAttribute("aria-label"),height:r.height,center_visible:Boolean(hit&&(hit===node||node.contains(hit)))};}));
+  }
+  assert(treeHitChecks.length>=3 && treeHitChecks.every(row=>row.height>0 && row.center_visible),"Saved quantities are clipped or not pointer reachable.");
+  result={...result,saved_tree_rows_reachable:treeHitChecks};
+  const savedOutputSearch=page.getByRole("searchbox",{name:"Search saved result outputs",exact:true});
+  const outputTreeitem=page.locator('[data-entry-id="'+selectedOutput.entry.id+'"]');
+  const arrayPath=selectedOutput.entry.path;
+  assert.equal(await outputTreeitem.getAttribute("aria-expanded"),"false","Zarr metadata starts expanded and crowds out quantities.");
+  await outputTreeitem.press("ArrowRight");
+  await page.getByRole("button",{name:"Collapse "+arrayPath,exact:true}).waitFor({state:"visible"});
+  await savedOutputSearch.fill(arrayPath+"/.zattrs");
+  await page.getByRole("button",{name:"Select "+arrayPath+"/.zattrs",exact:true}).waitFor({state:"visible"});
+  await savedOutputSearch.fill("");
+  await page.getByRole("button",{name:"Collapse "+arrayPath,exact:true}).waitFor({state:"visible"});
+  await outputTreeitem.press("ArrowLeft");
+  await page.getByRole("button",{name:"Expand "+arrayPath,exact:true}).waitFor({state:"visible"});
+  await savedOutputSearch.fill(arrayPath+"/.zattrs");
+  await page.getByRole("button",{name:"Select "+arrayPath+"/.zattrs",exact:true}).waitFor({state:"visible"});
+  await savedOutputSearch.fill("");
+  await page.getByRole("button",{name:"Expand "+arrayPath,exact:true}).waitFor({state:"visible"});
+  const expandedMetadataPaths=[];
+  for(const arrayRow of await page.locator('[data-entry-select="true"][data-entry-kind="zarr_array"]').all()) {
+    const path=(await arrayRow.getAttribute("aria-label")).slice("Select ".length);
+    const expand=page.getByRole("button",{name:"Expand "+path,exact:true});
+    if(await expand.count()) {await expand.click();expandedMetadataPaths.push(path);}
+  }
+  const folderDetails=page.locator("details").filter({has:page.locator("summary").filter({hasText:/^Folder details$/})});
+  await folderDetails.locator("summary").scrollIntoViewIfNeeded();
+  await folderDetails.locator("summary").click({trial:true});
+  const folderReachability=await folderDetails.evaluate(node=>{const r=node.getBoundingClientRect(),panel=node.closest('[data-panel-frame="panel-left"]').getBoundingClientRect(),scroller=node.closest('[data-saved-results-folder-summary]');return {y:r.y,bottom:r.bottom,panel_y:panel.y,panel_bottom:panel.bottom,scroll_height:scroller.scrollHeight,client_height:scroller.clientHeight,scroll_top:scroller.scrollTop};});
+  assert(folderReachability.y>=folderReachability.panel_y && folderReachability.bottom<=folderReachability.panel_bottom,"Folder details is clipped below the expanded catalog.");
+  assert.equal(await folderDetails.getAttribute("open"),null,"Repeated folder identity should start collapsed.");
+  await folderDetails.locator("summary").press("Enter");
+  assert((await folderDetails.textContent()).includes("Workspace item"));
+  assert.notEqual(await folderDetails.getAttribute("open"),null);
+  await folderDetails.locator("summary").press("Enter");
+  for(const path of expandedMetadataPaths)await page.getByRole("button",{name:"Collapse "+path,exact:true}).click();
+  result={...result,array_metadata_default_collapsed:true,metadata_search_preserves_expansion:true,folder_details_keyboard_verified:true,folder_details_reachability:folderReachability};
   const samplesBeforeSelection=resultSampleRequests.length;
   await outputRow.click();
   const outputInspector=page.getByRole("region",{name:"Results output Inspector"});
-  await outputInspector.getByRole("slider",{name:"Saved sample index"}).waitFor({state:"visible"});
+  await outputInspector.getByRole("slider",{name:"Saved sample"}).waitFor({state:"visible"});
+  assert((await outputInspector.textContent()).includes(`Sample 1 of ${selectedOutput.array.sample_count}`),"Inspector sample label is not one-based and bounded.");
   assert.equal(await page.getByRole("region",{name:"Inspector",exact:true}).getByRole("tab").count(),0,"Output Inspector exposes inactive generic tabs.");
   result={...result,output_inspector_continuous_sections_verified:true};
   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
@@ -316,7 +374,7 @@ try {
   const resultCanvasHashes=[];
   const resultInspectorHandle=await outputInspector.elementHandle();
   for(const index of [...resultIndices,0]) {
-    const slider=outputInspector.getByRole("slider",{name:"Saved sample index"});
+    const slider=outputInspector.getByRole("slider",{name:"Saved sample"});
     if(index===0)await slider.press("Home");
     else if(index===selectedOutput.array.sample_count-1)await slider.press("End");
     else {
@@ -331,6 +389,7 @@ try {
     }
     await page.waitForFunction(index=>document.querySelector('[data-results-snapshot-status="ready"]')?.getAttribute("data-results-snapshot-index")===String(index),index);
     await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    assert.equal(await slider.getAttribute("aria-valuetext"),`Sample ${index+1} of ${selectedOutput.array.sample_count}`,"Results slider announces the data index instead of the sample ordinal.");
     assert(await resultInspectorHandle.evaluate(node=>node.isConnected),"Results Inspector remounted while scrubbing.");
     assert(await retainedCanvas.evaluate(node=>node.isConnected),"Results canvas remounted while scrubbing.");
     const key=selectedOutput.array.id+":"+index;
@@ -355,7 +414,7 @@ try {
   try {
     const beforePose=await snapshotCanvas.getAttribute("data-saved-camera-pose");
     const beforeLegend=await snapshot.getByLabel("Saved result color scale").textContent();
-    const sampleSlider=outputInspector.getByRole("slider",{name:"Saved sample index"});
+    const sampleSlider=outputInspector.getByRole("slider",{name:"Saved sample"});
     for(let index=0;index<delayedIndex;index++)await sampleSlider.press("ArrowRight");
     await page.waitForFunction(index=>{
       const view=document.querySelector('[data-results-snapshot-status="loading"]');
@@ -367,8 +426,10 @@ try {
     assert(await retainedCanvas.evaluate(node=>node.isConnected),"Loading the next sample remounted the canvas.");
     assert.equal(await snapshotCanvas.getAttribute("data-saved-camera-pose"),beforePose,"Pending sample changed the camera.");
     assert.equal(await snapshot.getByLabel("Saved result color scale").textContent(),beforeLegend,"Pending sample relabelled the retained colors.");
+    assert(/Displayed: Sample \d+ of \d+/.test(await snapshot.textContent()),"Pending sample lost the displayed sample ordinal.");
+    assert(/Requested: Sample \d+ of \d+/.test(await snapshot.textContent()),"Pending sample lost the requested sample ordinal.");
     assert((await snapshot.textContent()).includes("Requested:"),"Pending sample is not distinguished from the displayed frame.");
-    const pendingScreenshot=await snapshot.screenshot({type:"png"});
+    const pendingScreenshot=await snapshot.screenshot({type:"jpeg",quality:80});
     assert(pendingScreenshot.length<=512*1024);
     result={...result,pending_snapshot_screenshot_base64:pendingScreenshot.toString("base64")};
     releaseSample();
@@ -398,7 +459,7 @@ try {
   const failedRoute=url=>decodeURIComponent(url.pathname)===failedPath;
   let failedRequests=0;
   const failSample=async route=>{failedRequests++;await route.fulfill({status:503,json:{code:"qa_sample_unavailable",message:"QA saved sample temporarily unavailable"}});};
-  const errorSlider=outputInspector.getByRole("slider",{name:"Saved sample index"});
+  const errorSlider=outputInspector.getByRole("slider",{name:"Saved sample"});
   await errorSlider.press("End");
   await page.waitForFunction(index=>document.querySelector('[data-results-snapshot-status="ready"]')?.getAttribute("data-results-snapshot-displayed-index")===String(index),failedIndex+1);
   const errorPose=await snapshotCanvas.getAttribute("data-saved-camera-pose");
@@ -416,9 +477,11 @@ try {
     assert(await retainedCanvas.evaluate(node=>node.isConnected),"Sample read failure replaced the canvas.");
     assert.equal(await snapshotCanvas.getAttribute("data-saved-camera-pose"),errorPose,"Read failure changed the camera.");
     assert.equal(await snapshot.getByLabel("Saved result color scale").textContent(),errorLegend,"Read failure relabelled the retained colors.");
+    assert(/Displayed: Sample \d+ of \d+/.test(await snapshot.textContent()),"Read failure lost the displayed sample ordinal.");
+    assert(/Requested: Sample \d+ of \d+/.test(await snapshot.textContent()),"Read failure lost the requested sample ordinal.");
     assert((await snapshot.textContent()).includes("Requested:"),"Read failure hides the requested/displayed distinction.");
-    assert(await snapshot.getByRole("button",{name:"Return to live",exact:true}).isEnabled(),"Read failure disabled return to live.");
-    const errorScreenshot=await snapshot.screenshot({type:"png"});
+    assert(await savedHeader.getByRole("button",{name:"Return to live",exact:true}).isEnabled(),"Read failure disabled return to live.");
+    const errorScreenshot=await snapshot.screenshot({type:"jpeg",quality:80});
     assert(errorScreenshot.length<=512*1024);
     result={...result,sample_error_screenshot_base64:errorScreenshot.toString("base64")};
   } finally {
@@ -473,7 +536,7 @@ try {
     const layout=await page.evaluate(()=>({
       width:innerWidth,scrollWidth:document.documentElement.scrollWidth,
       results_tree_boxes:[...document.querySelectorAll('[aria-label="Saved result outputs"], [aria-label="Result output entries"]')].map(node=>({label:node.getAttribute("aria-label"),x:node.getBoundingClientRect().x,width:node.getBoundingClientRect().width,scrollWidth:node.scrollWidth,clientWidth:node.clientWidth,scrollLeft:node.scrollLeft})),
-      primary_controls:[...document.querySelectorAll('[aria-label="Saved sample index"], [aria-label="Visualization component"]')].map(node=>{const r=node.getBoundingClientRect();const hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return {label:node.getAttribute("aria-label"),center_visible:Boolean(hit && (hit===node || node.contains(hit)))};}),
+      primary_controls:[...document.querySelectorAll('[aria-label="Saved sample"], [aria-label="Visualization component"]')].map(node=>{const r=node.getBoundingClientRect();const hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return {label:node.getAttribute("aria-label"),center_visible:Boolean(hit && (hit===node || node.contains(hit)))};}),
       tree_labels:[...document.querySelectorAll('[data-entry-select="true"][data-entry-kind="zarr_array"] > span:first-child')].map(node=>({text:node.textContent,clientWidth:node.clientWidth,scrollWidth:node.scrollWidth})),
       scrolled_elements:[...document.querySelectorAll("*")].filter(node=>node.scrollLeft>0).map(node=>({tag:node.tagName,role:node.getAttribute("role"),className:typeof node.className==="string"?node.className:"",scrollLeft:node.scrollLeft,scrollWidth:node.scrollWidth,clientWidth:node.clientWidth,x:node.getBoundingClientRect().x})).slice(0,15),
     }));
@@ -482,7 +545,7 @@ try {
     assert(layout.results_tree_boxes.every(box=>box.scrollLeft===0 && box.scrollWidth<=box.clientWidth+1),"Result tree is wider than its panel or has scrolled its labels out of view.");
     assert(layout.tree_labels.length>=3 && layout.tree_labels.every(label=>label.clientWidth>0 && label.scrollWidth<=label.clientWidth+1),"The narrow output tree obscures a field or table name.");
     const reachableControls=[];
-    for(const control of [outputInspector.getByRole("slider",{name:"Saved sample index"}),component]) {
+    for(const control of [outputInspector.getByRole("slider",{name:"Saved sample"}),component]) {
       await control.scrollIntoViewIfNeeded();
       await control.click({trial:true});
       const probe=await control.evaluate(node=>{
@@ -494,7 +557,7 @@ try {
       reachableControls.push(probe);
     }
     layoutChecks.push({...viewport,...layout,reachable_controls:reachableControls});
-    if(viewport.width===1280)compactScreenshot=await page.screenshot({type:"png"});
+    if(viewport.width===1280)compactScreenshot=await page.screenshot({type:"jpeg",quality:80});
   }
   assert(layoutChecks.every(value=>value.reachable_controls.every(control=>control.center_visible)),"Snapshot navigation or component controls cannot be reached inside the Inspector.");
   assert(compactScreenshot.length<=512*1024);
@@ -517,7 +580,9 @@ try {
   assert(new Set(canvasHashes).size>1,"Different fields did not change the rendered canvas.");
   assert(screenshot.length<=512*1024,"Screenshot exceeds managed evidence bound.");
   scenarioPhase="first-return-live";
-  await snapshot.getByRole("button",{name:"Return to live",exact:true}).click();
+  assert.equal(await snapshot.getByRole("button",{name:"Return to live",exact:true}).count(),0,"Saved viewport retained a duplicate exit action.");
+  assert.equal(await page.getByRole("button",{name:"Return to live",exact:true}).count(),1,"Saved playback exit action count changed.");
+  await savedHeader.getByRole("button",{name:"Return to live",exact:true}).click();
   assert.equal(await page.locator('[data-results-snapshot-status]').count(),0);
   await page.getByRole("button",{name:"Return to live",exact:true}).waitFor({state:"hidden"});
   await page.getByRole("heading",{name:"Result output",exact:true}).waitFor({state:"hidden"});
@@ -528,7 +593,7 @@ try {
   await liveCanvas.waitFor({state:"visible"});
   const liveGl=await liveCanvas.evaluate(node=>{const gl=node.getContext("webgl2")??node.getContext("webgl");const rect=node.getBoundingClientRect();return {visible:rect.width>0&&rect.height>0,lost:gl?.isContextLost()??true,width:gl?.drawingBufferWidth??0,height:gl?.drawingBufferHeight??0};});
   assert(liveGl.visible&&!liveGl.lost&&liveGl.width>0&&liveGl.height>0,"Return to live did not restore a visible working 3D canvas.");
-  const liveScreenshot=await page.screenshot({type:"png"});
+  const liveScreenshot=await page.screenshot({type:"jpeg",quality:80});
   assert(liveScreenshot.length<=512*1024);
   result={...result,live_screenshot_base64:liveScreenshot.toString("base64"),live_return_verified:true,live_view_source:"current",live_drawing_buffer:[liveGl.width,liveGl.height],results_sample_indices:resultIndices,results_sample_sha256:[...expectedResults.values()],results_canvas_changed:true};
   // Repeat through Explorer > Results for the just-completed live run.
@@ -638,11 +703,15 @@ try {
   const historicalContext=page.getByRole("region",{name:"Historical viewport context",exact:true});
   await historicalContext.waitFor({state:"visible"});
   assert.equal(await page.locator('[data-results-snapshot-status="ready"]').count(),1);
-  const modelContextScreenshot=await page.screenshot({type:"png"});
+  const currentHistoryExit=page.locator("header.fm-header").getByRole("button",{name:"Return to live",exact:true});
+  assert.equal(await currentHistoryExit.count(),1,"Current history has no single app-menu exit action.");
+  assert.equal(await page.getByRole("button",{name:"Return to live",exact:true}).count(),1,"Current history exposes duplicate exit actions.");
+  assert.equal(await historicalContext.getByRole("button",{name:"Return to live",exact:true}).count(),0,"Historical viewport retained a duplicate exit action.");
+  const modelContextScreenshot=await page.screenshot({type:"jpeg",quality:80});
   assert(modelContextScreenshot.length<=512*1024);
   result={...result,model_context_screenshot_base64:modelContextScreenshot.toString("base64")};
   await objectName.fill(draftObjectName);
-  await historicalContext.getByRole("button",{name:"Return to live",exact:true}).click();
+  await currentHistoryExit.click();
   await liveViewport.waitFor({state:"visible"});
   assert.equal(await liveViewport.getAttribute("data-view-source"),"current");
   assert.equal(await objectName.inputValue(),draftObjectName,"Return to live discarded the current model draft.");
@@ -655,8 +724,38 @@ try {
   await dirtyDialog.getByRole("button",{name:"Discard",exact:true}).click();
   await outputInspector.getByRole("button",{name:"Load into 3D",exact:true}).click();
   result={...result,model_inspector_historical_context_verified:true,return_live_preserves_model_draft:true};
+  const viewportSurfaces=page.getByRole("tablist",{name:"Viewport surfaces",exact:true});
+  await viewportSurfaces.getByRole("tab",{name:"Live Charts",exact:true}).click();
+  await page.locator('[data-slot-id="viewport-main"][data-active-module-id="live-charts"]').waitFor({state:"visible"});
+  assert.equal(await page.locator('[data-results-snapshot-status]').count(),0,"The alternate surface did not unmount the historical 3D viewport.");
+  await page.getByRole("heading",{name:"Live Chart",exact:true,level:2}).waitFor({state:"visible",timeout:60_000});
+  for(const menu of ["Inspector panel menu","Explorer panel menu"]) {
+    await page.getByRole("button",{name:menu,exact:true}).click();
+    await page.getByRole("menuitem",{name:"Hide panel",exact:true}).click();
+  }
+  await page.locator('[data-panel-frame="panel-left"]').waitFor({state:"hidden"});
+  await page.locator('[data-panel-frame="panel-right"]').waitFor({state:"hidden"});
+  await page.setViewportSize({width:320,height:900});
+  await currentHistoryExit.click({trial:true,timeout:10_000});
+  const exitAt320=await currentHistoryExit.evaluate(node=>{const r=node.getBoundingClientRect();return {x:r.x,width:r.width,viewport:innerWidth};});
+  assert(exitAt320.x>=0 && exitAt320.x+exitAt320.width<=exitAt320.viewport,"Current history exit is clipped at 320 px.");
+  await page.setViewportSize({width:1500,height:1000});
+  await currentHistoryExit.click();
+  assert.equal(await currentHistoryExit.count(),0,"Exit action remained after leaving Current history.");
+  for(const [id,restore] of [["panel-left","Restore Explorer"],["panel-right","Restore Inspector"]]) {
+    const frame=page.locator('[data-panel-frame="'+id+'"]');
+    if(!await frame.isVisible())await page.getByRole("button",{name:restore,exact:true}).click({timeout:10_000});
+    await frame.waitFor({state:"visible"});
+  }
+  await viewportSurfaces.getByRole("tab",{name:"3D Viewport",exact:true}).click();
+  result={...result,current_exit_without_panels_or_3d_verified:true,current_exit_at_320:exitAt320};
+  await liveViewport.waitFor({state:"visible"});
+  await explorer.getByRole("tab",{name:"Results",exact:true}).click();
+  await currentRow.click();
+  await outputInspector.getByRole("button",{name:"Load into 3D",exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('[data-results-snapshot-status="ready"]'));
   for(const index of [0,selectedOutput.array.sample_count-1,0]) {
-    await outputInspector.getByRole("slider",{name:"Saved sample index"}).press(index===0?"Home":"End");
+    await outputInspector.getByRole("slider",{name:"Saved sample"}).press(index===0?"Home":"End");
     await page.waitForFunction(index=>document.querySelector('[data-results-snapshot-status="ready"]')?.getAttribute("data-results-snapshot-index")===String(index),index);
     const key=selectedOutput.array.id+":"+index;
     for(let attempt=0;attempt<500&&!resultPayloads.has(key);attempt++)await page.waitForTimeout(20);
@@ -664,14 +763,14 @@ try {
   }
   scenarioPhase="current-result-playback";
   const lastSample=selectedOutput.array.sample_count-1;
-  await outputInspector.getByRole("slider",{name:"Saved sample index"}).press("End");
+  await outputInspector.getByRole("slider",{name:"Saved sample"}).press("End");
   await page.waitForFunction(index=>document.querySelector('[data-results-snapshot-status="ready"]')?.getAttribute("data-results-snapshot-index")===String(index),lastSample);
   const fileEntry=currentCatalog.entries.find(entry=>entry.kind==="file" && entry.path.endsWith(".json"));
   assert(fileEntry,"Current results lack a metadata file for the reselection check.");
   await explorer.locator('[data-entry-id="'+fileEntry.id+'"] > div > [data-entry-select="true"]').click();
   await outputInspector.getByRole("heading",{name:"File preview",exact:true}).waitFor({state:"visible"});
   await currentRow.click();
-  assert.equal(Number(await outputInspector.getByRole("slider",{name:"Saved sample index"}).inputValue()),lastSample,"Reopening the displayed dataset reset its Inspector sample.");
+  assert.equal(Number(await outputInspector.getByRole("slider",{name:"Saved sample"}).inputValue()),lastSample,"Reopening the displayed dataset reset its Inspector sample.");
   assert.equal(await snapshot.getAttribute("data-results-snapshot-index"),String(lastSample));
   result={...result,sample_reselection_verified:true};
   // Tables must expose their persisted column names, not anonymous values.
@@ -688,7 +787,7 @@ try {
   const decodedValues=outputInspector.getByRole("button",{name:"Decoded values",exact:true});
   if(await decodedValues.getAttribute("aria-expanded")!=="true")await decodedValues.click();
   for(const index of [0,table.sample_count-1]) {
-    await outputInspector.getByRole("slider",{name:"Saved sample index"}).press(index===0?"Home":"End");
+    await outputInspector.getByRole("slider",{name:"Saved sample"}).press(index===0?"Home":"End");
     const expectedTable=await context.request.get(tableBase+"/samples/"+index+"?"+new URLSearchParams({revision:table.revision}));
     assert.equal(expectedTable.status(),200);
     const expectedBytes=await expectedTable.body();
@@ -705,7 +804,7 @@ try {
   }
   result={...result,table_columns_verified:tableColumns,table_sample_indices:[0,table.sample_count-1]};
   await currentRow.click();
-  assert.equal(Number(await outputInspector.getByRole("slider",{name:"Saved sample index"}).inputValue()),lastSample);
+  assert.equal(Number(await outputInspector.getByRole("slider",{name:"Saved sample"}).inputValue()),lastSample);
   const preResetZoomPose=await snapshotCanvas.getAttribute("data-saved-camera-pose");
   await snapshotCanvas.hover();
   await page.mouse.wheel(0,450);
@@ -719,7 +818,7 @@ try {
   await page.getByRole("button",{name:/^Color theme:/}).click();
   await page.getByRole("menuitemradio",{name:"Dark",exact:true}).click();
   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
-  const darkScreenshot=await page.screenshot({type:"png"});
+  const darkScreenshot=await page.screenshot({type:"jpeg",quality:80});
   assert(darkScreenshot.length<=512*1024);
   result={...result,dark_screenshot_base64:darkScreenshot.toString("base64")};
   await page.getByRole("button",{name:/^Color theme:/}).click();
@@ -733,7 +832,7 @@ try {
   }
   assert(lateIndex!==null,"Late-response proof needs an uncached current-run sample.");
   const latePath=currentSamplePrefix+lateIndex;
-  await outputInspector.getByRole("slider",{name:"Saved sample index"}).press("Home");
+  await outputInspector.getByRole("slider",{name:"Saved sample"}).press("Home");
   await page.waitForFunction(()=>document.querySelector('[data-results-snapshot-status="ready"]')?.getAttribute("data-results-snapshot-index")==="0");
   const lateRoute=url=>decodeURIComponent(url.pathname)===latePath;
   let releaseLate,finishLate,lateReady=false,lateError=null;
@@ -751,12 +850,14 @@ try {
   };
   await page.route(lateRoute,holdLate);
   try {
-    for(let index=0;index<lateIndex;index++)await outputInspector.getByRole("slider",{name:"Saved sample index"}).press("ArrowRight");
+    for(let index=0;index<lateIndex;index++)await outputInspector.getByRole("slider",{name:"Saved sample"}).press("ArrowRight");
     await page.waitForFunction(index=>document.querySelector('[data-results-snapshot-status="loading"]')?.getAttribute("data-results-snapshot-index")===String(index),lateIndex);
     for(let attempt=0;attempt<500&&!lateReady&&!lateError;attempt++)await page.waitForTimeout(20);
     if(lateError)throw lateError;
     assert(lateReady,"Late historical response was not captured.");
-    await snapshot.getByRole("button",{name:"Return to live",exact:true}).click();
+    assert.equal(await currentHistoryExit.count(),1,"Current history app-menu exit disappeared while loading a sample.");
+    assert.equal(await snapshot.getByRole("button",{name:"Return to live",exact:true}).count(),0,"Current viewport retained a duplicate exit action.");
+    await currentHistoryExit.click();
     await liveViewport.waitFor({state:"visible"});
     await outputInspector.waitFor({state:"hidden"});
     releaseLate();
@@ -790,7 +891,9 @@ try {
   await savedFolders.locator('[data-workspace-result-id="'+itemId+'"] button').click();
   await source.waitFor({state:"visible"});
   await page.waitForFunction(()=>document.querySelector(".fm-saved-playback-viewport")?.getAttribute("data-saved-frame-state")==="ready");
-  await page.getByRole("region",{name:"Saved results playback",exact:true}).getByRole("button",{name:"Return to live",exact:true}).click();
+  assert.equal(await savedHeader.getByRole("button",{name:"Return to live",exact:true}).count(),1,"Saved folder playback has no single primary exit action.");
+  assert.equal(await page.getByRole("button",{name:"Return to live",exact:true}).count(),1,"Saved folder playback exposes duplicate exit actions.");
+  await savedHeader.getByRole("button",{name:"Return to live",exact:true}).click();
   await liveViewport.waitFor({state:"visible"});
   assert.equal(await liveViewport.getAttribute("data-view-source"),"current");
   scenarioPhase="terminal-live";
@@ -873,7 +976,7 @@ try {
   const firstPublicationCheck=publicationChecks;
   for(let attempt=0;attempt<400&&publicationChecks===firstPublicationCheck;attempt++)await page.waitForTimeout(50);
   assert(publicationChecks>firstPublicationCheck,"Visible Results did not check for publication again.");
-  const publicationScreenshot=await publicationTree.screenshot({type:"png"});
+  const publicationScreenshot=await publicationTree.screenshot({type:"jpeg",quality:80});
   assert(publicationScreenshot.length<=512*1024);
   publicationMode="missing";
   await publicationTree.getByRole("alert").filter({hasText:"Completed run output publication is missing"}).waitFor({state:"visible"});
@@ -917,30 +1020,33 @@ try {
   await page.locator('button[data-action="open-results-viewer"]').click();
   const noSessionHeader=page.getByRole("region",{name:"Saved results playback",exact:true});
   await noSessionHeader.getByRole("button",{name:"Close results",exact:true}).waitFor({state:"visible"});
+  assert.equal(await noSessionHeader.getByRole("button",{name:"Close results",exact:true}).count(),1,"No-session Saved header lost its Close results action.");
   assert.equal(await page.getByRole("button",{name:"Return to live",exact:true}).count(),0,"The no-session view promises a live workspace.");
   await page.waitForFunction(()=>document.querySelector(".fm-saved-playback-viewport")?.getAttribute("data-saved-frame-state")==="ready");
   const noSessionOutput=page.locator('[data-entry-id="'+selectedOutput.entry.id+'"] > div > [data-entry-select="true"]');
   for(let count=0;count<50 && !await noSessionOutput.count();count++)await page.getByRole("button",{name:"Next page",exact:true}).click();
   await noSessionOutput.click();
   const noSessionInspector=page.getByRole("region",{name:"Results output Inspector",exact:true});
-  await noSessionInspector.getByRole("button",{name:"Close results",exact:true}).waitFor({state:"visible"});
+  assert.equal(await noSessionInspector.getByRole("button",{name:"Close results",exact:true}).count(),0,"No-session Inspector retained a duplicate Close results action.");
   await noSessionInspector.getByRole("button",{name:"Load into 3D",exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('[data-results-snapshot-status="ready"]'));
-  await noSessionInspector.getByRole("slider",{name:"Saved sample index"}).press("End");
+  await noSessionInspector.getByRole("slider",{name:"Saved sample"}).press("End");
   await page.waitForFunction(index=>document.querySelector('[data-results-snapshot-status="ready"]')?.getAttribute("data-results-snapshot-index")===String(index),selectedOutput.array.sample_count-1);
   const noSessionSnapshot=page.getByRole("region",{name:"Saved results 3D viewport",exact:true});
-  await noSessionSnapshot.getByRole("button",{name:"Close results",exact:true}).waitFor({state:"visible"});
+  assert.equal(await noSessionSnapshot.getByRole("button",{name:"Close results",exact:true}).count(),0,"No-session viewport retained a duplicate Close results action.");
   assert.equal(await page.getByRole("button",{name:"Return to live",exact:true}).count(),0);
-  const noSessionScreenshot=await page.screenshot({type:"png"});
+  const noSessionScreenshot=await page.screenshot({type:"jpeg",quality:80});
   assert(noSessionScreenshot.length<=512*1024);
-  await noSessionSnapshot.getByRole("button",{name:"Close results",exact:true}).click();
+  await noSessionHeader.getByRole("button",{name:"Close results",exact:true}).click();
   await noSessionRow.waitFor({state:"visible"});
   assert.equal(await page.locator('[data-results-snapshot-status]').count(),0);
   assert.equal(await page.getByRole("region",{name:"3D viewport",exact:true}).count(),0);
   await noSessionRow.click();
   await page.locator('button[data-action="open-results-viewer"]').click();
-  await page.getByRole("region",{name:"Saved results playback Inspector",exact:true})
-    .getByRole("button",{name:"Close results",exact:true}).click();
+  await page.getByRole("region",{name:"Saved results playback Inspector",exact:true}).waitFor({state:"visible"});
+  assert.equal(await page.getByRole("region",{name:"Saved results playback Inspector",exact:true})
+    .getByRole("button",{name:"Close results",exact:true}).count(),0,"No-session playback Inspector retained a duplicate Close results action.");
+  await noSessionHeader.getByRole("button",{name:"Close results",exact:true}).click();
   await noSessionRow.waitFor({state:"visible"});
   assert.equal(await page.locator('[data-saved-results-playback="read-only"]').count(),0);
   // A folder without the legacy playback descriptor still opens its output
@@ -950,11 +1056,13 @@ try {
   await noSessionRow.click();
   await page.locator('button[data-action="open-results-viewer"]').click();
   const browserOnlyInspector=page.getByRole("region",{name:"Results output Inspector",exact:true});
-  await browserOnlyInspector.getByRole("button",{name:"Close results",exact:true}).waitFor({state:"visible"});
-  await page.getByRole("region",{name:"Results 3D viewport",exact:true})
-    .getByRole("button",{name:"Close results",exact:true}).waitFor({state:"visible"});
+  await browserOnlyInspector.waitFor({state:"visible"});
+  assert.equal(await browserOnlyInspector.getByRole("button",{name:"Close results",exact:true}).count(),0,"Browser-only Inspector retained a duplicate Close results action.");
+  const browserOnlyViewport=page.getByRole("region",{name:"Results 3D viewport",exact:true});
+  await browserOnlyViewport.waitFor({state:"visible"});
+  assert.equal(await browserOnlyViewport.getByRole("button",{name:"Close results",exact:true}).count(),0,"Browser-only viewport retained a duplicate Close results action.");
   assert.equal(await page.getByRole("button",{name:"Return to live",exact:true}).count(),0);
-  await browserOnlyInspector.getByRole("button",{name:"Close results",exact:true}).click();
+  await noSessionHeader.getByRole("button",{name:"Close results",exact:true}).click();
   await noSessionRow.waitFor({state:"visible"});
   assert.equal(await page.locator('[data-saved-results-playback="read-only"]').count(),0);
   assert(noSessionDiscoveries>0);
@@ -970,7 +1078,19 @@ try {
     frame_indices:indices,frame_sha256:expected,canvas_visible:true,context_lost:false,
     ...result,field_payloads_verified:true,changed_canvas:true,inspector_stable:true,
     camera_stable:true,visualization_trace:visualizationTrace,payload_evidence:"application_body_reads",live_visualization_unchanged:true,startup_camera_initialization:startupCameraInitialization,hook_errors:hookErrors,errors,screenshot_base64:screenshot.toString("base64")};
+  result.evidence_image_formats={
+    screenshot_base64:"png",terminal_live_screenshot_base64:"png",
+    pending_snapshot_screenshot_base64:"jpeg",sample_error_screenshot_base64:"jpeg",
+    compact_screenshot_base64:"jpeg",live_screenshot_base64:"jpeg",
+    model_context_screenshot_base64:"jpeg",dark_screenshot_base64:"jpeg",
+    publication_waiting_screenshot_base64:"jpeg",no_session_screenshot_base64:"jpeg",
+  };
+  // Leave room for the validator's JSON whitespace within its fixed 2 MiB cap.
+  assert(Buffer.byteLength(JSON.stringify(result))<=1900*1024,"Saved playback evidence exceeds its producer budget.");
 } catch(error) {
+  // A failed scenario keeps its final diagnostic image and all assertions/trace,
+  // without carrying every intermediate image into the bounded error report.
+  result=Object.fromEntries(Object.entries(result??{}).filter(([key])=>!key.endsWith("_base64")));
   try {evidenceScreenshot = await page?.screenshot({type:"png",timeout:5000}) ?? evidenceScreenshot;} catch {}
   result={...result,schema:"fullmag.docker-dev-saved-playback-result.v1",state:"failed",scenario:"saved-playback",
     item_id:itemId,session_mutations:solverRequests,visualization_trace:visualizationTrace,startup_camera_initialization:startupCameraInitialization,errors:[...errors,error?.stack??String(error)],network_trace:networkTrace.slice(-24),screenshot_base64:evidenceScreenshot?.toString("base64")};

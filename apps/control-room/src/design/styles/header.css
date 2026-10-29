@@ -68,6 +68,16 @@
   -webkit-app-region: no-drag;
 }
 
+.fm-header__history-exit {
+  flex: 0 0 auto;
+  min-width: max-content;
+  white-space: nowrap;
+}
+
+.fm-header__history-exit-label {
+  white-space: nowrap;
+}
+
 .fm-header__nav-item {
   display: flex;
   align-items: center;

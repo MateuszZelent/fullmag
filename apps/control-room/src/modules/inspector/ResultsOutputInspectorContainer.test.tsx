@@ -11,6 +11,7 @@ import {
 import { KernelContext } from "@/kernel/KernelContext";
 import type { KernelApi } from "@/kernel/types";
 import { SnapshotVisualizationController } from "@/kernel/visualization/SnapshotVisualizationController";
+import { ResultsHistoryExitOwnerProvider } from "@/kernel/visualization/ResultsHistoryExitOwnerContext";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import {
   findElement,
@@ -191,7 +192,7 @@ describe("ResultsOutputInspectorContainer sample restoration", () => {
       await act(async () => {
         lastSample.dispatchEvent(new TestEvent("click", { bubbles: true }));
       });
-      expect(container.textContent).toContain("6 / 6");
+      expect(container.textContent).toContain("Sample 6 of 6");
 
       const loadButton = findElement(
         container,
@@ -207,16 +208,16 @@ describe("ResultsOutputInspectorContainer sample restoration", () => {
 
       await renderSelection(fileSelection);
       expect(container.textContent).toContain("solver.txt");
-      expect(container.textContent).not.toContain("6 / 6");
+      expect(container.textContent).not.toContain("Sample 6 of 6");
 
       await renderSelection(arraySelection);
       const restoredSlider = findElement(
         container,
-        (element) => element.getAttribute("aria-label") === "Saved sample index",
+        (element) => element.getAttribute("aria-label") === "Saved sample",
         "restored sample slider",
       );
       expect(restoredSlider.value).toBe("5");
-      expect(container.textContent).toContain("6 / 6");
+      expect(container.textContent).toContain("Sample 6 of 6");
       expect(controller.getSnapshot().activeKey).toBe(displayedKey);
     } finally {
       await act(async () => root.unmount());
@@ -330,6 +331,41 @@ describe("ResultsOutputInspectorContainer sample restoration", () => {
       expect(
         container.textContent,
       ).not.toContain("Return to live");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("leaves the exit action to the Saved shell owner", async () => {
+    resourceMocks.sessionIdentity = null;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const controller = new SnapshotVisualizationController();
+    const kernel = createKernel(controller);
+    controller.select({
+      runId: "run-1",
+      stageId: "results-output",
+      datasetId: resultDatasetIdentity(source, array.id),
+      quantityId: "m",
+      sampleIndex: 0,
+      revision: array.revision,
+    });
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <ResultsHistoryExitOwnerProvider owner="saved">
+              <ResultsOutputInspectorContainer selection={resultSelection(arrayEntry, "results:array-m")} />
+            </ResultsHistoryExitOwnerProvider>
+          </KernelContext.Provider>,
+        );
+      });
+
+      expect(container.textContent).not.toContain("Close results");
+      expect(container.textContent).not.toContain("Return to live");
     } finally {
       await act(async () => root.unmount());
       dom.restore();

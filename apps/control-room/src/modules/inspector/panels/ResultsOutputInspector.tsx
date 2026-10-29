@@ -13,6 +13,7 @@ import type {
   SnapshotVisualizationComponent,
   SnapshotVisualizationRangeMode,
 } from "@/kernel/visualization/SnapshotVisualizationController";
+import { formatResultsSampleOrdinal } from "@/kernel/results-browser/resultsSampleLabels";
 import { formatTooltipValue } from "@/shared/analysis-charts/scientificChartFormatting";
 import { Button } from "@/shared/ui/Button";
 import { Input } from "@/shared/ui/Input";
@@ -79,10 +80,14 @@ export function clampResultsSampleIndex(sampleIndex: number, sampleCount: number
 export function formatResultsSampleCoordinate(
   coordinate: ResultsArray["coordinates"][number] | undefined,
   sampleIndex: number,
+  sampleCount?: number,
 ): string {
-  if (!coordinate) return `Sample index ${sampleIndex}`;
+  const fallback = sampleCount === undefined
+    ? `Sample index ${sampleIndex}`
+    : formatResultsSampleOrdinal(sampleIndex, sampleCount);
+  if (!coordinate) return fallback;
   if (coordinate.kind === "accepted_step" && coordinate.accepted_step) return `Accepted step: ${coordinate.accepted_step}`;
-  if (typeof coordinate.value !== "number" || !Number.isFinite(coordinate.value)) return `Sample index ${sampleIndex}`;
+  if (typeof coordinate.value !== "number" || !Number.isFinite(coordinate.value)) return fallback;
   if (coordinate.kind === "physical_time") return `Physical time: ${formatNumber(coordinate.value * 1e9)} ns`;
   return `Accepted step: ${formatNumber(coordinate.value)}`;
 }
@@ -98,6 +103,9 @@ function formatCoordinateValue(
   return formatResultsSampleCoordinate(
     array.coordinates.find((coordinate) => coordinate.sample_index === sampleIndex),
     sampleIndex,
+    Number.isFinite(array.sample_count)
+      ? Math.max(0, Math.floor(array.sample_count))
+      : array.coordinates.length,
   );
 }
 
@@ -393,11 +401,12 @@ export function ResultsOutputInspector({
         <InspectorGroup title="Samples">
           <div className="grid min-w-0 gap-2">
             <div className="flex items-center justify-between gap-2 text-fm-xs text-fm-muted">
-              <span>Sample index</span>
-              <output aria-live="polite">{hasSamples ? `${selectedSampleIndex + 1} / ${sampleCount}` : "Unavailable"}</output>
+              <span>Sample</span>
+              <output aria-live="polite">{hasSamples ? formatResultsSampleOrdinal(selectedSampleIndex, sampleCount) : "Sample unavailable"}</output>
             </div>
             <Input
-              aria-label="Saved sample index"
+              aria-label="Saved sample"
+              aria-valuetext={formatResultsSampleOrdinal(selectedSampleIndex, sampleCount)}
               disabled={!hasSamples}
               max={lastSampleIndex}
               min={0}

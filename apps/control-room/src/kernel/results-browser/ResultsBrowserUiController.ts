@@ -8,7 +8,7 @@ import { useKernel } from "../KernelContext";
 const MAX_UI_KEYS = 32;
 const MAX_QUERY_LENGTH = 512;
 const MAX_ENTRY_ID_LENGTH = 512;
-const MAX_COLLAPSED_IDS = 512;
+const MAX_TRACKED_ENTRY_IDS = 512;
 
 export interface ResultsBrowserUiIdentity {
   readonly source: ResultsSource;
@@ -19,6 +19,7 @@ export interface ResultsBrowserUiIdentity {
 export interface ResultsBrowserUiState {
   readonly query: string;
   readonly collapsedIds: readonly string[];
+  readonly expandedIds: readonly string[];
   readonly focusedEntryId: string | null;
 }
 
@@ -27,6 +28,7 @@ export type ResultsBrowserUiKey = string;
 export const EMPTY_RESULTS_BROWSER_UI_STATE: ResultsBrowserUiState = Object.freeze({
   query: "",
   collapsedIds: Object.freeze([]),
+  expandedIds: Object.freeze([]),
   focusedEntryId: null,
 });
 
@@ -60,15 +62,38 @@ function normalizeEntryId(value: string | null): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
-function normalizeCollapsedIds(values: readonly string[]): readonly string[] {
+function normalizeEntryIds(values: readonly string[]): readonly string[] {
   const unique = new Set<string>();
   for (const value of values) {
     const normalized = normalizeEntryId(value);
     if (!normalized) continue;
     unique.add(normalized);
-    if (unique.size >= MAX_COLLAPSED_IDS) break;
+    if (unique.size >= MAX_TRACKED_ENTRY_IDS) break;
   }
   return Object.freeze([...unique]);
+}
+
+function evictOldestExcept(values: Set<string>, protectedId: string): boolean {
+  for (const value of values) {
+    if (value === protectedId) continue;
+    values.delete(value);
+    return true;
+  }
+  return false;
+}
+
+function keepEntryIdWithinBound(
+  collapsedIds: Set<string>,
+  expandedIds: Set<string>,
+  preferred: "collapsed" | "expanded",
+  protectedId: string,
+): void {
+  while (collapsedIds.size + expandedIds.size > MAX_TRACKED_ENTRY_IDS) {
+    const opposite = preferred === "collapsed" ? expandedIds : collapsedIds;
+    if (evictOldestExcept(opposite, protectedId)) continue;
+    const preferredIds = preferred === "collapsed" ? collapsedIds : expandedIds;
+    if (!evictOldestExcept(preferredIds, protectedId)) break;
+  }
 }
 
 export class ResultsBrowserUiController {
@@ -106,10 +131,7 @@ export class ResultsBrowserUiController {
     const normalized = normalizeEntryId(entryId);
     if (!normalized) return;
     const current = this.getSnapshot(key);
-    const collapsedIds = new Set(current.collapsedIds);
-    if (collapsedIds.has(normalized)) collapsedIds.delete(normalized);
-    else collapsedIds.add(normalized);
-    this.update(key, { collapsedIds: [...collapsedIds] });
+    this.setCollapsed(key, normalized, !current.collapsedIds.includes(normalized));
   }
 
   setCollapsed(key: ResultsBrowserUiKey | null, entryId: string, collapsed: boolean): void {
@@ -117,9 +139,63 @@ export class ResultsBrowserUiController {
     if (!normalized) return;
     const current = this.getSnapshot(key);
     const collapsedIds = new Set(current.collapsedIds);
-    if (collapsed) collapsedIds.add(normalized);
-    else collapsedIds.delete(normalized);
-    this.update(key, { collapsedIds: [...collapsedIds] });
+    const expandedIds = new Set(current.expandedIds);
+    if (collapsed) {
+      expandedIds.delete(normalized);
+      collapsedIds.delete(normalized);
+      collapsedIds.add(normalized);
+      keepEntryIdWithinBound(collapsedIds, expandedIds, "collapsed", normalized);
+    } else {
+      collapsedIds.delete(normalized);
+    }
+    this.update(key, {
+      collapsedIds: [...collapsedIds],
+      expandedIds: [...expandedIds],
+    });
+  }
+
+  toggleExpanded(
+    key: ResultsBrowserUiKey | null,
+    entryId: string,
+    defaultCollapsed = false,
+  ): void {
+    const normalized = normalizeEntryId(entryId);
+    if (!normalized) return;
+    const current = this.getSnapshot(key);
+    const expanded = defaultCollapsed
+      ? current.expandedIds.includes(normalized) && !current.collapsedIds.includes(normalized)
+      : !current.collapsedIds.includes(normalized);
+    this.setExpanded(key, normalized, !expanded, defaultCollapsed);
+  }
+
+  setExpanded(
+    key: ResultsBrowserUiKey | null,
+    entryId: string,
+    expanded: boolean,
+    defaultCollapsed = false,
+  ): void {
+    const normalized = normalizeEntryId(entryId);
+    if (!normalized) return;
+    const current = this.getSnapshot(key);
+    const collapsedIds = new Set(current.collapsedIds);
+    const expandedIds = new Set(current.expandedIds);
+    if (expanded) {
+      collapsedIds.delete(normalized);
+      expandedIds.delete(normalized);
+      if (defaultCollapsed) {
+        expandedIds.add(normalized);
+        keepEntryIdWithinBound(collapsedIds, expandedIds, "expanded", normalized);
+      }
+    } else {
+      expandedIds.delete(normalized);
+      collapsedIds.delete(normalized);
+      collapsedIds.add(normalized);
+      keepEntryIdWithinBound(collapsedIds, expandedIds, "collapsed", normalized);
+    }
+    this.update(key, {
+      collapsedIds: [...collapsedIds],
+      expandedIds: [...expandedIds],
+    });
   }
 
   setFocusedEntryId(key: ResultsBrowserUiKey | null, entryId: string | null): void {
@@ -132,13 +208,21 @@ export class ResultsBrowserUiController {
   ): void {
     if (!key) return;
     const current = this.getSnapshot(key);
+    const collapsedIds = patch.collapsedIds
+      ? normalizeEntryIds(patch.collapsedIds)
+      : current.collapsedIds;
+    const collapsedIdSet = new Set(collapsedIds);
+    const expandedIds = normalizeEntryIds(
+      patch.expandedIds ?? current.expandedIds,
+    )
+      .filter((entryId) => !collapsedIdSet.has(entryId))
+      .slice(0, Math.max(0, MAX_TRACKED_ENTRY_IDS - collapsedIds.length));
     const next: ResultsBrowserUiState = Object.freeze({
       query: typeof patch.query === "string"
         ? patch.query.slice(0, MAX_QUERY_LENGTH)
         : current.query,
-      collapsedIds: patch.collapsedIds
-        ? normalizeCollapsedIds(patch.collapsedIds)
-        : current.collapsedIds,
+      collapsedIds,
+      expandedIds: Object.freeze(expandedIds),
       focusedEntryId: Object.prototype.hasOwnProperty.call(patch, "focusedEntryId")
         ? normalizeEntryId(patch.focusedEntryId ?? null)
         : current.focusedEntryId,
@@ -147,7 +231,9 @@ export class ResultsBrowserUiController {
       next.query === current.query &&
       next.focusedEntryId === current.focusedEntryId &&
       next.collapsedIds.length === current.collapsedIds.length &&
-      next.collapsedIds.every((value, index) => value === current.collapsedIds[index])
+      next.collapsedIds.every((value, index) => value === current.collapsedIds[index]) &&
+      next.expandedIds.length === current.expandedIds.length &&
+      next.expandedIds.every((value, index) => value === current.expandedIds[index])
     ) {
       return;
     }
@@ -170,6 +256,8 @@ export interface ResultsBrowserUiBinding extends ResultsBrowserUiState {
   setQuery: (query: string) => void;
   toggleCollapsed: (entryId: string) => void;
   setCollapsed: (entryId: string, collapsed: boolean) => void;
+  toggleExpanded: (entryId: string, defaultCollapsed?: boolean) => void;
+  setExpanded: (entryId: string, expanded: boolean, defaultCollapsed?: boolean) => void;
   setFocusedEntryId: (entryId: string | null) => void;
 }
 
@@ -207,9 +295,18 @@ export function useResultsBrowserUi(
     (entryId: string, collapsed: boolean) => controller.setCollapsed(key, entryId, collapsed),
     [controller, key],
   );
+  const toggleExpanded = useCallback(
+    (entryId: string, defaultCollapsed?: boolean) => controller.toggleExpanded(key, entryId, defaultCollapsed),
+    [controller, key],
+  );
+  const setExpanded = useCallback(
+    (entryId: string, expanded: boolean, defaultCollapsed?: boolean) =>
+      controller.setExpanded(key, entryId, expanded, defaultCollapsed),
+    [controller, key],
+  );
   const setFocusedEntryId = useCallback(
     (entryId: string | null) => controller.setFocusedEntryId(key, entryId),
     [controller, key],
   );
-  return { ...state, setQuery, toggleCollapsed, setCollapsed, setFocusedEntryId };
+  return { ...state, setQuery, toggleCollapsed, setCollapsed, toggleExpanded, setExpanded, setFocusedEntryId };
 }

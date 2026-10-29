@@ -1,5 +1,6 @@
 "use client";
 import { useSavedResultsPlaybackSelection } from "@/kernel/saved-results/useSavedResultsPlayback";
+import { useResultsHistoryExitOwner } from "@/kernel/visualization/ResultsHistoryExitOwnerContext";
 import { returnResultsToLive } from "@/kernel/visualization/returnResultsToLive";
 import { useSnapshotVisualization } from "@/kernel/visualization/useSnapshotVisualization";
 import SavedResultsPlaybackViewport from "./SavedResultsPlaybackViewport";
@@ -1492,6 +1493,7 @@ export default function Viewport3DModule(props: ModuleProps) {
 }
 
 function BrowserOnlyResultsViewport({ kernel }: Pick<ModuleProps, "kernel">) {
+  const resultsHistoryExitOwner = useResultsHistoryExitOwner();
   const sessionIdentity = useSessionResourceIdentity();
   return (
     <section
@@ -1502,9 +1504,11 @@ function BrowserOnlyResultsViewport({ kernel }: Pick<ModuleProps, "kernel">) {
       <p className="m-0 text-fm-sm text-fm-muted" role="status">
         Select an output in Results and load into 3D.
       </p>
-      <Button size="sm" type="button" variant="secondary" onClick={() => returnResultsToLive(kernel)}>
-        {sessionIdentity ? "Return to live" : "Close results"}
-      </Button>
+      {resultsHistoryExitOwner === null ? (
+        <Button size="sm" type="button" variant="secondary" onClick={() => returnResultsToLive(kernel)}>
+          {sessionIdentity ? "Return to live" : "Close results"}
+        </Button>
+      ) : null}
     </section>
   );
 }

@@ -14,6 +14,7 @@ import {
   useSelectionSelector,
 } from "@/kernel/selection/useSelection";
 import { returnResultsToLive } from "@/kernel/visualization/returnResultsToLive";
+import { useResultsHistoryExitOwner } from "@/kernel/visualization/ResultsHistoryExitOwnerContext";
 import { useSnapshotVisualization } from "@/kernel/visualization/useSnapshotVisualization";
 import { Button } from "@/shared/ui/Button";
 
@@ -88,6 +89,7 @@ export default function InspectorModule() {
 
 function BrowserOnlyResultsInspector() {
   const kernel = useKernel();
+  const resultsHistoryExitOwner = useResultsHistoryExitOwner();
   const sessionIdentity = useSessionResourceIdentity();
   return (
     <section
@@ -98,15 +100,18 @@ function BrowserOnlyResultsInspector() {
       <p className="m-0 text-fm-xs text-fm-muted" role="status">
         Select an output in Results to inspect its metadata and load it into 3D.
       </p>
-      <Button size="sm" type="button" variant="secondary" onClick={() => returnResultsToLive(kernel)}>
-        {sessionIdentity ? "Return to live" : "Close results"}
-      </Button>
+      {resultsHistoryExitOwner === null ? (
+        <Button size="sm" type="button" variant="secondary" onClick={() => returnResultsToLive(kernel)}>
+          {sessionIdentity ? "Return to live" : "Close results"}
+        </Button>
+      ) : null}
     </section>
   );
 }
 
 function HistoricalViewportNotice({ enabled }: { enabled: boolean }) {
   const kernel = useKernel();
+  const resultsHistoryExitOwner = useResultsHistoryExitOwner();
   const snapshot = useSnapshotVisualization();
   if (!enabled || snapshot.activeKey === null) return null;
   return (
@@ -115,17 +120,19 @@ function HistoricalViewportNotice({ enabled }: { enabled: boolean }) {
       className="grid min-w-0 gap-2 border-b border-fm-subtle p-3 text-fm-sm"
     >
       <p className="m-0 text-fm-muted" role="status">
-        The viewport shows a saved snapshot. This Inspector belongs to the current workspace.
+        A saved 3D snapshot is selected. This Inspector belongs to the current workspace.
       </p>
-      <Button
-        className="justify-self-start"
-        size="sm"
-        type="button"
-        variant="secondary"
-        onClick={() => returnResultsToLive(kernel)}
-      >
-        Return to live
-      </Button>
+      {resultsHistoryExitOwner === null ? (
+        <Button
+          className="justify-self-start"
+          size="sm"
+          type="button"
+          variant="secondary"
+          onClick={() => returnResultsToLive(kernel)}
+        >
+          Return to live
+        </Button>
+      ) : null}
     </section>
   );
 }

@@ -19,6 +19,7 @@ import {
 } from "@/kernel/results-browser/ResultsBrowserUiController";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
+import { useResultsHistoryExitOwner } from "@/kernel/visualization/ResultsHistoryExitOwnerContext";
 import { returnResultsToLive } from "@/kernel/visualization/returnResultsToLive";
 import { useSnapshotVisualization } from "@/kernel/visualization/useSnapshotVisualization";
 import { Button } from "@/shared/ui/Button";
@@ -90,10 +91,16 @@ function useLocalResultsBrowserUi(scopeKey: string): ResultsBrowserUiBinding {
   const setCollapsed = useCallback((entryId: string, collapsed: boolean) => {
     controller.setCollapsed(localKey, entryId, collapsed);
   }, [controller]);
+  const toggleExpanded = useCallback((entryId: string, defaultCollapsed?: boolean) => {
+    controller.toggleExpanded(localKey, entryId, defaultCollapsed);
+  }, [controller]);
+  const setExpanded = useCallback((entryId: string, expanded: boolean, defaultCollapsed?: boolean) => {
+    controller.setExpanded(localKey, entryId, expanded, defaultCollapsed);
+  }, [controller]);
   const setFocusedEntryId = useCallback((entryId: string | null) => {
     controller.setFocusedEntryId(localKey, entryId);
   }, [controller]);
-  return { ...state, setQuery, toggleCollapsed, setCollapsed, setFocusedEntryId };
+  return { ...state, setQuery, toggleCollapsed, setCollapsed, toggleExpanded, setExpanded, setFocusedEntryId };
 }
 
 function sourceKey(source: ResultsSource): string {
@@ -309,6 +316,7 @@ function ResultsOutputExplorerPager({
     localResultsBrowserUiScopeKey(source, catalog?.run_id ?? null, sessionIdentityKey),
   );
   const outputBrowserUi = browserUiIdentity ? browserUi : localBrowserUi;
+  const resultsHistoryExitOwner = useResultsHistoryExitOwner();
   const selectionStatus = selectedOutputStatus(selectedRef, source, catalog);
   const selectedEntryId = selectedRef &&
     sameSource(selectedRef.source, source) &&
@@ -400,7 +408,7 @@ function ResultsOutputExplorerPager({
   const returnToLive = useCallback(() => returnResultsToLive(kernel), [kernel]);
 
   return (
-    <div className="grid min-w-0 max-w-full gap-2 overflow-x-hidden">
+    <div className="grid min-w-0 max-w-full gap-2 overflow-x-clip">
       {selectionStatus.kind === "stale-revision" ? (
         <div className="grid min-w-0 gap-1 px-3" role="status">
           <p className="m-0 text-fm-xs text-fm-muted">
@@ -454,6 +462,7 @@ function ResultsOutputExplorerPager({
         error={awaitingPublication ? null : catalogError}
         publicationNotice={publicationNotice}
         isHistoricalActive={isHistoricalActive}
+        showReturnAction={resultsHistoryExitOwner === null}
         returnActionLabel={sessionIdentity ? "Return to live" : "Close results"}
         onNextPage={nextPage}
         onRefresh={refresh}

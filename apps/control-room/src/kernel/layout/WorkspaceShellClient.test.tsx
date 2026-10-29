@@ -113,6 +113,11 @@ describe("WorkspaceShellClient Home entry surface", () => {
       const shellHeader = findByAttribute(container, "aria-label", "Saved results playback");
       expect(shellHeader?.textContent).toContain("Close results");
       expect(shellHeader?.textContent).not.toContain("Return to live");
+      expect(
+        findElements(container, (element) =>
+          element.tagName === "BUTTON" && element.textContent === "Close results",
+        ),
+      ).toHaveLength(1);
       expect(findByAttribute(container, "aria-label", "Search saved result outputs")).toBeTruthy();
       expect(findByAttribute(container, "data-slot-id", "viewport-aux")).toBeNull();
       expect(findByAttribute(container, "data-slot-id", "panel-bottom")).toBeNull();

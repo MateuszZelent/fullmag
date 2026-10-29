@@ -26,6 +26,8 @@ import { sessionRequestScopeKey } from "../resources/sessionResourceIdentity";
 import { homeView, useHomeViewOpen } from "./homeView";
 import { useLayoutSelector } from "./useLayout";
 import { useRealtimeConnection } from "../realtime/useRealtimeConnection";
+import { ResultsHistoryExitOwnerProvider } from "../visualization/ResultsHistoryExitOwnerContext";
+import { useSnapshotVisualization } from "../visualization/useSnapshotVisualization";
 
 export function WorkspaceShellClient() {
   const savedPlayback = useSavedResultsPlaybackSelection();
@@ -135,31 +137,33 @@ function SavedResultsWorkspaceShell({ liveDiagnosticsAvailable }: { liveDiagnost
   if (!selection) return null;
 
   return (
-    <WorkspaceContentScopeProvider scope="session">
-      <SlotHost slotId="app-menu" />
-      <section
-        aria-label="Saved results playback"
-        className="fm-saved-results-playback-shell__header"
-        data-saved-results-playback="read-only"
-      >
-        <div className="fm-saved-results-playback-shell__identity">
-          <h1 className="fm-saved-results-playback-shell__title">Saved results · read only</h1>
-          <p className="fm-saved-results-playback-shell__name" title={selection.name}>{selection.name}</p>
-        </div>
-        <Button
-          className="fm-saved-results-playback-shell__close"
-          onClick={() => returnResultsToLive(kernel)}
-          type="button"
-          variant="secondary"
+    <ResultsHistoryExitOwnerProvider owner="saved">
+      <WorkspaceContentScopeProvider scope="session">
+        <SlotHost slotId="app-menu" />
+        <section
+          aria-label="Saved results playback"
+          className="fm-saved-results-playback-shell__header"
+          data-saved-results-playback="read-only"
         >
-          {exitLabel}
-        </Button>
-      </section>
-      <WorkspaceRenderProfiler id="WorkspaceDockLayout">
-        <WorkspaceDockLayout liveDiagnosticsAvailable={liveDiagnosticsAvailable} />
-      </WorkspaceRenderProfiler>
-      <CommandFeedbackPresenter />
-    </WorkspaceContentScopeProvider>
+          <div className="fm-saved-results-playback-shell__identity">
+            <h1 className="fm-saved-results-playback-shell__title">Saved results · read only</h1>
+            <p className="fm-saved-results-playback-shell__name" title={selection.name}>{selection.name}</p>
+          </div>
+          <Button
+            className="fm-saved-results-playback-shell__close"
+            onClick={() => returnResultsToLive(kernel)}
+            type="button"
+            variant="secondary"
+          >
+            {exitLabel}
+          </Button>
+        </section>
+        <WorkspaceRenderProfiler id="WorkspaceDockLayout">
+          <WorkspaceDockLayout liveDiagnosticsAvailable={liveDiagnosticsAvailable} />
+        </WorkspaceRenderProfiler>
+        <CommandFeedbackPresenter />
+      </WorkspaceContentScopeProvider>
+    </ResultsHistoryExitOwnerProvider>
   );
 }
 
@@ -278,9 +282,11 @@ function StartScreenLoadingFallback({
 function ActiveWorkspaceShell() {
   const startupState = useSimulationStartupOverlayState();
   const homeOpen = useHomeViewOpen();
+  const snapshotVisualization = useSnapshotVisualization();
+  const exitOwner = snapshotVisualization.activeKey === null ? null : "current";
 
   return (
-    <>
+    <ResultsHistoryExitOwnerProvider owner={exitOwner}>
       <SlotHost slotId="app-menu" />
       <SlotHost slotId="ribbon" />
       <RuntimeDegradedBanner />
@@ -294,7 +300,7 @@ function ActiveWorkspaceShell() {
         <SimulationStartupOverlayView state={startupState} />
       </div>
       <CommandFeedbackPresenter />
-    </>
+    </ResultsHistoryExitOwnerProvider>
   );
 }
 

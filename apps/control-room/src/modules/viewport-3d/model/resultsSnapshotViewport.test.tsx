@@ -8,6 +8,7 @@ import {
   installSimulationPreparationTestDom,
   TestElement,
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
+import { ResultsHistoryExitOwnerProvider } from "@/kernel/visualization/ResultsHistoryExitOwnerContext";
 
 const fixtures = vi.hoisted(() => ({
   activeKey: "snapshot-1",
@@ -195,9 +196,14 @@ function resetFixtures(): void {
 
 async function renderViewport(
   root: ReturnType<typeof createRoot>,
+  owner: "saved" | "current" | null = null,
 ): Promise<void> {
   await act(async () => {
-    root.render(<ResultsSnapshotViewport />);
+    root.render(
+      <ResultsHistoryExitOwnerProvider owner={owner}>
+        <ResultsSnapshotViewport />
+      </ResultsHistoryExitOwnerProvider>,
+    );
   });
 }
 
@@ -232,8 +238,8 @@ describe("ResultsSnapshotViewport frame retention", () => {
       const pending = viewport(container);
       expect(pending.getAttribute("data-results-snapshot-index")).toBe("1");
       expect(pending.getAttribute("data-results-snapshot-displayed-index")).toBe("0");
-      expect(pending.textContent).toContain("Displayed: index 0");
-      expect(pending.textContent).toContain("Requested: index 1");
+      expect(pending.textContent).toContain("Displayed: Sample 1 of 2");
+      expect(pending.textContent).toContain("Requested: Sample 2 of 2");
       expect(pending.textContent).toContain("coolwarm");
       expect(pending.textContent).toContain(" · x · coolwarm");
       expect(pending.textContent).toContain("Close results");
@@ -252,8 +258,8 @@ describe("ResultsSnapshotViewport frame retention", () => {
       const ready = viewport(container);
       expect(ready.getAttribute("data-results-snapshot-index")).toBe("1");
       expect(ready.getAttribute("data-results-snapshot-displayed-index")).toBe("1");
-      expect(ready.textContent).toContain("Displayed: index 1");
-      expect(ready.textContent).not.toContain("Requested: index");
+      expect(ready.textContent).toContain("Displayed: Sample 2 of 2");
+      expect(ready.textContent).not.toContain("Requested: Sample");
       expect(ready.textContent).toContain(" · z · viridis");
       const readyCanvas = findElement(
         container,
@@ -285,6 +291,22 @@ describe("ResultsSnapshotViewport frame retention", () => {
       await renderViewport(root);
       expect(viewport(container).textContent).toContain("Return to live");
       expect(viewport(container).textContent).not.toContain("Close results");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("leaves the exit action to the owning shell", async () => {
+    resetFixtures();
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+
+    try {
+      await renderViewport(root, "saved");
+      expect(viewport(container).textContent).not.toContain("Close results");
+      expect(viewport(container).textContent).not.toContain("Return to live");
     } finally {
       await act(async () => root.unmount());
       dom.restore();

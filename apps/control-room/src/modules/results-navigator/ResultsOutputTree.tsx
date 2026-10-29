@@ -27,6 +27,7 @@ export interface ResultsOutputTreeProps {
   onNextPage: () => void;
   onReturnToLive: () => void;
   isHistoricalActive: boolean;
+  showReturnAction?: boolean;
   returnActionLabel: "Close results" | "Return to live";
   ui: ResultsBrowserUiBinding;
 }
@@ -34,6 +35,7 @@ export interface ResultsOutputTreeProps {
 interface ResultsOutputTreeModel {
   childrenByParent: ReadonlyMap<string, readonly ResultsEntry[]>;
   roots: readonly ResultsEntry[];
+  queryExpandedIds: ReadonlySet<string>;
 }
 
 interface VisibleTreeEntry {
@@ -92,10 +94,12 @@ function buildTreeModel(
     return {
       childrenByParent: sortChildren(children),
       roots: roots.sort(compareEntries),
+      queryExpandedIds: new Set(),
     };
   }
 
   const visibleIds = new Set<string>();
+  const queryExpandedIds = new Set<string>();
   for (const entry of entries) {
     if (
       entry.name.toLocaleLowerCase().includes(normalizedQuery) ||
@@ -107,6 +111,7 @@ function buildTreeModel(
         const parent = byId.get(parentId);
         if (!parent) break;
         visibleIds.add(parent.id);
+        queryExpandedIds.add(parent.id);
         parentId = parent.parent_id;
       }
     }
@@ -120,6 +125,7 @@ function buildTreeModel(
   return {
     childrenByParent: sortChildren(filteredChildren),
     roots: roots.filter((entry) => visibleIds.has(entry.id)).sort(compareEntries),
+    queryExpandedIds,
   };
 }
 
@@ -137,6 +143,7 @@ function sortChildren(
 function flattenVisibleEntries(
   model: ResultsOutputTreeModel,
   collapsedIds: ReadonlySet<string>,
+  expandedIds: ReadonlySet<string>,
 ): VisibleTreeEntry[] {
   const visible: VisibleTreeEntry[] = [];
 
@@ -149,7 +156,7 @@ function flattenVisibleEntries(
       const children = model.childrenByParent.get(entry.id) ?? [];
       const hasChildren = children.length > 0;
       visible.push({ depth, entry, hasChildren, parentId });
-      if (hasChildren && !collapsedIds.has(entry.id)) {
+      if (isEntryExpanded(model, entry, hasChildren, collapsedIds, expandedIds)) {
         append(children, depth + 1, entry.id);
       }
     }
@@ -157,6 +164,24 @@ function flattenVisibleEntries(
 
   append(model.roots, 0, null);
   return visible;
+}
+
+function isDefaultCollapsed(entry: ResultsEntry, hasChildren: boolean): boolean {
+  return hasChildren && entry.kind === "zarr_array";
+}
+
+function isEntryExpanded(
+  model: ResultsOutputTreeModel,
+  entry: ResultsEntry,
+  hasChildren: boolean,
+  collapsedIds: ReadonlySet<string>,
+  expandedIds: ReadonlySet<string>,
+  includeQueryExpansion = true,
+): boolean {
+  if (!hasChildren) return false;
+  if (includeQueryExpansion && model.queryExpandedIds.has(entry.id)) return true;
+  if (collapsedIds.has(entry.id)) return false;
+  return expandedIds.has(entry.id) || !isDefaultCollapsed(entry, hasChildren);
 }
 
 function entryPath(entry: ResultsEntry): string {
@@ -222,6 +247,7 @@ export function ResultsOutputTree({
   onNextPage,
   onReturnToLive,
   isHistoricalActive,
+  showReturnAction = true,
   returnActionLabel,
   ui,
 }: ResultsOutputTreeProps) {
@@ -230,9 +256,11 @@ export function ResultsOutputTree({
     () => buildTreeModel(catalog?.entries ?? [], ui.query),
     [catalog?.entries, ui.query],
   );
+  const collapsedIds = useMemo(() => new Set(ui.collapsedIds), [ui.collapsedIds]);
+  const expandedIds = useMemo(() => new Set(ui.expandedIds), [ui.expandedIds]);
   const visibleEntries = useMemo(
-    () => flattenVisibleEntries(model, new Set(ui.collapsedIds)),
-    [model, ui.collapsedIds],
+    () => flattenVisibleEntries(model, collapsedIds, expandedIds),
+    [model, collapsedIds, expandedIds],
   );
   const visibleEntryIds = useMemo(
     () => new Set(visibleEntries.map(({ entry }) => entry.id)),
@@ -266,6 +294,15 @@ export function ResultsOutputTree({
     if (currentIndex < 0) return;
 
     const current = visibleEntries[currentIndex];
+    const currentDefaultCollapsed = isDefaultCollapsed(current.entry, current.hasChildren);
+    const currentSearchExpanded = model.queryExpandedIds.has(current.entry.id);
+    const currentExpanded = isEntryExpanded(
+      model,
+      current.entry,
+      current.hasChildren,
+      collapsedIds,
+      expandedIds,
+    );
     let handled = true;
     switch (event.key) {
       case "ArrowDown": {
@@ -289,16 +326,20 @@ export function ResultsOutputTree({
         break;
       }
       case "ArrowLeft":
-        if (current.hasChildren && !ui.collapsedIds.includes(current.entry.id)) {
-          ui.setCollapsed(current.entry.id, true);
+        if (current.hasChildren && currentExpanded) {
+          if (currentSearchExpanded) {
+            if (current.parentId) focusEntry(current.parentId);
+          } else {
+            ui.setExpanded(current.entry.id, false, currentDefaultCollapsed);
+          }
         } else if (current.parentId) {
           focusEntry(current.parentId);
         }
         break;
       case "ArrowRight":
         if (current.hasChildren) {
-          if (ui.collapsedIds.includes(current.entry.id)) {
-            ui.setCollapsed(current.entry.id, false);
+          if (!currentExpanded) {
+            ui.setExpanded(current.entry.id, true, currentDefaultCollapsed);
           } else {
             const child = visibleEntries[currentIndex + 1];
             if (child?.parentId === current.entry.id) focusEntry(child.entry.id);
@@ -326,7 +367,15 @@ export function ResultsOutputTree({
   ): ReactElement => {
     const children = model.childrenByParent.get(entry.id) ?? [];
     const hasChildren = children.length > 0;
-    const expanded = hasChildren && !ui.collapsedIds.includes(entry.id);
+    const defaultCollapsed = isDefaultCollapsed(entry, hasChildren);
+    const searchExpanded = model.queryExpandedIds.has(entry.id);
+    const expanded = isEntryExpanded(
+      model,
+      entry,
+      hasChildren,
+      collapsedIds,
+      expandedIds,
+    );
     const shape = entry.kind === "zarr_array" ? optionalShape(entry) : null;
     const fullPath = entryPath(entry);
     const label = entryDisplayLabel(entry);
@@ -356,7 +405,7 @@ export function ResultsOutputTree({
         aria-selected={selectedEntryId === entry.id}
         aria-setsize={setSize}
         aria-label={accessibleLabel}
-        className="min-w-0 max-w-full overflow-hidden"
+        className="min-w-0 max-w-full"
         data-entry-id={entry.id}
         data-entry-status={entry.status ?? "ready"}
         role="treeitem"
@@ -371,14 +420,17 @@ export function ResultsOutputTree({
             <Button
               aria-label={`${expanded ? "Collapse" : "Expand"} ${fullPath}`}
               className="shrink-0 px-1.5"
+              disabled={searchExpanded}
               size="icon"
               tabIndex={-1}
               type="button"
+              title={searchExpanded ? "Expanded to show search matches" : undefined}
               variant="ghost"
               onClick={(event) => {
                 event.stopPropagation();
+                if (searchExpanded) return;
                 focusEntry(entry.id);
-                ui.toggleCollapsed(entry.id);
+                ui.toggleExpanded(entry.id, defaultCollapsed);
               }}
             >
               {expanded ? "▾" : "▸"}
@@ -413,7 +465,7 @@ export function ResultsOutputTree({
           </Button>
         </div>
         {expanded ? (
-          <ul className="fm-results-output__children grid min-w-0 gap-0.5 overflow-hidden border-l border-fm-subtle" role="group">
+          <ul className="fm-results-output__children grid min-w-0 gap-0.5 border-l border-fm-subtle" role="group">
             {children.map((child, index) =>
               renderEntry(child, depth + 1, index + 1, children.length),
             )}
@@ -424,13 +476,13 @@ export function ResultsOutputTree({
   };
 
   return (
-    <section aria-label="Saved result outputs" className="fm-results-output grid grid-cols-1 w-full min-w-0 max-w-full gap-3 overflow-x-hidden p-3">
+    <section aria-label="Saved result outputs" className="fm-results-output grid grid-cols-1 w-full min-w-0 max-w-full gap-3 overflow-x-clip p-3">
       <header className="grid min-w-0 gap-1">
         <div className="flex min-w-0 items-center justify-between gap-2">
           <h2 className="m-0 min-w-0 truncate text-fm-md font-semibold text-fm-primary">{rootLabel}</h2>
           <div className="flex shrink-0 gap-1">
             <Button aria-label="Refresh results output" size="icon" type="button" variant="ghost" onClick={onRefresh}>↻</Button>
-            {isHistoricalActive ? (
+            {isHistoricalActive && showReturnAction ? (
               <Button size="sm" type="button" variant="secondary" onClick={onReturnToLive}>{returnActionLabel}</Button>
             ) : null}
           </div>
@@ -482,7 +534,7 @@ export function ResultsOutputTree({
           {model.roots.length > 0 ? (
             <ul
               aria-label="Result output entries"
-              className="m-0 grid w-full min-w-0 max-w-full gap-0.5 overflow-x-hidden list-none p-0"
+              className="m-0 grid w-full min-w-0 max-w-full gap-0.5 overflow-x-clip list-none p-0"
               ref={treeRef}
               role="tree"
               onKeyDown={handleTreeKeyDown}

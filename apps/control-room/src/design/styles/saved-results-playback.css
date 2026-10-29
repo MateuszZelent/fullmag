@@ -198,6 +198,9 @@
 
 .fm-saved-results-playback__summary {
   display: grid;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   align-content: start;
   gap: var(--fm-space-3);
   min-width: 0;

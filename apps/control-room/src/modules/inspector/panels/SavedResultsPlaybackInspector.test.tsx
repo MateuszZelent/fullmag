@@ -10,6 +10,7 @@ import {
   TestEvent,
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import type { KernelApi } from "@/kernel/types";
+import { ResultsHistoryExitOwnerProvider } from "@/kernel/visualization/ResultsHistoryExitOwnerContext";
 
 import {
   clampPlaybackFrameIndex,
@@ -59,6 +60,7 @@ vi.mock("@/shared/ui/Slider", async () => {
   return {
     Slider: (props: {
       readonly ["aria-label"]?: string;
+      readonly ["aria-valuetext"]?: string;
       readonly id?: string;
       readonly max?: number;
       readonly min?: number;
@@ -66,6 +68,7 @@ vi.mock("@/shared/ui/Slider", async () => {
       readonly value?: readonly number[];
     }) => React.createElement("input", {
       "aria-label": props["aria-label"],
+      "aria-valuetext": props["aria-valuetext"],
       id: props.id,
       max: props.max,
       min: props.min,
@@ -98,10 +101,12 @@ const controller = {
   setComponent: vi.fn(),
 };
 
-function renderInspector() {
+function renderInspector(owner: "saved" | "current" | null = null) {
   return renderToStaticMarkup(
     <KernelContext.Provider value={{ savedResultsPlayback: controller } as unknown as KernelApi}>
-      <SavedResultsPlaybackInspector />
+      <ResultsHistoryExitOwnerProvider owner={owner}>
+        <SavedResultsPlaybackInspector />
+      </ResultsHistoryExitOwnerProvider>
     </KernelContext.Provider>,
   );
 }
@@ -128,6 +133,7 @@ describe("SavedResultsPlaybackInspector", () => {
     expect(html).toContain("Complete data recovered after ENOSPC; original publication failed.");
     expect(html).toContain('role="slider"');
     expect(html).toContain('aria-label="Saved frame index"');
+    expect(html).toContain('aria-valuetext="Sample 1 of 3"');
     expect(html).toContain("Time: 0 ns");
     expect(html).toContain('aria-label="Saved results stage"');
     expect(html).toContain('aria-label="Saved results magnetization component"');
@@ -158,7 +164,21 @@ describe("SavedResultsPlaybackInspector", () => {
     // Radix assigns the Thumb's collection index after DOM registration.
     // SSR verifies the visible selection; managed browser QA checks the hydrated ARIA value.
     expect(lastFrame).toContain('>3 / 3</output>');
+    expect(lastFrame).toContain('aria-valuetext="Sample 3 of 3"');
     expect(lastFrame).toContain("Time: 2 ns");
+  });
+
+  it("exposes the middle and empty frame ordinals to the slider", () => {
+    playbackMocks.selection = { ...playbackMocks.selection!, frameIndex: 1 };
+    expect(renderInspector()).toContain('aria-valuetext="Sample 2 of 3"');
+
+    playbackMocks.resource = {
+      data: { ...manifest, stages: [{ ...manifest.stages[0]!, frame_count: 0, times_s: [] }] },
+      error: null,
+      refreshError: null,
+      status: "ready",
+    };
+    expect(renderInspector()).toContain('aria-valuetext="Sample unavailable"');
   });
 
   it("clamps descriptor-driven frame indexes to the saved range", () => {
@@ -178,6 +198,11 @@ describe("SavedResultsPlaybackInspector", () => {
     const html = renderInspector();
     expect(html).toContain("Return to live");
     expect(html).not.toContain("Close results");
+  });
+
+  it("leaves the exit action to the Saved shell owner", () => {
+    expect(renderInspector("saved")).not.toContain("Close results");
+    expect(renderInspector("saved")).not.toContain("Return to live");
   });
 
   it("returns through the shared historical-results cleanup helper", async () => {

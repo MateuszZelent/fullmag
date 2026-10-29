@@ -33,11 +33,13 @@ describe("ResultsBrowserUiController", () => {
     expect(controller.getSnapshot(current)).toEqual({
       query: "fields",
       collapsedIds: ["fields"],
+      expandedIds: [],
       focusedEntryId: "fields/m",
     });
     expect(controller.getSnapshot(otherRun)).toEqual({
       query: "",
       collapsedIds: [],
+      expandedIds: [],
       focusedEntryId: null,
     });
     expect(controller.getSnapshot(otherSource).query).toBe("");
@@ -58,6 +60,7 @@ describe("ResultsBrowserUiController", () => {
     expect(controller.getSnapshot(key)).toEqual({
       query: "m",
       collapsedIds: [],
+      expandedIds: [],
       focusedEntryId: "array-m",
     });
     expect(controller.size).toBe(1);
@@ -101,6 +104,7 @@ describe("ResultsBrowserUiController", () => {
     expect(controller.getSnapshot(first)).toEqual({
       query: "",
       collapsedIds: [],
+      expandedIds: [],
       focusedEntryId: null,
     });
     expect(listener).toHaveBeenCalledTimes(2);
@@ -119,6 +123,7 @@ describe("ResultsBrowserUiController", () => {
     expect(controller.getSnapshot(null)).toEqual({
       query: "",
       collapsedIds: [],
+      expandedIds: [],
       focusedEntryId: null,
     });
     controller.setQuery(null, "ignored");
@@ -130,5 +135,56 @@ describe("ResultsBrowserUiController", () => {
     const spaced = resultsBrowserUiIdentityKey(identity("7", " run-1", "session-1"));
 
     expect(trimmed).not.toBe(spaced);
+  });
+
+  it("keeps an explicit Zarr-array expansion separate from ordinary collapse", () => {
+    const controller = new ResultsBrowserUiController();
+    const key = resultsBrowserUiIdentityKey(identity());
+
+    controller.setExpanded(key, "array-m", true, true);
+    expect(controller.getSnapshot(key)).toEqual({
+      query: "",
+      collapsedIds: [],
+      expandedIds: ["array-m"],
+      focusedEntryId: null,
+    });
+
+    controller.setExpanded(key, "array-m", false, true);
+    expect(controller.getSnapshot(key)).toEqual({
+      query: "",
+      collapsedIds: ["array-m"],
+      expandedIds: [],
+      focusedEntryId: null,
+    });
+
+    controller.setExpanded(key, "array-m", true, true);
+    expect(controller.getSnapshot(key).collapsedIds).toEqual([]);
+    expect(controller.getSnapshot(key).expandedIds).toEqual(["array-m"]);
+  });
+
+  it("evicts the oldest override while keeping the newest action within the shared bound", () => {
+    const controller = new ResultsBrowserUiController();
+    const key = resultsBrowserUiIdentityKey(identity());
+
+    for (let index = 0; index < 512; index += 1) {
+      controller.setCollapsed(key, `folder-${index}`, true);
+    }
+    controller.setExpanded(key, "array-overflow", true, true);
+
+    const snapshot = controller.getSnapshot(key);
+    expect(snapshot.collapsedIds).toHaveLength(511);
+    expect(snapshot.collapsedIds).not.toContain("folder-0");
+    expect(snapshot.expandedIds).toEqual(["array-overflow"]);
+
+    const reverse = new ResultsBrowserUiController();
+    for (let index = 0; index < 512; index += 1) {
+      reverse.setExpanded(key, `array-${index}`, true, true);
+    }
+    reverse.setCollapsed(key, "folder-overflow", true);
+
+    const reverseSnapshot = reverse.getSnapshot(key);
+    expect(reverseSnapshot.collapsedIds).toEqual(["folder-overflow"]);
+    expect(reverseSnapshot.expandedIds).toHaveLength(511);
+    expect(reverseSnapshot.expandedIds).not.toContain("array-0");
   });
 });

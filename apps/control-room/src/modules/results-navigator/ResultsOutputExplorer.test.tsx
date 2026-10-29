@@ -8,6 +8,7 @@ import type {
   ResultsSource,
 } from "@/kernel/api/resultsBrowser";
 import { ResultsBrowserUiController } from "@/kernel/results-browser/ResultsBrowserUiController";
+import { ResultsHistoryExitOwnerProvider } from "@/kernel/visualization/ResultsHistoryExitOwnerContext";
 import {
   findElement,
   findElements,
@@ -195,9 +196,14 @@ async function renderExplorer(
   root: ReturnType<typeof createRoot>,
   renderSource: ResultsSource = source,
   watch = false,
+  owner: "saved" | "current" | null = null,
 ): Promise<void> {
   await act(async () => {
-    root.render(<ResultsOutputExplorer source={renderSource} watch={watch} />);
+    root.render(
+      <ResultsHistoryExitOwnerProvider owner={owner}>
+        <ResultsOutputExplorer source={renderSource} watch={watch} />
+      </ResultsHistoryExitOwnerProvider>,
+    );
   });
 }
 
@@ -300,7 +306,6 @@ describe("ResultsOutputExplorer revision-pinned pagination and selection", () =>
         (element) => element.getAttribute("aria-label") === "Search saved result outputs",
         "results search",
       );
-      await act(async () => changeInput(search, "fields"));
       const fieldsRow = findElement(
         container,
         (element) => element.getAttribute("data-entry-id") === fields.id,
@@ -314,6 +319,7 @@ describe("ResultsOutputExplorer revision-pinned pagination and selection", () =>
       await act(async () => {
         collapse.dispatchEvent(new TestEvent("click", { bubbles: true }));
       });
+      await act(async () => changeInput(search, "fields"));
       await act(async () => firstRoot.unmount());
 
       const secondRoot = createRoot(container as unknown as Element);
@@ -329,9 +335,132 @@ describe("ResultsOutputExplorer revision-pinned pagination and selection", () =>
         "remounted fields row",
       );
       expect(remountedSearch.value).toBe("fields");
+      expect(remountedFields.getAttribute("aria-expanded")).toBe("true");
+      await act(async () => changeInput(remountedSearch, ""));
       expect(remountedFields.getAttribute("aria-expanded")).toBe("false");
       await act(async () => secondRoot.unmount());
     } finally {
+      dom.restore();
+    }
+  });
+
+  it("retains an explicit Zarr-array expansion across refresh, revision refresh, and remount", async () => {
+    const fields = entry("fields", "fields", null, "directory");
+    const field = entry("field-m", "fields/m", fields.id, "zarr_array");
+    const metadata = entry("array-meta", "fields/m/.zattrs", field.id);
+    const makeCatalog = () => catalog("revision-1", "run-1", [fields, field, metadata]);
+    fixtures.setFirstPage(makeCatalog());
+
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const firstRoot = createRoot(container as unknown as Element);
+    try {
+      await renderExplorer(firstRoot);
+      const fieldRow = findElement(
+        container,
+        (element) => element.getAttribute("data-entry-id") === field.id,
+        "Zarr array row",
+      );
+      expect(fieldRow.getAttribute("aria-expanded")).toBe("false");
+      const expand = findElement(
+        fieldRow,
+        (element) => element.getAttribute("aria-label") === "Expand fields/m",
+        "Zarr array disclosure",
+      );
+      await act(async () => expand.dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(fieldRow.getAttribute("aria-expanded")).toBe("true");
+      expect(findElement(
+        container,
+        (element) => element.getAttribute("data-entry-id") === metadata.id,
+        "Zarr technical child",
+      )).toBeTruthy();
+
+      fixtures.setFirstPage(makeCatalog());
+      await renderExplorer(firstRoot);
+      expect(findElement(
+        container,
+        (element) => element.getAttribute("data-entry-id") === field.id,
+        "refreshed Zarr array row",
+      ).getAttribute("aria-expanded")).toBe("true");
+
+      fixtures.setFirstPage({ ...makeCatalog(), revision: "revision-2" });
+      await renderExplorer(firstRoot);
+      expect(findElement(
+        container,
+        (element) => element.getAttribute("data-entry-id") === field.id,
+        "revision-refreshed Zarr array row",
+      ).getAttribute("aria-expanded")).toBe("true");
+
+      await act(async () => firstRoot.unmount());
+      const secondRoot = createRoot(container as unknown as Element);
+      await renderExplorer(secondRoot);
+      expect(findElement(
+        container,
+        (element) => element.getAttribute("data-entry-id") === field.id,
+        "remounted Zarr array row",
+      ).getAttribute("aria-expanded")).toBe("true");
+      await act(async () => secondRoot.unmount());
+    } finally {
+      dom.restore();
+    }
+  });
+
+  it("reveals matching Zarr children for search without rewriting expansion on clear", async () => {
+    const fields = entry("fields", "fields", null, "directory");
+    const field = entry("field-m", "fields/m", fields.id, "zarr_array");
+    const metadata = entry("array-meta", "fields/m/.zattrs", field.id);
+    fixtures.setFirstPage(catalog("revision-1", "run-1", [fields, field, metadata]));
+
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const findField = () => findElement(
+      container,
+      (element) => element.getAttribute("data-entry-id") === field.id,
+      "search Zarr array row",
+    );
+    const findMetadata = () => findElement(
+      container,
+      (element) => element.getAttribute("data-entry-id") === metadata.id,
+      "search Zarr technical child",
+    );
+    try {
+      await renderExplorer(root);
+      const search = findElement(
+        container,
+        (element) => element.getAttribute("aria-label") === "Search saved result outputs",
+        "results search",
+      );
+      expect(findField().getAttribute("aria-expanded")).toBe("false");
+      await act(async () => changeInput(search, "zattrs"));
+      expect(findField().getAttribute("aria-expanded")).toBe("true");
+      expect(findMetadata()).toBeTruthy();
+      const searchDisclosure = findElement(
+        findField(),
+        (element) => element.getAttribute("aria-label") === "Collapse fields/m",
+        "search-forced Zarr array disclosure",
+      );
+      expect(searchDisclosure.getAttribute("disabled")).not.toBeNull();
+      expect(searchDisclosure.getAttribute("title")).toBe("Expanded to show search matches");
+      await act(async () => searchDisclosure.dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(findField().getAttribute("aria-expanded")).toBe("true");
+
+      await act(async () => changeInput(search, ""));
+      expect(findField().getAttribute("aria-expanded")).toBe("false");
+      expect(() => findMetadata()).toThrow();
+
+      const expand = findElement(
+        findField(),
+        (element) => element.getAttribute("aria-label") === "Expand fields/m",
+        "Zarr array disclosure after search",
+      );
+      await act(async () => expand.dispatchEvent(new TestEvent("click", { bubbles: true })));
+      await act(async () => changeInput(search, "zattrs"));
+      await act(async () => changeInput(search, ""));
+      expect(findField().getAttribute("aria-expanded")).toBe("true");
+      expect(findMetadata()).toBeTruthy();
+    } finally {
+      await act(async () => root.unmount());
       dom.restore();
     }
   });
@@ -385,9 +514,6 @@ describe("ResultsOutputExplorer revision-pinned pagination and selection", () =>
         (element) => element.getAttribute("aria-label") === "Search saved result outputs",
         "legacy results search",
       );
-      await act(async () => changeInput(search, "fields"));
-      expect(search.value).toBe("fields");
-
       const fieldsRow = findElement(
         container,
         (element) => element.getAttribute("data-entry-id") === fields.id,
@@ -401,6 +527,10 @@ describe("ResultsOutputExplorer revision-pinned pagination and selection", () =>
       await act(async () => {
         collapse.dispatchEvent(new TestEvent("click", { bubbles: true }));
       });
+      await act(async () => changeInput(search, "fields"));
+      expect(search.value).toBe("fields");
+      expect(fieldsRow.getAttribute("aria-expanded")).toBe("true");
+      await act(async () => changeInput(search, ""));
       expect(fieldsRow.getAttribute("aria-expanded")).toBe("false");
     } finally {
       await act(async () => root.unmount());
@@ -429,7 +559,6 @@ describe("ResultsOutputExplorer revision-pinned pagination and selection", () =>
     );
     try {
       await renderExplorer(root);
-      await act(async () => changeInput(findSearch(), "fields"));
       const fieldsRow = findFieldsRow();
       await act(async () => {
         findElement(
@@ -438,10 +567,13 @@ describe("ResultsOutputExplorer revision-pinned pagination and selection", () =>
           "legacy scoped fields disclosure",
         ).dispatchEvent(new TestEvent("click", { bubbles: true }));
       });
+      await act(async () => changeInput(findSearch(), "fields"));
 
       fixtures.setFirstPage(catalog("revision-a-2", "run-a", [fields, field]));
       await renderExplorer(root);
       expect(findSearch().value).toBe("fields");
+      expect(findFieldsRow().getAttribute("aria-expanded")).toBe("true");
+      await act(async () => changeInput(findSearch(), ""));
       expect(findFieldsRow().getAttribute("aria-expanded")).toBe("false");
 
       fixtures.setFirstPage(catalog("revision-b-1", "run-b", [fields, field]));
@@ -477,12 +609,6 @@ describe("ResultsOutputExplorer revision-pinned pagination and selection", () =>
         (element) => element.getAttribute("aria-label") === "Search saved result outputs",
         "results search",
       );
-      await act(async () => {
-        changeInput(search, "fields");
-      });
-      expect(search.value).toBe("fields");
-      expect(container.textContent).not.toContain("solver.txt");
-
       const fieldsRow = findElement(
         container,
         (element) => element.getAttribute("data-entry-id") === fields.id,
@@ -496,6 +622,11 @@ describe("ResultsOutputExplorer revision-pinned pagination and selection", () =>
       await act(async () => {
         collapse.dispatchEvent(new TestEvent("click", { bubbles: true }));
       });
+      await act(async () => {
+        changeInput(search, "fields");
+      });
+      expect(search.value).toBe("fields");
+      expect(container.textContent).not.toContain("solver.txt");
       expect(
         findElement(
           container,
@@ -504,7 +635,7 @@ describe("ResultsOutputExplorer revision-pinned pagination and selection", () =>
         ),
       ).toBe(search);
       expect(search.value).toBe("fields");
-      expect(fieldsRow.getAttribute("aria-expanded")).toBe("false");
+      expect(fieldsRow.getAttribute("aria-expanded")).toBe("true");
 
       await act(async () => {
         findButton(container, "Next page").dispatchEvent(
@@ -535,7 +666,13 @@ describe("ResultsOutputExplorer revision-pinned pagination and selection", () =>
           (element) => element.getAttribute("data-entry-id") === fields.id,
           "updated fields row",
         ).getAttribute("aria-expanded"),
-      ).toBe("false");
+      ).toBe("true");
+      await act(async () => changeInput(updatedSearch, ""));
+      expect(findElement(
+        container,
+        (element) => element.getAttribute("data-entry-id") === fields.id,
+        "updated fields row after search clear",
+      ).getAttribute("aria-expanded")).toBe("false");
       expect(
         findElements(
           container,
@@ -650,6 +787,21 @@ describe("ResultsOutputExplorer revision-pinned pagination and selection", () =>
         );
       });
       expect(fixtures.kernel.selection.clear).toHaveBeenCalledWith("results-navigator");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("leaves the saved-folder exit action to the owning shell", async () => {
+    fixtures.setFirstPage(catalog("revision-1", "run-1", [entry("array-m", "fields/m", null, "zarr_array")]));
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await renderExplorer(root, source, false, "saved");
+      expect(() => findButton(container, "Return to live")).toThrow();
+      expect(() => findButton(container, "Close results")).toThrow();
     } finally {
       await act(async () => root.unmount());
       dom.restore();

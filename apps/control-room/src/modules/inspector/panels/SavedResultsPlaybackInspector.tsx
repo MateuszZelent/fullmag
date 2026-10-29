@@ -7,6 +7,8 @@ import type { SavedPlaybackResource } from "@/kernel/api/savedResultsPlayback";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import { useSavedResultsPlaybackSelection } from "@/kernel/saved-results/useSavedResultsPlayback";
 import { useSavedResultsManifestResource } from "@/kernel/resources/savedResultsPlaybackResources";
+import { formatResultsSampleOrdinal } from "@/kernel/results-browser/resultsSampleLabels";
+import { useResultsHistoryExitOwner } from "@/kernel/visualization/ResultsHistoryExitOwnerContext";
 import { returnResultsToLive } from "@/kernel/visualization/returnResultsToLive";
 import { Button } from "@/shared/ui/Button";
 import { Input } from "@/shared/ui/Input";
@@ -92,6 +94,7 @@ function ColorLimitControl({
 
 export function SavedResultsPlaybackInspector() {
   const kernel = useKernel();
+  const resultsHistoryExitOwner = useResultsHistoryExitOwner();
   const sessionIdentity = useSessionResourceIdentity();
   const selection = useSavedResultsPlaybackSelection();
   const manifestResource = useSavedResultsManifestResource(selection?.itemId ?? null);
@@ -195,6 +198,7 @@ export function SavedResultsPlaybackInspector() {
             </div>
             <Slider
               aria-label="Saved frame index"
+              aria-valuetext={formatResultsSampleOrdinal(frameIndex, frameCount)}
               disabled={!hasFrames}
               id="fm-saved-results-frame"
               max={lastFrame}
@@ -249,14 +253,16 @@ export function SavedResultsPlaybackInspector() {
             value={selection.colorLimit}
           />
 
-          <Button
-            className="fm-saved-results-playback-inspector__close"
-            onClick={() => returnResultsToLive(kernel)}
-            type="button"
-            variant="secondary"
-          >
-            {sessionIdentity ? "Return to live" : "Close results"}
-          </Button>
+          {resultsHistoryExitOwner === null ? (
+            <Button
+              className="fm-saved-results-playback-inspector__close"
+              onClick={() => returnResultsToLive(kernel)}
+              type="button"
+              variant="secondary"
+            >
+              {sessionIdentity ? "Return to live" : "Close results"}
+            </Button>
+          ) : null}
         </>
       ) : null}
     </section>

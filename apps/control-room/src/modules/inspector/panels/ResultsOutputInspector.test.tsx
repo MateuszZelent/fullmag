@@ -111,13 +111,15 @@ describe("ResultsOutputInspector", () => {
     expect(html).toContain("float64");
     expect(html).toContain("A/m");
     expect(html).toContain("Physical time: 12 ns");
-    expect(html).toContain('aria-label="Saved sample index"');
+    expect(html).toContain('aria-label="Saved sample"');
+    expect(html).toContain('aria-valuetext="Sample 1 of 3"');
+    expect(html).toContain("Sample 1 of 3");
     expect(html).toContain('aria-label="First sample"');
     expect(html).toContain('aria-label="Previous sample"');
     expect(html).toContain('aria-label="Next sample"');
     expect(html).toContain('aria-label="Last sample"');
     expect(html).toContain("Visualization");
-    expect(html.indexOf('aria-label="Saved sample index"')).toBeLessThan(html.indexOf("Output metadata"));
+    expect(html.indexOf('aria-label="Saved sample"')).toBeLessThan(html.indexOf("Output metadata"));
     expect(html.indexOf('aria-label="Visualization component"')).toBeLessThan(html.indexOf("Output metadata"));
     expect(html).toContain('data-collapsible="true" data-open="false"');
     expect(html).toContain('aria-label="Visualization palette"');
@@ -208,11 +210,26 @@ describe("ResultsOutputInspector", () => {
     expect(html).toContain("This array has no published geometry mapping.");
     expect(html).toMatch(/Quantity[\s\S]*Unavailable/);
     expect(html).toMatch(/Unit[\s\S]*Unavailable/);
-    expect(html).toContain("Sample index 1");
+    expect(html).toContain("Sample 2 of 3");
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Load into 3D<\/button>/);
     expect(formatResultsSampleCoordinate(undefined, 1)).toBe("Sample index 1");
     expect(formatResultsSampleCoordinate({ sample_index: 0, kind: "physical_time", value: 2e-9 }, 0)).toBe("Physical time: 2 ns");
     expect(formatResultsSampleCoordinate({ sample_index: 1, kind: "accepted_step", value: 7 }, 1)).toBe("Accepted step: 7");
+  });
+
+  it("exposes first, middle, last, and empty sample ordinals to the native range", () => {
+    expect(renderToStaticMarkup(<ResultsOutputInspector {...inspectorProps()} sampleIndex={0} />))
+      .toContain('aria-valuetext="Sample 1 of 3"');
+    expect(renderToStaticMarkup(<ResultsOutputInspector {...inspectorProps()} sampleIndex={1} />))
+      .toContain('aria-valuetext="Sample 2 of 3"');
+    expect(renderToStaticMarkup(<ResultsOutputInspector {...inspectorProps()} sampleIndex={2} />))
+      .toContain('aria-valuetext="Sample 3 of 3"');
+    expect(renderToStaticMarkup(
+      <ResultsOutputInspector
+        {...inspectorProps()}
+        array={{ ...array, sample_count: 0, coordinates: [] }}
+      />,
+    )).toContain('aria-valuetext="Sample unavailable"');
   });
 
   it("bounds sample indexes and routes navigation, load, and live-return actions", async () => {

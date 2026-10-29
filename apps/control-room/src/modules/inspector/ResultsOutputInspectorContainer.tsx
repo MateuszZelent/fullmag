@@ -16,6 +16,7 @@ import { sessionResourceIdentityKey } from "@/kernel/resources/sessionResourceId
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import { useSavedResultsPlaybackSelection } from "@/kernel/saved-results/useSavedResultsPlayback";
 import type { Selection } from "@/kernel/selection/selectionTypes";
+import { useResultsHistoryExitOwner } from "@/kernel/visualization/ResultsHistoryExitOwnerContext";
 import { returnResultsToLive } from "@/kernel/visualization/returnResultsToLive";
 import {
   DEFAULT_SNAPSHOT_VISUALIZATION_APPEARANCE,
@@ -92,6 +93,7 @@ function ResultsOutputInspectorContainerBody({
   selection,
 }: InspectorPanelProps) {
   const kernel = useKernel();
+  const resultsHistoryExitOwner = useResultsHistoryExitOwner();
   const resultRef = resultOutputRef(selection);
   const source = resultRef?.source ?? CURRENT_RESULTS_SOURCE;
   const entry = resultRef?.entry ?? null;
@@ -209,7 +211,8 @@ function ResultsOutputInspectorContainerBody({
     arrayResource.error,
     filePreviewResource.error,
   );
-  const canReturnToLive = savedPlayback !== null || snapshotState.activeKey !== null;
+  const canReturnToLive = resultsHistoryExitOwner === null &&
+    (savedPlayback !== null || snapshotState.activeKey !== null);
   const returnActionLabel = sessionIdentity ? "Return to live" : "Close results";
 
   return (
