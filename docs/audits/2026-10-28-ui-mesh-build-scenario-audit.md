@@ -49,9 +49,10 @@ Waga: **B** – blokuje scenariusz, **W** – daje błędny wynik lub wprowadza 
 | 21 | B | Compute FEM po buildzie tylko z geometrii: „simulation preparation unavailable” | Frontend wymagał przygotowania, które dawniej powstawało przy buildzie | naprawione: przy braku przygotowania przygotowuje serwer; Compute zakończony |
 | 22 | N | Po udanym Apply Inspektory Universe i geometrii nadal zgłaszają niezapisane zmiany | Airbox: draft nie był przebazowany na kanoniczną odpowiedź serwera (np. `authoredConfigPresent`). Geometria: publikacja zatwierdzonej sceny bywa pomijana bez odświeżenia zasobu | naprawione: Airbox przyjmuje odpowiedź jako czystą bazę (zachowując edycje w locie); panel obiektu zawsze unieważnia zasób sceny |
 | 23 | N | Polecenie `close` w trybie Docker zostaje w kolejce (`queued`) | Kolejkę opróżnia tylko host CLI, którego tryb API-only nie ma | naprawione: `close` jest jawnie odrzucany (`accepted_control_unsupported`), readiness podaje ten sam powód; UI nie wysyła `close` |
-| 24 | N | Dwie sfery z wstążki dostają tę samą nazwę „New sphere”, a build kończy się błędem „Region name 'New sphere' is used by both …” | Nowe obiekty nie dostają unikalnych nazw, a regiony są kluczowane nazwą | otwarte – obejście: zmiana nazwy w Inspektorze |
+| 24 | N | Dwie sfery z wstążki dostają tę samą nazwę „New sphere”, a build kończy się błędem „Region name 'New sphere' is used by both …” | Nowe obiekty nie dostają unikalnych nazw, a regiony są kluczowane nazwą | naprawione: nowy szkic prymitywu dostaje pierwszą wolną nazwę („New sphere 2”, …), a zapis (wstążka i Inspektor) ponownie sprawdza domyślną nazwę względem aktualnej sceny; nazwy wpisane ręcznie pozostają bez zmian, a bramka duplikatów regionów działa dalej. `object_id` pozostaje tożsamością. Zweryfikowane w UI |
 | 25 | B | Po zapisie polityki siatki edycja obiektu kończy się 409 `scene revision mismatch` (aż do Revert), a build błędem `mesh_revision precondition failed` | Zapis polityki podbija rewizje sceny i siatki bez zdarzenia realtime; brudny draft obiektu nigdy nie był przebazowywany | naprawione: po zapisie polityki odświeżane są scena i status sesji; brudny draft przechodzi na nową rewizję, gdy sam obiekt się nie zmienił |
 | 26 | N | `curvature_factor` i `narrow_region_resolution` wpisane w JSON polityki Airbox znikają po zapisie | `ScriptBuilderUniverseState` nie ma tych pól i ich nie odrzuca | otwarte – formularz Airbox ich nie pokazuje |
+| 27 | B | Universe Auto z paddingiem: Apply kończy się błędem 400 ``invalid universe mesh config payload: missing field `mode` `` | Do ustalenia: Inspektor Universe nie wysyła `mode` w trybie Auto | otwarte – obejście: tryb Manual z rozmiarem i środkiem |
 
 ## Commity
 
@@ -108,6 +109,15 @@ Waga: **B** – blokuje scenariusz, **W** – daje błędny wynik lub wprowadza 
     polityki zmiana nazwy obiektu przechodzi bez 409, a build z `growth_rate` 1,3
     kończy się stanem `published` (12 461 elementów, SICN p5 0,39, min 0,005).
     `close` zwraca `accepted_control_unsupported`.
+- **Trzecia runda (pkt 24), osobna grupa worktree `ui-unique-object-names-20261029`:**
+  - `tsc --noEmit` na całym projekcie (z testami) i ESLint na zmienionych plikach
+    przechodzą w kontenerze `frontend`; vitest sprawdza CI.
+  - Przeglądarka: nowa symulacja FEM, sfera z wstążki zatwierdzona „Apply Draft”
+    dostaje nazwę „New sphere”. Druga sfera ze wstążki otwiera szkic
+    „New sphere 2” i po zatwierdzeniu z Inspektora zachowuje tę nazwę. Walidacja
+    geometrii nie zgłasza `GEOMETRY_REGION_NAME_DUPLICATE`. Po Universe Manual
+    400×240×240 nm i h_max 20 nm / h_min 5 nm build shared-domain kończy się stanem
+    `completed` (14 402 elementy, 3076 węzłów) bez ręcznej zmiany nazwy.
 - **Środowisko:** grupy pierwotnego worktree nie dało się uruchomić. Najpierw zabrakło
   pul adresów sieci Docker; za zgodą użytkownika usunięto 8 pustych sieci. Potem
   launcher zostawił znacznik aktywnej operacji bez usług. Do weryfikacji użyto
