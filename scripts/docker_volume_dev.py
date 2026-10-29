@@ -2547,6 +2547,8 @@ def _finish(control, operation, document, backend_id, frontend_id, selected, sta
             certificate_path, certificate, cache, toolchain, image, git_common, ledger_profile, port,
             *, completion_gate=None, helper_source_binding=None, terminal_completion_gate=None):
     import fullmag_docker_runtime as runtime
+    # Failure before admission still needs exact incarnation pins for recovery.
+    operation["receipt"].update(backend_container=backend_id, frontend_container=frontend_id)
     token = operation["receipt"]["attempt"]
     operator_probe_record = _operator_probe_record_from_retained(operation["receipt"], document)
     inputs = {"image_id": image, "toolchain_image_id": toolchain["image_id"],

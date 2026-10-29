@@ -1960,6 +1960,7 @@ async function waitForFrequencyDomainResidualFields(page, expectedFields) {
         ]),
     );
     return Object.entries(fields).every(([label, expected]) => {
+      if (expected === null) return !renderedFields.has(label);
       if (!renderedFields.has(label)) return false;
       const rendered = renderedFields.get(label);
       return typeof expected === "number"
@@ -2138,7 +2139,7 @@ function createFrequencyDomainChartFixtures() {
         frequencyHz: 2.25e9,
         tooltipTerms: ["mode index: 1", "Eigen frequency", "2.25 GHz"],
         residualFields: {
-          "Absolute residual (L2)": "not available",
+          "Absolute residual (L2)": null,
           "Relative residual (L2)": 1e-7,
           "Spectrum residual (type unspecified)": 2e-4,
         },

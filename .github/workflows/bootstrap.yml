@@ -920,6 +920,7 @@ jobs:
           python -B scripts/test_docker_volume_dev_runtime_state.py -v
           python -B scripts/test_docker_volume_dev_cancelled_activation.py -v
           python -B scripts/test_docker_volume_readiness_receipt.py -v
+          python -B scripts/test_docker_volume_stop_bootstrap.py -v
           python -B scripts/test_docker_volume_stop_failed.py -v
           python -B scripts/test_docker_volume_stop_startup_iteration.py -v
           python -B scripts/test_docker_volume_no_spawn_cancellation.py -v

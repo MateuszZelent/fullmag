@@ -296,14 +296,10 @@ mod recovery_tests {
             fixture.context.compute_snapshot_admission_failure().unwrap(),
             Some("compute-node snapshot is missing".into())
         );
-        assert_eq!(
-            fixture
-                .context
-                .ensure_committed_request(&fixture.request)
-                .unwrap_err()
-                .to_string(),
-            "process spawn requires a current compute-node sample for this boot: compute-node snapshot is missing"
-        );
+        let rejection = fixture.context.ensure_committed_request(&fixture.request).unwrap_err();
+        assert!(rejection.is::<ComputeNodeSampleNotCurrent>());
+        assert_eq!(rejection.to_string(),
+            "process spawn requires a current compute-node sample for this boot: compute-node snapshot is missing");
     }
 
     #[test]
@@ -1889,7 +1885,12 @@ impl HostRuntimeAdmission {
     fn ensure_committed_request(&self, request: &HostReservationRequest) -> Result<()> {
         let current_snapshot = self
             .required_current_compute_node_snapshot()
-            .context("process spawn requires a current compute-node sample for this boot")?;
+            .map_err(|error| {
+                // Keep the typed source for admission deferral and its reason
+                // in the boundary Display used by process-spawn diagnostics.
+                let detail = format!("process spawn requires a current compute-node sample for this boot: {error}");
+                error.context(detail)
+            })?;
         if !request.exclusive_gpu_uuids.is_empty() {
             match &current_snapshot.gpus {
                 Reported::Available { value } if !value.is_empty() => {}

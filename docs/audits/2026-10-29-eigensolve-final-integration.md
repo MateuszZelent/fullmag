@@ -149,3 +149,36 @@ przez feature runtime-service-control CI). Dodano opcjonalny pin recovery=None.
 Obraz CPU bramek MFEM również nie instalował GMP/MPFR wymaganych przez wspólny
 CMake; dodano późną warstwę z tym samym pinem MPFR co w obrazie GPU oraz
 pkg-config preflight. Weryfikacja natywna wyłącznie w GitHub Actions.
+
+
+## Recovery failed admission — luka producent/konsument
+
+Build i API ukończone; admission failed-confirmed b1b3dd2c031b41778d6d8983e765ca7e,
+config 9788eca276e839741b6b291812003037802d50aee7fa2b662646093c2e7abc05.
+Native OWNER Ready pochodzi z innego buildu. Obserwacyjne resume
+9869254e01c9445d9977ce1ddec89a70 potwierdza ten sam target/build mismatch;
+nie restartowało backendu i nie ponawiało Solve. Stop-bootstrap odmówił przed
+mutacją, ponieważ failed development nie ma top-level container IDs, które
+_finish publikował dopiero po readiness. Oba receipty mają ten sam cgroup Ready.
+
+Naprawa publikuje IDs przed wait/publication. Dla historycznego failed start
+stop-bootstrap wymaga świeżych IDs w nowym resume, identycznego cgroup i
+StartedAt z wcześniejszego development, pełnego config/source/image binding
+oraz wszystkich istniejących live probes. Succeeded z brakującymi IDs,
+zmieniona inkarnacja i sprzeczne obecne IDs nadal są odrzucane. Żaden stary
+receipt nie jest zmieniany; fallback ma prawdziwe, odrębne pin_sources.
+Dziewięć nowych testów tego kontraktu dodano do GitHub Actions; lokalnie tylko AST.
+
+Rust CI wykazał cztery regresje utraty szczegółu powodu niedostępnej próbki
+hosta w Display. Context zachowuje teraz reason również w Display i nadal
+zachowuje ComputeNodeSampleNotCurrent jako typed source; dodano asercję typu.
+Browser zachowuje test residualu względnego i wymaga braku niepublikowanego
+Absolute residual, zgodnie z nowym UI (null w fixture oznacza brak wiersza).
+
+I6 — dalsze konkretne ustalenia do naprawy: runtime guard pustego selektora
+Floqueta jest sprzeczny z plannerem (pusty oznacza wszystkie pary); guard k
+powinien używać tej samej maski osi co certyfikat v6, łącznie z translacyjnym
+fallbackiem przy braku axis_hint. Producent v6 używa eager then_some(nonzero[0]),
+co może spanikować przy pustej liście osi. Historycznego WIP nie można przenieść
+wprost: uwzględniał tylko axis_hint, a obecny certyfikat wspiera też translację.
+Te punkty i native tracking provider pozostają otwarte; nie oznaczono I6 jako PASS.
