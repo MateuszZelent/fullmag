@@ -1,10 +1,11 @@
 use crate::autosave_storage::{
     update_artifact_manifest, AutosaveTargetWriter, ContinuousIndexEntry, StageManifest,
+    StageSampleCoordinate,
 };
 use fullmag_ir::AutosaveLayoutIR;
 use serde_json::json;
 use std::fs::{self, OpenOptions};
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 pub struct ZarrAutosaveWriter {
@@ -105,11 +106,13 @@ impl AutosaveTargetWriter for ZarrAutosaveWriter {
         write_json(&stage_path.join("manifest.json"), &effective_manifest)?;
         if !effective_manifest.table_quantities.is_empty() {
             let table = stage_path.join("table");
-            initialize_array(&table, 0, effective_manifest.table_quantities.len())?;
+            fs::create_dir_all(&table).map_err(|error| error.to_string())?;
             write_json(
                 &table.join(".zattrs"),
-                &json!({"quantities": effective_manifest.table_quantities, "dimension_order": ["sample", "quantity"]}),
+                &json!({"quantities": effective_manifest.table_quantities, "dimension_order": ["sample", "quantity"], "sample_publication": SAMPLE_PUBLICATION_SCHEMA}),
             )?;
+            initialize_publication(&table)?;
+            initialize_array(&table, 0, effective_manifest.table_quantities.len())?;
         }
         let fields = stage_path.join("fields");
         if !effective_manifest.field_quantities.is_empty() {
@@ -137,6 +140,7 @@ impl AutosaveTargetWriter for ZarrAutosaveWriter {
         entry: &ContinuousIndexEntry,
         values: &[f64],
     ) -> Result<(), String> {
+        validate_sample(entry, values)?;
         let root = self.root.clone();
         let current = self.current_mut()?;
         if values.len() != current.manifest.table_quantities.len() {
@@ -144,9 +148,12 @@ impl AutosaveTargetWriter for ZarrAutosaveWriter {
         }
         let table = current.path.join("table");
         write_f64_chunk(&table.join(format!("{}.0", current.table_samples)), values)?;
-        current.table_samples += 1;
-        initialize_array(&table, current.table_samples, values.len())?;
-        append_continuous_index(&root, &current.manifest, entry)
+        let count = current.table_samples + 1;
+        initialize_array(&table, count, values.len())?;
+        append_continuous_index(&root, &current.manifest, entry)?;
+        publish_sample(&table, current.table_samples, entry.coordinate)?;
+        current.table_samples = count;
+        Ok(())
     }
 
     fn append_field_sample(
@@ -155,6 +162,7 @@ impl AutosaveTargetWriter for ZarrAutosaveWriter {
         quantity: &str,
         values: &[f64],
     ) -> Result<(), String> {
+        validate_sample(entry, values)?;
         let root = self.root.clone();
         let current = self.current_mut()?;
         if !current
@@ -170,23 +178,36 @@ impl AutosaveTargetWriter for ZarrAutosaveWriter {
         let field = current.path.join("fields").join(quantity);
         let sample = *current.field_samples.get(quantity).unwrap_or(&0);
         if sample == 0 {
-            initialize_array(&field, 0, values.len())?;
+            fs::create_dir_all(&field).map_err(|error| error.to_string())?;
             let mut attrs = json!({
                 "quantity": quantity,
                 "dimension_order": ["sample", "value"],
+                "sample_publication": SAMPLE_PUBLICATION_SCHEMA,
             });
             if let Some(provenance) = current.manifest.provenance.clone() {
                 attrs["provenance"] = provenance;
             }
             write_json(&field.join(".zattrs"), &attrs)?;
+            initialize_publication(&field)?;
+            initialize_array(&field, 0, values.len())?;
+        } else {
+            let metadata: serde_json::Value = serde_json::from_slice(
+                &fs::read(field.join(".zarray")).map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())?;
+            if metadata["shape"][1].as_u64() != Some(values.len() as u64) {
+                return Err("Zarr field width changed within a stage".into());
+            }
         }
         write_f64_chunk(&field.join(format!("{sample}.0")), values)?;
         let sample_count = sample + 1;
+        initialize_array(&field, sample_count, values.len())?;
+        append_continuous_index(&root, &current.manifest, entry)?;
+        publish_sample(&field, sample, entry.coordinate)?;
         current
             .field_samples
             .insert(quantity.to_string(), sample_count);
-        initialize_array(&field, sample_count, values.len())?;
-        append_continuous_index(&root, &current.manifest, entry)
+        Ok(())
     }
 
     fn finish_stage(&mut self, manifest: &StageManifest) -> Result<(), String> {
@@ -212,6 +233,87 @@ impl ZarrAutosaveWriter {
             .as_mut()
             .ok_or_else(|| "Zarr autosave has no active stage".to_string())
     }
+}
+
+// This is an array-local commit boundary, not an accepted-run ownership receipt.
+const SAMPLE_PUBLICATION_SCHEMA: &str = "fullmag.zarr.sample_publication.v1";
+const SAMPLE_PUBLICATION_FILE: &str = ".fullmag-samples.json";
+const SAMPLE_COORDINATE_HEADER: &str = "sample,physical_time_s,accepted_step\n";
+
+fn validate_sample(entry: &ContinuousIndexEntry, values: &[f64]) -> Result<(), String> {
+    if values.is_empty() || values.iter().any(|value| !value.is_finite()) {
+        return Err("Zarr sample must contain finite values".into());
+    }
+    if matches!(entry.coordinate, StageSampleCoordinate::PhysicalTime { time_s } if !time_s.is_finite())
+    {
+        return Err("Zarr sample time must be finite".into());
+    }
+    Ok(())
+}
+
+fn initialize_publication(directory: &Path) -> Result<(), String> {
+    let mut file =
+        fs::File::create(directory.join("samples.csv")).map_err(|error| error.to_string())?;
+    file.write_all(SAMPLE_COORDINATE_HEADER.as_bytes())
+        .map_err(|error| error.to_string())?;
+    file.sync_all().map_err(|error| error.to_string())?;
+    write_json(
+        &directory.join(SAMPLE_PUBLICATION_FILE),
+        &json!({
+            "schema_version": SAMPLE_PUBLICATION_SCHEMA,
+            "committed_samples": 0,
+            "coordinate_bytes": SAMPLE_COORDINATE_HEADER.len(),
+        }),
+    )
+}
+
+fn publish_sample(
+    directory: &Path,
+    sample: usize,
+    coordinate: StageSampleCoordinate,
+) -> Result<(), String> {
+    let publication: serde_json::Value = serde_json::from_slice(
+        &fs::read(directory.join(SAMPLE_PUBLICATION_FILE)).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    if publication["schema_version"].as_str() != Some(SAMPLE_PUBLICATION_SCHEMA)
+        || publication["committed_samples"].as_u64() != Some(sample as u64)
+    {
+        return Err("Zarr publication does not match writer sample position".into());
+    }
+    let committed_bytes = publication["coordinate_bytes"]
+        .as_u64()
+        .ok_or("Zarr publication coordinate length is missing")?;
+    let row = match coordinate {
+        StageSampleCoordinate::PhysicalTime { time_s } => format!("{sample},{time_s},\n"),
+        StageSampleCoordinate::AcceptedStep { accepted_step } => {
+            format!("{sample},,{accepted_step}\n")
+        }
+    };
+    let mut file = OpenOptions::new()
+        .write(true)
+        .open(directory.join("samples.csv"))
+        .map_err(|error| error.to_string())?;
+    if file.metadata().map_err(|error| error.to_string())?.len() < committed_bytes {
+        return Err("Zarr committed coordinates were truncated".into());
+    }
+    // A failed append may have left an uncommitted suffix. Only the producer's
+    // committed prefix is retained on retry; committed samples are immutable.
+    file.set_len(committed_bytes)
+        .map_err(|error| error.to_string())?;
+    file.seek(SeekFrom::Start(committed_bytes))
+        .map_err(|error| error.to_string())?;
+    file.write_all(row.as_bytes())
+        .map_err(|error| error.to_string())?;
+    file.sync_all().map_err(|error| error.to_string())?;
+    write_json(
+        &directory.join(SAMPLE_PUBLICATION_FILE),
+        &json!({
+            "schema_version": SAMPLE_PUBLICATION_SCHEMA,
+            "committed_samples": sample + 1,
+            "coordinate_bytes": committed_bytes + row.len() as u64,
+        }),
+    )
 }
 
 fn initialize_group(path: &Path) -> Result<(), String> {
@@ -240,7 +342,11 @@ fn initialize_array(path: &Path, sample_count: usize, width: usize) -> Result<()
 pub(crate) fn write_json_atomic(path: &Path, value: &impl serde::Serialize) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
     // Each concurrent publication must own its temporary file.
-    let temporary = path.with_extension(format!("tmp.{}.{}", std::process::id(), uuid::Uuid::new_v4()));
+    let temporary = path.with_extension(format!(
+        "tmp.{}.{}",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
     let file = fs::File::create(&temporary).map_err(|error| error.to_string())?;
     let mut writer = BufWriter::new(file);
     writer
@@ -313,7 +419,9 @@ fn write_f64_chunk(path: &Path, values: &[f64]) -> Result<(), String> {
     for value in values {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
-    fs::write(path, bytes).map_err(|error| error.to_string())
+    let mut file = fs::File::create(path).map_err(|error| error.to_string())?;
+    file.write_all(&bytes).map_err(|error| error.to_string())?;
+    file.sync_all().map_err(|error| error.to_string())
 }
 
 fn append_continuous_index(
@@ -402,6 +510,130 @@ mod tests {
         assert_eq!(index.len(), 2);
         assert_eq!(index[0].sample_kind, AutosaveSampleKind::Table);
         assert_eq!(index[1].payload_ref, "stages/stage_0000_relax/fields/m/0");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn publication_uses_field_local_coordinates_and_survives_separate_layout() {
+        let root = temp_root();
+        let mut writer = ZarrAutosaveWriter::new(&root);
+        let mut state = AutosaveTargetState::new("main");
+        state
+            .begin_stage(
+                &mut writer,
+                "run",
+                AutosaveLayoutIR::Separate,
+                AutosaveFormatIR::Zarr,
+                vec!["mx".into()],
+                vec!["m".into(), "H_eff".into()],
+            )
+            .unwrap();
+        state
+            .append_table_row(
+                &mut writer,
+                StageSampleCoordinate::AcceptedStep {
+                    accepted_step: 9007199254740993,
+                },
+                &[0.25],
+            )
+            .unwrap();
+        for time_s in [0.0, 0.25] {
+            for quantity in ["m", "H_eff"] {
+                state
+                    .append_field_sample(
+                        &mut writer,
+                        StageSampleCoordinate::PhysicalTime { time_s },
+                        quantity,
+                        &[1.0, 2.0, 3.0],
+                    )
+                    .unwrap();
+            }
+        }
+        let stage = root.join("main.zarr/stages/stage_0000_run");
+        for relative in ["fields/m", "fields/H_eff", "table"] {
+            let directory = stage.join(relative);
+            let publication: serde_json::Value =
+                serde_json::from_slice(&fs::read(directory.join(SAMPLE_PUBLICATION_FILE)).unwrap())
+                    .unwrap();
+            let csv = fs::read_to_string(directory.join("samples.csv")).unwrap();
+            assert_eq!(publication["coordinate_bytes"], csv.len());
+            if relative == "table" {
+                assert_eq!(publication["committed_samples"], 1);
+                assert_eq!(
+                    csv,
+                    format!("{SAMPLE_COORDINATE_HEADER}0,,9007199254740993\n")
+                );
+            } else {
+                assert_eq!(publication["committed_samples"], 2);
+                assert_eq!(csv, format!("{SAMPLE_COORDINATE_HEADER}0,0,\n1,0.25,\n"));
+            }
+        }
+        let before = fs::read(stage.join("fields/m/.zarray")).unwrap();
+        assert!(state
+            .append_field_sample(
+                &mut writer,
+                StageSampleCoordinate::PhysicalTime { time_s: 0.5 },
+                "m",
+                &[1.0]
+            )
+            .is_err());
+        assert_eq!(fs::read(stage.join("fields/m/.zarray")).unwrap(), before);
+        assert!(state
+            .append_field_sample(
+                &mut writer,
+                StageSampleCoordinate::PhysicalTime { time_s: f64::NAN },
+                "m",
+                &[1.0, 2.0, 3.0]
+            )
+            .is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_coordinate_append_does_not_publish_sample() {
+        let root = temp_root();
+        let mut writer = ZarrAutosaveWriter::new(&root);
+        let mut state = AutosaveTargetState::new("main");
+        state
+            .begin_stage(
+                &mut writer,
+                "run",
+                AutosaveLayoutIR::Separate,
+                AutosaveFormatIR::Zarr,
+                vec!["mx".into()],
+                vec![],
+            )
+            .unwrap();
+        let table = root.join("main.zarr/stages/stage_0000_run/table");
+        let before = fs::read(table.join(SAMPLE_PUBLICATION_FILE)).unwrap();
+        // Preserve the initial committed header, but make the coordinate path unwritable.
+        fs::rename(table.join("samples.csv"), table.join("saved.csv")).unwrap();
+        fs::create_dir(table.join("samples.csv")).unwrap();
+        assert!(state
+            .append_table_row(
+                &mut writer,
+                StageSampleCoordinate::PhysicalTime { time_s: 0.0 },
+                &[0.25]
+            )
+            .is_err());
+        assert!(table.join("0.0").exists());
+        assert_eq!(
+            fs::read(table.join(SAMPLE_PUBLICATION_FILE)).unwrap(),
+            before
+        );
+        fs::remove_dir(table.join("samples.csv")).unwrap();
+        fs::rename(table.join("saved.csv"), table.join("samples.csv")).unwrap();
+        state
+            .append_table_row(
+                &mut writer,
+                StageSampleCoordinate::PhysicalTime { time_s: 0.0 },
+                &[0.25],
+            )
+            .unwrap();
+        let publication: serde_json::Value =
+            serde_json::from_slice(&fs::read(table.join(SAMPLE_PUBLICATION_FILE)).unwrap())
+                .unwrap();
+        assert_eq!(publication["committed_samples"], 1);
         fs::remove_dir_all(root).unwrap();
     }
 

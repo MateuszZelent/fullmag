@@ -27,6 +27,7 @@ let visualizationBaseline;
 const networkTrace=[];
 const resultPayloads=new Map();
 const resultSampleRequests=[];
+const visualizationTrace=[];
 const timeout=Math.min(Number(process.env.CONTROL_ROOM_BROWSER_QA_TIMEOUT_MS ?? 180000),180000);
 try {
   proxy=await startBrowserQaLoopbackProxy(publicUrl,probeUrl);
@@ -35,7 +36,7 @@ try {
   page=await context.newPage(); page.setDefaultTimeout(timeout);
   page.on("pageerror",e=>{errors.push(e.message);if(/Rendered (fewer|more) hooks|order of Hooks/i.test(e.message))hookErrors.push(e.message);});
   page.on("console",m=>{if(m.type()==="error" && /Rendered (fewer|more) hooks|Context Lost|WebGL.*error/i.test(m.text())) errors.push(m.text());});
-  page.on("request",request=>{
+  context.on("request",request=>{
     const path=new URL(request.url()).pathname;
     if(/\/results\/arrays\/[^/]+\/samples\/[0-9]+$/.test(path)) resultSampleRequests.push(path);
     // Observer leases and render acknowledgements accompany the restored live
@@ -43,6 +44,21 @@ try {
     const observerLease=/^\/v2\/sessions\/current\/clients(?:\/[^/]+)?$/.test(path);
     const renderAck=request.method()==="POST" && path==="/v2/sessions/current/visualization/client-acks";
     if(request.method()!=="GET" && /\/v2\/sessions\//.test(path) && !observerLease && !renderAck) solverRequests.push({path,method:request.method(),phase:scenarioPhase,body:request.postData()?.slice(0,6000) ?? null});
+  });
+  // Observe every page in this browser context, and retain a bounded trace of
+  // remote camera revisions. A global state change is not proof of its caller.
+  context.on("response",async response=>{
+    if(new URL(response.url()).pathname!=="/v2/sessions/current/visualization/state" || response.status()!==200)return;
+    const phase=scenarioPhase;
+    try {
+      const state=await response.json();
+      if(visualizationTrace.length<64 && visualizationTrace.at(-1)?.revision!==state.revision) {
+        visualizationTrace.push({phase,method:response.request().method(),revision:state.revision,camera:state.camera});
+      }
+    } catch {
+      // A document navigation may dispose a body before the observer reads it.
+      // Mutation requests remain independently recorded above.
+    }
   });
   const sessionsBeforeResponse=await context.request.get(proxy.origin+"/v2/sessions");
   assert.equal(sessionsBeforeResponse.status(),200);
@@ -953,11 +969,11 @@ try {
     geometry_kind:manifest.fem_mesh ? "fem" : "fdm",frame_count:stage.frame_count,
     frame_indices:indices,frame_sha256:expected,canvas_visible:true,context_lost:false,
     ...result,field_payloads_verified:true,changed_canvas:true,inspector_stable:true,
-    camera_stable:true,payload_evidence:"application_body_reads",live_visualization_unchanged:true,startup_camera_initialization:startupCameraInitialization,hook_errors:hookErrors,errors,screenshot_base64:screenshot.toString("base64")};
+    camera_stable:true,visualization_trace:visualizationTrace,payload_evidence:"application_body_reads",live_visualization_unchanged:true,startup_camera_initialization:startupCameraInitialization,hook_errors:hookErrors,errors,screenshot_base64:screenshot.toString("base64")};
 } catch(error) {
   try {evidenceScreenshot = await page?.screenshot({type:"png",timeout:5000}) ?? evidenceScreenshot;} catch {}
   result={...result,schema:"fullmag.docker-dev-saved-playback-result.v1",state:"failed",scenario:"saved-playback",
-    item_id:itemId,session_mutations:solverRequests,startup_camera_initialization:startupCameraInitialization,errors:[...errors,error?.stack??String(error)],network_trace:networkTrace.slice(-24),screenshot_base64:evidenceScreenshot?.toString("base64")};
+    item_id:itemId,session_mutations:solverRequests,visualization_trace:visualizationTrace,startup_camera_initialization:startupCameraInitialization,errors:[...errors,error?.stack??String(error)],network_trace:networkTrace.slice(-24),screenshot_base64:evidenceScreenshot?.toString("base64")};
   process.exitCode=1;
 } finally {
   await context?.close();await browser?.close();await proxy?.close();

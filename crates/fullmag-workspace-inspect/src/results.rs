@@ -694,7 +694,7 @@ fn walk_directory(
         // fingerprinted separately, so in-place updates also invalidate the
         // snapshot without exposing a tree entry for every binary chunk.
         let mut metadata_entries = vec![zarray];
-        for name in [".zattrs", "samples.csv"] {
+        for name in [".zattrs", "samples.csv", ".fullmag-samples.json"] {
             if let Some(entry) = array_metadata_entry(directory, relative, name)? {
                 metadata_entries.push(entry);
             }
@@ -973,6 +973,7 @@ fn is_revision_metadata_path(path: &Path) -> bool {
             | "output-storage.json"
             | "manifest.json"
             | "samples.csv"
+            | ".fullmag-samples.json"
             | "index.jsonl"
     )
 }
@@ -1155,11 +1156,114 @@ struct ArrayMetadata {
     field_layout: Option<String>,
     component_count: Option<usize>,
     attrs: Value,
+    published_coordinates: Option<Vec<WorkspaceResultSampleCoordinate>>,
+}
+
+const SAMPLE_PUBLICATION_SCHEMA: &str = "fullmag.zarr.sample_publication.v1";
+const SAMPLE_PUBLICATION_FILE: &str = ".fullmag-samples.json";
+const SAMPLE_COORDINATE_HEADER: &str = "sample,physical_time_s,accepted_step";
+
+/// New autosave arrays expose only a committed prefix. An absent policy is the
+/// legacy contract, but an orphan marker or an unknown policy fails closed.
+fn read_sample_publication(
+    directory: &Path,
+    attrs: &Value,
+    shape: &mut [u64],
+) -> Result<Option<Vec<WorkspaceResultSampleCoordinate>>, ResultsError> {
+    let publication = match read_json(&directory.join(SAMPLE_PUBLICATION_FILE)) {
+        Ok(value) => Some(value),
+        Err(ResultsError::NotFound(_)) => None,
+        Err(error) => return Err(error),
+    };
+    let policy = attrs.get("sample_publication");
+    if policy.is_none() && publication.is_none() {
+        return Ok(None);
+    }
+    let invalid = || ResultsError::Invalid("invalid Zarr sample publication".into());
+    if policy.and_then(Value::as_str) != Some(SAMPLE_PUBLICATION_SCHEMA) {
+        return Err(invalid());
+    }
+    let publication = publication.ok_or_else(invalid)?;
+    if publication.get("schema_version").and_then(Value::as_str) != Some(SAMPLE_PUBLICATION_SCHEMA)
+    {
+        return Err(invalid());
+    }
+    let count = publication
+        .get("committed_samples")
+        .and_then(Value::as_u64)
+        .ok_or_else(invalid)?;
+    let length = publication
+        .get("coordinate_bytes")
+        .and_then(Value::as_u64)
+        .ok_or_else(invalid)?;
+    if count > shape[0] || length < (SAMPLE_COORDINATE_HEADER.len() + 1) as u64 {
+        return Err(invalid());
+    }
+    if length > MAX_JSON_BYTES {
+        return Err(ResultsError::TooLarge(
+            "published coordinate prefix exceeds metadata budget".into(),
+        ));
+    }
+    charge_metadata(length)?;
+    let length = usize::try_from(length).map_err(|_| invalid())?;
+    let bytes = read_prefix(&directory.join("samples.csv"), length)?;
+    if bytes.len() != length || bytes.last() != Some(&b'\n') {
+        return Err(invalid());
+    }
+    let text = std::str::from_utf8(&bytes).map_err(|_| invalid())?;
+    let mut lines = text.lines();
+    if lines.next() != Some(SAMPLE_COORDINATE_HEADER) {
+        return Err(invalid());
+    }
+    let mut coordinates = Vec::new();
+    let mut rows = 0_u64;
+    for line in lines {
+        let mut columns = line.split(',');
+        let index = columns
+            .next()
+            .and_then(|value| value.parse::<u64>().ok())
+            .ok_or_else(invalid)?;
+        let time = columns.next().ok_or_else(invalid)?;
+        let step = columns.next().ok_or_else(invalid)?;
+        if columns.next().is_some() || index != rows || rows >= count {
+            return Err(invalid());
+        }
+        let index = usize::try_from(index).map_err(|_| invalid())?;
+        let coordinate = if !time.is_empty() && step.is_empty() {
+            let value = time
+                .parse::<f64>()
+                .ok()
+                .filter(|value| value.is_finite())
+                .ok_or_else(invalid)?;
+            WorkspaceResultSampleCoordinate {
+                sample_index: index,
+                kind: WorkspaceResultCoordinateKind::PhysicalTime,
+                value: Some(value),
+                accepted_step: None,
+            }
+        } else if time.is_empty() && !step.is_empty() {
+            accepted_step_coordinate(
+                index,
+                step.parse::<u64>().map_err(|_| invalid())?.to_string(),
+            )
+        } else {
+            return Err(invalid());
+        };
+        if coordinates.len() < MAX_COORDINATES {
+            coordinates.push(coordinate);
+        }
+        rows += 1;
+    }
+    if rows != count {
+        return Err(invalid());
+    }
+    shape[0] = count;
+    Ok(Some(coordinates))
 }
 
 fn parse_array_metadata(directory: &Path) -> Result<ArrayMetadata, ResultsError> {
     let zarray = read_json(&directory.join(".zarray"))?;
-    let shape = json_u64_vec(zarray.get("shape"), "shape")?;
+    let mut shape = json_u64_vec(zarray.get("shape"), "shape")?;
     let chunks = json_u64_vec(zarray.get("chunks"), "chunks")?;
     if shape.is_empty() || shape.len() != chunks.len() || chunks.iter().any(|chunk| *chunk == 0) {
         return Err(ResultsError::Invalid(format!(
@@ -1188,7 +1292,14 @@ fn parse_array_metadata(directory: &Path) -> Result<ArrayMetadata, ResultsError>
         .get("order")
         .and_then(Value::as_str)
         .map(str::to_string);
-    let attrs = read_json_optional(&directory.join(".zattrs")).unwrap_or(Value::Null);
+    // Malformed attributes cannot silently downgrade a publication-aware array
+    // to the legacy shape-only contract.
+    let attrs = match read_json(&directory.join(".zattrs")) {
+        Ok(attrs) => attrs,
+        Err(ResultsError::NotFound(_)) => Value::Null,
+        Err(error) => return Err(error),
+    };
+    let published_coordinates = read_sample_publication(directory, &attrs, &mut shape)?;
     let dimension_order = match attrs.get("dimension_order") {
         None => Vec::new(),
         Some(value) => {
@@ -1328,6 +1439,7 @@ fn parse_array_metadata(directory: &Path) -> Result<ArrayMetadata, ResultsError>
         field_layout,
         component_count,
         attrs,
+        published_coordinates,
     })
 }
 
@@ -1389,6 +1501,8 @@ fn array_to_public(
     }
     let coordinates = if revision == "catalog-metadata-only" {
         Vec::new()
+    } else if let Some(coordinates) = metadata.published_coordinates.as_ref() {
+        coordinates.clone()
     } else if let Some(stage) = descriptor_stage.filter(|stage| stage.frame_count == sample_count) {
         // A completed playback descriptor binds physical times to this exact
         // array. The older continuous index may count different fields in one
@@ -2379,14 +2493,6 @@ fn read_json(path: &Path) -> Result<Value, ResultsError> {
         .map_err(|error| ResultsError::Invalid(format!("{}: {error}", path.display())))
 }
 
-fn read_json_optional(path: &Path) -> Option<Value> {
-    match read_json(path) {
-        Ok(value) => Some(value),
-        Err(ResultsError::NotFound(_)) => None,
-        Err(_) => None,
-    }
-}
-
 fn read_and_validate_run_id(
     root: &Path,
     expected_run_id: Option<&str>,
@@ -2469,6 +2575,119 @@ mod tests {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
         fs::write(directory.join("0.0"), bytes).expect("chunk");
+    }
+
+    fn publish_test_prefix(directory: &Path, count: u64, coordinates: &str) {
+        fs::write(directory.join("samples.csv"), coordinates).unwrap();
+        write_json(
+            &directory.join(SAMPLE_PUBLICATION_FILE),
+            serde_json::json!({
+                "schema_version": SAMPLE_PUBLICATION_SCHEMA,
+                "committed_samples": count,
+                "coordinate_bytes": coordinates.len(),
+            }),
+        );
+    }
+
+    #[test]
+    fn publication_hides_uncommitted_payload_and_coordinate_suffix() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        write_array(
+            root,
+            "m",
+            &[1.0],
+            serde_json::json!({"sample_publication": SAMPLE_PUBLICATION_SCHEMA}),
+        );
+        let array_path = root.join("m");
+        let header = format!("{SAMPLE_COORDINATE_HEADER}\n");
+        publish_test_prefix(&array_path, 0, &header);
+        // A crash after advancing shape and starting the payload cannot expose frame 0.
+        fs::write(array_path.join("0.0"), [0_u8; 3]).unwrap();
+        let catalog =
+            read_results_catalog(root, None, 100, None, WorkspaceResultsSource::WorkspaceItem)
+                .unwrap();
+        let id = catalog
+            .entries
+            .iter()
+            .find_map(|entry| entry.array_id.clone())
+            .unwrap();
+        let array = read_results_array(root, &id, &catalog.revision, None).unwrap();
+        assert_eq!(array.sample_count, 0);
+        assert!(matches!(
+            read_results_sample(root, &id, 0, &catalog.revision, None),
+            Err(ResultsError::NotFound(_))
+        ));
+        // Even a complete time row is unpublished until the marker is replaced.
+        fs::write(
+            array_path.join("samples.csv"),
+            format!("{header}0,0.25,\n1,uncommitted"),
+        )
+        .unwrap();
+        assert_eq!(parse_array_metadata(&array_path).unwrap().shape[0], 0);
+        fs::write(array_path.join("0.0"), 1.0_f64.to_le_bytes()).unwrap();
+        let committed = format!("{header}0,0.25,\n");
+        publish_test_prefix(&array_path, 1, &committed);
+        assert!(matches!(
+            read_results_array(root, &id, &catalog.revision, None),
+            Err(ResultsError::StaleRevision)
+        ));
+        let catalog =
+            read_results_catalog(root, None, 100, None, WorkspaceResultsSource::WorkspaceItem)
+                .unwrap();
+        let sample = read_results_sample(root, &id, 0, &catalog.revision, None).unwrap();
+        assert_eq!(sample.coordinate.unwrap().value, Some(0.25));
+        assert_eq!(sample.bytes, 1.0_f64.to_le_bytes());
+    }
+
+    #[test]
+    fn publication_rejects_missing_or_inconsistent_commit_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        write_array(
+            root,
+            "m",
+            &[1.0],
+            serde_json::json!({"sample_publication": SAMPLE_PUBLICATION_SCHEMA}),
+        );
+        let path = root.join("m");
+        assert!(parse_array_metadata(&path).is_err());
+        let header = format!("{SAMPLE_COORDINATE_HEADER}\n");
+        for (count, suffix) in [
+            (2, "0,0.1,\n1,0.2,\n"),
+            (1, ""),
+            (1, "1,0.1,\n"),
+            (1, "0,NaN,\n"),
+            (1, "0,0.1,3\n"),
+            (1, "0,,1.5\n"),
+            (1, "0,0.1,"),
+        ] {
+            publish_test_prefix(&path, count, &format!("{header}{suffix}"));
+            assert!(
+                parse_array_metadata(&path).is_err(),
+                "count={count}, suffix={suffix:?}"
+            );
+        }
+        publish_test_prefix(&path, 1, &format!("{header}0,,9007199254740993\n"));
+        let metadata = parse_array_metadata(&path).unwrap();
+        assert_eq!(
+            metadata.published_coordinates.unwrap()[0]
+                .accepted_step
+                .as_deref(),
+            Some("9007199254740993")
+        );
+        write_json(&path.join(".zattrs"), serde_json::json!({}));
+        assert!(
+            parse_array_metadata(&path).is_err(),
+            "orphan marker must not downgrade to legacy"
+        );
+        write_json(
+            &path.join(".zattrs"),
+            serde_json::json!({"sample_publication":"future"}),
+        );
+        assert!(parse_array_metadata(&path).is_err());
+        fs::write(path.join(".zattrs"), "{broken").unwrap();
+        assert!(parse_array_metadata(&path).is_err());
     }
 
     #[test]
@@ -2762,7 +2981,10 @@ mod tests {
         assert_eq!(scalar.component_count, Some(1));
 
         let serialized = serde_json::to_value(table).expect("serialize table metadata");
-        assert_eq!(serialized["quantity_ids"], serde_json::json!(["mx", "e_total"]));
+        assert_eq!(
+            serialized["quantity_ids"],
+            serde_json::json!(["mx", "e_total"])
+        );
         let legacy: WorkspaceResultArray = serde_json::from_value(serde_json::json!({
             "id": "legacy",
             "path": "table",
@@ -3495,6 +3717,7 @@ mod tests {
             field_layout: Some("aos_node_major".into()),
             component_count: Some(3),
             attrs: Value::Null,
+            published_coordinates: None,
         };
         let exact = RawEntry {
             relative: PathBuf::from("stages/relax/fields/m"),

@@ -55,3 +55,13 @@ Terminalizacja zamyka manifest jako completed/failed/cancelled i zwalnia lease w
 | Integracja | Właściwe testy w przypisanej grupie, managed runtime/browser, review kontraktu i wymagane CI przed merge |
 
 Bieżąca poprawka komunikatu waiting nie realizuje punktów 1–4. Ich status pozostaje otwarty w audycie UX; ukończenie części frontendowej nie jest deklaracją działającej przyrostowej publikacji.
+
+## Pierwszy etap implementacji: commit pojedynczej tablicy
+
+Nowy `ZarrAutosaveWriter` deklaruje w `.zattrs` politykę `sample_publication: "fullmag.zarr.sample_publication.v1"`. W tej samej tablicy `.fullmag-samples.json` zawiera `schema_version`, `committed_samples` i `coordinate_bytes`. Ostatnie pole wskazuje kompletny prefiks lokalnego `samples.csv` z nagłówkiem `sample,physical_time_s,accepted_step`. Każdy wiersz ma dokładnie jedną współrzędną: skończony czas SI albo dokładny `u64` kroku. Indeks próbki jest lokalny dla quantity, także przy przeplatanych zapisach różnych pól i układzie `separate`.
+
+Writer zapisuje i synchronizuje chunk, aktualizuje fizyczny rozmiar Zarr, zapisuje indeks zgodności continuous, następnie zapisuje i synchronizuje współrzędną. Dopiero atomowa podmiana manifestu udostępnia nową próbkę. Ponowienie nieudanego append usuwa jedynie niezatwierdzony suffix indeksu lokalnego; licznik writera przesuwa się po udanym commit. Szerokość pola pozostaje stała w obrębie etapu. Jest to granica widoczności dla współbieżnego odczytu i przerwania procesu; nie jest kwalifikacją odporności systemu plików na utratę zasilania.
+
+Reader ogranicza `shape[0]` i `sample_count` do zatwierdzonej liczby, weryfikuje pełny prefiks współrzędnych oraz uwzględnia manifest w rewizji. Niekompletny niezatwierdzony suffix pozostaje niewidoczny. Odczyt payloadu nadal sprawdza jego dokładny rozmiar, skończone wartości i niezmienioną rewizję. Brak manifestu przy zadeklarowanej polityce, osierocony manifest, nieznana wersja, liczba większa od fizycznego shape lub brak współrzędnej są błędami. Starsze tablice bez obu deklaracji zachowują dotychczasowy kontrakt.
+
+Ten etap **nie jest manifestem własności runu** i nie zamyka punktów 2–6. Zachowuje istniejący limit metadanych i listy współrzędnych Results; długie serie nadal wymagają osobnego zakresowego indeksu. Nie wprowadza publicznych endpointów ani zmian DTO. Wynik testów i kwalifikację runtime należy odnotować w audycie po wykonaniu.
