@@ -4269,7 +4269,9 @@ function createInspectorFixture() {
   };
 }
 
-function inspectorMaterialAuditMembership(fixture) {
+function inspectorMaterialAuditMembership(fixture, regionId) {
+  // Authored regions share the coarse fixture element. This smoke checks
+  // authoring and Inspector behavior, not geometric region classification.
   return {
     boundary_face_indices: [4, 5, 6, 7],
     element_indices: [1],
@@ -4283,7 +4285,7 @@ function inspectorMaterialAuditMembership(fixture) {
     realization: "certified",
     realization_method: "fixture-authored-region",
     realization_warnings: [],
-    region_id: "material-audit-core",
+    region_id: regionId,
     region_membership_revision: fixture.revision,
     source: "fixture",
     topology_fingerprint: fixture.manifest.topology_fingerprint,
@@ -4851,7 +4853,8 @@ async function installInspectorFixtureApi(page, fixture) {
       return fulfillJson(route, {
         mesh_id: "inspector-fixture-mesh",
         mesh_revision: fixture.manifest.revision,
-        memberships: [inspectorMaterialAuditMembership(fixture)],
+        memberships: fixture.materialAuditRegionResources.map((region) =>
+          inspectorMaterialAuditMembership(fixture, region.region_id)),
         unresolved_regions: [],
       });
     }
@@ -4861,10 +4864,13 @@ async function installInspectorFixtureApi(page, fixture) {
       fixture.materialBoundaryAuditEnabled &&
       request.method() === "GET" &&
       materialMembershipMatch &&
-      decodeURIComponent(materialMembershipMatch[1]) === "material-audit-core" &&
+      fixture.materialAuditRegionResources.some((region) =>
+        region.region_id === decodeURIComponent(materialMembershipMatch[1])) &&
       url.searchParams.get("owner_object_id") === "film"
     ) {
-      return fulfillJson(route, inspectorMaterialAuditMembership(fixture));
+      return fulfillJson(route, inspectorMaterialAuditMembership(
+        fixture, decodeURIComponent(materialMembershipMatch[1]),
+      ));
     }
     if (path === "/v2/sessions/current/model/material-fields") return fulfillJson(route, { fields: [], revision: fixture.revision });
     if (path === "/v2/sessions/current/model/couplings") return fulfillJson(route, { couplings: [], revision: fixture.revision });
