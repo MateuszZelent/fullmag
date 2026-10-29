@@ -6646,7 +6646,7 @@ fn fem_plan_promotes_active_anisotropy_axis_material_for_heterogeneous_regions()
 }
 
 #[test]
-fn fem_plan_conformal_shared_domain_duplicates_interface_nodes_for_cuda() {
+fn fem_plan_conformal_shared_domain_rejects_unsupported_split_contact_for_cuda() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;
     ir.problem_meta.runtime_metadata.insert(
@@ -6709,17 +6709,8 @@ fn fem_plan_conformal_shared_domain_duplicates_interface_nodes_for_cuda() {
     });
     ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
 
-    let planned = plan(&ir).expect("CUDA FEM should accept conformal shared-domain meshes");
-    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
-        panic!("expected FEM plan");
-    };
-
-    assert_eq!(fem.mesh.nodes.len(), 8);
-    assert_eq!(fem.object_segments.len(), 2);
-    assert_eq!(fem.object_segments[0].object_id, "strip");
-    assert_eq!(fem.object_segments[0].node_count, 4);
-    assert_eq!(fem.object_segments[1].object_id, "second");
-    assert_eq!(fem.object_segments[1].node_count, 4);
+    let error = plan(&ir).expect_err("unsupported split contact must fail before native admission");
+    assert!(error.reasons.iter().any(|reason| reason.contains("fem_shared_domain_object_contact_unsupported")));
 }
 
 #[test]
@@ -6772,24 +6763,19 @@ fn fem_plan_four_body_shared_domain_populates_region_materials_on_cuda() {
 
     // Build a shared-domain mesh with 4 bodies + air
     // 5 tets: 4 magnetic (markers 1,2,3,4) + 1 air (marker 0)
-    let nodes = vec![
-        [0.0, 0.0, 0.0],
-        [1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 0.0, 1.0],
-        [2.0, 0.0, 0.0],
-        [0.0, 2.0, 0.0],
-        [0.0, 0.0, 2.0],
-        [3.0, 0.0, 0.0],
-        [0.0, 0.0, -1.0],
-    ];
-    let elements = vec![
-        [0, 1, 2, 3],
-        [0, 4, 2, 3],
-        [0, 1, 5, 3],
-        [0, 1, 2, 6],
-        [0, 7, 8, 2],
-    ];
+    // Distinct magnetic bodies have disjoint volume faces; only the first
+    // body shares a face with air. This fixture tests material ownership,
+    // without relying on the unsupported split-contact native contract.
+    let mut nodes = Vec::new();
+    let mut elements = Vec::new();
+    for body in 0..4_u32 {
+        let x = f64::from(body) * 3.0;
+        nodes.extend([[x, 0.0, 0.0], [x + 1.0, 0.0, 0.0], [x, 1.0, 0.0], [x, 0.0, 1.0]]);
+        let first = body * 4;
+        elements.push([first, first + 1, first + 2, first + 3]);
+    }
+    nodes.push([0.0, 0.0, -1.0]);
+    elements.push([0, 2, 1, 16]);
     let element_markers = vec![1, 2, 3, 4, 0];
 
     ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
@@ -19791,3 +19777,6 @@ fn fem_eigen_branch_tracking_tetra_single_and_path_remain_plannable() {
         assert!(matches!(planned.backend_plan, BackendPlanIR::FemEigen(_)));
     }
 }
+
+mod material_audit_fdm;
+mod material_audit_fem;

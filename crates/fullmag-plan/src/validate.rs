@@ -50,10 +50,16 @@ pub(crate) fn region_is_conformal(
                         .collect::<BTreeSet<_>>()
                 });
             return domain_asset.object_region_markers.iter().any(|marker| {
-                (marker.geometry_name == region.name || marker.geometry_name == region.region_id)
-                    && mesh_markers
-                        .as_ref()
-                        .is_some_and(|markers| markers.contains(&marker.marker))
+                if !mesh_markers
+                    .as_ref()
+                    .is_some_and(|markers| markers.contains(&marker.marker))
+                {
+                    return false;
+                }
+                crate::mesh::resolve_object_region_marker(problem, &marker.geometry_name)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|resolved| resolved.region_id == region.region_id)
             });
         }
     }

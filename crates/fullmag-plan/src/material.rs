@@ -104,19 +104,44 @@ fn signed_distance_to_region_shape(point: [f64; 3], shape: &RegionShapeIR) -> Re
     }
 }
 
-fn characteristic_point_spacing(points: &[[f64; 3]]) -> Option<f64> {
-    let mut best = f64::INFINITY;
-    for axis in 0..3 {
-        let mut coords = points.iter().map(|point| point[axis]).collect::<Vec<_>>();
-        coords.sort_by(f64::total_cmp);
-        for pair in coords.windows(2) {
-            let delta = (pair[1] - pair[0]).abs();
-            if delta > 0.0 && delta < best {
-                best = delta;
+/// Physical sampling length in metres, supplied by the owning discretization.
+#[derive(Clone, Copy)]
+pub(crate) enum MaterialSampleSpacing<'a> {
+    Uniform(f64),
+    PerPoint(&'a [f64]),
+}
+
+impl MaterialSampleSpacing<'_> {
+    fn at(self, index: usize) -> f64 {
+        match self {
+            Self::Uniform(value) => value,
+            Self::PerPoint(values) => values[index],
+        }
+    }
+}
+
+/// Local nodal sampling length, independent of coordinate axes and other bodies.
+pub(crate) fn fem_node_spacings(mesh: &fullmag_ir::MeshIR) -> Vec<f64> {
+    let mut spacings = vec![f64::INFINITY; mesh.nodes.len()];
+    for ordinal in 0..mesh.cell_count() {
+        let Some(nodes) = mesh.cells.item_nodes(ordinal) else {
+            continue;
+        };
+        for (offset, &a) in nodes.iter().enumerate() {
+            for &b in &nodes[offset + 1..] {
+                let (Some(pa), Some(pb)) = (mesh.nodes.get(a as usize), mesh.nodes.get(b as usize))
+                else {
+                    continue;
+                };
+                let distance = (pa[0] - pb[0]).hypot(pa[1] - pb[1]).hypot(pa[2] - pb[2]);
+                if distance.is_finite() && distance > 0.0 {
+                    spacings[a as usize] = spacings[a as usize].min(distance);
+                    spacings[b as usize] = spacings[b as usize].min(distance);
+                }
             }
         }
     }
-    best.is_finite().then_some(best)
+    spacings
 }
 
 fn smoothstep01(t: f64) -> f64 {
@@ -127,21 +152,24 @@ fn smoothstep01(t: f64) -> f64 {
 fn transition_weight(
     distance: f64,
     transition: crate::material_transition::ResolvedMaterialTransition,
-    point_spacing: Option<f64>,
-) -> f64 {
+    point_spacing: f64,
+) -> Result<f64, String> {
     use crate::material_transition::ResolvedMaterialTransition;
 
     let width = match transition {
         ResolvedMaterialTransition::None | ResolvedMaterialTransition::Sharp => {
-            return (distance <= 0.0) as u8 as f64;
+            return Ok((distance <= 0.0) as u8 as f64);
         }
         ResolvedMaterialTransition::Metric { width, .. } => width,
         ResolvedMaterialTransition::MeshRelative { cells, .. } => {
-            point_spacing.unwrap_or(0.0) * f64::from(cells)
+            if !point_spacing.is_finite() || point_spacing <= 0.0 {
+                return Err("mesh_relative material transition requires a finite positive local mesh spacing".to_string());
+            }
+            point_spacing * f64::from(cells)
         }
     };
-    if width <= 0.0 {
-        return (distance <= 0.0) as u8 as f64;
+    if !width.is_finite() || width <= 0.0 {
+        return Err("material transition requires a finite positive width".to_string());
     }
 
     let scope = match transition {
@@ -149,7 +177,7 @@ fn transition_weight(
         | ResolvedMaterialTransition::Metric { scope, .. } => scope,
         ResolvedMaterialTransition::Sharp | ResolvedMaterialTransition::None => unreachable!(),
     };
-    match scope {
+    Ok(match scope {
         fullmag_ir::MaterialTransitionScopeIR::Boundary => {
             1.0 - smoothstep01((distance + 0.5 * width) / width)
         }
@@ -167,7 +195,7 @@ fn transition_weight(
                 1.0 - smoothstep01(distance / width)
             }
         }
-    }
+    })
 }
 
 pub(crate) fn evaluate_parameter_field(
@@ -243,6 +271,7 @@ pub(crate) fn resolve_spatial_parameter(
     parameter: MaterialParameterNameIR,
     base_value: f64,
     points: &[[f64; 3]],
+    spacing: MaterialSampleSpacing<'_>,
     object_translation: [f64; 3],
 ) -> Result<Vec<f64>, String> {
     resolve_spatial_parameter_excluding_regions(
@@ -251,6 +280,7 @@ pub(crate) fn resolve_spatial_parameter(
         parameter,
         base_value,
         points,
+        spacing,
         object_translation,
         &BTreeSet::new(),
     )
@@ -262,9 +292,15 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
     parameter: MaterialParameterNameIR,
     base_value: f64,
     points: &[[f64; 3]],
+    spacing: MaterialSampleSpacing<'_>,
     object_translation: [f64; 3],
     excluded_region_ids: &BTreeSet<String>,
 ) -> Result<Vec<f64>, String> {
+    if let MaterialSampleSpacing::PerPoint(values) = spacing {
+        if values.len() != points.len() {
+            return Err("material sampling spacing count must match sample points".to_string());
+        }
+    }
     // Gather active object regions for this owner
     let enabled_regions = problem
         .object_regions
@@ -331,9 +367,8 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
     let mut resolved_values = if overrides.is_empty() {
         vec![base_value; points.len()]
     } else {
-        let point_spacing = characteristic_point_spacing(points);
         let mut resolved_values = Vec::with_capacity(points.len());
-        for &point in points {
+        for (point_index, &point) in points.iter().enumerate() {
             let mut active_at_point = Vec::new();
             for &(region_id, priority, value, region_opt, frame, policy, ref source_id) in
                 &overrides
@@ -350,7 +385,7 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
                     let distance = signed_distance_to_region_shape(coords, &region.shape)?;
                     let transition =
                         crate::material_transition::resolved_region_transition(region, parameter);
-                    transition_weight(distance, transition, point_spacing)
+                    transition_weight(distance, transition, spacing.at(point_index))?
                 } else {
                     1.0
                 };
@@ -729,6 +764,7 @@ mod tests {
             MaterialParameterNameIR::Alpha,
             0.1,
             &points,
+            MaterialSampleSpacing::Uniform(1.0),
             [0.0, 0.0, 0.0],
         )
         .expect("alpha profile should resolve");
@@ -754,9 +790,14 @@ mod tests {
             MaterialParameterNameIR::Alpha,
             0.1,
             &points,
+            MaterialSampleSpacing::Uniform(1.0),
             [0.0, 0.0, 0.0],
         )
         .expect("corner profile should resolve");
         assert!((values[0] - 0.6).abs() < 1e-12);
     }
 }
+
+#[cfg(test)]
+#[path = "material_audit_tests.rs"]
+mod material_audit_tests;

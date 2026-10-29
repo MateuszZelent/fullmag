@@ -336,6 +336,33 @@ fn disabled_inter_body_exchange_pairs(layer_count: usize) -> Vec<(u32, u32, f64)
     pairs
 }
 
+fn plan_has_nonzero_body_local_dmi(plan: &FdmMultilayerPlanIR) -> bool {
+    [
+        plan.interfacial_dmi,
+        plan.rotated_interfacial_dmi,
+        plan.bulk_dmi,
+    ]
+    .into_iter()
+    .flatten()
+    .any(|coefficient| coefficient != 0.0)
+}
+
+fn cuda_multilayer_kernel_admission_model(
+    plan: &FdmMultilayerPlanIR,
+) -> fullmag_fdm_demag::KernelAdmissionModel {
+    if plan.planner_summary.requested_strategy == "auto"
+        && plan.integrator != IntegratorChoice::Heun
+        && fullmag_plan::fdm_multilayer_cuda_native_single_grid_eligible_with_body_local_dmi(
+            &plan.layers,
+            plan_has_nonzero_body_local_dmi(plan),
+        )
+    {
+        fullmag_fdm_demag::KernelAdmissionModel::CudaNativeSingleGrid
+    } else {
+        fullmag_fdm_demag::KernelAdmissionModel::CudaAbiV2PairPayload
+    }
+}
+
 #[allow(dead_code)]
 pub(crate) fn execute_cuda_fdm_multilayer(
     plan: &FdmMultilayerPlanIR,
@@ -354,14 +381,7 @@ pub(crate) fn execute_cuda_fdm_multilayer_with_live(
 ) -> Result<ExecutedRun, RunError> {
     crate::fdm::reject_adaptive_multilayer_plan(plan)?;
     reject_cuda_multilayer_containment(plan.enable_demag, &plan.mode, &plan.layers)?;
-    let memory_model = if plan.planner_summary.requested_strategy == "auto"
-        && plan.integrator != fullmag_ir::IntegratorChoice::Heun
-        && fullmag_plan::fdm_multilayer_cuda_native_single_grid_eligible(&plan.layers)
-    {
-        fullmag_fdm_demag::KernelAdmissionModel::CudaNativeSingleGrid
-    } else {
-        fullmag_fdm_demag::KernelAdmissionModel::CudaAbiV2PairPayload
-    };
+    let memory_model = cuda_multilayer_kernel_admission_model(plan);
     validate_multilayer_grid_budget(plan, memory_model)?;
     validate_cuda_multilayer_execution_contract(plan)?;
     if !is_cuda_available() {
@@ -558,14 +578,7 @@ pub(crate) fn validate_accepted_fdm_multilayer_cuda_lane(
     crate::fdm::reject_adaptive_multilayer_plan(plan)?;
     reject_cuda_multilayer_containment(plan.enable_demag, &plan.mode, &plan.layers)?;
 
-    let memory_model = if plan.planner_summary.requested_strategy == "auto"
-        && plan.integrator != IntegratorChoice::Heun
-        && fullmag_plan::fdm_multilayer_cuda_native_single_grid_eligible(&plan.layers)
-    {
-        fullmag_fdm_demag::KernelAdmissionModel::CudaNativeSingleGrid
-    } else {
-        fullmag_fdm_demag::KernelAdmissionModel::CudaAbiV2PairPayload
-    };
+    let memory_model = cuda_multilayer_kernel_admission_model(plan);
     validate_multilayer_grid_budget(plan, memory_model)?;
     validate_cuda_multilayer_execution_contract(plan)?;
 
@@ -2289,8 +2302,9 @@ pub(crate) fn snapshot_accepted_multilayer_observables(
                     && validate_accepted_fdm_multilayer_cuda_lane(plan).is_ok()
                     && !(plan.planner_summary.requested_strategy == "auto"
                         && plan.integrator != IntegratorChoice::Heun
-                        && fullmag_plan::fdm_multilayer_cuda_native_single_grid_eligible(
+                        && fullmag_plan::fdm_multilayer_cuda_native_single_grid_eligible_with_body_local_dmi(
                             &plan.layers,
+                            plan_has_nonzero_body_local_dmi(plan),
                         ));
             if !assisted_dispatch_selected {
                 return Err(RunError {
@@ -2417,7 +2431,9 @@ pub(crate) fn materialize_airbox_observation_snapshot_gpu(
             if validate_device_resident_cuda_multilayer_lane(plan).is_ok()
                 || (plan.planner_summary.requested_strategy == "auto"
                     && plan.integrator != IntegratorChoice::Heun
-                    && fullmag_plan::fdm_multilayer_cuda_native_single_grid_eligible(&plan.layers))
+                    && fullmag_plan::fdm_multilayer_cuda_native_single_grid_eligible_with_body_local_dmi(
+                        &plan.layers, plan_has_nonzero_body_local_dmi(plan),
+                    ))
             {
                 return Err(RunError {
                     message: "accepted CUDA multilayer engine does not match CUDA-assisted dispatch".into(),
@@ -3272,6 +3288,12 @@ fn build_native_stacked_cuda_plan(
         return Ok(None);
     }
     if !native_cuda_identity_descriptor_eligible(plan)? {
+        return Ok(None);
+    }
+    if !fullmag_plan::fdm_multilayer_cuda_native_single_grid_eligible_with_body_local_dmi(
+        &plan.layers,
+        plan_has_nonzero_body_local_dmi(plan),
+    ) {
         return Ok(None);
     }
     let Some(first_layer) = plan.layers.first() else {
@@ -6630,6 +6652,131 @@ mod tests {
             let angle = 0.35 * x;
             *value = [angle.cos(), 0.0, angle.sin()];
         }
+    }
+
+    #[test]
+    fn cuda_interfacial_dmi_xy_body_contact_tracks_cpu_reference_when_available() {
+        if !is_cuda_available() {
+            eprintln!("skipping body-local DMI device regression: CUDA is unavailable");
+            return;
+        }
+        let bind_memory_model = |plan: &mut FdmMultilayerPlanIR, model| {
+            let estimate = fullmag_plan::resolve_multilayer_kernel_memory(
+                &plan.mode, plan.common_cells, &plan.layers, plan.precision,
+                plan.enable_demag, model,
+            ).expect("device regression kernel catalog");
+            plan.planner_summary.estimated_pair_kernels = estimate.catalog.pair_bindings.len() as u32;
+            plan.planner_summary.estimated_unique_kernels = estimate.catalog.keys.len() as u32;
+            plan.planner_summary.estimated_kernel_bytes = estimate.accounting.admission_bytes;
+        };
+        for axis in 0..2 {
+            let mut plan = make_touching_plan(ExecutionPrecision::Double);
+            plan.planner_summary.requested_strategy = "auto".to_string();
+            plan.integrator = IntegratorChoice::Rk4;
+            plan.enable_exchange = false;
+            // XY-offset demag remains unqualified; exercise supported local
+            // CUDA fields without weakening that separate containment guard.
+            plan.enable_demag = false;
+            plan.interfacial_dmi = Some(1.5e-3);
+            plan.layers[1].initial_magnetization.fill([0.0, 0.0, 1.0]);
+            let mut origin = [0.0; 3];
+            origin[axis] = f64::from(plan.layers[0].native_grid[axis])
+                * plan.layers[0].native_cell_size[axis];
+            plan.layers[1].native_origin = origin;
+            plan.layers[1].convolution_origin = origin;
+            certify_plan(&mut plan);
+            bind_memory_model(&mut plan, fullmag_fdm_demag::KernelAdmissionModel::CpuFp64Catalog);
+            let cpu = multilayer_reference::execute_reference_fdm_multilayer(
+                &plan, 1e-13, &[], None, None,
+            ).expect("CPU body-local DMI reference");
+            bind_memory_model(&mut plan, fullmag_fdm_demag::KernelAdmissionModel::CudaAbiV2PairPayload);
+            let cuda = execute_cuda_fdm_multilayer(&plan, 1e-13, &[])
+                .expect("CUDA body-local DMI execution");
+            assert_eq!(cuda.provenance.execution_engine, "cuda_assisted_multilayer");
+            assert_eq!(cuda.result.final_magnetization.len(), cpu.result.final_magnetization.len());
+            for (actual, expected) in cuda.result.final_magnetization.iter()
+                .zip(&cpu.result.final_magnetization) {
+                for component in 0..3 {
+                    assert!((actual[component] - expected[component]).abs() < 1e-6,
+                        "axis {axis}: CUDA and CPU body-local DMI diverged: {actual:?} vs {expected:?}");
+                }
+            }
+            eprintln!("body-local DMI device regression executed on CUDA for contact axis {axis}");
+        }
+    }
+
+
+
+    #[test]
+    fn cuda_interfacial_dmi_xy_body_contact_keeps_separate_local_stencils() {
+        let mut plan = make_touching_plan(ExecutionPrecision::Double);
+        plan.planner_summary.requested_strategy = "auto".to_string();
+        plan.integrator = IntegratorChoice::Rk4;
+        plan.enable_exchange = false;
+        plan.enable_demag = false;
+        plan.interfacial_dmi = Some(1.5e-3);
+        plan.layers[0].initial_magnetization.fill([1.0, 0.0, 0.0]);
+        plan.layers[1].initial_magnetization.fill([0.0, 0.0, 1.0]);
+        plan.layers[1].native_origin = [4e-9, 0.0, 0.0];
+        plan.layers[1].convolution_origin = plan.layers[1].native_origin;
+
+        assert!(
+            !fullmag_plan::fdm_multilayer_cuda_native_single_grid_eligible_with_body_local_dmi(
+                &plan.layers,
+                true,
+            ),
+            "a body-local DMI stencil cannot span touching bodies in X"
+        );
+        assert_eq!(
+            cuda_multilayer_kernel_admission_model(&plan),
+            fullmag_fdm_demag::KernelAdmissionModel::CudaAbiV2PairPayload,
+            "the seam should retain the existing CUDA-assisted lane rather than fall back to CPU"
+        );
+        assert!(
+            build_native_stacked_cuda_plan(&plan)
+                .expect("body-local DMI seam should select the existing assisted path")
+                .is_none(),
+            "native-stacked DMI must not combine the touching bodies"
+        );
+
+        let mut y_contact = plan.clone();
+        y_contact.layers[1].native_origin = [0.0, 2e-9, 0.0];
+        y_contact.layers[1].convolution_origin = y_contact.layers[1].native_origin;
+        assert!(
+            !fullmag_plan::fdm_multilayer_cuda_native_single_grid_eligible_with_body_local_dmi(
+                &y_contact.layers,
+                true,
+            ),
+            "a body-local DMI stencil cannot span touching bodies in Y"
+        );
+        assert_eq!(
+            cuda_multilayer_kernel_admission_model(&y_contact),
+            fullmag_fdm_demag::KernelAdmissionModel::CudaAbiV2PairPayload
+        );
+        assert!(build_native_stacked_cuda_plan(&y_contact)
+            .expect("Y body-local DMI seam should select the existing assisted path")
+            .is_none());
+
+        let (contexts, states) = build_contexts_and_states(&plan, false)
+            .expect("per-layer CUDA-assisted contexts should retain DMI support");
+        assert_eq!(contexts.len(), 2);
+        assert_eq!(states.len(), 2);
+        for layer in &plan.layers {
+            let layer_plan = single_layer_cuda_plan(&plan, layer);
+            assert_eq!(layer_plan.grid.cells, layer.native_grid);
+            assert_eq!(layer_plan.interfacial_dmi, Some(1.5e-3));
+        }
+        let first_layer_field = contexts[0]
+            .problem
+            .interfacial_dmi_field(states[0].magnetization());
+        let second_layer_field = contexts[1]
+            .problem
+            .interfacial_dmi_field(states[1].magnetization());
+        let qx = 1.5e-3 / (MU0 * 800e3 * 2e-9);
+        assert!((first_layer_field[0][2] + qx).abs() < qx * 1e-12);
+        assert!((first_layer_field[1][2] - qx).abs() < qx * 1e-12);
+        assert!((second_layer_field[0][0] - qx).abs() < qx * 1e-12);
+        assert!((second_layer_field[1][0] + qx).abs() < qx * 1e-12);
     }
 
     fn add_uniaxial_anisotropy_texture(plan: &mut FdmMultilayerPlanIR) {

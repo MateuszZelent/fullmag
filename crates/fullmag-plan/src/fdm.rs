@@ -431,6 +431,16 @@ fn grid_sample_points(
     points
 }
 
+fn fdm_material_sample_spacing(
+    cell_size: [f64; 3],
+) -> crate::material::MaterialSampleSpacing<'static> {
+    let minimum_positive_cell_size = cell_size
+        .into_iter()
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .fold(f64::INFINITY, f64::min);
+    crate::material::MaterialSampleSpacing::Uniform(minimum_positive_cell_size)
+}
+
 /// Validate the exchange stiffness used by the rotated-interfacial-DMI
 /// natural boundary condition.  A zero Aex is legal in the bulk, but the
 /// boundary stencil is only well-defined when every active cell touching an
@@ -3102,10 +3112,11 @@ pub(crate) fn plan_fdm(
         grid_cells,
         cell_size,
         native_origin,
-        [0.0; 3],
+        top_level_translation,
         active_mask.as_ref(),
     );
     let point_coords: Vec<[f64; 3]> = sample_points.iter().map(|p| p.position_world).collect();
+    let material_sample_spacing = fdm_material_sample_spacing(cell_size);
     let antenna_zeeman_masks =
         resolve_prescribed_zeeman_masks(problem, &point_coords, active_mask.as_deref())?;
 
@@ -3116,7 +3127,8 @@ pub(crate) fn plan_fdm(
         fullmag_ir::MaterialParameterNameIR::Ms,
         material.saturation_magnetisation,
         &point_coords,
-        [0.0, 0.0, 0.0],
+        material_sample_spacing,
+        top_level_translation,
     );
     let ms_field_opt = match ms_field_resolved {
         Ok(v) => {
@@ -3142,7 +3154,8 @@ pub(crate) fn plan_fdm(
         fullmag_ir::MaterialParameterNameIR::Aex,
         material.exchange_stiffness,
         &point_coords,
-        [0.0, 0.0, 0.0],
+        material_sample_spacing,
+        top_level_translation,
     );
     let aex_field_opt = match aex_field_resolved {
         Ok(v) => {
@@ -3157,9 +3170,13 @@ pub(crate) fn plan_fdm(
                     errors.push(reason);
                 }
             }
-            let is_uniform = v
-                .iter()
-                .all(|&val| (val - material.exchange_stiffness).abs() <= 1e-12);
+            let is_uniform = v.iter().all(|value| {
+                let scale = value
+                    .abs()
+                    .max(material.exchange_stiffness.abs())
+                    .max(f64::MIN_POSITIVE);
+                (*value - material.exchange_stiffness).abs() <= 64.0 * f64::EPSILON * scale
+            });
             if is_uniform {
                 None
             } else {
@@ -3182,7 +3199,8 @@ pub(crate) fn plan_fdm(
         fullmag_ir::MaterialParameterNameIR::Alpha,
         material.damping,
         &point_coords,
-        [0.0, 0.0, 0.0],
+        material_sample_spacing,
+        top_level_translation,
     );
     let alpha_field_opt = match alpha_field_resolved {
         Ok(v) => {
@@ -4052,7 +4070,30 @@ fn fdm_layer_xy_center(layer: &FdmLayerPlanIR) -> [f64; 2] {
     ]
 }
 
+fn fdm_xy_face_contact(
+    offset: [usize; 3],
+    end: [usize; 3],
+    other_offset: [usize; 3],
+    other_end: [usize; 3],
+) -> bool {
+    let positive_overlap = |axis| offset[axis] < other_end[axis] && other_offset[axis] < end[axis];
+    let x_face = (end[0] == other_offset[0] || other_end[0] == offset[0])
+        && positive_overlap(1)
+        && positive_overlap(2);
+    let y_face = (end[1] == other_offset[1] || other_end[1] == offset[1])
+        && positive_overlap(0)
+        && positive_overlap(2);
+    x_face || y_face
+}
+
 pub fn fdm_multilayer_cuda_native_single_grid_eligible(layers: &[FdmLayerPlanIR]) -> bool {
+    fdm_multilayer_cuda_native_single_grid_eligible_with_body_local_dmi(layers, false)
+}
+
+pub fn fdm_multilayer_cuda_native_single_grid_eligible_with_body_local_dmi(
+    layers: &[FdmLayerPlanIR],
+    has_body_local_dmi: bool,
+) -> bool {
     let Some(first_layer) = layers.first() else {
         return false;
     };
@@ -4143,7 +4184,11 @@ pub fn fdm_multilayer_cuda_native_single_grid_eligible(layers: &[FdmLayerPlanIR]
             end[axis] = value;
         }
         if occupied_boxes.iter().any(|(other_offset, other_end)| {
-            (0..3).all(|axis| offset[axis] < other_end[axis] && other_offset[axis] < end[axis])
+            let overlaps =
+                (0..3).all(|axis| offset[axis] < other_end[axis] && other_offset[axis] < end[axis]);
+            let dmi_would_cross_body_boundary =
+                has_body_local_dmi && fdm_xy_face_contact(offset, end, *other_offset, *other_end);
+            overlaps || dmi_would_cross_body_boundary
         }) {
             return false;
         }
@@ -4434,6 +4479,7 @@ pub(crate) fn plan_fdm_multilayer(
                 continue;
             }
         };
+        let material_sample_spacing = fdm_material_sample_spacing(cell_size);
         let provided_grid_asset = problem.geometry_assets.as_ref().and_then(|assets| {
             assets
                 .fdm_grid_assets
@@ -4528,6 +4574,7 @@ pub(crate) fn plan_fdm_multilayer(
                 parameter,
                 base_value,
                 &point_coords,
+                material_sample_spacing,
                 placed.translation,
             )?;
             if values.len() != n_cells {
@@ -5041,7 +5088,12 @@ pub(crate) fn plan_fdm_multilayer(
     let native_cuda_single_grid = runtime_requests_cuda(problem)
         && requested_strategy == "auto"
         && integrator != Some(IntegratorChoice::Heun)
-        && fdm_multilayer_cuda_native_single_grid_eligible(&layers);
+        && fdm_multilayer_cuda_native_single_grid_eligible_with_body_local_dmi(
+            &layers,
+            interfacial_dmi.is_some_and(|d| d != 0.0)
+                || rotated_interfacial_dmi.is_some_and(|d| d != 0.0)
+                || bulk_dmi.is_some_and(|d| d != 0.0),
+        );
     let kernel_admission_model = if native_cuda_single_grid {
         KernelAdmissionModel::CudaNativeSingleGrid
     } else if runtime_requests_cuda(problem) {
@@ -5106,7 +5158,12 @@ pub(crate) fn plan_fdm_multilayer(
     let native_cuda_lane = runtime_requests_cuda(problem)
         && requested_strategy == "auto"
         && integrator != Some(IntegratorChoice::Heun)
-        && fdm_multilayer_cuda_native_single_grid_eligible(&layers);
+        && fdm_multilayer_cuda_native_single_grid_eligible_with_body_local_dmi(
+            &layers,
+            interfacial_dmi.is_some_and(|d| d != 0.0)
+                || rotated_interfacial_dmi.is_some_and(|d| d != 0.0)
+                || bulk_dmi.is_some_and(|d| d != 0.0),
+        );
     let requested_auto_integrator = problem.study.optional_dynamics().is_some_and(|dynamics| {
         let fullmag_ir::DynamicsIR::Llg { integrator, .. } = dynamics;
         integrator == "auto"
