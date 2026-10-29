@@ -32,7 +32,7 @@ nadal zachowują własne akcje. Zmiana nie przenosi rodziców modułów w React.
 3. Browser z opublikowanym modem: istniejąca próba wszystkich paneli,
    zmiany rozmiarów, tożsamości canvasów i niezagubionego WebGL.
 
-Status: implementacja gotowa; weryfikacja w toku. Dowód layoutu na telefonie
+Status: **3/3 zakończone — review, poprawki i weryfikacja PASS.** Dowód layoutu na telefonie
 nie oznacza, że kilka równoległych paneli ma tam ergonomię dużego monitora.
 
 ## Korekty wykryte podczas wykonywania próby
@@ -46,5 +46,63 @@ nie tłumi cudzych zdarzeń i nie zamienia wyboru menu w ruch panelu.
 Browser probe sprawdza rzeczywiste kliknięcie menu i zmianę trybu.
 
 Pomiar stylów wskazał też, że ogólny wariant przycisku icon nadpisywał minimum
-uchwytu. Selektor uchwytu otrzymał właściwą specyficzność bez `!important`.
+uchwytu. Odczyt CSSOM potwierdził pierwszeństwo warstwy `fm-primitives` nad
+`fm-base`, niezależne od specyficzności selektora. Uchwyt ustawia teraz
+lokalny token rozmiaru używany przez Button, bez `!important`.
 Końcowy probe wymaga fizycznych wymiarów minimum 32×32 px.
+
+Reset na wąskim ekranie przywraca domyślny drawer Inspectora, który nakłada
+się na część widoku. Próba używa istniejącego przycisku „Hide Inspector”
+przed kliknięciem odsłoniętego presetu; nie używa force-click ani klikania
+pod nakładką. Jawne dokowanie pozostaje dostępną alternatywą.
+
+## Wyniki
+
+- Browser: wszystkie szerokości 1600, 1180, 895, 640, 390 px bez poziomego
+  overflow dokumentu; wszystkie zmierzone uchwyty 32×32 px.
+- 895 px, Inspector: `docked → reload → docked`.
+- Tytuł: klik pozostawia `docked`; przeciągnięcie daje `floating`; Escape
+  przywraca `docked`; ponowne przeciągnięcie i drop przy krawędzi daje `docked`.
+- Tooltip zawiera instrukcję gestu, Escape i alternatywy klawiatura/menu.
+- Pusty preset przy 895 px po schowaniu domyślnego drawera: widok ma
+  710,8×531,6 px, mimo dodatkowej podpowiedzi wyboru wyniku.
+- Zero pageerror i zablokowanych mutacji w próbie responsywnej.
+- [CI 40790131450](https://github.com/MateuszZelent/fullmag/actions/runs/40790131450):
+  **1453 testy / 63 pliki**, typecheck i kontrola architektury PASS dla logiki
+  `e93f0706338fac2c9c68566359c69c155573885e`. Późniejsza korekta wyłącznie
+  lokalnego tokenu rozmiaru CSS jest objęta pomiarem przeglądarkowym.
+
+[Pełne pomiary i hashe artefaktów](2026-10-29-docking-manual-responsive-review.evidence.json).
+Zakres responsywności to układ i obsługa gestów; nie jest to benchmark FPS
+na fizycznym GPU. Próby nie uruchamiają nowych obliczeń.
+
+[Zrzut wąskiego widoku po użyciu presetu](/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/docking-responsive-20261029/verified/narrow-preset.png).
+
+## Instrukcja ręcznej obsługi
+
+1. Przytrzymaj lewy przycisk na uchwycie z kropkami albo tytule panelu
+   (jeżeli nagłówek zawiera tytuł; zakładki zachowują własną funkcję).
+2. Przeciągnij do krawędzi workspace albo innego panelu. Niebieski podgląd
+   wskazuje obszar zajęty po upuszczeniu; puść przycisk w tym obszarze.
+3. Przeciągaj separator między panelami, aby zmieniać proporcje.
+4. Escape podczas przeciągania przywraca poprzednie położenie.
+5. Alternatywnie użyj menu `…` → `Dock to ... of workspace`. Preset
+   `Modes | Spectrum` ustawia 3D po lewej i Analysis po prawej.
+6. Na wąskim ekranie domyślny Inspector jest nakładką. Użyj jego przycisku
+   `Hide Inspector`, aby odsłonić widok, albo zadokuj go jawnie. Taki wybór
+   dokowania jest teraz zachowywany także po odświeżeniu.
+
+
+## Regresja na opublikowanym modzie
+
+`verify_eigensolve_workspace_docking_ui.mjs` PASS: 10 checkpointów, zachowane
+instancje 3D, wykresu, Inspectora, Explorera i diagnostyki, resize obu osi,
+sześć przeniesień, zapis/odtworzenie, kompaktowe dokowanie i reset. Każdy
+checkpoint ma widoczny canvas z niezerowym drawing buffer i niezagubionym
+WebGL; zero pageerror i prób mutacji solvera. Załadowano 5127 zespolonych
+wartości modu FEM dla zachowanego run_id; nie obliczano nowego wyniku.
+
+Nie zmieniono hashy 14 plików wcześniejszego WIP. Aktywny solver i wydajność
+fizycznego GPU pozostają poza zakresem tego browser proof (SwiftShader).
+
+[Mod i wykres po wszystkich operacjach](/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/docking-responsive-20261029/mode-regression/final-modes-spectrum-inspector.png).

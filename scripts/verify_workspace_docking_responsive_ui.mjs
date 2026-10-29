@@ -1,12 +1,13 @@
 const {chromium}=await import(process.env.FULLMAG_PLAYWRIGHT_MODULE ?? new URL('../apps/control-room/node_modules/playwright/index.mjs',import.meta.url).href);
 import {mkdir,writeFile} from 'node:fs/promises';
+const origin=process.env.FULLMAG_UI_URL ?? 'http://localhost:3217';
 const out=process.env.PROBE_OUT ?? '/tmp/fullmag-docking-responsive'; await mkdir(out,{recursive:true});
 const b=await chromium.launch({headless:true,args:['--use-angle=swiftshader','--enable-unsafe-swiftshader']});
 const c=await b.newContext({viewport:{width:895,height:1000}});const p=await c.newPage();p.setDefaultTimeout(30000);
 const e={errors:[],blocked:[],widths:[]};p.on('pageerror',x=>e.errors.push(x.message));
 await c.route('**/*',r=>{const q=r.request(),s=new URL(q.url()).pathname;if(['GET','HEAD','OPTIONS'].includes(q.method())||s==='/v2/sessions/current/visualization/client-acks'||q.method()==='PATCH'&&s==='/v2/sessions/current/visualization/state')return r.continue();e.blocked.push(s);return r.abort();});
 try{
-await p.goto('http://localhost:3217/workspace',{waitUntil:'domcontentloaded'});
+await p.goto(origin+'/workspace',{waitUntil:'domcontentloaded'});
 const panel=p.locator('[data-panel-frame="panel-right"]');await panel.waitFor();console.log('Inspector ready');
 await panel.getByRole('button',{name:'Inspector panel menu',exact:true}).click();await p.getByRole('menuitem',{name:'Dock to right of workspace',exact:true}).click();await p.waitForTimeout(500);
 await p.waitForFunction(()=>document.querySelector('[data-panel-frame="panel-right"]')?.getAttribute('data-panel-mode')==='docked');e.beforeReload=await panel.getAttribute('data-panel-mode');await p.reload({waitUntil:'domcontentloaded'});await panel.waitFor();await p.waitForTimeout(700);e.afterReload=await panel.getAttribute('data-panel-mode');
@@ -21,6 +22,8 @@ const root=await p.locator('#fm-main-content').boundingBox();await p.mouse.move(
 await p.screenshot({path:out+'/title-drag-docked.png'});
 await p.locator('[data-panel-frame="viewport-main"]').getByRole('button',{name:'Viewport panel menu',exact:true}).click();await p.getByRole('menuitem',{name:'Reset panel arrangement',exact:true}).click();
 await p.setViewportSize({width:895,height:1000});
+// Reset restores the narrow-screen Inspector drawer; dismiss it through the real UI.
+await p.getByRole('button',{name:'Hide Inspector',exact:true}).click();
 await p.getByRole('button',{name:'Arrange modes left and spectrum right',exact:true}).click();await p.waitForTimeout(400);
 e.emptyPreset=await p.locator('.fm-viewport-tabs__surface').boundingBox();
 await p.screenshot({path:out+'/narrow-preset.png'});

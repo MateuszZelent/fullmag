@@ -1,0 +1,772 @@
+{
+  "schema": "fullmag.manual-docking-responsive.v1",
+  "logic_sha": "e93f0706338fac2c9c68566359c69c155573885e",
+  "css_followup": {
+    "path": "apps/control-room/src/design/styles/layout.css",
+    "sha256": "d183369c63a97b89d2fc617a04fe775dc2f601d0f49e4b6f3329f53b41c78e64",
+    "reason": "Scoped icon sizing token respects cascade layers"
+  },
+  "ci": {
+    "url": "https://github.com/MateuszZelent/fullmag/actions/runs/40790131450",
+    "tests": 1453,
+    "files": 63,
+    "typecheck": "PASS",
+    "architecture": "PASS"
+  },
+  "before": {
+    "errors": [],
+    "blocked": [],
+    "widths": [
+      {
+        "width": 1600,
+        "scroll": 1600,
+        "panels": [
+          {
+            "id": "panel-left",
+            "mode": "docked",
+            "grip": {
+              "x": 5,
+              "y": 202.5,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "id": "viewport-main",
+            "mode": "docked",
+            "grip": {
+              "x": 193.046875,
+              "y": 203.5,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "id": "panel-right",
+            "mode": "docked",
+            "grip": {
+              "x": 807,
+              "y": 201.5,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "id": "panel-bottom",
+            "mode": "docked",
+            "grip": {
+              "x": 9,
+              "y": 811.09375,
+              "w": 28,
+              "h": 28
+            }
+          }
+        ]
+      },
+      {
+        "width": 1180,
+        "scroll": 1180,
+        "panels": [
+          {
+            "id": "panel-left",
+            "mode": "docked",
+            "grip": {
+              "x": 5,
+              "y": 202.5,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "id": "viewport-main",
+            "mode": "docked",
+            "grip": {
+              "x": 145.421875,
+              "y": 203.5,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "id": "panel-right",
+            "mode": "docked",
+            "grip": {
+              "x": 597,
+              "y": 201.5,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "id": "panel-bottom",
+            "mode": "docked",
+            "grip": {
+              "x": 9,
+              "y": 811.09375,
+              "w": 28,
+              "h": 28
+            }
+          }
+        ]
+      },
+      {
+        "width": 895,
+        "scroll": 895,
+        "panels": [
+          {
+            "id": "panel-left",
+            "mode": "docked",
+            "grip": {
+              "x": 5,
+              "y": 202.5,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "id": "viewport-main",
+            "mode": "docked",
+            "grip": {
+              "x": 215.03125,
+              "y": 203.5,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "id": "panel-right",
+            "mode": "floating",
+            "grip": {
+              "x": 477,
+              "y": 146.5,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "id": "panel-bottom",
+            "mode": "docked",
+            "grip": {
+              "x": 9,
+              "y": 811.109375,
+              "w": 28,
+              "h": 28
+            }
+          }
+        ]
+      },
+      {
+        "width": 640,
+        "scroll": 640,
+        "panels": [
+          {
+            "id": "panel-left",
+            "mode": "floating",
+            "grip": {
+              "x": 14,
+              "y": 147.5,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "id": "viewport-main",
+            "mode": "docked",
+            "grip": {
+              "x": 9,
+              "y": 203.5,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "id": "panel-right",
+            "mode": "floating",
+            "grip": {
+              "x": 330,
+              "y": 146.5,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "id": "panel-bottom",
+            "mode": "docked",
+            "grip": {
+              "x": 9,
+              "y": 811.09375,
+              "w": 28,
+              "h": 28
+            }
+          }
+        ]
+      },
+      {
+        "width": 390,
+        "scroll": 390,
+        "panels": [
+          {
+            "id": "panel-left",
+            "mode": "floating",
+            "grip": {
+              "x": 14,
+              "y": 147.5,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "id": "viewport-main",
+            "mode": "docked",
+            "grip": {
+              "x": 9,
+              "y": 203.5,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "id": "panel-right",
+            "mode": "floating",
+            "grip": {
+              "x": 205,
+              "y": 146.5,
+              "w": 28,
+              "h": 28
+            }
+          },
+          {
+            "id": "panel-bottom",
+            "mode": "docked",
+            "grip": {
+              "x": 9,
+              "y": 811.09375,
+              "w": 28,
+              "h": 28
+            }
+          }
+        ]
+      }
+    ],
+    "beforeReload": "docked",
+    "afterReload": "floating",
+    "titleDrag": "docked",
+    "cancelMode": "docked"
+  },
+  "after": {
+    "errors": [],
+    "blocked": [],
+    "widths": [
+      {
+        "width": 1600,
+        "scroll": 1600,
+        "panels": [
+          {
+            "id": "panel-left",
+            "mode": "docked",
+            "grip": {
+              "x": 5,
+              "y": 201,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "id": "viewport-main",
+            "mode": "docked",
+            "grip": {
+              "x": 193.046875,
+              "y": 201,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "id": "panel-right",
+            "mode": "docked",
+            "grip": {
+              "x": 807,
+              "y": 201,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "id": "panel-bottom",
+            "mode": "docked",
+            "grip": {
+              "x": 9,
+              "y": 809.59375,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ]
+      },
+      {
+        "width": 1180,
+        "scroll": 1180,
+        "panels": [
+          {
+            "id": "panel-left",
+            "mode": "docked",
+            "grip": {
+              "x": 5,
+              "y": 201,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "id": "viewport-main",
+            "mode": "docked",
+            "grip": {
+              "x": 145.421875,
+              "y": 201,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "id": "panel-right",
+            "mode": "docked",
+            "grip": {
+              "x": 597,
+              "y": 201,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "id": "panel-bottom",
+            "mode": "docked",
+            "grip": {
+              "x": 9,
+              "y": 809.59375,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ]
+      },
+      {
+        "width": 895,
+        "scroll": 895,
+        "panels": [
+          {
+            "id": "panel-left",
+            "mode": "docked",
+            "grip": {
+              "x": 5,
+              "y": 201,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "id": "viewport-main",
+            "mode": "docked",
+            "grip": {
+              "x": 113.109375,
+              "y": 201,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "id": "panel-right",
+            "mode": "docked",
+            "grip": {
+              "x": 454.5,
+              "y": 201,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "id": "panel-bottom",
+            "mode": "docked",
+            "grip": {
+              "x": 9,
+              "y": 809.59375,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ]
+      },
+      {
+        "width": 640,
+        "scroll": 640,
+        "panels": [
+          {
+            "id": "panel-left",
+            "mode": "floating",
+            "grip": {
+              "x": 14,
+              "y": 146,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "id": "viewport-main",
+            "mode": "docked",
+            "grip": {
+              "x": 9,
+              "y": 201,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "id": "panel-right",
+            "mode": "docked",
+            "grip": {
+              "x": 327,
+              "y": 201,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "id": "panel-bottom",
+            "mode": "docked",
+            "grip": {
+              "x": 9,
+              "y": 809.59375,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ]
+      },
+      {
+        "width": 390,
+        "scroll": 390,
+        "panels": [
+          {
+            "id": "panel-left",
+            "mode": "floating",
+            "grip": {
+              "x": 14,
+              "y": 146,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "id": "viewport-main",
+            "mode": "docked",
+            "grip": {
+              "x": 9,
+              "y": 201,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "id": "panel-right",
+            "mode": "docked",
+            "grip": {
+              "x": 202,
+              "y": 201,
+              "w": 32,
+              "h": 32
+            }
+          },
+          {
+            "id": "panel-bottom",
+            "mode": "docked",
+            "grip": {
+              "x": 9,
+              "y": 809.59375,
+              "w": 32,
+              "h": 32
+            }
+          }
+        ]
+      }
+    ],
+    "beforeReload": "docked",
+    "afterReload": "docked",
+    "titleClick": "docked",
+    "titleDrag": "floating",
+    "cancelMode": "docked",
+    "tooltip": "Drag the title or dotted handle to an edge to dock. Esc cancels. Arrow keys move; the panel menu also offers docking.",
+    "titleDrop": "docked",
+    "dockedBounds": {
+      "x": 0,
+      "y": 200,
+      "width": 798,
+      "height": 874
+    },
+    "emptyPreset": {
+      "x": 183.203125,
+      "y": 268,
+      "width": 710.796875,
+      "height": 531.59375
+    },
+    "pass": true
+  },
+  "artifacts": [
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/docking-responsive-20261029/verified/compact-reload.png",
+      "sha256": "eb4d6b26bdf902e614ec77dc67b575f8fcc34e7a18366427f69390cbfdd655bf"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/docking-responsive-20261029/verified/narrow-preset.png",
+      "sha256": "e00fa1f19de7f8c1df951b17419878ac4abc5d381583687e53562d7e454ce714"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/docking-responsive-20261029/verified/probe.json",
+      "sha256": "da0487bb54d565c7d32a481d05ea620bfc84f66eea9e475b086cb17e6a248c52"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/docking-responsive-20261029/verified/title-drag-docked.png",
+      "sha256": "747cf3bb936d048b687d1aa7a8d48999422bb03c9d09d827ed3c3ed05a3d1077"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/docking-responsive-20261029/verified/width-1180.png",
+      "sha256": "1f07f04f82b439c41fec3d771a8d6816b5213f4f05f02f1c3d48c6c6975968a4"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/docking-responsive-20261029/verified/width-1600.png",
+      "sha256": "da61c180420c17fd34082d21fd32b5cad7a1b016ebdf71311ee3c91c2a2aa30c"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/docking-responsive-20261029/verified/width-390.png",
+      "sha256": "e4a702419b237e40b1f33182b1a2d803656d3696156ab6dfad99101756c5c017"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/docking-responsive-20261029/verified/width-640.png",
+      "sha256": "46e1d753ad23b622e54bb05ef0173405c10ecd7c43f4fcb1bdee9346e457f940"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/docking-responsive-20261029/verified/width-895.png",
+      "sha256": "84b06d5f400560f75af2e1bf796c6406a89d43d71a00bffad93692ef36f91abb"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/docking-responsive-20261029/mode-regression/compact-inspector-docked.png",
+      "sha256": "111839327f35a83445a62133c94cd5650c4633db8065ad3ef9787490f6b4a895"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/docking-responsive-20261029/mode-regression/custom-all-panels.png",
+      "sha256": "7a1d329baba34f7463481110f0d2562dc298e73a62159024601d02003790557d"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/docking-responsive-20261029/mode-regression/final-modes-spectrum-inspector.png",
+      "sha256": "4eec5afc122133425e20be033e24375e8887842c6481f1924ad4ed2708843191"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/docking-responsive-20261029/mode-regression/inspector-dock-preview.png",
+      "sha256": "6ba9359b4cc305c18d1445b37468e025f9922dc96c6f033bfb83c2c9862be2b8"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/docking-responsive-20261029/mode-regression/modes-left-spectrum-right.png",
+      "sha256": "9dc7db331631158fe101d42a717112b003317f187be8c2a282f97228c8e2d359"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/docking-responsive-20261029/mode-regression/probe.json",
+      "sha256": "3f7bc585a12b65f11db448222142d656fdac3c881b8d0518fc7fc4ef21a37717"
+    }
+  ],
+  "mode_regression": {
+    "capturedAt": "2026-10-28T23:54:05.850Z",
+    "runId": "run-live-bf62fc7d346d46ad1cca97c205d6d59a96eeca8f708d37fefacf09dd5cdb5c01",
+    "origin": "http://localhost:3217",
+    "scope": "Published-results UX in separate browser; presentation preferences may persist; no solver submissions or result modifications",
+    "presentationWrites": [
+      {
+        "method": "PATCH",
+        "path": "/v2/sessions/current/visualization/state"
+      },
+      {
+        "method": "PATCH",
+        "path": "/v2/sessions/current/visualization/state"
+      },
+      {
+        "method": "PATCH",
+        "path": "/v2/sessions/current/visualization/state"
+      }
+    ],
+    "errors": [],
+    "blockedMutations": [],
+    "initial": {
+      "partId": "part:film_geom",
+      "surfaceIndexCount": 1560,
+      "fieldQuantity": "analysis:eigen:sample-0000:mode-0000",
+      "requestedQuantity": "analysis:eigen:sample-0000:mode-0000",
+      "surfaceVisible": true,
+      "surfaceColorSource": "magnitude",
+      "bufferQuantity": "analysis:eigen:sample-0000:mode-0000",
+      "bufferRepresentation": "phase_rotated_real",
+      "bufferMin": 0,
+      "bufferMax": 250202010640.56915,
+      "complexValueCount": 5127,
+      "rgbValueCount": 0
+    },
+    "splitBefore": {
+      "primary": "analysis-plots",
+      "companion": "viewport-3d"
+    },
+    "splitAfter": {
+      "primary": "analysis-plots",
+      "companion": "viewport-3d"
+    },
+    "binding": {
+      "partId": "part:film_geom",
+      "surfaceIndexCount": 1560,
+      "fieldQuantity": "analysis:eigen:sample-0000:mode-0000",
+      "requestedQuantity": "analysis:eigen:sample-0000:mode-0000",
+      "surfaceVisible": true,
+      "surfaceColorSource": "magnitude",
+      "bufferQuantity": "analysis:eigen:sample-0000:mode-0000",
+      "bufferRepresentation": "phase_rotated_real",
+      "bufferMin": 0,
+      "bufferMax": 250202010640.56915,
+      "complexValueCount": 5127,
+      "rgbValueCount": 0
+    },
+    "chartText": "Dispersion\nModal frequencies\nEigenfrequencies at fixed k\nEigenmode spectrum · 1 point · 11.212 GHz\nLive\nSCIENTIFIC TRUST: UNKNOWN\n1 series\nProvenance\nShow / hide lower panel\nGHz\nEigen frequency\nGHz\n11.212\n\nAnalysis chart. 1 series and 1 plotted points.\n\nData Table\nCSV\nTSV\nPNG\nWavevector sample\nSample 0\n\nSample 0 · computed modes at this k. Mode rank is diagnostic; no intensity weighting.\n\nMode 0: 11.2119 GHz · 3D field available\nPhysical context and workflow",
+    "webgl": {
+      "width": 442,
+      "height": 477,
+      "contextLost": false,
+      "visible": true
+    },
+    "windowActions": [
+      {
+        "name": "preset modes left, spectrum right",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 442,
+          "h": 477
+        }
+      },
+      {
+        "name": "resize panel-left",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 428,
+          "h": 477
+        }
+      },
+      {
+        "name": "resize panel-bottom",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 428,
+          "h": 432
+        }
+      },
+      {
+        "name": "panel-right left of workspace",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 304,
+          "h": 400
+        }
+      },
+      {
+        "name": "panel-right bottom of viewport-main",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 615,
+          "h": 177
+        }
+      },
+      {
+        "name": "panel-left right of workspace",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 396,
+          "h": 113
+        }
+      },
+      {
+        "name": "panel-left top of viewport-main",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 797,
+          "h": 18
+        }
+      },
+      {
+        "name": "panel-bottom left of workspace",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 396,
+          "h": 14
+        }
+      },
+      {
+        "name": "panel-bottom right of panel-right",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 797,
+          "h": 78
+        }
+      },
+      {
+        "name": "reset workspace without remount",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 442,
+          "h": 477
+        }
+      }
+    ],
+    "resizes": [
+      {
+        "pane": "panel-left",
+        "before": 319.203125,
+        "after": 359.203125
+      },
+      {
+        "pane": "panel-bottom",
+        "before": 191.40625,
+        "after": 236.390625
+      }
+    ],
+    "stage": "panel-bottom right of panel-right",
+    "persistedStructure": [
+      "horizontal",
+      [
+        "vertical",
+        [
+          "vertical",
+          "panel-left",
+          "viewport-main"
+        ],
+        [
+          "horizontal",
+          "panel-right",
+          "panel-bottom"
+        ]
+      ],
+      "viewport-aux"
+    ],
+    "compactInspector": {
+      "x": 449.5,
+      "y": 200,
+      "width": 445.5,
+      "height": 774
+    },
+    "pass": true
+  },
+  "foreign_wip": {
+    "count": 14,
+    "sha256_preserved": true
+  }
+}
