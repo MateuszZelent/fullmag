@@ -4130,9 +4130,50 @@ pub fn fdm_multilayer_cuda_aligned_embedding_eligible(layers: &[FdmLayerPlanIR])
     })
 }
 
+/// Bounded multilayer PG-BB operator contract, shared by planner and runtime.
+/// The minimizer owns iterations rather than an LLG timestep. Every trial
+/// uses the existing open 3D FP64 coupled operator and native-layer layout.
+pub fn fdm_multilayer_projected_bb_error(plan: &FdmMultilayerPlanIR) -> Option<String> {
+    let algorithm_ok = plan.relaxation.as_ref()
+        .is_some_and(|control| control.algorithm == RelaxationAlgorithmIR::ProjectedGradientBb);
+    let open = plan.periodicity.as_ref().is_none_or(|policy|
+        policy.axes.iter().all(|axis| matches!(axis, AxisBoundary::Open)));
+    let reference = plan.layers.first();
+    let identity = !plan.layers.is_empty() && plan.layers.iter().all(|layer|
+        layer.transfer_kind == "identity" && layer.native_grid == layer.convolution_grid
+        && layer.native_cell_size == layer.convolution_cell_size);
+    let geometry = identity || fdm_multilayer_cuda_aligned_embedding_eligible(&plan.layers);
+    let common = reference.is_some_and(|first| first.convolution_grid == plan.common_cells
+        && plan.layers.iter().all(|layer| layer.convolution_grid == plan.common_cells
+            && layer.native_cell_size == first.native_cell_size
+            && layer.convolution_cell_size == first.native_cell_size));
+    let masks_ok = plan.layers.iter().all(|layer| layer.native_active_mask.as_ref()
+        .is_none_or(|mask| mask.len() == layer.initial_magnetization.len()));
+    let uniform_ms = plan.layers.iter().all(|layer| layer.material.ms_field.as_ref().is_none_or(|values|
+        values.len() == layer.initial_magnetization.len() && values.iter().enumerate().all(|(index, value)|
+            layer.native_active_mask.as_ref().is_some_and(|mask| mask.get(index).copied() == Some(false))
+                || *value == layer.material.saturation_magnetisation)));
+    if !algorithm_ok || !plan.enable_demag || plan.mode != "three_d"
+        || plan.planner_summary.resolved_mode != "three_d" || !open
+        || plan.precision != fullmag_ir::ExecutionPrecision::Double
+        || plan.frozen_spins.is_some() || !geometry || !common || !uniform_ms || !masks_ok
+        || !fdm_multilayer_cuda_containment_reason_codes(plan.enable_demag, &plan.mode, &plan.layers).is_empty()
+    {
+        Some("fdm_multilayer_projected_gradient_bb_contract: PG-BB requires open three_d FP64 coupled demag, equal native/convolution cell sizes, identity or centered aligned native grids, uniform Ms within each object, and no frozen spins; no device/precision/LLG fallback".into())
+    } else { None }
+}
+
+/// CUDA uses the same explicitly bounded PG-BB geometry as its CPU oracle.
+pub fn fdm_multilayer_cuda_projected_bb_error(plan: &FdmMultilayerPlanIR) -> Option<String> {
+    fdm_multilayer_projected_bb_error(plan)
+}
+
 /// Narrow execution contract for the new exact embedding lane. Identity plans
 /// retain their existing supported integrators and precisions.
 pub fn fdm_multilayer_cuda_aligned_embedding_error(plan: &FdmMultilayerPlanIR) -> Option<String> {
+    if plan.relaxation.as_ref().is_some_and(|control| control.algorithm == RelaxationAlgorithmIR::ProjectedGradientBb) {
+        return fdm_multilayer_cuda_projected_bb_error(plan);
+    }
     if !plan.enable_demag || !plan.layers.iter().any(|l| l.transfer_kind == "push_pull") {
         return None;
     }
@@ -5150,14 +5191,12 @@ pub(crate) fn plan_fdm_multilayer(
     let relaxation = controls.relaxation;
     let adaptive_timestep = controls.adaptive_timestep;
     let field_refresh = controls.field_refresh;
-    if relaxation
-        .as_ref()
-        .is_some_and(|control| control.algorithm != RelaxationAlgorithmIR::LlgOverdamped)
+    let projected_bb = relaxation.as_ref()
+        .is_some_and(|control| control.algorithm == RelaxationAlgorithmIR::ProjectedGradientBb);
+    if relaxation.as_ref().is_some_and(|control| !matches!(control.algorithm,
+        RelaxationAlgorithmIR::LlgOverdamped | RelaxationAlgorithmIR::ProjectedGradientBb))
     {
-        errors.push(
-            "the public multilayer FDM runner currently supports only 'llg_overdamped' relaxation"
-                .to_string(),
-        );
+        errors.push("multilayer FDM supports llg_overdamped and the bounded FP64 three_d projected_gradient_bb lane; other direct minimizers remain unsupported".into());
     }
 
     if !errors.is_empty() {
@@ -5238,6 +5277,7 @@ pub(crate) fn plan_fdm_multilayer(
         })
         .collect::<Vec<_>>();
     let native_cuda_single_grid = runtime_requests_cuda(problem)
+        && !projected_bb
         && requested_strategy == "auto"
         && integrator != Some(IntegratorChoice::Heun)
         && fdm_multilayer_cuda_native_single_grid_eligible_with_body_local_dmi(
@@ -5308,6 +5348,7 @@ pub(crate) fn plan_fdm_multilayer(
         );
     }
     let native_cuda_lane = runtime_requests_cuda(problem)
+        && !projected_bb
         && requested_strategy == "auto"
         && integrator != Some(IntegratorChoice::Heun)
         && fdm_multilayer_cuda_native_single_grid_eligible_with_body_local_dmi(
@@ -5325,7 +5366,7 @@ pub(crate) fn plan_fdm_multilayer(
     }
     let staged_cpu_abm3 =
         !runtime_requests_cuda(problem) && integrator == Some(IntegratorChoice::Abm3);
-    if !native_cuda_lane
+    if !projected_bb && !native_cuda_lane
         && !staged_cpu_abm3
         && !matches!(
             integrator,
@@ -5388,7 +5429,8 @@ pub(crate) fn plan_fdm_multilayer(
         exchange_bc: ExchangeBoundaryCondition::Neumann,
         periodicity: problem.pbc.clone(),
         resolved_periodic_images,
-        integrator: integrator.expect("validated multilayer FDM studies require LLG dynamics"),
+        // Required legacy field; PG-BB does not execute a time integrator.
+        integrator: integrator.unwrap_or(IntegratorChoice::Heun),
         fixed_timestep,
         field_refresh,
         relaxation,
@@ -5425,6 +5467,12 @@ pub(crate) fn plan_fdm_multilayer(
     if runtime_requests_cuda(problem) {
         if let Some(message) = fdm_multilayer_cuda_aligned_embedding_error(&plan) {
             return Err(PlanError { reasons: vec![message] });
+        }
+    }
+
+    if projected_bb {
+        if let Some(reason) = fdm_multilayer_cuda_projected_bb_error(&plan) {
+            return Err(PlanError { reasons: vec![reason] });
         }
     }
 

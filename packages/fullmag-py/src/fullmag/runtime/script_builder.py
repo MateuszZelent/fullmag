@@ -1094,7 +1094,8 @@ def _inherit_scene_stage_timestep(
     if not isinstance(study, dict) or not isinstance(study.get("stages"), list):
         return
     for stage in study["stages"]:
-        if isinstance(stage, dict) and str(stage.get("kind") or "relax") == "relax":
+        if (isinstance(stage, dict) and str(stage.get("kind") or "relax") == "relax"
+                and _scene_relax_uses_llg(stage)):
             stage.setdefault("fixed_timestep", fixed_timestep)
 
 
@@ -2337,6 +2338,10 @@ def _without_default_hysteresis_sampling(
     return stage
 
 
+def _scene_relax_uses_llg(stage: Mapping[str, object]) -> bool:
+    return (stage.get("algorithm") or stage.get("relax_algorithm") or "llg_overdamped") == "llg_overdamped"
+
+
 def _scene_relax_stage_kwargs(
     stage: Mapping[str, object],
     *,
@@ -2361,7 +2366,9 @@ def _scene_relax_stage_kwargs(
     max_relaxation_time_s = _finite_number(stage.get("max_relaxation_time_s"))
     if max_relaxation_time_s is not None:
         kwargs["max_relaxation_time_s"] = max_relaxation_time_s
-    kwargs.update(_relax_stage_timestep_kwargs(stage, solver))
+    # Global integration settings apply to LLG, not to direct minimization.
+    # Explicit stage controls still reach the public DSL's strict validator.
+    kwargs.update(_relax_stage_timestep_kwargs(stage, solver if _scene_relax_uses_llg(stage) else {}))
     return kwargs
 
 

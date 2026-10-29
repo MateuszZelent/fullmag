@@ -67,6 +67,7 @@ pub use error::PlanError;
 pub use fdm::{
     checked_multilayer_aggregate_memory_bytes, checked_multilayer_pair_kernel_footprint,
     fdm_multilayer_cuda_aligned_embedding_eligible, fdm_multilayer_cuda_aligned_embedding_error,
+    fdm_multilayer_cuda_projected_bb_error, fdm_multilayer_projected_bb_error,
     fdm_multilayer_cuda_containment_reason_codes, fdm_multilayer_cuda_material_field_errors,
     fdm_multilayer_cuda_native_single_grid_eligible,
     fdm_multilayer_cuda_native_single_grid_eligible_with_body_local_dmi,

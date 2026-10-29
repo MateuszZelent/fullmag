@@ -14,7 +14,7 @@ import fullmag as fm
 NM = 1e-9
 CELL = (2.5 * NM, 2.5 * NM, 2.5 * NM)
 # Use the managed writable project root, or the script directory locally.
-OUTPUT_ROOT = Path(os.environ.get("FULLMAG_PROJECT_STORAGE_ROOT", str(Path(__file__).resolve().parent))) / "bimeron-cylinder-relax-results"
+OUTPUT_ROOT = Path(os.environ.get("FULLMAG_PROJECT_STORAGE_ROOT", str(Path(__file__).resolve().parent))) / "bimeron-cylinder-relax-bb-gradient-results"
 
 study = fm.study("bimeron_film_upper_cylinder_relax")
 study.engine("fdm")
@@ -28,6 +28,9 @@ study.universe(
     padding=(0.0, 0.0, 0.0),
 )
 study.cell(*CELL)
+# Adaptive time integration for LLG stages. The BB relaxation below instead
+# adapts its minimization step through BB updates and Armijo line search.
+study.solver(dt_initial=1e-14, max_err=1e-6, integrator="rk23")
 
 # Film spans z=-5..+5 nm. Material comes from the historical formula-guided
 # R50 experiment; the 600x600x10 nm geometry follows Julia's film dimensions.
@@ -78,17 +81,13 @@ study.demag()
 # Finite geometry and its full demagnetizing field; no extra shape anisotropy,
 # no artificial zero padding of a separately prescribed external field,
 # no PBC, no frozen spins, no external drive and no inter-body exchange.
-study.solver(fix_dt=1e-14, integrator="heun")
 relax = study.stages.add_relax(
     stage_id="joint_relax",
-    algorithm="llg_overdamped",
-    solver="heun",
-    dt=1e-14,
-    relax_alpha=1.0,
+    algorithm="projected_gradient_bb",
     max_steps=100000,
-    max_physical_time_s=1e-9,
     tolT=1e-5,
 )
+# PG-BB changes both objects together and does not advance physical time.
 # The runner force-emits terminal m even off cadence; this is an observation,
 # not a checkpoint/resume artifact.
 relax.autosave(

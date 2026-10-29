@@ -6950,7 +6950,11 @@ pub fn run_reference_multilayer_fdm(
     until_seconds: f64,
     outputs: &[OutputIR],
 ) -> Result<RunResult, RunError> {
-    fdm::reject_adaptive_multilayer_plan(plan)?;
+    if !plan.relaxation.as_ref().is_some_and(|control|
+        control.algorithm == fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb)
+    {
+        fdm::reject_adaptive_multilayer_plan(plan)?;
+    }
     Ok(multilayer_reference::execute_reference_fdm_multilayer(
         plan,
         until_seconds,

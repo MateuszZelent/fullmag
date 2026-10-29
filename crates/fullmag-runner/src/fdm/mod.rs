@@ -71,6 +71,16 @@ mod timestep_tests {
 pub(crate) fn reject_adaptive_multilayer_plan(
     plan: &fullmag_ir::FdmMultilayerPlanIR,
 ) -> Result<(), RunError> {
+    if plan.relaxation.as_ref().is_some_and(|control| {
+        control.algorithm == fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+    }) {
+        // BB has no physical timestep. Qualify its own native-layer scope
+        // instead of classifying an unused global LLG policy as integration.
+        return match fullmag_plan::fdm_multilayer_projected_bb_error(plan) {
+            Some(message) => Err(RunError { message }),
+            None => Ok(()),
+        };
+    }
     if plan.fixed_timestep.is_none() {
         return Err(RunError {
             message: "adaptive time stepping is unsupported for multilayer FDM runtimes; an explicit fixed_timestep is required before native materialization".to_string(),

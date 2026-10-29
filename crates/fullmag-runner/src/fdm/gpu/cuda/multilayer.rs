@@ -22,7 +22,7 @@ use fullmag_fdm_demag::{
 use fullmag_ir::{
     ExchangeBoundaryCondition, ExecutionPrecision, FdmGridCertificateIR, FdmLayerPlanIR,
     FdmMaterialIR, FdmMultilayerPlanIR, FdmPlanIR, FdmRegionLegendEntryIR, GridDimensions,
-    IntegratorChoice, OutputIR, ResolvedFrozenSpinsPlanIR,
+    IntegratorChoice, OutputIR, RelaxationAlgorithmIR, ResolvedFrozenSpinsPlanIR,
 };
 use sha2::{Digest, Sha256};
 
@@ -49,6 +49,9 @@ use crate::types::{
 };
 
 use std::time::Instant;
+
+#[path = "multilayer_bb.rs"]
+mod multilayer_bb;
 
 #[derive(Debug, Clone)]
 struct LayerContext {
@@ -207,6 +210,7 @@ struct DeviceResidentMultilayerTransferCounters {
     scalar_bytes: u64,
     setup: CudaTransferCounters,
     observed_snapshots: CudaTransferCounters,
+    bb_trial_roundtrips: CudaTransferCounters,
     warm_steps: CudaTransferCounters,
 }
 
@@ -229,6 +233,13 @@ impl DeviceResidentMultilayerTransferCounters {
 
     fn record_observed_snapshot_d2h_vector(&mut self, cell_count: usize) {
         self.observed_snapshots.record_d2h_vector(
+            cell_count,
+            usize::try_from(self.scalar_bytes).expect("CUDA scalar byte width does not fit usize"),
+        );
+    }
+
+    fn record_bb_trial_h2d_vector(&mut self, cell_count: usize) {
+        self.bb_trial_roundtrips.record_h2d_vector(
             cell_count,
             usize::try_from(self.scalar_bytes).expect("CUDA scalar byte width does not fit usize"),
         );
@@ -265,6 +276,29 @@ impl DeviceResidentMultilayerTransferCounters {
             h2d_bytes: totals.h2d_bytes,
             d2h_bytes: totals.d2h_bytes,
         }
+    }
+
+    fn projected_gradient_bb_telemetry(
+        self,
+        precision: ExecutionPrecision,
+    ) -> FdmMultilayerTransferTelemetry {
+        let mut telemetry = self.telemetry(precision);
+        let mut totals = self.setup;
+        totals.merge(self.observed_snapshots);
+        totals.merge(self.bb_trial_roundtrips);
+        totals.merge(self.warm_steps);
+        telemetry.execution_shape =
+            "cuda_native_multilayer_projected_gradient_bb_host_controller".to_string();
+        telemetry.data_residency =
+            "native_cuda_operators_with_host_bb_trial_roundtrips".to_string();
+        // BB trial uploads contribute only to exact totals.  They are not
+        // startup uploads or fixed-step solver transfers, so keep both named
+        // subcategories unchanged (and warm-step counters at zero).
+        telemetry.h2d_transfer_count = totals.h2d_transfer_count;
+        telemetry.d2h_transfer_count = totals.d2h_transfer_count;
+        telemetry.h2d_bytes = totals.h2d_bytes;
+        telemetry.d2h_bytes = totals.d2h_bytes;
+        telemetry
     }
 }
 
@@ -411,7 +445,12 @@ fn plan_has_nonzero_body_local_dmi(plan: &FdmMultilayerPlanIR) -> bool {
 fn cuda_multilayer_kernel_admission_model(
     plan: &FdmMultilayerPlanIR,
 ) -> fullmag_fdm_demag::KernelAdmissionModel {
-    if plan.planner_summary.requested_strategy == "auto"
+    let projected_gradient_bb = plan
+        .relaxation
+        .as_ref()
+        .is_some_and(|control| control.algorithm == RelaxationAlgorithmIR::ProjectedGradientBb);
+    if !projected_gradient_bb
+        && plan.planner_summary.requested_strategy == "auto"
         && plan.integrator != IntegratorChoice::Heun
         && fullmag_plan::fdm_multilayer_cuda_native_single_grid_eligible_with_body_local_dmi(
             &plan.layers,
@@ -437,9 +476,26 @@ pub(crate) fn execute_cuda_fdm_multilayer_with_live(
     plan: &FdmMultilayerPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    live: Option<(&[u32; 3], u64, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
+    live: Option<(
+        &[u32; 3],
+        u64,
+        Option<&serde_json::Value>,
+        &mut dyn FnMut(StepUpdate) -> StepAction,
+    )>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    if plan
+        .relaxation
+        .as_ref()
+        .is_some_and(|control| control.algorithm == RelaxationAlgorithmIR::ProjectedGradientBb)
+    {
+        return multilayer_bb::execute_cuda_fdm_multilayer_projected_bb(
+            plan,
+            outputs,
+            live,
+            artifact_writer,
+        );
+    }
     crate::fdm::reject_adaptive_multilayer_plan(plan)?;
     reject_cuda_multilayer_containment(plan.enable_demag, &plan.mode, &plan.layers)?;
     let memory_model = cuda_multilayer_kernel_admission_model(plan);
@@ -640,12 +696,25 @@ fn validate_device_resident_cuda_multilayer_lane(
 pub(crate) fn validate_accepted_fdm_multilayer_cuda_lane(
     plan: &FdmMultilayerPlanIR,
 ) -> Result<(), RunError> {
-    crate::fdm::reject_adaptive_multilayer_plan(plan)?;
+    let projected_gradient_bb = plan
+        .relaxation
+        .as_ref()
+        .is_some_and(|control| control.algorithm == RelaxationAlgorithmIR::ProjectedGradientBb);
+    if !projected_gradient_bb {
+        crate::fdm::reject_adaptive_multilayer_plan(plan)?;
+    }
     reject_cuda_multilayer_containment(plan.enable_demag, &plan.mode, &plan.layers)?;
 
     let memory_model = cuda_multilayer_kernel_admission_model(plan);
     validate_multilayer_grid_budget(plan, memory_model)?;
     validate_cuda_multilayer_execution_contract(plan)?;
+
+    // PG-BB is a native pair-payload lane independent of the LLG integrator.
+    // Its planner gate and execution contract above are the complete
+    // acceptance check; do not pass it through the fixed-Heun D-07 validator.
+    if projected_gradient_bb {
+        return Ok(());
+    }
 
     // This is the dispatcher's first choice and needs no device probe.
     if validate_device_resident_cuda_multilayer_lane(plan).is_ok() {
@@ -685,7 +754,16 @@ pub(crate) fn validate_accepted_fdm_multilayer_cuda_lane(
 /// or FFI.
 fn validate_cuda_multilayer_execution_contract(plan: &FdmMultilayerPlanIR) -> Result<(), RunError> {
     reject_cuda_multilayer_containment(plan.enable_demag, &plan.mode, &plan.layers)?;
-    if let Some(message) = fullmag_plan::fdm_multilayer_cuda_aligned_embedding_error(plan) {
+    let projected_gradient_bb = plan
+        .relaxation
+        .as_ref()
+        .is_some_and(|control| control.algorithm == RelaxationAlgorithmIR::ProjectedGradientBb);
+    let contract_error = if projected_gradient_bb {
+        fullmag_plan::fdm_multilayer_cuda_projected_bb_error(plan)
+    } else {
+        fullmag_plan::fdm_multilayer_cuda_aligned_embedding_error(plan)
+    };
+    if let Some(message) = contract_error {
         return Err(RunError { message });
     }
     if let Some(message) = fullmag_plan::fdm_multilayer_cuda_material_field_errors(&plan.layers)
@@ -6371,6 +6449,52 @@ mod tests {
             .unwrap_err()
             .message
             .contains("mode_not_qualified"));
+    }
+
+    #[test]
+    fn projected_bb_uses_pair_payload_and_bypasses_only_the_llg_fixed_heun_gate() {
+        let mut plan = make_bounded_device_resident_plan();
+        plan.planner_summary.requested_strategy = "auto".to_string();
+        plan.integrator = IntegratorChoice::Rk23;
+        plan.fixed_timestep = None;
+        plan.relaxation = Some(fullmag_ir::RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+            stop: fullmag_ir::RelaxStopIR {
+                torque_tolerance_apm: Some(1e-3),
+                energy_tolerance_j: None,
+                max_steps: Some(4),
+                max_relaxation_time_s: None,
+            },
+        });
+
+        let admission_model = cuda_multilayer_kernel_admission_model(&plan);
+        assert_eq!(
+            admission_model,
+            fullmag_fdm_demag::KernelAdmissionModel::CudaAbiV2PairPayload,
+            "BB must retain the pair-payload operator even for identity grids"
+        );
+        let estimate = fullmag_plan::resolve_multilayer_kernel_memory(
+            &plan.mode,
+            plan.common_cells,
+            &plan.layers,
+            plan.precision,
+            plan.enable_demag,
+            admission_model,
+        )
+        .expect("pair-payload kernel catalog");
+        plan.planner_summary.estimated_pair_kernels = estimate.catalog.pair_bindings.len() as u32;
+        plan.planner_summary.estimated_unique_kernels = estimate.catalog.keys.len() as u32;
+        plan.planner_summary.estimated_kernel_bytes = estimate.accounting.admission_bytes;
+
+        assert!(fullmag_plan::fdm_multilayer_cuda_projected_bb_error(&plan).is_none());
+        validate_cuda_multilayer_execution_contract(&plan)
+            .expect("BB keeps geometry, material, and certificate validation");
+        validate_accepted_fdm_multilayer_cuda_lane(&plan)
+            .expect("BB acceptance must not be routed through fixed-Heun D-07 checks");
+        assert!(validate_device_resident_cuda_multilayer_lane(&plan)
+            .unwrap_err()
+            .message
+            .contains("integrator_not_qualified"));
     }
 
     #[test]

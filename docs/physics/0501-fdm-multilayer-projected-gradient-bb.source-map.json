@@ -1,0 +1,391 @@
+{
+  "document": {
+    "path": "docs/physics/0501-fdm-multilayer-projected-gradient-bb.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "bounded_runtime_verified_fp64"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "bounded_runtime_verified_fp64"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "unchanged"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "unchanged"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-multilayer-bb-gradient",
+      "symbols": [
+        "m",
+        "H",
+        "g",
+        "P",
+        "I",
+        "w",
+        "mu0",
+        "Ms",
+        "V"
+      ],
+      "sources": [
+        "gradient",
+        "metric"
+      ]
+    },
+    {
+      "id": "eq-multilayer-bb-metric",
+      "symbols": [
+        "a",
+        "b",
+        "w"
+      ],
+      "sources": [
+        "metric"
+      ]
+    },
+    {
+      "id": "eq-multilayer-bb-retraction",
+      "symbols": [
+        "m",
+        "m_trial",
+        "lambda",
+        "g",
+        "g_trial",
+        "s",
+        "y",
+        "P"
+      ],
+      "sources": [
+        "trial",
+        "bb"
+      ]
+    },
+    {
+      "id": "eq-multilayer-bb-steps",
+      "symbols": [
+        "lambda",
+        "bb1",
+        "bb2",
+        "s",
+        "y"
+      ],
+      "sources": [
+        "bb"
+      ]
+    },
+    {
+      "id": "eq-multilayer-bb-armijo",
+      "symbols": [
+        "dE",
+        "w",
+        "H",
+        "m_trial",
+        "m",
+        "E",
+        "E_trial",
+        "c1"
+      ],
+      "sources": [
+        "armijo"
+      ]
+    },
+    {
+      "id": "eq-multilayer-bb-torque",
+      "symbols": [
+        "tau",
+        "tauT",
+        "m",
+        "H",
+        "mu0"
+      ],
+      "sources": [
+        "torque"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "m",
+      "latex": "\\mathbf m_i",
+      "meaning": "magnetyzacja przyjęta",
+      "si_unit": "1"
+    },
+    {
+      "id": "m_trial",
+      "latex": "\\mathbf m'_i",
+      "meaning": "magnetyzacja próbna",
+      "si_unit": "1"
+    },
+    {
+      "id": "H",
+      "latex": "\\mathbf H_i",
+      "meaning": "pole efektywne",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "g",
+      "latex": "\\mathbf g_i",
+      "meaning": "gradient styczny",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "g_trial",
+      "latex": "\\mathbf g'_i",
+      "meaning": "gradient próbny",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "P",
+      "latex": "P_{\\mathbf m_i}",
+      "meaning": "projektor styczny",
+      "si_unit": "1"
+    },
+    {
+      "id": "I",
+      "latex": "I",
+      "meaning": "macierz jednostkowa",
+      "si_unit": "1"
+    },
+    {
+      "id": "Ms",
+      "latex": "M_{s,i}",
+      "meaning": "namagnesowanie nasycenia",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "V",
+      "latex": "V_i",
+      "meaning": "objętość komórki",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "mu0",
+      "latex": "\\mu_0",
+      "meaning": "przenikalność próżni",
+      "si_unit": "\\mathrm{N\\,A^{-2}}"
+    },
+    {
+      "id": "w",
+      "latex": "w_i",
+      "meaning": "waga metryki",
+      "si_unit": "\\mathrm{J\\,m\\,A^{-1}}"
+    },
+    {
+      "id": "a",
+      "latex": "\\mathbf a_i",
+      "meaning": "argument metryki",
+      "si_unit": "1"
+    },
+    {
+      "id": "b",
+      "latex": "\\mathbf b_i",
+      "meaning": "argument metryki",
+      "si_unit": "1"
+    },
+    {
+      "id": "s",
+      "latex": "\\mathbf s_i",
+      "meaning": "różnica po transporcie",
+      "si_unit": "1"
+    },
+    {
+      "id": "y",
+      "latex": "\\mathbf y_i",
+      "meaning": "różnica gradientów",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "lambda",
+      "latex": "\\lambda",
+      "meaning": "krok",
+      "si_unit": "\\mathrm{m\\,A^{-1}}"
+    },
+    {
+      "id": "bb1",
+      "latex": "\\lambda_{\\mathrm{BB1}}",
+      "meaning": "krok BB1",
+      "si_unit": "\\mathrm{m\\,A^{-1}}"
+    },
+    {
+      "id": "bb2",
+      "latex": "\\lambda_{\\mathrm{BB2}}",
+      "meaning": "krok BB2",
+      "si_unit": "\\mathrm{m\\,A^{-1}}"
+    },
+    {
+      "id": "E",
+      "latex": "E",
+      "meaning": "energia przyjęta",
+      "si_unit": "\\mathrm J"
+    },
+    {
+      "id": "E_trial",
+      "latex": "E'",
+      "meaning": "energia próbna",
+      "si_unit": "\\mathrm J"
+    },
+    {
+      "id": "dE",
+      "latex": "\\Delta E_{\\mathrm{lin}}",
+      "meaning": "przyrost liniowy",
+      "si_unit": "\\mathrm J"
+    },
+    {
+      "id": "c1",
+      "latex": "c_1",
+      "meaning": "stała Armijo",
+      "si_unit": "1"
+    },
+    {
+      "id": "tau",
+      "latex": "\\tau_{\\max}",
+      "meaning": "reszta momentu",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "tauT",
+      "latex": "\\tau_{\\max,T}",
+      "meaning": "reszta momentu w T",
+      "si_unit": "\\mathrm T"
+    }
+  ],
+  "sources": [
+    {
+      "id": "gradient",
+      "path": "crates/fullmag-runner/src/relaxation/vector_math.rs",
+      "symbol": "tangent_gradient_from_field",
+      "responsibility": "Kanoniczna istniejąca polityka lub granica realizacji PG-BB."
+    },
+    {
+      "id": "metric",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer.rs",
+      "symbol": "energy_metric_dot",
+      "responsibility": "Kanoniczna istniejąca polityka lub granica realizacji PG-BB."
+    },
+    {
+      "id": "trial",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer.rs",
+      "symbol": "projected_gradient_trial_magnetization",
+      "responsibility": "Kanoniczna istniejąca polityka lub granica realizacji PG-BB."
+    },
+    {
+      "id": "bb",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer.rs",
+      "symbol": "projected_gradient_step_size_update",
+      "responsibility": "Kanoniczna istniejąca polityka lub granica realizacji PG-BB."
+    },
+    {
+      "id": "armijo",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer.rs",
+      "symbol": "representable_chord_energy_linear_increment",
+      "responsibility": "Kanoniczna istniejąca polityka lub granica realizacji PG-BB."
+    },
+    {
+      "id": "torque",
+      "path": "crates/fullmag-runner/src/relaxation/vector_math.rs",
+      "symbol": "max_torque_from_field",
+      "responsibility": "Kanoniczna istniejąca polityka lub granica realizacji PG-BB."
+    },
+    {
+      "id": "authoring",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "_build_relax_llg_dynamics",
+      "responsibility": "Kanoniczna istniejąca polityka lub granica realizacji PG-BB."
+    },
+    {
+      "id": "planner",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "plan_fdm_multilayer",
+      "responsibility": "Kanoniczna istniejąca polityka lub granica realizacji PG-BB."
+    },
+    {
+      "id": "provenance",
+      "path": "crates/fullmag-runner/src/relaxation/provenance.rs",
+      "symbol": "apply_energy_minimizer_provenance",
+      "responsibility": "Kanoniczna istniejąca polityka lub granica realizacji PG-BB."
+    },
+    {
+      "id": "accepted-api",
+      "path": "crates/fullmag-api/src/live_accepted_execution.rs",
+      "symbol": "bounded_fdm_gpu_bb_plan",
+      "responsibility": "Kwalifikacja planu GPU przed publikacją RunIntent."
+    },
+    {
+      "id": "scene-authoring",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_scene_relax_stage_kwargs",
+      "responsibility": "Round-trip BB bez dziedziczenia czasowych kontroli LLG."
+    },
+    {
+      "id": "accepted-time-policy",
+      "path": "crates/fullmag-runner/src/fdm/mod.rs",
+      "symbol": "reject_adaptive_multilayer_plan",
+      "responsibility": "Kwalifikacja BB bez interpretowania globalnej polityki LLG jako kroku fizycznego."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "study.stages.add_relax.algorithm",
+        "type": "enum",
+        "default": "llg_overdamped",
+        "si_unit": "1",
+        "validation": "projected_gradient_bb in this lane",
+        "meaning": "wybór minimizatora",
+        "backend_support": "FDM CPU/GPU in the explicitly gated implementation scope",
+        "problem_ir": "relaxation.algorithm"
+      },
+      {
+        "python": "study.stages.add_relax.max_steps",
+        "type": "int | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "positive integer",
+        "meaning": "limit przyjętych iteracji",
+        "backend_support": "FDM CPU/GPU in the explicitly gated implementation scope",
+        "problem_ir": "relaxation.stop.max_steps"
+      },
+      {
+        "python": "study.stages.add_relax.tolT",
+        "type": "float | unset",
+        "default": "unset",
+        "si_unit": "\\mathrm T",
+        "validation": "positive finite, excludes tolA",
+        "meaning": "moment w T",
+        "backend_support": "FDM CPU/GPU in the explicitly gated implementation scope",
+        "problem_ir": "relaxation.stop.torque_tolerance_apm"
+      },
+      {
+        "python": "study.stages.add_relax.tolA",
+        "type": "float | unset",
+        "default": "unset",
+        "si_unit": "\\mathrm{A\\,m^{-1}}",
+        "validation": "positive finite, excludes tolT",
+        "meaning": "moment w A/m",
+        "backend_support": "FDM CPU/GPU in the explicitly gated implementation scope",
+        "problem_ir": "relaxation.stop.torque_tolerance_apm"
+      },
+      {
+        "python": "study.stages.add_relax.energy_tolerance",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm J",
+        "validation": "positive finite or None",
+        "meaning": "zakres energii",
+        "backend_support": "FDM CPU/GPU in the explicitly gated implementation scope",
+        "problem_ir": "relaxation.stop.energy_tolerance_j"
+      }
+    ]
+  }
+}

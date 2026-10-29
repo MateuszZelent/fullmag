@@ -23,7 +23,8 @@ use fullmag_fdm_demag::{
     TransferBoundaryPolicy, TransferKind,
 };
 use fullmag_ir::{
-    ExecutionPrecision, FdmMultilayerPlanIR, IntegratorChoice, OutputIR, StageCompletionIR,
+    ExecutionPrecision, FdmMultilayerPlanIR, IntegratorChoice, OutputIR,
+    RelaxationAlgorithmIR, RelaxationControlIR, StageCompletionIR,
 };
 
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
@@ -50,7 +51,8 @@ use crate::types::{
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::time::Instant;
+use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
 
 const MULTILAYER_ABM3_CHECKPOINT_SCHEMA: &str = "fullmag.fdm.cpu.multilayer.abm3-checkpoint.v1";
 const ABM3_DT_RELATIVE_TOLERANCE: f64 = 1.0e-12;
@@ -164,7 +166,17 @@ pub(crate) fn execute_reference_fdm_multilayer_with_checkpoint(
     artifact_writer: Option<ArtifactPipelineSender>,
     checkpoint: Option<serde_json::Value>,
 ) -> Result<ExecutedRun, RunError> {
-    crate::fdm::reject_adaptive_multilayer_plan(plan)?;
+    let direct_multilayer_bb = is_multilayer_projected_gradient_bb(plan);
+    if direct_multilayer_bb {
+        validate_multilayer_bb_scope(plan)?;
+        if checkpoint.is_some() {
+            return Err(RunError {
+                message: "FDM multilayer PG-BB does not accept an LLG or ABM3 checkpoint".into(),
+            });
+        }
+    } else {
+        crate::fdm::reject_adaptive_multilayer_plan(plan)?;
+    }
     if let Some(layer) = plan
         .layers
         .iter()
@@ -181,7 +193,7 @@ pub(crate) fn execute_reference_fdm_multilayer_with_checkpoint(
         plan,
         fullmag_fdm_demag::KernelAdmissionModel::CpuFp64Catalog,
     )?;
-    if until_seconds <= 0.0 {
+    if !direct_multilayer_bb && until_seconds <= 0.0 {
         return Err(RunError {
             message: "until_seconds must be positive".to_string(),
         });
@@ -251,8 +263,8 @@ pub(crate) fn execute_reference_fdm_multilayer_with_checkpoint(
             })
         })
         .transpose()?;
-    let mut abm3_history =
-        (plan.integrator == IntegratorChoice::Abm3).then(MultilayerAbm3History::default);
+    let mut abm3_history = (!direct_multilayer_bb && plan.integrator == IntegratorChoice::Abm3)
+        .then(MultilayerAbm3History::default);
     let mut step_count = 0u64;
     if let Some(checkpoint) = checkpoint {
         let (restored_frozen, restored_history, restored_step) =
@@ -267,16 +279,22 @@ pub(crate) fn execute_reference_fdm_multilayer_with_checkpoint(
             .map(|state| state.magnetization().to_vec())
             .collect::<Vec<_>>(),
     );
-    let timestep_policy = crate::resolve_timestep_policy(
-        Some(plan.integrator),
-        plan.fixed_timestep,
-        None,
-        crate::types::TimestepExecutionLane::fdm_cpu(),
-    )?;
-    let dt = abm3_history
-        .as_ref()
-        .and_then(|history| (history.last_dt > 0.0).then_some(history.last_dt))
-        .unwrap_or_else(|| timestep_policy.initial_dt());
+    let timestep_policy = if direct_multilayer_bb {
+        None
+    } else {
+        Some(crate::resolve_timestep_policy(
+            Some(plan.integrator),
+            plan.fixed_timestep,
+            None,
+            crate::types::TimestepExecutionLane::fdm_cpu(),
+        )?)
+    };
+    let dt = timestep_policy.as_ref().map(|policy| {
+        abm3_history
+            .as_ref()
+            .and_then(|history| (history.last_dt > 0.0).then_some(history.last_dt))
+            .unwrap_or_else(|| policy.initial_dt())
+    });
     let mut steps: Vec<StepStats> = Vec::new();
     let fdm_fft_execution = super::reference::resolve_cpu_fft_execution_for_demag(
         plan.enable_demag,
@@ -285,7 +303,7 @@ pub(crate) fn execute_reference_fdm_multilayer_with_checkpoint(
     let fft_backend = fdm_fft_execution
         .as_ref()
         .map(|execution| execution.executed_backend.clone());
-    let provenance = ExecutionProvenance {
+    let mut provenance = ExecutionProvenance {
         charge_transport: None,
         transport_modules: Vec::new(),
         fdm_gpu_transport_telemetry: None,
@@ -328,7 +346,7 @@ pub(crate) fn execute_reference_fdm_multilayer_with_checkpoint(
         fem_direct_minimizer_policy: None,
         requested_demag_realization: None,
         resolved_demag_realization: None,
-        timestep_policy: Some(timestep_policy),
+        timestep_policy,
         fdm_multilayer_transfer_telemetry: None,
         fdm_multilayer_stage_telemetry: None,
         dt_policy: None,
@@ -375,11 +393,43 @@ pub(crate) fn execute_reference_fdm_multilayer_with_checkpoint(
         fem_poisson_demag: None,
         fem_bem_demag: None,
     };
+    if direct_multilayer_bb {
+        crate::relaxation::apply_energy_minimizer_provenance(
+            &mut provenance,
+            plan.relaxation.as_ref(),
+        );
+        provenance.energy_minimizer_realization =
+            Some("cpu_reference_multilayer_projected_gradient_bb".to_string());
+        provenance.requested_integrator = None;
+        provenance.resolved_integrator = None;
+        provenance.timestep_policy = None;
+    }
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)
     } else {
         ArtifactRecorder::in_memory(provenance.clone())
     };
+
+    if direct_multilayer_bb {
+        return execute_reference_fdm_multilayer_bb(
+            plan,
+            plan.relaxation
+                .as_ref()
+                .expect("PG-BB dispatch requires relaxation control"),
+            contexts,
+            states,
+            demag_runtime,
+            active_mask,
+            initial_magnetization,
+            outputs,
+            live,
+            artifacts,
+        );
+    }
+
+    let dt = dt.ok_or_else(|| RunError {
+        message: "LLG multilayer execution requires a resolved timestep policy".into(),
+    })?;
 
     let mut scalar_schedules = collect_scalar_schedules(outputs)?;
     let mut field_schedules = collect_field_schedules(outputs)?;
@@ -838,6 +888,470 @@ pub(crate) fn execute_reference_fdm_multilayer_with_checkpoint(
     })
 }
 
+fn validate_multilayer_bb_scope(plan: &FdmMultilayerPlanIR) -> Result<(), RunError> {
+    fullmag_plan::fdm_multilayer_projected_bb_error(plan)
+        .map_or(Ok(()), |message| Err(RunError { message }))
+}
+
+fn is_multilayer_projected_gradient_bb(plan: &FdmMultilayerPlanIR) -> bool {
+    plan.relaxation.as_ref().is_some_and(|control| {
+        control.algorithm == RelaxationAlgorithmIR::ProjectedGradientBb
+    })
+}
+
+fn execute_reference_fdm_multilayer_bb(
+    plan: &FdmMultilayerPlanIR,
+    control: &RelaxationControlIR,
+    contexts: Vec<LayerContext>,
+    mut states: Vec<ExchangeLlgState>,
+    demag_runtime: Option<MultilayerDemagRuntime>,
+    active_mask: Option<Vec<bool>>,
+    initial_magnetization: Vec<[f64; 3]>,
+    outputs: &[OutputIR],
+    mut live: Option<(
+        &[u32; 3],
+        u64,
+        Option<&serde_json::Value>,
+        &mut dyn FnMut(StepUpdate) -> StepAction,
+    )>,
+    mut artifacts: ArtifactRecorder,
+) -> Result<ExecutedRun, RunError> {
+    let (ms_apm, volumes_m3) = multilayer_bb_metric_arrays(&contexts, &states, active_mask.as_deref())?;
+    let initial_observables = observe_multilayer(&contexts, &states, demag_runtime.as_ref())?;
+    if initial_observables.magnetization != initial_magnetization {
+        return Err(RunError {
+            message: "CPU multilayer PG-BB initial observation differs from the authored native state".into(),
+        });
+    }
+
+    let mut scalar_schedules = collect_scalar_schedules(outputs)?;
+    let mut field_schedules = collect_field_schedules(outputs)?;
+    let mut sampled_field_steps = BTreeMap::<String, u64>::new();
+    let default_scalar_trace = scalar_schedules.is_empty();
+    let mut steps = Vec::<StepStats>::new();
+    let mut last_artifact_scalar_step = None;
+    let mut last_live_payload_at = None::<Instant>;
+
+    let mut evaluate = |magnetization: &[[f64; 3]]| {
+        install_multilayer_magnetization_exact(&mut states, magnetization)?;
+        observe_multilayer(&contexts, &states, demag_runtime.as_ref())
+    };
+    let mut observe = |event: crate::relaxation::multilayer_bb::MultilayerBbEvent<'_>| {
+        match event {
+            crate::relaxation::multilayer_bb::MultilayerBbEvent::Accepted {
+                observables,
+                stats,
+            } => {
+                let scalar_due = default_scalar_trace
+                    || scalar_schedules
+                        .iter()
+                        .any(|schedule| is_due(stats.time, schedule.next_time));
+                if scalar_due {
+                    artifacts.record_scalar(stats)?;
+                    last_artifact_scalar_step = Some(stats.step);
+                    steps.push(stats.clone());
+                    advance_due_schedules(&mut scalar_schedules, stats.time);
+                }
+
+                record_multilayer_bb_due_fields(
+                    observables,
+                    stats.step,
+                    stats.time,
+                    stats.dt,
+                    &mut field_schedules,
+                    &mut sampled_field_steps,
+                    &mut artifacts,
+                )?;
+                let autosave_fields = accepted_step_autosave_fields(&mut artifacts, stats.step, false);
+                record_multilayer_bb_autosave_fields(
+                    &autosave_fields,
+                    observables,
+                    stats.step,
+                    stats.time,
+                    stats.dt,
+                    &mut sampled_field_steps,
+                    &mut artifacts,
+                )?;
+
+                let payload_interval_elapsed = last_live_payload_at
+                    .is_none_or(|last| last.elapsed() >= Duration::from_secs(2));
+                let live_payload_enabled = live
+                    .as_ref()
+                    .is_some_and(|(_, field_every_n, _, _)| *field_every_n != u64::MAX);
+                let live_payload_due = live_payload_enabled && payload_interval_elapsed;
+                if live_payload_due {
+                    last_live_payload_at = Some(Instant::now());
+                }
+                publish_multilayer_bb_live_update(
+                    &mut live,
+                    stats,
+                    Some(observables),
+                    live_payload_due,
+                    scalar_due,
+                )
+            }
+            crate::relaxation::multilayer_bb::MultilayerBbEvent::Poll { stats } => {
+                // Polls carry only the last accepted scalar state. The evaluator may
+                // currently hold a rejected line-search candidate, so never source
+                // a field payload from the mutable CPU states on this path.
+                publish_multilayer_bb_live_update(&mut live, stats, None, false, false)
+            }
+        }
+    };
+    let outcome = crate::relaxation::multilayer_bb::execute_multilayer_bb(
+        initial_observables,
+        control,
+        &ms_apm,
+        &volumes_m3,
+        active_mask.as_deref(),
+        &mut evaluate,
+        &mut observe,
+    )?;
+    drop(observe);
+    drop(evaluate);
+
+    let final_observables = outcome.final_observables;
+    let final_stats = outcome.final_stats;
+    let final_magnetization = flatten_layers(
+        &states
+            .iter()
+            .map(|state| state.magnetization().to_vec())
+            .collect::<Vec<_>>(),
+    );
+    if final_magnetization != final_observables.magnetization {
+        return Err(RunError {
+            message: "CPU multilayer PG-BB final state differs from the accepted optimizer state".into(),
+        });
+    }
+
+    if last_artifact_scalar_step != Some(final_stats.step) {
+        artifacts.record_scalar(&final_stats)?;
+    }
+    if !steps
+        .iter()
+        .any(|step| step.step == final_stats.step && same_time(step.time, final_stats.time))
+    {
+        steps.push(final_stats.clone());
+    }
+
+    let final_autosave_fields = accepted_step_autosave_fields(&mut artifacts, final_stats.step, true);
+    record_multilayer_bb_due_fields(
+        &final_observables,
+        final_stats.step,
+        final_stats.time,
+        final_stats.dt,
+        &mut field_schedules,
+        &mut sampled_field_steps,
+        &mut artifacts,
+    )?;
+    record_multilayer_bb_autosave_fields(
+        &final_autosave_fields,
+        &final_observables,
+        final_stats.step,
+        final_stats.time,
+        final_stats.dt,
+        &mut sampled_field_steps,
+        &mut artifacts,
+    )?;
+    record_multilayer_bb_terminal_fields(
+        &final_observables,
+        final_stats.step,
+        final_stats.time,
+        final_stats.dt,
+        &mut field_schedules,
+        &mut sampled_field_steps,
+        &mut artifacts,
+    )?;
+
+    if let Some((grid, _, layout, on_step)) = live.as_mut() {
+        let _ = on_step(StepUpdate {
+            stats: final_stats.clone(),
+            coupled_checkpoint: None,
+            grid: [grid[0], grid[1], grid[2]],
+            fem_mesh_generation_id: None,
+            magnetization: Some(flatten_vectors(&final_observables.magnetization)),
+            preview_field: None,
+            cached_preview_fields: None,
+            hysteresis_field_m_t: None,
+            hysteresis_point_index: None,
+            hysteresis_settle_step_index: None,
+            hysteresis_settle_step_kind: None,
+            hysteresis_settle_step_method: None,
+            scalar_row_due: false,
+            terminal_field_snapshot: false,
+            finished: false,
+            magnetization_carrier: crate::types::fdm_multilayer_live_magnetization_carrier(
+                *layout,
+                &final_stats,
+            ),
+        });
+    }
+
+    let status = if outcome.cancelled {
+        RunStatus::Cancelled
+    } else {
+        RunStatus::Completed
+    };
+    let completion = crate::relaxation::resolve_stage_completion(
+        status,
+        Some(control),
+        crate::relaxation::RelaxationCompletionMetrics {
+            max_torque_apm: Some(final_stats.max_torque_Apm),
+            torque_confirmed: outcome.torque_confirmed,
+            accepted_energy_plateau_range_j: outcome.final_energy_plateau_range_j,
+            steps: outcome.accepted_steps,
+            relaxation_time_s: None,
+            numerical_stagnation: outcome.numerical_stagnation,
+        },
+    );
+    let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
+
+    Ok(ExecutedRun {
+        result: RunResult {
+            status,
+            steps,
+            final_magnetization,
+            completion: Some(completion),
+        },
+        initial_magnetization,
+        field_snapshots,
+        field_snapshot_count,
+        auxiliary_artifacts: Vec::new(),
+        provenance,
+    })
+}
+
+fn multilayer_bb_metric_arrays(
+    contexts: &[LayerContext],
+    states: &[ExchangeLlgState],
+    active_mask: Option<&[bool]>,
+) -> Result<(Vec<f64>, Vec<f64>), RunError> {
+    let cell_count = states
+        .iter()
+        .map(|state| state.magnetization().len())
+        .sum::<usize>();
+    if contexts.len() != states.len() || active_mask.is_some_and(|mask| mask.len() != cell_count) {
+        return Err(RunError {
+            message: "CPU multilayer PG-BB native layer and active-mask lengths disagree".into(),
+        });
+    }
+    let mut ms_apm = Vec::with_capacity(cell_count);
+    let mut volumes_m3 = Vec::with_capacity(cell_count);
+    let mut offset = 0;
+    for (context, state) in contexts.iter().zip(states) {
+        let count = state.magnetization().len();
+        let cell_volume = context.problem.cell_size.volume();
+        if !cell_volume.is_finite() || cell_volume <= 0.0 {
+            return Err(RunError {
+                message: format!(
+                    "CPU multilayer PG-BB has invalid native cell volume for magnet '{}'",
+                    context.magnet_name
+                ),
+            });
+        }
+        for cell in 0..count {
+            let active = active_mask.map(|mask| mask[offset + cell]).unwrap_or(true);
+            let ms = if active {
+                context.problem.ms_at(cell)
+            } else {
+                0.0
+            };
+            ms_apm.push(ms);
+            volumes_m3.push(if active { cell_volume } else { 0.0 });
+        }
+        offset += count;
+    }
+    Ok((ms_apm, volumes_m3))
+}
+
+fn install_multilayer_magnetization_exact(
+    states: &mut [ExchangeLlgState],
+    magnetization: &[[f64; 3]],
+) -> Result<(), RunError> {
+    let expected_count = states
+        .iter()
+        .map(|state| state.magnetization().len())
+        .sum::<usize>();
+    if expected_count != magnetization.len() {
+        return Err(RunError {
+            message: format!(
+                "CPU multilayer PG-BB trial has {} values for {expected_count} native cells",
+                magnetization.len()
+            ),
+        });
+    }
+    let mut offset = 0;
+    for state in states {
+        let end = offset + state.magnetization().len();
+        // The shared BB driver supplies normalized accepted/trial vectors and
+        // checks exact restoration; re-normalizing here can change FP64 bits.
+        state
+            .magnetization_mut()
+            .copy_from_slice(&magnetization[offset..end]);
+        offset = end;
+    }
+    Ok(())
+}
+
+fn accepted_step_autosave_fields(
+    artifacts: &mut ArtifactRecorder,
+    step: u64,
+    final_sample: bool,
+) -> Vec<String> {
+    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+    {
+        artifacts.due_accepted_step_fields(step, final_sample)
+    }
+    #[cfg(not(any(feature = "cuda", feature = "fem-gpu")))]
+    {
+        let _ = (artifacts, step, final_sample);
+        Vec::new()
+    }
+}
+
+fn record_multilayer_bb_due_fields(
+    observables: &StateObservables,
+    step: u64,
+    time: f64,
+    solver_dt: f64,
+    field_schedules: &mut [crate::schedules::OutputSchedule],
+    sampled_field_steps: &mut BTreeMap<String, u64>,
+    artifacts: &mut ArtifactRecorder,
+) -> Result<(), RunError> {
+    let due_field_names = field_schedules
+        .iter()
+        .filter(|schedule| is_due(time, schedule.next_time))
+        .map(|schedule| schedule.name.clone())
+        .collect::<Vec<_>>();
+    record_due_fields(
+        observables,
+        step,
+        time,
+        solver_dt,
+        field_schedules,
+        artifacts,
+    )?;
+    for name in due_field_names {
+        sampled_field_steps.insert(name, step);
+    }
+    Ok(())
+}
+
+fn field_was_sampled_at_step(
+    name: &str,
+    step: u64,
+    sampled_field_steps: &BTreeMap<String, u64>,
+) -> bool {
+    sampled_field_steps.get(name) == Some(&step)
+}
+
+fn record_multilayer_bb_autosave_fields(
+    names: &[String],
+    observables: &StateObservables,
+    step: u64,
+    time: f64,
+    solver_dt: f64,
+    sampled_field_steps: &mut BTreeMap<String, u64>,
+    artifacts: &mut ArtifactRecorder,
+) -> Result<(), RunError> {
+    for name in names {
+        if field_was_sampled_at_step(name, step, sampled_field_steps) {
+            continue;
+        }
+        artifacts.record_field_snapshot(FieldSnapshot {
+            name: name.clone(),
+            step,
+            time,
+            solver_dt,
+            component_count: 3,
+            component_order: "xyz".into(),
+            location: "sample".into(),
+            scope: "full".into(),
+            revision: step.saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(select_state_observable_field(
+                observables,
+                name,
+                false,
+            )?),
+        })?;
+        sampled_field_steps.insert(name.clone(), step);
+    }
+    Ok(())
+}
+
+fn record_multilayer_bb_terminal_fields(
+    observables: &StateObservables,
+    step: u64,
+    time: f64,
+    solver_dt: f64,
+    field_schedules: &mut [crate::schedules::OutputSchedule],
+    sampled_field_steps: &mut BTreeMap<String, u64>,
+    artifacts: &mut ArtifactRecorder,
+) -> Result<(), RunError> {
+    for schedule in field_schedules {
+        if field_was_sampled_at_step(&schedule.name, step, sampled_field_steps) {
+            continue;
+        }
+        let values = select_state_observable_field(observables, &schedule.name, false)?;
+        artifacts.record_field_snapshot(FieldSnapshot {
+            name: schedule.name.clone(),
+            step,
+            time,
+            solver_dt,
+            component_count: 3,
+            component_order: "xyz".into(),
+            location: "sample".into(),
+            scope: "full".into(),
+            revision: step.saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(values),
+        })?;
+        sampled_field_steps.insert(schedule.name.clone(), step);
+        schedule.last_sampled_time = Some(time);
+    }
+    Ok(())
+}
+
+fn publish_multilayer_bb_live_update(
+    live: &mut Option<(
+        &[u32; 3],
+        u64,
+        Option<&serde_json::Value>,
+        &mut dyn FnMut(StepUpdate) -> StepAction,
+    )>,
+    stats: &StepStats,
+    observables: Option<&StateObservables>,
+    include_magnetization: bool,
+    scalar_row_due: bool,
+) -> Result<StepAction, RunError> {
+    let Some((grid, _, layout, on_step)) = live.as_mut() else {
+        return Ok(StepAction::Continue);
+    };
+    let magnetization = include_magnetization
+        .then(|| observables.map(|value| flatten_vectors(&value.magnetization)))
+        .flatten();
+    let magnetization_carrier = magnetization.as_ref().and_then(|_| {
+        crate::types::fdm_multilayer_live_magnetization_carrier(*layout, stats)
+    });
+    Ok(on_step(StepUpdate {
+        stats: stats.clone(),
+        coupled_checkpoint: None,
+        grid: [grid[0], grid[1], grid[2]],
+        fem_mesh_generation_id: None,
+        magnetization,
+        preview_field: None,
+        cached_preview_fields: None,
+        hysteresis_field_m_t: None,
+        hysteresis_point_index: None,
+        hysteresis_settle_step_index: None,
+        hysteresis_settle_step_kind: None,
+        hysteresis_settle_step_method: None,
+        scalar_row_due,
+        terminal_field_snapshot: false,
+        finished: false,
+        magnetization_carrier,
+    }))
+}
+
 #[cfg(test)]
 fn build_multilayer_live_preview_fields(
     plan: &FdmMultilayerPlanIR,
@@ -949,7 +1463,11 @@ pub(crate) fn observe_accepted_state(
     plan: &FdmMultilayerPlanIR,
     time_seconds: f64,
 ) -> Result<StateObservables, RunError> {
-    crate::fdm::reject_adaptive_multilayer_plan(plan)?;
+    if is_multilayer_projected_gradient_bb(plan) {
+        validate_multilayer_bb_scope(plan)?;
+    } else {
+        crate::fdm::reject_adaptive_multilayer_plan(plan)?;
+    }
     if plan.precision != ExecutionPrecision::Double {
         return Err(RunError {
             message: "accepted CPU multilayer observations require double precision".into(),
@@ -995,7 +1513,11 @@ fn snapshot_fields(
     quantities: &[&str],
     request: &crate::types::LivePreviewRequest,
 ) -> Result<Vec<LivePreviewField>, RunError> {
-    crate::fdm::reject_adaptive_multilayer_plan(plan)?;
+    if is_multilayer_projected_gradient_bb(plan) {
+        validate_multilayer_bb_scope(plan)?;
+    } else {
+        crate::fdm::reject_adaptive_multilayer_plan(plan)?;
+    }
     if plan.precision != ExecutionPrecision::Double {
         return Err(RunError {
             message: "CPU multilayer field snapshots require double precision".to_string(),
@@ -2932,6 +3454,149 @@ mod tests {
         plan.planner_summary.estimated_unique_kernels = estimate.catalog.keys.len() as u32;
         plan.planner_summary.estimated_kernel_bytes = estimate.accounting.admission_bytes;
         plan
+    }
+
+    fn make_projected_bb_aligned_embedding_plan() -> FdmMultilayerPlanIR {
+        let mut plan = make_plan(true);
+        plan.mode = "three_d".to_string();
+        plan.common_cells = [4, 4, 4];
+        plan.planner_summary.requested_mode = "three_d".to_string();
+        plan.planner_summary.resolved_mode = "three_d".to_string();
+        plan.relaxation.as_mut().unwrap().algorithm =
+            RelaxationAlgorithmIR::ProjectedGradientBb;
+        for layer in &mut plan.layers {
+            layer.native_grid = [4, 4, 2];
+            let direction = layer.initial_magnetization[0];
+            layer.initial_magnetization.resize(32, direction);
+            layer.convolution_grid = [4, 4, 4];
+            layer.convolution_cell_size = layer.native_cell_size;
+            layer.convolution_origin = layer.native_origin;
+            layer.transfer_kind = "push_pull".to_string();
+        }
+        plan
+    }
+
+    fn one_cell_magnetization_observables(magnetization: [f64; 3]) -> StateObservables {
+        StateObservables {
+            magnetization: vec![magnetization],
+            torque_field: Vec::new(),
+            exchange_field: Vec::new(),
+            demag_field: Vec::new(),
+            external_field: Vec::new(),
+            antenna_field: Vec::new(),
+            drive_field: Vec::new(),
+            effective_field: Vec::new(),
+            anisotropy_field: Vec::new(),
+            dmi_field: Vec::new(),
+            rotated_dmi_field: Vec::new(),
+            magnetoelastic_field: Vec::new(),
+            cubic_anisotropy_field: Vec::new(),
+            bulk_dmi_field: Vec::new(),
+            oersted_field: Vec::new(),
+            thermal_field: Vec::new(),
+            exchange_energy: 0.0,
+            demag_energy: 0.0,
+            external_energy: 0.0,
+            drive_energy: 0.0,
+            anisotropy_energy: 0.0,
+            dmi_energy: 0.0,
+            rotated_dmi_energy: 0.0,
+            total_energy: 0.0,
+            max_dm_dt: 0.0,
+            max_rhs_all_norm_per_s: 0.0,
+            max_h_eff: 0.0,
+            max_h_demag: 0.0,
+            max_torque_Apm: 0.0,
+            max_torque_all_Apm: 0.0,
+            per_object_scalars: std::collections::HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn multilayer_projected_bb_accepts_centered_aligned_native_embedding() {
+        let plan = make_projected_bb_aligned_embedding_plan();
+
+        assert!(fullmag_plan::fdm_multilayer_projected_bb_error(&plan).is_none());
+        validate_multilayer_bb_scope(&plan)
+            .expect("CPU PG-BB should honor the planner's aligned embedding contract");
+    }
+
+    #[test]
+    fn multilayer_bb_field_outputs_deduplicate_by_name_and_accepted_step() {
+        let initial = one_cell_magnetization_observables([1.0, 0.0, 0.0]);
+        let terminal = one_cell_magnetization_observables([0.0, 1.0, 0.0]);
+        let mut schedules = vec![crate::schedules::OutputSchedule {
+            name: "m".to_string(),
+            every_seconds: 1.0,
+            next_time: 0.0,
+            last_sampled_time: None,
+        }];
+        let mut sampled_steps = BTreeMap::<String, u64>::new();
+        let mut artifacts = ArtifactRecorder::in_memory(ExecutionProvenance::default());
+
+        // The timed field schedule captures the initial accepted state at t=0.
+        record_multilayer_bb_due_fields(
+            &initial,
+            0,
+            0.0,
+            0.0,
+            &mut schedules,
+            &mut sampled_steps,
+            &mut artifacts,
+        )
+        .expect("initial scheduled field");
+        record_multilayer_bb_autosave_fields(
+            &["m".to_string()],
+            &initial,
+            0,
+            0.0,
+            0.0,
+            &mut sampled_steps,
+            &mut artifacts,
+        )
+        .expect("same-step autosave should deduplicate with the schedule");
+
+        // BB keeps physical time fixed. A later accepted-step autosave must
+        // still capture its changed state instead of matching the old t=0 row.
+        record_multilayer_bb_due_fields(
+            &terminal,
+            1,
+            0.0,
+            0.0,
+            &mut schedules,
+            &mut sampled_steps,
+            &mut artifacts,
+        )
+        .expect("no later timed field is due");
+        record_multilayer_bb_autosave_fields(
+            &["m".to_string()],
+            &terminal,
+            1,
+            0.0,
+            0.0,
+            &mut sampled_steps,
+            &mut artifacts,
+        )
+        .expect("changed accepted-step field should be saved");
+
+        assert!(field_was_sampled_at_step("m", 1, &sampled_steps));
+        record_multilayer_bb_terminal_fields(
+            &terminal,
+            1,
+            0.0,
+            0.0,
+            &mut schedules,
+            &mut sampled_steps,
+            &mut artifacts,
+        )
+        .expect("terminal fields should deduplicate against the same accepted step");
+        let (snapshots, snapshot_count, _) = artifacts.finish();
+        assert_eq!(snapshot_count, 2);
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].step, 0);
+        assert_eq!(snapshots[0].values, vec![1.0, 0.0, 0.0]);
+        assert_eq!(snapshots[1].step, 1);
+        assert_eq!(snapshots[1].values, vec![0.0, 1.0, 0.0]);
     }
 
     #[test]
