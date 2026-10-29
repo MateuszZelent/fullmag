@@ -13617,6 +13617,33 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
             && reason.contains("DMI")
     }));
 
+    let analytic_mesh = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .and_then(|asset| asset.mesh.as_mut())
+        .expect("the DE/BV fixture must carry an inline mesh");
+    analytic_mesh
+        .periodic_boundary_pairs
+        .push(fullmag_ir::MeshPeriodicBoundaryPairIR {
+            pair_id: "y_faces".to_string(),
+            source_marker: None,
+            destination_marker: None,
+            marker_a: 12,
+            marker_b: 13,
+            translation: Some([0.0, 1.0, 0.0]),
+            tolerance: None,
+            axis_hint: Some("y".to_string()),
+            orientation: None,
+            pairing_policy: None,
+        });
+    analytic_mesh
+        .periodic_node_pairs
+        .push(fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "y_faces".to_string(),
+            node_a: 0,
+            node_b: 2,
+        });
     if let fullmag_ir::StudyIR::Eigenmodes { k_sampling, .. } = &mut ir.study {
         *k_sampling = Some(fullmag_ir::KSamplingIR::Path {
             points: vec![
@@ -13706,6 +13733,12 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
             samples_per_segment: vec![2, 1, 2],
             closed: false,
         });
+    }
+    if let fullmag_ir::StudyIR::Eigenmodes { spin_wave_bc, .. } = &mut ir.study {
+        if let fullmag_ir::SpinWaveBoundaryConditionIR::Config(config) = spin_wave_bc {
+            config.boundary_pair_id = None;
+            config.pair_ids = vec!["x_faces".to_string(), "y_faces".to_string()];
+        }
     }
     let planned = plan(&ir).expect(
         "DE/BV analytic metadata should remain a postsolve comparison on the numeric Floquet-airbox lane",
