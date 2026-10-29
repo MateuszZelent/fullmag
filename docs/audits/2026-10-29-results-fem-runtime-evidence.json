@@ -1,0 +1,503 @@
+{
+  "schema": "fullmag.results-browser.fem-runtime-evidence.v1",
+  "source_head": "7025dfbf39f988e63b0dd0c9697ff7088c7717ac",
+  "native_snapshot": "662e2ed08306e6d5ab111ab4f14b3c43421c69e0ea909d4a2ab3d4ed595fabab",
+  "iteration_attempt": "4f9f28b7dc9849af8cae5cb832ce1ff0",
+  "frontend_refresh_attempt": "9249f5c7473e48d6a0e1347a154f5c57",
+  "activation_attempt": "ca8a27f8920946d0898af546fd7c61d6",
+  "activation_request_id": "results-fem-ui-20261029-1715",
+  "workspace_item_id": "11",
+  "browser_qa_attempt": "52a08fbb914149228a2fdbe849475c63",
+  "browser_qa_state_at_checkpoint": "running",
+  "qualification": "Application workflow fixture, not numerical/scientific qualification",
+  "observed": {
+    "runtime_bundle_version": "0.1.0-dev.20261029.g7025dfbf39f9+9798",
+    "session": {
+      "session_id": "docker-startup-a5b4cbd60dc6b57c2bdc9da16f0c23863074e49e8c78ef6c50799ab914299ea7",
+      "session_epoch": "docker-startup-a5b4cbd60dc6b57c2bdc9da16f0c23863074e49e8c78ef6c50799ab914299ea7@1793294052680",
+      "request_scope_epoch": "fa210de1-b350-4ccc-b8c2-aefaf9f0dceb:1",
+      "name": "results_snapshot_browser_fem",
+      "created_at": "1793294052680",
+      "workspace_root": "/opt/fullmag/runtime-control/local-live/current",
+      "script": {
+        "origin": "user_file",
+        "path": "/opt/fullmag/source/examples/results_snapshot_browser_fem_smoke.py",
+        "writable": false,
+        "managed_copy_path": "/opt/fullmag/runtime-control/local-live/current/exports/results_snapshot_browser_fem_smoke.canonical.py"
+      }
+    },
+    "run": {
+      "run_id": "run-live-c0aab773b27224d95392934223a4fd726e9dd06557e920e53dcb01534d362c1a",
+      "stage_index": 0,
+      "stage_label": "",
+      "stage_count": 1,
+      "started_at": "1793294052680",
+      "solver_steps": 101,
+      "solver_time": 1e-10,
+      "requested_device": "cpu",
+      "resolved_device": "cpu",
+      "selection_reason": "explicit_device_request"
+    },
+    "solver": {
+      "state": "completed",
+      "algorithm": null,
+      "relaxation_algorithm": null,
+      "dt": null,
+      "max_torque_T": null,
+      "max_torque_Apm": null,
+      "max_rhs_norm_per_s": null,
+      "max_torque": null,
+      "converged": false
+    },
+    "domain": {
+      "generation_id": "6017978382166941610",
+      "discretization": "fem",
+      "cell_count": 1687
+    },
+    "lane": {
+      "schema_version": "active-lane-capabilities.v2",
+      "authored": {
+        "backend": "fem",
+        "discretization": "fem",
+        "device": "cpu",
+        "precision": "double",
+        "mode": "strict"
+      },
+      "requested": {
+        "backend": "fem",
+        "discretization": "fem",
+        "device": "cpu",
+        "precision": "double",
+        "mode": "strict"
+      },
+      "resolved": {
+        "backend": "fem",
+        "discretization": "fem",
+        "device": "cpu",
+        "precision": "double",
+        "mode": "strict"
+      },
+      "fallback": null,
+      "source": {
+        "kind": "planner",
+        "capability_profile_version": "2026-09-20",
+        "engine_id": "fem_cpu_native",
+        "authored_intent": "scene.study.requested_execution",
+        "effective_request": "session.runtime_resolution"
+      },
+      "qualification": {
+        "status": "not_asserted",
+        "reason": "Planner capability availability is separate from workload-scoped scientific qualification evidence."
+      },
+      "operations": {
+        "air_void_overlay": {
+          "state": "semantic_only",
+          "reason_code": "capability_semantic_only",
+          "reason": "Air/void presentation semantics exist, but the planner profile does not publish current domain-resource readiness.",
+          "requires": [
+            "domain_metadata:compatible"
+          ]
+        },
+        "constraint.frozen_spins": {
+          "state": "supported",
+          "reason_code": "capability_supported",
+          "reason": "Frozen Spins source execution is available for the resolved FEM CPU double-precision explicit and relaxation scope; production qualification remains gated.",
+          "requires": [
+            "planner_feature:constraint.frozen_spins"
+          ]
+        },
+        "field_quantity": {
+          "state": "supported",
+          "reason_code": "capability_supported",
+          "reason": "The planner advertises field quantities for the resolved lane.",
+          "requires": [
+            "planner:field_quantities"
+          ]
+        },
+        "grid_build": {
+          "state": "unsupported",
+          "reason_code": "capability_unsupported",
+          "reason": "Structured-grid refresh is not applicable to the resolved lane.",
+          "requires": [
+            "discretization:fdm"
+          ]
+        },
+        "hover_select_cell": {
+          "state": "unsupported",
+          "reason_code": "capability_unsupported",
+          "reason": "Cell hover and selection are specific to structured FDM domains.",
+          "requires": [
+            "discretization:fdm"
+          ]
+        },
+        "initial_magnetization.uniform": {
+          "state": "supported",
+          "reason_code": "capability_supported",
+          "reason": "Uniform initial magnetization is executable in the resolved FDM/FEM lane.",
+          "requires": [
+            "initial_magnetization:uniform",
+            "resolved_lane_identity"
+          ]
+        },
+        "initial_magnetization.vortex": {
+          "state": "supported",
+          "reason_code": "capability_supported",
+          "reason": "Vortex initial magnetization is executable in the resolved FDM/FEM lane.",
+          "requires": [
+            "initial_magnetization:vortex",
+            "resolved_lane_identity"
+          ]
+        },
+        "interaction.bulk_dmi": {
+          "state": "unsupported",
+          "reason_code": "capability_unsupported",
+          "reason": "The resolved planner lane does not advertise this interaction.",
+          "requires": [
+            "interaction:bulk_dmi"
+          ]
+        },
+        "interaction.cubic_anisotropy": {
+          "state": "supported",
+          "reason_code": "capability_supported",
+          "reason": "The resolved planner lane advertises this interaction as executable.",
+          "requires": [
+            "interaction:cubic_anisotropy"
+          ]
+        },
+        "interaction.current_transport": {
+          "state": "supported",
+          "reason_code": "capability_supported",
+          "reason": "The resolved planner lane advertises this interaction as executable.",
+          "requires": [
+            "interaction:current_transport"
+          ]
+        },
+        "interaction.demag": {
+          "state": "supported",
+          "reason_code": "capability_supported",
+          "reason": "The resolved planner lane advertises this interaction as executable.",
+          "requires": [
+            "interaction:demag"
+          ]
+        },
+        "interaction.dmi": {
+          "state": "supported",
+          "reason_code": "capability_supported",
+          "reason": "The resolved planner lane advertises this interaction as executable.",
+          "requires": [
+            "interaction:dmi"
+          ]
+        },
+        "interaction.exchange": {
+          "state": "supported",
+          "reason_code": "capability_supported",
+          "reason": "The resolved planner lane advertises this interaction as executable.",
+          "requires": [
+            "interaction:exchange"
+          ]
+        },
+        "interaction.frozen_spins": {
+          "state": "supported",
+          "reason_code": "capability_supported",
+          "reason": "Frozen Spins source execution is available for the resolved FEM CPU double-precision explicit and relaxation scope; production qualification remains gated.",
+          "requires": [
+            "planner_feature:constraint.frozen_spins"
+          ]
+        },
+        "interaction.interfacial_dmi": {
+          "state": "supported",
+          "reason_code": "capability_supported",
+          "reason": "The resolved planner lane advertises this interaction as executable.",
+          "requires": [
+            "interaction:interfacial_dmi"
+          ]
+        },
+        "interaction.magnetoelastic": {
+          "state": "supported",
+          "reason_code": "capability_supported",
+          "reason": "The resolved planner lane advertises this interaction as executable.",
+          "requires": [
+            "interaction:magnetoelastic"
+          ]
+        },
+        "interaction.oersted": {
+          "state": "supported",
+          "reason_code": "capability_supported",
+          "reason": "The resolved planner lane advertises this interaction as executable.",
+          "requires": [
+            "interaction:oersted"
+          ]
+        },
+        "interaction.oersted_field": {
+          "state": "supported",
+          "reason_code": "capability_supported",
+          "reason": "The resolved planner lane advertises this interaction as executable.",
+          "requires": [
+            "interaction:oersted_field"
+          ]
+        },
+        "interaction.rotated_interfacial_dmi": {
+          "state": "supported",
+          "reason_code": "capability_supported",
+          "reason": "The resolved planner lane advertises this interaction as executable.",
+          "requires": [
+            "interaction:rotated_interfacial_dmi"
+          ]
+        },
+        "interaction.sot": {
+          "state": "unsupported",
+          "reason_code": "capability_unsupported",
+          "reason": "The resolved planner lane does not advertise this interaction.",
+          "requires": [
+            "interaction:sot"
+          ]
+        },
+        "interaction.spin_torque": {
+          "state": "unsupported",
+          "reason_code": "capability_unsupported",
+          "reason": "The resolved planner lane does not advertise this interaction.",
+          "requires": [
+            "interaction:spin_torque"
+          ]
+        },
+        "interaction.stt": {
+          "state": "unsupported",
+          "reason_code": "capability_unsupported",
+          "reason": "The resolved planner lane does not advertise this interaction.",
+          "requires": [
+            "interaction:stt"
+          ]
+        },
+        "interaction.thermal": {
+          "state": "supported",
+          "reason_code": "capability_supported",
+          "reason": "The resolved planner lane advertises this interaction as executable.",
+          "requires": [
+            "interaction:thermal"
+          ]
+        },
+        "interaction.uniaxial_anisotropy": {
+          "state": "supported",
+          "reason_code": "capability_supported",
+          "reason": "The resolved planner lane advertises this interaction as executable.",
+          "requires": [
+            "interaction:uniaxial_anisotropy"
+          ]
+        },
+        "interaction.zeeman": {
+          "state": "supported",
+          "reason_code": "capability_supported",
+          "reason": "The resolved planner lane advertises this interaction as executable.",
+          "requires": [
+            "interaction:zeeman"
+          ]
+        },
+        "region_membership": {
+          "state": "semantic_only",
+          "reason_code": "capability_semantic_only",
+          "reason": "Region-membership semantics exist, but the planner profile does not publish current membership-resource readiness.",
+          "requires": [
+            "domain_metadata:compatible",
+            "region_membership_resource:compatible"
+          ]
+        },
+        "shared_mesh_build": {
+          "state": "supported",
+          "reason_code": "capability_supported",
+          "reason": "Shared-domain mesh build is owned by the resolved FEM lane.",
+          "requires": [
+            "discretization:fem"
+          ]
+        },
+        "study.eigenmodes": {
+          "state": "semantic_only",
+          "reason_code": "capability_semantic_only",
+          "reason": "Eigenmode authoring exists, but the resolved planner lane does not advertise executable support.",
+          "requires": [
+            "planner:eigenmodes"
+          ]
+        },
+        "study.fft": {
+          "state": "supported",
+          "reason_code": "capability_supported",
+          "reason": "FFT post-processing can consume planner-advertised field quantities.",
+          "requires": [
+            "field_quantity"
+          ]
+        },
+        "study.frequency_response": {
+          "state": "semantic_only",
+          "reason_code": "capability_semantic_only",
+          "reason": "Frequency-response authoring exists, but the resolved planner lane does not advertise executable support.",
+          "requires": [
+            "planner:frequency_response"
+          ]
+        },
+        "study.relaxation": {
+          "state": "supported",
+          "reason_code": "capability_supported",
+          "reason": "The resolved planner capability profile is a time-domain lane.",
+          "requires": [
+            "planner:time_domain_lane"
+          ]
+        },
+        "study.time_integration": {
+          "state": "supported",
+          "reason_code": "capability_supported",
+          "reason": "The resolved planner capability profile is a time-domain lane.",
+          "requires": [
+            "planner:time_domain_lane"
+          ]
+        },
+        "surface_coloring": {
+          "state": "supported",
+          "reason_code": "capability_supported",
+          "reason": "Surface coloring can consume planner-advertised field quantities.",
+          "requires": [
+            "field_quantity"
+          ]
+        },
+        "vectors": {
+          "state": "supported",
+          "reason_code": "capability_supported",
+          "reason": "Vector rendering can consume planner-advertised field quantities.",
+          "requires": [
+            "field_quantity"
+          ]
+        }
+      }
+    },
+    "arrays": [
+      {
+        "id": "array:b70baa35a5bebddeb6cc019dc1e57f72c34533a495911a35217328aeff4e70ff",
+        "path": "results_browser.zarr/stages/stage_0000_propagate/fields/H_eff",
+        "revision": "sha256:b165ff85a5760625f21536965a1b5593c7ec1bd0c964168e079eb75cdd5b0349",
+        "shape": [
+          6,
+          1377
+        ],
+        "chunks": [
+          1,
+          1377
+        ],
+        "dtype": "<f8",
+        "quantity_id": "H_eff",
+        "quantity_ids": [
+          "H_eff"
+        ],
+        "component_count": 3,
+        "field_layout": "soa_component_major",
+        "sample_count": 6,
+        "coordinates": [
+          {
+            "sample_index": 0,
+            "kind": "physical_time",
+            "value": 0.0
+          },
+          {
+            "sample_index": 1,
+            "kind": "physical_time",
+            "value": 2e-11
+          },
+          {
+            "sample_index": 2,
+            "kind": "physical_time",
+            "value": 4.000000000000003e-11
+          },
+          {
+            "sample_index": 3,
+            "kind": "physical_time",
+            "value": 6.000000000000008e-11
+          },
+          {
+            "sample_index": 4,
+            "kind": "physical_time",
+            "value": 8.000000000000001e-11
+          },
+          {
+            "sample_index": 5,
+            "kind": "physical_time",
+            "value": 9.999999999999994e-11
+          }
+        ],
+        "can_read_values": true,
+        "can_visualize_3d": false,
+        "reason": "array has no explicit persisted 3-D geometry mapping"
+      },
+      {
+        "id": "array:74799a43ca32972fcfa3d015e091a43065a4e868aa9ccc40bd213d0df3dd0318",
+        "path": "results_browser.zarr/stages/stage_0000_propagate/fields/m",
+        "revision": "sha256:b165ff85a5760625f21536965a1b5593c7ec1bd0c964168e079eb75cdd5b0349",
+        "shape": [
+          6,
+          1377
+        ],
+        "chunks": [
+          1,
+          1377
+        ],
+        "dtype": "<f8",
+        "quantity_id": "m",
+        "quantity_ids": [
+          "m"
+        ],
+        "component_count": 3,
+        "field_layout": "soa_component_major",
+        "sample_count": 6,
+        "coordinates": [
+          {
+            "sample_index": 0,
+            "kind": "physical_time",
+            "value": 0.0
+          },
+          {
+            "sample_index": 1,
+            "kind": "physical_time",
+            "value": 2e-11
+          },
+          {
+            "sample_index": 2,
+            "kind": "physical_time",
+            "value": 4.000000000000003e-11
+          },
+          {
+            "sample_index": 3,
+            "kind": "physical_time",
+            "value": 6.000000000000008e-11
+          },
+          {
+            "sample_index": 4,
+            "kind": "physical_time",
+            "value": 8.000000000000001e-11
+          },
+          {
+            "sample_index": 5,
+            "kind": "physical_time",
+            "value": 9.999999999999994e-11
+          }
+        ],
+        "can_read_values": true,
+        "can_visualize_3d": true,
+        "geometry": {
+          "kind": "fem_p1",
+          "component_count": 3,
+          "node_count": 459,
+          "cell_count": 1687,
+          "playback_geometry_sha256": "d0711b3b270ce33339aed0f451c0e24220a37382352964269cb3e664138be161",
+          "fem_mesh": {
+            "node_count": 459,
+            "cell_count": 1687,
+            "facet_count": 818,
+            "geometry_sha256": "d0711b3b270ce33339aed0f451c0e24220a37382352964269cb3e664138be161",
+            "topology_byte_length": 101280,
+            "topology_sha256": "eb3b43d318449133122fdfefe576810d786ea5c970b6889ab0185b7c9d3405c5",
+            "support_byte_length": 82,
+            "support_sha256": "04d95c588737716e24c2a67dab46430f2b3d57f8987d36bcaff60b3b7744fe39"
+          }
+        }
+      }
+    ]
+  },
+  "browser_qa_final_state": "failed-confirmed",
+  "browser_qa_failure": "Explorer Current results filter was not visible in Results ribbon host, which displayed Saved folders instead"
+}

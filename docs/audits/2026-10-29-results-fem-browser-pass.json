@@ -1,0 +1,766 @@
+{
+  "airbox_draft_cancel_preserved": true,
+  "airbox_draft_discard_verified": true,
+  "airbox_draft_saved_folder_guarded": true,
+  "array_metadata_default_collapsed": true,
+  "browser_gpu_mode": "swiftshader-webgl-requested",
+  "camera_stable": true,
+  "canvas_visible": true,
+  "changed_canvas": true,
+  "closed_values_preview_no_sample_request": true,
+  "context_lost": false,
+  "current_exit_at_320": {
+    "viewport": 320,
+    "width": 118,
+    "x": 68
+  },
+  "current_exit_without_panels_or_3d_verified": true,
+  "current_run_id": "run-live-c0aab773b27224d95392934223a4fd726e9dd06557e920e53dcb01534d362c1a-1",
+  "current_run_results_verified": true,
+  "delayed_sample_index": 1,
+  "drawing_buffer": [
+    649,
+    565
+  ],
+  "errors": [],
+  "evidence_image_formats": {
+    "compact_screenshot_base64": "jpeg",
+    "dark_screenshot_base64": "jpeg",
+    "live_screenshot_base64": "jpeg",
+    "model_context_screenshot_base64": "jpeg",
+    "no_session_screenshot_base64": "jpeg",
+    "pending_snapshot_screenshot_base64": "jpeg",
+    "publication_waiting_screenshot_base64": "jpeg",
+    "sample_error_screenshot_base64": "jpeg",
+    "screenshot_base64": "png",
+    "terminal_live_screenshot_base64": "png"
+  },
+  "failed_sample_index": 4,
+  "field_payloads_verified": true,
+  "folder_details_keyboard_verified": true,
+  "folder_details_reachability": {
+    "bottom": 729.15625,
+    "client_height": 628,
+    "panel_bottom": 784.28125,
+    "panel_y": 125.796875,
+    "scroll_height": 1437,
+    "scroll_top": 809,
+    "y": 710.96875
+  },
+  "frame_count": 6,
+  "frame_indices": [
+    0,
+    2,
+    5
+  ],
+  "frame_sha256": [
+    "ba86492b250fbf1391fda89594f598bff611d8da3ab4aaaf2d9acfd58ee47131",
+    "f3631cb4cd65abda4290afdee006fbfa4ea91530b1715099f33b0425d5ca01a3",
+    "0813adc77824988a9b86197e8a762cb0e0c31d7a514360fb16c13c310799adc8"
+  ],
+  "geometry_kind": "fem",
+  "hook_errors": [],
+  "inspector_stable": true,
+  "item_id": "11",
+  "layout_checks": [
+    {
+      "height": 900,
+      "primary_controls": [
+        {
+          "center_visible": true,
+          "label": "Saved sample"
+        },
+        {
+          "center_visible": true,
+          "label": "Visualization component"
+        }
+      ],
+      "reachable_controls": [
+        {
+          "center_visible": true,
+          "label": "Saved sample"
+        },
+        {
+          "center_visible": true,
+          "label": "Visualization component"
+        }
+      ],
+      "results_tree_boxes": [
+        {
+          "clientWidth": 228,
+          "label": "Saved result outputs",
+          "scrollLeft": 0,
+          "scrollWidth": 228,
+          "width": 228.390625,
+          "x": 12
+        },
+        {
+          "clientWidth": 204,
+          "label": "Result output entries",
+          "scrollLeft": 0,
+          "scrollWidth": 204,
+          "width": 204.390625,
+          "x": 24
+        }
+      ],
+      "scrollWidth": 1280,
+      "scrolled_elements": [],
+      "tree_labels": [
+        {
+          "clientWidth": 102,
+          "scrollWidth": 102,
+          "text": "H_eff"
+        },
+        {
+          "clientWidth": 102,
+          "scrollWidth": 102,
+          "text": "m"
+        },
+        {
+          "clientWidth": 115,
+          "scrollWidth": 115,
+          "text": "table"
+        }
+      ],
+      "width": 1280
+    },
+    {
+      "height": 900,
+      "primary_controls": [
+        {
+          "center_visible": true,
+          "label": "Saved sample"
+        },
+        {
+          "center_visible": true,
+          "label": "Visualization component"
+        }
+      ],
+      "reachable_controls": [
+        {
+          "center_visible": true,
+          "label": "Saved sample"
+        },
+        {
+          "center_visible": true,
+          "label": "Visualization component"
+        }
+      ],
+      "results_tree_boxes": [
+        {
+          "clientWidth": 217,
+          "label": "Saved result outputs",
+          "scrollLeft": 0,
+          "scrollWidth": 217,
+          "width": 216.9375,
+          "x": 12
+        },
+        {
+          "clientWidth": 193,
+          "label": "Result output entries",
+          "scrollLeft": 0,
+          "scrollWidth": 193,
+          "width": 192.9375,
+          "x": 24
+        }
+      ],
+      "scrollWidth": 1024,
+      "scrolled_elements": [],
+      "tree_labels": [
+        {
+          "clientWidth": 91,
+          "scrollWidth": 91,
+          "text": "H_eff"
+        },
+        {
+          "clientWidth": 91,
+          "scrollWidth": 91,
+          "text": "m"
+        },
+        {
+          "clientWidth": 104,
+          "scrollWidth": 104,
+          "text": "table"
+        }
+      ],
+      "width": 1024
+    },
+    {
+      "height": 900,
+      "primary_controls": [
+        {
+          "center_visible": true,
+          "label": "Saved sample"
+        },
+        {
+          "center_visible": true,
+          "label": "Visualization component"
+        }
+      ],
+      "reachable_controls": [
+        {
+          "center_visible": true,
+          "label": "Saved sample"
+        },
+        {
+          "center_visible": true,
+          "label": "Visualization component"
+        }
+      ],
+      "results_tree_boxes": [
+        {
+          "clientWidth": 216,
+          "label": "Saved result outputs",
+          "scrollLeft": 0,
+          "scrollWidth": 216,
+          "width": 216,
+          "x": 12
+        },
+        {
+          "clientWidth": 192,
+          "label": "Result output entries",
+          "scrollLeft": 0,
+          "scrollWidth": 192,
+          "width": 192,
+          "x": 24
+        }
+      ],
+      "scrollWidth": 768,
+      "scrolled_elements": [],
+      "tree_labels": [
+        {
+          "clientWidth": 90,
+          "scrollWidth": 90,
+          "text": "H_eff"
+        },
+        {
+          "clientWidth": 90,
+          "scrollWidth": 90,
+          "text": "m"
+        },
+        {
+          "clientWidth": 103,
+          "scrollWidth": 103,
+          "text": "table"
+        }
+      ],
+      "width": 768
+    },
+    {
+      "height": 1080,
+      "primary_controls": [
+        {
+          "center_visible": true,
+          "label": "Saved sample"
+        },
+        {
+          "center_visible": true,
+          "label": "Visualization component"
+        }
+      ],
+      "reachable_controls": [
+        {
+          "center_visible": true,
+          "label": "Saved sample"
+        },
+        {
+          "center_visible": true,
+          "label": "Visualization component"
+        }
+      ],
+      "results_tree_boxes": [
+        {
+          "clientWidth": 577,
+          "label": "Saved result outputs",
+          "scrollLeft": 0,
+          "scrollWidth": 577,
+          "width": 576.640625,
+          "x": 12
+        },
+        {
+          "clientWidth": 553,
+          "label": "Result output entries",
+          "scrollLeft": 0,
+          "scrollWidth": 553,
+          "width": 552.640625,
+          "x": 24
+        }
+      ],
+      "scrollWidth": 1920,
+      "scrolled_elements": [],
+      "tree_labels": [
+        {
+          "clientWidth": 357,
+          "scrollWidth": 357,
+          "text": "H_eff"
+        },
+        {
+          "clientWidth": 357,
+          "scrollWidth": 357,
+          "text": "m"
+        },
+        {
+          "clientWidth": 382,
+          "scrollWidth": 382,
+          "text": "table"
+        }
+      ],
+      "width": 1920
+    },
+    {
+      "height": 1000,
+      "primary_controls": [
+        {
+          "center_visible": true,
+          "label": "Saved sample"
+        },
+        {
+          "center_visible": true,
+          "label": "Visualization component"
+        }
+      ],
+      "reachable_controls": [
+        {
+          "center_visible": true,
+          "label": "Saved sample"
+        },
+        {
+          "center_visible": true,
+          "label": "Visualization component"
+        }
+      ],
+      "results_tree_boxes": [
+        {
+          "clientWidth": 390,
+          "label": "Saved result outputs",
+          "scrollLeft": 0,
+          "scrollWidth": 390,
+          "width": 389.6875,
+          "x": 12
+        },
+        {
+          "clientWidth": 366,
+          "label": "Result output entries",
+          "scrollLeft": 0,
+          "scrollWidth": 366,
+          "width": 365.6875,
+          "x": 24
+        }
+      ],
+      "scrollWidth": 1500,
+      "scrolled_elements": [],
+      "tree_labels": [
+        {
+          "clientWidth": 170,
+          "scrollWidth": 170,
+          "text": "H_eff"
+        },
+        {
+          "clientWidth": 170,
+          "scrollWidth": 170,
+          "text": "m"
+        },
+        {
+          "clientWidth": 195,
+          "scrollWidth": 195,
+          "text": "table"
+        }
+      ],
+      "width": 1500
+    }
+  ],
+  "live_drawing_buffer": [
+    516,
+    495
+  ],
+  "live_return_verified": true,
+  "live_view_source": "current",
+  "live_visualization_unchanged": true,
+  "metadata_search_preserves_expansion": true,
+  "model_inspector_historical_context_verified": true,
+  "no_session_browser_only_close_verified": true,
+  "no_session_close_to_home_verified": true,
+  "no_session_evidence": "browser-session-discovery-fixture-with-real-result-data",
+  "no_session_legacy_inspector_close_verified": true,
+  "object_draft_cancel_preserved": true,
+  "object_draft_discard_verified": true,
+  "object_draft_saved_folder_guarded": true,
+  "output_count": 38,
+  "output_inspector_continuous_sections_verified": true,
+  "payload_evidence": "application_body_reads",
+  "pending_snapshot_retained_verified": true,
+  "per_snapshot_settings_retained": true,
+  "playwright_version": "1.62.1",
+  "probe_url": "http://frontend:8080",
+  "public_url": "http://127.0.0.1:3298",
+  "publication_catalog_arrival_verified": true,
+  "publication_evidence": "browser-availability-fixture-with-real-published-catalog",
+  "publication_failure_distinct_verified": true,
+  "publication_poll_count": 4,
+  "publication_waiting_ui_verified": true,
+  "results_browser_verified": true,
+  "results_canvas_changed": true,
+  "results_navigation_state_retained": true,
+  "results_sample_indices": [
+    0,
+    2,
+    5
+  ],
+  "results_sample_sha256": [
+    "fddfeda05d5187c880e0e1c547f1d6711167449a9d9ea59e923866639715ad61",
+    "3e171d1ca16e4e895d8fc17525d1c97279a0b0514f28362df31a9194fd693b06",
+    "ec0ffa20d90714a93def532679561a0f364f15a560acf4fcb6ea1f4fda54134f"
+  ],
+  "results_saved_folder_entry_verified": true,
+  "return_live_pending_sample_verified": true,
+  "return_live_preserves_model_draft": true,
+  "sample_read_error_reselection_recovered": true,
+  "sample_read_error_retained_verified": true,
+  "sample_reselection_verified": true,
+  "saved_camera_fit_verified": true,
+  "saved_camera_reset_verified": true,
+  "saved_folder_float_dock_verified": true,
+  "saved_panels_hide_restore_verified": true,
+  "saved_tree_layout": {
+    "groups": [
+      {
+        "client_height": 470,
+        "height": 470,
+        "overflow_x": "visible",
+        "overflow_y": "visible",
+        "scroll_height": 470
+      },
+      {
+        "client_height": 88,
+        "height": 88,
+        "overflow_x": "visible",
+        "overflow_y": "visible",
+        "scroll_height": 88
+      },
+      {
+        "client_height": 264,
+        "height": 264,
+        "overflow_x": "visible",
+        "overflow_y": "visible",
+        "scroll_height": 264
+      },
+      {
+        "client_height": 206,
+        "height": 206,
+        "overflow_x": "visible",
+        "overflow_y": "visible",
+        "scroll_height": 206
+      },
+      {
+        "client_height": 88,
+        "height": 88,
+        "overflow_x": "visible",
+        "overflow_y": "visible",
+        "scroll_height": 88
+      }
+    ],
+    "rows": [
+      {
+        "bottom": 361.96875,
+        "height": 28,
+        "label": "Select results_browser.zarr",
+        "y": 333.96875
+      },
+      {
+        "bottom": 389.96875,
+        "height": 28,
+        "label": "Select results_browser.zarr/continuous",
+        "y": 361.96875
+      },
+      {
+        "bottom": 417.96875,
+        "height": 28,
+        "label": "Select results_browser.zarr/continuous/.zattrs",
+        "y": 389.96875
+      },
+      {
+        "bottom": 447.96875,
+        "height": 28,
+        "label": "Select results_browser.zarr/continuous/.zgroup",
+        "y": 419.96875
+      },
+      {
+        "bottom": 477.96875,
+        "height": 28,
+        "label": "Select results_browser.zarr/continuous/index.jsonl",
+        "y": 449.96875
+      },
+      {
+        "bottom": 507.96875,
+        "height": 28,
+        "label": "Select results_browser.zarr/stages",
+        "y": 479.96875
+      },
+      {
+        "bottom": 535.96875,
+        "height": 28,
+        "label": "Select results_browser.zarr/stages/stage_0000_propagate",
+        "y": 507.96875
+      },
+      {
+        "bottom": 563.96875,
+        "height": 28,
+        "label": "Select results_browser.zarr/stages/stage_0000_propagate/fields",
+        "y": 535.96875
+      },
+      {
+        "bottom": 591.96875,
+        "height": 28,
+        "label": "Select results_browser.zarr/stages/stage_0000_propagate/fields/H_eff",
+        "y": 563.96875
+      },
+      {
+        "bottom": 621.96875,
+        "height": 28,
+        "label": "Select results_browser.zarr/stages/stage_0000_propagate/fields/m",
+        "y": 593.96875
+      },
+      {
+        "bottom": 651.96875,
+        "height": 28,
+        "label": "Select results_browser.zarr/stages/stage_0000_propagate/fields/.zgroup",
+        "y": 623.96875
+      },
+      {
+        "bottom": 681.96875,
+        "height": 28,
+        "label": "Select results_browser.zarr/stages/stage_0000_propagate/table",
+        "y": 653.96875
+      },
+      {
+        "bottom": 711.96875,
+        "height": 28,
+        "label": "Select results_browser.zarr/stages/stage_0000_propagate/.zgroup",
+        "y": 683.96875
+      },
+      {
+        "bottom": 741.96875,
+        "height": 28,
+        "label": "Select results_browser.zarr/stages/stage_0000_propagate/manifest.json",
+        "y": 713.96875
+      },
+      {
+        "bottom": 771.96875,
+        "height": 28,
+        "label": "Select results_browser.zarr/stages/.zgroup",
+        "y": 743.96875
+      },
+      {
+        "bottom": 801.96875,
+        "height": 28,
+        "label": "Select results_browser.zarr/.zattrs",
+        "y": 773.96875
+      },
+      {
+        "bottom": 831.96875,
+        "height": 28,
+        "label": "Select results_browser.zarr/.zgroup",
+        "y": 803.96875
+      },
+      {
+        "bottom": 861.96875,
+        "height": 28,
+        "label": "Select .fullmag-run-manifest.writer.lock",
+        "y": 833.96875
+      },
+      {
+        "bottom": 891.96875,
+        "height": 28,
+        "label": "Select .zattrs",
+        "y": 863.96875
+      },
+      {
+        "bottom": 921.96875,
+        "height": 28,
+        "label": "Select .zgroup",
+        "y": 893.96875
+      },
+      {
+        "bottom": 951.96875,
+        "height": 28,
+        "label": "Select fullmag-run.json",
+        "y": 923.96875
+      },
+      {
+        "bottom": 981.96875,
+        "height": 28,
+        "label": "Select geometry.json",
+        "y": 953.96875
+      },
+      {
+        "bottom": 1011.96875,
+        "height": 28,
+        "label": "Select output-storage.json",
+        "y": 983.96875
+      },
+      {
+        "bottom": 1041.96875,
+        "height": 28,
+        "label": "Select playback.json",
+        "y": 1013.96875
+      },
+      {
+        "bottom": 1071.96875,
+        "height": 28,
+        "label": "Select results_browser.autosave.json",
+        "y": 1043.96875
+      },
+      {
+        "bottom": 1101.96875,
+        "height": 28,
+        "label": "Select run.json",
+        "y": 1073.96875
+      }
+    ]
+  },
+  "saved_tree_rows_reachable": [
+    {
+      "center_visible": true,
+      "height": 27.99993896484375,
+      "label": "Select results_browser.zarr/stages/stage_0000_propagate/fields/H_eff"
+    },
+    {
+      "center_visible": true,
+      "height": 28,
+      "label": "Select results_browser.zarr/stages/stage_0000_propagate/fields/m"
+    },
+    {
+      "center_visible": true,
+      "height": 28,
+      "label": "Select results_browser.zarr/stages/stage_0000_propagate/table"
+    }
+  ],
+  "scenario": "saved-playback",
+  "schema": "fullmag.docker-dev-saved-playback-result.v1",
+  "script_sha256": "ddc3edf588c29a838965bdad2882df46d00a06808af1c7993de0f23cbd988130",
+  "source_details_disclosure_verified": true,
+  "startup_camera_initialization": null,
+  "state": "passed",
+  "table_columns_verified": [
+    "t",
+    "step",
+    "mx",
+    "my",
+    "mz",
+    "e_total"
+  ],
+  "table_sample_indices": [
+    0,
+    5
+  ],
+  "terminal_live_observation_frame": {
+    "domain_generation_id": "6017978382166941610",
+    "observation_frame_id": "obs:docker-startup-a5b4cbd60dc6b57c2bdc9da16f0c23863074e49e8c78ef6c50799ab914299ea7@1793294052680:6017978382166941610:2:101:3ddb7cdfd9d7bdbb",
+    "session_epoch": "docker-startup-a5b4cbd60dc6b57c2bdc9da16f0c23863074e49e8c78ef6c50799ab914299ea7@1793294052680",
+    "source_step": 101,
+    "source_time_seconds": 1e-10,
+    "topology_revision": "2"
+  },
+  "terminal_live_scalar_revision": 4,
+  "terminal_live_scalars_verified": true,
+  "terminal_live_step": 101,
+  "terminal_live_time_s": 1e-10,
+  "visualization_trace": [
+    {
+      "camera": {
+        "fov_degrees": 45,
+        "orthographic_scale": null,
+        "position": [
+          1.2586030213332585e-07,
+          9.06194175359946e-08,
+          1.2586030213332585e-07
+        ],
+        "projection": "perspective",
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "up": [
+          0,
+          0,
+          1
+        ]
+      },
+      "method": "GET",
+      "phase": "initial-home",
+      "revision": 1
+    }
+  ],
+  "image_artifacts": {
+    "compact_screenshot_base64": {
+      "path": "/home/kkingstoun/git/fullmag/audits/results-ui-20261029/d126043062cf4b808e71b5eea7e70313/compact_screenshot.jpg",
+      "sha256": "06cf2c42fc614702d50394df91228b82d5dafb7336547ba62d4496e4bb92f31a",
+      "bytes": 92716
+    },
+    "dark_screenshot_base64": {
+      "path": "/home/kkingstoun/git/fullmag/audits/results-ui-20261029/d126043062cf4b808e71b5eea7e70313/dark_screenshot.jpg",
+      "sha256": "d586b4854503e8bf4762e2f8b38fb3227246d67589190af4c8d70ae7a87f85f8",
+      "bytes": 144843
+    },
+    "live_screenshot_base64": {
+      "path": "/home/kkingstoun/git/fullmag/audits/results-ui-20261029/d126043062cf4b808e71b5eea7e70313/live_screenshot.jpg",
+      "sha256": "24243e443d7c21ad67cd2afe0b853db4d3af6a1fdb380755138fb551814f4826",
+      "bytes": 136583
+    },
+    "model_context_screenshot_base64": {
+      "path": "/home/kkingstoun/git/fullmag/audits/results-ui-20261029/d126043062cf4b808e71b5eea7e70313/model_context_screenshot.jpg",
+      "sha256": "7f0d520a4d460bf8d3024b16c6ebd60aea50e89e17589f9727ad79cdd7fd356e",
+      "bytes": 144358
+    },
+    "no_session_screenshot_base64": {
+      "path": "/home/kkingstoun/git/fullmag/audits/results-ui-20261029/d126043062cf4b808e71b5eea7e70313/no_session_screenshot.jpg",
+      "sha256": "67da337adf32183b49bb28d3f96e4257e28a60adcf4aef2d376ba3a65b34d75a",
+      "bytes": 101208
+    },
+    "pending_snapshot_screenshot_base64": {
+      "path": "/home/kkingstoun/git/fullmag/audits/results-ui-20261029/d126043062cf4b808e71b5eea7e70313/pending_snapshot_screenshot.jpg",
+      "sha256": "b2a09e70e039352782154ffeb53dd17ab386a43a5fc09c7e8b5dc2eb4f353554",
+      "bytes": 23932
+    },
+    "publication_waiting_screenshot_base64": {
+      "path": "/home/kkingstoun/git/fullmag/audits/results-ui-20261029/d126043062cf4b808e71b5eea7e70313/publication_waiting_screenshot.jpg",
+      "sha256": "3445b0a63ef3c135ea49146037d59aefbc35872ee92e25881c692239aa4261d5",
+      "bytes": 5892
+    },
+    "sample_error_screenshot_base64": {
+      "path": "/home/kkingstoun/git/fullmag/audits/results-ui-20261029/d126043062cf4b808e71b5eea7e70313/sample_error_screenshot.jpg",
+      "sha256": "01f0dc9b4a48fbc0c380625e18a03d1644c562af002ab981d66e4175c8fe4a2e",
+      "bytes": 22875
+    },
+    "screenshot_base64": {
+      "path": "/home/kkingstoun/git/fullmag/audits/results-ui-20261029/d126043062cf4b808e71b5eea7e70313/screenshot.png",
+      "sha256": "ff64f6b47fdb366aa12fd3eb6d4136777c5ffd8288436977ae8c19bc3a8f3be3",
+      "bytes": 223678
+    },
+    "terminal_live_screenshot_base64": {
+      "path": "/home/kkingstoun/git/fullmag/audits/results-ui-20261029/d126043062cf4b808e71b5eea7e70313/terminal_live_screenshot.png",
+      "sha256": "7191e93f973caf738a746d6ed136e784f91a0e39c019714f0006bba2d535681f",
+      "bytes": 255947
+    }
+  },
+  "managed_attempt": "d126043062cf4b808e71b5eea7e70313",
+  "native_source_snapshot": "662e2ed08306e6d5ab111ab4f14b3c43421c69e0ea909d4a2ab3d4ed595fabab",
+  "base_head": "7025dfbf39f988e63b0dd0c9697ff7088c7717ac",
+  "frontend_delta_sha256": {
+    "apps/control-room/src/modules/explorer/ExplorerModule.tsx": "9f8461335012896f39e66171a7a5574e26a540f91e6872b3e9bf8872a69b6356",
+    "apps/control-room/src/modules/explorer/explorerResultsNavigation.ts": "4ff06d9a4b937b04ab05b722151627d10f929f5483ed5026a68c74cffb583bbf",
+    "apps/control-room/src/modules/results-navigator/ResultsNavigatorModule.saved.test.tsx": "034ffb12492f4aa3d16d31efafec9c728f8205209d24f8463c2ce2f0bc9a135d"
+  },
+  "scope_limitations": [
+    "Software WebGL is not hardware GPU proof",
+    "FEM application fixture is not physics qualification",
+    "H_eff lacks producer-owned geometry binding",
+    "Publication waiting/no-session subscenarios use controlled browser fixtures; not active-run or cross-stage qualification"
+  ],
+  "frontend_verification": {
+    "source_routing_vitest": "3 passed in group frontend04b26e02d008",
+    "typecheck": "pnpm run typecheck passed, exit0, same frontend container",
+    "independent_review": "No blocking finding for source synchronization with the activated host; browser QA verifies actual component wiring"
+  }
+}

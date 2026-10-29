@@ -134,6 +134,7 @@ import {
   modelTreeSnapshotWithStageExecution,
 } from "./builders/sceneModelTreeAdapter";
 import { ExplorerTabBar } from "./ExplorerTabBar";
+import { synchronizeExplorerResultsSource } from "./explorerResultsNavigation";
 import { resolveCurrentFemAirboxEvidence } from "./femAirboxEvidence";
 import {
   explorerCrossSectionsEqual,
@@ -952,6 +953,10 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     kernel.analysisFieldOverlay,
     resolvedResultContextRunId,
   );
+
+  useEffect(() => {
+    synchronizeExplorerResultsSource(activeTab, kernel.layout);
+  }, [activeTab, kernel.layout]);
 
   useEffect(() => {
     if (activeTab !== "model") return;

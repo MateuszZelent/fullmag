@@ -1,0 +1,726 @@
+{
+  "drawing_buffer": [
+    649,
+    565
+  ],
+  "source_details_disclosure_verified": true,
+  "saved_tree_layout": {
+    "rows": [
+      {
+        "label": "Select results_browser.zarr",
+        "y": 333.96875,
+        "bottom": 361.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/continuous",
+        "y": 361.96875,
+        "bottom": 389.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/continuous/.zattrs",
+        "y": 389.96875,
+        "bottom": 417.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/continuous/.zgroup",
+        "y": 419.96875,
+        "bottom": 447.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/continuous/index.jsonl",
+        "y": 449.96875,
+        "bottom": 477.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/stages",
+        "y": 479.96875,
+        "bottom": 507.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/stages/stage_0000_propagate",
+        "y": 507.96875,
+        "bottom": 535.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/stages/stage_0000_propagate/fields",
+        "y": 535.96875,
+        "bottom": 563.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/stages/stage_0000_propagate/fields/H_eff",
+        "y": 563.96875,
+        "bottom": 591.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/stages/stage_0000_propagate/fields/m",
+        "y": 593.96875,
+        "bottom": 621.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/stages/stage_0000_propagate/fields/.zgroup",
+        "y": 623.96875,
+        "bottom": 651.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/stages/stage_0000_propagate/table",
+        "y": 653.96875,
+        "bottom": 681.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/stages/stage_0000_propagate/.zgroup",
+        "y": 683.96875,
+        "bottom": 711.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/stages/stage_0000_propagate/manifest.json",
+        "y": 713.96875,
+        "bottom": 741.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/stages/.zgroup",
+        "y": 743.96875,
+        "bottom": 771.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/.zattrs",
+        "y": 773.96875,
+        "bottom": 801.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/.zgroup",
+        "y": 803.96875,
+        "bottom": 831.96875,
+        "height": 28
+      },
+      {
+        "label": "Select .fullmag-run-manifest.writer.lock",
+        "y": 833.96875,
+        "bottom": 861.96875,
+        "height": 28
+      },
+      {
+        "label": "Select .zattrs",
+        "y": 863.96875,
+        "bottom": 891.96875,
+        "height": 28
+      },
+      {
+        "label": "Select .zgroup",
+        "y": 893.96875,
+        "bottom": 921.96875,
+        "height": 28
+      },
+      {
+        "label": "Select fullmag-run.json",
+        "y": 923.96875,
+        "bottom": 951.96875,
+        "height": 28
+      },
+      {
+        "label": "Select geometry.json",
+        "y": 953.96875,
+        "bottom": 981.96875,
+        "height": 28
+      },
+      {
+        "label": "Select output-storage.json",
+        "y": 983.96875,
+        "bottom": 1011.96875,
+        "height": 28
+      },
+      {
+        "label": "Select playback.json",
+        "y": 1013.96875,
+        "bottom": 1041.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.autosave.json",
+        "y": 1043.96875,
+        "bottom": 1071.96875,
+        "height": 28
+      },
+      {
+        "label": "Select run.json",
+        "y": 1073.96875,
+        "bottom": 1101.96875,
+        "height": 28
+      }
+    ],
+    "groups": [
+      {
+        "height": 470,
+        "client_height": 470,
+        "scroll_height": 470,
+        "overflow_x": "visible",
+        "overflow_y": "visible"
+      },
+      {
+        "height": 88,
+        "client_height": 88,
+        "scroll_height": 88,
+        "overflow_x": "visible",
+        "overflow_y": "visible"
+      },
+      {
+        "height": 264,
+        "client_height": 264,
+        "scroll_height": 264,
+        "overflow_x": "visible",
+        "overflow_y": "visible"
+      },
+      {
+        "height": 206,
+        "client_height": 206,
+        "scroll_height": 206,
+        "overflow_x": "visible",
+        "overflow_y": "visible"
+      },
+      {
+        "height": 88,
+        "client_height": 88,
+        "scroll_height": 88,
+        "overflow_x": "visible",
+        "overflow_y": "visible"
+      }
+    ]
+  },
+  "saved_tree_rows_reachable": [
+    {
+      "label": "Select results_browser.zarr/stages/stage_0000_propagate/fields/H_eff",
+      "height": 28,
+      "center_visible": true
+    },
+    {
+      "label": "Select results_browser.zarr/stages/stage_0000_propagate/fields/m",
+      "height": 28,
+      "center_visible": true
+    },
+    {
+      "label": "Select results_browser.zarr/stages/stage_0000_propagate/table",
+      "height": 28,
+      "center_visible": true
+    }
+  ],
+  "array_metadata_default_collapsed": true,
+  "metadata_search_preserves_expansion": true,
+  "folder_details_keyboard_verified": true,
+  "folder_details_reachability": {
+    "y": 710.96875,
+    "bottom": 729.15625,
+    "panel_y": 125.796875,
+    "panel_bottom": 784.28125,
+    "scroll_height": 1437,
+    "client_height": 628,
+    "scroll_top": 809
+  },
+  "output_inspector_continuous_sections_verified": true,
+  "closed_values_preview_no_sample_request": true,
+  "pending_snapshot_retained_verified": true,
+  "delayed_sample_index": 1,
+  "sample_read_error_retained_verified": true,
+  "sample_read_error_reselection_recovered": true,
+  "failed_sample_index": 4,
+  "results_browser_verified": true,
+  "output_count": 38,
+  "per_snapshot_settings_retained": true,
+  "saved_panels_hide_restore_verified": true,
+  "saved_folder_float_dock_verified": true,
+  "layout_checks": [
+    {
+      "width": 1280,
+      "height": 900,
+      "scrollWidth": 1280,
+      "results_tree_boxes": [
+        {
+          "label": "Saved result outputs",
+          "x": 12,
+          "width": 228.390625,
+          "scrollWidth": 228,
+          "clientWidth": 228,
+          "scrollLeft": 0
+        },
+        {
+          "label": "Result output entries",
+          "x": 24,
+          "width": 204.390625,
+          "scrollWidth": 204,
+          "clientWidth": 204,
+          "scrollLeft": 0
+        }
+      ],
+      "primary_controls": [
+        {
+          "label": "Saved sample",
+          "center_visible": true
+        },
+        {
+          "label": "Visualization component",
+          "center_visible": true
+        }
+      ],
+      "tree_labels": [
+        {
+          "text": "H_eff",
+          "clientWidth": 102,
+          "scrollWidth": 102
+        },
+        {
+          "text": "m",
+          "clientWidth": 102,
+          "scrollWidth": 102
+        },
+        {
+          "text": "table",
+          "clientWidth": 115,
+          "scrollWidth": 115
+        }
+      ],
+      "scrolled_elements": [],
+      "reachable_controls": [
+        {
+          "label": "Saved sample",
+          "center_visible": true
+        },
+        {
+          "label": "Visualization component",
+          "center_visible": true
+        }
+      ]
+    },
+    {
+      "width": 1024,
+      "height": 900,
+      "scrollWidth": 1024,
+      "results_tree_boxes": [
+        {
+          "label": "Saved result outputs",
+          "x": 12,
+          "width": 216.9375,
+          "scrollWidth": 217,
+          "clientWidth": 217,
+          "scrollLeft": 0
+        },
+        {
+          "label": "Result output entries",
+          "x": 24,
+          "width": 192.9375,
+          "scrollWidth": 193,
+          "clientWidth": 193,
+          "scrollLeft": 0
+        }
+      ],
+      "primary_controls": [
+        {
+          "label": "Saved sample",
+          "center_visible": true
+        },
+        {
+          "label": "Visualization component",
+          "center_visible": true
+        }
+      ],
+      "tree_labels": [
+        {
+          "text": "H_eff",
+          "clientWidth": 91,
+          "scrollWidth": 91
+        },
+        {
+          "text": "m",
+          "clientWidth": 91,
+          "scrollWidth": 91
+        },
+        {
+          "text": "table",
+          "clientWidth": 104,
+          "scrollWidth": 104
+        }
+      ],
+      "scrolled_elements": [],
+      "reachable_controls": [
+        {
+          "label": "Saved sample",
+          "center_visible": true
+        },
+        {
+          "label": "Visualization component",
+          "center_visible": true
+        }
+      ]
+    },
+    {
+      "width": 768,
+      "height": 900,
+      "scrollWidth": 768,
+      "results_tree_boxes": [
+        {
+          "label": "Saved result outputs",
+          "x": 12,
+          "width": 216,
+          "scrollWidth": 216,
+          "clientWidth": 216,
+          "scrollLeft": 0
+        },
+        {
+          "label": "Result output entries",
+          "x": 24,
+          "width": 192,
+          "scrollWidth": 192,
+          "clientWidth": 192,
+          "scrollLeft": 0
+        }
+      ],
+      "primary_controls": [
+        {
+          "label": "Saved sample",
+          "center_visible": true
+        },
+        {
+          "label": "Visualization component",
+          "center_visible": true
+        }
+      ],
+      "tree_labels": [
+        {
+          "text": "H_eff",
+          "clientWidth": 90,
+          "scrollWidth": 90
+        },
+        {
+          "text": "m",
+          "clientWidth": 90,
+          "scrollWidth": 90
+        },
+        {
+          "text": "table",
+          "clientWidth": 103,
+          "scrollWidth": 103
+        }
+      ],
+      "scrolled_elements": [],
+      "reachable_controls": [
+        {
+          "label": "Saved sample",
+          "center_visible": true
+        },
+        {
+          "label": "Visualization component",
+          "center_visible": true
+        }
+      ]
+    },
+    {
+      "width": 1920,
+      "height": 1080,
+      "scrollWidth": 1920,
+      "results_tree_boxes": [
+        {
+          "label": "Saved result outputs",
+          "x": 12,
+          "width": 576.640625,
+          "scrollWidth": 577,
+          "clientWidth": 577,
+          "scrollLeft": 0
+        },
+        {
+          "label": "Result output entries",
+          "x": 24,
+          "width": 552.640625,
+          "scrollWidth": 553,
+          "clientWidth": 553,
+          "scrollLeft": 0
+        }
+      ],
+      "primary_controls": [
+        {
+          "label": "Saved sample",
+          "center_visible": false
+        },
+        {
+          "label": "Visualization component",
+          "center_visible": false
+        }
+      ],
+      "tree_labels": [
+        {
+          "text": "H_eff",
+          "clientWidth": 357,
+          "scrollWidth": 357
+        },
+        {
+          "text": "m",
+          "clientWidth": 357,
+          "scrollWidth": 357
+        },
+        {
+          "text": "table",
+          "clientWidth": 382,
+          "scrollWidth": 382
+        }
+      ],
+      "scrolled_elements": [],
+      "reachable_controls": [
+        {
+          "label": "Saved sample",
+          "center_visible": true
+        },
+        {
+          "label": "Visualization component",
+          "center_visible": true
+        }
+      ]
+    },
+    {
+      "width": 1500,
+      "height": 1000,
+      "scrollWidth": 1500,
+      "results_tree_boxes": [
+        {
+          "label": "Saved result outputs",
+          "x": 12,
+          "width": 389.6875,
+          "scrollWidth": 390,
+          "clientWidth": 390,
+          "scrollLeft": 0
+        },
+        {
+          "label": "Result output entries",
+          "x": 24,
+          "width": 365.6875,
+          "scrollWidth": 366,
+          "clientWidth": 366,
+          "scrollLeft": 0
+        }
+      ],
+      "primary_controls": [
+        {
+          "label": "Saved sample",
+          "center_visible": true
+        },
+        {
+          "label": "Visualization component",
+          "center_visible": true
+        }
+      ],
+      "tree_labels": [
+        {
+          "text": "H_eff",
+          "clientWidth": 170,
+          "scrollWidth": 170
+        },
+        {
+          "text": "m",
+          "clientWidth": 170,
+          "scrollWidth": 170
+        },
+        {
+          "text": "table",
+          "clientWidth": 195,
+          "scrollWidth": 195
+        }
+      ],
+      "scrolled_elements": [],
+      "reachable_controls": [
+        {
+          "label": "Saved sample",
+          "center_visible": true
+        },
+        {
+          "label": "Visualization component",
+          "center_visible": true
+        }
+      ]
+    }
+  ],
+  "saved_camera_fit_verified": true,
+  "live_return_verified": true,
+  "live_view_source": "current",
+  "live_drawing_buffer": [
+    516,
+    495
+  ],
+  "results_sample_indices": [
+    0,
+    2,
+    5
+  ],
+  "results_sample_sha256": [
+    "fddfeda05d5187c880e0e1c547f1d6711167449a9d9ea59e923866639715ad61",
+    "3e171d1ca16e4e895d8fc17525d1c97279a0b0514f28362df31a9194fd693b06",
+    "ec0ffa20d90714a93def532679561a0f364f15a560acf4fcb6ea1f4fda54134f"
+  ],
+  "results_canvas_changed": true,
+  "object_draft_cancel_preserved": true,
+  "object_draft_saved_folder_guarded": true,
+  "object_draft_discard_verified": true,
+  "airbox_draft_cancel_preserved": true,
+  "airbox_draft_saved_folder_guarded": true,
+  "airbox_draft_discard_verified": true,
+  "model_inspector_historical_context_verified": true,
+  "return_live_preserves_model_draft": true,
+  "current_exit_without_panels_or_3d_verified": true,
+  "current_exit_at_320": {
+    "x": 68,
+    "width": 118,
+    "viewport": 320
+  },
+  "sample_reselection_verified": true,
+  "table_columns_verified": [
+    "t",
+    "step",
+    "mx",
+    "my",
+    "mz",
+    "e_total"
+  ],
+  "table_sample_indices": [
+    0,
+    5
+  ],
+  "saved_camera_reset_verified": true,
+  "return_live_pending_sample_verified": true,
+  "current_run_results_verified": true,
+  "current_run_id": "run-live-c0aab773b27224d95392934223a4fd726e9dd06557e920e53dcb01534d362c1a-1",
+  "schema": "fullmag.docker-dev-saved-playback-result.v1",
+  "state": "failed",
+  "scenario": "saved-playback",
+  "item_id": "11",
+  "session_mutations": [],
+  "visualization_trace": [
+    {
+      "phase": "initial-home",
+      "method": "GET",
+      "revision": 0,
+      "camera": {
+        "projection": "perspective",
+        "position": [
+          2e-06,
+          1.4e-06,
+          2e-06
+        ],
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "up": [
+          0,
+          0,
+          1
+        ],
+        "fov_degrees": 45,
+        "orthographic_scale": null
+      }
+    },
+    {
+      "phase": "initial-home",
+      "method": "PATCH",
+      "revision": 1,
+      "camera": {
+        "projection": "perspective",
+        "position": [
+          1.2586030213332585e-07,
+          9.06194175359946e-08,
+          1.2586030213332585e-07
+        ],
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "up": [
+          0,
+          0,
+          1
+        ],
+        "fov_degrees": 45,
+        "orthographic_scale": null
+      }
+    }
+  ],
+  "startup_camera_initialization": {
+    "path": "/v2/sessions/current/visualization/state",
+    "method": "PATCH",
+    "phase": "initial-home",
+    "body": "{\"camera\":{\"fov_degrees\":45,\"orthographic_scale\":null,\"position\":[1.2586030213332585e-7,9.06194175359946e-8,1.2586030213332585e-7],\"projection\":\"perspective\",\"target\":[0,0,0],\"up\":[0,0,1]}}",
+    "revision_before": 0,
+    "revision_after": 1
+  },
+  "errors": [
+    "locator.waitFor: Timeout 180000ms exceeded.\nCall log:\n  - waiting for getByRole('region', { name: 'Results', exact: true }).getByRole('searchbox', { name: 'Search saved result outputs', exact: true }) to be visible\n\n    at /state/development/workspace/apps/control-room/scripts/check-saved-playback-browser.mjs:880:25"
+  ],
+  "network_trace": [
+    {
+      "event": "request",
+      "url": "http://127.0.0.1:3298/v2/workspace/items/11/playback/frames/0?stage_id=propagate&revision=fdaaa1f85fe92f5c7baf1e7bf5d8654d335689432c88cedd36fd3b7d9d15fc63"
+    },
+    {
+      "event": "response",
+      "url": "http://127.0.0.1:3298/v2/workspace/items/11/playback/frames/0?stage_id=propagate&revision=fdaaa1f85fe92f5c7baf1e7bf5d8654d335689432c88cedd36fd3b7d9d15fc63"
+    },
+    {
+      "event": "requestfinished",
+      "url": "http://127.0.0.1:3298/v2/workspace/items/11/playback/frames/0?stage_id=propagate&revision=fdaaa1f85fe92f5c7baf1e7bf5d8654d335689432c88cedd36fd3b7d9d15fc63"
+    },
+    {
+      "event": "request",
+      "url": "http://127.0.0.1:3298/v2/workspace/items/11/playback/frames/3?stage_id=propagate&revision=fdaaa1f85fe92f5c7baf1e7bf5d8654d335689432c88cedd36fd3b7d9d15fc63"
+    },
+    {
+      "event": "response",
+      "url": "http://127.0.0.1:3298/v2/workspace/items/11/playback/frames/3?stage_id=propagate&revision=fdaaa1f85fe92f5c7baf1e7bf5d8654d335689432c88cedd36fd3b7d9d15fc63"
+    },
+    {
+      "event": "requestfailed",
+      "url": "http://127.0.0.1:3298/v2/workspace/items/11/playback/frames/3?stage_id=propagate&revision=fdaaa1f85fe92f5c7baf1e7bf5d8654d335689432c88cedd36fd3b7d9d15fc63"
+    },
+    {
+      "event": "request",
+      "url": "http://127.0.0.1:3298/v2/workspace/items/11/playback/frames/2?stage_id=propagate&revision=fdaaa1f85fe92f5c7baf1e7bf5d8654d335689432c88cedd36fd3b7d9d15fc63"
+    },
+    {
+      "event": "response",
+      "url": "http://127.0.0.1:3298/v2/workspace/items/11/playback/frames/2?stage_id=propagate&revision=fdaaa1f85fe92f5c7baf1e7bf5d8654d335689432c88cedd36fd3b7d9d15fc63"
+    },
+    {
+      "event": "requestfinished",
+      "url": "http://127.0.0.1:3298/v2/workspace/items/11/playback/frames/2?stage_id=propagate&revision=fdaaa1f85fe92f5c7baf1e7bf5d8654d335689432c88cedd36fd3b7d9d15fc63"
+    },
+    {
+      "event": "request",
+      "url": "http://127.0.0.1:3298/v2/workspace/items/11/playback/frames/5?stage_id=propagate&revision=fdaaa1f85fe92f5c7baf1e7bf5d8654d335689432c88cedd36fd3b7d9d15fc63"
+    },
+    {
+      "event": "response",
+      "url": "http://127.0.0.1:3298/v2/workspace/items/11/playback/frames/5?stage_id=propagate&revision=fdaaa1f85fe92f5c7baf1e7bf5d8654d335689432c88cedd36fd3b7d9d15fc63"
+    },
+    {
+      "event": "requestfinished",
+      "url": "http://127.0.0.1:3298/v2/workspace/items/11/playback/frames/5?stage_id=propagate&revision=fdaaa1f85fe92f5c7baf1e7bf5d8654d335689432c88cedd36fd3b7d9d15fc63"
+    }
+  ],
+  "screenshots": {
+    "screenshot_base64": {
+      "bytes": 258682,
+      "sha256": "123cfabd7c5f186b3fce8cbd94911a1aa0d98ee382d6d3c05f927d75f1b7ed08"
+    }
+  },
+  "managed_attempt": "52a08fbb914149228a2fdbe849475c63"
+}

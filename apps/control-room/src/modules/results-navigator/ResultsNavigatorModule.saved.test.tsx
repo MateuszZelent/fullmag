@@ -12,10 +12,14 @@ import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { ModuleProps } from "@/kernel/types";
 
 import ResultsNavigatorModule from "./ResultsNavigatorModule";
+import { synchronizeExplorerResultsSource } from "../explorer/explorerResultsNavigation";
 
 const fakes = vi.hoisted(() => ({ currentReads: 0 }));
 vi.mock("./SavedResultsBrowser", () => ({
   SavedResultsBrowser: () => <section aria-label="Saved result browser">Saved datasets</section>,
+}));
+vi.mock("./ResultsOutputExplorer", () => ({
+  ResultsOutputExplorer: () => <section aria-label="Current output browser" />,
 }));
 vi.mock("@/kernel/resources/studyRuntimeResources", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -84,6 +88,30 @@ describe("Results navigator source routing", () => {
     await act(async () => root.render(view()));
     expect(activeTab().textContent).toBe("Saved");
     expect(fakes.currentReads).toBe(0);
+  });
+
+  it("follows the Current outputs shown by Explorer across ribbon navigation and preserves a deliberate Saved choice", async () => {
+    kernel.layout.openSavedResults();
+    await act(async () => root.render(view()));
+    expect(activeTab().textContent).toBe("Saved");
+    expect(container.textContent).toContain("Saved datasets");
+
+    // Leaving the Results ribbon mounts Explorer with its retained Results tab.
+    await act(async () => {
+      kernel.layout.setActiveTab("home");
+      synchronizeExplorerResultsSource("results", kernel.layout);
+      kernel.layout.setActiveTab("results");
+    });
+    expect(activeTab().textContent).toBe("Current");
+    expect(container.textContent).not.toContain("Saved datasets");
+    expect(fakes.currentReads).toBeGreaterThan(0);
+
+    await act(async () => kernel.layout.setResultsSource("saved"));
+    expect(activeTab().textContent).toBe("Saved");
+    expect(container.textContent).toContain("Saved datasets");
+    await act(async () => root.render(view()));
+    expect(activeTab().textContent).toBe("Saved");
+    expect(container.textContent).toContain("Saved datasets");
   });
 
   it("switches Current and Saved through the canonical layout source without duplicate panels", async () => {

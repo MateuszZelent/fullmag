@@ -4,7 +4,7 @@ Data: 2026-10-28, aktualizacja 2026-10-29. Status: **REQUEST CHANGES dla całej 
 
 ## Aktualny stan audytu
 
-Poniższa tabela jest bieżącym podsumowaniem. Szczegółowe ustalenia UX-01–23 poniżej opisują także stan sprzed napraw; ich historyczne brzmienie nie oznacza, że każde pozostaje otwartym defektem.
+Poniższa tabela jest bieżącym podsumowaniem. Szczegółowe ustalenia UX-01–26 poniżej opisują także stan sprzed napraw; ich historyczne brzmienie nie oznacza, że każde pozostaje otwartym defektem.
 
 | Obszar | Aktualny wynik i zakres | Pozostała praca |
 |---|---|---|
@@ -645,3 +645,30 @@ Odświeżenie frontendu `53f4f2b78b974ac6afb98ed790dce459` ujawniło niezależny
 Dalsza weryfikacja checkpointu: poprawka group-ledger przeszła niezależny review i **22 testy +35 subtestów** w Docker/Python3.11. Test fixture dostosowano do rzeczywistego stanu BuildControl i osobnych guardów anulowania/przygotowania; asercje własności, unknown outcome i zachowania lease pozostały. Helper sprawdza cały rekord oraz jego ponowny odczyt pod lease, a brak wymaganych dokumentów zatrzymuje się przed otwarciem nowej operacji. Zastosowanie w runtime nadal oczekuje na nowy capture. [Dowód integracji](2026-10-29-results-integration-v3-evidence.json).
 
 Odczyt API potwierdził brak warunku wstępnego pełnego harnessu po restarcie: status, commands i visualization bieżącej sesji zwracają404 `no active local live workspace`, podczas gdy workspace item10 i jego playback zwracają200. Lista zapisanych sesji jest pusta. Następny przebieg wymaga nowego, autoryzowanego runu `examples/results_snapshot_browser_fem_smoke.py`; wyniki poprzedniego runu pozostają zachowane.
+
+
+### Świeży run po integracji — 29.10.2026
+
+Kanoniczna iteracja `4f9f28b7dc9849af8cae5cb832ce1ff0` na commicie `7025dfbf39f988e63b0dd0c9697ff7088c7717ac` i snapshotcie `662e2ed08306e6d5ab111ab4f14b3c43421c69e0ea909d4a2ab3d4ed595fabab` zakończyła się sukcesem. Poprawione odświeżenie frontendu `9249f5c7473e48d6a0e1347a154f5c57` również przeszło w rzeczywistym group-ledger runtime; backend pozostał zachowany. React Doctor w pre-commit ponownie zgłosił błąd parsera oxlint, więc lint pozostaje niezakwalifikowany. Ostrzeżenia whitespace w incoming master były identyczne z MERGE_HEAD i nie zostały zmienione.
+
+Aktywacja `ca8a27f8920946d0898af546fd7c61d6` istniejącego fixture FEM zakończyła nowy run `run-live-c0aab773b27224d95392934223a4fd726e9dd06557e920e53dcb01534d362c1a`: CPU/double, 1687 komórek, 101 kroków, 100 ps. Folder zarejestrowano jako item11. Obie tablice `m` i `H_eff` mają po sześć czytelnych próbek. API kwalifikuje 3D tylko dla `m`; `H_eff` zgłasza brak jawnego powiązania geometrii. To nadal otwarty brak funkcji, wymagający osobnego, ścisłego kontraktu FEM per quantity i wczesnej publikacji. Kontrakt `owned_sample_field_geometry.v1` z mastera jest ograniczony do inspekcji anteny (V_electric/J_charge/H_ant) i nie może zostać użyty przez zmianę nazwy quantity albo rozluźnienie istniejących walidatorów.
+
+[Dowód nowego runtime](2026-10-29-results-fem-runtime-evidence.json). Audyt przeglądarki `52a08fbb914149228a2fdbe849475c63` jest w tym checkpointcie w toku; nie jest jeszcze dowodem świeżego UI PASS.
+
+
+Próba `52a08fbb914149228a2fdbe849475c63` zakończyła się **failed-confirmed** w kroku synchronizacji źródła i filtra między hostami Explorer/Results (harness:880). Screenshot pokazuje zakładkę Saved z listą folderów, podczas gdy Explorer wcześniej pokazywał Current z filtrem `fields/m`. Przed tym krokiem rzeczywiste odczyty próbek i zmiany canvas, ustawienia per snapshot, zachowanie starej klatki przy ładowaniu/błędzie, guardy Object/Airbox, powrót Live, wyjście podczas opóźnionej próbki i Current results przeszły. Nie odnotowano mutacji solvera. To częściowy dowód, nie pełny UI PASS. [Zachowany wynik z hashami obrazów](2026-10-29-results-fem-browser-failure.json).
+
+
+### UX-25 · P2 · Źródło Results rozjeżdżało się przy zmianie hosta — naprawione
+
+Po przejściu z Explorera pokazującego Current do zakładki Results pozostawał poprzedni wybór Saved. Explorer renderuje wyłącznie Current outputs; otwarty zapisany folder ma osobny host. Synchronizacja jest teraz akcją aktywacji hosta Explorera z jego kartą Results (mount lub zmiana wewnętrznej karty), a nie każdym rerenderem. Świadomy Saved pozostaje podczas zwykłych renderów Results; przejście do Explorera z widocznymi bieżącymi wynikami ustawia Current. Trzy testy source routing przeszły w frontendzie grupy, niezależny review nie znalazł blokera.
+
+Pełny browser QA `d126043062cf4b808e71b5eea7e70313` przeszedł na tym samym runie i item11. Potwierdził także rzeczywiste podłączenie mount/tab efektu, wspólny filtr między hostami, Saved entry, zachowanie ustawień i guardów, stale-response exit, tabele oraz końcowe skalary **101 kroków /100 ps**. Widoczny canvas ma buffer **649×565**, kontekst nie jest zgubiony; errors i hook_errors są puste. Jest to SwiftShader. Przygotowane scenariusze braku sesji i oczekiwania na publikację nadal są testami kontrolowanymi w przeglądarce, nie dowodem działającego wieloetapowego monitoringu. [Pełny wynik i hashe frontendowej delty](2026-10-29-results-fem-browser-pass.json).
+
+Obejrzano główny screenshot Saved, końcowy Live i kompaktowy. Quantity są widoczne, obiekt Saved mieści się w kadrze, suwak i ustawienia są czytelne, a powrót do Live przywraca właściwy viewport i końcową telemetrię. Ten ogląd nie rozszerza kwalifikacji na pełne 320 px/200% ani hardware GPU.
+
+### UX-26 · P2 · Jednostka zapisanej tablicy nie jest publikowana
+
+Na oglądniętym screenshotcie `m` nagłówek pokazuje `Unit not recorded`. Ogólny writer Zarr zapisuje quantity/layout, lecz nie jednostkę i per-array semantics. Dla istniejącego FEM m geometria wiąże już kanoniczny descriptor z jednostką1; nowy kontrakt publikacji powinien przenosić jawne jednostki bez zgadywania z nazwy. Dla H_eff kanoniczny katalog i live API definiują A/m, Node, FullDomain, a planner przelicza B Zeemana przez μ₀. Nie wolno skopiować maski/producer ID magnetyzacji ani zastąpić H_eff przez kontrakt inspekcji H_ant.
+
+Końcowy `pnpm run typecheck` tej poprawki również przeszedł w frontendzie grupy3298 (exit0). Kod Rust i dane runu nie zmieniły się podczas poprawki UI.
