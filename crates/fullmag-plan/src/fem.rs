@@ -3120,7 +3120,6 @@ fn build_region_material_fields(
     base_material: &fullmag_ir::MaterialIR,
     mesh: &fullmag_ir::MeshIR,
     object_segments: &[fullmag_ir::FemObjectSegmentIR],
-    mesh_parts: &[fullmag_ir::FemMeshPartIR],
     magnet_materials: &BTreeMap<String, fullmag_ir::MaterialIR>,
 ) -> Result<(fullmag_ir::MaterialIR, Option<Vec<[f64; 3]>>), PlanError> {
     let node_count = mesh.nodes.len();
@@ -3152,17 +3151,32 @@ fn build_region_material_fields(
     let sharp_conformal_ms_regions =
         sharp_conformal_parameter_regions(problem, fullmag_ir::MaterialParameterNameIR::Ms)?;
 
+    let mut node_indices_by_object = BTreeMap::<String, BTreeSet<usize>>::new();
     for segment in object_segments {
         if segment.object_id == AIR_OBJECT_SEGMENT_ID {
             continue;
         }
-        let Some(region_material) = magnet_materials.get(&segment.object_id) else {
+        if !magnet_materials.contains_key(&segment.object_id) {
             continue;
-        };
-        let node_indices = segment_node_indices(mesh_parts, segment, node_count)?;
+        }
+        // Conformal segments can share an owner/geometry identity. The first
+        // matching mesh part may belong to another segment of that owner;
+        // element connectivity is the authoritative node membership here.
+        let node_indices = segment_element_node_indices(mesh, segment)?;
         if node_indices.is_empty() {
             continue;
         }
+        node_indices_by_object
+            .entry(segment.object_id.clone())
+            .or_default()
+            .extend(node_indices);
+    }
+
+    for (object_id, node_index_set) in node_indices_by_object {
+        let Some(region_material) = magnet_materials.get(&object_id) else {
+            continue;
+        };
+        let node_indices = node_index_set.into_iter().collect::<Vec<_>>();
         let region_axis = normalize_nonzero_vector3(
             region_material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]),
             "anisotropy_axis",
@@ -3176,11 +3190,11 @@ fn build_region_material_fields(
             .iter()
             .map(|&idx| node_spacings[idx])
             .collect::<Vec<_>>();
-        let object_translation = crate::material::object_translation(problem, &segment.object_id);
+        let object_translation = crate::material::object_translation(problem, &object_id);
 
         let ms_resolved = crate::material::resolve_spatial_parameter_excluding_regions(
             problem,
-            &segment.object_id,
+            &object_id,
             fullmag_ir::MaterialParameterNameIR::Ms,
             region_material.saturation_magnetisation,
             &points,
@@ -3192,7 +3206,7 @@ fn build_region_material_fields(
 
         let aex_resolved = crate::material::resolve_spatial_parameter_excluding_regions(
             problem,
-            &segment.object_id,
+            &object_id,
             fullmag_ir::MaterialParameterNameIR::Aex,
             region_material.exchange_stiffness,
             &points,
@@ -3204,7 +3218,7 @@ fn build_region_material_fields(
 
         let alpha_resolved = crate::material::resolve_spatial_parameter(
             problem,
-            &segment.object_id,
+            &object_id,
             fullmag_ir::MaterialParameterNameIR::Alpha,
             region_material.damping,
             &points,
@@ -4292,7 +4306,6 @@ pub(crate) fn plan_fem(
         &base_material,
         &mesh,
         &object_segments,
-        &resolved_mesh_parts,
         &magnet_materials,
     )?;
     let (ms_element_field, a_element_field) = build_conformal_region_element_fields(
