@@ -1,0 +1,77 @@
+{
+  "captured_at_utc": "2026-10-29T16:42:09Z",
+  "repository": "MateuszZelent/fullmag",
+  "source_sha": "14fc9280e39a1551743a375a491257819012ce5e",
+  "scope": "bounded CI artifact audit; no local build, test, runtime mutation, or repository edit",
+  "profiles": [
+    {
+      "profile": "mfem",
+      "run_id": 40905285319,
+      "job_id": 123558259878,
+      "artifact": "fem-cpu-source-contract-tracking-mass-mfem-40905285319-1",
+      "native_log": "/tmp/eigen-i6-native-ci-20261029/mfem/native-build-and-ctest.log",
+      "native_log_sha256": "7a30d97199644913cb7c75b9dc8989ef0dd971b51341d470fd43b16a476b42a1",
+      "receipt": "/tmp/eigen-i6-native-ci-20261029/mfem/receipt.json",
+      "receipt_sha256": "407ac2a34d27bf8102148aac6c2ac17ded61fb21f31e1b363c32f7853748a51e",
+      "first_failure": {
+        "kind": "compiler_preprocessor",
+        "source_file": "backends/fem/tests/frequency_domain/tracking_mass_snapshot_contract_test.cpp",
+        "source_line": 33,
+        "diagnostic": "error: unterminated #else",
+        "log_lines": [260, 267],
+        "secondary_diagnostic": "line 456: expected '}' at end of input",
+        "stage": "snapshot contract object compilation",
+        "preceding_gates": ["fullmag_fem shared-library link", "fem_tracking_mass_provider_contract link"]
+      },
+      "minimal_source_cause": "The #if FULLMAG_HAS_MFEM_STACK at line 33 has an #else at line 458 but no matching #endif before the namespace closure at line 506; add that closure after the stub function (line 504)."
+    },
+    {
+      "profile": "stub",
+      "run_id": 40905296548,
+      "job_id": 123558298112,
+      "artifact": "fem-cpu-source-contract-tracking-mass-stub-40905296548-1",
+      "native_log": "/tmp/eigen-i6-native-ci-20261029/stub/native-build-and-ctest.log",
+      "native_log_sha256": "0a03f371712d039e0e8716603f3fa231920ee01931457cdce9a4a8e0205d4be7",
+      "receipt": "/tmp/eigen-i6-native-ci-20261029/stub/receipt.json",
+      "receipt_sha256": "0517ba09db164f00fd6c83f678033bc10d6f892a9a8ac85529a25d4261c0bb80",
+      "first_failure": {
+        "kind": "compiler_preprocessor",
+        "source_file": "backends/fem/tests/frequency_domain/tracking_mass_snapshot_contract_test.cpp",
+        "source_line": 33,
+        "diagnostic": "error: unterminated #else",
+        "log_lines": [230, 235],
+        "stage": "snapshot contract object compilation",
+        "preceding_gates": ["fullmag_fem shared-library link"]
+      },
+      "minimal_source_cause": "Same unmatched outer conditional as the MFEM profile: #if at line 33, #else at line 458, no #endif before namespace closure."
+    },
+    {
+      "profile": "slepc",
+      "run_id": 40905306186,
+      "job_id": 123558333241,
+      "artifact": "fem-cpu-source-contract-floquet-modal-slepc-40905306186-1",
+      "native_log": "/tmp/eigen-i6-native-ci-20261029/slepc/native-build-and-ctest.log",
+      "native_log_sha256": "72b877e6993feac704a19d29d6a9f7fedb26a8918ec2c7afef55703d23664550",
+      "receipt": "/tmp/eigen-i6-native-ci-20261029/slepc/receipt.json",
+      "receipt_sha256": "5a074bab8b8e71196b2804cd59c665a5b9c955dd04222c15a102a2322de35d44",
+      "native_result": {
+        "ctest_exit_code": 0,
+        "ctest_passed_count": 21,
+        "ctest_summary_log_line": 49424,
+        "ctest_total_log_line": 49426,
+        "compile_and_link_gates_observed": true
+      },
+      "first_failure": {
+        "kind": "post_test_harness_finalization",
+        "receipt_lines": [125, 162],
+        "diagnostic": "ContractRunError: Command failed with exit code 2: /usr/bin/python3; [fullmag storage] Docker cache retirement blocked completion: Automatic worktree completion cannot retire the main checkout",
+        "stage": "storage owner-finish / Docker cache retirement after successful native build and CTest"
+      },
+      "not_a_failure": ["compiler", "linker", "CTest/native contract"],
+      "interpretation": "PETSc error text emitted by negative fixtures is not a failed test here; the native log ends with 21/21 passed."
+    }
+  ],
+  "hypothesis_check": {
+    "fullmag_fem_set_global_error_or_clear_global_error_undefined_symbols": "not observed in these artifacts; MFEM/stub link fullmag_fem successfully before the source-test compile failure, and SLEPc compile/link gates passed"
+  }
+}

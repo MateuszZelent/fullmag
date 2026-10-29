@@ -24,6 +24,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 STORAGE_CLI = REPO_ROOT / "scripts" / "fullmag_storage.py"
 DOCKERFILE = REPO_ROOT / "docker" / "fem-cpu" / "Dockerfile"
 DOCKERIGNORE = REPO_ROOT / ".dockerignore"
+SCRIPTS_ROOT = REPO_ROOT / "scripts"
+if str(SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_ROOT))
+
+from docker_compose_identity import compose_project_identity
+
+
 STORAGE_PROFILE = "linux-host"
 DOCKER_BUILD_JOBS = 2
 NATIVE_BUILD_JOBS = 2
@@ -828,6 +835,55 @@ def _owner_action(
     if state is not None:
         arguments.extend(["--state", state])
     _storage_command(action, arguments, env=env)
+
+
+def _checkout_kind(layout: dict[str, Any]) -> str:
+    """Return the canonical checkout kind used by the storage safety contract."""
+
+    try:
+        identity = compose_project_identity(layout)
+    except Exception as error:
+        raise ContractRunError(
+            f"Could not resolve canonical checkout identity before owner finalization: {error}"
+        ) from error
+    checkout_kind = identity.get("checkout_kind")
+    if checkout_kind not in {"main-checkout", "worktree"}:
+        raise ContractRunError(
+            f"Storage identity returned unsupported checkout kind: {checkout_kind!r}"
+        )
+    return checkout_kind
+
+
+def _owner_finish_plan(*, checkout_kind: str, passed: bool) -> dict[str, str]:
+    """Describe safe registry finalization without weakening worktree-retirement guards."""
+
+    if checkout_kind not in {"main-checkout", "worktree"}:
+        raise ContractRunError(
+            f"Cannot select owner finalization for unsupported checkout kind: {checkout_kind!r}"
+        )
+    if not passed:
+        return {
+            "state": "review",
+            "mode": "failure_review",
+            "cleanup_state": "review_required",
+            "reason": "The bounded source contract did not pass; retain the receipt for review.",
+        }
+    if checkout_kind == "main-checkout":
+        return {
+            "state": "review",
+            "mode": "main_checkout_receipt_only",
+            "cleanup_state": "not_applicable_main_checkout",
+            "reason": (
+                "GitHub Actions ran in the canonical main checkout; record the passed build "
+                "owner without attempting private worktree retirement."
+            ),
+        }
+    return {
+        "state": "completed",
+        "mode": "worktree_retirement",
+        "cleanup_state": "completed",
+        "reason": "The bounded source contract passed and the managed worktree may retire safely.",
+    }
 
 
 def _parse_cache(path: Path) -> dict[str, str]:
@@ -1784,6 +1840,7 @@ def _orchestrate(contract_profile: str) -> int:
     task_id = f"{slug}-{run_id}-{attempt}"
     owner = f"github-actions:{repository}:{run_id}.{attempt}"
     layout, env = _prepare_storage(env)
+    checkout_kind = _checkout_kind(layout)
     storage_root = Path(layout["storage_root"])
     build_dir = Path(layout["build_root"]) / f"{slug}-{run_id}-{attempt}"
     run_dir = Path(layout["runs_root"]) / slug / f"{run_id}-{attempt}"
@@ -1802,6 +1859,7 @@ def _orchestrate(contract_profile: str) -> int:
         ),
     )
     owner_finished = [False]
+    owner_recorded_plan: list[dict[str, str] | None] = [None]
 
     def finish_interrupted_owner() -> None:
         if not owner_finished[0]:
@@ -1818,6 +1876,12 @@ def _orchestrate(contract_profile: str) -> int:
                     state="review",
                 )
                 owner_finished[0] = True
+                owner_recorded_plan[0] = {
+                    "state": "review",
+                    "mode": "interrupted_review",
+                    "cleanup_state": "review_required",
+                    "reason": "Orchestration ended before terminal owner finalization; retain the receipt for review.",
+                }
             except Exception as error:
                 print(
                     f"[{slug}] could not finish storage owner: {error}",
@@ -1843,9 +1907,17 @@ def _orchestrate(contract_profile: str) -> int:
             if receipt_path.is_file():
                 try:
                     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                    owner_plan = owner_recorded_plan[0] or _owner_finish_plan(
+                        checkout_kind=checkout_kind,
+                        passed=False,
+                    )
                     receipt.setdefault("storage", {}).update(
-                        owner_state="completed" if owner_finished[0] and receipt.get("status") == "passed" else "review",
+                        checkout_kind=checkout_kind,
+                        owner_state=owner_plan["state"],
                         owner_finish_recorded=owner_finished[0],
+                        owner_finish_mode=owner_plan["mode"],
+                        owner_finish_reason=owner_plan["reason"],
+                        cleanup_state=owner_plan["cleanup_state"],
                     )
                     if receipt.get("status") == "queued":
                         receipt["status"] = "failed"
@@ -1894,6 +1966,9 @@ def _orchestrate(contract_profile: str) -> int:
             "temp_dir": str(temp_dir),
             "task_id": task_id,
             "owner": owner,
+            "checkout_kind": checkout_kind,
+            "owner_finish_mode": "pending",
+            "cleanup_state": "pending",
         },
     }
     _write_json(run_dir / "receipt.json", output)
@@ -1908,6 +1983,7 @@ def _orchestrate(contract_profile: str) -> int:
             "build_storage_root": layout["build_storage_root"],
             "managed_ext4": layout["managed_ext4"],
             "worktree_id": layout["worktree_id"],
+            "checkout_kind": checkout_kind,
         },
     )
     command = [
@@ -2025,7 +2101,8 @@ def _orchestrate(contract_profile: str) -> int:
         and receipt.get("status") == "passed"
         and post_run_identity_error is None
     )
-    owner_state = "completed" if passed else "review"
+    owner_plan = _owner_finish_plan(checkout_kind=checkout_kind, passed=passed)
+    owner_state = owner_plan["state"]
     owner_finish_recorded = False
     finish_error = None
     finish_exception: Exception | None = None
@@ -2037,20 +2114,31 @@ def _orchestrate(contract_profile: str) -> int:
             owner=owner,
             purpose=(
                 f"GitHub Actions source-contract status={receipt.get('status', 'failed')}; "
-                "next step: retain the uploaded receipt and act on its test result."
+                f"{owner_plan['reason']}"
             ),
             state=owner_state,
         )
         owner_finish_recorded = True
         owner_finished[0] = True
+        owner_recorded_plan[0] = owner_plan
     except Exception as error:
         finish_exception = error
         finish_error = f"{type(error).__name__}: {error}"
         passed = False
         owner_state = "review"
+        owner_plan = {
+            "state": "review",
+            "mode": "finish_error_review",
+            "cleanup_state": "review_required",
+            "reason": "Owner finalization failed; retain the receipt for review.",
+        }
     receipt.setdefault("storage", {}).update(
+        checkout_kind=checkout_kind,
         owner_state=owner_state,
         owner_finish_recorded=owner_finish_recorded,
+        owner_finish_mode=owner_plan["mode"],
+        owner_finish_reason=owner_plan["reason"],
+        cleanup_state=owner_plan["cleanup_state"],
     )
     if finish_error:
         receipt["storage"]["owner_finish_error"] = finish_error

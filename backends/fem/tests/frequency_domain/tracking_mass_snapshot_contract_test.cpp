@@ -502,6 +502,7 @@ void check_stub_reports_unavailable_without_handles()
         "no-stack copy preserves caller storage when no snapshot exists");
     fullmag_fem_tracking_mass_snapshot_destroy_v1(nullptr);
 }
+#endif
 
 } // namespace
 
