@@ -1,6 +1,6 @@
 # Naprawy materiałów i granic — 2026-10-29
 
-Baza: e6a58cc7b12bc92b96c271cacb4cd1e19118659e. Branch codex/material-boundaries-p1-20261029, owner 01a18732-767d-7431-b30e-337c3f4310a8. Cudze zmiany master pozostają poza branchem.
+Baza: e6a58cc7b12bc92b96c271cacb4cd1e19118659e. Branch codex/material-boundaries-p1-20261029, owner 01a18732-767d-7431-b30e-337c3f4310a8. Cudze niezacommitowane zmiany głównego checkoutu pozostają nietknięte. Baza integracji: master `82a43e62041c1e7f2a1e6bf311aaae7449240931`; merge `49654b8e2410be8dbc31eadd57daca479177efae`. Odziedziczona lokalna zmiana build-control została wyłączona z diffu PR, bez edycji głównego checkoutu.
 
 ## Kontrakt przed implementacją
 
@@ -21,8 +21,7 @@ Stan bieżący w tabelach poniżej. Użytkownik jawnie zezwolił na kompilowanie
 
 Commit `7c0f11db366dafb4d2098157179790cf70a00f64`: odrzucanie nieeksportowanych atrybutów MagnetHandle. RED: sześć podprzypadków nie zgłaszało AttributeError. GREEN: 2 testy unittest oraz 12 istniejących testów execution_context/region_material_transition. Polecenia użyły Python -B, bez kompilacji solvera.
 
-Użytkownik 29.10 odwołał zakaz kompilowania i uruchamiania testów tego zadania. Grupa weryfikacyjna: fullmag-worktree-fullmag-033f6660666cdc47, frontend port 3356. Kontenery innych zadań pozostają nietknięte. Testy źródłowe UI: 26 PASS (model + DOM); pełny typecheck PASS. Pełny lint/suite i testy Rust w toku. Pierwotna nota o zakazie opisuje stan sprzed tej zgody.
-
+Grupa weryfikacyjna: `fullmag-worktree-fullmag-033f6660666cdc47`, frontend port 3356. Kontenery innych zadań pozostały nietknięte.
 
 ## Zakres zamkniętych wyzwalaczy audytu
 
@@ -46,12 +45,15 @@ Użytkownik 29.10 odwołał zakaz kompilowania i uruchamiania testów tego zadan
 - Planner: `cargo test --locked -p fullmag-plan --lib` — **609 PASS**, w tym 15 nowych regresji materiałów/granic. Na dokładnej bazie `e6a58cc7b12bc92b96c271cacb4cd1e19118659e` odtworzono **583 PASS / 11 FAIL**. Przyczyną starych błędów były fixture anten bez wymaganych target_refs i oczekiwania na dwie elektrody przy czterech zdefiniowanych. Naprawy testów zachowują pełne asercje i są osobnym commitem `5f3af3a2553c93a188f97805bb96cbb08764bc6d`.
 - CUDA runner: `cargo test --locked -p fullmag-runner --no-default-features --features cuda --lib cuda_interfacial_dmi_xy_body_contact -- --nocapture` — **2 PASS**. Urządzenie RTX 4080 SUPER; wykonano oba kierunki styku, nie skip. Zakres FP64/RK4, lokalne DMI bez demagnetyzacji i wymiany, existing assisted lane. Nie kwalifikuje pełnego natywnego DMI ani FEM GPU.
 - API: `cargo test --locked -p fullmag-api --no-default-features --features cuda --bin fullmag-api material_field -- --nocapture` — **7 PASS**, w tym pozytywne assety pamięciowe/plikowe i odrzucenie przypisania globalnych próbek regionowi.
-- UI: pełny suite 9257 PASS / 1 environment failure (brak cross-app źródła w shadow). Po ustawieniu `FULLMAG_TEST_SOURCE_ROOT=/opt/fullmag/source` cały wadliwy plik 12/12 PASS. Po dodatkowym przypadku nieskalarnym i wspólnym wrapperze: focused model/DOM **27 PASS**, typecheck PASS, pełny wcześniejszy lint i focused lint PASS.
+- UI po integracji master: pełny suite **9273 PASS**, typecheck PASS i lint PASS. Ustawiono `FULLMAG_TEST_SOURCE_ROOT=/opt/fullmag/source`, aby testy kontraktów między aplikacjami mogły czytać właściwe źródła. Wcześniej focused model/DOM: **27 PASS**.
+- Przeglądarka: focused fixture scenario materiałów oraz istniejące kontrole Object/Airbox — PASS; szczegółowy zakres, źródła i ograniczenia w [raporcie przeglądarkowym](material-boundaries-browser-20261029.md). Pełny smoke przeglądarkowy pozostaje NOT VERIFIED.
 - React Doctor 0.9.12: aktualne cztery pliki względem `5f3af3a2553c93a188f97805bb96cbb08764bc6d`, complete, **newCount=0**. Dwa istniejące ostrzeżenia pozostają poza zakresem; nie dodano tłumień. Root hook nie wykrywał aplikacji Next; skan wykonano ponownie we właściwym zakresie przez przypięte narzędzie w Docker.
 - `scripts/ci/contract_guard.sh --strict` oraz `git diff --check`: PASS.
 
-Kompilacja i testy Rust/TypeScript odbyły się w kontenerach własnej grupy. Target i pełne logi pozostają w wolumenach Docker: `/build/material-audit-target`, `/build/material-audit-plan.log`, `/build/material-audit-plan-baseline.log`, `/build/material-audit-cuda.log`, `/build/material-audit-api.log`. Dane innych grup, sesji i dirty main checkout nie były zmieniane.
+Kompilacja i testy Rust/TypeScript odbyły się w kontenerach własnej grupy. Po integracji powtórzono planner 609, CUDA 2, API 7 oraz Python 14 testów / 6 subtests; wszystkie PASS. Target i pełne logi pozostają w wolumenach Docker: `/build/material-audit-target`, `/build/material-audit-plan.log`, `/build/material-audit-plan-baseline.log`, `/build/material-audit-cuda.log`, `/build/material-audit-api.log` oraz odpowiadające im pliki `*-integrated.log`. Pełny log UI: `/state/development/material-audit-vitest-integrated.log`. Dane innych grup, sesji i dirty main checkout nie były zmieniane.
 
 ## Integracja i pozostałe granice dowodu
 
-Weryfikacja przeglądarkowa oraz integracja z aktualnym master są w toku. Końcowy stan będzie uzupełniony po ich zakończeniu. Naukowa zbieżność wszystkich oddziaływań, FEM CPU/GPU, pełny zakres precyzji/integratorów i produkcyjna kwalifikacja pozostają NOT VERIFIED. Ograniczenia ABI i strażniki capability opisane powyżej są jawne; nie zastąpiono ich przybliżeniem lub cichym fallbackiem.
+Stan PR, wynikowy commit oraz ewentualną blokadę aktualizacji lokalnego master zapisuje rejestr worktree zadania. Ten raport opisuje zweryfikowane źródła, a nie wdrożenie końcowego pakietu API.
+
+Naukowa zbieżność wszystkich oddziaływań, wykonanie FEM CPU/GPU, pełny zakres precyzji/integratorów i produkcyjna kwalifikacja pozostają **NOT VERIFIED**. Ograniczenia ABI i strażniki capability opisane powyżej są jawne; nie zastąpiono ich przybliżeniem lub cichym fallbackiem.
