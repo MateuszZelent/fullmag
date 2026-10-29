@@ -931,6 +931,17 @@ FDM materializuje maski i pola na komórkach. FEM materializuje conformal domain
 markers albo jawnie raportowaną projekcję. Region mesh-only pozostaje polem
 rozmiaru i nie tworzy niezależnych stopni swobody magnetyzacji.
 
+Współczynniki skalarne DMI w starszym `MaterialIR` są odrębną drogą od
+regionalnych pól: `interfacial_dmi` i `bulk_dmi` muszą trafić do planu FDM
+single-grid. Jawny term energii ma pierwszeństwo (również przy D=0), bez
+sumowania z materiałem. Dla multilayer brak D w materiale oznacza zero;
+obecny descriptor o jednym skalarze wymaga identycznych efektywnych D we
+wszystkich ciałach. Rozbieżność jest jawnym błędem, a zgodny BulkD przechodzi
+przez istniejący guard braku wykonania multilayer. Wybór CPU/CUDA, normalne
+i odrębne brzegi ciał nadal podlegają dotychczasowym ograniczeniom.
+Fizyka pozostaje opisana w [iDMI](0404-interfacial-dmi.md) oraz
+[Bulk DMI](0405-bulk-dmi.md); testy descriptorów nie są kwalifikacją GPU.
+
 (material-regions-round-trip-and-failure-semantics)=
 ### 4.6 Round-trip and failure semantics
 
@@ -1076,3 +1087,5 @@ must include:
 | Walidacja jednostek | `crates/fullmag-ir/src/model.rs` | `validate_unit` | Zgodność etykiety z SI parametru bez przeliczania wartości; wspólna kontrola sceny oraz IR V03/V04. |
 | Walidacja jednostek | `packages/fullmag-py/src/fullmag/model/structure.py` | `_validate_material_parameter_field` | Walidacja jednostki po przypisaniu pola do parametru w Python. |
 | Walidacja jednostek | `crates/fullmag-ir/tests/material_field_units.rs` | `material_field_units_are_checked_in_v04_public_validation` | Regresja walidacji jednostek przed wykonaniem solvera. |
+| Materiały FDM | `crates/fullmag-plan/src/fdm.rs` | `resolve_multilayer_material_dmi_scalar` | Jednolite D materiałów lub jawny błąd descriptoru multilayer; explicit term ma pierwszeństwo. |
+| Materiały FDM | `crates/fullmag-plan/src/tests/material_audit_fdm.rs` | `single_grid_material_scalar_dmi_is_lowered_on_cpu_and_cuda` | Regresja descriptorów CPU/CUDA, bez dowodu wykonania urządzenia. |

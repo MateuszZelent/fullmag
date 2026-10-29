@@ -41,6 +41,201 @@ fn fdm_plan(ir: &ProblemIR) -> fullmag_ir::FdmPlanIR {
     fdm
 }
 
+fn fdm_multilayer_plan(ir: &ProblemIR) -> fullmag_ir::FdmMultilayerPlanIR {
+    let planned = plan(ir).expect("FDM multilayer material case should plan");
+    let BackendPlanIR::FdmMultilayer(fdm) = planned.backend_plan else {
+        panic!("expected FDM multilayer plan");
+    };
+    fdm
+}
+
+fn force_cuda(ir: &mut ProblemIR) {
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
+}
+
+fn set_fully_periodic(ir: &mut ProblemIR) {
+    ir.pbc = Some(fullmag_ir::FdmPeriodicityIR {
+        axes: [
+            fullmag_ir::AxisBoundary::Periodic,
+            fullmag_ir::AxisBoundary::Periodic,
+            fullmag_ir::AxisBoundary::Periodic,
+        ],
+        demag: fullmag_ir::FdmDemagPeriodicityIR::Open,
+        image_counts: None,
+    });
+}
+
+fn give_second_layer_separate_material(
+    ir: &mut ProblemIR,
+    interfacial_dmi: Option<f64>,
+    bulk_dmi: Option<f64>,
+) {
+    let mut material = ir
+        .materials
+        .iter()
+        .find(|material| material.name == ir.magnets[0].material)
+        .expect("first layer material should exist")
+        .clone();
+    material.name = "PyRef".to_string();
+    material.interfacial_dmi = interfacial_dmi;
+    material.bulk_dmi = bulk_dmi;
+    ir.materials.push(material);
+    ir.magnets[1].material = "PyRef".to_string();
+}
+
+#[test]
+fn single_grid_material_scalar_dmi_is_lowered_on_cpu_and_cuda() {
+    for cuda in [false, true] {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.materials[0].interfacial_dmi = Some(1.75e-3);
+        ir.materials[0].bulk_dmi = Some(-0.625e-3);
+        set_fully_periodic(&mut ir);
+        if cuda {
+            force_cuda(&mut ir);
+        }
+
+        assert!(ir.energy_terms.iter().all(|term| {
+            !matches!(
+                term,
+                fullmag_ir::EnergyTermIR::InterfacialDmi { .. }
+                    | fullmag_ir::EnergyTermIR::BulkDmi { .. }
+            )
+        }));
+        let fdm = fdm_plan(&ir);
+        assert_eq!(fdm.interfacial_dmi, Some(1.75e-3), "cuda={cuda}");
+        assert_eq!(fdm.bulk_dmi, Some(-0.625e-3), "cuda={cuda}");
+    }
+}
+
+#[test]
+fn single_grid_explicit_dmi_terms_override_material_scalars() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.materials[0].interfacial_dmi = Some(4.0e-3);
+    ir.materials[0].bulk_dmi = Some(-6.0e-3);
+    ir.energy_terms
+        .push(fullmag_ir::EnergyTermIR::InterfacialDmi {
+            d: 1.25e-3,
+            interface_normal: None,
+        });
+    ir.energy_terms
+        .push(fullmag_ir::EnergyTermIR::BulkDmi { d: -2.5e-3 });
+    set_fully_periodic(&mut ir);
+
+    let fdm = fdm_plan(&ir);
+    assert_eq!(fdm.interfacial_dmi, Some(1.25e-3));
+    assert_eq!(fdm.bulk_dmi, Some(-2.5e-3));
+}
+
+#[test]
+fn single_grid_material_zero_dmi_remains_explicit() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.materials[0].interfacial_dmi = Some(-0.0);
+    ir.materials[0].bulk_dmi = Some(0.0);
+    set_fully_periodic(&mut ir);
+
+    let fdm = fdm_plan(&ir);
+    assert_eq!(
+        fdm.interfacial_dmi.map(f64::to_bits),
+        Some((-0.0_f64).to_bits())
+    );
+    assert_eq!(fdm.bulk_dmi.map(f64::to_bits), Some(0.0_f64.to_bits()));
+}
+
+#[test]
+fn multilayer_uniform_material_interfacial_dmi_is_lowered_on_cpu_and_cuda() {
+    for cuda in [false, true] {
+        let mut ir = if cuda {
+            cuda_three_d_identity_multilayer_problem()
+        } else {
+            stacked_two_body_multilayer_problem()
+        };
+        ir.materials[0].interfacial_dmi = Some(2.375e-3);
+        if !cuda {
+            give_second_layer_separate_material(&mut ir, Some(2.375e-3), None);
+        }
+
+        let fdm = fdm_multilayer_plan(&ir);
+        assert_eq!(fdm.interfacial_dmi, Some(2.375e-3), "cuda={cuda}");
+    }
+}
+
+#[test]
+fn multilayer_material_interfacial_dmi_rejects_nonuniform_effective_values() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.materials[0].interfacial_dmi = Some(2.375e-3);
+    give_second_layer_separate_material(&mut ir, None, None);
+
+    let error = plan(&ir).expect_err("nonuniform body-local DMI cannot fit one multilayer scalar");
+    assert!(
+        error.reasons.iter().any(|reason| {
+            reason.contains("interfacial_dmi") && reason.contains("material")
+        }),
+        "expected an explicit material interfacial_dmi mismatch, got {:?}",
+        error.reasons
+    );
+}
+
+#[test]
+fn multilayer_material_zero_interfacial_dmi_matches_missing_value() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.materials[0].interfacial_dmi = Some(0.0);
+    give_second_layer_separate_material(&mut ir, None, None);
+
+    let fdm = fdm_multilayer_plan(&ir);
+    assert_eq!(fdm.interfacial_dmi, Some(0.0));
+}
+
+#[test]
+fn multilayer_explicit_interfacial_dmi_overrides_nonuniform_material_values() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.materials[0].interfacial_dmi = Some(4.0e-3);
+    give_second_layer_separate_material(&mut ir, None, None);
+    ir.energy_terms
+        .push(fullmag_ir::EnergyTermIR::InterfacialDmi {
+            d: 0.0,
+            interface_normal: None,
+        });
+
+    let fdm = fdm_multilayer_plan(&ir);
+    assert_eq!(fdm.interfacial_dmi, Some(0.0));
+}
+
+#[test]
+fn multilayer_material_bulk_dmi_is_not_silently_dropped() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.materials[0].bulk_dmi = Some(1.25e-3);
+    give_second_layer_separate_material(&mut ir, None, Some(1.25e-3));
+
+    let error = plan(&ir).expect_err("multilayer BulkDmi remains explicitly unsupported");
+    assert!(
+        error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("BulkDmi") && reason.contains("multilayer")),
+        "expected the existing multilayer BulkDmi capability rejection, got {:?}",
+        error.reasons
+    );
+}
+
+#[test]
+fn multilayer_material_bulk_dmi_rejects_nonuniform_values_before_capability_guard() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.materials[0].bulk_dmi = Some(1.25e-3);
+    give_second_layer_separate_material(&mut ir, None, Some(2.0e-3));
+
+    let error = plan(&ir).expect_err("different body-local BulkDmi values cannot share one scalar");
+    assert!(
+        error.reasons.iter().any(|reason| {
+            reason.contains("bulk_dmi") && reason.contains("material")
+        }),
+        "expected an explicit material bulk_dmi mismatch, got {:?}",
+        error.reasons
+    );
+}
+
 #[test]
 fn single_grid_keeps_small_spatial_aex_delta() {
     let mut ir = ProblemIR::bootstrap_example();

@@ -698,6 +698,20 @@
       "symbol": "material_field_units_are_checked_in_v04_public_validation",
       "responsibility": "Regresja walidacji jednostek przed wykonaniem solvera.",
       "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-material-scalar-lowering",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "resolve_multilayer_material_dmi_scalar",
+      "responsibility": "Jednolite D materiałów lub jawny błąd descriptoru multilayer; explicit term ma pierwszeństwo.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-material-scalar-regression",
+      "path": "crates/fullmag-plan/src/tests/material_audit_fdm.rs",
+      "symbol": "single_grid_material_scalar_dmi_is_lowered_on_cpu_and_cuda",
+      "responsibility": "Regresja descriptorów CPU/CUDA, bez dowodu wykonania urządzenia.",
+      "evidence_status": "implemented"
     }
   ],
   "public_api": {
