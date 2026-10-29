@@ -13617,33 +13617,6 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
             && reason.contains("DMI")
     }));
 
-    let analytic_mesh = ir
-        .geometry_assets
-        .as_mut()
-        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
-        .and_then(|asset| asset.mesh.as_mut())
-        .expect("the DE/BV fixture must carry an inline mesh");
-    analytic_mesh
-        .periodic_boundary_pairs
-        .push(fullmag_ir::MeshPeriodicBoundaryPairIR {
-            pair_id: "y_faces".to_string(),
-            source_marker: None,
-            destination_marker: None,
-            marker_a: 12,
-            marker_b: 13,
-            translation: Some([0.0, 1.0, 0.0]),
-            tolerance: None,
-            axis_hint: Some("y".to_string()),
-            orientation: None,
-            pairing_policy: None,
-        });
-    analytic_mesh
-        .periodic_node_pairs
-        .push(fullmag_ir::MeshPeriodicNodePairIR {
-            pair_id: "y_faces".to_string(),
-            node_a: 0,
-            node_b: 2,
-        });
     if let fullmag_ir::StudyIR::Eigenmodes { k_sampling, .. } = &mut ir.study {
         *k_sampling = Some(fullmag_ir::KSamplingIR::Path {
             points: vec![
@@ -13681,6 +13654,41 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
         .reasons
         .iter()
         .any(|reason| { reason.contains("strict double-precision CPU FEM plan") }));
+
+    let analytic_mesh = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .and_then(|asset| asset.mesh.as_mut())
+        .expect("the DE/BV fixture must carry an inline mesh");
+    // Keep periodic seam markers separate from the certified open airbox boundary.
+    assert!(!analytic_mesh.boundary_markers.contains(&20));
+    assert!(!analytic_mesh.boundary_markers.contains(&21));
+    analytic_mesh
+        .periodic_boundary_pairs
+        .push(fullmag_ir::MeshPeriodicBoundaryPairIR {
+            pair_id: "y_faces".to_string(),
+            source_marker: None,
+            destination_marker: None,
+            marker_a: 20,
+            marker_b: 21,
+            translation: Some([0.0, 1.0, 0.0]),
+            tolerance: None,
+            axis_hint: Some("y".to_string()),
+            orientation: None,
+            pairing_policy: None,
+        });
+    analytic_mesh
+        .periodic_node_pairs
+        .push(fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "y_faces".to_string(),
+            node_a: 0,
+            node_b: 2,
+        });
+    // The y seam identifies nodes 0 and 2, so their nodal material values must agree.
+    // Earlier assertions retain the original heterogeneous single-axis fixture.
+    let analytic_ms = ir.materials[0].ms_field.as_mut().unwrap();
+    analytic_ms[2] = analytic_ms[0];
 
     ir.problem_meta.runtime_metadata.insert(
         "dispersion_validation".to_string(),
