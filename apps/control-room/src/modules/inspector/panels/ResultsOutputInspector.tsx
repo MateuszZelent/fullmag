@@ -36,6 +36,7 @@ export interface ResultsOutputInspectorProps {
   onLoadTo3D: () => void;
   onReturnToLive: () => void;
   canReturnToLive: boolean;
+  returnActionLabel: "Close results" | "Return to live";
   appearance: SnapshotVisualizationAppearance;
   onAppearanceChange: (patch: SnapshotVisualizationAppearancePatch) => void;
   values: Float64Array | null;
@@ -331,6 +332,7 @@ export function ResultsOutputInspector({
   onLoadTo3D,
   onReturnToLive,
   canReturnToLive,
+  returnActionLabel,
   appearance,
   onAppearanceChange,
   values,
@@ -346,7 +348,7 @@ export function ResultsOutputInspector({
       <section aria-label="Results output Inspector" className="fm-inspector-panel grid min-w-0 gap-3 p-3">
         <h2 className="m-0 text-fm-md font-semibold text-fm-primary">Results output</h2>
         <p className="m-0 text-fm-xs text-fm-muted" role="status">Select a saved output to inspect its metadata and samples.</p>
-        {canReturnToLive ? <Button size="sm" type="button" variant="secondary" onClick={onReturnToLive}>Return to live</Button> : null}
+        {canReturnToLive ? <Button size="sm" type="button" variant="secondary" onClick={onReturnToLive}>{returnActionLabel}</Button> : null}
       </section>
     );
   }
@@ -373,7 +375,7 @@ export function ResultsOutputInspector({
             <h2 className="m-0 truncate text-fm-md font-semibold text-fm-primary" title={entry.name}>{entry.name || entry.path}</h2>
             <p className="m-0 truncate text-fm-xs text-fm-muted" title={entry.path}>{entry.path}</p>
           </div>
-          {canReturnToLive ? <Button size="sm" type="button" variant="secondary" onClick={onReturnToLive}>Return to live</Button> : null}
+          {canReturnToLive ? <Button size="sm" type="button" variant="secondary" onClick={onReturnToLive}>{returnActionLabel}</Button> : null}
         </div>
         <div className="flex flex-wrap gap-2">
           <Button disabled={loadDisabled} disabledReason={array?.reason ?? "This output has no verified 3D visualization."} size="sm" type="button" variant="primary" onClick={onLoadTo3D}>Load into 3D</Button>

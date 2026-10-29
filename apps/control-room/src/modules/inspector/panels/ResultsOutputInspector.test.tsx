@@ -83,6 +83,7 @@ function inspectorProps() {
     onLoadTo3D: vi.fn(),
     onReturnToLive: vi.fn(),
     canReturnToLive: true,
+    returnActionLabel: "Return to live" as const,
     appearance,
     onAppearanceChange: vi.fn(),
     values: new Float64Array([0.25, -1.5, 2.75]),
@@ -152,6 +153,18 @@ describe("ResultsOutputInspector", () => {
     expect(html).toContain("Decoded values");
     expect(html).toContain('data-collapsible="true" data-open="false"');
     expect(html).not.toContain("Raw bytes");
+  });
+
+  it("uses the close-results label when no live session is confirmed", () => {
+    const html = renderToStaticMarkup(
+      <ResultsOutputInspector
+        {...inspectorProps()}
+        returnActionLabel="Close results"
+      />,
+    );
+
+    expect(html).toContain("Close results");
+    expect(html).not.toContain("Return to live");
   });
 
   it("keeps extreme physical values compact and does not show stale catalog warnings", () => {

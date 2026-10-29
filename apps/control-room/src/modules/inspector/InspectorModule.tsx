@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import { createCommandContext } from "@/kernel/commands/commandContext";
+import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import { useSavedResultsPlaybackSelection } from "@/kernel/saved-results/useSavedResultsPlayback";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import { useWorkspaceContentScope } from "@/kernel/layout/WorkspaceContentScope";
@@ -13,6 +14,7 @@ import {
   useSelectionSelector,
 } from "@/kernel/selection/useSelection";
 import { returnResultsToLive } from "@/kernel/visualization/returnResultsToLive";
+import { useSnapshotVisualization } from "@/kernel/visualization/useSnapshotVisualization";
 import { Button } from "@/shared/ui/Button";
 
 import { InspectorDirtySelectionGuard } from "./InspectorDirtySelectionGuard";
@@ -86,6 +88,7 @@ export default function InspectorModule() {
 
 function BrowserOnlyResultsInspector() {
   const kernel = useKernel();
+  const sessionIdentity = useSessionResourceIdentity();
   return (
     <section
       aria-label="Results output Inspector"
@@ -96,6 +99,31 @@ function BrowserOnlyResultsInspector() {
         Select an output in Results to inspect its metadata and load it into 3D.
       </p>
       <Button size="sm" type="button" variant="secondary" onClick={() => returnResultsToLive(kernel)}>
+        {sessionIdentity ? "Return to live" : "Close results"}
+      </Button>
+    </section>
+  );
+}
+
+function HistoricalViewportNotice({ enabled }: { enabled: boolean }) {
+  const kernel = useKernel();
+  const snapshot = useSnapshotVisualization();
+  if (!enabled || snapshot.activeKey === null) return null;
+  return (
+    <section
+      aria-label="Historical viewport context"
+      className="grid min-w-0 gap-2 border-b border-fm-subtle p-3 text-fm-sm"
+    >
+      <p className="m-0 text-fm-muted" role="status">
+        The viewport shows a saved snapshot. This Inspector belongs to the current workspace.
+      </p>
+      <Button
+        className="justify-self-start"
+        size="sm"
+        type="button"
+        variant="secondary"
+        onClick={() => returnResultsToLive(kernel)}
+      >
         Return to live
       </Button>
     </section>
@@ -154,6 +182,7 @@ function LiveInspectorModule() {
               }}
               onToggleVisibility={handleToggleVisibility}
             >
+              <HistoricalViewportNotice enabled={Boolean(Panel) && guardedSelection.ref?.type !== "result-output"} />
               {Panel ? (
                 <Panel selection={guardedSelection} />
               ) : (

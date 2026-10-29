@@ -210,6 +210,7 @@ function ResultsOutputInspectorContainerBody({
     filePreviewResource.error,
   );
   const canReturnToLive = savedPlayback !== null || snapshotState.activeKey !== null;
+  const returnActionLabel = sessionIdentity ? "Return to live" : "Close results";
 
   return (
     <ResultsOutputInspector
@@ -223,6 +224,7 @@ function ResultsOutputInspectorContainerBody({
       onLoadTo3D={onLoadTo3D}
       onReturnToLive={onReturnToLive}
       onSampleIndexChange={onSampleIndexChange}
+      returnActionLabel={returnActionLabel}
       sampleIndex={selectedSampleIndex}
       status={status}
       valuesAvailable={array?.can_read_values === true}

@@ -2,6 +2,23 @@
 
 Data: 2026-10-28, aktualizacja 2026-10-29. Status: **REQUEST CHANGES dla całej funkcji — końcowy audyt nawigacji, snapshotów m, tabel i powrotu do Live przeszedł; pozostałe formaty i bramki kwalifikacji pozostają otwarte**.
 
+## Aktualny stan audytu
+
+Poniższa tabela jest bieżącym podsumowaniem. Szczegółowe ustalenia UX-01–16 poniżej opisują także stan sprzed napraw; ich historyczne brzmienie nie oznacza, że każde pozostaje otwartym defektem.
+
+| Obszar | Aktualny wynik i zakres | Pozostała praca |
+|---|---|---|
+| Model Builder / Object / Airbox | Browser: Cancel zachowuje draft, Saved odmawia zmiany kontekstu, Discard przywraca zapis; powrót ze snapshotu zachowuje draft modelu | Dalsze przypadki formularzy poza Name/hmax |
+| Inspector snapshotu | Próbki czasu, własne ustawienia, powrót do ostatniej próbki po wyborze pliku; stabilne montowanie | Pełny widok szeregu tabelarycznego i pozostałe formaty analiz |
+| Live ↔ preview | Rzeczywisty FEM m: zgodność payloadu, brak mutacji sesji w badanym przepływie, opóźniona odpowiedź nie przywraca historii | Bezsesyjny przepływ przeszedł z fixture discovery i realnymi danymi; kontrolowany błąd odczytu wymaga dalszego QA |
+| Kamera i panele | Fit/Reset, zachowanie kamery, hide/restore/float/dock; szerokości 768–1920 przeszły | Pozostałe komendy kamery, powiększenie 200% |
+| Results / nawigacja | Wspólny filtr/collapse/focus, widoczny zakres wyszukiwania, klawiatura, wejście Saved | Kolejność folderów i Source details mają dowód browser; duże katalogi/strony i długi run pozostają otwarte |
+| Tabele i metadane | Nazwy sześciu kolumn, odczyt pierwszej/ostatniej próbki, tekstowe preview | Pełne możliwości analiz dla tabel/modów/eigensolve |
+| FDM/FEM i wszystkie quantity | Katalog odczytuje faktyczne wpisy; FEM m ma kwalifikowane 3D | H_eff FEM wymaga per-quantity geometry binding; nowa regresja FDM/YIG i wiele etapów |
+| Monitoring | Revision-pinned reader i polling widocznego panelu | Managed run publikuje current output dopiero na końcu; aktywny autosave nie jest zakwalifikowany |
+| Dostępność i czytelność | Klawiatura drzewa, osiągalne kontrolki po scrollu, motywy, brak poziomego overflow w badanym zakresie | Wspólne tokeny dark/light przeszły check:design; brak pełnej kwalifikacji czytnika ekranu i wszystkich rzeczywistych zestawień kolorów |
+| Integracja | Commity i draft [PR #332](https://github.com/MateuszZelent/fullmag/pull/332), grupa 3298 zachowana | CI, końcowe review i merge; React Doctor hook nie ukończył analizy parsera |
+
 ## Zakres i tożsamość
 
 - Checkout: `/home/kkingstoun/git/fullmag/worktrees/results-snapshot-inspector-20261028`.
@@ -422,3 +439,35 @@ Poprzednia próba `78473560609f4119a9633b441d51d071` przeszła nowe asercje tabe
 Pozostają otwarte ograniczenia formatów i kwalifikacji wymienione wcześniej, przede wszystkim jawny per-quantity geometry binding FEM poza m. Bieżący audyt nawigacji/snapshotów/Return to live ma dowód runtime; nie jest to zatwierdzenie całego szerszego zakresu wszystkich quantity/modów. Integracja i CI bieżącej funkcji pozostają osobnym niedokończonym etapem.
 
 Końcowe zrzuty `terminal_live_screenshot` i `pending_snapshot_screenshot` z próby b44… obejrzano wizualnie: po Return to live nie pozostaje Inspector historyczny, a podczas oczekiwania czas Displayed/Requested i legenda odpowiadają zachowanej klatce.
+
+
+## Checkpoint 2026-10-29 — Model Builder, robocze formularze i kontekst podglądu
+
+Próba **`03608b15552b4b7f9eaed0ea78fb820b` — passed**, hash harnessu `b89e697001eee0b55c5eb50cf6672349327dfb7f23508c821c232a04fe760a8c`. [Dowód JSON](2026-10-29-results-model-drafts-evidence.json). Test nadal korzysta z rzeczywistego zakończonego runu FEM item 6; nie wykonuje nowego Solve, Apply ani przebudowy siatki.
+
+- **Object i Airbox**: lokalna zmiana pola → wybór outputu → Cancel zachowuje wpisaną wartość. Próba otwarcia Saved folder kończy się jawną odmową i zachowuje draft. Discard umożliwia zmianę wyboru; ponowne wejście do formularza pokazuje wartość zapisaną. Dotyczy pola Name oraz Airbox Maximum element size.
+- **Kontekst historycznego viewportu**: otwarcie Inspectora bieżącego modelu przy aktywnym snapshotcie wcześniej nie wyjaśniało różnicy źródeł. Dodano neutralny komunikat i Return to live. Przejście zachowuje roboczą nazwę obiektu. Nie wprowadzono globalnego zakazu authoringu: ustawienia modelu nadal dotyczą bieżącego workspace, a zapisany snapshot zachowuje własne ustawienia.
+- Cały scenariusz zachowuje command ledger, persisted visualization oraz zbiór sesji; nie wysłał mutacji sesji poza wcześniej dozwolonymi observer leases/render ACK. Ten wynik dotyczy sprawdzonych interakcji bez Apply; nie oznacza zakazu jawnej edycji modelu podczas current-result preview.
+- Focused kontrole shellu, stylów Inspectora i Return to live: **27/27 passed**. Scoped ESLint i pełny typecheck przeszły. Niezależne review nowego notice i testów nie znalazło blokera.
+
+Wcześniejsza próba `80d49f28895b47cea1ea456ac5208934` przeszła sam rozszerzony zakres Object. Późniejsza 036… obejmuje również Airbox i nowy kontekst Inspectora. Osobne kontrole braku aktywnej sesji i kolejności katalogu są w dalszej części pracy, nie są dowiedzione tym wynikiem.
+
+
+## Checkpoint 2026-10-29 — spójne wyjście i czytelniejsza lista wyników
+
+**`25ba83b20468499b9b95e89fcf632b35` — succeeded / passed**, harness `ae670f2da517cbb76bd917a5feb05a94790f1e1737b8a6ae9b2f7e8ebe008d65`. [Dowód JSON](2026-10-29-results-context-exit-evidence.json). Obejmuje wszystkie wcześniejsze asercje oraz:
+
+- Cancel/Discard i odmowę Saved dla roboczych formularzy Object/Airbox; Return to live z modelowego Inspectora zachowuje wpisaną wartość i zaznaczony obiekt. Nowy komunikat kontekstu ma role=status.
+- Etykietę **Return to live** wyłącznie przy potwierdzonej sesji; bez niej **Close results** w shellu, drzewie, Inspectorze i viewportach. Starszy Inspector playback używa wspólnego helpera usuwającego źródła historyczne.
+- No-session: otwarcie realnego folderu, przewinięcie snapshotu do końca, zamknięcie do Home oraz ponowne zamknięcie starszego Inspectora i browser-only folderu. Discovery sesji zostało kontrolowanie zastąpione pustą kolekcją/404 w osobnym kontekście przeglądarki. Dane wyników nadal pochodzą z rzeczywistego backendu. To dowód UI bez sesji, **nie dowód backendowego restartu/recovery**. Nie zatrzymano istniejącej sesji i nie dopuszczono żadnej próby mutacji sesji w tym kontekście.
+- Kontenery wyników i tablice są przed zwykłymi plikami; pełne identyfikatory Run/Revision pozostają w domyślnie zwiniętym **Source details**. Licznik katalogu nie powtarza pełnego hasha. Browser potwierdził zwinięcie i dostępność całej rewizji po rozwinięciu.
+
+Próba `44f12568b6d4439b8f4b69f6c0bcb0a0` wykryła pominięty przycisk Return to live w drzewie przy braku sesji. Poprawiono przekazanie etykiety z istniejącej sessionIdentity; nie osłabiono asercji braku takiego przycisku. Wszystkie wcześniejsze asercje draftów w tej próbie przeszły, bez mutacji sesji.
+
+Weryfikacja: exit labels/legacy cleanup **32/32**, tree/explorer **18/18**, końcowy tree po przeniesieniu Source details **9/9**. Jedna wcześniejsza asercja CSS wymagała aktualizacji z usuniętego truncate header na domyślnie zwinięte details i break-all; zachowano kontrolę pełnego 64-znakowego hasha. Scoped ESLint, typecheck i check:design przeszły w stałym frontendzie. Check:design kwalifikuje wspólne tokeny kolorów dark/light i focus ring, nie wszystkie możliwe renderowane kombinacje kolorów ani czytnik ekranu. Niezależne review zmienionych zachowań nie wykazało blokera.
+
+Zrzuty modelowego Inspectora przy snapshotcie, no-session snapshotu i końcowego Live obejrzano wizualnie. Kontrolki mają spójne etykiety; źródło modelu jest jawne, a pełny hash nie wypycha listy. UI nadal wymaga dalszego audytu wskazanych otwartych obszarów. Grupa 3298, dane użytkownika, receipty, logi i cache pozostają zachowane.
+
+### UX-17 · P2 · Ogólne zakładki Inspectora nie są połączone z panelem outputu
+
+Nowa obserwacja z końcowego zrzutu, potwierdzona źródłowo: `inspectorDescriptor.ts::resolveFamily` nadaje `results.output.entry` ogólne zakładki Overview/Data/Provenance/Diagnostics. `InspectorShell` zmienia tylko `InspectorTabState`, natomiast `ResultsOutputInspectorContainer` i `ResultsOutputInspector` nie odczytują activeTab. Panel pokazuje te same sekcje niezależnie od wybranej zakładki. Nie oznacza to utraty danych, ale jest martwą nawigacją i pozostaje otwartym defektem ergonomii. Następny krok: nadać temu panelowi spójny kontrakt sekcji bez pustych zakładek albo powiązać je z rzeczywistą treścią; zachować Samples/Visualization, metadata, values i błędy oraz dowieść zachowania w UI.

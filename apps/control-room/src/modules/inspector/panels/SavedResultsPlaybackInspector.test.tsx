@@ -1,7 +1,14 @@
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { KernelContext } from "@/kernel/KernelContext";
+import {
+  findElement,
+  installSimulationPreparationTestDom,
+  TestEvent,
+} from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import type { KernelApi } from "@/kernel/types";
 
 import {
@@ -20,6 +27,15 @@ const playbackMocks = vi.hoisted(() => ({
     colorLimit: number | null;
   },
   resource: null as unknown,
+  sessionIdentity: null as {
+    requestScopeEpoch: string;
+    sessionEpoch: string;
+    sessionId: string;
+  } | null,
+}));
+
+const returnToLiveMock = vi.hoisted(() => ({
+  call: vi.fn(),
 }));
 
 vi.mock("@/kernel/saved-results/useSavedResultsPlayback", () => ({
@@ -29,6 +45,37 @@ vi.mock("@/kernel/saved-results/useSavedResultsPlayback", () => ({
 vi.mock("@/kernel/resources/savedResultsPlaybackResources", () => ({
   useSavedResultsManifestResource: () => playbackMocks.resource,
 }));
+
+vi.mock("@/kernel/resources/useSessionStatus", () => ({
+  useSessionResourceIdentity: () => playbackMocks.sessionIdentity,
+}));
+
+vi.mock("@/kernel/visualization/returnResultsToLive", () => ({
+  returnResultsToLive: returnToLiveMock.call,
+}));
+
+vi.mock("@/shared/ui/Slider", async () => {
+  const React = await import("react");
+  return {
+    Slider: (props: {
+      readonly ["aria-label"]?: string;
+      readonly id?: string;
+      readonly max?: number;
+      readonly min?: number;
+      readonly step?: number;
+      readonly value?: readonly number[];
+    }) => React.createElement("input", {
+      "aria-label": props["aria-label"],
+      id: props.id,
+      max: props.max,
+      min: props.min,
+      readOnly: true,
+      role: "slider",
+      step: props.step,
+      value: props.value?.[0],
+    }),
+  };
+});
 
 const manifest = {
   schema: "fullmag.saved-playback.v1",
@@ -70,6 +117,7 @@ describe("SavedResultsPlaybackInspector", () => {
       colorLimit: null,
     };
     playbackMocks.resource = { data: manifest, error: null, refreshError: null, status: "ready" };
+    playbackMocks.sessionIdentity = null;
     vi.clearAllMocks();
   });
 
@@ -83,6 +131,7 @@ describe("SavedResultsPlaybackInspector", () => {
     expect(html).toContain("Time: 0 ns");
     expect(html).toContain('aria-label="Saved results stage"');
     expect(html).toContain('aria-label="Saved results magnetization component"');
+    expect(html).toContain("Close results");
   });
 
   it("shows nodal FEM support while retaining the same time controls", () => {
@@ -118,5 +167,47 @@ describe("SavedResultsPlaybackInspector", () => {
     expect(clampPlaybackFrameIndex(99, 3)).toBe(2);
     expect(clampPlaybackFrameIndex(4, 0)).toBe(0);
     expect(formatSavedPlaybackTimeNs(2e-9)).toBe("2 ns");
+  });
+
+  it("uses the live-return label only for a confirmed session", () => {
+    playbackMocks.sessionIdentity = {
+      requestScopeEpoch: "scope-1",
+      sessionEpoch: "epoch-1",
+      sessionId: "session-1",
+    };
+    const html = renderInspector();
+    expect(html).toContain("Return to live");
+    expect(html).not.toContain("Close results");
+  });
+
+  it("returns through the shared historical-results cleanup helper", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const kernel = { savedResultsPlayback: controller } as unknown as KernelApi;
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <SavedResultsPlaybackInspector />
+          </KernelContext.Provider>,
+        );
+      });
+      const closeButton = findElement(
+        container,
+        (element) => element.getAttribute("class")?.includes("fm-saved-results-playback-inspector__close") === true,
+        "saved results exit button",
+      );
+      await act(async () => {
+        closeButton.dispatchEvent(new TestEvent("click", { bubbles: true }));
+      });
+      expect(returnToLiveMock.call).toHaveBeenCalledOnce();
+      expect(returnToLiveMock.call).toHaveBeenCalledWith(kernel);
+      expect(controller.close).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
   });
 });

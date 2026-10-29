@@ -398,6 +398,7 @@ export function ResultsSnapshotViewport({
   );
   const status = !identity ? "idle" : error ? "error" : ready ? "ready" : "loading";
   const returnToLive = useCallback(() => returnResultsToLive(kernel), [kernel]);
+  const exitLabel = sessionIdentity ? "Return to live" : "Close results";
 
   if (!identity || !definition) {
     return (
@@ -462,7 +463,7 @@ export function ResultsSnapshotViewport({
         {requestedDiffers ? ` · Requested: index ${sampleIndex} (${requestedCaptionCoordinate})` : null}
         {error ? <span role="alert"> · {error}</span> : !ready ? " · Loading saved output…" : null}
         <Button size="sm" type="button" variant="secondary" onClick={returnToLive}>
-          Return to live
+          {exitLabel}
         </Button>
       </header>
 

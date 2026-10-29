@@ -440,6 +440,7 @@ function ResultsOutputExplorerPager({
         catalog={catalog}
         error={resource.refreshError ?? resource.error}
         isHistoricalActive={isHistoricalActive}
+        returnActionLabel={sessionIdentity ? "Return to live" : "Close results"}
         onNextPage={nextPage}
         onRefresh={refresh}
         onReturnToLive={returnToLive}

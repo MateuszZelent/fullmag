@@ -260,6 +260,12 @@ try {
     catalogCursor=catalog.next_cursor;
   }
   assert(selectedOutput,"Result folder has no qualified magnetization array.");
+  const sourceDetails=page.getByRole("region",{name:"Saved result outputs",exact:true}).locator("details");
+  assert.equal(await sourceDetails.getAttribute("open"),null,"Technical source details should start collapsed.");
+  await sourceDetails.locator("summary").click();
+  assert((await sourceDetails.textContent()).includes(selectedOutput.array.revision),"Source details lost the full catalog revision.");
+  await sourceDetails.locator("summary").click();
+  result={...result,source_details_disclosure_verified:true};
   const resultIndices=[0,Math.floor((selectedOutput.array.sample_count-1)/2),selectedOutput.array.sample_count-1];
   const physicalCoordinates=selectedOutput.array.coordinates;
   for(const index of resultIndices) {
@@ -471,6 +477,86 @@ try {
   const explorer=page.getByRole("region",{name:"Explorer",exact:true});
   await explorer.getByRole("tab",{name:"Results",exact:true}).click();
   const currentRow=explorer.locator('[data-entry-id="'+currentEntry.id+'"] > div > [data-entry-select="true"]');
+  // An uncommitted Model Builder draft must survive both Results entry paths.
+  // Only edit local form state; never Apply or change the scientific session.
+  scenarioPhase="object-draft-navigation";
+  await explorer.getByRole("tab",{name:"Model",exact:true}).click();
+  for(const nodeId of ["model:session","model:objects"]) {
+    const node=explorer.locator('[data-node-id="'+nodeId+'"]');
+    await node.waitFor({state:"visible"});
+    if(await node.getAttribute("aria-expanded")==="false")await node.locator(".fm-explorer-tree-row__branch").click();
+  }
+  const objectNode=explorer.locator('[role="treeitem"][data-node-id^="model:object:"]').first();
+  await objectNode.click();
+  const objectName=page.locator(".fm-inspector").getByRole("textbox",{name:"Name",exact:true});
+  await objectName.waitFor({state:"visible"});
+  const originalObjectName=await objectName.inputValue();
+  const draftObjectName=originalObjectName+" QA unsaved draft";
+  await objectName.fill(draftObjectName);
+  await explorer.getByRole("tab",{name:"Results",exact:true}).click();
+  await currentRow.click();
+  const dirtyDialog=page.getByRole("dialog",{name:"Unapplied Inspector changes",exact:true});
+  await dirtyDialog.waitFor({state:"visible"});
+  await dirtyDialog.getByRole("button",{name:"Cancel",exact:true}).click();
+  assert.equal(await objectName.inputValue(),draftObjectName,"Cancelling Results selection lost the object draft.");
+  assert.equal(await liveViewport.getAttribute("data-view-source"),"current");
+  assert.equal(await page.locator('[data-results-snapshot-status]').count(),0);
+  await page.getByRole("tablist",{name:"Ribbon tabs",exact:true}).getByRole("tab",{name:"Results",exact:true}).click();
+  await page.getByRole("tablist",{name:"Results source",exact:true}).getByRole("tab",{name:"Saved",exact:true}).click();
+  const guardedFolders=page.getByRole("region",{name:"Workspace result folders",exact:true});
+  await guardedFolders.locator('[data-workspace-result-id="'+itemId+'"] button').click();
+  await guardedFolders.getByRole("alert").filter({hasText:"Apply or cancel the current object edit"}).waitFor({state:"visible"});
+  assert.equal(await objectName.inputValue(),draftObjectName,"Opening a saved folder lost the object draft.");
+  assert.equal(await page.locator('[data-saved-results-playback="read-only"]').count(),0);
+  await page.getByRole("tablist",{name:"Ribbon tabs",exact:true}).getByRole("tab",{name:"Workspace",exact:true}).click();
+  await explorer.getByRole("tab",{name:"Results",exact:true}).click();
+  await currentRow.click();
+  await dirtyDialog.waitFor({state:"visible"});
+  await dirtyDialog.getByRole("button",{name:"Discard",exact:true}).click();
+  await outputInspector.waitFor({state:"visible"});
+  await explorer.getByRole("tab",{name:"Model",exact:true}).click();
+  await objectNode.click();
+  assert.equal(await objectName.inputValue(),originalObjectName,"Discard did not restore the persisted object name.");
+  await explorer.getByRole("tab",{name:"Results",exact:true}).click();
+  result={...result,object_draft_cancel_preserved:true,object_draft_saved_folder_guarded:true,object_draft_discard_verified:true};
+  if(manifest.fem_mesh) {
+    scenarioPhase="airbox-draft-navigation";
+    await explorer.getByRole("tab",{name:"Model",exact:true}).click();
+    for(const nodeId of ["model:universe","model:airbox","model:airbox:mesh"]) {
+      const node=explorer.locator('[data-node-id="'+nodeId+'"]');
+      await node.waitFor({state:"visible"});
+      if(await node.getAttribute("aria-expanded")==="false")await node.locator(".fm-explorer-tree-row__branch").click();
+    }
+    const airboxNode=explorer.locator('[data-node-id="model:airbox:mesh:parameters"]');
+    await airboxNode.click();
+    const airboxSize=page.locator(".fm-inspector").getByRole("textbox",{name:"Maximum element size",exact:true});
+    await airboxSize.waitFor({state:"visible"});
+    const originalAirboxSize=await airboxSize.inputValue();
+    const draftAirboxSize=String((Number(originalAirboxSize)||8)*1.25);
+    await airboxSize.fill(draftAirboxSize);
+    await explorer.getByRole("tab",{name:"Results",exact:true}).click();
+    await currentRow.click();
+    await dirtyDialog.waitFor({state:"visible"});
+    await dirtyDialog.getByRole("button",{name:"Cancel",exact:true}).click();
+    assert.equal(await airboxSize.inputValue(),draftAirboxSize,"Cancelling Results selection lost the Airbox draft.");
+    await page.getByRole("tablist",{name:"Ribbon tabs",exact:true}).getByRole("tab",{name:"Results",exact:true}).click();
+    await page.getByRole("tablist",{name:"Results source",exact:true}).getByRole("tab",{name:"Saved",exact:true}).click();
+    await guardedFolders.locator('[data-workspace-result-id="'+itemId+'"] button').click();
+    await guardedFolders.getByRole("alert").filter({hasText:"Choose Apply or Cancel for pending Inspector changes"}).waitFor({state:"visible"});
+    assert.equal(await airboxSize.inputValue(),draftAirboxSize,"Opening a saved folder lost the Airbox draft.");
+    assert.equal(await page.locator('[data-saved-results-playback="read-only"]').count(),0);
+    await page.getByRole("tablist",{name:"Ribbon tabs",exact:true}).getByRole("tab",{name:"Workspace",exact:true}).click();
+    await explorer.getByRole("tab",{name:"Results",exact:true}).click();
+    await currentRow.click();
+    await dirtyDialog.waitFor({state:"visible"});
+    await dirtyDialog.getByRole("button",{name:"Discard",exact:true}).click();
+    await outputInspector.waitFor({state:"visible"});
+    await explorer.getByRole("tab",{name:"Model",exact:true}).click();
+    await airboxNode.click();
+    assert.equal(await airboxSize.inputValue(),originalAirboxSize,"Discard did not restore the persisted Airbox policy.");
+    await explorer.getByRole("tab",{name:"Results",exact:true}).click();
+    result={...result,airbox_draft_cancel_preserved:true,airbox_draft_saved_folder_guarded:true,airbox_draft_discard_verified:true};
+  }
   scenarioPhase="current-result-playback";
   await currentRow.click();
   const currentTreeitem=explorer.locator('[data-entry-id="'+currentEntry.id+'"]');
@@ -479,6 +565,29 @@ try {
   assert.equal(await currentTreeitem.getAttribute("aria-selected"),"true","Keyboard selection bubbled into a parent output.");
   assert.equal(await currentTreeitem.getAttribute("tabindex"),"0","Focused result is not the roving tree tab stop.");
   await outputInspector.getByRole("button",{name:"Load into 3D",exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('[data-results-snapshot-status="ready"]'));
+  await explorer.getByRole("tab",{name:"Model",exact:true}).click();
+  await objectNode.click();
+  const historicalContext=page.getByRole("region",{name:"Historical viewport context",exact:true});
+  await historicalContext.waitFor({state:"visible"});
+  assert.equal(await page.locator('[data-results-snapshot-status="ready"]').count(),1);
+  const modelContextScreenshot=await page.screenshot({type:"png"});
+  assert(modelContextScreenshot.length<=512*1024);
+  result={...result,model_context_screenshot_base64:modelContextScreenshot.toString("base64")};
+  await objectName.fill(draftObjectName);
+  await historicalContext.getByRole("button",{name:"Return to live",exact:true}).click();
+  await liveViewport.waitFor({state:"visible"});
+  assert.equal(await liveViewport.getAttribute("data-view-source"),"current");
+  assert.equal(await objectName.inputValue(),draftObjectName,"Return to live discarded the current model draft.");
+  assert.equal(await objectNode.getAttribute("aria-selected"),"true","Return to live changed the selected model object.");
+  await historicalContext.waitFor({state:"hidden"});
+  assert.equal(await page.locator('[data-results-snapshot-status]').count(),0);
+  await explorer.getByRole("tab",{name:"Results",exact:true}).click();
+  await currentRow.click();
+  await dirtyDialog.waitFor({state:"visible"});
+  await dirtyDialog.getByRole("button",{name:"Discard",exact:true}).click();
+  await outputInspector.getByRole("button",{name:"Load into 3D",exact:true}).click();
+  result={...result,model_inspector_historical_context_verified:true,return_live_preserves_model_draft:true};
   for(const index of [0,selectedOutput.array.sample_count-1,0]) {
     await outputInspector.getByRole("slider",{name:"Saved sample index"}).press(index===0?"Home":"End");
     await page.waitForFunction(index=>document.querySelector('[data-results-snapshot-status="ready"]')?.getAttribute("data-results-snapshot-index")===String(index),index);
@@ -664,6 +773,83 @@ try {
   assert.equal(sessionsAfterResponse.status(),200);
   const sessionsAfter=await sessionsAfterResponse.json();
   assert.deepEqual(sessionsAfter.sessions.map(session=>session.id ?? session.session_id).sort(),sessionIdsBefore,"Result browsing changed simulation sessions.");
+  // Exercise the no-session shell with real saved data and explicitly injected
+  // empty session discovery. Preserve the real completed session in the backend.
+  await context.close();
+  context=await browser.newContext({viewport:{width:1500,height:1000},deviceScaleFactor:1,serviceWorkers:"block"});
+  const noSessionWrites=[];
+  let noSessionDiscoveries=0;
+  await context.route(url=>url.pathname==="/v2/sessions" || url.pathname.startsWith("/v2/sessions/"),async route=>{
+    const request=route.request();
+    if(request.method()!=="GET") {
+      noSessionWrites.push({method:request.method(),path:new URL(request.url()).pathname});
+      await route.fulfill({status:409,json:{code:"no_active_session",message:"No active session in the UI test."}});
+    } else if(new URL(request.url()).pathname==="/v2/sessions") {
+      noSessionDiscoveries++;
+      await route.fulfill({status:200,json:{...sessionsBefore,sessions:[]}});
+    } else {
+      await route.fulfill({status:404,json:{code:"not_found",message:"no active local live workspace"}});
+    }
+  });
+  page=await context.newPage();page.setDefaultTimeout(timeout);
+  page.on("pageerror",error=>errors.push(error.message));
+  await page.goto(proxy.origin+"/home",{waitUntil:"domcontentloaded",timeout});
+  const noSessionRow=page.locator("#fm-start-result-"+itemId);
+  if(!await noSessionRow.isVisible()) {
+    const filter=page.getByRole("combobox",{name:"Show projects, scripts, results or all"});
+    if(await filter.count()) {await filter.click();await page.getByRole("option",{name:"Results",exact:true}).click();}
+  }
+  await noSessionRow.waitFor({state:"visible"});
+  await noSessionRow.click();
+  await page.locator('button[data-action="open-results-viewer"]').click();
+  const noSessionHeader=page.getByRole("region",{name:"Saved results playback",exact:true});
+  await noSessionHeader.getByRole("button",{name:"Close results",exact:true}).waitFor({state:"visible"});
+  assert.equal(await page.getByRole("button",{name:"Return to live",exact:true}).count(),0,"The no-session view promises a live workspace.");
+  await page.waitForFunction(()=>document.querySelector(".fm-saved-playback-viewport")?.getAttribute("data-saved-frame-state")==="ready");
+  const noSessionOutput=page.locator('[data-entry-id="'+selectedOutput.entry.id+'"] > div > [data-entry-select="true"]');
+  for(let count=0;count<50 && !await noSessionOutput.count();count++)await page.getByRole("button",{name:"Next page",exact:true}).click();
+  await noSessionOutput.click();
+  const noSessionInspector=page.getByRole("region",{name:"Results output Inspector",exact:true});
+  await noSessionInspector.getByRole("button",{name:"Close results",exact:true}).waitFor({state:"visible"});
+  await noSessionInspector.getByRole("button",{name:"Load into 3D",exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('[data-results-snapshot-status="ready"]'));
+  await noSessionInspector.getByRole("slider",{name:"Saved sample index"}).press("End");
+  await page.waitForFunction(index=>document.querySelector('[data-results-snapshot-status="ready"]')?.getAttribute("data-results-snapshot-index")===String(index),selectedOutput.array.sample_count-1);
+  const noSessionSnapshot=page.getByRole("region",{name:"Saved results 3D viewport",exact:true});
+  await noSessionSnapshot.getByRole("button",{name:"Close results",exact:true}).waitFor({state:"visible"});
+  assert.equal(await page.getByRole("button",{name:"Return to live",exact:true}).count(),0);
+  const noSessionScreenshot=await page.screenshot({type:"png"});
+  assert(noSessionScreenshot.length<=512*1024);
+  await noSessionSnapshot.getByRole("button",{name:"Close results",exact:true}).click();
+  await noSessionRow.waitFor({state:"visible"});
+  assert.equal(await page.locator('[data-results-snapshot-status]').count(),0);
+  assert.equal(await page.getByRole("region",{name:"3D viewport",exact:true}).count(),0);
+  await noSessionRow.click();
+  await page.locator('button[data-action="open-results-viewer"]').click();
+  await page.getByRole("region",{name:"Saved results playback Inspector",exact:true})
+    .getByRole("button",{name:"Close results",exact:true}).click();
+  await noSessionRow.waitFor({state:"visible"});
+  assert.equal(await page.locator('[data-saved-results-playback="read-only"]').count(),0);
+  // A folder without the legacy playback descriptor still opens its output
+  // browser. Inject only that optional descriptor failure; retain real catalog.
+  await context.route(url=>url.pathname==="/v2/workspace/items/"+itemId+"/playback",route=>
+    route.fulfill({status:422,json:{code:"saved_playback_unsupported",message:"No legacy playback descriptor in this UI fixture."}}));
+  await noSessionRow.click();
+  await page.locator('button[data-action="open-results-viewer"]').click();
+  const browserOnlyInspector=page.getByRole("region",{name:"Results output Inspector",exact:true});
+  await browserOnlyInspector.getByRole("button",{name:"Close results",exact:true}).waitFor({state:"visible"});
+  await page.getByRole("region",{name:"Results 3D viewport",exact:true})
+    .getByRole("button",{name:"Close results",exact:true}).waitFor({state:"visible"});
+  assert.equal(await page.getByRole("button",{name:"Return to live",exact:true}).count(),0);
+  await browserOnlyInspector.getByRole("button",{name:"Close results",exact:true}).click();
+  await noSessionRow.waitFor({state:"visible"});
+  assert.equal(await page.locator('[data-saved-results-playback="read-only"]').count(),0);
+  assert(noSessionDiscoveries>0);
+  assert.deepEqual(noSessionWrites,[],"No-session result browsing attempted a session mutation.");
+  assert.deepEqual(errors,[]);
+  result={...result,no_session_close_to_home_verified:true,no_session_legacy_inspector_close_verified:true,no_session_browser_only_close_verified:true,
+    no_session_evidence:"browser-session-discovery-fixture-with-real-result-data",
+    no_session_screenshot_base64:noSessionScreenshot.toString("base64")};
   result={schema:"fullmag.docker-dev-saved-playback-result.v1",state:"passed",scenario:"saved-playback",
     item_id:itemId,public_url:publicUrl,probe_url:probeUrl,playwright_version:version,
     browser_gpu_mode:process.env.CONTROL_ROOM_BROWSER_GPU_MODE,script_sha256:scriptSha,

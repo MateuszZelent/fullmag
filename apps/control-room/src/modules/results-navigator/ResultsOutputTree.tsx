@@ -26,6 +26,7 @@ export interface ResultsOutputTreeProps {
   onNextPage: () => void;
   onReturnToLive: () => void;
   isHistoricalActive: boolean;
+  returnActionLabel: "Close results" | "Return to live";
   ui: ResultsBrowserUiBinding;
 }
 
@@ -48,8 +49,16 @@ const ENTRY_KIND_LABELS: Readonly<Record<ResultsEntry["kind"], string>> = {
   file: "file",
 };
 
+const ENTRY_KIND_ORDER: Readonly<Record<ResultsEntry["kind"], number>> = {
+  directory: 0,
+  zarr_group: 0,
+  zarr_array: 1,
+  file: 2,
+};
+
 function compareEntries(left: ResultsEntry, right: ResultsEntry): number {
   return (
+    ENTRY_KIND_ORDER[left.kind] - ENTRY_KIND_ORDER[right.kind] ||
     left.path.localeCompare(right.path, undefined, {
       numeric: true,
       sensitivity: "base",
@@ -211,6 +220,7 @@ export function ResultsOutputTree({
   onNextPage,
   onReturnToLive,
   isHistoricalActive,
+  returnActionLabel,
   ui,
 }: ResultsOutputTreeProps) {
   const treeRef = useRef<HTMLUListElement | null>(null);
@@ -419,13 +429,10 @@ export function ResultsOutputTree({
           <div className="flex shrink-0 gap-1">
             <Button aria-label="Refresh results output" size="icon" type="button" variant="ghost" onClick={onRefresh}>↻</Button>
             {isHistoricalActive ? (
-              <Button size="sm" type="button" variant="secondary" onClick={onReturnToLive}>Return to live</Button>
+              <Button size="sm" type="button" variant="secondary" onClick={onReturnToLive}>{returnActionLabel}</Button>
             ) : null}
           </div>
         </div>
-        <p className="m-0 min-w-0 truncate text-fm-xs text-fm-muted" title={catalog?.run_id ?? undefined}>
-          Run: {catalog?.run_id ?? "—"} · Revision: {catalog?.revision ?? "—"}
-        </p>
         {catalogStatus || catalogReason ? (
           <p className="m-0 min-w-0 break-words text-fm-xs text-fm-muted" role="status">
             Catalog: {catalogStatus ?? "ready"}{catalogReason ? " · " + catalogReason : ""}
@@ -459,9 +466,16 @@ export function ResultsOutputTree({
             </p>
           ) : null}
           <p className="m-0 min-w-0 break-words text-fm-xs text-fm-muted" role="status">
-            Revision {catalog.revision} · {catalog.entries.length} loaded of {catalog.total_count} total
+            {catalog.entries.length} loaded of {catalog.total_count} total
             {catalog.truncated ? " · truncated" : ""}
           </p>
+          <details className="min-w-0 text-fm-xs text-fm-muted">
+            <summary className="cursor-pointer">Source details</summary>
+            <div className="grid min-w-0 gap-1 pt-2">
+              <p className="m-0 break-all">Run: {catalog.run_id ?? "—"}</p>
+              <p className="m-0 break-all">Revision {catalog.revision}</p>
+            </div>
+          </details>
           {model.roots.length > 0 ? (
             <ul
               aria-label="Result output entries"

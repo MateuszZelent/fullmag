@@ -30,3 +30,12 @@ Czytnik folderu nie wymaga statusu `completed`; pojedyncza próbka musi jednak b
 Chunki binarne Zarr są składnikami logicznej tablicy. Ich przeglądanie odbywa się przez próbki w Inspectorze; nie wymagamy osobnego wiersza drzewa dla każdego fragmentu binarnego. Dzięki temu długa seria czasowa nie zasłania kolejnych quantity i tabel.
 
 Po zakończeniu nowego accepted runu backend publikuje końcowe rzeczywiste statystyki wraz z tożsamością obserwacji. Powrót do Live pokazuje te wartości; nie przepisuje czasu ze statusu do starszego wiersza energii/magnetyzacji. Starsze wyniki bez takiej obserwacji nie otrzymują statystyk wyliczonych zastępczo.
+
+
+## Kontekst modelu i wyjście
+
+Jeśli podczas podglądu snapshotu wybierzesz obiekt lub Airbox w Model Builderze, Inspector dotyczy bieżącego workspace. Informacja nad formularzem oddziela ten kontekst od historycznej klatki. **Return to live** zachowuje wybór modelu i jego niezapisany draft. Zmiana wyboru na wynik wymaga jawnego Apply/Discard; Cancel zachowuje formularz. Otwarcie całego Saved folder jest blokowane przy niezapisanych zmianach.
+
+Przy braku potwierdzonej aktywnej sesji akcja wyjścia nazywa się **Close results** i zamyka odczyt wyników, wracając do Home lub otwartego projektu. Nie uruchamia symulacji. Etykieta **Return to live** pojawia się przy istniejącym kontekście sesji.
+
+Drzewo porządkuje rodzeństwo: katalogi/grupy Zarr, tablice, następnie zwykłe pliki; wewnątrz kategorii zachowuje porządek alfanumeryczny. Pełny Run i Revision są dostępne w rozwijanym **Source details**. Żaden wpis nie jest usuwany ani ukrywany z katalogu przez tę zmianę kolejności.

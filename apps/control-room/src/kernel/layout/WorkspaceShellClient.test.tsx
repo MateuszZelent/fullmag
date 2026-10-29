@@ -110,6 +110,9 @@ describe("WorkspaceShellClient Home entry surface", () => {
       expect(findByAttribute(container, "data-saved-results-playback", "read-only")).toBeTruthy();
       expect(container.textContent).toContain("Saved results · read only");
       expect(container.textContent).toContain("orphaned-run");
+      const shellHeader = findByAttribute(container, "aria-label", "Saved results playback");
+      expect(shellHeader?.textContent).toContain("Close results");
+      expect(shellHeader?.textContent).not.toContain("Return to live");
       expect(findByAttribute(container, "aria-label", "Search saved result outputs")).toBeTruthy();
       expect(findByAttribute(container, "data-slot-id", "viewport-aux")).toBeNull();
       expect(findByAttribute(container, "data-slot-id", "panel-bottom")).toBeNull();

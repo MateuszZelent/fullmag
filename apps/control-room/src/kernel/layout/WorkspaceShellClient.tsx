@@ -131,6 +131,7 @@ export function WorkspaceShellClient() {
 function SavedResultsWorkspaceShell({ liveDiagnosticsAvailable }: { liveDiagnosticsAvailable: boolean }) {
   const kernel = useKernel();
   const selection = useSavedResultsPlaybackSelection();
+  const exitLabel = liveDiagnosticsAvailable ? "Return to live" : "Close results";
   if (!selection) return null;
 
   return (
@@ -151,7 +152,7 @@ function SavedResultsWorkspaceShell({ liveDiagnosticsAvailable }: { liveDiagnost
           type="button"
           variant="secondary"
         >
-          Return to live
+          {exitLabel}
         </Button>
       </section>
       <WorkspaceRenderProfiler id="WorkspaceDockLayout">

@@ -2,10 +2,11 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type {
-  ResultsArray,
-  ResultsEntry,
-  ResultsSource,
+import {
+  resultDatasetIdentity,
+  type ResultsArray,
+  type ResultsEntry,
+  type ResultsSource,
 } from "@/kernel/api/resultsBrowser";
 import { KernelContext } from "@/kernel/KernelContext";
 import type { KernelApi } from "@/kernel/types";
@@ -21,6 +22,15 @@ import { ResultsOutputInspectorContainer } from "./ResultsOutputInspectorContain
 const resourceMocks = vi.hoisted(() => ({
   arrays: new Map<string, ResultsArray>(),
   sampleCalls: [] as Array<{ array: ResultsArray | null; sampleIndex: number }>,
+  sessionIdentity: {
+    requestScopeEpoch: "scope-1",
+    sessionEpoch: "epoch-1",
+    sessionId: "session-1",
+  } as {
+    requestScopeEpoch: string;
+    sessionEpoch: string;
+    sessionId: string;
+  } | null,
 }));
 
 vi.mock("@/kernel/resources/resultsBrowserResources", () => ({
@@ -57,11 +67,7 @@ vi.mock("@/kernel/resources/resultsBrowserResources", () => ({
 }));
 
 vi.mock("@/kernel/resources/useSessionStatus", () => ({
-  useSessionResourceIdentity: () => ({
-    requestScopeEpoch: "scope-1",
-    sessionEpoch: "epoch-1",
-    sessionId: "session-1",
-  }),
+  useSessionResourceIdentity: () => resourceMocks.sessionIdentity,
 }));
 
 vi.mock("@/kernel/saved-results/useSavedResultsPlayback", () => ({
@@ -148,6 +154,11 @@ describe("ResultsOutputInspectorContainer sample restoration", () => {
   beforeEach(() => {
     resourceMocks.arrays.clear();
     resourceMocks.sampleCalls.length = 0;
+    resourceMocks.sessionIdentity = {
+      requestScopeEpoch: "scope-1",
+      sessionEpoch: "epoch-1",
+      sessionId: "session-1",
+    };
     resourceMocks.arrays.set(array.id, array);
   });
 
@@ -278,6 +289,47 @@ describe("ResultsOutputInspectorContainer sample restoration", () => {
         ),
       ).toBe(true);
       expect(controller.getSnapshot().activeKey).toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("labels the snapshot exit as close results without a confirmed live session", async () => {
+    resourceMocks.sessionIdentity = null;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const controller = new SnapshotVisualizationController();
+    const kernel = createKernel(controller);
+    controller.select({
+      runId: "run-1",
+      stageId: "results-output",
+      datasetId: resultDatasetIdentity(source, array.id),
+      quantityId: "m",
+      sampleIndex: 0,
+      revision: array.revision,
+    });
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <ResultsOutputInspectorContainer selection={resultSelection(arrayEntry, "results:array-m")} />
+          </KernelContext.Provider>,
+        );
+      });
+
+      expect(
+        findElement(
+          container,
+          (element) => element.textContent === "Close results",
+          "close results button",
+        ),
+      ).toBeTruthy();
+      expect(
+        container.textContent,
+      ).not.toContain("Return to live");
     } finally {
       await act(async () => root.unmount());
       dom.restore();

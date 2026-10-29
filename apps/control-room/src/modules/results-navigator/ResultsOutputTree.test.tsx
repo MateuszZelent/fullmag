@@ -73,6 +73,44 @@ const secondRoot: ResultsEntry = {
   array_id: null,
 };
 
+const resultsGroup: ResultsEntry = {
+  id: "group-results",
+  path: "results",
+  parent_id: null,
+  name: "results",
+  kind: "zarr_group",
+  size_bytes: null,
+  array_id: null,
+};
+const resultsArray: ResultsEntry & { shape: readonly number[] } = {
+  id: "array-results-m",
+  path: "results/m",
+  parent_id: "group-results",
+  name: "m",
+  kind: "zarr_array",
+  size_bytes: 64,
+  array_id: "array-results-m",
+  shape: [3, 1],
+};
+const zarrAttributes: ResultsEntry = {
+  id: "file-zattrs",
+  path: ".zattrs",
+  parent_id: null,
+  name: ".zattrs",
+  kind: "file",
+  size_bytes: 20,
+  array_id: null,
+};
+const zarrGroupMetadata: ResultsEntry = {
+  id: "file-zgroup",
+  path: ".zgroup",
+  parent_id: null,
+  name: ".zgroup",
+  kind: "file",
+  size_bytes: 18,
+  array_id: null,
+};
+
 const catalog: ResultsCatalog = {
   schema: "fullmag.results-catalog.v1",
   revision: "sha256:catalog-1",
@@ -112,6 +150,7 @@ const noopProps: Omit<ResultsOutputTreeProps, "ui"> = {
   onNextPage: vi.fn(),
   onReturnToLive: vi.fn(),
   isHistoricalActive: false,
+  returnActionLabel: "Return to live",
 };
 
 function StatefulResultsOutputTree(
@@ -224,7 +263,66 @@ describe("ResultsOutputTree", () => {
     );
 
     expect(html).toContain("grid-cols-1");
-    expect(html).toContain('class="m-0 min-w-0 truncate text-fm-xs text-fm-muted"');
+    expect(html).toContain('<details class="min-w-0 text-fm-xs text-fm-muted">');
+    expect(html).toContain('Source details</summary>');
+    expect(html).toContain('<p class="m-0 break-all">Revision sha256:' + "a".repeat(64));
+  });
+
+  it("puts result groups and arrays before metadata files while preserving tree aria order", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const orderedCatalog: ResultsCatalog = {
+      ...catalog,
+      entries: [zarrAttributes, zarrGroupMetadata, resultsArray, resultsGroup, array, directory],
+      next_cursor: null,
+      total_count: 6,
+      truncated: false,
+    };
+
+    try {
+      await act(async () => {
+        root.render(
+          <StatefulResultsOutputTree
+            {...noopProps}
+            catalog={orderedCatalog}
+          />,
+        );
+      });
+
+      const rows = () => [...container.querySelectorAll('[role="treeitem"]')] as TestElement[];
+      expect(rows().map((row) => row.getAttribute("data-entry-id"))).toEqual([
+        "dir-fields",
+        "array-m",
+        "group-results",
+        "array-results-m",
+        "file-zattrs",
+        "file-zgroup",
+      ]);
+      const groupRow = findTreeRow(container, "group-results");
+      const arrayRow = findTreeRow(container, "array-results-m");
+      const attributesRow = findTreeRow(container, "file-zattrs");
+      const groupMetadataRow = findTreeRow(container, "file-zgroup");
+      expect(groupRow.getAttribute("aria-posinset")).toBe("2");
+      expect(groupRow.getAttribute("aria-setsize")).toBe("4");
+      expect(arrayRow.getAttribute("aria-posinset")).toBe("1");
+      expect(arrayRow.getAttribute("aria-setsize")).toBe("1");
+      expect(attributesRow.getAttribute("aria-posinset")).toBe("3");
+      expect(groupMetadataRow.getAttribute("aria-posinset")).toBe("4");
+
+      groupRow.focus();
+      await act(async () => {
+        press(groupRow, "ArrowDown");
+      });
+      expect(dom.document.activeElement).toBe(arrayRow);
+      await act(async () => {
+        press(arrayRow, "ArrowDown");
+      });
+      expect(dom.document.activeElement).toBe(attributesRow);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
   });
 
   it("keeps historical return and error state visible without inventing a live run", () => {
@@ -234,13 +332,15 @@ describe("ResultsOutputTree", () => {
         error={new Error("Catalog revision is stale.")}
         isHistoricalActive
         catalog={{ ...catalog, run_id: null }}
+        returnActionLabel="Close results"
         status="stale"
         ui={noopUi}
       />,
     );
 
     expect(html).toContain("Catalog revision is stale.");
-    expect(html).toContain("Return to live");
+    expect(html).toContain("Close results");
+    expect(html).not.toContain("Return to live");
     expect(html).toContain("Run: —");
     expect(html).not.toContain("Current session");
   });
@@ -389,9 +489,10 @@ describe("ResultsOutputTree", () => {
       const deepRow = findTreeRow(container, "dir-deep");
       const finalRow = findTreeRow(container, "file-deep");
       const zetaRow = findTreeRow(container, "dir-zeta");
+      const lastRow = findTreeRow(container, "file-log");
       const treeRows = () =>
         [fieldsRow, deepRow, finalRow, findTreeRow(container, "array-m"),
-          findTreeRow(container, "file-log"), zetaRow];
+          zetaRow, lastRow];
 
       expect(treeRows().filter((row) => row.getAttribute("tabindex") === "0"))
         .toHaveLength(1);
@@ -436,9 +537,9 @@ describe("ResultsOutputTree", () => {
       await act(async () => {
         press(deepRow, "End");
       });
-      expect(dom.document.activeElement).toBe(zetaRow);
+      expect(dom.document.activeElement).toBe(lastRow);
       await act(async () => {
-        press(zetaRow, "Home");
+        press(lastRow, "Home");
       });
       expect(dom.document.activeElement).toBe(fieldsRow);
 

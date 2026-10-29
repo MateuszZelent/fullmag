@@ -4,8 +4,10 @@ import { useEffect, useState } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import type { SavedPlaybackResource } from "@/kernel/api/savedResultsPlayback";
+import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import { useSavedResultsPlaybackSelection } from "@/kernel/saved-results/useSavedResultsPlayback";
 import { useSavedResultsManifestResource } from "@/kernel/resources/savedResultsPlaybackResources";
+import { returnResultsToLive } from "@/kernel/visualization/returnResultsToLive";
 import { Button } from "@/shared/ui/Button";
 import { Input } from "@/shared/ui/Input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/Select";
@@ -90,6 +92,7 @@ function ColorLimitControl({
 
 export function SavedResultsPlaybackInspector() {
   const kernel = useKernel();
+  const sessionIdentity = useSessionResourceIdentity();
   const selection = useSavedResultsPlaybackSelection();
   const manifestResource = useSavedResultsManifestResource(selection?.itemId ?? null);
   const manifest = manifestResource.data;
@@ -248,11 +251,11 @@ export function SavedResultsPlaybackInspector() {
 
           <Button
             className="fm-saved-results-playback-inspector__close"
-            onClick={() => kernel.savedResultsPlayback?.close()}
+            onClick={() => returnResultsToLive(kernel)}
             type="button"
             variant="secondary"
           >
-            Close playback
+            {sessionIdentity ? "Return to live" : "Close results"}
           </Button>
         </>
       ) : null}

@@ -31,6 +31,11 @@ const fixtures = vi.hoisted(() => ({
   arrayStatus: "ready",
   sampleStatus: "ready",
   sampleData: new Float64Array([1, 0, 0]),
+  sessionIdentity: null as {
+    requestScopeEpoch: string;
+    sessionEpoch: string;
+    sessionId: string;
+  } | null,
   samples: {
     0: new Float64Array([1, 0, 0]),
     1: new Float64Array([0, 0, 2]),
@@ -46,7 +51,7 @@ vi.mock("@/kernel/KernelContext", () => ({
 }));
 
 vi.mock("@/kernel/resources/useSessionStatus", () => ({
-  useSessionResourceIdentity: () => null,
+  useSessionResourceIdentity: () => fixtures.sessionIdentity,
 }));
 
 vi.mock("@/kernel/resources/resultsBrowserResources", () => ({
@@ -185,6 +190,7 @@ function resetFixtures(): void {
   fixtures.arrayStatus = "ready";
   fixtures.sampleStatus = "ready";
   fixtures.sampleData = fixtures.samples[0];
+  fixtures.sessionIdentity = null;
 }
 
 async function renderViewport(
@@ -230,6 +236,7 @@ describe("ResultsSnapshotViewport frame retention", () => {
       expect(pending.textContent).toContain("Requested: index 1");
       expect(pending.textContent).toContain("coolwarm");
       expect(pending.textContent).toContain(" · x · coolwarm");
+      expect(pending.textContent).toContain("Close results");
       const pendingCanvas = findElement(
         container,
         (element) => element.getAttribute("data-testid") === "saved-field-canvas",
@@ -254,6 +261,30 @@ describe("ResultsSnapshotViewport frame retention", () => {
         "ready canvas",
       );
       expect(readyCanvas.getAttribute("data-frame-index")).toBe("1");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("uses the live-return label only after session identity is confirmed", async () => {
+    resetFixtures();
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+
+    try {
+      await renderViewport(root);
+      expect(viewport(container).textContent).toContain("Close results");
+
+      fixtures.sessionIdentity = {
+        requestScopeEpoch: "scope-1",
+        sessionEpoch: "epoch-1",
+        sessionId: "session-1",
+      };
+      await renderViewport(root);
+      expect(viewport(container).textContent).toContain("Return to live");
+      expect(viewport(container).textContent).not.toContain("Close results");
     } finally {
       await act(async () => root.unmount());
       dom.restore();

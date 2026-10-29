@@ -1492,6 +1492,7 @@ export default function Viewport3DModule(props: ModuleProps) {
 }
 
 function BrowserOnlyResultsViewport({ kernel }: Pick<ModuleProps, "kernel">) {
+  const sessionIdentity = useSessionResourceIdentity();
   return (
     <section
       aria-label="Results 3D viewport"
@@ -1502,7 +1503,7 @@ function BrowserOnlyResultsViewport({ kernel }: Pick<ModuleProps, "kernel">) {
         Select an output in Results and load into 3D.
       </p>
       <Button size="sm" type="button" variant="secondary" onClick={() => returnResultsToLive(kernel)}>
-        Return to live
+        {sessionIdentity ? "Return to live" : "Close results"}
       </Button>
     </section>
   );
