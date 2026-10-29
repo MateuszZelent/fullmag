@@ -65,6 +65,8 @@ import {
   SIMULATION_COMMANDS_PATH,
   SIMULATION_OBJECT_METRICS_PATH,
   SIMULATION_PREPARATION_PATH,
+  SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
+  SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
   SIMULATION_STAGE_HYSTERESIS_ORIENTATION_PATH,
@@ -539,6 +541,16 @@ export class RealtimeInvalidationBridge {
           change.resource === "fields" && change.resource_id === "samples";
         const planarFieldChange = change.resource === "planar_fields";
         const scalarChange = change.resource === "scalars";
+
+        if (
+          recommendedFetch === SIMULATION_SOLVER_ENERGIES_CURRENT_PATH &&
+          change.resource === "simulation"
+        ) {
+          this.queuePrefixInvalidation(
+            SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
+            change.revision,
+          );
+        }
 
         if (scalarChange) {
           this.queuePrefixInvalidation(DATA_SCALARS_PATH, change.revision);

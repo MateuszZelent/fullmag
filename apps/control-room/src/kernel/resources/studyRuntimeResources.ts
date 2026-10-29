@@ -1496,6 +1496,7 @@ export function useSolverEnergyHistoryResource(
   return useSessionScopedResource<SolverEnergyHistoryResource | null>({
     enabled,
     load,
+    minRefetchIntervalMs: tableRowsMinRefetchIntervalMs(),
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
   });
