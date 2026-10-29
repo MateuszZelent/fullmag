@@ -424,3 +424,13 @@ Review kolejnego CI40897875054 ustalił błędny zakres odczytu fixture'u:
 `candidate_operator_diagnostic` jest pod `last_true_probe`, nie bezpośrednio
 pod failure_probe. Poprawiono depth-1 lookup; równość z faktycznym callbackiem
 pozostaje sprawdzana. Nie zmieniono produkcji, KSP ani physical acceptance.
+
+
+I6 checkpoint wypchnięty: `14fc9280e39a1551743a375a491257819012ce5e`.
+Hosted source profiles: MFEM/directCompose40905285319, no-stack40905296548,
+Floquet/SLEPc40905306186, method40905319431. Ostatni przeszedł nowe testy
+Python v2 i mapę naukową; Rust1853PASS/1FAIL/1ignored wykrył złą kolejność
+alokacji metryki przed odmową niecertyfikowanej równowagi. Naprawiono kod:
+cache identity sprawdzamy przed solve, nowy native tracking powstaje dopiero
+po zaakceptowanym completion i raw checkpoint. Oczekiwanie testu i gate
+`uncertified_provided_equilibrium` pozostały bez zmian. Wymagany recheck CI.

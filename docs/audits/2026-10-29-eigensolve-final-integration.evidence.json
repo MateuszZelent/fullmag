@@ -104,6 +104,22 @@
     ],
     "direct_compose_source_identity": "runtime build-info helper; hosted direct-compose profile added",
     "local_test_compilation": false,
-    "new_native_runtime": "NOT VERIFIED"
+    "new_native_runtime": "NOT VERIFIED",
+    "source_commit": "14fc9280e39a1551743a375a491257819012ce5e",
+    "hosted_runs": {
+      "tracking-mass-mfem": 40905285319,
+      "tracking-mass-stub": 40905296548,
+      "floquet-modal-slepc": 40905306186,
+      "method-default-runner-and-python": 40905319431
+    },
+    "method_run_observation": {
+      "python_native_v2_tests": "success",
+      "scientific_source_map": "success",
+      "runner_passed": 1853,
+      "runner_failed": 1,
+      "runner_ignored": 1,
+      "failure": "native tracking allocation masked uncertified equilibrium admission; metric construction moved after accepted completion without changing fixture",
+      "recheck": "pending"
+    }
   }
 }

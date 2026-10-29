@@ -1503,7 +1503,8 @@ Wewnętrzna wspólna dodatnia skala M może służyć reprezentowalności;
 nie zmienia znormalizowanych overlapów i nie zmienia zapisanego CSR w m^3.
 
 Snapshot powstaje raz dla danej generacji siatki i maski magnetycznych
-komórek, przed rozdzieleniem k. Mapy DOF/węzłów i tożsamość źródeł muszą być
+komórek. W serial powstaje po pierwszym zaakceptowanym rozwiązaniu i raw
+checkpoint; pool współdzieli snapshot przygotowany dla tej samej siatki. Mapy DOF/węzłów i tożsamość źródeł muszą być
 sprawdzone przed użyciem; wiersze wyłącznie powietrzne nie uczestniczą
 w metryce magnetyka. Ścieżka native ma korzystać z CSR, nie tylko zapisać
 jego hash jako sidecar obok nadal używanej metryki Rust. Jawna historyczna
@@ -1543,3 +1544,11 @@ Native snapshot odczytuje source SHA ze wspólnego runtime build-info,
 który obsługuje zarówno target-wide macro, jak i generated header direct
 Compose. Hosted profil tracking-mass-mfem jawnie ustawia DIRECT_COMPOSE=1,
 aby uniknąć pozornej kwalifikacji wyłącznie historycznej ścieżki makra.
+
+
+Hosted suite 40905319431 wykrył nowy błąd kolejności admission: native tracking
+był tworzony przed sprawdzeniem certyfikatu równowagi i zasłaniał właściwy
+błąd `uncertified_provided_equilibrium`. Tworzenie metryki serial przesunięto
+za zaakceptowane native completion i raw checkpoint; kontrola niezmienności
+już istniejącej siatki pozostaje przed solve. Nie zmieniono fixture'u ani
+wymagania certyfikowanej równowagi. Nowy przebieg CI jest wymagany.

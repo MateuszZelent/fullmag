@@ -3491,24 +3491,13 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
                         message: format!("eigen path tracking mesh identity: {message}"),
                     })?;
             let cached_tracking_metric = self.tracking_metric.borrow().clone();
-            let tracking_metric = match cached_tracking_metric {
-                Some(metric) if metric.mesh_identity() != expected_tracking_mesh.as_str() => {
-                    return Err(RunError {
-                        message: "eigen path tracking mesh changed between samples".into(),
-                    });
-                }
-                Some(metric) => metric,
-                None => {
-                    let metric = eigen_path_consistent_tracking_metric(
-                        &tracking_topology,
-                        &point_plan.mesh,
-                        self.engine == FemEngine::NativeGpu || native_cpu_modal_window_enabled(&point_plan),
-                    )?;
-                    *self.tracking_metric.borrow_mut() = Some(metric.clone());
-                    metric
-                }
-            };
-            let tracking_active_nodes = tracking_metric.node_indices();
+            if cached_tracking_metric.as_ref().is_some_and(|metric| {
+                metric.mesh_identity() != expected_tracking_mesh.as_str()
+            }) {
+                return Err(RunError {
+                    message: "eigen path tracking mesh changed between samples".into(),
+                });
+            }
             // A non-sweep path consumes the immutable Relax-stage handoff for
             // every k point. A bias-field path owns a separate accepted
             // equilibrium and therefore takes the per-sample relaxation route
@@ -3583,6 +3572,22 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
                     return Ok(SingleKSolveOutcome::Interrupted(action));
                 }
             }
+            // Equilibrium admission, native solve and raw checkpoint happen
+            // before native tracking allocation. In particular, an invalid
+            // equilibrium must not be hidden by a postprocessing feature error.
+            let tracking_metric = match cached_tracking_metric {
+                Some(metric) => metric,
+                None => {
+                    let metric = eigen_path_consistent_tracking_metric(
+                        &tracking_topology,
+                        &point_plan.mesh,
+                        self.engine == FemEngine::NativeGpu || native_cpu_modal_window_enabled(&point_plan),
+                    )?;
+                    *self.tracking_metric.borrow_mut() = Some(metric.clone());
+                    metric
+                }
+            };
+            let tracking_active_nodes = tracking_metric.node_indices();
             {
                 let final_magnetization = &executed.result.final_magnetization;
                 if final_magnetization.len() != plan.mesh.nodes.len()
