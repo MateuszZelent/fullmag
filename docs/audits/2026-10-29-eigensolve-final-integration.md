@@ -111,3 +111,11 @@ Nowa regresja porównuje markup serwera przy obecnym/nieobecnym window i wymaga
 zera odczytów localStorage podczas renderu. Nie wyłączono reguły doktora.
 Fixture frontend volume aktualizuje niezależnie wyliczony digest o metadata
 files, zgodnie z bieżącym kluczem produkcyjnym (guard label drift zachowany).
+
+
+Browser smoke po korekcie uchwytów przeszedł Inspector resize/reset i dotarł do
+wykresów. Stary odczyt wymagał jednoczesnego pokazania identity/field/resource
+w jednym panelu. Aktualny test przechodzi przez Data (sample/mode/field),
+Provenance (exact resource) i Diagnostics (niezależne residuale), a potem wraca
+do Overview. Zachowuje wcześniejsze asercje właściciela JSON, generacji,
+equilibrium i indeksu źródłowego rzeczywistego kliknięcia ECharts.

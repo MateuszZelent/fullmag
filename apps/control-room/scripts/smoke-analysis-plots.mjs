@@ -1850,46 +1850,35 @@ async function clickFrequencyDomainPoint(page, expected, fixtureId, fixture, fre
       `Selected mode detail published residual_relative_l2; the browser fallback case must obtain it from the spectrum.`,
     );
   }
+  const inspector = page.locator(".fm-inspector");
+  await inspector.getByRole("tab", { name: "Data", exact: true }).click();
   await page.waitForFunction(
-    ({ expectedFieldId, expectedIdentity, expectedResourceRef }) => {
-      const panel = document.querySelector(
-        '[data-inspector-owner="frequency-domain.eigen-mode"]',
-      );
+    ({ expectedFieldId, expectedIdentity }) => {
+      const panel = document.querySelector('[data-inspector-owner="frequency-domain.eigen-mode"]');
       const text = panel?.textContent ?? "";
-      return Boolean(
-        panel &&
-        text.includes(expectedIdentity) &&
-        text.includes(expectedFieldId) &&
-        text.includes(expectedResourceRef)
-      );
+      return Boolean(panel && text.includes(expectedIdentity) && text.includes(expectedFieldId));
     },
-    {
-      expectedFieldId: expected.fieldId,
-      expectedIdentity: `sample ${expected.sampleIndex}, mode ${expected.modeIndex}`,
-      expectedResourceRef: expected.resourceRef,
-    },
+    { expectedFieldId: expected.fieldId, expectedIdentity: `sample ${expected.sampleIndex}, mode ${expected.modeIndex}` },
     { timeout: 1_200 },
-  ).catch(() => undefined);
-  const inspectorText = await page
-    .locator('[data-inspector-owner="frequency-domain.eigen-mode"]')
-    .textContent()
-    .catch(() => "");
-  if (
-    !inspectorText?.includes(`sample ${expected.sampleIndex}, mode ${expected.modeIndex}`) ||
-    !inspectorText.includes(expected.fieldId) ||
-    !inspectorText.includes(expected.resourceRef)
-  ) {
-    const inspectorText = await page
-      .locator(".fm-inspector-panel")
-      .textContent()
-      .catch(() => "");
-    throw new Error(
-      `Rendered row ${expected.rowId} did not select sample ${expected.sampleIndex}, mode ${expected.modeIndex}, field ${expected.fieldId}. Inspector: ${inspectorText}`,
-    );
+  );
+  const inspectorText = await inspector.locator('[data-inspector-owner="frequency-domain.eigen-mode"]').textContent();
+  if (!inspectorText?.includes(`sample ${expected.sampleIndex}, mode ${expected.modeIndex}`) ||
+      !inspectorText.includes(expected.fieldId)) {
+    throw new Error(`Rendered row ${expected.rowId} selected another mode in the Data tab: ${inspectorText}`);
   }
-  const residualFields = expected.residualFields
-    ? await waitForFrequencyDomainResidualFields(page, expected.residualFields)
-    : null;
+  await inspector.getByRole("tab", { name: "Provenance", exact: true }).click();
+  await inspector.locator('.fm-result-inspector[data-result-tab="provenance"]').waitFor({ state: "visible" });
+  const provenance = await inspector.locator(".fm-result-inspector").textContent();
+  if (!provenance?.includes(expected.resourceRef)) {
+    throw new Error(`Selected mode lost its exact resource in Provenance: ${provenance}`);
+  }
+  let residualFields = null;
+  if (expected.residualFields) {
+    await inspector.getByRole("tab", { name: "Diagnostics", exact: true }).click();
+    residualFields = await waitForFrequencyDomainResidualFields(page, expected.residualFields);
+  }
+  await inspector.getByRole("tab", { name: "Overview", exact: true }).click();
+  await inspector.locator('.fm-result-inspector[data-result-tab="overview"]').waitFor({ state: "visible" });
   const renderedClick = await page.evaluate(({ rowId, sourceGapRow }) => {
     const diagnostics = window.__FULLMAG_CHART_DIAGNOSTICS__;
     const click = diagnostics?.lastRenderedClick;
