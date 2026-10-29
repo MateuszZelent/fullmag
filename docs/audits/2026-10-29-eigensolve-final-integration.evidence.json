@@ -194,5 +194,35 @@
     "hosted_recheck": "pending",
     "evidence": "2026-10-29-eigensolve-preparation-staging-race.evidence.json",
     "compute_repeated": false
+  },
+  "storage_check_20261029": {
+    "observed_at_utc": "2026-10-29T19:13:00Z",
+    "docker_build_control_free_gib_approx": 260,
+    "ubuntu_state_free_gib_approx": 6,
+    "windows_c_free_gib_approx": 13,
+    "storage_total_gib_approx": 17,
+    "host_builds_less_than_mib": 1,
+    "deleted": false,
+    "full_home_scan": "cancelled-incomplete",
+    "build_threshold_ubuntu_request": "wrong-filesystem-corrected"
+  },
+  "cancel_before_start_recovery": {
+    "activation": "e603ca28017940beb9f171ca6da8ba00",
+    "run": "run-live-abb3a9134ca582539dc92f736e9bfd842cc22bdcfd914eaab4c17731786cbb90",
+    "run_state": "cancelled",
+    "compute_issued": false,
+    "preview": "ready-for-explicit-apply",
+    "plan_sha256": "d94a5fcbacdbbc5f96cc91d310e38044a65bee1c9595defd24e85f4891437f60",
+    "applied": false,
+    "qualification": "NOT VERIFIED",
+    "operator_tests": "hosted execution pending"
+  },
+  "planning_gate_7f378d65f": {
+    "run_id": 40935795721,
+    "passed": 583,
+    "failed": 13,
+    "xy_gamma_fixture": "passed",
+    "upstream_fixes_available": 11,
+    "spectral_output_fixture_fixes": "source-only"
   }
 }

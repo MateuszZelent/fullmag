@@ -65,6 +65,8 @@ MAX_SCOPE_OUTPUT_BYTES = 1024 * 1024
 MAX_TASKS = 4096
 MAX_PREPARATION_EVIDENCE_RECORDS = 64
 RECOVERY_CURRENT = "cancelled-activation-recovery/current.json"
+CANCEL_BEFORE_START_MODE = "cancel-before-start"
+FAILED_PREPARATION_MODE = "failed-preparation"
 
 
 class CancelledActivationRecoveryError(BuildControlError):
@@ -133,6 +135,14 @@ def _stable_store_probe(probe: Mapping[str, object]) -> dict[str, object]:
         "preparation_inventory",
         "preparation_host_reservations",
         "failed_preparation",
+        "preparation_mode",
+        "start_release_absent",
+        "task_admissions_empty",
+        "execution_state",
+        "retained_current_run_total_steps",
+        "artifact_catalog_present",
+        "artifact_catalog_entry_count",
+        "artifact_catalog_sha256",
     )
     stable: dict[str, object] = {"schema": "fullmag.docker-activation-cancel-probe.v1"}
     for key in required:
@@ -254,7 +264,10 @@ def _validate_preparation_inventory(
     value: object,
     *,
     task_ids: set[str],
+    mode: str = FAILED_PREPARATION_MODE,
 ) -> list[dict[str, object]]:
+    if mode not in {FAILED_PREPARATION_MODE, CANCEL_BEFORE_START_MODE}:
+        raise _fail("cancelled preparation inventory mode is invalid")
     if not isinstance(value, list) or not value or len(value) > MAX_TASKS:
         raise _fail("cancelled preparation inventory is not bounded")
     required = {
@@ -347,8 +360,11 @@ def _validate_preparation_inventory(
         result.append(dict(entry))
     if seen != task_ids:
         raise _fail("preparation inventory does not cover every accepted task")
-    if success_count != 1 or failed_count != 1:
-        raise _fail("cancelled preparation inventory must contain one success and one failure")
+    if mode == FAILED_PREPARATION_MODE:
+        if success_count != 1 or failed_count != 1:
+            raise _fail("cancelled preparation inventory must contain one success and one failure")
+    elif failed_count != 0 or success_count != len(task_ids):
+        raise _fail("cancel-before-start preparation inventory must contain only successful preparations")
     return sorted(result, key=lambda item: str(item["task_id"]))
 
 
@@ -570,6 +586,181 @@ def _validate_failed_preparation_probe(
     }
 
 
+def _validate_cancel_before_start_probe(
+    probe: Mapping[str, object],
+    *,
+    request_id: str,
+    source_sha256: str,
+    expected_run_id: str | None = None,
+    expected_session_id: str | None = None,
+) -> dict[str, object]:
+    """Validate an all-success preparation set that never reached Compute."""
+    if probe.get("schema") != "fullmag.docker-activation-cancel-probe.v1":
+        raise _fail("cancel-before-start probe schema differs")
+    for key, expected in {
+        "request_id": request_id,
+        "source_sha256": source_sha256,
+    }.items():
+        if probe.get(key) != expected:
+            raise _fail(f"cancel-before-start probe {key} differs from the unknown activation")
+    if expected_run_id is not None and probe.get("run_id") != expected_run_id:
+        raise _fail("cancel-before-start run differs from the retained retirement identity")
+    if expected_session_id is not None and probe.get("live_session_id") != expected_session_id:
+        raise _fail("cancel-before-start session differs from the retained retirement identity")
+    if probe.get("preparation_mode") != CANCEL_BEFORE_START_MODE:
+        raise _fail("cancel-before-start probe mode is not explicit")
+    for key in ("start_release_absent", "task_admissions_empty"):
+        if probe.get(key) is not True:
+            raise _fail("cancel-before-start probe lacks its " + key.replace("_", " ") + " proof")
+    if probe.get("execution_state") != "not-started":
+        raise _fail("cancel-before-start probe execution state is not not-started")
+    _cancelled_activation_id(probe.get("run_id"), "run_id")
+    _cancelled_activation_id(probe.get("cancellation_id"), "cancellation_id")
+    _cancelled_activation_sha(probe.get("run_intent_sha256"), "run intent")
+    _cancelled_activation_sha(probe.get("run_catalog_sha256"), "run catalog")
+    _cancelled_activation_sha(probe.get("cancellation_intent_sha256"), "cancellation intent")
+    _cancelled_activation_sha(probe.get("activation_marker_sha256"), "activation marker")
+    _cancelled_activation_sha(probe.get("live_workspace_sha256"), "live workspace")
+    if not isinstance(probe.get("live_api_instance_id"), str) or not probe["live_api_instance_id"]:
+        raise _fail("cancel-before-start probe has no live API instance")
+    if not isinstance(probe.get("live_session_id"), str) or not probe["live_session_id"]:
+        raise _fail("cancel-before-start probe has no live session")
+    for key in ("live_session_epoch", "live_scene_revision", "catalog_revision", "task_count"):
+        value = probe.get(key)
+        if type(value) is not int or value < 0:
+            raise _fail(f"cancel-before-start probe {key} is invalid")
+    if probe["catalog_revision"] <= 0 or not 0 < probe["task_count"] <= MAX_TASKS:
+        raise _fail("cancel-before-start probe does not identify a bounded accepted task set")
+    task_inventory = _validate_task_inventory(
+        probe.get("task_inventory"), expected_task_count=probe["task_count"],
+    )
+    task_ids = {str(entry["task_id"]) for entry in task_inventory}
+    task_id = probe.get("task_id")
+    if (not isinstance(task_id, str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}", task_id) is None
+            or task_id in {".", ".."} or task_id.endswith(".")):
+        raise _fail("cancel-before-start task_id is invalid")
+    if task_id not in task_ids:
+        raise _fail("cancel-before-start probe target is absent from the task inventory")
+    if probe.get("matching_reservations") != 0:
+        raise _fail("cancel-before-start task set still has a host resource reservation")
+    queue = probe.get("compute_queue")
+    if not isinstance(queue, Mapping) or queue.get("items") != []:
+        raise _fail("cancel-before-start task set still has queued compute")
+    runtime = probe.get("runtime_service")
+    if (not isinstance(runtime, Mapping)
+            or runtime.get("configured") is not True
+            or runtime.get("state") != "ready"):
+        raise _fail("native runtime service is not Ready for cancel-before-start")
+    health = probe.get("health")
+    if (not isinstance(health, Mapping)
+            or health.get("status") != "ok"
+            or health.get("active_session") is not True):
+        raise _fail("cancel-before-start probe lost the active Ready session")
+    if not isinstance(probe.get("retained_current_run_sha256"), str):
+        raise _fail("cancel-before-start probe has no retained current run read model")
+    _cancelled_activation_sha(
+        probe["retained_current_run_sha256"], "retained current run",
+    )
+    if (type(probe.get("retained_current_run_task_count")) is not int
+            or probe["retained_current_run_task_count"] != probe["task_count"]
+            or type(probe.get("retained_current_run_total_steps")) is not int
+            or probe["retained_current_run_total_steps"] != probe["task_count"]):
+        raise _fail("cancel-before-start current run planned task count differs from the accepted catalog")
+    artifact_catalog_present = probe.get("artifact_catalog_present")
+    artifact_catalog_entry_count = probe.get("artifact_catalog_entry_count")
+    if type(artifact_catalog_present) is not bool:
+        raise _fail("cancel-before-start artifact catalog presence proof is invalid")
+    if (type(artifact_catalog_entry_count) is not int
+            or artifact_catalog_entry_count < 0
+            or artifact_catalog_entry_count != 0):
+        raise _fail("cancel-before-start canonical artifact catalog contains entries")
+    artifact_catalog_sha256 = probe.get("artifact_catalog_sha256")
+    if artifact_catalog_present:
+        _cancelled_activation_sha(artifact_catalog_sha256, "canonical artifact catalog")
+    elif artifact_catalog_sha256 is not None:
+        raise _fail("cancel-before-start artifact catalog digest is present without its file")
+
+    evidence = _validate_preparation_evidence(
+        probe.get("preparation_evidence"), "cancel-before-start preparation evidence",
+    )
+    preparation_inventory = _validate_preparation_inventory(
+        probe.get("preparation_inventory"),
+        task_ids=task_ids,
+        mode=CANCEL_BEFORE_START_MODE,
+    )
+    if "failed_preparation" in probe:
+        raise _fail("cancel-before-start probe contains failed preparation state")
+    if len(evidence) < 4 * len(task_ids):
+        raise _fail("cancel-before-start preparation evidence is incomplete")
+    evidence_paths = {entry["path"] for entry in evidence}
+    inventory_paths = {
+        path
+        for entry in preparation_inventory
+        for path in (
+            entry.get("launch_path"), entry.get("exit_path"), entry.get("lease_path"),
+            entry.get("task_receipt_path"), entry.get("stage_receipt_path"),
+        )
+        if path is not None
+    }
+    if evidence_paths != inventory_paths:
+        raise _fail("cancel-before-start evidence contains an unknown or unpinned file")
+
+    host_reservations = _validate_preparation_host_reservations(
+        probe.get("preparation_host_reservations", []),
+        "cancel-before-start host reservation evidence",
+    )
+    inventory_keys = {
+        (str(entry["task_id"]), str(entry["resource_id"]), str(entry["lease_token"]))
+        for entry in preparation_inventory
+    }
+    reservation_keys = set()
+    for reservation in host_reservations:
+        identity = reservation["identity"]
+        key = (
+            str(identity["task_id"]),
+            str(identity["resource_id"]),
+            str(identity["lease_token"]),
+        )
+        if key not in inventory_keys or key in reservation_keys:
+            raise _fail("cancel-before-start host reservation is not bound to one inventory lease")
+        reservation_keys.add(key)
+
+    result = {
+        "preparation_mode": CANCEL_BEFORE_START_MODE,
+        "start_release_absent": True,
+        "task_admissions_empty": True,
+        "execution_state": "not-started",
+        "retained_current_run_total_steps": probe["retained_current_run_total_steps"],
+        "artifact_catalog_present": artifact_catalog_present,
+        "artifact_catalog_entry_count": artifact_catalog_entry_count,
+        "run_id": probe["run_id"],
+        "task_id": probe["task_id"],
+        "session_id": probe["live_session_id"],
+        "cancellation_id": probe["cancellation_id"],
+        "request_id": request_id,
+        "source_sha256": source_sha256,
+        "catalog_revision": probe["catalog_revision"],
+        "run_intent_sha256": probe["run_intent_sha256"],
+        "run_catalog_sha256": probe["run_catalog_sha256"],
+        "cancellation_intent_sha256": probe["cancellation_intent_sha256"],
+        "activation_marker_sha256": probe["activation_marker_sha256"],
+        "live_api_instance_id": probe["live_api_instance_id"],
+        "live_session_epoch": probe["live_session_epoch"],
+        "live_scene_revision": probe["live_scene_revision"],
+        "live_workspace_sha256": probe["live_workspace_sha256"],
+        "retained_current_run_sha256": probe["retained_current_run_sha256"],
+        "task_inventory": task_inventory,
+        "preparation_evidence": evidence,
+        "preparation_inventory": preparation_inventory,
+        "preparation_host_reservations": host_reservations,
+        "probe": _stable_store_probe(probe),
+    }
+    if artifact_catalog_present:
+        result["artifact_catalog_sha256"] = artifact_catalog_sha256
+    return result
+
+
 def _legacy_failed_preparation_probe_script() -> str:
     """Reuse the locked read-only cancellation proof with failed-run evidence.
 
@@ -741,7 +932,17 @@ def _legacy_failed_preparation_probe_script() -> str:
 
 
 def _failed_preparation_probe_script() -> str:
+    return _multi_task_preparation_probe_script(FAILED_PREPARATION_MODE)
+
+
+def _cancel_before_start_probe_script() -> str:
+    return _multi_task_preparation_probe_script(CANCEL_BEFORE_START_MODE)
+
+
+def _multi_task_preparation_probe_script(mode: str) -> str:
     """Build the bounded multi-task cancellation probe from the locked probe."""
+    if mode not in {FAILED_PREPARATION_MODE, CANCEL_BEFORE_START_MODE}:
+        raise _fail("cancelled preparation probe mode is invalid")
     source = _legacy_failed_preparation_probe_script()
     base = _cancelled_activation_probe_script()
     redundant_reads = "\n".join((
@@ -826,6 +1027,10 @@ def _failed_preparation_probe_script() -> str:
     if success_body.count(old_manifest) != 1:
         raise _fail("existing cancellation probe successful preparation manifest changed")
     success_body = success_body.replace(old_manifest, new_manifest)
+    all_success_body = "\n".join(
+        line[4:] if line.startswith("    ") else line
+        for line in success_body.splitlines()
+    )
 
     legacy_lines = source[prep_start:prep_end].splitlines()
     failure_manifest = next(
@@ -883,7 +1088,105 @@ def _failed_preparation_probe_script() -> str:
     preparation_evidence.sort(key=lambda item:item["path"])
     preparation_inventory.sort(key=lambda item:item["task_id"])
 '''
+    if mode == CANCEL_BEFORE_START_MODE:
+        multi_block = '''    raw_task_receipts=read_records(run/"task_preparation_receipts","task preparation receipts")
+    raw_stage_receipts=read_records(run/"accepted_stage_preparation_receipts","accepted stage preparation receipts")
+    raw_prep_launches=read_records(run/"preparation_process_launches","preparation process launches")
+    raw_prep_exits=read_records(run/"preparation_process_exit_receipts","preparation process exits")
+    raw_prep_leases=read_records(run/"preparation_resource_leases","preparation resource leases",1)
+    all_preparation_records=raw_task_receipts+raw_stage_receipts+raw_prep_launches+raw_prep_exits+raw_prep_leases
+    preparation_evidence=[]; preparation_inventory=[]; evidence_by_task={}; assigned_records=0
+    for current_task_id in sorted(task_ids):
+        task_id=current_task_id; target=tasks_by_id[task_id]
+        task_receipts=[record for record in raw_task_receipts if record["value"].get("task_id")==task_id]
+        stage_receipts=[record for record in raw_stage_receipts if record["value"].get("task_id")==task_id]
+        prep_launches=[record for record in raw_prep_launches if record["value"].get("task_id")==task_id]
+        prep_exits=[record for record in raw_prep_exits if record["value"].get("task_id")==task_id]
+        prep_leases=[record for record in raw_prep_leases if record["value"].get("task_id")==task_id]
+        preparation_records=task_receipts+stage_receipts+prep_launches+prep_exits+prep_leases
+        assigned_records+=len(preparation_records)
+        if (not task_receipts or len(task_receipts)!=1 or len(stage_receipts)>1
+                or len(prep_launches)!=1 or len(prep_exits)!=1 or len(prep_leases)!=1):
+            fail("cancel-before-start preparation evidence is not one exact process chain")
+'''+all_success_body+'''
+        evidence_by_task[task_id]={"launch":launch,"process_exit":process_exit,"prep_lease":prep_lease}
+        preparation_inventory.append({"task_id":task_id,"outcome":"succeeded","launch_id":launch["launch_id"],"preparation_attempt_id":launch["preparation_attempt_id"],"resource_id":launch["resource_id"],"lease_token":launch["lease_token"],"launch_path":launch_record["path"],"launch_sha256":digest(launch_record["raw"]),"exit_path":exit_record["path"],"exit_sha256":digest(exit_record["raw"]),"lease_path":lease_record["path"],"lease_sha256":digest(lease_record["raw"]),"lease_heartbeat_sequence":prep_lease["heartbeat_sequence"],"exit_code":process_exit["exit_code"],"timed_out":process_exit["timed_out"],"lease_state":prep_lease["state"],"released_at":prep_lease["released_at"],"task_receipt_path":task_receipts[0]["path"],"task_receipt_sha256":digest(task_receipts[0]["raw"]),"stage_receipt_path":stage_receipts[0]["path"] if stage_receipts else None,"stage_receipt_sha256":digest(stage_receipts[0]["raw"]) if stage_receipts else None})
+    if assigned_records!=len(all_preparation_records): fail("preparation evidence contains an unknown task identity")
+    if (len(preparation_inventory)!=len(task_ids)
+            or any(entry["outcome"]!="succeeded" for entry in preparation_inventory)):
+        fail("cancel-before-start preparation set is not all-success")
+    task_id=sorted(task_ids)[0]; target=tasks_by_id[task_id]
+    task_receipts=[record for record in raw_task_receipts if record["value"].get("task_id")==task_id]
+    stage_receipts=[record for record in raw_stage_receipts if record["value"].get("task_id")==task_id]
+    prep_launches=[record for record in raw_prep_launches if record["value"].get("task_id")==task_id]
+    prep_exits=[record for record in raw_prep_exits if record["value"].get("task_id")==task_id]
+    prep_leases=[record for record in raw_prep_leases if record["value"].get("task_id")==task_id]
+    selected_data=evidence_by_task[task_id]
+    launch=selected_data["launch"]; process_exit=selected_data["process_exit"]; prep_lease=selected_data["prep_lease"]
+    launch_record=prep_launches[0]; exit_record=prep_exits[0]; lease_record=prep_leases[0]
+    resource_id=launch["resource_id"]; preparation_attempt=launch["preparation_attempt_id"]; launch_id=launch["launch_id"]
+    preparation_evidence.sort(key=lambda item:item["path"])
+    preparation_inventory.sort(key=lambda item:item["task_id"])
+    start_release=run/"start_release.json"
+    if start_release.exists() or start_release.is_symlink(): fail("cancel-before-start has a durable start release")
+'''
     source = source[:prep_start] + multi_block + source[prep_end:]
+
+    if mode == CANCEL_BEFORE_START_MODE:
+        solver_start = source.find("    solver_matches=matching_json(", prep_start)
+        solver_end = source.find(
+            '    ledger_raw=regular(ledger/"HOST_RESOURCE_LEDGER.json","host resource ledger")\n',
+            solver_start,
+        )
+        if solver_start < 0 or solver_end < 0:
+            raise _fail("existing cancellation probe solver lease block changed")
+        solver_block = '''    solver_root=run/"resource_leases"
+    solver_matches=[]
+    if solver_root.exists() or solver_root.is_symlink():
+        if solver_root.is_symlink() or not solver_root.is_dir(): fail("solver resource leases path is unsafe")
+        for current,dirs,files in os.walk(
+                solver_root,topdown=True,followlinks=False,
+                onerror=lambda error:fail("solver resource lease tree cannot be read")):
+            current=pathlib.Path(current)
+            for name in list(dirs):
+                path=current/name
+                if (current != solver_root or path.is_symlink() or not path.is_dir()
+                        or not name or len(name)>200 or name in {".",".."} or name.endswith(".")
+                        or any(char not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-" for char in name)):
+                    fail("solver resource lease directory is not canonical")
+            for name in files:
+                path=current/name
+                if path.is_symlink() or not path.is_file(): fail("solver resource lease entry is invalid")
+                if name.startswith(".") and name.endswith(".part"):
+                    stem=name[1:-5]
+                    try: staging_uuid=uuid.UUID(stem)
+                    except ValueError: staging_uuid=None
+                    if (current != solver_root and staging_uuid is not None
+                            and str(staging_uuid)==stem and staging_uuid.version==4):
+                        continue
+                path=current/name
+                if path.is_symlink() or not path.is_file() or path.suffix!=".json": fail("solver resource lease entry is invalid")
+                relative=path.relative_to(solver_root).parts
+                if len(relative)!=2 or not relative[1].endswith(".json"):
+                    fail("solver resource lease path is not canonical")
+                resource_id=relative[0]; lease_token=relative[1][:-5]
+                if (not resource_id or len(resource_id)>200 or resource_id in {".",".."}
+                        or resource_id.endswith(".")
+                        or any(char not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-" for char in resource_id)
+                        or not lease_token or len(lease_token)>200 or lease_token in {".",".."}
+                        or lease_token.endswith(".")
+                        or any(char not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-" for char in lease_token)):
+                    fail("solver resource lease identity is invalid")
+                value=strict_obj(regular(path,"solver resource lease"),"solver resource lease")
+                if (value.get("schema_version")!="resource_lease.v1"
+                        or value.get("run_id")!=run_id
+                        or value.get("resource_id")!=resource_id
+                        or value.get("lease_token")!=lease_token):
+                    fail("solver resource lease identity differs from its canonical path")
+                solver_matches.append(str(path))
+    if solver_matches: fail("cancel-before-start run retains a solver lease")
+'''
+        source = source[:solver_start] + solver_block + source[solver_end:]
 
     ledger_start = source.find(
         '    ledger_raw=regular(ledger/"HOST_RESOURCE_LEDGER.json","host resource ledger")\n'
@@ -983,31 +1286,120 @@ def _failed_preparation_probe_script() -> str:
     if ledger_block.count(old_final_reservation_guard) != 1:
         raise _fail("existing cancellation probe final reservation guard changed")
     ledger_block = ledger_block.replace(old_final_reservation_guard, new_final_reservation_guard, 1)
+    if mode == CANCEL_BEFORE_START_MODE:
+        old_run_reservation_scope = (
+            '        if isinstance(identity,dict) and identity.get("run_id")==run_id and identity.get("task_id") in task_ids:\n'
+        )
+        new_run_reservation_scope = (
+            '        if isinstance(identity,dict) and identity.get("run_id")==run_id:\n'
+            '            if (not isinstance(identity.get("task_id"),str)\n'
+            '                    or identity.get("task_id") not in task_ids):\n'
+            '                fail("cancel-before-start host reservation targets an unknown task")\n'
+        )
+        if ledger_block.count(old_run_reservation_scope) != 1:
+            raise _fail("existing cancellation probe host reservation scope changed")
+        ledger_block = ledger_block.replace(old_run_reservation_scope, new_run_reservation_scope, 1)
     source = source[:ledger_start] + ledger_block + source[ledger_end:]
+
+    if mode == CANCEL_BEFORE_START_MODE:
+        retained_steps_marker = "    retained_current_run_sha256=None\n"
+        retained_steps_replacement = (
+            "    retained_current_run_sha256=None\n"
+            "    retained_current_run_total_steps=None\n"
+        )
+        if source.count(retained_steps_marker) != 1:
+            raise _fail("existing cancellation probe retained-run marker changed")
+        source = source.replace(retained_steps_marker, retained_steps_replacement, 1)
+        retained_run_marker = "            retained_current_run_sha256=digest(run_raw)\n"
+        retained_run_replacement = (
+            "            retained_current_run_total_steps=retained_run.get(\"total_steps\")\n"
+            "            if (type(retained_current_run_total_steps) is not int\n"
+                    "                    or retained_current_run_total_steps!=len(tasks)):\n"
+            "                fail(\"cancel-before-start retained run task count differs from its catalogue\")\n"
+            "            retained_current_run_sha256=digest(run_raw)\n"
+        )
+        if source.count(retained_run_marker) != 1:
+            raise _fail("existing cancellation probe retained-run digest point changed")
+        source = source.replace(retained_run_marker, retained_run_replacement, 1)
+
+        artifact_marker = '    scene, _, _ = api_get("/v2/sessions/current/model/scene", "current live scene")\n'
+        artifact_probe = '''    artifact_catalog_path=run/"artifact_catalog.json"
+    artifact_catalog_present=False
+    artifact_catalog_entry_count=0
+    artifact_catalog_sha256=None
+    if artifact_catalog_path.exists() or artifact_catalog_path.is_symlink():
+        artifact_catalog_raw=regular(artifact_catalog_path,"canonical artifact catalog")
+        artifact_catalog=strict_obj(artifact_catalog_raw,"canonical artifact catalog")
+        if (set(artifact_catalog)!={"schema_version","run_id","revision","updated_at","entries"}
+                or artifact_catalog.get("schema_version")!="artifact_catalog.v1"
+                or artifact_catalog.get("run_id")!=run_id
+                or type(artifact_catalog.get("revision")) is not int
+                or artifact_catalog.get("revision",0)<=0
+                or not isinstance(artifact_catalog.get("updated_at"),str)
+                or not artifact_catalog.get("updated_at")
+                or not isinstance(artifact_catalog.get("entries"),list)
+                or artifact_catalog.get("entries")!=[]):
+            fail("cancel-before-start canonical artifact catalog contains entries or has invalid identity")
+        import datetime, re
+        updated_at=artifact_catalog["updated_at"]
+        if (len(updated_at)>128 or re.fullmatch(
+                r"[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]+)?(?:[Zz]|[+-][0-9]{2}:[0-9]{2})",
+                updated_at) is None):
+            fail("cancel-before-start canonical artifact catalog timestamp is invalid")
+        try:
+            datetime.datetime.fromisoformat(updated_at.replace("t","T").replace("Z","+00:00").replace("z","+00:00"))
+        except ValueError:
+            fail("cancel-before-start canonical artifact catalog timestamp is invalid")
+        artifact_catalog_present=True
+        artifact_catalog_sha256=digest(artifact_catalog_raw)
+'''
+        if source.count(artifact_marker) != 1:
+            raise _fail("existing cancellation probe scene observation marker changed")
+        source = source.replace(artifact_marker, artifact_probe + artifact_marker, 1)
 
     output_start = source.find('    if "process_exit" not in locals() or "prep_lease" not in locals():')
     output_end = source.find('    print(json.dumps(probe,sort_keys=True))', output_start)
     if output_start < 0 or output_end < 0:
         raise _fail("existing cancellation probe output block changed")
-    output_block = source[output_start:output_end]
-    output_block = output_block.replace(
-        'if "process_exit" not in locals() or "prep_lease" not in locals():',
-        'if "failed_process_exit" not in locals() or "failed_prep_lease" not in locals():',
-    )
-    for old, new in (
-        ('launch["launch_id"]', 'failed_launch["launch_id"]'),
-        ('process_exit[', 'failed_process_exit['),
-        ('exit_record[', 'failed_exit_record['),
-        ('prep_lease[', 'failed_prep_lease['),
-        ('lease_record[', 'failed_lease_record['),
-    ):
-        output_block = output_block.replace(old, new)
-    output_prefix = (
-        '    probe["task_inventory"]=[{"task_id":task["task_id"],"input_fingerprint":task.get("input_fingerprint"),'
-        '"lifecycle":task.get("lifecycle"),"readiness":task.get("readiness"),"artifact_ids":task.get("artifact_ids")} '
-        'for task in sorted(tasks,key=lambda item:item["task_id"])]\n'
-        '    probe["preparation_inventory"]=preparation_inventory\n'
-    )
+    if mode == CANCEL_BEFORE_START_MODE:
+        output_block = (
+            '    probe["task_inventory"]=[{"task_id":task["task_id"],"input_fingerprint":task.get("input_fingerprint"),'
+            '"lifecycle":task.get("lifecycle"),"readiness":task.get("readiness"),"artifact_ids":task.get("artifact_ids")} '
+            'for task in sorted(tasks,key=lambda item:item["task_id"])]\n'
+            '    probe["preparation_inventory"]=preparation_inventory\n'
+            '    probe["preparation_mode"]="cancel-before-start"\n'
+            '    probe["start_release_absent"]=True\n'
+            '    probe["task_admissions_empty"]=True\n'
+            '    probe["execution_state"]="not-started"\n'
+            '    probe["retained_current_run_total_steps"]=retained_current_run_total_steps\n'
+            '    probe["artifact_catalog_present"]=artifact_catalog_present\n'
+            '    probe["artifact_catalog_entry_count"]=artifact_catalog_entry_count\n'
+            '    if artifact_catalog_sha256 is not None: probe["artifact_catalog_sha256"]=artifact_catalog_sha256\n'
+            '    if retained_current_run_sha256 is not None: probe["retained_current_run_sha256"]=retained_current_run_sha256\n'
+            '    if preparation_evidence: probe["preparation_evidence"]=preparation_evidence\n'
+            '    if preparation_host_reservations: probe["preparation_host_reservations"]=preparation_host_reservations\n'
+        )
+        output_prefix = ""
+    else:
+        output_block = source[output_start:output_end]
+        output_block = output_block.replace(
+            'if "process_exit" not in locals() or "prep_lease" not in locals():',
+            'if "failed_process_exit" not in locals() or "failed_prep_lease" not in locals():',
+        )
+        for old, new in (
+            ('launch["launch_id"]', 'failed_launch["launch_id"]'),
+            ('process_exit[', 'failed_process_exit['),
+            ('exit_record[', 'failed_exit_record['),
+            ('prep_lease[', 'failed_prep_lease['),
+            ('lease_record[', 'failed_lease_record['),
+        ):
+            output_block = output_block.replace(old, new)
+        output_prefix = (
+            '    probe["task_inventory"]=[{"task_id":task["task_id"],"input_fingerprint":task.get("input_fingerprint"),'
+            '"lifecycle":task.get("lifecycle"),"readiness":task.get("readiness"),"artifact_ids":task.get("artifact_ids")} '
+            'for task in sorted(tasks,key=lambda item:item["task_id"])]\n'
+            '    probe["preparation_inventory"]=preparation_inventory\n'
+        )
     return source[:output_start] + output_prefix + output_block + source[output_end:]
 
 
@@ -1094,16 +1486,20 @@ if exit_root.exists():
         if path.is_symlink() or not path.is_file() or path.suffix!=".json":
             fail("preparation exit receipt root contains an invalid entry")
         value=obj(regular(path,"preparation exit receipt"),"preparation exit receipt")
+        candidate=value.get("task_id")
+        if candidate not in task_ids: fail("preparation exit targets an unknown task")
         if value.get("status_success") is False and value.get("exit_code")==1:
-            candidate=value.get("task_id")
-            if candidate not in task_ids: fail("failed preparation exit targets an unknown task")
             failed_task_ids.append(candidate)
-if len(failed_task_ids)!=1: fail("current cancelled run has no unique failed preparation task")
-task_id=failed_task_ids[0]
+        elif value.get("status_success") is not True or value.get("exit_code")!=0:
+            fail("preparation exit has an unsupported terminal outcome")
+if len(failed_task_ids)>1: fail("current cancelled run has multiple failed preparation tasks")
+preparation_mode="failed-preparation" if failed_task_ids else "cancel-before-start"
+task_id=failed_task_ids[0] if failed_task_ids else sorted(task_ids)[0]
 revision=scene.get("revision",scene.get("scene_revision"))
 if type(revision) is not int or revision<0: fail("current scene revision is invalid")
 print(json.dumps({"run_id":run_id,"task_id":task_id,"task_ids":sorted(task_ids),"session_id":session["session_id"],
-                  "scene_revision":revision,"api_instance_id":next(iter(instances))},sort_keys=True))
+                  "scene_revision":revision,"api_instance_id":next(iter(instances)),
+                  "preparation_mode":preparation_mode},sort_keys=True))
 '''
 
 
@@ -1129,6 +1525,8 @@ def _discover_scope(backend_id: str) -> dict[str, object]:
         _cancelled_activation_id(task_id, "discovered task_id")
     if scope["task_id"] not in task_ids:
         raise _fail("current cancelled run/task discovery target is not in the task inventory")
+    if scope.get("preparation_mode") not in {FAILED_PREPARATION_MODE, CANCEL_BEFORE_START_MODE}:
+        raise _fail("current cancelled run/task discovery preparation mode is invalid")
     if (type(scope.get("scene_revision")) is not int
             or scope["scene_revision"] < 0
             or not isinstance(scope.get("api_instance_id"), str)
@@ -1148,6 +1546,58 @@ def _failed_preparation_store_probe(
     expected_scene_revision: int,
     environment: Mapping[str, object],
 ) -> dict[str, object]:
+    return _preparation_store_probe(
+        backend_id,
+        run_id=run_id,
+        task_id=task_id,
+        request_id=request_id,
+        source_sha256=source_sha256,
+        marker_path=marker_path,
+        expected_scene_revision=expected_scene_revision,
+        environment=environment,
+        script=_failed_preparation_probe_script(),
+        label="cancelled task probe",
+    )
+
+
+def _cancel_before_start_store_probe(
+    backend_id: str,
+    *,
+    run_id: str,
+    task_id: str,
+    request_id: str,
+    source_sha256: str,
+    marker_path: str,
+    expected_scene_revision: int,
+    environment: Mapping[str, object],
+) -> dict[str, object]:
+    return _preparation_store_probe(
+        backend_id,
+        run_id=run_id,
+        task_id=task_id,
+        request_id=request_id,
+        source_sha256=source_sha256,
+        marker_path=marker_path,
+        expected_scene_revision=expected_scene_revision,
+        environment=environment,
+        script=_cancel_before_start_probe_script(),
+        label="cancel-before-start probe",
+    )
+
+
+def _preparation_store_probe(
+    backend_id: str,
+    *,
+    run_id: str,
+    task_id: str,
+    request_id: str,
+    source_sha256: str,
+    marker_path: str,
+    expected_scene_revision: int,
+    environment: Mapping[str, object],
+    script: str,
+    label: str,
+) -> dict[str, object]:
     runs_root = environment.get("FULLMAG_RUNS_ROOT", "/state/runs/docker-all")
     ledger_root = environment.get("FULLMAG_HOST_LEDGER_ROOT", "/host-ledger/ledger")
     if not isinstance(runs_root, str) or not isinstance(ledger_root, str):
@@ -1157,21 +1607,21 @@ def _failed_preparation_store_probe(
         "exec", "-i", backend_id, "/usr/local/bin/python3", "-B", "-",
         run_id, task_id, request_id, source_sha256, marker_path,
         store_root, ledger_root, str(expected_scene_revision),
-        data=_failed_preparation_probe_script().encode("utf-8"),
+        data=script.encode("utf-8"),
         timeout=90, allow_failure=True,
     )
     if result.returncode:
         raise _fail(
-            "locked cancelled-task proof failed: "
+            "locked " + label + " failed: "
             + result.stderr.decode("utf-8", "replace")[-4096:]
         )
-    probe = _strict_object(bytes(result.stdout), "cancelled task probe")
+    probe = _strict_object(bytes(result.stdout), label)
     probe["preparation_evidence"] = _validate_preparation_evidence(
-        probe.get("preparation_evidence", []), "failed preparation probe evidence",
+        probe.get("preparation_evidence", []), label + " evidence",
     )
     probe["preparation_host_reservations"] = _validate_preparation_host_reservations(
         probe.get("preparation_host_reservations", []),
-        "failed preparation host reservation evidence",
+        label + " host reservation evidence",
     )
     return probe
 
@@ -1407,23 +1857,42 @@ def _read_control_record(
 def _require_recovery_current_clear(
     control: BuildControl,
     activation_attempt: str,
-) -> None:
+    *,
+    pin_existing_archive: bool = False,
+) -> bytes | None:
     raw = _read_control_bytes(control, RECOVERY_CURRENT, optional=True, maximum=MAX_RECORD_BYTES)
     if raw is None:
-        return
+        return None
     current = _strict_object(raw, "cancelled activation recovery current pointer")
     if current.get("activation_attempt") == activation_attempt:
         raise _fail(
             "this activation already has a recovery current record; resume its retained journal"
         )
-    raise _fail(
-        "a prior cancelled-activation recovery current record must be reconciled before another drain"
-    )
+    try:
+        from docker_volume_cancelled_activation_guard import has_archive, pin_archive, read_record
+
+        prior = read_record(control)
+        if prior is None or prior.get("activation_attempt") != current.get("activation_attempt"):
+            raise _fail("cancelled activation recovery current pointer has no matching validated record")
+        if not has_archive(control, prior):
+            raise _fail("a prior cancelled-activation recovery current record has no verified archive")
+        if pin_existing_archive:
+            pin_archive(control)
+    except ControlOutcomeUnknown:
+        raise
+    except BuildControlError as error:
+        raise _fail(str(error)) from error
+    return raw
 
 
 def _build_proof(args: argparse.Namespace) -> dict[str, Any]:
     selected, identity, control = _selected_context(args)
-    _require_recovery_current_clear(control, args.activation_attempt)
+    previous_recovery_current_raw = _require_recovery_current_clear(
+        control, args.activation_attempt,
+    )
+    requested_mode = getattr(args, "cancellation_mode", None)
+    if requested_mode not in {None, CANCEL_BEFORE_START_MODE}:
+        raise _fail("cancelled activation cancellation mode is invalid")
     development_root = "development/attempts/" + args.attempt
     previous_raw = _read_control_bytes(control, development_root + "/terminal.json")
     previous = _strict_object(previous_raw, "retained development terminal")
@@ -1570,23 +2039,49 @@ def _build_proof(args: argparse.Namespace) -> dict[str, Any]:
         raise _fail("live accepted run differs from the retained startup retirement scope")
     if expected_session is not None and scope.get("session_id") != expected_session:
         raise _fail("live session differs from the retained startup retirement scope")
-    probe = _failed_preparation_store_probe(
-        backend_id,
-        run_id=str(scope["run_id"]),
-        task_id=str(scope["task_id"]),
-        request_id=request_id,
-        source_sha256=source_sha256,
-        marker_path=marker_path,
-        expected_scene_revision=int(scope["scene_revision"]),
-        environment=environment,
-    )
-    cancellation = _validate_failed_preparation_probe(
-        probe,
-        request_id=request_id,
-        source_sha256=source_sha256,
-        expected_run_id=str(scope["run_id"]),
-        expected_session_id=str(scope["session_id"]),
-    )
+    discovered_mode = scope["preparation_mode"]
+    if discovered_mode == CANCEL_BEFORE_START_MODE:
+        if requested_mode != CANCEL_BEFORE_START_MODE:
+            raise _fail(
+                "all-success preparation recovery requires --cancellation-mode cancel-before-start"
+            )
+        probe = _cancel_before_start_store_probe(
+            backend_id,
+            run_id=str(scope["run_id"]),
+            task_id=str(scope["task_id"]),
+            request_id=request_id,
+            source_sha256=source_sha256,
+            marker_path=marker_path,
+            expected_scene_revision=int(scope["scene_revision"]),
+            environment=environment,
+        )
+        cancellation = _validate_cancel_before_start_probe(
+            probe,
+            request_id=request_id,
+            source_sha256=source_sha256,
+            expected_run_id=str(scope["run_id"]),
+            expected_session_id=str(scope["session_id"]),
+        )
+    else:
+        if requested_mode is not None:
+            raise _fail("cancel-before-start mode requires an all-success preparation set")
+        probe = _failed_preparation_store_probe(
+            backend_id,
+            run_id=str(scope["run_id"]),
+            task_id=str(scope["task_id"]),
+            request_id=request_id,
+            source_sha256=source_sha256,
+            marker_path=marker_path,
+            expected_scene_revision=int(scope["scene_revision"]),
+            environment=environment,
+        )
+        cancellation = _validate_failed_preparation_probe(
+            probe,
+            request_id=request_id,
+            source_sha256=source_sha256,
+            expected_run_id=str(scope["run_id"]),
+            expected_session_id=str(scope["session_id"]),
+        )
     if cancellation.get("live_api_instance_id") != scope["api_instance_id"]:
         raise _fail("run discovery and locked cancellation probe observed different API instances")
     if cancellation.get("activation_marker_sha256") != probe.get("activation_marker_sha256"):
@@ -1624,6 +2119,7 @@ def _build_proof(args: argparse.Namespace) -> dict[str, Any]:
         "request_id": request_id,
         "source_sha256": source_sha256,
         "marker_path": marker_path,
+        "previous_recovery_current_raw": previous_recovery_current_raw,
         "cancellation": cancellation,
     }
 
@@ -1666,6 +2162,13 @@ def _plan(proof: Mapping[str, object]) -> dict[str, object]:
             "run_id": cancellation["run_id"],
             "session_id": cancellation["session_id"],
             "task_id": cancellation["task_id"],
+            "cancellation_mode": cancellation.get(
+                "preparation_mode", FAILED_PREPARATION_MODE,
+            ),
+            "previous_recovery_current_sha256": (
+                _sha256(proof["previous_recovery_current_raw"])
+                if proof.get("previous_recovery_current_raw") is not None else None
+            ),
         },
         "cancellation_proof": dict(cancellation),
         "stop": {
@@ -1785,6 +2288,7 @@ def _record_from_journal(journal: Mapping[str, object]) -> dict[str, object]:
         "run_id": target["run_id"],
         "session_id": target["session_id"],
         "task_id": target["task_id"],
+        "cancellation_mode": target.get("cancellation_mode", FAILED_PREPARATION_MODE),
         "journal_path": journal["journal_path"],
         "journal_sha256": _sha256(canonical(dict(journal)) + b"\n"),
         "proof": dict(cancellation),
@@ -1800,6 +2304,9 @@ def _record_from_journal(journal: Mapping[str, object]) -> dict[str, object]:
     has_preparation_inventory = "preparation_inventory" in cancellation
     if has_task_inventory != has_preparation_inventory:
         raise _fail("cancelled activation inventory projection is incomplete")
+    if (cancellation.get("preparation_mode") == CANCEL_BEFORE_START_MODE
+            and not has_task_inventory):
+        raise _fail("cancel-before-start recovery proof has no preparation inventory")
     if has_task_inventory:
         task_inventory = cancellation.get("task_inventory")
         if not isinstance(task_inventory, list) or not task_inventory:
@@ -1810,9 +2317,23 @@ def _record_from_journal(journal: Mapping[str, object]) -> dict[str, object]:
         validated_preparations = _validate_preparation_inventory(
             cancellation.get("preparation_inventory"),
             task_ids={str(entry["task_id"]) for entry in validated_tasks},
+            mode=str(cancellation.get("preparation_mode", FAILED_PREPARATION_MODE)),
         )
         record["task_inventory"] = validated_tasks
         record["preparation_inventory"] = validated_preparations
+    if record["cancellation_mode"] == CANCEL_BEFORE_START_MODE:
+        for key in (
+            "preparation_mode", "start_release_absent", "task_admissions_empty",
+            "execution_state", "retained_current_run_total_steps",
+            "artifact_catalog_present", "artifact_catalog_entry_count",
+        ):
+            if key not in cancellation:
+                raise _fail("cancel-before-start recovery proof omits " + key)
+            record[key] = cancellation[key]
+        if "artifact_catalog_sha256" in cancellation:
+            record["artifact_catalog_sha256"] = cancellation["artifact_catalog_sha256"]
+    elif record["cancellation_mode"] != FAILED_PREPARATION_MODE:
+        raise _fail("cancelled activation recovery preparation mode is invalid")
     return record
 
 
@@ -2157,16 +2678,43 @@ def _publish_recovery_and_activation_terminal(
     recovery_record = _record_from_journal(journal)
     recovery_raw = canonical(recovery_record) + b"\n"
     recovery_sha = _sha256(recovery_raw)
+    target = journal.get("target")
+    if not isinstance(target, Mapping):
+        raise _fail("cancelled activation journal has no recovery current predecessor pin")
+    expected_previous_sha = target.get("previous_recovery_current_sha256")
+    if expected_previous_sha is not None and (
+            not isinstance(expected_previous_sha, str)
+            or SHA256_RE.fullmatch(expected_previous_sha) is None):
+        raise _fail("cancelled activation recovery predecessor digest is invalid")
+    existing_current = _read_control_bytes(control, RECOVERY_CURRENT, optional=True)
+    previous_current_raw: bytes | None = None
+    if existing_current is None:
+        if expected_previous_sha is not None:
+            raise ControlOutcomeUnknown("cancelled-activation recovery predecessor current pointer disappeared")
+    elif existing_current != recovery_raw:
+        previous_current_raw = _require_recovery_current_clear(
+            control, args.activation_attempt,
+            pin_existing_archive=True,
+        )
+        if (previous_current_raw is None
+                or expected_previous_sha is None
+                or _sha256(previous_current_raw) != expected_previous_sha
+                or previous_current_raw != existing_current):
+            raise ControlOutcomeUnknown("cancelled-activation recovery predecessor changed before CAS")
     existing_terminal = _read_control_bytes(control, recovery_path, optional=True)
     if existing_terminal is None:
         _publish_cas(control, recovery_path, recovery_record, expected_raw=None)
     elif existing_terminal != recovery_raw:
         raise ControlOutcomeUnknown("immutable cancelled-activation recovery terminal differs from the drain journal")
-    existing_current = _read_control_bytes(control, RECOVERY_CURRENT, optional=True)
     if existing_current is None:
         _publish_cas(control, RECOVERY_CURRENT, recovery_record, expected_raw=None)
     elif existing_current != recovery_raw:
-        raise ControlOutcomeUnknown("cancelled-activation recovery current pointer belongs to another generation")
+        if previous_current_raw is None:
+            raise ControlOutcomeUnknown("cancelled-activation recovery predecessor is unavailable for CAS")
+        _publish_cas(
+            control, RECOVERY_CURRENT, recovery_record,
+            expected_raw=previous_current_raw,
+        )
     if (_read_control_bytes(control, recovery_path) != recovery_raw
             or _read_control_bytes(control, RECOVERY_CURRENT) != recovery_raw):
         raise ControlOutcomeUnknown("immutable and current cancelled-activation recovery records differ")

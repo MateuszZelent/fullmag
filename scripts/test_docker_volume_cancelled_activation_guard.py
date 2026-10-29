@@ -363,6 +363,50 @@ class CancelledActivationRecoveryGuardTests(unittest.TestCase):
             cancelled_guard.read_record(control)["continuation_phase"], "development"
         )
 
+        all_success = {
+            "task_inventory": deepcopy(tasks),
+            "preparation_inventory": [
+                preparation("task-relax", 1, outcome="succeeded"),
+                preparation("task-eigen", 2, outcome="succeeded"),
+            ],
+        }
+        all_success_record = deepcopy(record)
+        all_success_record.update(all_success)
+        all_success_record.update({
+            "cancellation_mode": cancelled_guard.CANCEL_BEFORE_START_MODE,
+            "start_release_absent": True,
+            "task_admissions_empty": True,
+            "execution_state": "not-started",
+            "retained_current_run_total_steps": 2,
+            "proof": {
+                "preparation_mode": cancelled_guard.CANCEL_BEFORE_START_MODE,
+                "start_release_absent": True,
+                "task_admissions_empty": True,
+                "execution_state": "not-started",
+                "retained_current_run_total_steps": 2,
+            },
+        })
+        cancelled_guard._validate_inventory(all_success_record)
+
+        for mutation in (
+            {"cancellation_mode": None},
+            {"preparation_inventory": [
+                preparation("task-relax", 1, outcome="failed"),
+                preparation("task-eigen", 2, outcome="succeeded"),
+            ]},
+            {"proof": {
+                "preparation_mode": cancelled_guard.CANCEL_BEFORE_START_MODE,
+                "start_release_absent": False,
+                "task_admissions_empty": True,
+                "execution_state": "not-started",
+                "retained_current_run_total_steps": 2,
+            }},
+        ):
+            candidate = deepcopy(all_success_record)
+            candidate.update(mutation)
+            with self.assertRaises(BuildControlError):
+                cancelled_guard._validate_inventory(candidate)
+
     def test_legacy_iteration_journal_projects_to_guard_without_empty_inventory(self) -> None:
         control, fixture = _record_fixture()
         target = {

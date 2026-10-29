@@ -517,3 +517,45 @@ Przy review historycznego f098 potwierdzono obecne native operator/sentinel
 pure-Neumann atoms. Historyczne automatyczne przełączenie boundary pozostaje
 osobną kwestią modelu; nie zmienia się jawnego finite-Dirichlet benchmarku ani
 analityki dla uzyskania PASS.
+
+
+## Granice dysków i recovery po anulowaniu przed Compute — 29.10, 19:13 UTC
+
+Pomiar z wnętrza bieżącego backendu rozdziela dwa filesystemy: named volumes
+`/build` i `/opt/fullmag/control` mają około 260 GiB wolnego (`/dev/sdf`),
+a bind `/state` korzysta z Ubuntu WSL (`/dev/sdd`, około 6 GiB wolnego).
+Na Windows C: jest około 13 GiB wolnego. Wcześniejsza prośba o 30 GiB
+w Ubuntu nie była uzasadnionym warunkiem przekroczenia dockerowego progu
+32 GiB dla buildu. Pojemność filesystemu gościa nie dowodzi jednak możliwości
+rozrostu pliku VHDX przy małej ilości miejsca na Windows.
+
+`storage` w Ubuntu zajmuje około 17 GiB: runtime'y 15 GiB, user-data 1,2 GiB,
+runy 806 MiB; hostowe builds mają mniej niż 1 MiB. To inwentarz, nie lista
+danych zakwalifikowanych do usunięcia. Zachowano sesje, wyniki, bieżący cache,
+control i ledgery. Szeroki skan całego home przerwano jako zbyt kosztowny;
+nie wyciągamy wniosków o pozostałych katalogach z niepełnego pomiaru.
+
+Run `abb3…` anulowano pojedynczym scope-bound Stop. Komenda jest completed,
+run cancelled, oba zadania w katalogu cancelled; Compute nigdy nie wydano.
+Oryginalny helper aktywacji wciąż poprawnie zachowuje lease. Poprzedni
+`cancelled-activation-recovery/current.json` ma potwierdzone archiwum.
+Nowa procedura jawnego `cancel-before-start` zachowuje legacy failed-preparation,
+waliduje komplet successful preparation receipts, brak start_release/admissions,
+wszystkie solver leases danego runu, host owners i canonical artifact catalog.
+Przejście do kolejnego current używa CAS i zachowuje predecessor anchor/journal.
+
+Niezależne review wykryło pomijanie released/orphan leases, orphan host owner
+oraz canonical artifact catalog. Poprawiono także fail-closed walk, walidację
+ścieżek/stagingu i daty katalogu. Nowe regresje wykonują rzeczywiste wygenerowane
+bloki na tymczasowym filesystemie; wykonanie wyłącznie w GHA. Aktualny produkcyjny
+preview przeszedł: plan SHA-256
+`d94a5fcbacdbbc5f96cc91d310e38044a65bee1c9595defd24e85f4891437f60`.
+Nie wykonano jeszcze apply ani nowego Compute. Runtime recovery pozostaje
+NOT VERIFIED do wykonania procedury i świeżego startu aplikacji.
+
+Pełny hosted planner `40935795721` wykonał 596 testów: 583 PASS, 13 FAIL.
+Poprawiony XY/Gamma fixture już PASS. Jedenaście błędów antenna/spin ma poprawki
+w pobranym masterze; nie przepisujemy ich równolegle. Dwa nasze fixture'y FEM
+preparation nie zadawały wymaganych wyjść widmowych — poprawiono źródła testów,
+zachowując produkcyjne guardy i obsługę FemEigen/FemFrequencyResponse.
+Nowe wykonanie CI i scalenie nowszego mastera pozostają konieczne.

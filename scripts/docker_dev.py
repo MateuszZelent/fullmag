@@ -2784,6 +2784,11 @@ def _parser() -> argparse.ArgumentParser:
     cancelled_activation.add_argument("--config-sha256", required=True)
     cancelled_activation.add_argument("--source-root", type=Path, required=True)
     cancelled_activation.add_argument("--port", type=int, required=True)
+    cancelled_activation.add_argument(
+        "--cancellation-mode",
+        choices=("cancel-before-start",),
+        help="explicitly admit an all-success preparation set only when Compute never started",
+    )
     cancelled_activation.add_argument("--apply", action="store_true")
     cancelled_activation.add_argument("--expected-plan-sha256")
     restarted = subparsers.add_parser("stop-restarted-terminal-volume", help="stop a pinned diagnostic-only restarted namespace after proving all tasks terminal and reservations released")

@@ -1,4 +1,4 @@
-name: FEM native failure receipt observation contracts
+name: FEM native receipt and activation recovery contracts
 
 on:
   workflow_call:
@@ -16,3 +16,9 @@ jobs:
 
       - name: Run isolated FEM failure receipt observation regressions
         run: python3 -B -m unittest discover -s scripts/ci -p "test_fem_contract_failure_receipt.py" -v
+
+      - name: Validate cancelled activation recovery and archive history
+        run: |
+          python3 -B scripts/test_docker_volume_dev_cancelled_activation.py -v
+          python3 -B scripts/test_docker_volume_cancelled_activation.py -v
+          python3 -B scripts/test_docker_volume_cancelled_activation_guard.py -v

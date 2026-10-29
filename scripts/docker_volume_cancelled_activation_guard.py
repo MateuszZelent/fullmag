@@ -11,6 +11,8 @@ from docker_volume_activate import _read_control_bytes
 RECORD = "cancelled-activation-recovery/current.json"
 SCHEMA = "fullmag.cancelled-activation-recovery.v1"
 TOKEN = re.compile(r"[0-9a-f]{32}\Z")
+CANCEL_BEFORE_START_MODE = "cancel-before-start"
+FAILED_PREPARATION_MODE = "failed-preparation"
 
 
 def _object(raw, label):
@@ -35,6 +37,8 @@ def _validate_inventory(record):
     tasks = record.get("task_inventory")
     preparations = record.get("preparation_inventory")
     if tasks is None and preparations is None:
+        if record.get("cancellation_mode") not in {None, FAILED_PREPARATION_MODE}:
+            raise BuildControlError("Cancelled activation all-success mode has no inventory")
         return
     if not isinstance(tasks, list) or not tasks or len(tasks) > 4096:
         raise BuildControlError("Cancelled activation task inventory is invalid")
@@ -59,6 +63,9 @@ def _validate_inventory(record):
         task_ids.add(task["task_id"])
     if not isinstance(preparations, list) or len(preparations) != len(tasks):
         raise BuildControlError("Cancelled activation preparation inventory is incomplete")
+    mode = record.get("cancellation_mode", FAILED_PREPARATION_MODE)
+    if mode not in {FAILED_PREPARATION_MODE, CANCEL_BEFORE_START_MODE}:
+        raise BuildControlError("Cancelled activation preparation mode is invalid")
     preparation_fields = {
         "task_id", "outcome", "launch_id", "preparation_attempt_id", "resource_id", "lease_token",
         "launch_path", "launch_sha256", "exit_path", "exit_sha256", "lease_path", "lease_sha256",
@@ -137,8 +144,22 @@ def _validate_inventory(record):
         else:
             raise BuildControlError("Cancelled activation preparation outcome is invalid")
         preparation_ids.add(task_id)
-    if preparation_ids != task_ids or failed != 1 or succeeded != 1:
+    if preparation_ids != task_ids:
         raise BuildControlError("Cancelled activation preparation inventory does not close the task set")
+    if mode == FAILED_PREPARATION_MODE and (failed != 1 or succeeded != 1):
+        raise BuildControlError("Cancelled activation preparation inventory does not close the task set")
+    if mode == CANCEL_BEFORE_START_MODE:
+        if failed != 0 or succeeded != len(task_ids):
+            raise BuildControlError("Cancelled activation all-success preparation inventory is invalid")
+        proof = record.get("proof")
+        if (not isinstance(proof, dict)
+                or proof.get("preparation_mode") != CANCEL_BEFORE_START_MODE
+                or proof.get("start_release_absent") is not True
+                or proof.get("task_admissions_empty") is not True
+                or proof.get("execution_state") != "not-started"
+                or type(proof.get("retained_current_run_total_steps")) is not int
+                or proof.get("retained_current_run_total_steps") != len(task_ids)):
+            raise BuildControlError("Cancelled activation all-success no-start proof is invalid")
 
 
 def read_record(control):

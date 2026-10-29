@@ -4,19 +4,24 @@ from __future__ import annotations
 
 import ast
 import argparse
+from copy import deepcopy
 import hashlib
 import importlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import textwrap
+import tempfile
+import uuid
 import unittest
 from unittest.mock import patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 module = importlib.import_module("docker_volume_cancelled_activation")
+cancelled_guard = importlib.import_module("docker_volume_cancelled_activation_guard")
 docker_dev = importlib.import_module("docker_dev")
 from docker_build_control import ControlOutcomeUnknown, canonical
 from docker_volume_dev import _cancelled_activation_probe_script, _retained_startup_enabled
@@ -175,6 +180,40 @@ def _probe(**overrides: object) -> dict[str, object]:
         },
     }
     probe.update(overrides)
+    return probe
+
+
+def _cancel_before_start_probe() -> dict[str, object]:
+    probe = _probe()
+    probe["preparation_inventory"] = deepcopy(probe["preparation_inventory"])
+    assert isinstance(probe["preparation_inventory"], list)
+    failed = probe["preparation_inventory"][0]
+    assert isinstance(failed, dict)
+    failed.update({
+        "outcome": "succeeded",
+        "exit_code": 0,
+        "task_receipt_path": f"task_preparation_receipts/{TASK_ID}.json",
+        "task_receipt_sha256": "1" * 64,
+        "stage_receipt_path": f"accepted_stage_preparation_receipts/{TASK_ID}.json",
+        "stage_receipt_sha256": "2" * 64,
+    })
+    evidence = list(probe["preparation_evidence"])
+    assert isinstance(evidence, list)
+    evidence.extend([
+        {"path": failed["task_receipt_path"], "sha256": failed["task_receipt_sha256"]},
+        {"path": failed["stage_receipt_path"], "sha256": failed["stage_receipt_sha256"]},
+    ])
+    probe.update({
+        "preparation_mode": module.CANCEL_BEFORE_START_MODE,
+        "start_release_absent": True,
+        "task_admissions_empty": True,
+        "execution_state": "not-started",
+        "retained_current_run_total_steps": 2,
+        "artifact_catalog_present": False,
+        "artifact_catalog_entry_count": 0,
+        "preparation_evidence": sorted(evidence, key=lambda item: item["path"]),
+    })
+    probe.pop("failed_preparation")
     return probe
 
 
@@ -413,6 +452,223 @@ class CancelledActivationProofTests(unittest.TestCase):
             module._plan(_proof())["plan_sha256"],
         )
 
+    def test_cancel_before_start_accepts_only_explicit_complete_all_success_proof(self) -> None:
+        accepted = module._validate_cancel_before_start_probe(
+            _cancel_before_start_probe(),
+            request_id=REQUEST,
+            source_sha256=SOURCE_SHA,
+            expected_run_id=RUN_ID,
+            expected_session_id="session-1",
+        )
+        self.assertEqual(accepted["preparation_mode"], module.CANCEL_BEFORE_START_MODE)
+        self.assertTrue(accepted["start_release_absent"])
+        self.assertEqual(accepted["retained_current_run_total_steps"], 2)
+        present_empty_catalog = _cancel_before_start_probe()
+        present_empty_catalog.update({
+            "artifact_catalog_present": True,
+            "artifact_catalog_sha256": "e" * 64,
+        })
+        catalog_accepted = module._validate_cancel_before_start_probe(
+            present_empty_catalog, request_id=REQUEST, source_sha256=SOURCE_SHA,
+        )
+        self.assertEqual(catalog_accepted["artifact_catalog_sha256"], "e" * 64)
+        proof = dict(_proof(), cancellation=accepted)
+        plan = module._plan(proof)
+        self.assertEqual(plan["target"]["cancellation_mode"], module.CANCEL_BEFORE_START_MODE)
+        journal = module._initial_journal(_args(proof), proof, plan, proof["control"])
+        self.assertEqual(
+            journal["plan"]["target"]["cancellation_mode"], module.CANCEL_BEFORE_START_MODE,
+        )
+        recovery = module._record_from_journal({
+            **journal,
+            "state": "drain-confirmed",
+            "drain": {"backend_exit_code": 0},
+        })
+        self.assertEqual(recovery["cancellation_mode"], module.CANCEL_BEFORE_START_MODE)
+        self.assertTrue(recovery["start_release_absent"])
+
+        mutations = (
+            {"preparation_mode": None},
+            {"start_release_absent": False},
+            {"task_admissions_empty": False},
+            {"retained_current_run_total_steps": 1},
+            {"matching_reservations": 1},
+            {"compute_queue": {"items": ["queued"]}},
+            {"failed_preparation": {}},
+            {"artifact_catalog_entry_count": 1},
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                candidate = _cancel_before_start_probe()
+                candidate.update(mutation)
+                with self.assertRaises(module.CancelledActivationRecoveryError):
+                    module._validate_cancel_before_start_probe(
+                        candidate, request_id=REQUEST, source_sha256=SOURCE_SHA,
+                    )
+
+        missing_receipt = _cancel_before_start_probe()
+        assert isinstance(missing_receipt["preparation_inventory"], list)
+        missing_receipt["preparation_inventory"][0]["task_receipt_path"] = None
+        missing_receipt["preparation_inventory"][0]["task_receipt_sha256"] = None
+        with self.assertRaises(module.CancelledActivationRecoveryError):
+            module._validate_cancel_before_start_probe(
+                missing_receipt, request_id=REQUEST, source_sha256=SOURCE_SHA,
+            )
+
+    def test_cancel_before_start_probe_is_distinct_and_checks_no_start_reachability(self) -> None:
+        source = module._cancel_before_start_probe_script()
+        ast.parse(source)
+        self.assertIn('start_release=run/"start_release.json"', source)
+        self.assertIn('probe["preparation_mode"]="cancel-before-start"', source)
+        self.assertIn("cancel-before-start retained run task count differs from its catalogue", source)
+        self.assertIn('resource lease identity differs from its canonical path', source)
+        self.assertIn('cancel-before-start run retains a solver lease', source)
+        self.assertIn('value.get("schema_version")!="resource_lease.v1"', source)
+        self.assertIn('if row.get("state")!="released":', source)
+        self.assertIn('cancel-before-start host reservation targets an unknown task', source)
+        self.assertIn('artifact_catalog_path=run/"artifact_catalog.json"', source)
+        self.assertIn('artifact_catalog.get("entries")!=[]', source)
+        self.assertNotIn(
+            'value.get("task_id") in task_ids and value.get("state")!="released"', source,
+        )
+        self.assertNotEqual(source, module._failed_preparation_probe_script())
+
+    def test_embedded_cancel_before_start_rejects_solver_lease_history(self) -> None:
+        source = module._cancel_before_start_probe_script()
+        start = source.index('    solver_root=run/"resource_leases"')
+        end = source.index('    ledger_raw=', start)
+        block = textwrap.dedent(source[start:end])
+
+        def reject(message: str) -> None:
+            raise module.CancelledActivationRecoveryError(message)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            namespace = {
+                "run": run, "run_id": RUN_ID, "os": os,
+                "pathlib": importlib.import_module("pathlib"), "uuid": uuid,
+                "fail": reject,
+                "regular": lambda path, label: path.read_bytes(),
+                "strict_obj": lambda raw, label: json.loads(raw),
+            }
+            exec(block, namespace, namespace)
+            self.assertEqual(namespace["solver_matches"], [])
+            lease = run / "resource_leases" / "resource-1" / "lease-1.json"
+            lease.parent.mkdir(parents=True)
+            base = {
+                "schema_version": "resource_lease.v1", "run_id": RUN_ID,
+                "resource_id": "resource-1", "lease_token": "lease-1",
+                "task_id": TASK_ID, "state": "released",
+            }
+            for change in ({}, {"state": "active"}, {"task_id": "orphan-task"}):
+                with self.subTest(change=change):
+                    lease.write_text(json.dumps({**base, **change}))
+                    with self.assertRaisesRegex(
+                        module.CancelledActivationRecoveryError, "retains a solver lease",
+                    ):
+                        exec(block, namespace, namespace)
+            lease.unlink()
+            staging = lease.parent / ("." + str(uuid.uuid4()) + ".part")
+            staging.write_text("partial atomic write")
+            exec(block, namespace, namespace)
+            staging.unlink()
+            staging.symlink_to(run / "absent")
+            with self.assertRaisesRegex(
+                module.CancelledActivationRecoveryError, "lease entry is invalid",
+            ):
+                exec(block, namespace, namespace)
+            staging.unlink()
+            root_staging = lease.parent.parent / ("." + str(uuid.uuid4()) + ".part")
+            root_staging.write_text("not canonical at the resource_leases root")
+            with self.assertRaises(module.CancelledActivationRecoveryError):
+                exec(block, namespace, namespace)
+            root_staging.unlink()
+            invalid_resource = lease.parent.parent / "bad resource name"
+            invalid_resource.mkdir()
+            with self.assertRaisesRegex(module.CancelledActivationRecoveryError, "directory is not canonical"):
+                exec(block, namespace, namespace)
+            invalid_resource.rmdir()
+
+            def unreadable(root: object, **options: object) -> object:
+                options["onerror"](PermissionError("fixture traversal denied"))
+                return iter(())
+
+            with patch.object(os, "walk", side_effect=unreadable):
+                with self.assertRaisesRegex(module.CancelledActivationRecoveryError, "tree cannot be read"):
+                    exec(block, namespace, namespace)
+
+    def test_embedded_cancel_before_start_classifies_every_host_owner_for_run(self) -> None:
+        tree = ast.parse(module._cancel_before_start_probe_script())
+        loops = [node for node in ast.walk(tree)
+                 if isinstance(node, ast.For) and isinstance(node.target, ast.Name)
+                 and node.target.id == "row" and isinstance(node.iter, ast.Name)
+                 and node.iter.id == "reservations"]
+        self.assertEqual(len(loops), 1)
+        block = compile(ast.Module(body=loops, type_ignores=[]), "host-owner-probe", "exec")
+
+        def reject(message: str) -> None:
+            raise module.CancelledActivationRecoveryError(message)
+
+        def run(row: dict[str, object]) -> list[object]:
+            namespace = {
+                "reservations": [row], "run_id": RUN_ID, "task_ids": {TASK_ID},
+                "matching": [], "fail": reject,
+            }
+            exec(block, namespace, namespace)
+            return namespace["matching"]
+
+        for state in ("released", "active"):
+            with self.subTest(state=state):
+                with self.assertRaisesRegex(
+                    module.CancelledActivationRecoveryError, "unknown task",
+                ):
+                    run({"identity": {"run_id": RUN_ID, "task_id": "orphan-task"},
+                         "state": state})
+        active = {"identity": {"run_id": RUN_ID, "task_id": TASK_ID}, "state": "active"}
+        self.assertEqual(run(active), [active])
+        self.assertEqual(run({"identity": {"run_id": "foreign-run", "task_id": "foreign-task"},
+                              "state": "active"}), [])
+
+    def test_embedded_cancel_before_start_checks_authoritative_artifact_catalog(self) -> None:
+        source = module._cancel_before_start_probe_script()
+        start = source.index('    artifact_catalog_path=run/"artifact_catalog.json"')
+        end = source.index('    scene, _, _ = api_get(', start)
+        block = textwrap.dedent(source[start:end])
+
+        def reject(message: str) -> None:
+            raise module.CancelledActivationRecoveryError(message)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            namespace = {
+                "run": Path(temporary), "run_id": RUN_ID, "fail": reject,
+                "regular": lambda path, label: path.read_bytes(),
+                "strict_obj": lambda raw, label: json.loads(raw),
+                "digest": lambda raw: hashlib.sha256(raw).hexdigest(),
+            }
+            exec(block, namespace, namespace)
+            self.assertFalse(namespace["artifact_catalog_present"])
+            catalog = Path(temporary) / "artifact_catalog.json"
+            base = {"schema_version": "artifact_catalog.v1", "run_id": RUN_ID,
+                    "revision": 1, "updated_at": "2026-10-29T10:00:00Z", "entries": []}
+            catalog.write_text(json.dumps(base))
+            exec(block, namespace, namespace)
+            self.assertTrue(namespace["artifact_catalog_present"])
+            self.assertEqual(namespace["artifact_catalog_sha256"],
+                             hashlib.sha256(catalog.read_bytes()).hexdigest())
+            # Even an empty projected task artifact_ids cannot hide a durable catalog entry.
+            for change in ({"entries": [{"artifact_id": "retained-output"}]},
+                           {"run_id": "foreign-run"}, {"revision": 0},
+                           {"revision": True}, {"entries": None},
+                           {"updated_at": "not-a-timestamp"},
+                           {"updated_at": "2026-02-30T10:00:00Z"},
+                           {"updated_at": "2026-10-29T10:00:00"}):
+                with self.subTest(change=change):
+                    catalog.write_text(json.dumps({**base, **change}))
+                    with self.assertRaisesRegex(
+                        module.CancelledActivationRecoveryError, "canonical artifact catalog",
+                    ):
+                        exec(block, namespace, namespace)
+
     def test_ready_receipt_is_explicit_activation_with_startup_disabled(self) -> None:
         process = _ready_process()
         module._validate_original_process(process)
@@ -475,6 +731,10 @@ class CancelledActivationProofTests(unittest.TestCase):
         parsed = parser.parse_args([*common, "--iteration-attempt", ITERATION_ATTEMPT])
         self.assertFalse(parsed.base_development)
         self.assertEqual(parsed.iteration_attempt, ITERATION_ATTEMPT)
+        parsed = parser.parse_args([
+            *common, "--base-development", "--cancellation-mode", "cancel-before-start",
+        ])
+        self.assertEqual(parsed.cancellation_mode, "cancel-before-start")
         with self.assertRaises(SystemExit):
             parser.parse_args([*common])
         with self.assertRaises(SystemExit):
@@ -693,18 +953,36 @@ class CancelledActivationProofTests(unittest.TestCase):
             with self.assertRaises(module.CancelledActivationRecoveryError):
                 module._validate_journal_pins(args, journal, proof, plan)
 
-    def test_prior_recovery_current_blocks_a_new_stop_before_any_mutation(self) -> None:
+    def test_verified_prior_recovery_current_is_replaced_only_after_archive_proof(self) -> None:
         control = FakeControl()
         prior = canonical({
             "schema": module.RECOVERY_SCHEMA,
             "activation_attempt": PREVIOUS_ATTEMPT,
             "state": module.RECOVERY_STATE,
         }) + b"\n"
-        with patch.object(module, "_read_control_bytes", return_value=prior):
+        prior_record = {"activation_attempt": PREVIOUS_ATTEMPT}
+        with patch.object(module, "_read_control_bytes", return_value=prior), \
+                patch.object(cancelled_guard, "read_record", return_value=prior_record), \
+                patch.object(cancelled_guard, "has_archive", return_value=True), \
+                patch.object(cancelled_guard, "pin_archive") as pin_archive:
+            self.assertEqual(module._require_recovery_current_clear(control, ATTEMPT), prior)
+            self.assertEqual(
+                module._require_recovery_current_clear(
+                    control, ATTEMPT, pin_existing_archive=True,
+                ),
+                prior,
+            )
+            pin_archive.assert_called_once_with(control)
+        with patch.object(module, "_read_control_bytes", return_value=prior), \
+                patch.object(cancelled_guard, "read_record", return_value=prior_record), \
+                patch.object(cancelled_guard, "has_archive", return_value=False):
             with self.assertRaisesRegex(
                 module.CancelledActivationRecoveryError,
-                "prior cancelled-activation recovery current record",
+                "no verified archive",
             ):
+                module._require_recovery_current_clear(control, ATTEMPT)
+        with patch.object(module, "_read_control_bytes", return_value=b"not-json"):
+            with self.assertRaises(module.CancelledActivationRecoveryError):
                 module._require_recovery_current_clear(control, ATTEMPT)
         same_attempt = canonical({
             "schema": module.RECOVERY_SCHEMA,
@@ -886,13 +1164,19 @@ class CancelledActivationApplyTests(unittest.TestCase):
         self.assertEqual(self.stop_calls, 0)
 
     def test_recovery_and_original_terminal_publication_resume_after_release_loss(self) -> None:
-        proof = self.proof
+        prior_current_raw = canonical({
+            "schema": module.RECOVERY_SCHEMA,
+            "activation_attempt": PREVIOUS_ATTEMPT,
+            "state": module.RECOVERY_STATE,
+        }) + b"\n"
+        proof = dict(self.proof, previous_recovery_current_raw=prior_current_raw)
         plan = module._plan(proof)
         journal = {
             "schema": module.JOURNAL_SCHEMA,
             "state": "drain-confirmed",
             "journal_path": module._journal_path(ATTEMPT),
             "plan": plan,
+            "target": plan["target"],
             "drain": {
                 "backend_container": BACKEND,
                 "image_id": IMAGE,
@@ -907,6 +1191,7 @@ class CancelledActivationApplyTests(unittest.TestCase):
             "activation/attempts/" + ATTEMPT + "/receipt.json": proof["receipt_raw"],
             "activation/attempts/" + ATTEMPT + "/result.json": proof["result_raw"],
             "activation/current.json": proof["current_raw"],
+            module.RECOVERY_CURRENT: prior_current_raw,
         }
         helper_active = [proof["active_raw"], proof["active_raw"], None]
         release_results = [False, True]
@@ -945,6 +1230,7 @@ class CancelledActivationApplyTests(unittest.TestCase):
 
         with patch.object(module, "_read_control_bytes", side_effect=read), \
              patch.object(module, "_publish_cas", side_effect=publish), \
+             patch.object(module, "_require_recovery_current_clear", return_value=prior_current_raw), \
              patch.object(module, "_preserve_original_records", side_effect=preserve), \
              patch.object(module, "_verify_frontend_unchanged"), \
              patch.object(module, "_validate_helper_and_active", side_effect=validate_active), \
