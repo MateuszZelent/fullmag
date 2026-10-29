@@ -13403,12 +13403,42 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
             && reason.contains("exactly zero on an open axis")
     }));
 
-    for translation in [
-        None,
-        Some([f64::NAN, 0.0, 0.0]),
-        Some([0.0, 0.0, 0.0]),
-        Some([1.0, 1.0, 0.0]),
-        Some([0.0, 1.0, 0.0]),
+    for (case, translation, expected_prefix, expected_pair, expected_detail) in [
+        (
+            "missing",
+            None,
+            "fem_eigen.floquet_airbox_dynamic_demag_admission",
+            "periodic pair 'x_faces'",
+            "translation is missing",
+        ),
+        (
+            "nan",
+            Some([f64::NAN, 0.0, 0.0]),
+            "fem_eigen.floquet_airbox_dynamic_demag_admission",
+            "periodic pair 'x_faces'",
+            "translation must contain finite values",
+        ),
+        (
+            "zero",
+            Some([0.0, 0.0, 0.0]),
+            "mesh periodic node pair 0 residual",
+            "pair_id 'x_faces'",
+            "exceeds tolerance",
+        ),
+        (
+            "oblique",
+            Some([1.0, 1.0, 0.0]),
+            "mesh periodic node pair 0 residual",
+            "pair_id 'x_faces'",
+            "exceeds tolerance",
+        ),
+        (
+            "wrong_axis",
+            Some([0.0, 1.0, 0.0]),
+            "mesh periodic node pair 0 residual",
+            "pair_id 'x_faces'",
+            "exceeds tolerance",
+        ),
     ] {
         let mut invalid_mesh_ir = ir.clone();
         let mesh = invalid_mesh_ir
@@ -13421,10 +13451,15 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
         mesh.periodic_boundary_pairs[0].axis_hint = Some("x".to_string());
         let error = plan(&invalid_mesh_ir)
             .expect_err("a hint must not substitute invalid or conflicting translation metadata");
-        assert!(error.reasons.iter().any(|reason| {
-            reason.contains("floquet_airbox_dynamic_demag_admission")
-                && reason.contains("periodic pair 'x_faces'")
-        }));
+        let actual = error.reasons.join("; ");
+        assert!(
+            error.reasons.iter().any(|reason| {
+                reason.contains(expected_prefix)
+                    && reason.contains(expected_pair)
+                    && reason.contains(expected_detail)
+            }),
+            "invalid translation case '{case}' produced unexpected reasons: {actual}"
+        );
     }
 
     let mut subset_ir = ir.clone();
