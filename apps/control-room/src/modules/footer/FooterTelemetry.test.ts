@@ -4,6 +4,7 @@ import type {
   FrequencyDomainSweepProgressResource,
   LiveStatusResource,
   ObjectMetricsResource,
+  ScalarWindowResource,
   SceneResource,
   SolverStatusResource,
   StageExecutionResource,
@@ -538,6 +539,21 @@ describe("FooterTelemetry", () => {
       revision: 1,
       status: "ready",
     });
+    const scalarWindow: ScalarWindowResource = {
+      columns: ["step", "time", "mx", "my", "mz", "e_total"],
+      current_observation: {
+        request_scope_epoch: telemetryStatus.requestScopeEpoch,
+        run_id: telemetryStatus.run!.run_id,
+        scalar_revision: 22,
+        session_id: telemetryStatus.sessionId,
+        source_step: 99,
+      },
+      observation_frames: [],
+      returned_rows: 1,
+      revision: 22,
+      rows: [[99, 1.25e-9, 0.25, -0.5, 0.75, 15]],
+      total_rows: 1,
+    };
     const model = buildFooterTelemetryModel(
       telemetryStatus,
       objectMetrics,
@@ -546,20 +562,14 @@ describe("FooterTelemetry", () => {
       null,
       null,
       null,
-      {
-        revision: 22,
-        row: { step: 99, time: 1.25e-9, mx: 0.25, my: -0.5, mz: 0.75 },
-        requestScopeEpoch: "test-api:0",
-        runId: "run-1",
-        sessionId: "session-1",
-      },
+      scalarWindow,
     );
     const byId = Object.fromEntries(model.metrics.map((metric) => [metric.id, metric]));
 
     expect(byId["avg-mx"]?.value).toBe("0.250000");
     expect(byId["avg-my"]?.value).toBe("-0.500000");
     expect(byId["avg-mz"]?.value).toBe("0.750000");
-    expect(byId["avg-mx"]?.subdetail).toBe("Scalar history resource");
+    expect(byId["avg-mx"]?.subdetail).toBe("Accepted scalar observation");
   });
 
   it("shows pseudotime and keeps physical simulation time separate for direct minimizers", () => {
@@ -1218,7 +1228,7 @@ describe("FooterTelemetry", () => {
           total_rows: 1,
         },
       );
-      expect(model.metrics.find(({ id }) => id === "avg-mx")?.value).toBe("0.5");
+      expect(model.metrics.find(({ id }) => id === "avg-mx")?.value).toBe("0.500000");
       expect(model.metrics.find(({ id }) => id === "step")?.value).toBe("12");
     },
   );
