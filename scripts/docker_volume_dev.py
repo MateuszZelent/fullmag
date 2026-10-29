@@ -7612,7 +7612,11 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 control.write(operation["root"] + "/helper-source-binding.json", helper_source_binding)
             successor_actual = ({service: json.loads(docker_text("inspect", identifier))[0]
                 for service, identifier in ids.items()} if drained_successor else actual)
-            leased_recovery_context = _retained_recovery_context(
+            # Match the pre-lease choice: explicit fresh state archives the
+            # complete old runtime and its recovery authority without consuming
+            # or carrying it. The fresh-state incarnation/archive fences below
+            # still apply under this same lease.
+            leased_recovery_context = {} if fresh_state else _retained_recovery_context(
                 control, previous, document, fresh_state=fresh_state,
                 backend_id=actual["backend"].get("Id"),
                 drained_successor=drained_successor_pins, actual=successor_actual,

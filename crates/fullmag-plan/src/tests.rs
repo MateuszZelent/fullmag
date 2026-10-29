@@ -19780,3 +19780,4 @@ fn fem_eigen_branch_tracking_tetra_single_and_path_remain_plannable() {
 
 mod material_audit_fdm;
 mod material_audit_fem;
+mod material_boundary_stt;

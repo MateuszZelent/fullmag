@@ -132,6 +132,9 @@ pub(crate) enum SpatialFieldCarrier<'a> {
         /// targets report it instead of a generic missing-membership error.
         membership_error: Option<String>,
         multilayer_scope: Option<FdmMultilayerScopeCarrier<'a>>,
+        /// Cells that carry a value; `None` means every cell. Uncovered cells
+        /// are outside every planar target, `domain` included.
+        coverage: Option<Vec<bool>>,
     },
     FemNodes {
         topology: &'a FemMeshPayload,
@@ -477,6 +480,7 @@ impl ResolvedSpatialField<'_> {
                 membership,
                 membership_error: _,
                 multilayer_scope,
+                coverage,
             } => {
                 validate_grid_count(*cells, local_count, &self.quantity_id)?;
                 if origin_m.is_some() != cell_size_m.is_some()
@@ -490,6 +494,9 @@ impl ResolvedSpatialField<'_> {
                         .as_ref()
                         .is_some_and(|membership| membership.cell_membership.len() != local_count)
                     || (membership.is_some() && grid_fingerprint.is_none())
+                    || coverage
+                        .as_ref()
+                        .is_some_and(|coverage| coverage.len() != local_count)
                     || multilayer_scope.is_some_and(|scope| {
                         scope
                             .artifact_layout
@@ -1361,6 +1368,26 @@ pub(crate) fn native_layer_membership_generation_id(
         ))
     })?;
     Ok(format!("sha256:{:x}", Sha256::digest(payload)))
+}
+
+/// Plan-derived native membership of one multilayer layer, checked only
+/// against the artifact-layout identity. The plan is the realization the solver
+/// ran, so sampling the live field does not wait for the persisted mask copy.
+pub(crate) fn planned_fdm_multilayer_native_layer_membership(
+    snapshot: &SessionStateResponse,
+    requested_layer_id: &str,
+) -> Result<Option<FdmNativeLayerMembershipCarrier>, ApiError> {
+    let Some(metadata) = snapshot.metadata.as_ref() else {
+        return Ok(None);
+    };
+    let Some(plan_layer) = planned_native_layer(metadata, requested_layer_id)? else {
+        return Ok(None);
+    };
+    let carrier = planned_native_layer_membership(snapshot, plan_layer)?;
+    if let Some(artifact_layer) = persisted_native_layer(snapshot, &carrier.layer_id)? {
+        cross_check_planned_layer_identity(&carrier, artifact_layer)?;
+    }
+    Ok(Some(carrier))
 }
 
 fn persisted_native_layer<'a>(
@@ -2392,6 +2419,7 @@ fn resolve_spatial_field_metadata<'a>(
             membership: membership.as_ref().map(FdmCellMembership::from),
             membership_error,
             multilayer_scope,
+            coverage: None,
         }
     } else {
         let mesh = snapshot.fem_mesh.as_ref().ok_or_else(|| {
@@ -2739,6 +2767,7 @@ mod tests {
                 membership: None,
                 membership_error: None,
                 multilayer_scope: None,
+                coverage: None,
             },
         }
     }
