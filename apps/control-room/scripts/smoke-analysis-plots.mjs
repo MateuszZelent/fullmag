@@ -1072,6 +1072,8 @@ async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseU
 
     const inspector = page.locator(".fm-inspector");
     await inspector.waitFor({ state: "visible", timeout: timeoutMs });
+    await inspector.getByRole("tab", { name: "Provenance", exact: true }).click();
+    await inspector.locator('[data-result-tab="provenance"]').waitFor({ state: "visible", timeout: timeoutMs });
     const ownerText = (await inspector.innerText()).replace(/\s+/g, " ");
     for (const expected of [runId, stageId, "Artifact revision", expectedArtifactRevision]) {
       if (!ownerText.includes(expected)) {
@@ -1079,6 +1081,8 @@ async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseU
       }
     }
 
+    await inspector.getByRole("tab", { name: "Data", exact: true }).click();
+    await inspector.locator('[data-result-tab="data"]').waitFor({ state: "visible", timeout: timeoutMs });
     const referenceGroup = inspector.locator("button").filter({ hasText: /^Import reference/ }).first();
     await referenceGroup.waitFor({ state: "visible", timeout: timeoutMs });
     await referenceGroup.click({ timeout: timeoutMs });

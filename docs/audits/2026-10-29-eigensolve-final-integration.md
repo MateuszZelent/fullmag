@@ -182,3 +182,60 @@ fallbackiem przy braku axis_hint. Producent v6 używa eager then_some(nonzero[0]
 co może spanikować przy pustej liście osi. Historycznego WIP nie można przenieść
 wprost: uwzględniał tylko axis_hint, a obecny certyfikat wspiera też translację.
 Te punkty i native tracking provider pozostają otwarte; nie oznaczono I6 jako PASS.
+
+
+## Natywny Floquet/SLEPc — aktualny dowód CI
+
+Workflow 40865035881, job 123417530842, źródła 97e94e906, profil
+floquet-modal-slepc: obraz CPU z GMP/MPFR i kompilacja kontraktów ukończone.
+CTest: 19/21 PASS, dwa FAIL. Artefakt GitHub zachowany
+fem-cpu-source-contract-floquet-modal-slepc-40865035881-1 (457782 B ZIP).
+
+- fem_floquet_modal_solver_contract: explicit multi-mode refill kończy partial
+  z floquet_nev_refill_outer_iteration_budget_exhausted mimo dwóch zaakceptowanych
+  modów; trzeba prześledzić goal/outer budget i fixture. Nie zwiększono budżetu
+  ani nie zmieniono oczekiwania w ciemno.
+- fem_modal_eigen_hard_ksp_nearest_contract: nie spełnia łącznej asercji stop reason
+  / failure-only scalar callback probe przy twardym błędzie KSP; dokładny
+  niespełniony składnik wymaga dalszej diagnostyki. Potrzebne review
+  przepływu awarii i metadanych, a nie poluzowania residualu.
+
+Oba są otwartymi konkretnymi punktami I6. To nie jest PASS pełnej ścieżki
+natywnej ani kwalifikacja naukowa. Nie ponowiono identycznego joba bez poprawki.
+
+
+## Recovery zastosowane i korekta rozpoznania miejsca
+
+CI źródeł 38079580c: python-contracts 123431887364 i control-room-contracts
+123431887066 zakończone SUCCESS. Dziewięć regresji stop-bootstrap wykonano
+w kroku Python GitHub Actions; lokalnie nie kompilowano ani nie uruchamiano testów.
+
+Świeża obserwacja resume ad7d5bd5dfef43a5b7bb24c6eec9fd45 nie restartowała
+backendu. Zachowała inkarnację e6ab0da98540, StartedAt
+2026-10-29T11:13:16.581353245Z i opublikowała pełne IDs przed odmową admission.
+Stop-bootstrap d2797c1d2df047faa9bd4db5fb0eb501: SUCCEEDED, stopped-confirmed.
+Zatrzymano wyłącznie własny diagnostyczny backend. OWNER hash przed/po
+fe65b122ce8c13be9364b408c0f5d0a771734bde03de79e35497f51245eb0585 jest identyczny;
+sesje i resource leases untouched. Native execution pozostaje unknown,
+a nie fikcyjnie drained. Frontend nadal działa, ale nie jest to dowód działającego solvera.
+Kolejny krok wymaga legalnego recovery starego native OWNER; samo stop-bootstrap
+nie udziela prawa do skasowania OWNER lub obejścia jego weryfikacji.
+
+Korekta wcześniejszej diagnozy dysku: df / dotyczy dystrybucji WSL (~6,5 GiB).
+Demon Docker to Docker Desktop; BuildControl.space dla własnej grupy raportuje
+300818042880 B dostępnego (~280 GiB), ponad próg 32 GiB. Docker DataFolder
+C:\ProgramData\DockerDesktop\vm-data ma około 165 GiB wolnego na Windows.
+Wycofano prośbę o zwolnienie 30 GiB WSL. Niczego nie usunięto.
+
+Browser CI 123431887164 przeszedł poprzednie kontrole mode/viewport, ale zatrzymał
+się na przestarzałym odczycie owner identity w Overview dyspersji. Naprawiono
+nawigację smoke do Provenance przed niezmienionymi asercjami run/stage/revision,
+następnie do Data przed importem CSV. Nie usunięto testu importu/precyzji ani
+asercji przypisania wyniku do właściciela. Nowy przebieg wymaga CI.
+
+Bramka Rust 123431887588 dla 38079580c zakończyła SUCCESS po wszystkich
+kontraktach. Generated API determinism, native modal C ABI, checkpoint Windows,
+FDM qualification oraz Inspector actions browser smoke również SUCCESS.
+Profile SLEPc w automatycznym bootstrap są SKIPPED, nie PASS; osobny ręczny
+run 40865035881 pozostaje dowodem 19/21. Jedyną porażką automatycznego
+bootstrap był browser-fixture-smoke opisany powyżej.
