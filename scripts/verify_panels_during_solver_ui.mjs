@@ -29,9 +29,9 @@ try{
   let s;
   try{s=await state();}
   catch(error){
-   // Session retirement may reject reads before the new run exists. Never
+   // Session retirement may reject reads or leave no current session before the new run exists. Never
    // swallow a conflict after attaching: observed() must still fail closed.
-   if(error.status!==409)throw error;
+   if(error.status!==409 && error.status!==404)throw error;
    proof.preActivationConflicts=(proof.preActivationConflicts??0)+1;
    await p.waitForTimeout(1000);continue;
   }
@@ -39,6 +39,8 @@ try{
   await p.waitForTimeout(1000);
  }
  if(!activeRun)throw Error('No live solver appeared');
+ const resizeOnly=process.env.FULLMAG_LIVE_PANEL_CASE==='split-resize-only';
+ if(!resizeOnly){
  await action('float diagnostics',()=>choose('Diagnostics','Float panel'));
  await action('dock diagnostics',()=>choose('Diagnostics','Dock panel'));
  await action('float inspector',async()=>{await choose('Inspector','Float panel');await p.locator('[data-panel-frame="panel-right"][data-panel-mode="floating"]').waitFor();});
@@ -53,6 +55,28 @@ try{
  await action('hide inspector',()=>choose('Inspector','Hide panel'));
  await action('restore hidden inspector',async()=>{await p.locator('[data-restore-panel="panel-right"]').click();});
  await action('dock inspector',()=>choose('Inspector','Dock panel'));
+
+ const drag = async (handle, target) => {
+  const r=await handle.boundingBox(); if(!r)throw Error('Missing drag handle');
+  await p.mouse.move(r.x+r.width/2,r.y+r.height/2);await p.mouse.down();
+  await p.mouse.move(r.x+r.width/2+45,r.y+r.height/2+45,{steps:4});
+  const root=await p.locator('#fm-main-content').boundingBox();
+  await p.mouse.move(root.x+18,root.y+root.height/2,{steps:5});
+  await p.locator('[data-workspace-dock-preview="left"][data-dock-target="workspace"]').waitFor();
+  await p.mouse.up();
+  await p.locator(`[data-panel-frame="${target}"][data-panel-mode="docked"]`).waitFor();
+ };
+ await action('mouse drag and edge-dock Inspector title',()=>drag(frame.locator('.fm-panel-chrome__title'),'panel-right'));
+ await action('mouse drag and edge-dock Explorer',()=>drag(p.getByRole('button',{name:'Move Explorer with arrow keys',exact:true}),'panel-left'));
+ await action('mouse drag and edge-dock Diagnostics',()=>drag(p.getByRole('button',{name:'Move Diagnostics with arrow keys',exact:true}),'panel-bottom'));
+ }
+ await action('mouse resize docked split',async()=>{
+  const h=p.locator('.fm-workspace-docking-tree .fm-resize-handle--vertical').first();await h.waitFor({state:'visible'});
+  const r=await h.boundingBox(); const measured=p.locator(`[data-panel-frame="${resizeOnly?'panel-left':'panel-bottom'}"]`);const before=await measured.boundingBox();
+  await p.mouse.move(r.x+r.width/2,r.y+r.height/2);await p.mouse.down();await p.mouse.move(r.x+40,r.y+r.height/2,{steps:5});await p.mouse.up();
+  await p.waitForTimeout(200);const after=await measured.boundingBox();
+  if(Math.abs(after.width-before.width)<10)throw Error('Splitter did not resize');
+ });
  await p.screenshot({path:out+'/panels-during-solve.png',timeout:30000});
  if(proof.errors.length||proof.mutations.length)throw Error('Browser errors or solver mutation attempt');
  proof.after=await observed();console.log('PANEL_OPERATIONS_PASS');

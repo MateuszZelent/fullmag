@@ -226,3 +226,13 @@ zastępują wcześniejszy status blokady. CI Rust i UI: PASS. Aktywacja z import
 rzeczywisty solver i publikacja: PASS. Float/move/resize/maximize/restore/hide/
 show/dock podczas solvera: PASS. Podział widoku z zachowaniem modu podczas
 Show/Animate: PASS. Ręczna próba z nową osobą pozostaje otwarta.
+
+
+## R6 — ponowna kwalifikacja dokowania całego workspace, 29.10
+
+Techniczny lifecycle nowego układu: **PASS**. Uruchomiono rzeczywiste piloty
+FEM CPU k=10; 14 rodzajów operacji ma running przed i po, w dwóch kwalifikujących
+przebiegach (13 + 1), a wyniki obu opublikowano. Gesty myszy obejmują Inspector,
+Explorer, Diagnostics i separator. Pierwszej próby ostatniego separatora nie
+zaliczono, bo solver zakończył się naturalnie w jej trakcie; brakującą operację
+sprawdzono oddzielnie. [Raport i ograniczenia](2026-10-29-r6-live-workspace-docking.md).

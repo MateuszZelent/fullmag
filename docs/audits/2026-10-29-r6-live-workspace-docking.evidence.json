@@ -1,0 +1,575 @@
+{
+  "schema": "fullmag.r6.live-docking.v1",
+  "source_sha": "ba499002e354fe3a91b3fdfb80d05a4fd4c8af28",
+  "status": "PASS across two qualifying runs, not a single uninterrupted test sequence",
+  "operations": [
+    {
+      "name": "float diagnostics",
+      "before": {
+        "at": "2026-10-29T05:41:08.518Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      },
+      "after": {
+        "at": "2026-10-29T05:41:14.822Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      }
+    },
+    {
+      "name": "dock diagnostics",
+      "before": {
+        "at": "2026-10-29T05:41:14.851Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      },
+      "after": {
+        "at": "2026-10-29T05:41:18.546Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      }
+    },
+    {
+      "name": "float inspector",
+      "before": {
+        "at": "2026-10-29T05:41:18.567Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      },
+      "after": {
+        "at": "2026-10-29T05:41:23.047Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      }
+    },
+    {
+      "name": "move inspector",
+      "before": {
+        "at": "2026-10-29T05:41:23.325Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      },
+      "after": {
+        "at": "2026-10-29T05:41:23.440Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      }
+    },
+    {
+      "name": "resize inspector",
+      "before": {
+        "at": "2026-10-29T05:41:23.481Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      },
+      "after": {
+        "at": "2026-10-29T05:41:23.752Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      }
+    },
+    {
+      "name": "maximize inspector",
+      "before": {
+        "at": "2026-10-29T05:41:23.786Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      },
+      "after": {
+        "at": "2026-10-29T05:41:31.422Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      }
+    },
+    {
+      "name": "restore inspector",
+      "before": {
+        "at": "2026-10-29T05:41:31.446Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      },
+      "after": {
+        "at": "2026-10-29T05:41:32.877Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      }
+    },
+    {
+      "name": "hide inspector",
+      "before": {
+        "at": "2026-10-29T05:41:32.902Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      },
+      "after": {
+        "at": "2026-10-29T05:41:37.333Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      }
+    },
+    {
+      "name": "restore hidden inspector",
+      "before": {
+        "at": "2026-10-29T05:41:37.365Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      },
+      "after": {
+        "at": "2026-10-29T05:41:38.576Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      }
+    },
+    {
+      "name": "dock inspector",
+      "before": {
+        "at": "2026-10-29T05:41:38.601Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      },
+      "after": {
+        "at": "2026-10-29T05:41:42.059Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      }
+    },
+    {
+      "name": "mouse drag and edge-dock Inspector title",
+      "before": {
+        "at": "2026-10-29T05:41:42.077Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      },
+      "after": {
+        "at": "2026-10-29T05:41:47.324Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      }
+    },
+    {
+      "name": "mouse drag and edge-dock Explorer",
+      "before": {
+        "at": "2026-10-29T05:41:47.342Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      },
+      "after": {
+        "at": "2026-10-29T05:41:49.496Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      }
+    },
+    {
+      "name": "mouse drag and edge-dock Diagnostics",
+      "before": {
+        "at": "2026-10-29T05:41:49.619Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      },
+      "after": {
+        "at": "2026-10-29T05:41:55.544Z",
+        "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+        "steps": 3,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+      }
+    },
+    {
+      "name": "mouse resize docked split",
+      "before": {
+        "at": "2026-10-29T05:48:59.844Z",
+        "run": "run-live-eac6101631fa040379ba6c1769c605c600eb9fa1630303f18cb098f7818a6ad1",
+        "steps": 0,
+        "time": 0,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-408b384a7137494baacdc856c15dcba3c3692975d5e4a473e55990204834ee1c"
+      },
+      "after": {
+        "at": "2026-10-29T05:49:39.714Z",
+        "run": "run-live-eac6101631fa040379ba6c1769c605c600eb9fa1630303f18cb098f7818a6ad1",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-408b384a7137494baacdc856c15dcba3c3692975d5e4a473e55990204834ee1c"
+      }
+    }
+  ],
+  "first_run_natural_completion": {
+    "name": "mouse resize docked split",
+    "before": {
+      "at": "2026-10-29T05:41:55.564Z",
+      "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+      "steps": 3,
+      "time": 1.5e-14,
+      "state": "running",
+      "stage": "",
+      "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+    },
+    "after": {
+      "at": "2026-10-29T05:42:20.282Z",
+      "run": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+      "steps": 3,
+      "time": 1.5e-14,
+      "state": "completed",
+      "stage": "",
+      "session": "docker-startup-bfef845bd01b0072c7ec839bc6391a95fc83147f2c9990b2998060c7ab6e5c34"
+    }
+  },
+  "final_run": {
+    "startedAt": "2026-10-29T05:47:51.017Z",
+    "errors": [],
+    "mutations": [],
+    "snapshots": [
+      {
+        "at": "2026-10-29T05:48:59.844Z",
+        "run": "run-live-eac6101631fa040379ba6c1769c605c600eb9fa1630303f18cb098f7818a6ad1",
+        "steps": 0,
+        "time": 0,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-408b384a7137494baacdc856c15dcba3c3692975d5e4a473e55990204834ee1c"
+      },
+      {
+        "at": "2026-10-29T05:49:39.714Z",
+        "run": "run-live-eac6101631fa040379ba6c1769c605c600eb9fa1630303f18cb098f7818a6ad1",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-408b384a7137494baacdc856c15dcba3c3692975d5e4a473e55990204834ee1c"
+      },
+      {
+        "at": "2026-10-29T05:49:50.355Z",
+        "run": "run-live-eac6101631fa040379ba6c1769c605c600eb9fa1630303f18cb098f7818a6ad1",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-408b384a7137494baacdc856c15dcba3c3692975d5e4a473e55990204834ee1c"
+      },
+      {
+        "at": "2026-10-29T05:49:50.367Z",
+        "run": "run-live-eac6101631fa040379ba6c1769c605c600eb9fa1630303f18cb098f7818a6ad1",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-408b384a7137494baacdc856c15dcba3c3692975d5e4a473e55990204834ee1c"
+      },
+      {
+        "at": "2026-10-29T05:49:53.379Z",
+        "run": "run-live-eac6101631fa040379ba6c1769c605c600eb9fa1630303f18cb098f7818a6ad1",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-408b384a7137494baacdc856c15dcba3c3692975d5e4a473e55990204834ee1c"
+      },
+      {
+        "at": "2026-10-29T05:49:56.391Z",
+        "run": "run-live-eac6101631fa040379ba6c1769c605c600eb9fa1630303f18cb098f7818a6ad1",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-408b384a7137494baacdc856c15dcba3c3692975d5e4a473e55990204834ee1c"
+      },
+      {
+        "at": "2026-10-29T05:49:59.404Z",
+        "run": "run-live-eac6101631fa040379ba6c1769c605c600eb9fa1630303f18cb098f7818a6ad1",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-408b384a7137494baacdc856c15dcba3c3692975d5e4a473e55990204834ee1c"
+      },
+      {
+        "at": "2026-10-29T05:50:02.489Z",
+        "run": "run-live-eac6101631fa040379ba6c1769c605c600eb9fa1630303f18cb098f7818a6ad1",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-408b384a7137494baacdc856c15dcba3c3692975d5e4a473e55990204834ee1c"
+      },
+      {
+        "at": "2026-10-29T05:50:05.501Z",
+        "run": "run-live-eac6101631fa040379ba6c1769c605c600eb9fa1630303f18cb098f7818a6ad1",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-408b384a7137494baacdc856c15dcba3c3692975d5e4a473e55990204834ee1c"
+      },
+      {
+        "at": "2026-10-29T05:50:11.238Z",
+        "run": "run-live-eac6101631fa040379ba6c1769c605c600eb9fa1630303f18cb098f7818a6ad1",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-408b384a7137494baacdc856c15dcba3c3692975d5e4a473e55990204834ee1c"
+      },
+      {
+        "at": "2026-10-29T05:50:14.250Z",
+        "run": "run-live-eac6101631fa040379ba6c1769c605c600eb9fa1630303f18cb098f7818a6ad1",
+        "steps": 0,
+        "time": 1.5e-14,
+        "state": "running",
+        "stage": "",
+        "session": "docker-startup-408b384a7137494baacdc856c15dcba3c3692975d5e4a473e55990204834ee1c"
+      },
+      {
+        "at": "2026-10-29T05:50:17.273Z",
+        "run": "run-live-eac6101631fa040379ba6c1769c605c600eb9fa1630303f18cb098f7818a6ad1",
+        "steps": 3,
+        "time": 1.5e-14,
+        "state": "completed",
+        "stage": "",
+        "session": "docker-startup-408b384a7137494baacdc856c15dcba3c3692975d5e4a473e55990204834ee1c"
+      }
+    ],
+    "actions": [
+      {
+        "name": "mouse resize docked split",
+        "before": {
+          "at": "2026-10-29T05:48:59.844Z",
+          "run": "run-live-eac6101631fa040379ba6c1769c605c600eb9fa1630303f18cb098f7818a6ad1",
+          "steps": 0,
+          "time": 0,
+          "state": "running",
+          "stage": "",
+          "session": "docker-startup-408b384a7137494baacdc856c15dcba3c3692975d5e4a473e55990204834ee1c"
+        },
+        "after": {
+          "at": "2026-10-29T05:49:39.714Z",
+          "run": "run-live-eac6101631fa040379ba6c1769c605c600eb9fa1630303f18cb098f7818a6ad1",
+          "steps": 0,
+          "time": 1.5e-14,
+          "state": "running",
+          "stage": "",
+          "session": "docker-startup-408b384a7137494baacdc856c15dcba3c3692975d5e4a473e55990204834ee1c"
+        }
+      }
+    ],
+    "preActivationConflicts": 4,
+    "initial": {
+      "at": "2026-10-29T05:48:59.735Z",
+      "run": "run-live-eac6101631fa040379ba6c1769c605c600eb9fa1630303f18cb098f7818a6ad1",
+      "steps": 0,
+      "time": 0,
+      "state": "running",
+      "stage": "",
+      "session": "docker-startup-408b384a7137494baacdc856c15dcba3c3692975d5e4a473e55990204834ee1c"
+    },
+    "after": {
+      "at": "2026-10-29T05:49:50.355Z",
+      "run": "run-live-eac6101631fa040379ba6c1769c605c600eb9fa1630303f18cb098f7818a6ad1",
+      "steps": 0,
+      "time": 1.5e-14,
+      "state": "running",
+      "stage": "",
+      "session": "docker-startup-408b384a7137494baacdc856c15dcba3c3692975d5e4a473e55990204834ee1c"
+    },
+    "completed": {
+      "at": "2026-10-29T05:50:17.273Z",
+      "run": "run-live-eac6101631fa040379ba6c1769c605c600eb9fa1630303f18cb098f7818a6ad1",
+      "steps": 3,
+      "time": 1.5e-14,
+      "state": "completed",
+      "stage": "",
+      "session": "docker-startup-408b384a7137494baacdc856c15dcba3c3692975d5e4a473e55990204834ee1c"
+    },
+    "publishedSpectrum": {
+      "runId": "run-live-eac6101631fa040379ba6c1769c605c600eb9fa1630303f18cb098f7818a6ad1",
+      "revision": "sha256:be201ce4934769431b62aa2187c476fbf54095bac5341a8127849fa7956269c9",
+      "samples": 1
+    },
+    "pass": true
+  },
+  "spectra": [
+    {
+      "run_id": "run-live-643d6b919feab5b065a5495ee01c5925cc720fc90f3605f3dffdcbbf41512367",
+      "frequency_hz": 11211886649.715792,
+      "residual": 1.6022730082536981e-13
+    },
+    {
+      "run_id": "run-live-92d343cf97eb2915faadb985516bed93ec61d8501626b1c6620b6dbb2f4646ea",
+      "frequency_hz": 11211886649.715792,
+      "residual": 1.6022730082536981e-13
+    },
+    {
+      "run_id": "run-live-eac6101631fa040379ba6c1769c605c600eb9fa1630303f18cb098f7818a6ad1",
+      "frequency_hz": 11211886649.715792,
+      "residual": 1.6022730082536981e-13
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/r6-live-docking-20261029/failure.png",
+      "sha256": "7b7668f44bde0a075e18ef7ec59b462b932b6b17470d7a36b5062c6402026d91"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/r6-live-docking-20261029/first-spectrum.json",
+      "sha256": "fccafb17216f22107b8e50c314c2306056f5adc8f2cfe535b220c871dbb22712"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/r6-live-docking-20261029/report.json",
+      "sha256": "46131a2691e7a484a57167f3343b8764b07ad2061c3ef64ab0255c141aa0f5ac"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/r6-live-docking-20261029/second-spectrum.json",
+      "sha256": "665e28c9e6f4195dcfb8772e2b1c2f748de4a811ac6f1b0be6db1d6c12393914"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/r6-live-docking-20261029/resize-final/panels-during-solve.png",
+      "sha256": "4f7691326fc628b4e913b896d6011bc219c352361bff3b0a77379437c9364ecd"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/r6-live-docking-20261029/resize-final/progress.json",
+      "sha256": "b6293dc931acde2d378cf7d0846ee9311f8887336c7fce4c4d403963ee1636c7"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/r6-live-docking-20261029/resize-final/report.json",
+      "sha256": "b3f428adafc5eb6766b84e0eb8932036d40331771cf9636c109aa1f0300b66ca"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/r6-live-docking-20261029/resize-final/spectrum.json",
+      "sha256": "3069dadda3e70969f6954a42ec90b85860316ef670e2e2ffee0a04104dee38d8"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/r6-live-docking-20261029/resize-only/failure.png",
+      "sha256": "582d593eade552452f0178a3c6a55015403c8ff69b74af19c0f5ddf0921b3e9d"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/r6-live-docking-20261029/resize-only/report.json",
+      "sha256": "3d7bf017f386d577f3493e306dabd95053a9b61dd13393aa2cdc4b8e1ac36956"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/r6-live-docking-20261029/resize-verified/report.json",
+      "sha256": "77df472c690d0311eb7f4da6c259483bd8afc45fe26f69d899e8564814b9e82e"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/r6-live-docking-20261029/retry-observer/failure.png",
+      "sha256": "42e958c7ef024868371288d550186552506192b3000fb428393a48f46588391a"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/r6-live-docking-20261029/retry-observer/progress.json",
+      "sha256": "0cab4b027a2d44254a1b4cfc45b3a49f505d08ca3e9e51e3aa8359325d82d186"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/r6-live-docking-20261029/retry-observer/report.json",
+      "sha256": "669ecdcb353da121732c0aeace7990d75c50852d1cb3eb396c83e87a7e2f5e4c"
+    }
+  ],
+  "platform_health": {
+    "status": "ok",
+    "uptime_seconds": 1793253064,
+    "api_contract_version": "1.0.0",
+    "active_session": true
+  }
+}
