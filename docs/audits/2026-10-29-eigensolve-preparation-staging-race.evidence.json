@@ -1,0 +1,83 @@
+{
+  "schema": "eigensolve.preparation_staging_race_observation.v1",
+  "captured_at_utc": "2026-10-29T17:40:27.061436+00:00",
+  "source_commit": "c8330392428194abc6b9ca7a9f72c2b597e3bf26",
+  "run_id": "run-live-abb3a9134ca582539dc92f736e9bfd842cc22bdcfd914eaab4c17731786cbb90",
+  "request_id": "eigensolve-gamma-window-r6-c83303924-20261029-1",
+  "activation_attempt": "e603ca28017940beb9f171ca6da8ba00",
+  "post_outcome": "409 accepted_preparation_receipt_invalid: preparation process exit receipt entry must be JSON",
+  "repeated_compute": false,
+  "evidence": [
+    {
+      "path": "/state/runs/docker-all/session-store/runs/run-live-abb3a9134ca582539dc92f736e9bfd842cc22bdcfd914eaab4c17731786cbb90/preparation_process_exit_receipts/prep-exit-prep-launch-97bdac68-036b-4bce-9874-aa2763d918b2.json",
+      "sha256": "dd5678f25fe880dd6546da6441f2b2051a5aa05710b4dce04465e87330c6b372",
+      "bytes": 737,
+      "schema_version": "preparation_process_exit_receipt.v1",
+      "receipt_id": "prep-exit-prep-launch-97bdac68-036b-4bce-9874-aa2763d918b2",
+      "run_id": "run-live-abb3a9134ca582539dc92f736e9bfd842cc22bdcfd914eaab4c17731786cbb90",
+      "task_id": "task-7795d54903f4ee8f8b7869a5861c3d64313c90949f6fef3b72c787d73fd8c516",
+      "status_success": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "process_id": 8616
+    },
+    {
+      "path": "/state/runs/docker-all/session-store/runs/run-live-abb3a9134ca582539dc92f736e9bfd842cc22bdcfd914eaab4c17731786cbb90/preparation_process_exit_receipts/prep-exit-prep-launch-e306c2f0-2133-4157-b630-7ca66a0e61ed.json",
+      "sha256": "d8f9ba8685f090e42e63ab315d9a747446cfc24bb509a0daf7234a81c50bc752",
+      "bytes": 737,
+      "schema_version": "preparation_process_exit_receipt.v1",
+      "receipt_id": "prep-exit-prep-launch-e306c2f0-2133-4157-b630-7ca66a0e61ed",
+      "run_id": "run-live-abb3a9134ca582539dc92f736e9bfd842cc22bdcfd914eaab4c17731786cbb90",
+      "task_id": "task-b8e0bc31152d49e6c93e77b8adc141b2db93314ce8d69965b0ac95be7453f8c6",
+      "status_success": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "process_id": 8626
+    },
+    {
+      "path": "/state/runs/docker-all/session-store/runs/run-live-abb3a9134ca582539dc92f736e9bfd842cc22bdcfd914eaab4c17731786cbb90/preparation_resource_leases/docker-all.preparation.cpu/prep-lease-b217ff10-2ed0-4eca-8e08-90cac37074da.json",
+      "sha256": "c46bbdb914704277d883b351595b0e034577c20f0d4acbd173904651d3db1387",
+      "bytes": 2069,
+      "schema_version": "preparation_resource_lease.v1",
+      "run_id": "run-live-abb3a9134ca582539dc92f736e9bfd842cc22bdcfd914eaab4c17731786cbb90",
+      "task_id": "task-b8e0bc31152d49e6c93e77b8adc141b2db93314ce8d69965b0ac95be7453f8c6",
+      "state": "released"
+    },
+    {
+      "path": "/state/runs/docker-all/session-store/runs/run-live-abb3a9134ca582539dc92f736e9bfd842cc22bdcfd914eaab4c17731786cbb90/preparation_resource_leases/docker-all.preparation.cpu/prep-lease-dce1009c-dd21-4373-b345-c7de6a894c7c.json",
+      "sha256": "539537258199f988ae3d563ff5de07a401ca15fb7ad7f8f9e180b9c6efde489b",
+      "bytes": 2069,
+      "schema_version": "preparation_resource_lease.v1",
+      "run_id": "run-live-abb3a9134ca582539dc92f736e9bfd842cc22bdcfd914eaab4c17731786cbb90",
+      "task_id": "task-7795d54903f4ee8f8b7869a5861c3d64313c90949f6fef3b72c787d73fd8c516",
+      "state": "released"
+    },
+    {
+      "path": "/state/runs/docker-all/session-store/runs/run-live-abb3a9134ca582539dc92f736e9bfd842cc22bdcfd914eaab4c17731786cbb90/task_preparation_receipts/task-b8e0bc31152d49e6c93e77b8adc141b2db93314ce8d69965b0ac95be7453f8c6.json",
+      "sha256": "86bf8d5cf84b2e2015e0c56253254b49b7bb992a70cb9d12105703a12188071c",
+      "bytes": 21163,
+      "schema_version": "task_preparation_receipt.v1",
+      "run_id": "run-live-abb3a9134ca582539dc92f736e9bfd842cc22bdcfd914eaab4c17731786cbb90",
+      "task_id": "task-b8e0bc31152d49e6c93e77b8adc141b2db93314ce8d69965b0ac95be7453f8c6"
+    },
+    {
+      "path": "/state/runs/docker-all/session-store/runs/run-live-abb3a9134ca582539dc92f736e9bfd842cc22bdcfd914eaab4c17731786cbb90/task_preparation_receipts/task-7795d54903f4ee8f8b7869a5861c3d64313c90949f6fef3b72c787d73fd8c516.json",
+      "sha256": "2380d8d256886bc133cde6b8022a61422570864cffc034f9823fe47a3912b606",
+      "bytes": 21178,
+      "schema_version": "task_preparation_receipt.v1",
+      "run_id": "run-live-abb3a9134ca582539dc92f736e9bfd842cc22bdcfd914eaab4c17731786cbb90",
+      "task_id": "task-7795d54903f4ee8f8b7869a5861c3d64313c90949f6fef3b72c787d73fd8c516"
+    },
+    {
+      "path": "/state/runs/docker-all/session-store/runs/run-live-abb3a9134ca582539dc92f736e9bfd842cc22bdcfd914eaab4c17731786cbb90/task_prepared_observations/task-b8e0bc31152d49e6c93e77b8adc141b2db93314ce8d69965b0ac95be7453f8c6.json",
+      "sha256": "9e3f2166b78ac49261d96dac783913fc39ca910f4ba517d9600758a42143f421",
+      "bytes": 1565,
+      "schema_version": "task_prepared_observation.v1",
+      "run_id": "run-live-abb3a9134ca582539dc92f736e9bfd842cc22bdcfd914eaab4c17731786cbb90",
+      "task_id": "task-b8e0bc31152d49e6c93e77b8adc141b2db93314ce8d69965b0ac95be7453f8c6"
+    }
+  ],
+  "solver_state": "awaiting_command",
+  "session_id": "docker-startup-ea0985a5952fb1ab1f18173dc9d1ee61facc3a57f6ab2ae1cef6af5a6adbae6e",
+  "runtime_source_snapshot_sha256": "ad1c117b4f871c664cd452e8642b4f66e3e305ee6bf121bb8345da3a61b08d03"
+}

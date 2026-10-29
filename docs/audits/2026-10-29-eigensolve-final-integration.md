@@ -482,3 +482,38 @@ tego rozróżnienia na fałszywy cleanup completed. Dodano hosted regresję wybo
 kontraktu; pełny workflow stanowi rzeczywistą próbę tej finalizacji.
 Końcowe source review D1 nie znalazło błędu produkcyjnego. Główny fixture
 przestawiono na rzeczywiste CPU pole subwindows, zachowując osobne aliasy.
+
+
+## Bieżący build i rzeczywisty wyścig preparation
+
+Na c8330392428194abc6b9ca7a9f72c2b597e3bf26 wszystkie trzy hosted profile
+native oraz pełny runner/Python method workflow przeszły. Bootstrap zatrzymał
+się na jednej nowej asercji planera: zero/oblique/wrong-axis odrzuca wcześniej
+mesh periodic-node-pair residual validator, missing/NaN odrzuca bounded
+admission. Fixture zachowuje pięć negatywnych przypadków i wymaga konkretnego
+komunikatu właściwej warstwy. Kod produkcyjny tego guardu jest bez zmian.
+
+Kontrolowany restart własnej grupy przeszedł terminal-catalog proof i native
+drain. Iteracja 1bf0177c89fd435bbead059aa29fd5e9: make exit=0, build 561926 ms,
+pakiet opublikowany, API zdrowe. Runtime snapshot to
+ad1c117b4f871c664cd452e8642b4f66e3e305ee6bf121bb8345da3a61b08d03.
+
+Jednorazowa aktywacja e603ca28017940beb9f171ca6da8ba00 utworzyła run abb3…,
+ale HTTP409 accepted_preparation_receipt_invalid zatrzymał Compute.
+To inny błąd niż wcześniejszy native window failure: solver nie ruszył,
+oba preparery wyszły kodem0 i zwolniły lease, a trwałe receipts są prawidłowe.
+Przyczyną jest scanner store.rs czytający folder w trakcie atomic_write:
+writer tworzy .<uuid-v4>.part, a scanner przed rename wymaga suffixu .json.
+
+Poprawka reuse istniejącego is_atomic_write_staging_filename w collectorach
+launch/exit pomija wyłącznie rozpoznane regularne pliki staging. Symlinki,
+katalogi, nieznane nazwy, null i malformed JSON pozostają hard errors.
+Regresje sprawdzają częściowe pliki, rename/publication, brak receiptu oraz
+negatywne dane; wykonanie wyłącznie GitHub Actions, runtime fix NOT VERIFIED.
+Nie ponowiono aktywacji ani Compute na podstawie samego upływu czasu.
+Dowody: 2026-10-29-eigensolve-preparation-staging-race.evidence.json.
+
+Przy review historycznego f098 potwierdzono obecne native operator/sentinel
+pure-Neumann atoms. Historyczne automatyczne przełączenie boundary pozostaje
+osobną kwestią modelu; nie zmienia się jawnego finite-Dirichlet benchmarku ani
+analityki dla uzyskania PASS.

@@ -200,6 +200,9 @@ jobs:
       - name: Run complete session reachability and archive contracts
         run: cargo test -p fullmag-session --lib --no-fail-fast
 
+      - name: Run preparation process receipt staging scanner contracts
+        run: cargo test -p fullmag-session --test p0_preparation_process_receipts --no-fail-fast
+
       - name: Verify accepted provenance archive export and read-only import
         if: ${{ !cancelled() && steps.install-rust.outcome == 'success' && steps.install-python-runtime.outcome == 'success' }}
         env:

@@ -100,6 +100,32 @@
       "workflow": "failure",
       "failure_stage": "post-test owner completion tried to retire main checkout",
       "evidence": "2026-10-29-eigensolve-native-ci-failures.evidence.json"
+    },
+    "source_contracts_c833": {
+      "source_commit": "c8330392428194abc6b9ca7a9f72c2b597e3bf26",
+      "method_runner_python": {
+        "run": 40916887608,
+        "conclusion": "success"
+      },
+      "native_mfem": {
+        "run": 40916678436,
+        "conclusion": "success"
+      },
+      "native_no_stack": {
+        "run": 40916683137,
+        "conclusion": "success"
+      },
+      "native_slepc": {
+        "run": 40916687081,
+        "conclusion": "success"
+      },
+      "bootstrap": {
+        "run": 40916891318,
+        "conclusion": "failure",
+        "reason": "one planner fixture requires the late admission message even when earlier mesh node-pair residual validation correctly rejects the same bad input",
+        "production_change": false,
+        "fix": "retain all five bad translations with exact expected rejection per validator"
+      }
     }
   },
   "open": [
@@ -142,6 +168,31 @@
       "tracking-mass-mfem": "compiler failure in snapshot contract: missing #endif; closure added; recheck pending",
       "tracking-mass-stub": "same missing #endif; recheck pending",
       "floquet-modal-slepc": "21/21 CTest PASS; owner finalization failed; main-checkout receipt-only fix pending hosted recheck"
+    },
+    "runtime_build": {
+      "source_commit": "c8330392428194abc6b9ca7a9f72c2b597e3bf26",
+      "source_snapshot_sha256": "ad1c117b4f871c664cd452e8642b4f66e3e305ee6bf121bb8345da3a61b08d03",
+      "iteration": "1bf0177c89fd435bbead059aa29fd5e9",
+      "state": "succeeded",
+      "canonical_make_exit_code": 0,
+      "api_health": "ok",
+      "no_new_numerical_result": true
     }
+  },
+  "current_gamma_activation": {
+    "run_id": "run-live-abb3a9134ca582539dc92f736e9bfd842cc22bdcfd914eaab4c17731786cbb90",
+    "activation_attempt": "e603ca28017940beb9f171ca6da8ba00",
+    "state": "outcome_unknown",
+    "solver_state": "awaiting_command",
+    "preparation_process_exit_codes": [
+      0,
+      0
+    ],
+    "preparation_leases": "released",
+    "cause": "list_preparation_process_exit_receipts sees canonical atomic_write .UUID.part before rename; suffix assertion incorrectly calls staging an invalid receipt",
+    "fix": "skip only canonical atomic staging after regular-file/symlink checks in both process receipt scanners",
+    "hosted_recheck": "pending",
+    "evidence": "2026-10-29-eigensolve-preparation-staging-race.evidence.json",
+    "compute_repeated": false
   }
 }
