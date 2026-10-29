@@ -394,3 +394,16 @@ jest diagnozowana na podstawie terminalnych journal/receipt, bez ponownego
 Solve. Czternaście operacji paneli zachowało aktywny run w trakcie testu;
 pełny odbiór R6 tej generacji oraz I7 pozostają otwarte. Zachowano starsze
 archiwum signed15, import UI i dane do porównania.
+
+
+### Następna bramka po awarii Gamma
+
+1. D1: dokończyć hosted testy prywatnego failure sidecara (code i review wykonane).
+2. Naprawić wskazane przez hosted build błędy integracji native I6 i przejść
+   MFEM/directCompose, no-stack, SLEPc oraz pełne Rust/planner/IR kontrakty.
+3. Przebudować wyłącznie własną grupę po kontroli zakończenia jej workerów,
+   z zachowaniem starego failed runu, importowanego signed15 i receiptów.
+4. Ponowić mały pilot Gamma, odebrać pełny certificate/firstfailed i dopiero
+   na tych danych poprawić przyczynę numerics; progi pozostają bez zmian.
+5. Gamma + signed15, aktualny scatter/analityka/mody, końcowy R6 i I7; następnie
+   wymagane review/CI, master i kwalifikowane sprzątanie własnego worktree.

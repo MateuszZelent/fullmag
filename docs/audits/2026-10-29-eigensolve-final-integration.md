@@ -434,3 +434,51 @@ alokacji metryki przed odmową niecertyfikowanej równowagi. Naprawiono kod:
 cache identity sprawdzamy przed solve, nowy native tracking powstaje dopiero
 po zaakceptowanym completion i raw checkpoint. Oczekiwanie testu i gate
 `uncertified_provided_equilibrium` pozostały bez zmian. Wymagany recheck CI.
+
+
+## D1 — zachowanie przyczyny awarii przed obcięciem wiadomości
+
+W prywatnym epoch modalnego workera dodano failure-only
+`native_failure_diagnostic.v1.json` z ownerem run/task/step/attempt/epoch.
+Nie zmieniono limitu publicznego failure_reason, RunError, statusów ani
+katalogu zaakceptowanych wyników. Source marker diagnostics_json odpowiada
+rzeczywistemu formatterowi native runnera. Limit wejścia parsera to 1 MiB,
+certyfikatu 16 KiB, całego pliku 64 KiB; zapisywany jest rzeczywiście ograniczony
+fallback, nie jego większy oryginał. Istniejący immutable writer zachowuje
+create-new i fsync. Zwykła ścieżka FDM pozostaje bez nowego sidecara.
+
+Certyfikat ma allowlist znanych scalarów, schedule summaries oraz niewielkich
+list częstotliwości/ranków. Nie zapisuje pól przestrzennych, operatorów,
+environment ani tokenów. Pierwszy failed subwindow zachowuje rzeczywisty
+status i kody/flags EPS; `status=ok` nie jest przekształcany w failure na
+podstawie samego stop_reason. `diagnostics_truncated` pozostaje jawne.
+Review poprawił realny błąd fallback serialization oraz zbędną mutację FDM.
+Hipotezę globalnego root odrzucono po odczycie callera: root=&attempt jest
+już prywatnym epoch, a storage.data_root to osobny argument autosave_root.
+
+Dodano regresje realnego rozmiaru zapisanego pliku przy pretty inflation,
+niemutowalności, filtracji payloadów, markerów oraz dostępności metadanych.
+Wykonanie wyłącznie GitHub Actions; managed/runtime zapis po nowej Gamma
+pozostaje NOT VERIFIED. Nie uruchomiono ponownie pełnego okna bez tej naprawy.
+
+Odczyt artefaktów hosted 14fc rozdzielił dwie przyczyny:
+- MFEM 40905285319 i stub 40905296548: brak zamykającego #endif w teście
+  snapshot C ABI (biblioteka zlinkowana); poprawka dodaje samo zamknięcie.
+- SLEPc 40905306186: build/link oraz **21/21 CTest PASS**. Dopiero finalizacja
+  CI próbuje automatycznie retire głównego checkoutu i jest prawidłowo blokowana.
+  Cały workflow pozostaje failure; nie osłabiono ochrony main checkout.
+
+To konkretne otwarte bramki integracji I6, nie dowód błędu nowego algorytmu
+fizycznego. Podsumowanie z SHA logów/receiptów zachowano w pliku
+2026-10-29-eigensolve-native-ci-failures.evidence.json. Poprawiany jest zakres
+finalizacji ephemeral CI, z zachowaniem obowiązkowych production guards.
+
+
+Finalizacja CI używa teraz istniejącego owner-finish(state=review) dla passed
+main-checkout, z jawnym cleanup_state=not_applicable_main_checkout.
+Managed worktree zachowuje state=completed i wszystkie guardy retire.
+Nie zmieniono produkcyjnego storage/retirement API. Atexit nie przepisuje
+tego rozróżnienia na fałszywy cleanup completed. Dodano hosted regresję wyboru
+kontraktu; pełny workflow stanowi rzeczywistą próbę tej finalizacji.
+Końcowe source review D1 nie znalazło błędu produkcyjnego. Główny fixture
+przestawiono na rzeczywiste CPU pole subwindows, zachowując osobne aliasy.

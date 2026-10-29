@@ -63,6 +63,13 @@
     "terminal_evidence": {
       "path": "docs/audits/2026-10-29-eigensolve-gamma-runtime-failure.evidence.json",
       "sha256": "a677ce146a09923bd468a4cc7d8dd8ca2e7ac9c459b40444c1f4dcf0c4487ce5"
+    },
+    "native_failure_sidecar_fix": {
+      "state": "source_implemented_and_reviewed_hosted_pending",
+      "scope": "private attempt diagnostic only; solver gates and failure result unchanged",
+      "max_file_bytes": 65536,
+      "certificate_allowlist": true,
+      "production_producer_key_tested_in_source": "subwindows"
     }
   },
   "ci": {
@@ -83,6 +90,16 @@
       "tests_passed": 20,
       "tests_total": 21,
       "failure": "fixture looked for candidate diagnostic directly under failure_probe; actual depth-1 member belongs under last_true_probe; scope fixed, hosted recheck pending"
+    },
+    "native_i6_followup": {
+      "source_commit": "14fc9280e39a1551743a375a491257819012ce5e",
+      "run": 40905306186,
+      "tests_passed": 21,
+      "tests_total": 21,
+      "native_build_and_ctest": "success",
+      "workflow": "failure",
+      "failure_stage": "post-test owner completion tried to retire main checkout",
+      "evidence": "2026-10-29-eigensolve-native-ci-failures.evidence.json"
     }
   },
   "open": [
@@ -120,6 +137,11 @@
       "runner_ignored": 1,
       "failure": "native tracking allocation masked uncertified equilibrium admission; metric construction moved after accepted completion without changing fixture",
       "recheck": "pending"
+    },
+    "native_profile_observation": {
+      "tracking-mass-mfem": "compiler failure in snapshot contract: missing #endif; closure added; recheck pending",
+      "tracking-mass-stub": "same missing #endif; recheck pending",
+      "floquet-modal-slepc": "21/21 CTest PASS; owner finalization failed; main-checkout receipt-only fix pending hosted recheck"
     }
   }
 }

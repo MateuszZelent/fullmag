@@ -248,7 +248,20 @@ pub(crate) fn execute(
     );
     observation.finish();
     let result = result
-        .map_err(|e| anyhow::anyhow!(e.to_string()))
+        .map_err(|error| {
+            if let Err(sidecar_error) =
+                crate::accepted_study_worker::persist_native_failure_diagnostic(
+                    root,
+                    step,
+                    &error.message,
+                )
+            {
+                eprintln!(
+                    "accepted native failure diagnostic sidecar unavailable: {sidecar_error:#}"
+                );
+            }
+            anyhow::anyhow!(error.to_string())
+        })
         .context("execute exact accepted native modal plan")?;
     if result.status == fullmag_runner::RunStatus::Cancelled {
         return Ok(None);

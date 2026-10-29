@@ -416,6 +416,7 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api accepted_fem_
           cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparer preparation_writer_retry_retries_typed_busy_but_not_other_errors
           cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_fem_
+          cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_worker::native_failure_diagnostic::tests
           cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparation-scheduler typed_writer_busy_retry_preserves_preparation_launch_identity
           cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparation-scheduler pre_admission_snapshot_deferral_classifies_only_typed_busy
           cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparation-scheduler deferred_recovery_retains_and_joins_an_owned_supervisor

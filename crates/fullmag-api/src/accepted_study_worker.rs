@@ -37,6 +37,9 @@ use accepted_worker_execution_receipt::{
     WorkerExecutionStartedReceipt, WORKER_EXECUTION_RECEIPT_SCHEMA,
     WORKER_EXECUTION_STARTED_RECEIPT,
 };
+#[path = "accepted_study_worker/native_failure_diagnostic.rs"]
+mod native_failure_diagnostic;
+pub(crate) use native_failure_diagnostic::persist_native_failure_diagnostic;
 
 const RUNNER_INITIAL_STATE_FILE: &str = "m_initial.json";
 pub(crate) const RUNNER_FINAL_STATE_FILE: &str = "m_final.json";
