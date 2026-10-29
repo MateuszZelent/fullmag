@@ -66,6 +66,17 @@ obserwacji i formatu sześciu miejsc dziesiętnych. Po korekcie: **13 + 53 PASS*
 Nie zmieniono produkcyjnej ochrony 32 GiB ani kodu stopki. Kolejność Windows
 nie była wykonywana na lokalnym Linuxie; test statycznego progu używa mocka.
 
+Dalszy krok CI ujawnił niepełną fixture abrupt-stop. Uzupełniono projekt
+kontrolera i jawne niepowodzenia obu dowodów izolacji; nieudowodniony obcy
+konsument nadal musi blokować recovery (**38 PASS**). Sprawdzono także
+pozostałe 73 pliki tego kroku, obejmujące 1347 przypadków. Poprawiono dwie
+stare fixture: test skanowania Windows dopuszcza provider wyłącznie w
+ograniczonej gałęzi reparse (**56 PASS**), a test cleanupu helpera browser QA
+podaje zgodną komendę Compose/inspect (**31 PASS**). Pozostały błąd ACL wynikał
+z przestrzeni użytkowników sandboxa; wszystkie **7 testów** przeszło na
+rzeczywistym hoście we własnych katalogach tymczasowych, bez zmiany kodu.
+Produkcji recovery i izolacji storage nie zmieniano.
+
 Start DEV zbudował pakiet bazowy przed finalnymi poprawkami Rust. Nie jest to
 dowód uruchomienia finalnego solvera. Nowa walidacja dynamiki, energii,
 parytetu CPU/GPU ani wykonania na urządzeniu: **NOT VERIFIED**.

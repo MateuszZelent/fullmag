@@ -426,13 +426,21 @@ class WindowsIsolationTests(unittest.TestCase):
         self.assertNotIn("FileId $currentDir", walk)
         self.assertIn("FileId $root", walk)
 
-    def test_descendant_walk_avoids_powershell_item_provider_and_per_entry_budget_calls(self):
+    def test_descendant_walk_limits_item_provider_to_reparse_entries_and_bounds_budget_calls(self):
         ancestor = isolation.WINDOWS_PROVIDER.split("function NoReparse(", 1)[1].split("function FileId(", 1)[0]
         walk = isolation.WINDOWS_PROVIDER.split("function Descendants(", 1)[1].split("function Identity(", 1)[0]
         self.assertNotIn("Get-Item", ancestor)
         self.assertIn("[IO.File]::GetAttributes($cursor)", ancestor)
-        self.assertNotIn("Get-Item", walk)
         self.assertIn("[IO.DirectoryInfo]::new($currentDir)", walk)
+        ordinary_prefix, link_and_rest = walk.split("if ($isLink) {", 1)
+        link_branch, ordinary_suffix = link_and_rest.split(
+            "if (($attributes -band 0x10) -ne 0) {", 1)
+        ordinary_entry_path = ordinary_prefix + ordinary_suffix
+        self.assertNotIn("Get-Item", ordinary_entry_path)
+        self.assertEqual(link_branch.count("Get-Item -Force -LiteralPath $entry.FullName"), 2)
+        self.assertIn("if ($tag -ceq '0xa0000003')", link_branch)
+        self.assertIn("elseif ($tag -ceq '0xa000000c')", link_branch)
+        self.assertIn("if ($links.Count -ge 256)", link_branch)
         entries = walk.split("foreach ($entry in $directory.EnumerateFileSystemInfos())", 1)[1]
         entries = entries.split("NoReparse $currentDir", 1)[0]
         self.assertEqual(entries.count("DescendantBudget $clock"), 1)
