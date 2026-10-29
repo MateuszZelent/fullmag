@@ -763,14 +763,29 @@ export function transformFieldVectorForDisplay(
     "magnitude_squared"
       ? scale * scale
       : scale;
-  const values = Float64Array.from(result.data.values, (value) => value * projectionScale);
-  return {
-    ...result,
-    data: {
+  let data: DecodedFieldVector;
+  if (result.data.dtype === "float32") {
+    const values = Float32Array.from(
+      result.data.values,
+      (value) => value * projectionScale,
+    );
+    if (values.some((value) => !Number.isFinite(value))) {
+      throw new Error("Display conversion produced non-finite float32 values");
+    }
+    data = { ...result.data, quantityId: requestedQuantityId, values };
+  } else {
+    data = {
       ...result.data,
       quantityId: requestedQuantityId,
-      values,
-    },
+      values: Float64Array.from(
+        result.data.values,
+        (value) => value * projectionScale,
+      ),
+    };
+  }
+  return {
+    ...result,
+    data,
     responseMetadata: {
       ...result.responseMetadata,
       quantityId: requestedQuantityId,

@@ -5,28 +5,36 @@ import { asDecodedComplexFieldVector, decodeFieldVector } from "./fieldVectorCod
 function makeFieldVectorBuffer({
   nComp = 3,
   quantityId = "m",
+  valueKind = 1,
   values = [1, 0, -1],
 }: {
   nComp?: number;
   quantityId?: string;
+  valueKind?: 1 | 2;
   values?: number[];
 } = {}): ArrayBuffer {
+  const bytesPerValue = valueKind === 2
+    ? Float32Array.BYTES_PER_ELEMENT
+    : Float64Array.BYTES_PER_ELEMENT;
   const buffer = new ArrayBuffer(
-    48 + values.length * Float64Array.BYTES_PER_ELEMENT,
+    48 + values.length * bytesPerValue,
   );
   const view = new DataView(buffer);
   for (const [index, code] of [..."FMVP"].entries()) {
     view.setUint8(index, code.charCodeAt(0));
   }
   view.setUint8(4, 2);
-  view.setUint8(5, 1);
+  view.setUint8(5, valueKind);
   view.setUint8(6, nComp);
   view.setUint32(12, values.length, true);
   view.setUint32(16, 1, true);
   view.setUint32(20, 1, true);
   view.setUint32(24, 1, true);
   new TextEncoder().encodeInto(quantityId, new Uint8Array(buffer, 28, 16));
-  new Float64Array(buffer, 48).set(values);
+  const data = valueKind === 2
+    ? new Float32Array(buffer, 48)
+    : new Float64Array(buffer, 48);
+  data.set(values);
   return buffer;
 }
 
@@ -38,6 +46,7 @@ function makeFieldVectorV3Buffer({
   quantityId = "m",
   scopeId = "",
   scopeKind = "full",
+  valueKind = 1,
   values = [1, 0, -1],
 }: {
   domainGenerationId?: string;
@@ -47,6 +56,7 @@ function makeFieldVectorV3Buffer({
   quantityId?: string;
   scopeId?: string;
   scopeKind?: string;
+  valueKind?: 1 | 2;
   values?: number[];
 } = {}): ArrayBuffer {
   const encoder = new TextEncoder();
@@ -60,15 +70,18 @@ function makeFieldVectorV3Buffer({
     generationIdBytes.length +
     nodeIndices.length * 4;
   const metadataLength = Math.ceil(rawMetadataLength / 8) * 8;
+  const bytesPerValue = valueKind === 2
+    ? Float32Array.BYTES_PER_ELEMENT
+    : Float64Array.BYTES_PER_ELEMENT;
   const buffer = new ArrayBuffer(
-    48 + metadataLength + values.length * Float64Array.BYTES_PER_ELEMENT,
+    48 + metadataLength + values.length * bytesPerValue,
   );
   const view = new DataView(buffer);
   for (const [index, code] of [..."FMVP"].entries()) {
     view.setUint8(index, code.charCodeAt(0));
   }
   view.setUint8(4, 3);
-  view.setUint8(5, 1);
+  view.setUint8(5, valueKind);
   view.setUint8(6, 3);
   view.setUint32(8, metadataLength, true);
   view.setUint32(12, values.length, true);
@@ -101,7 +114,10 @@ function makeFieldVectorV3Buffer({
     view.setUint32(offset, nodeIndex, true);
     offset += 4;
   }
-  new Float64Array(buffer, 48 + metadataLength).set(values);
+  const data = valueKind === 2
+    ? new Float32Array(buffer, 48 + metadataLength)
+    : new Float64Array(buffer, 48 + metadataLength);
+  data.set(values);
   return buffer;
 }
 
@@ -174,6 +190,7 @@ function makeFieldVectorV5Buffer({
   sourceId = "",
   sourceKind = "",
   sourceRevision = BigInt(0),
+  valueKind = 1,
   values = [1, 0.1, 2, 0.2, 3, 0.3],
 }: {
   domainGenerationId?: string;
@@ -188,6 +205,7 @@ function makeFieldVectorV5Buffer({
   sourceId?: string;
   sourceKind?: string;
   sourceRevision?: bigint;
+  valueKind?: 1 | 2;
   values?: number[];
 } = {}): ArrayBuffer {
   const encoder = new TextEncoder();
@@ -208,13 +226,16 @@ function makeFieldVectorV5Buffer({
     quantityIdBytes.length +
     nodeIndices.length * Uint32Array.BYTES_PER_ELEMENT;
   const metadataLength = Math.ceil((88 + metadataPayloadLength) / 8) * 8;
+  const bytesPerValue = valueKind === 2
+    ? Float32Array.BYTES_PER_ELEMENT
+    : Float64Array.BYTES_PER_ELEMENT;
   const buffer = new ArrayBuffer(
-    48 + metadataLength + values.length * Float64Array.BYTES_PER_ELEMENT,
+    48 + metadataLength + values.length * bytesPerValue,
   );
   const view = new DataView(buffer);
   encoder.encodeInto("FMVP", new Uint8Array(buffer, 0, 4));
   view.setUint8(4, 5);
-  view.setUint8(5, 1);
+  view.setUint8(5, valueKind);
   view.setUint8(6, 6);
   view.setUint32(8, metadataLength, true);
   view.setUint32(12, values.length, true);
@@ -255,8 +276,24 @@ function makeFieldVectorV5Buffer({
     view.setUint32(offset, nodeIndex, true);
     offset += Uint32Array.BYTES_PER_ELEMENT;
   }
-  new Float64Array(buffer, 48 + metadataLength).set(values);
+  const data = valueKind === 2
+    ? new Float32Array(buffer, 48 + metadataLength)
+    : new Float64Array(buffer, 48 + metadataLength);
+  data.set(values);
   return buffer;
+}
+
+function shiftFieldVectorMetadataByOneByte(buffer: ArrayBuffer): ArrayBuffer {
+  const view = new DataView(buffer);
+  const metadataLength = view.getUint32(8, true);
+  const valueOffset = 48 + metadataLength;
+  const shifted = new ArrayBuffer(buffer.byteLength + 1);
+  const bytes = new Uint8Array(shifted);
+  bytes.set(new Uint8Array(buffer, 0, valueOffset));
+  bytes.set(new Uint8Array(buffer, valueOffset), valueOffset + 1);
+  bytes[valueOffset] = 0;
+  new DataView(shifted).setUint32(8, metadataLength + 1, true);
+  return shifted;
 }
 
 describe("decodeFieldVector", () => {
@@ -264,11 +301,94 @@ describe("decodeFieldVector", () => {
     const decoded = decodeFieldVector(makeFieldVectorBuffer());
 
     expect(decoded.quantityId).toBe("m");
+    expect(decoded.dtype).toBe("float64");
+    expect(decoded.values).toBeInstanceOf(Float64Array);
     expect(decoded.formatVersion).toBe(2);
     expect(decoded.indexing).toBe("legacy_count_only");
     expect(decoded.nComp).toBe(3);
     expect(decoded.grid).toEqual([1, 1, 1]);
     expect(Array.from(decoded.values)).toEqual([1, 0, -1]);
+  });
+
+  it("decodes FMVP v2 float32 values from their four-byte binary representation", () => {
+    const sourceValues = [0.1, -0.25, 1.5];
+    const buffer = makeFieldVectorBuffer({ valueKind: 2, values: sourceValues });
+    const decoded = decodeFieldVector(buffer);
+
+    expect(decoded.dtype).toBe("float32");
+    expect(decoded.values).toBeInstanceOf(Float32Array);
+    expect(decoded.values.buffer).toBe(buffer);
+    expect(decoded.values.byteOffset).toBe(48);
+    expect(decoded.values.byteLength).toBe(sourceValues.length * 4);
+    expect(Array.from(decoded.values)).toEqual(Array.from(new Float32Array(sourceValues)));
+    expect(Array.from(decoded.values).every(Number.isFinite)).toBe(true);
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "rejects non-finite FMVP float32 display values (%s)",
+    (value) => {
+      expect(() =>
+        decodeFieldVector(
+          makeFieldVectorBuffer({ valueKind: 2, values: [1, value, -1] }),
+        ),
+      ).toThrow(/FMVP float32 values must be finite/);
+    },
+  );
+
+  it("keeps FMVP v5 float32 payloads aligned and preserves their validated metadata", () => {
+    const sourceValues = [0.125, -0.25, 0.5, 1, -2, 4];
+    const decoded = decodeFieldVector(
+      makeFieldVectorV5Buffer({
+        fieldGenerationId: "field:film-a:m:8",
+        indexing: 1,
+        nodeIndices: [0],
+        quantityId: "m",
+        scopeId: "film-a",
+        scopeKind: "object",
+        sourceId: "run-8",
+        sourceKind: "live",
+        sourceRevision: BigInt(8),
+        valueKind: 2,
+        values: sourceValues,
+      }),
+    );
+
+    expect(decoded.dtype).toBe("float32");
+    expect(decoded.values).toBeInstanceOf(Float32Array);
+    expect(Array.from(decoded.values)).toEqual(Array.from(new Float32Array(sourceValues)));
+    expect(decoded).toMatchObject({
+      fieldGenerationId: "field:film-a:m:8",
+      formatVersion: 5,
+      indexing: "explicit_node_indices",
+      quantityId: "m",
+      scopeId: "film-a",
+      scopeKind: "object",
+      sourceId: "run-8",
+      sourceKind: "live",
+      sourceRevision: "8",
+    });
+    expect(Array.from(decoded.nodeIndices ?? [])).toEqual([0]);
+  });
+
+  it("rejects truncated payloads and misaligned float32/float64 data offsets", () => {
+    const float32 = makeFieldVectorBuffer({ valueKind: 2 });
+    expect(() => decodeFieldVector(float32.slice(0, float32.byteLength - 1))).toThrow(
+      /FMVP buffer size mismatch/,
+    );
+
+    const misaligned = shiftFieldVectorMetadataByOneByte(
+      makeFieldVectorV3Buffer({ valueKind: 2 }),
+    );
+    expect(() => decodeFieldVector(misaligned)).toThrow(
+      /FMVP metadata length is not 4-byte aligned/,
+    );
+
+    const misalignedLegacy = shiftFieldVectorMetadataByOneByte(
+      makeFieldVectorV3Buffer(),
+    );
+    expect(() => decodeFieldVector(misalignedLegacy)).toThrow(
+      /FMVP metadata length is not 8-byte aligned/,
+    );
   });
 
   it("decodes FMVP v3 full-domain metadata", () => {
@@ -591,6 +711,20 @@ describe("decodeFieldVector", () => {
     });
   });
 
+  it("does not reinterpret float32 display fields as complex128 analysis fields", () => {
+    const decoded = decodeFieldVector(
+      makeFieldVectorBuffer({
+        nComp: 6,
+        quantityId: "display:tensor",
+        valueKind: 2,
+        values: [1, 0.1, 2, 0.2, 3, 0.3],
+      }),
+    );
+
+    expect(decoded.values).toBeInstanceOf(Float32Array);
+    expect(asDecodedComplexFieldVector(decoded)).toBeNull();
+  });
+
   it("does not treat real xyz field vectors as complex analysis fields", () => {
     const decoded = decodeFieldVector(makeFieldVectorBuffer());
 
@@ -602,5 +736,14 @@ describe("decodeFieldVector", () => {
     new DataView(buffer).setUint8(6, 0);
 
     expect(() => decodeFieldVector(buffer)).toThrow(/Unsupported FMVP component count/);
+  });
+
+  it("rejects unsupported FMVP value kinds", () => {
+    const buffer = makeFieldVectorBuffer();
+    new DataView(buffer).setUint8(5, 3);
+
+    expect(() => decodeFieldVector(buffer)).toThrow(
+      /Unsupported FMVP value kind: expected 1 or 2, got 3/,
+    );
   });
 });
