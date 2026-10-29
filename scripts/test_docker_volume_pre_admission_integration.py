@@ -79,6 +79,7 @@ class _Control:
     volume = VOLUME
     namespace = ""
     namespace_registry_sha256 = None
+    namespace_registry = None
 
     def __init__(self, previous: dict[str, object], document: dict[str, object], events: list[object]) -> None:
         self.previous = previous

@@ -4498,6 +4498,7 @@ mod tests {
             run_revision: 10,
             artifact_revision: None,
             status: "failed",
+            solver_profile_identity: None,
             latest_output_identity: None,
             live_observation_identity: None,
             live_observation_sequence: None,
@@ -4505,6 +4506,7 @@ mod tests {
             stage_execution: crate::session::accepted_stage_execution_state(
                 Vec::new(), crate::types::RuntimeLifecycleState::Unknown,
             ),
+            stage_journal_details: StageJournalDetailsCache::new(),
         };
         for status in ["failed", "cancelled", "completed"] {
             previous.status = status;

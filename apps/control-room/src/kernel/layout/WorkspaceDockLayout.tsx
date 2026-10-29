@@ -65,6 +65,11 @@ function WorkspaceColumnContent({
 }
 
 
+function splitSideTitle(tree: WorkspaceDockTree): string {
+  return tree.kind === "split" ? "workspace panels"
+    : DEFAULT_WORKSPACE_LAYOUT.columns.find(column => column.slotId === tree.pane)?.label ?? "Diagnostics";
+}
+
 /** Layout containers hold measuring anchors, never live module content. */
 function TreeAnchors({ tree, surface, onBounds, onResize }: {
   tree: WorkspaceDockTree; surface: RefObject<HTMLDivElement | null>;
@@ -78,7 +83,9 @@ function TreeAnchors({ tree, surface, onBounds, onResize }: {
     <ResizablePanel id={firstId} defaultSize={`${tree.ratio}%`} minSize={tree.axis === "horizontal" ? "100px" : "80px"}>
       <TreeAnchors tree={tree.first} surface={surface} onBounds={onBounds} onResize={onResize} />
     </ResizablePanel>
-    <ResizableHandle className={tree.axis === "horizontal" ? "fm-resize-handle--vertical" : "fm-resize-handle--horizontal"} aria-label="Resize adjacent workspace panels" />
+    <ResizableHandle className={tree.axis === "horizontal" ? "fm-resize-handle--vertical" : "fm-resize-handle--horizontal"} aria-label={`Resize ${splitSideTitle(tree.first)} and ${splitSideTitle(tree.second)}`}
+      title="Drag to resize; double-click to restore the panel arrangement"
+      onDoubleClick={() => window.dispatchEvent(new Event(WORKSPACE_LAYOUT_RESTORED_EVENT))} />
     <ResizablePanel id={secondId} defaultSize={`${100-tree.ratio}%`} minSize={tree.axis === "horizontal" ? "100px" : "80px"}>
       <TreeAnchors tree={tree.second} surface={surface} onBounds={onBounds} onResize={onResize} />
     </ResizablePanel>
@@ -113,12 +120,6 @@ function readWorkspacePreference(key: string): string | null {
 const subscribeHydration = () => () => {};
 const clientReady = () => true;
 const serverReady = () => false;
-const browserWidth = () => window.innerWidth;
-const serverWidth = () => 1440;
-function subscribeBrowserWidth(onChange: () => void) {
-  window.addEventListener("resize", onChange);
-  return () => window.removeEventListener("resize", onChange);
-}
 
 export function WorkspaceDockLayout() {
   const kernel = useKernel();
@@ -130,11 +131,12 @@ export function WorkspaceDockLayout() {
   const [tree, setTree] = useState<WorkspaceDockTree>(() => restoreWorkspaceTree(readWorkspacePreference(WORKSPACE_TREE_KEY)));
   const [explicitDocked, setExplicitDocked] = useState<WorkspacePaneId[]>(() => restoreExplicitDocked(readWorkspacePreference(WORKSPACE_EXPLICIT_DOCK_KEY)));
   const restored = useSyncExternalStore(subscribeHydration, clientReady, serverReady);
-  const windowWidth = useSyncExternalStore(subscribeBrowserWidth, browserWidth, serverWidth);
+  const [windowWidth, setWindowWidth] = useState(1440);
   const [docked, setDocked] = useState<Partial<Record<WorkspacePaneId, boolean>>>({});
   const [bounds, setBounds] = useState<Record<string, DockBounds>>({});
   const [requests, setRequests] = useState<Partial<Record<WorkspacePaneId, PanelModeRequest>>>({});
   const [preview, setPreview] = useState<DockTarget | null>(null);
+  const [anchorGeneration, setAnchorGeneration] = useState(0);
   const surface = useRef<HTMLDivElement>(null);
   const columns = DEFAULT_WORKSPACE_LAYOUT.columns.filter(column => column.slotId !== "viewport-aux" || hasAux);
   const panes = [...columns.map(column => ({ id: column.slotId as WorkspacePaneId, title: playbackOnly && column.slotId === "panel-left" ? "Saved folder" : column.label })),
@@ -147,7 +149,15 @@ export function WorkspaceDockLayout() {
   const activeTree = filterWorkspaceTree(tree, kept);
 
   useEffect(() => {
-    const reset = () => { setTree(defaultWorkspaceTree()); setExplicitDocked([]); setRequests({}); setDocked({}); setPreview(null); };
+    // Measure the browser after the first layout, keeping the server and
+    // hydration render identical. Subsequent changes come from resize events.
+    const measure = () => setWindowWidth(window.innerWidth);
+    const initialFrame = requestAnimationFrame(measure);
+    window.addEventListener("resize", measure);
+    return () => { cancelAnimationFrame(initialFrame); window.removeEventListener("resize", measure); };
+  }, []);
+  useEffect(() => {
+    const reset = () => { setAnchorGeneration(value => value + 1); setTree(defaultWorkspaceTree()); setExplicitDocked([]); setRequests({}); setDocked({}); setPreview(null); };
     window.addEventListener(WORKSPACE_LAYOUT_RESTORED_EVENT, reset);
     return () => window.removeEventListener(WORKSPACE_LAYOUT_RESTORED_EVENT, reset);
   }, []);
@@ -196,7 +206,7 @@ export function WorkspaceDockLayout() {
   const previewStyle = preview ? { left: preview.bounds.left + (preview.edge === "right" ? preview.bounds.width/2 : 0), top: preview.bounds.top + (preview.edge === "bottom" ? preview.bounds.height/2 : 0),
     width: preview.bounds.width / (preview.edge === "left" || preview.edge === "right" ? 2 : 1), height: preview.bounds.height / (preview.edge === "top" || preview.edge === "bottom" ? 2 : 1) } : undefined;
   return <div ref={surface} className="fm-workspace-body" id="fm-main-content" tabIndex={-1}>
-    <div className="fm-workspace-docking-tree">{activeTree ? <TreeAnchors tree={activeTree} surface={surface} onBounds={reportBounds} onResize={resizeSplit} /> : <div className="fm-slot__empty">Drag a window to an edge to dock it.</div>}</div>
+    <div className="fm-workspace-docking-tree">{activeTree ? <TreeAnchors key={anchorGeneration} tree={activeTree} surface={surface} onBounds={reportBounds} onResize={resizeSplit} /> : <div className="fm-slot__empty">Drag a window to an edge to dock it.</div>}</div>
     {panes.map(pane => <WorkspaceWindow key={pane.id} id={pane.id} title={pane.title} visible={visible(pane.id)} drawer={drawer(pane.id)}
       drawerShared={drawer("panel-left") && drawer("panel-right") && visible("panel-left") && visible("panel-right")} bounds={bounds[pane.id]} request={requests[pane.id]} playbackSelection={playbackSelection}
       onDockChange={reportDocked} onMoveGesture={moveGesture} onDockTo={(id, edge) => applyDock(id, null, edge)} onHide={hide(pane.id)} />)}

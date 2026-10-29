@@ -1648,6 +1648,7 @@ mod tests {
             runtime_generation_sha256: None,
             compute_node_owner_id: None,
             compute_node_owner_epoch: None,
+            pending_inventory_recovery_sha256: None,
             topology_sha256: digest(b't'),
             budget: fullmag_session::FmsResourceBudget {
                 cpu_millis: 1,

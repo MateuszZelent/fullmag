@@ -1,6 +1,10 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const inspectorTab = vi.hoisted(() => ({ value: "overview" }));
+vi.mock("../../InspectorTabState", () => ({ useInspectorActiveTab: () => inspectorTab.value }));
+afterEach(() => { inspectorTab.value = "overview"; });
 
 vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/kernel/KernelContext")>()),
@@ -71,6 +75,7 @@ function renderFrequencyRoute(
 
 describe("routed postprocessing Inspectors", () => {
   it("renders the selected result status facets and contract gap truthfully", () => {
+    inspectorTab.value = "diagnostics";
     const html = renderFrequencyRoute(
       "results.resonance.driven.spectrum",
       {

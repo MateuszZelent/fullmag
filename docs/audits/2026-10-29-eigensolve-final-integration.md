@@ -72,3 +72,32 @@ identyczny helper fixture'u FMS zduplikowany przez scalanie testów oraz nowy
 opcjonalny external_cas w fixture ArchiveWalker. Python: usunięto podwójne
 zadeklarowanie --stop-only. Nie osłabiono oczekiwań, progów ani testów.
 Kompilowane testy pozostają wyłącznie w GitHub Actions.
+
+
+Drugi przebieg: 1460 testów UI PASS, typy i architektura PASS; React Doctor
+wskazał jeszcze browser-dependent branch szerokości. Odczyt szerokości
+przeniesiono do pierwszego pomiaru layoutu requestAnimationFrame i zdarzeń
+resize, z identyczną wartością początkową po stronie SSR/klienta. Nie wyciszono
+reguły. Fixture pre-admission uzupełnia teraz pełny interfejs BuildControl
+(namespace_registry=None), zamiast osłabiać kontrolę namespace w produkcji.
+
+Przy inwentaryzacji zastano obie usługi grupy zakończone exit255 o 07:24:39 UTC,
+bez OOM i bez błędu Dockera w State.Error. Nie przypisujemy zatrzymania
+zmianie Next config; wymaga ono osobnej kontrolowanej ścieżki wznowienia.
+
+
+Pełny frontend: 9393 PASS / 7 FAIL. Pięć awarii wynikało z braku rzeczywistego
+SelectionController w fixture powłoki; diagnostyka wymaga teraz zakładki
+Diagnostics. Zachowano asercje statusu i wyraźne rozróżnienie fₙ(k) / A(k,f).
+Kompilacja API ujawniła nowy allow_operation_profile (dla modalnego false),
+terminal_publication (modalny bundle nie publikuje terminalnego stanu czasowego)
+oraz brakujące opcjonalne pola i cache w starszych fixture'ach. Uzupełniono
+inicjalizatory zamiast usuwać walidację i testy. Te poprawki wymagają kolejnego CI.
+
+
+Browser smoke ujawnił brak semantycznej etykiety splittera Inspector oraz resetu
+rozmiaru w nowym drzewie. Uchwyty nazywają teraz sąsiednie panele. Double-click
+odtwarza domyślny układ: remount dotyczy wyłącznie anchorów i splitterów;
+WorkspaceWindow pozostają w stabilnej warstwie. Browser gate nadal sprawdza
+360/416/560px i reset, ale względem początkowego rozmiaru nowego dock layout,
+a nie hardkodowanego dawnego 416px. Weryfikacja runtime po scaleniu otwarta.

@@ -660,6 +660,8 @@ try {
     (await page.getByRole("dialog", { name: "Airbox visualization diagnostic" }).count()) === 0,
     "Visible must not open the removed Airbox diagnostic dialog.",
   );
+  const defaultInspectorBounds = await panel.boundingBox();
+  assert(defaultInspectorBounds, "Default Inspector geometry is unavailable.");
   for (const width of [360, 416, 560]) {
     const handleBox = await resizeHandle.boundingBox();
     const panelBox = await panel.boundingBox();
@@ -694,7 +696,7 @@ try {
   await resizeHandle.dblclick();
   await page.waitForTimeout(150);
   const resetWidth = await panel.boundingBox();
-  assert(resetWidth && Math.abs(resetWidth.width - 416) <= 3, "Double-click did not restore 416px.");
+  assert(resetWidth && Math.abs(resetWidth.width - defaultInspectorBounds.width) <= 3, "Double-click did not restore the default docked Inspector width.");
 
   await page.setViewportSize({ height: 900, width: 800 });
   await page.evaluate(() => {

@@ -2450,7 +2450,7 @@ fn execute_accepted_worker_start_with_snapshot(
         );
     }
     if matches!(&accepted_step.execution_plan.backend_plan, fullmag_ir::BackendPlanIR::FemEigen(_)) {
-        validate_accepted_worker_parameters(&specification.parameters, &accepted_step.step_id)?;
+        validate_accepted_worker_parameters(&specification.parameters, &accepted_step.step_id, false)?;
         return execute_accepted_modal_worker_start(store, accepted, start, accepted_step, study_step, case_id, interrupt_requested);
     }
     // Validate the same bounded RunSpec metadata before backend dispatch;
@@ -2999,14 +2999,14 @@ fn execute_accepted_modal_worker_start(
         let output = crate::accepted_modal_study_worker::execute(&prepared, step, &attempt,
             storage.as_ref().map(|s| s.data_root()).unwrap_or(&attempt), interrupted)?;
         let Some(output) = output else {
-            return Ok(AcceptedRunnerExecution { status: RunStatus::Cancelled, completed_step_count: 0,
+            return Ok(AcceptedRunnerExecution { terminal_publication: None, status: RunStatus::Cancelled, completed_step_count: 0,
                 outputs: vec![], attempt_output_dir: attempt.clone(), recovered_from_receipt: false,
                 accepted_state_ref: None, observation_source: None });
         };
         if let Some(storage) = &mut storage { storage.finish(true, &attempt)?; }
         persist_completed_worker_execution(store, &attempt, &identity, &study.outputs, RunStatus::Completed,
             1, std::slice::from_ref(&output), None, None)?;
-        Ok(AcceptedRunnerExecution { status: RunStatus::Completed, completed_step_count: 1,
+        Ok(AcceptedRunnerExecution { terminal_publication: None, status: RunStatus::Completed, completed_step_count: 1,
             outputs: vec![output], attempt_output_dir: attempt.clone(), recovered_from_receipt: false,
             accepted_state_ref: None, observation_source: None })
     })();

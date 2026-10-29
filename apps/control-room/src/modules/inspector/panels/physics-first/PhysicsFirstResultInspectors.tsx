@@ -226,7 +226,7 @@ export function DispersionOverviewResultInspector(props: InspectorPanelProps) {
       <InspectorGroup title="Wavevector-resolved results">
         {ref?.collectionStudyCount !== undefined ? <FieldRow label="Published studies" value={String(ref.collectionStudyCount)} /> : null}
         <p className="fm-result-inspector__help">Open a study in Results, choose its dispersion chart, then select a point to inspect the mode at that wavevector.</p>
-        <p className="fm-result-inspector__help">Modal frequencies and driven response maps are separate results. Their axes, units and available fields are shown with the selected dataset.</p>
+        <p className="fm-result-inspector__help">Modal relation fₙ(k) lists eigenfrequencies. Driven map A(k,f) shows forced response and is not a modal dispersion relation. Axes, units and available fields are shown with the selected dataset.</p>
       </InspectorGroup>
     </PhysicsFirstResultInspectorFrame>
   );

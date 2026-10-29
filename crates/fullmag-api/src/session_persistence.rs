@@ -2447,6 +2447,7 @@ mod accepted_fms_persistence_tests {
             Json(SessionExportRequest {
                 profile: SaveProfile::Solved,
                 name: Some("Nonempty accepted mode".into()),
+                accepted_run: None,
                 compression: Some(fullmag_session::CompressionProfile::Speed),
                 ui_state: None,
                 target_path: None,
