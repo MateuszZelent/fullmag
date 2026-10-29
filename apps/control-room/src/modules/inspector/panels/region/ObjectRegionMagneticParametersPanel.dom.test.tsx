@@ -91,6 +91,114 @@ describe("ObjectRegionMagneticParametersPanel session fence", () => {
     });
   });
 
+  it.each([
+    {
+      description: "reads Ku1 from an enabled owner anisotropy entry",
+      interactionPresent: true,
+      enabled: true,
+      ku1: 42_000,
+      ownerFieldKu1: null,
+      localOverride: null,
+      expectedParent: "42000 J/m^3 (inherits parent)",
+    },
+    {
+      description: "retains Ku1 when its owner anisotropy entry is disabled",
+      interactionPresent: true,
+      enabled: false,
+      ku1: 31_000,
+      ownerFieldKu1: null,
+      localOverride: 8_000,
+      expectedParent: "31000 J/m^3",
+    },
+    {
+      description: "preserves an explicitly authored zero Ku1",
+      interactionPresent: true,
+      enabled: true,
+      ku1: 0,
+      ownerFieldKu1: null,
+      localOverride: null,
+      expectedParent: "0 J/m^3 (inherits parent)",
+    },
+    {
+      description: "keeps an owner-level Ku1 field ahead of the stack scalar",
+      interactionPresent: true,
+      enabled: true,
+      ku1: 42_000,
+      ownerFieldKu1: 25_000,
+      localOverride: null,
+      expectedParent: "25000 J/m^3 (inherits parent)",
+    },
+    {
+      description: "defaults Ku1 to zero when the owner has no anisotropy entry",
+      interactionPresent: false,
+      enabled: false,
+      ku1: 0,
+      ownerFieldKu1: null,
+      localOverride: null,
+      expectedParent: "0 J/m^3 (inherits parent)",
+    },
+  ])("$description", async ({
+    interactionPresent,
+    enabled,
+    ku1,
+    ownerFieldKu1,
+    localOverride,
+    expectedParent,
+  }) => {
+    mocks.sceneData = {
+      objects: [{
+        id: "object-a",
+        physics_stack: interactionPresent ? [{
+          enabled,
+          kind: "uniaxial_anisotropy",
+          params: { axis: [0, 0, 1], ku1 },
+        }] : [],
+      }],
+      materials: [],
+    } as unknown as typeof mocks.sceneData;
+
+    const props = panelProps();
+    if (ownerFieldKu1 !== null) {
+      props.materialFields = {
+        fields: [{
+          assignment_id: "object-ku1",
+          field: { kind: "constant", value: ownerFieldKu1 },
+          owner_object_id: "object-a",
+          parameter: "ku1",
+          unit: "J/m^3",
+        }],
+        scene_revision: 9,
+      } as unknown as RegionSubPanelProps["materialFields"];
+    }
+    if (localOverride !== null) {
+      props.draft.materialOverrides = [{
+        conflictPolicy: "error",
+        parameter: "ku1",
+        priority: 0,
+        unit: "J/m^3",
+        value: localOverride,
+      }];
+    }
+
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<ObjectRegionMagneticParametersPanel {...props} />));
+      expect(fieldRowValue(
+        container,
+        localOverride === null ? "ku1" : "Inherited parent",
+      )).toBe(expectedParent);
+      if (localOverride !== null) {
+        expect(props.draft.materialOverrides[0]?.value).toBe(localOverride);
+      }
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("keeps clean Apply Fields disabled without submitting a write", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
@@ -278,6 +386,16 @@ function findButton(root: TestNode, text: string): TestElement {
   )[0];
   if (!button) throw new Error(`Missing button ${text}`);
   return button;
+}
+
+function fieldRowValue(root: TestElement, label: string): string {
+  const row = root.querySelectorAll(".fm-inspector-field-row").find(
+    (candidate) =>
+      candidate.querySelector(".fm-inspector-field-row__label")?.textContent === label,
+  );
+  const value = row?.querySelector(".fm-inspector-field-row__value");
+  if (!value) throw new Error(`Missing field row ${label}`);
+  return value.textContent;
 }
 
 function findElements(
