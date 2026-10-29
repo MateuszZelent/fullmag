@@ -101,3 +101,13 @@ odtwarza domyślny układ: remount dotyczy wyłącznie anchorów i splitterów;
 WorkspaceWindow pozostają w stabilnej warstwie. Browser gate nadal sprawdza
 360/416/560px i reset, ale względem początkowego rozmiaru nowego dock layout,
 a nie hardkodowanego dawnego 416px. Weryfikacja runtime po scaleniu otwarta.
+
+
+Trzeci przebieg: kontrola SSR nadal śledziła localStorage z leniwego inicjalizatora
+stanu aż do drzewa. Inicjalizacja tree/explicitDocked/restored ma teraz wyłącznie
+stałe wartości. Preferencje i szerokość są ładowane razem w pierwszej klatce
+layoutu; zapis preferencji pozostaje wyłączony do zakończenia tego odczytu.
+Nowa regresja porównuje markup serwera przy obecnym/nieobecnym window i wymaga
+zera odczytów localStorage podczas renderu. Nie wyłączono reguły doktora.
+Fixture frontend volume aktualizuje niezależnie wyliczony digest o metadata
+files, zgodnie z bieżącym kluczem produkcyjnym (guard label drift zachowany).

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { Button } from "@/shared/ui/Button";
 import { PanelChrome, PanelFrame, type PanelModeRequest, type PanelMoveEvent } from "@/shared/ui/PanelFrame";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/shared/ui/Resizable";
@@ -117,9 +117,6 @@ function readWorkspacePreference(key: string): string | null {
   try { return typeof window === "undefined" ? null : window.localStorage.getItem(key); }
   catch { return null; }
 }
-const subscribeHydration = () => () => {};
-const clientReady = () => true;
-const serverReady = () => false;
 
 export function WorkspaceDockLayout() {
   const kernel = useKernel();
@@ -128,9 +125,9 @@ export function WorkspaceDockLayout() {
   const projectOnly = useWorkspaceContentScope() === "project";
   const panelVisible = useLayoutSelector(layout => layout.panelVisible);
   const hasAux = !projectOnly && !playbackOnly && kernel.modules.forSlot("viewport-aux").length > 0;
-  const [tree, setTree] = useState<WorkspaceDockTree>(() => restoreWorkspaceTree(readWorkspacePreference(WORKSPACE_TREE_KEY)));
-  const [explicitDocked, setExplicitDocked] = useState<WorkspacePaneId[]>(() => restoreExplicitDocked(readWorkspacePreference(WORKSPACE_EXPLICIT_DOCK_KEY)));
-  const restored = useSyncExternalStore(subscribeHydration, clientReady, serverReady);
+  const [tree, setTree] = useState<WorkspaceDockTree>(defaultWorkspaceTree);
+  const [explicitDocked, setExplicitDocked] = useState<WorkspacePaneId[]>([]);
+  const [restored, setRestored] = useState(false);
   const [windowWidth, setWindowWidth] = useState(1440);
   const [docked, setDocked] = useState<Partial<Record<WorkspacePaneId, boolean>>>({});
   const [bounds, setBounds] = useState<Record<string, DockBounds>>({});
@@ -152,7 +149,13 @@ export function WorkspaceDockLayout() {
     // Measure the browser after the first layout, keeping the server and
     // hydration render identical. Subsequent changes come from resize events.
     const measure = () => setWindowWidth(window.innerWidth);
-    const initialFrame = requestAnimationFrame(measure);
+    const initialFrame = requestAnimationFrame(() => {
+      setTree(restoreWorkspaceTree(readWorkspacePreference(WORKSPACE_TREE_KEY)));
+      setExplicitDocked(restoreExplicitDocked(readWorkspacePreference(WORKSPACE_EXPLICIT_DOCK_KEY)));
+      measure();
+      // Persistence stays disabled until all preferences have been loaded.
+      setRestored(true);
+    });
     window.addEventListener("resize", measure);
     return () => { cancelAnimationFrame(initialFrame); window.removeEventListener("resize", measure); };
   }, []);

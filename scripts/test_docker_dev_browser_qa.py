@@ -1699,9 +1699,11 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
             "schema": "fullmag.docker-development-inputs.v1",
             "dependency_seed_sha256": "a" * 64,
             "toolpins_sha256": "b" * 64,
+            "files": [{"relative": "package.json", "sha256": "d" * 64}],
         }
         key = hashlib.sha256(
-            qa.canonical({"project": "fullmag-worktree-fixture", "dependencies": "a" * 64, "tools": "b" * 64})
+            qa.canonical({"project": "fullmag-worktree-fixture", "dependencies": "a" * 64,
+                          "tools": "b" * 64, "metadata": inputs["files"]})
         ).hexdigest()
         volume_name = "fullmag-dev-frontend-v1-" + key[:24]
 

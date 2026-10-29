@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ControlRoomApi } from "../api/ControlRoomApi";
 import { RequestDiagnosticsController } from "../api/RequestDiagnosticsController";
@@ -72,6 +72,22 @@ function makeKernel(): KernelApi {
 }
 
 describe("WorkspaceDockLayout", () => {
+  it("keeps server output independent of browser preferences until the first layout frame", () => {
+    const kernel = makeKernel();
+    const render = () => renderToStaticMarkup(
+      <KernelContext.Provider value={kernel}><WorkspaceDockLayout /></KernelContext.Provider>,
+    );
+    const serverOutput = render();
+    const getItem = vi.fn(() => JSON.stringify({ kind: "pane", pane: "panel-right" }));
+    vi.stubGlobal("window", { innerWidth: 390, localStorage: { getItem } });
+    try {
+      expect(render()).toBe(serverOutput);
+      expect(getItem).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("renders a stable server fallback before client-only dock libraries mount", () => {
     const html = renderToStaticMarkup(
       <KernelContext.Provider value={makeKernel()}>
