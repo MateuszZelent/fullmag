@@ -21213,7 +21213,7 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
 }
 
 #[tokio::test]
-async fn material_field_data_resource_returns_realized_samples() {
+async fn material_field_data_resource_does_not_relabel_global_samples_as_region_assignment() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
     scene.revision = 31;
@@ -21296,7 +21296,7 @@ async fn material_field_data_resource_returns_realized_samples() {
         list["fields"][0]["href"],
         "/v2/sessions/current/data/material-fields/body_core_ms_gradient"
     );
-    assert_eq!(list["fields"][0]["sample_count"], 4);
+    assert_eq!(list["fields"][0]["sample_count"], 0);
 
     let detail_response = app
         .oneshot(
@@ -21318,14 +21318,14 @@ async fn material_field_data_resource_returns_realized_samples() {
     assert_eq!(detail["parameter"], "ms");
     assert_eq!(detail["unit"], "A/m");
     assert_eq!(detail["frame"], "object");
-    assert_eq!(detail["realization_status"], "realized");
-    assert_eq!(detail["sample_count"], 4);
-    assert_eq!(detail["min"], 760000.0);
-    assert_eq!(detail["max"], 790000.0);
-    assert_eq!(detail["mean"], 775000.0);
+    assert_eq!(detail["realization_status"], "authored_pending_realization");
+    assert_eq!(detail["sample_count"], 0);
+    assert!(detail["min"].is_null());
+    assert!(detail["max"].is_null());
+    assert!(detail["mean"].is_null());
     assert_eq!(
         detail["values"],
-        serde_json::json!([760000.0, 770000.0, 780000.0, 790000.0])
+        serde_json::json!([])
     );
 }
 
