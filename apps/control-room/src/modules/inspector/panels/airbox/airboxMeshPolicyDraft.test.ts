@@ -11,8 +11,37 @@ import {
   draftIdentityKeyForUniverseMeshPolicyResource,
   draftKeyForUniverseMeshPolicyResource,
   formatUniverseMeshPolicyConfig,
+  rebaseAirboxMeshPolicyDraft,
   updateAirboxLengthUnit,
 } from "./airboxMeshPolicyDraft";
+
+describe("Airbox mesh policy revision rebase", () => {
+  const opened = { config: null, effective_config: null, revision: 0 };
+
+  it("adopts a newer mesh revision when only unrelated scene state changed", () => {
+    const draft = updateAirboxMeshPolicyDraft(
+      draftFromUniverseMeshPolicyResource(opened),
+      { airboxMode: "manual" },
+    );
+
+    const rebased = rebaseAirboxMeshPolicyDraft(draft, { ...opened, revision: 7 });
+
+    expect(rebased.baseRevision).toBe(7);
+    expect(rebased.airboxMode).toBe("manual");
+  });
+
+  it("keeps the opened revision when the Universe policy changed concurrently", () => {
+    const draft = draftFromUniverseMeshPolicyResource(opened);
+
+    const rebased = rebaseAirboxMeshPolicyDraft(draft, {
+      config: { mode: "manual", size: [1e-7, 1e-7, 1e-7] },
+      effective_config: null,
+      revision: 7,
+    });
+
+    expect(rebased.baseRevision).toBe(0);
+  });
+});
 
 describe("Airbox mesh policy draft", () => {
   it("formats nullable universe mesh config as an editable object draft", () => {

@@ -25,7 +25,10 @@ import {
 } from "@/kernel/resources/geometryLifecycleResources";
 import { resolveSessionAuthoringDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { publishCommittedMeshPolicyResource } from "@/kernel/resources/meshPolicyResourceCache";
-import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import {
+  SESSION_STATUS_RESOURCE_KEY,
+  useSessionStatusSelector,
+} from "@/kernel/resources/useSessionStatus";
 import {
   sessionRequestScopeKey,
 } from "@/kernel/resources/sessionResourceIdentity";
@@ -1194,6 +1197,9 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
       resources.invalidate(MESH_BUILD_CURRENT_RESOURCE_KEY, revision);
       resources.invalidate(MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY, revision);
       resources.invalidate(SCENE_RESOURCE_KEY, revision);
+      // The write bumps the mesh revision without a realtime event; the build
+      // dialog's mesh_revision precondition reads it from the session status.
+      resources.invalidate(SESSION_STATUS_RESOURCE_KEY, `mesh-policy:object:${objectId}:${revision}`);
       if (!silentSuccess && !silentApplyInFlight.current) {
         setFeedback({
           kind: "success",

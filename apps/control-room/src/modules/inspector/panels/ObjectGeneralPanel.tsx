@@ -71,6 +71,7 @@ import {
 } from "./objectGeneralPanelModel";
 import {
   objectEditMetadataEquals,
+  rebaseDirtyDraftOntoUnchangedObject,
   reconcileObjectEditAck,
   reconcileObjectIdentityAck,
 } from "./objectEditAckReconciliation";
@@ -289,7 +290,11 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
       Number.isFinite(canonicalGeometryDraft.baseRevision) &&
       currentDraft.baseRevision === canonicalGeometryDraft.baseRevision
     ) return;
-    kernel.objectEditSession.refreshCanonical(identity, canonicalDraftInSelectedUnits(canonicalGeometryDraft, currentDraft ?? canonicalGeometryDraft));
+    kernel.objectEditSession.refreshCanonical(
+      identity,
+      canonicalDraftInSelectedUnits(canonicalGeometryDraft, currentDraft ?? canonicalGeometryDraft),
+      rebaseDirtyDraftOntoUnchangedObject,
+    );
   }, [
     canonicalGeometryDraft,
     currentSessionScopeKey,

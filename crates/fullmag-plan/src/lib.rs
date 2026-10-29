@@ -139,6 +139,23 @@ fn routes_to_fdm_multilayer(problem: &ProblemIR) -> bool {
     problem.magnets.len() > 1 || requested_demag_strategy == "multilayer_convolution"
 }
 
+/// Packs a shared-domain mesh realized from geometry alone (ADR 0074) into
+/// object segments and mesh parts. No materials are involved; each region
+/// marker's geometry name is the scene object id.
+pub fn pack_geometry_only_shared_domain_mesh(
+    mesh: &fullmag_ir::MeshIR,
+    region_markers: &[fullmag_ir::FemDomainRegionMarkerIR],
+) -> Result<
+    (
+        fullmag_ir::MeshIR,
+        Vec<fullmag_ir::FemObjectSegmentIR>,
+        Vec<fullmag_ir::FemMeshPartIR>,
+    ),
+    String,
+> {
+    mesh::reorder_shared_domain_mesh(mesh, region_markers, true)
+}
+
 /// Plans a `ProblemIR` into an `ExecutionPlanIR`.
 ///
 /// Current planner coverage:

@@ -115,6 +115,12 @@ legacy explicit option, not the default scientific recommendation.
 - The Laplace and multipole equations apply to the source-free exterior model;
   material interfaces supply boundary data and the bounded airbox plus Robin
   truncation approximate the infinite exterior.
+- The air policy never coarsens a magnetic body. When $h_\max^\mathrm{air}$
+  exceeds the study body target $h_\max$, the shared background size is
+  $\max(h_\max, h_\max^\mathrm{air})$, so every body without its own
+  per-object recipe or body field receives a volume clamp at $h_\max$.
+  Without that clamp, a body was meshed at the air size while the build
+  report still listed $h_\max$ as its target.
 - The decay order is physical motivation only. Mesh error also depends on
   polynomial order, element shape, boundary truncation, coefficients and the
   target observable; no universal $\varepsilon(h)$ law is asserted here.
@@ -251,6 +257,8 @@ edges, and covered area are checked before the chordal volume bound is used.
 `_geometric_size_profile_expression` owns the scalar profile;
 `_add_airbox_grading_field` applies it; and
 `_resolve_airbox_boundary_transition_span` resolves object-to-boundary spans.
+`_study_default_body_clamp_fields` keeps bodies without a per-object recipe
+at the study target on the conformal and single-geometry OCC routes.
 
 (airbox-grading-validation)=
 ## 10. Validation
@@ -538,4 +546,6 @@ production criteria, not claims about the current partial report.
 | Plane-projected graded descriptors | `packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py` | `_PLANE_PROJECTED_UPPER_KINDS` | allowlist consumed by the exact-plane cap and swept source-face route for graded Box/Cylinder/Sphere descriptors; unsupported exact-cap projections are rejected | FEM meshing | focused real-Gmsh graded checks passed; mesh runtime and density **NOT VERIFIED** |
 | Public CAD/air guard | `scripts/test_box_layered_airbox_mesh.py` | `_assert_public_box_planes` | requires CAD boundaries, exact magnetic `L+1`, nonempty intervals, no CAD-crossing tetrahedra, positive cells and incident exterior-air planes while allowing extra air levels | FEM meshing | interpreted Gmsh regression passed; runtime/0105 **NOT VERIFIED** |
 | Exact-layer airbox target resolution | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_resolve_box_airbox_layer_sizes` | derives interface and finite outer cap for the exact-layer Box/ring generator | FEM meshing | implemented |
+| Study-default body clamp | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `_study_default_body_clamp_fields` | adds `ComponentVolumeConstant` at the study $h_\max$ for bodies without a recipe or body field when the air policy raised the background size | FEM meshing | interpreted Gmsh regression passed; managed runtime **NOT VERIFIED** |
+| Body-target regression | `packages/fullmag-py/tests/test_shared_domain_body_hmax.py` | `SharedDomainBodyHmaxTests` | two spheres with `airbox_hmax` above the body target realize the body size and refine with it | FEM meshing | interpreted Gmsh regression passed |
 | Effective-target report | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `_resolve_effective_shared_domain_targets` | reports resolved airbox intent, not yet the exact-layer generator's implicit cap | FEM meshing | report limitation |

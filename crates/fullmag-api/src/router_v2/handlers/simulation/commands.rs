@@ -159,6 +159,17 @@ async fn submit_structured_command_impl_with_context(
             crate::get_or_load_current_live_scene_document_for_context(&state, context).await?;
         }
         let transition_guard = state.current_live_session_transition.lock().await;
+        // ADR 0074: a FEM mesh build meshes the authored geometry without
+        // creating an accepted RunIntent, so the scene stays editable.
+        if crate::live_accepted_execution::docker_api_only_runtime() && command.kind == "remesh" {
+            return publish_geometry_mesh_build_under_transition(
+                Arc::clone(&state),
+                headers,
+                command,
+                context,
+            )
+            .await;
+        }
         if crate::live_accepted_execution::docker_api_only_runtime()
             && matches!(command.kind.as_str(), "remesh" | "fdm_grid_refresh")
         {
@@ -260,12 +271,14 @@ async fn submit_structured_command_impl_with_context(
             .await;
         }
         if crate::live_accepted_execution::docker_api_only_runtime()
-            && matches!(command.kind.as_str(), "pause" | "skip")
+            && matches!(command.kind.as_str(), "pause" | "skip" | "close")
         {
-            let reason = if command.kind == "pause" {
-                "accepted_control_unsupported: Docker accepted workers expose durable Stop; Pause is unavailable until a worker pause command is published."
-            } else {
-                "accepted_control_unsupported: Docker accepted workers expose durable Stop; Skip is unavailable until a worker stage-skip command is published."
+            // Only a CLI host drains the control queue and the Docker
+            // API-only runtime has none, so these must not be queued.
+            let reason = match command.kind.as_str() {
+                "pause" => "accepted_control_unsupported: Docker accepted workers expose durable Stop; Pause is unavailable until a worker pause command is published.",
+                "skip" => "accepted_control_unsupported: Docker accepted workers expose durable Stop; Skip is unavailable until a worker stage-skip command is published.",
+                _ => super::runtime::DOCKER_CLOSE_UNSUPPORTED_REASON,
             };
             return reject_session_command_impl_with_context(
                 Arc::clone(&state),
@@ -589,6 +602,95 @@ async fn complete_materialized_fields_under_transition(
     crate::live_command_journal::mutate(state, &snapshot, |ledger| {
         let record = ledger.iter_mut().find(|record| record.command.command_id == command_id)
             .ok_or_else(|| ApiError::conflict("materialization command record missing"))?;
+        record.status = if completed { CommandLifecycleState::Completed } else { CommandLifecycleState::Failed };
+        record.completed_at_unix_ms = Some(crate::session::unix_time_millis_now());
+        record.completion_status = Some(if completed { crate::types::CommandCompletionState::Completed }
+            else { crate::types::CommandCompletionState::Failed });
+        record.error = error.clone();
+        Ok(((), true))
+    }).await?;
+    let display_revision = state.current_display_selection.read().await.revision;
+    let realtime = crate::current_live_realtime_state_from_snapshot(state, &snapshot, display_revision).await;
+    crate::publish_current_live_realtime_batch_changed(state, &realtime, completed, 0).await
+}
+
+/// Journal a geometry-only mesh build (ADR 0074) and run it detached from the
+/// HTTP request, as accepted quantity adoption does: the record is Accepted
+/// before the ACK and reaches its terminal state when the mesh is published.
+async fn publish_geometry_mesh_build_under_transition(
+    state: Arc<AppState>,
+    headers: &HeaderMap,
+    mut command: SessionCommand,
+    context: &crate::types::CurrentLiveRequestContext,
+) -> Result<CommandResponse, ApiError> {
+    let key = command_request_key(headers);
+    if let Some(key) = key.as_ref() {
+        if let Some((_, response)) = state.current_command_responses.lock().await.iter()
+            .find(|(cached, _)| cached == key) { return Ok(response.clone()); }
+    }
+    let snapshot = state.current_live_state.read().await.as_ref().cloned()
+        .ok_or_else(|| ApiError::not_found("no current workspace"))?;
+    crate::ensure_current_live_request_context(&snapshot, context,
+        state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire))?;
+    let command_id = command.command_id.clone();
+    let request_id = command_request_id(headers);
+    let mut next_sequence = state.current_control_next_seq.lock().await;
+    let seq = next_sequence.checked_add(1).ok_or_else(|| ApiError::internal("command sequence exhausted"))?;
+    command.seq = seq;
+    crate::live_command_journal::mutate(&state, &snapshot, |ledger| {
+        validate_runtime_command_contract(&snapshot, ledger, &command)?;
+        if ledger.iter().any(is_active_mesh_or_compute_command) {
+            return Err(ApiError::conflict("A runtime or mesh command is already active."));
+        }
+        reserve_command_ledger_entry(ledger)?;
+        ledger.push_back(TrackedCommandRecord { command, request_id: request_id.clone(),
+            status: CommandLifecycleState::Accepted, dispatched_at_unix_ms: None,
+            completed_at_unix_ms: None, completion_status: None, error: None });
+        Ok(((), true))
+    }).await?;
+    *next_sequence = seq;
+    drop(next_sequence);
+    let task_state = Arc::clone(&state);
+    let task_context = context.clone();
+    let task_command_id = command_id.clone();
+    // Meshing may take minutes; the session transition fence is taken only to
+    // publish, so scene edits and Stop are not blocked while Gmsh runs.
+    tokio::spawn(async move {
+        let result = complete_geometry_mesh_build(
+            &task_state, &task_context, &task_command_id,
+        ).await;
+        if let Err(error) = result {
+            tracing::warn!(command_id = %task_command_id, error = %error,
+                "geometry-only mesh build could not publish its terminal outcome");
+        }
+    });
+    let response = CommandResponse { accepted: true, command_id, request_id, error: None };
+    if let Some(key) = key {
+        let mut responses = state.current_command_responses.lock().await;
+        responses.push_back((key, response.clone()));
+        while responses.len() > 128 { responses.pop_front(); }
+    }
+    Ok(response)
+}
+
+async fn complete_geometry_mesh_build(
+    state: &Arc<AppState>,
+    context: &crate::types::CurrentLiveRequestContext,
+    command_id: &str,
+) -> Result<(), ApiError> {
+    let outcome =
+        crate::live_geometry_mesh_build::build_and_publish_geometry_mesh(state, context, command_id)
+            .await;
+    let error = outcome.err().map(|error| error.message);
+    let completed = error.is_none();
+    let _transition = state.current_live_session_transition.lock().await;
+    let snapshot = state.current_live_state.read().await.as_ref().cloned()
+        .ok_or_else(|| ApiError::not_found("no current workspace"))?;
+    crate::ensure_current_live_request_context(&snapshot, context,
+        state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire))?;
+    crate::live_command_journal::mutate(state, &snapshot, |ledger| {
+        let record = ledger.iter_mut().find(|record| record.command.command_id == command_id)
+            .ok_or_else(|| ApiError::conflict("mesh build command record missing"))?;
         record.status = if completed { CommandLifecycleState::Completed } else { CommandLifecycleState::Failed };
         record.completed_at_unix_ms = Some(crate::session::unix_time_millis_now());
         record.completion_status = Some(if completed { crate::types::CommandCompletionState::Completed }
@@ -1429,14 +1531,14 @@ async fn validate_authoring_gate_for_command_with_context(
     let backend_target = GeometryBackendTarget::from_scene(&scene);
     if should_check_mesh {
         let realization = realize_geometry_scene(&scene, backend_target);
-        if realization.status == "blocked" {
-            let reason = realization
-                .diagnostics
-                .iter()
-                .find(|diagnostic| diagnostic.blocks.iter().any(|block| block == "build_mesh"))
-                .map(|diagnostic| diagnostic.message.clone())
-                .unwrap_or_else(|| "Geometry realization is blocked.".to_string());
-            return Err(ApiError::bad_request(reason));
+        // A blocked realization may be blocked for Compute only (missing
+        // material or initial state); meshing needs geometry alone (ADR 0074).
+        if let Some(diagnostic) = realization
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.blocks.iter().any(|block| block == "build_mesh"))
+        {
+            return Err(ApiError::bad_request(diagnostic.message.clone()));
         }
         return Ok(Some((scene, realization)));
     }
@@ -1520,6 +1622,11 @@ fn attach_geometry_realization_to_mesh_request(
     scene: &SceneDocument,
     realization: &GeometryRealizationSnapshot,
 ) -> Result<(), ApiError> {
+    // The Docker mesh build reads the scene directly and must not lower
+    // physics (ADR 0074); the legacy journal and FDM refresh still need the
+    // ProblemIR patch.
+    let geometry_only_mesh_build = crate::live_accepted_execution::docker_api_only_runtime()
+        && matches!(req, StructuredCommandRequest::MeshBuild { .. });
     let (intent, mesh_options) = match req {
         StructuredCommandRequest::MeshBuild {
             intent,
@@ -1562,10 +1669,12 @@ fn attach_geometry_realization_to_mesh_request(
             options_object.insert("per_geometry".to_string(), per_geometry);
         }
     }
-    options_object.insert(
-        "scene_problem_patch".to_string(),
-        scene_problem_patch_for_mesh(scene)?,
-    );
+    if !geometry_only_mesh_build {
+        options_object.insert(
+            "scene_problem_patch".to_string(),
+            scene_problem_patch_for_mesh(scene)?,
+        );
+    }
     options_object.insert(
         "canonical_policy_snapshot".to_string(),
         canonical_mesh_policy_snapshot(scene),
@@ -1601,7 +1710,7 @@ fn canonical_mesh_policy_snapshot(scene: &SceneDocument) -> serde_json::Value {
     })
 }
 
-fn scene_per_geometry_mesh_options(
+pub(crate) fn scene_per_geometry_mesh_options(
     scene: &SceneDocument,
 ) -> Result<Option<serde_json::Value>, ApiError> {
     let mut entries = Vec::new();
@@ -1733,7 +1842,7 @@ fn scene_problem_patch_for_mesh(scene: &SceneDocument) -> Result<serde_json::Val
     }))
 }
 
-fn study_universe_for_problem_patch(
+pub(crate) fn study_universe_for_problem_patch(
     scene: &SceneDocument,
 ) -> Result<Option<serde_json::Value>, ApiError> {
     let Some(universe) = scene
@@ -1764,7 +1873,7 @@ fn study_universe_for_problem_patch(
     Ok(Some(value))
 }
 
-fn scene_object_geometry_entry(
+pub(crate) fn scene_object_geometry_entry(
     object: &SceneObject,
     geometry_name: &str,
 ) -> Result<GeometryEntryIR, ApiError> {
