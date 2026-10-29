@@ -2790,6 +2790,66 @@ fn update_hash_serialized<T: Serialize + ?Sized>(hasher: &mut Sha256, label: &st
 }
 
 impl FemMeshPayload {
+    /// Live payload for a mesh realized from geometry alone (ADR 0074). There
+    /// is no plan yet, so magnetic markers are the packed object segments and
+    /// the identity uses the same stable payload fingerprint as plan meshes.
+    pub fn from_geometry_only_domain_mesh(
+        mesh: &fullmag_ir::MeshIR,
+        object_segments: &[fullmag_ir::FemObjectSegmentIR],
+        mesh_parts: &[fullmag_ir::FemMeshPartIR],
+        build_report: Option<fullmag_ir::FemSharedDomainBuildReportIR>,
+    ) -> Self {
+        record_fem_mesh_payload_build();
+        let domain_mesh_mode = if mesh.element_markers.contains(&0) {
+            fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
+        } else {
+            fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh
+        };
+        let element_markers = normalized_payload_element_markers(&mesh.element_markers, None);
+        let generation_id = stable_fem_mesh_generation_id(
+            mesh,
+            &element_markers,
+            object_segments,
+            mesh_parts,
+            domain_mesh_mode,
+            &None,
+        );
+        Self {
+            mesh_name: mesh.mesh_name.clone(),
+            mesh_id: format!("{}:{}", mesh.mesh_name, generation_id),
+            nodes: mesh.nodes.clone(),
+            cells: mesh.cells.clone(),
+            element_markers,
+            facets: mesh.facets.clone(),
+            boundary_markers: mesh.boundary_markers.clone(),
+            periodic_boundary_pairs: mesh.periodic_boundary_pairs.clone(),
+            periodic_node_pairs: mesh.periodic_node_pairs.clone(),
+            object_segments: object_segments
+                .iter()
+                .map(|segment| FemMeshObjectSegment {
+                    object_id: segment.object_id.clone(),
+                    geometry_id: segment.geometry_id.clone(),
+                    node_start: segment.node_start,
+                    node_count: segment.node_count,
+                    element_start: segment.element_start,
+                    element_count: segment.element_count,
+                    boundary_face_start: segment.boundary_face_start,
+                    boundary_face_count: segment.boundary_face_count,
+                })
+                .collect(),
+            mesh_parts: mesh_parts.iter().map(FemMeshPartPayload::from).collect(),
+            domain_mesh_mode: Some(domain_mesh_mode_name(domain_mesh_mode).to_string()),
+            domain_frame: None,
+            generation_id: Some(generation_id),
+            per_domain_quality: mesh
+                .per_domain_quality
+                .iter()
+                .map(|(k, v)| (*k, MeshQualityPayload::from(v)))
+                .collect(),
+            build_report,
+        }
+    }
+
     pub fn from_fem_plan_with_generation(
         plan: &fullmag_ir::FemPlanIR,
         generation_id: String,

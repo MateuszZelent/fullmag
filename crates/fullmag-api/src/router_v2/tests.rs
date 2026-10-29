@@ -11302,6 +11302,41 @@ async fn mesh_semantics_returns_three_level_projection() {
 }
 
 #[tokio::test]
+async fn mesh_capabilities_advertise_only_the_session_lane() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.mesh_workspace = None;
+        snapshot.session.requested_backend = "fem".into();
+        snapshot.session.resolved_backend = Some("fem".into());
+        snapshot.session.resolved_device = Some("cpu".into());
+        snapshot.session.resolved_precision = Some("double".into());
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/capabilities")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    let capabilities = json["mesh_capabilities"]
+        .as_object()
+        .expect("the session lane should be advertised before the first build");
+    for id in ["fem", "cpu", "double"] {
+        assert_eq!(capabilities[id]["status"], "supported", "{id}");
+    }
+    for id in ["fdm", "gpu", "single", "multilayer", "pbc"] {
+        assert!(!capabilities.contains_key(id), "{id}");
+    }
+}
+
+#[tokio::test]
 async fn mesh_capabilities_replace_stale_workspace_mixed_features_fail_closed() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {

@@ -144,6 +144,46 @@ pub async fn get_mesh_capabilities(
     }))
 }
 
+/// Advertise the session's own lane, the one lane this runtime is known to
+/// mesh for. Device and precision are published only once resolved; other
+/// lanes stay unpublished, which the mesh editor treats as informational
+/// rather than as a rejection. Workspace-published entries take precedence.
+fn insert_session_lane_capabilities(
+    snapshot: &SessionStateResponse,
+    projected: &mut serde_json::Map<String, Value>,
+) {
+    let session = &snapshot.session;
+    let backend = session
+        .resolved_backend
+        .as_deref()
+        .unwrap_or(session.requested_backend.as_str())
+        .to_ascii_lowercase();
+    let discretization = if backend.contains("fem") {
+        Some("fem")
+    } else if backend.contains("fdm") {
+        Some("fdm")
+    } else {
+        None
+    };
+    if let Some(discretization) = discretization {
+        projected
+            .entry(discretization.to_string())
+            .or_insert_with(|| json!({"status": "supported", "reason": "Session discretization lane."}));
+    }
+    if let (Some(device), Some(precision)) = (
+        session.resolved_device.as_deref(),
+        session.resolved_precision.as_deref(),
+    ) {
+        for key in [device.to_ascii_lowercase(), precision.to_ascii_lowercase()] {
+            if matches!(key.as_str(), "cpu" | "gpu" | "single" | "double") {
+                projected.entry(key).or_insert_with(|| {
+                    json!({"status": "supported", "reason": "Resolved session execution lane."})
+                });
+            }
+        }
+    }
+}
+
 fn projected_mesh_capabilities(
     snapshot: &SessionStateResponse,
     mesh_workspace: &Value,
@@ -156,6 +196,7 @@ fn projected_mesh_capabilities(
     for id in MIXED_P1_MESH_FEATURE_CAPABILITY_IDS {
         projected.remove(id);
     }
+    insert_session_lane_capabilities(snapshot, &mut projected);
     let feature = |id: &str| {
         snapshot
             .capabilities
@@ -631,10 +672,11 @@ pub async fn replace_mesh_universe_config(
     let mut scene =
         crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
             .await?;
+    // The declared universe and the universe mesh policy are one authored
+    // value; the scene lowering rejects a document where they differ, so a
+    // second Airbox edit must update both (as the authoring routes do).
     scene.study.universe_mesh = Some(config.clone());
-    if scene.universe.is_none() {
-        scene.universe = Some(config.clone());
-    }
+    scene.universe = Some(config.clone());
     let committed =
         crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
             .await?;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { Database, FolderOpen, Layers, ShieldCheck } from "lucide-react";
 
 import {
@@ -10,15 +10,8 @@ import {
 import type { OutputStorageDefaultsRequest } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
 import { createProblemWithPendingFormGuard } from "./createProblemWithPendingFormGuard";
-import {
-  SESSION_STATUS_RESOURCE_KEY,
-  useSessionResourceIdentity,
-} from "../resources/useSessionStatus";
-import { useSessionCollection } from "../resources/useSessionCollection";
-import {
-  confirmedSessionResourceIdentity,
-  sessionRequestScopeKey,
-} from "../resources/sessionResourceIdentity";
+import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
+import { cancelDomainSetupNavigation, requestDomainSetupNavigation } from "./domainSetupNavigation";
 import { useOutputStorageDefaults } from "../resources/useOutputStorageDefaults";
 import { tauriInvoke } from "../persistence/ProjectDocumentController";
 import { createProjectAuthoringSessionBinding } from "../persistence/ProjectAuthoringSessionBinding";
@@ -92,51 +85,10 @@ export function NewProblemDialog({
   const canBrowse = useSyncExternalStore(subscribeDesktopAvailability, desktopPickerAvailable, noDesktopPicker);
   const [creationAccepted, setCreationAccepted] = useState(false);
   const [domainSetupChoice, setDomainSetupChoice] = useState<"now" | "later">("later");
-  const pendingDomainNavigationSessionIdRef = useRef<string | null>(null);
-  const createdSessionIdRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const sessionCollection = useSessionCollection();
-  const sessionIdentity = useSessionResourceIdentity();
-  const currentSessionIdentity = confirmedSessionResourceIdentity(
-    sessionIdentity,
-    sessionCollection.resource.data,
-  );
-  const currentSessionScopeKey = sessionRequestScopeKey(currentSessionIdentity);
-  const currentSessionId = currentSessionIdentity?.sessionId ?? null;
-
-  useEffect(() => {
-    const pendingDomainNavigationSessionId = pendingDomainNavigationSessionIdRef.current;
-    if (
-      !pendingDomainNavigationSessionId ||
-      currentSessionId !== pendingDomainNavigationSessionId ||
-      currentSessionScopeKey === null
-    ) {
-      return;
-    }
-    kernel.layout.setPanelVisible("right", true);
-    kernel.selection.set(
-      {
-        kind: "universe.root",
-        label: "Universe",
-        nodeId: "model:universe",
-        objectId: null,
-        ref: null,
-      },
-      "ribbon",
-    );
-    pendingDomainNavigationSessionIdRef.current = null;
-  }, [
-    currentSessionId,
-    currentSessionScopeKey,
-    kernel,
-    open,
-  ]);
 
   const requestOpenChange = (nextOpen: boolean) => {
     if (pending || browsing) return;
-    if (!nextOpen && domainSetupChoice === "now" && createdSessionIdRef.current) {
-      pendingDomainNavigationSessionIdRef.current = createdSessionIdRef.current;
-    }
     onOpenChange(nextOpen);
   };
 
@@ -190,7 +142,10 @@ export function NewProblemDialog({
       // a second session create with the same form.
       setCreationAccepted(true);
       const response = outcome.response;
-      createdSessionIdRef.current = response.session_id;
+      // Recorded before the session readback can confirm the new session;
+      // the session connectors apply it once the identity is confirmed.
+      if (domainSetupChoice === "now") requestDomainSetupNavigation(response.session_id);
+      else cancelDomainSetupNavigation();
       const revision = `session:${response.session_id}`;
       kernel.resources.invalidate(SESSIONS_PATH, revision);
       kernel.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);

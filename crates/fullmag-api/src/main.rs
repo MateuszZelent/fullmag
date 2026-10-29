@@ -71,6 +71,7 @@ mod instance_discovery;
 mod imported_observation_retirement;
 mod live_command_journal;
 mod live_execution_binding;
+mod live_geometry_mesh_build;
 mod accepted_field_materialization;
 mod accepted_field_materialization_worker;
 mod live_accepted_continuation;
