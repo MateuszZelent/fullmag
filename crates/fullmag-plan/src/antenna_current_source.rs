@@ -1540,7 +1540,7 @@ mod tests {
             format!("sha256:{}", "a".repeat(64)), 7, plan.common.requested_backend, &plan,
             format!("sha256:{}", "c".repeat(64)), format!("sha256:{}", "d".repeat(64)), &native,
         ).unwrap_err();
-        assert!(error.to_string().contains("requires a time-domain FEM execution plan"));
+        assert!(error.to_string().contains("requires a magnetic FEM execution plan"));
     }
 
     #[test]
