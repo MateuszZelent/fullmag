@@ -9875,7 +9875,7 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
                   contains(hard_ksp_nearest_result.diagnostics_json,
                            "\"callback_count\":") &&
                   contains(hard_ksp_nearest_result.diagnostics_json,
-                           "\"true_probe_attempt_count\":0");
+                           "\"true_probe_attempt_count_scope\":\"positive_default_reason_callbacks_during_this_eps_attempt\"");
         if (!nearest_hard_ksp_contract) {
             const char *json = hard_ksp_nearest_result.diagnostics_json;
             const char *stop = json == nullptr ? nullptr : std::strstr(json, "\"stop_reason\":");
@@ -9897,6 +9897,45 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
                   "\"callback_count\":",
                   "hard_ksp_failure_probe_callback_count") >= 1.0,
               "hard failure retains the actual registered callback count");
+        // These counters span this EPS attempt, which can include successful
+        // KSP callbacks before a later hard failure. Never erase that history
+        // or confuse attempts with completed vector measurements. The direct
+        // shifted-KSP contract separately checks immediate breakdown and
+        // positive-default callbacks whose KSPBuildSolution observes failure.
+        const std::string failure_probe = json_object_after_key(
+            hard_ksp_nearest_result.diagnostics_json, "\"shifted_ksp_failure_probe\":");
+        const std::string last_probe = json_object_after_key(
+            failure_probe.c_str(), "\"last_true_probe\":");
+        const double callback_count = extract_json_number(
+            failure_probe.c_str(), "\"callback_count\":", "nearest callback history");
+        const double attempts_count = extract_json_number(
+            failure_probe.c_str(), "\"true_probe_attempt_count\":", "nearest probe attempts");
+        const double completed_count = extract_json_number(
+            failure_probe.c_str(), "\"true_probe_count\":", "nearest completed probes");
+        const double measurement_failures = extract_json_number(
+            failure_probe.c_str(), "\"true_probe_measurement_failure_count\":", "nearest failed measurements");
+        check(attempts_count >= 0.0 && attempts_count <= callback_count &&
+                  completed_count >= 0.0 && measurement_failures >= 0.0 &&
+                  completed_count + measurement_failures <= attempts_count,
+              "hard failure preserves internally consistent EPS-lifetime callback and measurement counters");
+        if (attempts_count > 0.0) {
+            const double ordinal = extract_json_number(
+                last_probe.c_str(), "\"callback_ordinal\":", "nearest last probe ordinal");
+            check(ordinal >= 1.0 && ordinal <= callback_count &&
+                      extract_json_number(last_probe.c_str(), "\"default_reason\":",
+                          "nearest last probe default reason") > 0.0,
+                  "a recorded true-probe attempt belongs to a prior or current positive-default callback");
+            if (json_member_has_literal(failure_probe.c_str(), "\"last_default_reason_available\":", "true") &&
+                extract_json_number(failure_probe.c_str(), "\"last_default_reason\":",
+                    "nearest final default reason") <= 0.0) {
+                check(ordinal < callback_count,
+                      "the final nonpositive callback does not create a new true-probe attempt");
+            }
+        } else {
+            check(json_member_has_literal(last_probe.c_str(), "\"callback_ordinal\":", "null") &&
+                      json_member_has_literal(last_probe.c_str(), "\"default_reason\":", "null"),
+                  "absent true-probe history keeps its ordinal and reason unavailable");
+        }
         const bool candidate_waits_for_true_probe =
             contains(hard_ksp_nearest_result.diagnostics_json,
                      "\"candidate_operator_diagnostic\":{\"schema_version\":\"floquet_candidate_operator_diagnostic.v1\",\"requested\":true") &&

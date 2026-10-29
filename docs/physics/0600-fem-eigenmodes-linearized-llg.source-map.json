@@ -811,8 +811,14 @@
     {
       "id": "source-native-floquet-explicit-full-refill-goal-test",
       "path": "backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp",
-      "symbol": "refills_native_floquet_nev_before_tangent_mass_cap",
+      "symbol": "void refills_native_floquet_nev_before_tangent_mass_cap",
       "responsibility": "Regress explicit/implicit count parity with the same operator, initial search space, original residual threshold and two independently known physical frequencies; do not infer window completeness."
+    },
+    {
+      "id": "source-native-shifted-ksp-probe-history-test",
+      "path": "backends/fem/tests/frequency_domain/shifted_ksp_true_convergence_test.cpp",
+      "symbol": "bool run_ksp_case",
+      "responsibility": "Exercise actual PETSc immediate breakdown and later build-solution breakdown after a positive default callback; preserve truthful probe attempts, completed counts and unavailable measurements."
     }
   ],
   "public_api": {

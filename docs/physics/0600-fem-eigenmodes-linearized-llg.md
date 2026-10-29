@@ -186,6 +186,17 @@ window. A smaller explicit best-effort goal retains its converged-pool gate;
 Stop/Pause, hard solve errors, residual checks and the global iteration budget
 remain unchanged.
 
+Failure-only shifted-KSP telemetry is published only on the failure path;
+it can retain earlier positive-callback history from the same EPS attempt.
+`true_probe_attempt_count` therefore need not be zero after a later hard KSP
+failure, and it differs from the count of completed vector measurements.
+The callback rejects nonpositive default reasons before attempting a new true
+probe. Earlier counters and measurements remain available with their recorded
+scope and callback ordinal; unavailable norms remain null. The direct KSP
+regression covers immediate breakdown and a positive-default callback whose
+solution build sees breakdown; the nearest C ABI regression verifies the
+serialized error, counter consistency and their binding to callback history.
+
 For a Bloch/Floquet modal problem with nonzero wavevector `k`, the tangent
 operator is partitioned as
 
@@ -1000,6 +1011,15 @@ ferromagnetic films*, J. Phys. C 19 (1986), DOI:10.1088/0022-3719/19/35/7013.
 (source-code-index)=
 | Path | Symbol | Responsibility |
 |---|---|---|
+| `backends/fem/tests/frequency_domain/shifted_ksp_true_convergence_test.cpp` | `bool run_ksp_case` | Regress immediate breakdown, positive-default/build-breakdown and true measurement availability without erasing callback history. |
+| `crates/fullmag-plan/src/fem.rs` | `eigen_policy_floquet_pair_sets_match` | Define the empty-selector means all mesh pairs contract used by native shared-domain planning. |
+| `crates/fullmag-runner/src/fem/eigen_capability.rs` | `native_cpu_modal_window_has_floquet_dynamic_demag_path` | Admit finite signed and mixed-axis k only along periodic axes, using the v6 certificate axis resolver and planner-compatible pair selection. |
+| `crates/fullmag-runner/src/fem/eigen_certificate.rs` | `modal_v6_pair_axis_mask` | Resolve an axis hint or one finite nonzero translation axis without indexing an empty list; reject ambiguous translation fallback. |
+| `crates/fullmag-runner/src/fem/eigen_tests.rs` | `floquet_dynamic_demag_provider_preserves_signed_mixed_k_and_rejects_open_axes` | Regress signed/mixed k, Gamma-containing paths, exact open-axis rejection and nonfinite inputs without rewriting requested coordinates. |
+| `crates/fullmag-runner/src/fem/eigen_tests.rs` | `modal_v6_pair_axis_mask_rejects_missing_zero_oblique_and_nonfinite_translation` | Regress missing/zero/oblique/nonfinite translation fallback and signed axis translations without panic. |
+| `crates/fullmag-runner/src/fem/eigen_tests.rs` | `floquet_dynamic_demag_provider_requires_exact_requested_pair_set` | Regress empty selector acceptance, exact all-pair selection, selector duplicates, unknown/subset IDs and incomplete mesh pair metadata. |
+| `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `solve_floquet_shared_domain_sparse_modal_spectrum` | Treat the explicit full selected-mode count as the same goal as the implicit default, preserving residual certification, mass deduplication, EPS diagnostics, smaller best-effort guards and cancellation. |
+| `backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` | `void refills_native_floquet_nev_before_tangent_mass_cap` | Regress explicit/implicit count parity with the same operator, initial search space, original residual threshold and two independently known physical frequencies; do not infer window completeness. |
 | `packages/fullmag-py/src/fullmag/model/study.py` | `class Eigenmodes` | Validate public modal parameters. |
 | `crates/fullmag-plan/src/fem.rs` | `plan_fem_eigen` | Lower the FEM eigen study and enforce capability policy. |
 | `crates/fullmag-plan/src/fem.rs` | `fem_eigen_solver_policy_has_native_path` | Reject ignored controls on structurally selected reference families. |
