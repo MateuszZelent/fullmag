@@ -239,3 +239,82 @@ FDM qualification oraz Inspector actions browser smoke również SUCCESS.
 Profile SLEPc w automatycznym bootstrap są SKIPPED, nie PASS; osobny ręczny
 run 40865035881 pozostaje dowodem 19/21. Jedyną porażką automatycznego
 bootstrap był browser-fixture-smoke opisany powyżej.
+
+
+## I6 — poprawki wejścia Floqueta, 29 października
+
+Naprawiono źródłowo trzy otwarte błędy: pusty selektor oznacza wszystkie pary
+zgodnie z plannerem; każdy punkt k jest sprawdzany względem osi periodycznych;
+wspólny resolver osi v6 nie indeksuje pustego Vec przy zerowej translacji.
+Resolver zachowuje pierwszeństwo axis_hint i translacyjny fallback oraz cutoff
+1e-15 m. Składowa k na otwartej osi musi być dokładnie zerowa, także poniżej
+progu Gamma 1e-12 rad/m; nie zmieniono ani nie zaokrąglono k i progów residualu.
+
+Rozszerzono istniejący test selektora i dodano trzy regresje signed/mixed/path,
+translacji bez hintu oraz braku/zera/oblique/nonfinite translacji. Wszystkie
+cztery funkcje jawnie objęto CI. Lokalnie wykonano tylko rustfmt --emit stdout
+(parsowanie), JSON i diff-check. Native provider trackingu, dwie porażki CTest,
+kwalifikacja runtime i nauki nadal są otwarte. Nie oznaczono całego I6 jako PASS.
+Dokument 0600 i source map opisują nowe warunki bez deklarowania fizycznej
+kwalifikacji. Master 6caa3e226 scalono bez konfliktów jako 2bf23f6ff; chronione
+14 plików WIP pozostały byte-for-byte identyczne. Usunięto wyłącznie pustą linię
+na końcu testu dostarczonego przez master, aby diff-check przechodził.
+
+Uwaga do hooka: commit 6cce2aadd i merge 2bf23f6ff uruchomiły React Doctor.
+Zgłosił odpowiednio 8 ostrzeżeń w starych częściach smoke-analysis-plots oraz
+3 ostrzeżenia w RealtimeInvalidationBridge z mastera, poza czterema dodanymi
+liniami nawigacji testu. Hook nie blokował commitu. Nie dodano suppressions ani
+nie obniżono bramek. Ocena tych wskazań pozostaje oddzielna od zielonego CI.
+
+
+Natywny refill: znaleziono różnicę między domyślnym celem N i jawnym celem N
+mimo identycznej zaakceptowanej puli. Jawny cel równy requested_mode_count ma
+teraz tę samą semantykę co domyślny; mniejszy best-effort zachowuje dawną bramkę
+EPS. Nie zmieniono NEV/NCV/MPD, budżetu 160, residualu 1e-10 ani certyfikacji
+per-mode. Test dodatkowo wymaga obu niezależnie znanych częstotliwości. EPS
+reason i iteracje pozostają widoczne; count fulfillment nie daje kompletności
+okna. Wymaga potwierdzenia natywnym CTest w CI.
+
+Druga porażka nearest KSP dostała wyłącznie ograniczoną diagnostykę składnika
+asercji (status/probe/callback/stop reason/true probe attempts), bez zmiany
+oczekiwań. Dotychczasowy log nie zawierał tych wartości. Ponowienie profilu
+po tej zmianie jest zbieraniem brakującego dowodu, a nie ślepym rerunem.
+Context7 nadal odmawia z powodu miesięcznej kwoty; oficjalna dokumentacja
+SLEPc EPSSetDimensions nie uzasadniała zgadywanej zmiany NEV/NCV, więc jej
+nie wykonano: https://slepc.upv.es/release/manualpages/EPS/EPSSetDimensions.html.
+
+
+Browser run 40872170503 przeszedł nawigację Provenance i poprawny import CSV.
+Następna asercja po odrzuceniu pliku ponad 4 MiB nadal odczytywała owner jako
+widoczny tekst w Data. Frame publikuje teraz stabilne semantyczne atrybuty
+run/stage/artifact revision na każdej zakładce; test czterech zakładek zabezpiecza
+ich przypisanie. Smoke sprawdza wszystkie trzy identyfikatory po odrzuceniu,
+pozostawiając Data zamontowane, żeby nie skasować błędu/wyboru pliku przed
+screenshotem. Zachowano test braku File.text dla za dużego pliku, braku POST,
+czyszczenia poprzednich kontrolek i dokładnej tożsamości wybranego węzła.
+
+
+## Decyzja runtime na podstawie zwolnionych zasobów
+
+Istniejący read-only _released_snapshot dla bieżących mountów e6ab0da98540:
+active_count=0, 20 rezerwacji hosta i 20 lokalnych leases. Każdy wpis released
+ma zweryfikowany autentyczny release proof. SHA-256 kanonicznej obserwacji:
+5ae150bf14d1e6e71ee0d51b73d4dcf08e26da60e99c6f4a1b1f227193a52ed0.
+To aktualny dowód braku aktywnych zasobów, nie domniemanie z OWNER Ready.
+Docker ma obecnie 223374323712 B wolnego, nadal ponad 32 GiB.
+
+Następna operacja: istniejące canonical recreate-volume --fresh-state dla
+b1b3dd2c031b41778d6d8983e765ca7e / config 9788eca276e839741b6b291812003037802d50aee7fa2b662646093c2e7abc05,
+source_root tego worktree, port 3217. Zachowuje cały dawny runtime-control
+atomowym archiwum, stare state_root oraz ledger; usuwa tylko dwa własne
+kontenery e6ab0da98540 i 5979f13fe9d6, następnie buduje nowy runtime w tej samej
+grupie. Nie edytuje ani nie usuwa historycznego OWNER i nie udaje drained.
+Dane fizyczne i historia pozostają dostępne, a nowy namespace nie przejmuje
+starego właściciela. To jawne odtworzenie nowego runtime, nie recovery aktywnego
+native lease (żaden nie jest aktywny).
+
+Przed operacją potwierdzono odtwarzalne archiwum signed15:
+/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/eigensolve-modal-updated-signed15-20261027/de-signed15-with-references-20261028.fms
+size=158456496, SHA-256=2338882b585bc40f9911ec3334676e672cb23c2a55448d4945e711533b57b6cf, ZIP entries=349, integralność PASS.
+Po starcie wymagane jest przywrócenie tego modelu/importu, a następnie nowe
+obliczenia i R6; pusty backend ani sam stary import nie zamykają celu.
