@@ -89,6 +89,9 @@ function titleCase(value: string): string {
 }
 
 function resolveFamily(kind: string): FamilyDescriptor {
+  if (kind === "results.output.entry") {
+    return { tabs: [], typeLabel: "Result" };
+  }
   if (kind === "airbox.visualization") {
     return { tabs: [], typeLabel: "Airbox display" };
   }

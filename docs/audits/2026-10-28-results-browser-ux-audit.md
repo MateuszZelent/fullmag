@@ -4,13 +4,13 @@ Data: 2026-10-28, aktualizacja 2026-10-29. Status: **REQUEST CHANGES dla całej 
 
 ## Aktualny stan audytu
 
-Poniższa tabela jest bieżącym podsumowaniem. Szczegółowe ustalenia UX-01–16 poniżej opisują także stan sprzed napraw; ich historyczne brzmienie nie oznacza, że każde pozostaje otwartym defektem.
+Poniższa tabela jest bieżącym podsumowaniem. Szczegółowe ustalenia UX-01–17 poniżej opisują także stan sprzed napraw; ich historyczne brzmienie nie oznacza, że każde pozostaje otwartym defektem.
 
 | Obszar | Aktualny wynik i zakres | Pozostała praca |
 |---|---|---|
 | Model Builder / Object / Airbox | Browser: Cancel zachowuje draft, Saved odmawia zmiany kontekstu, Discard przywraca zapis; powrót ze snapshotu zachowuje draft modelu | Dalsze przypadki formularzy poza Name/hmax |
 | Inspector snapshotu | Próbki czasu, własne ustawienia, powrót do ostatniej próbki po wyborze pliku; stabilne montowanie | Pełny widok szeregu tabelarycznego i pozostałe formaty analiz |
-| Live ↔ preview | Rzeczywisty FEM m: zgodność payloadu, brak mutacji sesji w badanym przepływie, opóźniona odpowiedź nie przywraca historii | Bezsesyjny przepływ przeszedł z fixture discovery i realnymi danymi; kontrolowany błąd odczytu wymaga dalszego QA |
+| Live ↔ preview | Rzeczywisty FEM m: zgodność payloadu, brak mutacji sesji w badanym przepływie, opóźniona odpowiedź nie przywraca historii | Bezsesyjny przepływ i kontrolowany błąd odczytu przeszły; długotrwałe błędy i pełna macierz awarii pozostają otwarte |
 | Kamera i panele | Fit/Reset, zachowanie kamery, hide/restore/float/dock; szerokości 768–1920 przeszły | Pozostałe komendy kamery, powiększenie 200% |
 | Results / nawigacja | Wspólny filtr/collapse/focus, widoczny zakres wyszukiwania, klawiatura, wejście Saved | Kolejność folderów i Source details mają dowód browser; duże katalogi/strony i długi run pozostają otwarte |
 | Tabele i metadane | Nazwy sześciu kolumn, odczyt pierwszej/ostatniej próbki, tekstowe preview | Pełne możliwości analiz dla tabel/modów/eigensolve |
@@ -471,3 +471,23 @@ Zrzuty modelowego Inspectora przy snapshotcie, no-session snapshotu i końcowego
 ### UX-17 · P2 · Ogólne zakładki Inspectora nie są połączone z panelem outputu
 
 Nowa obserwacja z końcowego zrzutu, potwierdzona źródłowo: `inspectorDescriptor.ts::resolveFamily` nadaje `results.output.entry` ogólne zakładki Overview/Data/Provenance/Diagnostics. `InspectorShell` zmienia tylko `InspectorTabState`, natomiast `ResultsOutputInspectorContainer` i `ResultsOutputInspector` nie odczytują activeTab. Panel pokazuje te same sekcje niezależnie od wybranej zakładki. Nie oznacza to utraty danych, ale jest martwą nawigacją i pozostaje otwartym defektem ergonomii. Następny krok: nadać temu panelowi spójny kontrakt sekcji bez pustych zakładek albo powiązać je z rzeczywistą treścią; zachować Samples/Visualization, metadata, values i błędy oraz dowieść zachowania w UI.
+
+
+## Kontynuacja 29.10 — ciągły Inspector wyników (UX-17)
+
+Dla dokładnego rodzaju `results.output.entry` descriptor nie publikuje już ogólnych zakładek. Panel nadal zawiera Samples, Visualization, metadane, wartości i podgląd plików; nie zmieniono pozostałych rodzin Inspectorów. Test descriptoru sprawdza również zachowanie dotychczasowego kontraktu innego rodzaju Results. Review diffu tego fragmentu nie wykazało zmiany API, danych ani uprawnień edycji.
+
+Zarządzany browser QA `47fbb05117c5422d8e7ba21660918ac6` przeszedł z harness SHA `e76b53993faf398d35adb4f7c635dc6805433722794970422497c75844105b41`. Potwierdza brak martwych zakładek, wszystkie poprzednie asercje przewijania i Return to live, drafty Object/Airbox oraz bezsesyjny przepływ Close results. Obejrzany screenshot no-session pokazuje Samples i Visualization bez pośredniej martwej nawigacji. Testy descriptoru **25/25**, powłoki **2/2**, scoped ESLint i typecheck przeszły w stałym frontendzie grupy 3298.
+
+Poprzednia próba `5db288056f8c4f0eacad29cc94792b1c` przeszła przewijanie i Return to live, lecz ujawniła wyścig w samym teście Airbox: zapisywał początkową pustą wartość przed asynchronicznym odczytem polityki, a po Discard porównywał ją z zapisanym `8e-9`. Test czeka teraz na dodatni authored hmax wymagany przez tę konkretną fixture FEM; usunięto zastępcze `|| 8`. Zachowano asercje Cancel, blokady Saved folder i dokładnego przywrócenia przez Discard. Nie zmieniono modelu ani zapisanej polityki.
+
+UX-17 zamknięto w powyższym zakresie. Nie jest to zamknięcie całej kwalifikacji przeglądarki; otwarte obszary pozostają w tabeli na początku audytu. Bieżący odczyt GitHub Actions dla HEAD `3ed19bbe7882d6d374720c6e16a602f9b9db2601` nie zwrócił workflow runs; nie stanowi to zielonego CI.
+
+
+## Kontynuacja 29.10 — kontrolowany błąd odczytu snapshotu
+
+Browser QA `06198ac2247842fcbd9dc1638e9c3931` przeszedł, harness SHA `dffacfde43ea336e932a238d7ea9774953e44818d5dbb10144fdb1f9ed2a1542`. Dowód: [results-read-error-evidence](2026-10-29-results-read-error-evidence.json). Nadal ten sam zakończony run FEM, backend snapshot i grupa 3298; nie wykonano nowej symulacji.
+
+Intercept dotyczył wyłącznie jednego GET próbki o indeksie 4; zwracał kontrolowany HTTP 503. Browser sprawdził stan error dla żądanej próbki, zachowanie poprzedniej klatki indeks 5 i jej prawdziwej współrzędnej 0,10 ns, niezmienioną kamerę i legendę, zachowany canvas, widoczny alert i dostępny przycisk Return to live. Zrzut błędu obejrzano: Requested 0,08 ns jest wyraźnie oddzielone od Displayed 0,10 ns. Po usunięciu interceptu, wyborze poprzednio poprawnej klatki i ponownym wyborze indeksu 4 nastąpił poprawny odczyt; hash bajtów użytych przez UI jest zgodny z niezależnym GET zapisanych danych. Końcowy powrót do Live, kontrola braku mutacji sesji, drafty Object/Airbox i no-session Close results także przeszły.
+
+To kwalifikacja krótkiego błędu odczytu i odzyskania przez ponowny wybór próbki; nie dowód wszystkich błędów, restartu backendu ani automatycznego retry. Return to live w samym stanie error sprawdzono jako dostępny; rzeczywiste kliknięcie powrotu wykonuje dalsza część scenariusza po odzyskaniu odczytu. Przeglądarka używa SwiftShader, bez deklaracji kwalifikacji sprzętowego GPU lub fizyki.

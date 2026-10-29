@@ -285,6 +285,8 @@ try {
   await outputRow.click();
   const outputInspector=page.getByRole("region",{name:"Results output Inspector"});
   await outputInspector.getByRole("slider",{name:"Saved sample index"}).waitFor({state:"visible"});
+  assert.equal(await page.getByRole("region",{name:"Inspector",exact:true}).getByRole("tab").count(),0,"Output Inspector exposes inactive generic tabs.");
+  result={...result,output_inspector_continuous_sections_verified:true};
   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
   assert.equal(resultSampleRequests.length,samplesBeforeSelection,"Selecting metadata fetched a decoded sample while its preview was closed.");
   result={...result,closed_values_preview_no_sample_request:true};
@@ -372,6 +374,52 @@ try {
     releaseSample();
     await page.unroute(delayedRoute,holdSample);
   }
+  // Inject a read failure for an uncached frame. The retained image must keep
+  // its actual coordinate/legend and a later selection must recover normally.
+  const failedIndex=selectedOutput.array.sample_count-2;
+  assert(!resultSampleRequests.some(path=>path.endsWith("/samples/"+failedIndex)),"Error proof requires an uncached penultimate sample.");
+  const failedPath="/v2/workspace/items/"+itemId+"/results/arrays/"+selectedOutput.array.id+"/samples/"+failedIndex;
+  const failedRoute=url=>decodeURIComponent(url.pathname)===failedPath;
+  let failedRequests=0;
+  const failSample=async route=>{failedRequests++;await route.fulfill({status:503,json:{code:"qa_sample_unavailable",message:"QA saved sample temporarily unavailable"}});};
+  const errorSlider=outputInspector.getByRole("slider",{name:"Saved sample index"});
+  await errorSlider.press("End");
+  await page.waitForFunction(index=>document.querySelector('[data-results-snapshot-status="ready"]')?.getAttribute("data-results-snapshot-displayed-index")===String(index),failedIndex+1);
+  const errorPose=await snapshotCanvas.getAttribute("data-saved-camera-pose");
+  const errorLegend=await snapshot.getByLabel("Saved result color scale").textContent();
+  await page.route(failedRoute,failSample);
+  try {
+    await errorSlider.press("ArrowLeft");
+    await page.waitForFunction(index=>{
+      const view=document.querySelector('[data-results-snapshot-status="error"]');
+      return view?.getAttribute("data-results-snapshot-index")===String(index)
+        && view?.getAttribute("data-results-snapshot-displayed-index")===String(index+1);
+    },failedIndex);
+    assert(failedRequests>0,"The requested sample did not reach the controlled failure.");
+    await snapshot.getByRole("alert").waitFor({state:"visible"});
+    assert(await retainedCanvas.evaluate(node=>node.isConnected),"Sample read failure replaced the canvas.");
+    assert.equal(await snapshotCanvas.getAttribute("data-saved-camera-pose"),errorPose,"Read failure changed the camera.");
+    assert.equal(await snapshot.getByLabel("Saved result color scale").textContent(),errorLegend,"Read failure relabelled the retained colors.");
+    assert((await snapshot.textContent()).includes("Requested:"),"Read failure hides the requested/displayed distinction.");
+    assert(await snapshot.getByRole("button",{name:"Return to live",exact:true}).isEnabled(),"Read failure disabled return to live.");
+    const errorScreenshot=await snapshot.screenshot({type:"png"});
+    assert(errorScreenshot.length<=512*1024);
+    result={...result,sample_error_screenshot_base64:errorScreenshot.toString("base64")};
+  } finally {
+    await page.unroute(failedRoute,failSample);
+  }
+  await errorSlider.press("End");
+  await page.waitForFunction(index=>document.querySelector('[data-results-snapshot-status="ready"]')?.getAttribute("data-results-snapshot-displayed-index")===String(index),failedIndex+1);
+  await errorSlider.press("ArrowLeft");
+  await page.waitForFunction(index=>document.querySelector('[data-results-snapshot-status="ready"]')?.getAttribute("data-results-snapshot-displayed-index")===String(index),failedIndex);
+  const recoveredResponse=await context.request.get(proxy.origin+failedPath+"?"+new URLSearchParams({revision:selectedOutput.array.revision}));
+  assert.equal(recoveredResponse.status(),200);
+  const recoveredHash=sha(await recoveredResponse.body());
+  for(let attempt=0;attempt<500&&!resultPayloads.has(selectedOutput.array.id+":"+failedIndex);attempt++)await page.waitForTimeout(20);
+  assert.equal(resultPayloads.get(selectedOutput.array.id+":"+failedIndex),recoveredHash,"Recovered sample differs from persisted data.");
+  await errorSlider.press("Home");
+  await page.waitForFunction(()=>document.querySelector('[data-results-snapshot-status="ready"]')?.getAttribute("data-results-snapshot-displayed-index")==="0");
+  result={...result,sample_read_error_retained_verified:true,sample_read_error_reselection_recovered:true,failed_sample_index:failedIndex};
   assert(new Set(resultCanvasHashes.slice(0,3)).size>1,"Results samples did not change the rendered canvas.");
   assert.equal((await component.textContent()).trim(),"x","Snapshot appearance was not retained.");
   assert(await retainedCanvas.evaluate(node=>node.isConnected),"Scrubbing replaced the shared canvas.");
@@ -531,8 +579,11 @@ try {
     await airboxNode.click();
     const airboxSize=page.locator(".fm-inspector").getByRole("textbox",{name:"Maximum element size",exact:true});
     await airboxSize.waitFor({state:"visible"});
+    // This FEM fixture has an authored positive hmax. Visibility precedes the
+    // asynchronous policy read, so do not capture its temporary empty draft.
+    await page.waitForFunction(node=>Number(node.value)>0,await airboxSize.elementHandle());
     const originalAirboxSize=await airboxSize.inputValue();
-    const draftAirboxSize=String((Number(originalAirboxSize)||8)*1.25);
+    const draftAirboxSize=String(Number(originalAirboxSize)*1.25);
     await airboxSize.fill(draftAirboxSize);
     await explorer.getByRole("tab",{name:"Results",exact:true}).click();
     await currentRow.click();

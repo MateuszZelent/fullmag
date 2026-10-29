@@ -62,6 +62,16 @@ describe("resolveInspectorDescriptor", () => {
     ]);
   });
 
+  it("keeps the results output panel continuous without inactive generic tabs", () => {
+    const descriptor = resolveInspectorDescriptor(selection("results.output.entry"));
+
+    expect(descriptor.tabs).toEqual([]);
+    expect(descriptor.typeLabel).toBe("Result");
+    expect(descriptor.icon).toBe("analysis");
+    expect(resolveInspectorDescriptor(selection("results.frequency_domain.root")).tabs)
+      .toHaveLength(4);
+  });
+
   it("uses task-oriented mesh navigation", () => {
     const descriptor = resolveInspectorDescriptor(selection("object.mesh"));
 
