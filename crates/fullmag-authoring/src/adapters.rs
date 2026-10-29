@@ -3985,7 +3985,10 @@ mod tests {
     #[test]
     fn presentation_hints_survive_builder_adapters_without_changing_physics() {
         let mut builder = sample_builder();
-        let before = builder.geometries[0].clone();
+        let before = scene_document_to_script_builder(&scene_document_from_script_builder(&builder))
+            .expect("baseline adapter round-trip should validate")
+            .geometries[0]
+            .clone();
         builder.geometries[0].visualization_hint = BTreeMap::from([
             ("display".into(), serde_json::json!("shaded_frame")),
             // A presentation label must never reclassify this authored magnet.
