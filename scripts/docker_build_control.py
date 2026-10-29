@@ -340,14 +340,13 @@ class BuildControl:
                 "available_bytes": usage.free, "filesystem": native["host_filesystem"],
                 "volume_serial": native["host_volume_serial"]}
 
-    @staticmethod
-    def assert_windows_pre_pull_space():
+    def assert_windows_pre_pull_space(self):
         """Guard physical Docker Desktop storage before a cold helper pull.
 
         Linux/WSL cannot observe the Docker VM filesystem before its first
         helper image exists; the existing cold pull order is retained there.
         """
-        backing = BuildControl._windows_backing_volume()
+        backing = self._windows_backing_volume()
         if backing is not None:
             _assert_free_space({"available_bytes": backing["available_bytes"]},
                                MIN_FREE_BUILD_BYTES, "cold helper pull admission refused")
@@ -831,6 +830,7 @@ def build_volume_toolchain(repo):
     helper = build["args"]["FULLMAG_CUDA_BASE_IMAGE"]
     if not re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", helper):
         raise BuildControlError("CUDA bootstrap image must be pinned by digest")
+    control = BuildControl(identity, helper)
     # The control helper itself is pulled only when it is absent. Do not call
     # prepare() first: its --pull never helper cannot run on a cold host.
     probe_spec = {"name": identity["project_name"], "services": {"build-control": {
@@ -838,14 +838,10 @@ def build_volume_toolchain(repo):
     helper_present = not docker_capture("image", "inspect", helper, allow_failure=True).returncode
     if not helper_present:
         if os.name == "nt":
-            BuildControl.assert_windows_pre_pull_space()
+            control.assert_windows_pre_pull_space()
         # Linux/WSL has no Docker-VM measurement before this image exists; the
         # established cold ordering is retained and documented as such.
         compose_capture(probe_spec, "pull", "build-control", timeout=1800)
-    # Namespace authentication itself runs a --pull never helper. Resolve it
-    # only after the pinned image exists, including when an existing group's
-    # control volume survived an operator's image cleanup.
-    control = BuildControl(identity, helper)
     control.prepare(minimum_free_bytes=(MIN_FREE_CONTROL_BYTES if helper_present
                                         else MIN_FREE_BUILD_BYTES))
 
