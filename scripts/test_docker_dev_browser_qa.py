@@ -1695,25 +1695,30 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
 
     def test_frontend_volume_preflight_requires_deterministic_owned_labels(self):
         qa = self.qa
+        from docker_build_control import BuildControl
+        from docker_development_inputs import metadata_cache_key
+
+        identity = {
+            "project_name": "fullmag-worktree-fixture",
+            "project_id": "fullmag-fixture",
+            "worktree_id": "fixture",
+            "checkout_kind": "worktree",
+        }
+        with patch("docker_control_namespace.resolve_namespace", return_value=None):
+            control = BuildControl(identity, "sha256:" + "d" * 64)
         inputs = {
             "schema": "fullmag.docker-development-inputs.v1",
             "dependency_seed_sha256": "a" * 64,
             "toolpins_sha256": "b" * 64,
+            "files": [
+                {"relative": "apps/control-room/next.config.mjs", "sha256": "c" * 64},
+            ],
         }
-        key = hashlib.sha256(
-            qa.canonical({"project": "fullmag-worktree-fixture", "dependencies": "a" * 64, "tools": "b" * 64})
-        ).hexdigest()
+        key = metadata_cache_key(inputs, control.project)
         volume_name = "fullmag-dev-frontend-v1-" + key[:24]
 
-        class FakeControl:
-            project = "fullmag-worktree-fixture"
-            labels = {
-                "org.fullmag.compose.project": project,
-                "org.fullmag.source.worktree-id": "fixture",
-            }
-
         labels = {
-            **FakeControl.labels,
+            **{key: value for key, value in control.labels.items() if key.startswith("org.fullmag.")},
             "org.fullmag.build.role": "frontend",
             "org.fullmag.build.cache-key": key,
         }
@@ -1723,7 +1728,7 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
             "docker_capture",
             return_value=SimpleNamespace(returncode=0, stdout=json.dumps([observed]).encode(), stderr=b""),
         ):
-            qa._validate_frontend_volume(FakeControl(), volume_name, inputs)
+            qa._validate_frontend_volume(control, volume_name, inputs)
         drifted = deepcopy(observed)
         drifted["Labels"]["org.fullmag.build.cache-key"] = "c" * 64
         with patch.object(
@@ -1732,7 +1737,7 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
             return_value=SimpleNamespace(returncode=0, stdout=json.dumps([drifted]).encode(), stderr=b""),
         ):
             with self.assertRaises(qa.BuildControlError):
-                qa._validate_frontend_volume(FakeControl(), volume_name, inputs)
+                qa._validate_frontend_volume(control, volume_name, inputs)
 
     def test_browser_image_reuses_compatible_local_digest_without_pull(self):
         qa = self.qa
