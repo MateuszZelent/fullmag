@@ -57,6 +57,15 @@ aktywnych konsumentów i przypiętemu receipcie grupy.
 
 ## Granice dowodu
 
+Pierwsze CI PR #342 ujawniło również stare fixture obecne już na bazie etapu:
+13 testów admission dawało 2 FAIL, a 53 testy stopki — 3 FAIL. Test cold start
+uwzględnia teraz istniejącą kolejność pull przed konstrukcją kontrolera i
+mockuje statyczny pomiar fizycznego storage na klasie. Fixture stopki używa
+obecnego `ScalarWindowResource` z `current_observation`, etykiety zaakceptowanej
+obserwacji i formatu sześciu miejsc dziesiętnych. Po korekcie: **13 + 53 PASS**.
+Nie zmieniono produkcyjnej ochrony 32 GiB ani kodu stopki. Kolejność Windows
+nie była wykonywana na lokalnym Linuxie; test statycznego progu używa mocka.
+
 Start DEV zbudował pakiet bazowy przed finalnymi poprawkami Rust. Nie jest to
 dowód uruchomienia finalnego solvera. Nowa walidacja dynamiki, energii,
 parytetu CPU/GPU ani wykonania na urządzeniu: **NOT VERIFIED**.
