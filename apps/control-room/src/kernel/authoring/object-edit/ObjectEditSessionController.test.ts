@@ -199,4 +199,3 @@ describe("ObjectEditSessionController", () => {
     expect(controller.getSnapshot().draft).toEqual({ base: 5, name: "Edited" });
   });
 });
-

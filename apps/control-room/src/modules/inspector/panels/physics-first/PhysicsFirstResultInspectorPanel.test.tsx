@@ -75,6 +75,26 @@ function renderFrequencyRoute(
 }
 
 describe("routed postprocessing Inspectors", () => {
+  it.each(["overview", "data", "provenance", "diagnostics"])(
+    "retains exact owner metadata independently of the visible tab (%s)", (tab) => {
+      inspectorTab.value = tab;
+      const html = renderToStaticMarkup(createElement(PhysicsFirstResultInspectorFrame, {
+        selection: {
+          kind: "results.dispersion.modal.mode_at_k", label: "Selected mode",
+          moduleSource: "explorer", nodeId: "mode-7", objectId: null,
+          ref: {
+            type: "frequency-domain", analysisRunId: "run-7", analysisStageId: "stage-2",
+            artifactRevision: "revision-3",
+          } as never,
+        },
+      }));
+      expect(html).toContain('data-analysis-run-id="run-7"');
+      expect(html).toContain('data-analysis-stage-id="stage-2"');
+      expect(html).toContain('data-artifact-revision="revision-3"');
+      expect(html).toContain(`data-result-tab="${tab}"`);
+    },
+  );
+
   it("delegates an owned provenance panel without duplicating generic metadata", () => {
     inspectorTab.value = "provenance";
     const html = renderToStaticMarkup(createElement(PhysicsFirstResultInspectorFrame, {

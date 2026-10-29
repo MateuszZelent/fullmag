@@ -1225,9 +1225,16 @@ async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseU
         dispersionSelector,
         { timeout: timeoutMs },
       );
-      const currentInspectorText = (await inspector.innerText()).replace(/\s+/g, " ");
-      if (!currentInspectorText.includes(runId) || !currentInspectorText.includes(stageId)) {
-        throw new Error("The selected Results owner changed after oversized reference rejection.");
+      // Keep Data mounted: switching tabs here would discard the local
+      // rejected-file state before its visible error is captured below.
+      const currentOwner = await inspector.locator(".fm-result-inspector").evaluate((node) => ({
+        runId: node.getAttribute("data-analysis-run-id"),
+        stageId: node.getAttribute("data-analysis-stage-id"),
+        artifactRevision: node.getAttribute("data-artifact-revision"),
+      }));
+      if (currentOwner.runId !== runId || currentOwner.stageId !== stageId ||
+          currentOwner.artifactRevision !== expectedArtifactRevision) {
+        throw new Error("The selected Results owner changed after oversized reference rejection: " + JSON.stringify(currentOwner));
       }
       overlimitEvidence = {
         errorVisible: true,
@@ -1237,6 +1244,7 @@ async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseU
         previousColumnsCleared: true,
         previousLabelCleared: true,
         selectedNodeId: await dispersionNode.getAttribute("data-node-id"),
+        owner: currentOwner,
       };
       const screenshot = path.join(acceptanceDirectory, "analysis-reference-import-overlimit.png");
       mkdirSync(acceptanceDirectory, { recursive: true });

@@ -30,7 +30,13 @@ export function PhysicsFirstResultInspectorFrame({
     ...(ref?.availability === "unavailable" && !collection ? ["The selected result is unavailable. Check its published artifacts."] : []),
   ];
   return (
-    <div className="fm-result-inspector" data-result-tab={activeTab}>
+    <div
+      className="fm-result-inspector"
+      data-result-tab={activeTab}
+      data-analysis-run-id={ref?.analysisRunId}
+      data-analysis-stage-id={ref?.analysisStageId}
+      data-artifact-revision={ref?.artifactRevision}
+    >
       {diagnostics.length > 0 ? <div role="status" className="fm-result-inspector__notice">{diagnostics.join(" ")}</div> : null}
       {activeTab === "overview" && collection ? <p className="fm-result-inspector__help">Select a published study below this collection to inspect its chart or fields.</p> : null}
       {activeTab === "data" ? <InspectorGroup title="Result context">
