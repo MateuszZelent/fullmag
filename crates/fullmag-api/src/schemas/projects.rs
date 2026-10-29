@@ -591,6 +591,9 @@ pub(crate) struct ProjectDocumentResource {
     pub mode: ProjectDocumentMode,
     pub source_hash: Option<String>,
     pub migration: ProjectMigrationResource,
+    /// Validated runtime-free authoring scene, available only on eligible Open.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authoring_scene_document: Option<std::collections::BTreeMap<String, serde_json::Value>>,
     /// Canonical or source-preserving `.fms` bytes for the next host adapter.
     pub archive_base64: String,
     /// Bytes-only transport never claims filesystem or power-loss durability.
@@ -666,6 +669,9 @@ pub(crate) struct ProjectScriptImportResource {
 /// The created project (same fields as create/open) plus what was imported.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub(crate) struct ProjectFromScriptResource {
+    /// Exact authoring scene embedded in this archive; new imports always provide it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scene_document: Option<BTreeMap<String, serde_json::Value>>,
     #[serde(flatten)]
     pub project: ProjectDocumentResource,
     pub script_import: ProjectScriptImportResource,

@@ -494,6 +494,8 @@ impl WorkerCoordinator {
         resolved_input.validate()?;
         let protocol = if resolved_input.schema_version == crate::execution::CLOSED_LOOP_RESOLVED_TASK_INPUT_SCHEMA {
             crate::execution::CLOSED_LOOP_WORKER_PROTOCOL_SCHEMA
+        } else if resolved_input.schema_version == crate::execution::TERMINAL_RESOLVED_TASK_INPUT_SCHEMA {
+            crate::execution::TERMINAL_WORKER_PROTOCOL_SCHEMA
         } else if self.protocol_schema=="worker_protocol.v2" { "worker_protocol.v2" } else { WORKER_PROTOCOL_SCHEMA };
         let previous_protocol=self.protocol_schema.clone();
         if self.next_command_sequence == 1 {

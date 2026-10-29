@@ -446,11 +446,21 @@ class StartupRejectionTests(unittest.TestCase):
             (422, {"code": "validation_error", "message": "invalid model"}, True),
             (422, {"code": "accepted_execution_plan_invalid", "message": "canonical accepted study lowering failed: shared-domain mesh missing"}, True),
             (422, {"code": "accepted_gpu_scope_unsupported", "message": "unsupported GPU study"}, True),
+            (422, {"code": "accepted_script_capture_invalid", "message": "source closure invalid"}, True),
+            (422, {"code": "accepted_script_capture_required", "message": "source capture required"}, True),
+            (422, {"code": "accepted_script_compilation_failed", "message": "closed-loop compilation failed"}, True),
+            (409, {"code": "accepted_script_source_changed", "message": "entry source changed"}, False),
+            (409, {"code": "accepted_script_scene_changed", "message": "captured scene changed"}, False),
             (422, {"code": "accepted_run_commit_failed", "message": "durable store failed"}, False),
             (422, {"code": "accepted_run_catalog_failed", "message": "catalog publication failed"}, False),
             (422, {"code": "accepted_unknown_future_code", "message": "unknown boundary"}, False),
             (409, {"code": "accepted_execution_plan_invalid", "message": "release conflict after admission"}, False),
             (400, {"code": "unsupported_capability", "message": "interactive=false with wait_for_solve=true"}, True),
+            (422, {"code": "docker_startup_output_mapping_required", "message": "output alias is required"}, True),
+            (422, {"code": "docker_startup_output_mapping_invalid", "message": "output alias is invalid"}, True),
+            (422, {"code": "docker_startup_output_mapping_future", "message": "unknown output failure"}, False),
+            (409, {"code": "docker_startup_output_mapping_required", "message": "conflict"}, False),
+            (500, {"code": "docker_startup_output_mapping_invalid", "message": "server failure"}, False),
             (422, {"code": "docker_startup_execution_policy_rejected", "message": "invalid protocol envelope"}, False),
             (500, {"code": "internal_error", "message": "service failure"}, False),
             (403, {"code": "forbidden", "message": "owner mismatch"}, False),
@@ -517,6 +527,34 @@ class StartupRejectionTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(startup.StartupScriptError):
                 startup.validate_rejection_receipt(altered, authorization)
 
+    def test_output_mapping_rejection_is_durable_and_replays_without_posting(self):
+        import io
+        import urllib.error
+
+        authorization = self.authorization()
+        for code in ("docker_startup_output_mapping_required", "docker_startup_output_mapping_invalid"):
+            with self.subTest(code=code):
+                self.receipt_path.unlink(missing_ok=True)
+                opener = mock.Mock()
+                opener.open.side_effect = urllib.error.HTTPError(
+                    "http://127.0.0.1:8081", 422, "error", {},
+                    io.BytesIO(json.dumps({"code": code, "message": "output alias is unavailable"}).encode()),
+                )
+                with self.run_environment(), mock.patch.object(
+                    startup, "_load_provenance_with_digest", return_value=(authorization, "a" * 64),
+                ), mock.patch.object(startup, "_bounded_regular", side_effect=self.bounded_regular), mock.patch.object(
+                    startup.urllib.request, "build_opener", return_value=opener,
+                ):
+                    first = startup.run_from_environment()
+                    durable = self.receipt_path.read_bytes()
+                    replay = startup.run_from_environment()
+                self.assertEqual(first["state"], "rejected")
+                self.assertEqual(first["rejection"]["code"], code)
+                self.assertEqual(replay, first)
+                self.assertEqual(self.receipt_path.read_bytes(), durable)
+                self.assertEqual(json.loads(durable)["state"], "rejected")
+                opener.open.assert_called_once()
+
     def test_long_rejection_preserves_traceback_start_and_final_cause(self):
         short = "unsupported mixed-P1 configuration"
         self.assertEqual(startup.StartupScriptRejected(422, "validation_error", short).message, short)
@@ -580,8 +618,11 @@ class StartupRejectionTests(unittest.TestCase):
                 POST_BUILD_START_SHA_ENV="FULLMAG_DOCKER_POST_BUILD_CONTINUATION_SHA256",
                 ensure_configuration=mock.Mock(return_value={}),
                 process_environment=mock.Mock(return_value={}),
+                terminal_observation_preflight=mock.Mock(return_value=None),
                 accepted_reattach_preflight=lambda _paths: None,
-                accepted_reattach_api_input=lambda _paths, **_kwargs: nullcontext(({}, None)),
+                terminal_observation_api_input=mock.Mock(
+                    side_effect=lambda _paths, **_kwargs: nullcontext(({}, None, None))
+                ),
                 process_receipt_path=mock.Mock(return_value=Path(directory) / "process-tree.json"),
                 start=mock.Mock(return_value=handle),
                 stop=mock.Mock(return_value={"state": "drained"}),
@@ -619,6 +660,10 @@ class StartupRejectionTests(unittest.TestCase):
                     mock.patch.object(startup, "_bounded_regular", side_effect=self.bounded_regular), \
                     mock.patch.object(startup, "activate", side_effect=startup.StartupScriptRejected(400, "bad_request", "unsupported model")):
                 self.assertEqual(module.serve(), 0)
+            service.terminal_observation_preflight.assert_called_once_with(paths)
+            service.terminal_observation_api_input.assert_called_once_with(
+                paths, terminal_preflight=None, accepted_preflight=None
+            )
             maintenance_start.assert_called_once()
             maintenance.stop.assert_called_once()
             service.stop.assert_called_once_with(handle, timeout=30)

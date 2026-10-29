@@ -29,3 +29,6 @@
 !healthcheck.py
 !docker_startup_script.py
 !fullmag_storage.py
+
+!docker/all-in-one/runtime_service_snapshot.py
+!runtime_service_snapshot.py

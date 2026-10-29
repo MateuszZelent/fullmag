@@ -886,6 +886,97 @@ describe("viewport3DFieldDataPlan", () => {
     expect(emptyAirbox.requests.size).toBe(0);
   });
 
+
+  describe("explicit tensor projections in Airbox", () => {
+    function tensorCatalog(): QuantityCatalogResource {
+      return {
+        quantities: [{
+          id: "spin_current_tensor",
+          domain: "full_domain",
+          shape: "tensor_field",
+          n_comp: 9,
+          tensor: {
+            rank: 2,
+            shape: [3, 3],
+            layout: "flow_major",
+            axes: ["flow", "spin"],
+            component_labels: ["Q_xx", "Q_xy", "Q_xz", "Q_yx", "Q_yy", "Q_yz", "Q_zx", "Q_zy", "Q_zz"],
+          },
+          resolved_capability: {
+            quantity_id: "spin_current_tensor",
+            provider: "available",
+            request: "field_vector",
+            materialization: "unmaterialized",
+            render: "unsupported_shape",
+            publication: "export_only",
+            carriers: [],
+            projections: [
+              { token: "c0", components: 1, output_shape: "spatial_scalar", render: "renderable", publication: "interactive" },
+              { token: "frobenius", components: 1, output_shape: "spatial_scalar", render: "renderable", publication: "interactive" },
+              { token: "spin_flow_y", components: 3, output_shape: "vector_field", render: "renderable", publication: "interactive" },
+            ],
+          },
+        }],
+      } as QuantityCatalogResource;
+    }
+
+    function demand(tensorProjection: string | null, quantityCatalog = tensorCatalog()) {
+      return resolveViewport3DAirboxFieldVectorDemandPlan({
+        airboxParts: [{ id: "universe" }],
+        quantityCatalog,
+        quantityId: "spin_current_tensor",
+        tensorProjection,
+        fieldQuery: { component: "full", scope_kind: "full", max_samples: 64 },
+        vectorBudget: 64,
+        vectorsVisible: true,
+      });
+    }
+
+    it.each(["c0", "frobenius"])("never requests vector glyphs for %s", (projection) => {
+      const plan = demand(projection);
+
+      expect(plan.demands).toEqual([]);
+      expect(plan.requests.size).toBe(0);
+    });
+
+    it("keeps the selected spin polarization instead of requesting the raw tensor", () => {
+      const plan = demand("spin_flow_y");
+
+      expect(plan.demands).toHaveLength(1);
+      expect(plan.requests.get("universe")).toMatchObject({
+        quantityId: "spin_current_tensor",
+        query: {
+          component: "spin_flow_y",
+          max_samples: 64,
+          scope_kind: "airbox",
+          scope_id: "universe",
+        },
+      });
+    });
+
+    it("requires an explicit projection and one unambiguous catalog permission", () => {
+      const missing = tensorCatalog();
+      missing.quantities[0].resolved_capability!.projections = [];
+      const duplicate = tensorCatalog();
+      duplicate.quantities[0].resolved_capability!.projections!.push(
+        { ...duplicate.quantities[0].resolved_capability!.projections![2] },
+      );
+      const malformed = tensorCatalog();
+      malformed.quantities[0].tensor!.axes = ["spin", "flow"];
+
+      for (const plan of [
+        demand(null),
+        demand("full"),
+        demand("spin_flow_y", missing),
+        demand("spin_flow_y", duplicate),
+        demand("spin_flow_y", malformed),
+      ]) {
+        expect(plan.demands).toEqual([]);
+        expect(plan.requests.size).toBe(0);
+      }
+    });
+  });
+
   it("does not request an unavailable FDM airbox quantity", () => {
     const plan = resolveViewport3DAirboxFieldVectorDemandPlan({
       airboxParts: [{ id: "part:airbox" }],

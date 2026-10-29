@@ -134,15 +134,34 @@ export function assertPlanarEvidenceReady(
   return evidence;
 }
 
+/**
+ * Identity of a rendered frame: the scalar sample, plus the presentation key
+ * when one sample feeds several rasters (client-side components, D2D-12).
+ */
+export function planarRenderIdentity(
+  scalarIdentity: string | null | undefined,
+  presentationKey?: string | null,
+): string {
+  return presentationKey ? `${scalarIdentity ?? ""}#${presentationKey}` : scalarIdentity ?? "";
+}
+
+/** Scalar sample identity of a rendered frame (without its presentation key). */
+export function planarRenderScalarIdentity(renderIdentity: string | null | undefined): string | null {
+  return renderIdentity == null ? null : renderIdentity.split("#")[0] ?? null;
+}
+
 export function resolvePlanarEvidenceStatus({
   metaIdentity,
   metaStatus,
+  presentationKey = null,
   renderEvidence,
   scalarIdentity,
   scalarStatus,
 }: {
   metaIdentity: string | null | undefined;
   metaStatus: "error" | "idle" | "loading" | "ready" | "stale";
+  /** Required in the rendered identity when one sample feeds several rasters. */
+  presentationKey?: string | null;
   renderEvidence: PlanarRenderEvidence | null;
   scalarIdentity: string | null | undefined;
   scalarStatus: "error" | "idle" | "loading" | "ready" | "stale";
@@ -155,7 +174,7 @@ export function resolvePlanarEvidenceStatus({
       typeof scalarIdentity === "string" &&
       scalarIdentity.length > 0 &&
       renderEvidence?.raster != null &&
-      renderEvidence?.sampleIdentity === scalarIdentity &&
+      renderEvidence?.sampleIdentity === planarRenderIdentity(scalarIdentity, presentationKey) &&
       scalarIdentity === metaIdentity
     ? "ready"
     : "loading";

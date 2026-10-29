@@ -59,6 +59,7 @@ pub(super) struct ReadBudget {
     files: BTreeSet<String>,
     file_bytes: u64,
     aggregate_limit: u64,
+    file_limit: usize,
 }
 
 impl Default for ReadBudget {
@@ -68,6 +69,7 @@ impl Default for ReadBudget {
             files: BTreeSet::new(),
             file_bytes: 0,
             aggregate_limit: MAX_OBSERVED_FILE_BYTES,
+            file_limit: MAX_OBSERVED_FILES,
         }
     }
 }
@@ -80,6 +82,10 @@ impl ReadBudget {
             aggregate_limit: MAX_MANUAL_HELD_V4_AGGREGATE_BYTES,
             ..Self::default()
         }
+    }
+
+    pub(super) fn for_attempt_history_v5() -> Self {
+        Self { aggregate_limit: MAX_MANUAL_HELD_V4_AGGREGATE_BYTES, file_limit: 32768, ..Self::default() }
     }
 
     pub(super) fn inspected_file_count(&self) -> usize {
@@ -119,7 +125,7 @@ impl ReadBudget {
         if !self.files.insert(relative.to_owned()) {
             return Ok(());
         }
-        if self.files.len() > MAX_OBSERVED_FILES {
+        if self.files.len() > self.file_limit {
             bail!("retained-run preflight exceeds its file limit");
         }
         let path = checked_path(root, relative)?;

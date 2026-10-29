@@ -215,6 +215,69 @@ try {
     checks.push({ name: `malformed ${malformed} ACK rejected before history publication`, passed: true }); await budget(`malformed ACK ${malformed}`);
   }
 
+  await boot("prepared-v3");
+  const preparedInlet = terminal("Branch 1 inlet terminal");
+  assert.equal(await preparedInlet.locator('option[value="signal-in"]').isDisabled(), false);
+  assert.equal(await preparedInlet.locator('option[value="return2-in"]').count(), 0, "v3 pickers must use actual source observations, never unrelated boundary IDs");
+  assert.equal(await preparedInlet.locator("option:not([disabled])").count(), 4);
+  await field("Branch 1 ID").fill("v3-submitted-draft");
+  await page.getByTestId("port-unrelated").fill("v3-unrelated-draft");
+  await page.evaluate(() => {
+    window.__antennaPortEditorFixture.watchSceneCache();
+    window.__antennaPortEditorFixture.malformedNext("source_cut");
+    const root = document.querySelector('[data-testid="port-editor"] [data-slot="inspector-group"]');
+    const input = root.querySelectorAll("input")[1], scroll = document.querySelector('[data-testid="port-scroll"]');
+    const unrelated = document.querySelector('[data-testid="port-unrelated"]');
+    scroll.scrollTop = 70; input.focus({ preventScroll: true });
+    const proof = { root, input, scroll, top: scroll.scrollTop, rootChanges: 0, controlChanges: 0,
+      disabledChanges: 0, opacityChanges: 0, opacityAnimations: 0,
+      controls: [input, unrelated].map(element => ({ element, disabled: element.disabled, opacity: getComputedStyle(element).opacity })) };
+    const sample = () => {
+      if (document.querySelector('[data-testid="port-editor"] [data-slot="inspector-group"]') !== root) proof.rootChanges++;
+      for (const saved of proof.controls) {
+        if (!saved.element.isConnected) proof.controlChanges++;
+        if (saved.element.disabled !== saved.disabled) proof.disabledChanges++;
+        if (getComputedStyle(saved.element).opacity !== saved.opacity) proof.opacityChanges++;
+      }
+      proof.opacityAnimations += root.getAnimations({ subtree: true }).filter(animation => (animation.playState === "running" || animation.pending) && animation.effect?.getKeyframes().some(frame => "opacity" in frame)).length;
+    };
+    const observer = new MutationObserver(sample);
+    observer.observe(root, { subtree: true, attributes: true, childList: true }); observer.observe(unrelated, { attributes: true });
+    window.__v3BadAckStable = { proof, sample, observer }; sample();
+  });
+  await apply();
+  await field("Branch 1 ID").fill("v3-newer-draft");
+  await page.evaluate(() => { const { proof } = window.__v3BadAckStable; proof.scroll.scrollTop = proof.top; proof.input.focus({ preventScroll: true }); });
+  await release();
+  await button("Rebase port").waitFor({ timeout });
+  await editor.getByText(/Port ACK omitted or changed the submitted scene/).waitFor({ timeout });
+  assert.equal(await field("Branch 1 ID").inputValue(), "v3-newer-draft");
+  assert.equal(await page.getByTestId("port-unrelated").inputValue(), "v3-unrelated-draft");
+  assert.equal(await page.getByTestId("port-dirty").textContent(), "true");
+  assert.equal(await button("Apply port").isDisabled(), true);
+  await wait(() => window.__antennaPortEditorFixture.read().sceneCacheTrace.some(observation => observation.revision === 2));
+  const v3BadAckState = await read();
+  assert.equal(writes(v3BadAckState).length, 1, "Bad ACK must never cause an implicit retry");
+  assert.equal(v3BadAckState.canUndo, false, "Rejected normalization must not enter history");
+  assert.ok(v3BadAckState.sceneCacheTrace.length > 0);
+  for (const observation of v3BadAckState.sceneCacheTrace) {
+    assert.equal(observation.sourceCutRef, "cut", "Rejected port normalization must never be published to the scene cache");
+    assert.equal(observation.transportCutRef, "cut", "Rejected source binding must never be published to the scene cache");
+  }
+  const v3BadAckStable = await page.evaluate(() => {
+    const { proof, sample, observer } = window.__v3BadAckStable; sample(); observer.disconnect();
+    window.__antennaPortEditorFixture.stopWatchingSceneCache();
+    return { root: document.querySelector('[data-testid="port-editor"] [data-slot="inspector-group"]') === proof.root,
+      input: proof.input.isConnected && proof.root.querySelectorAll("input")[1] === proof.input,
+      focus: document.activeElement === proof.input, scroll: proof.scroll.scrollTop === proof.top,
+      rootChanges: proof.rootChanges, controlChanges: proof.controlChanges, disabledChanges: proof.disabledChanges,
+      opacityChanges: proof.opacityChanges, opacityAnimations: proof.opacityAnimations };
+  });
+  assert.deepEqual(v3BadAckStable, { root: true, input: true, focus: true, scroll: true, rootChanges: 0,
+    controlChanges: 0, disabledChanges: 0, opacityChanges: 0, opacityAnimations: 0 });
+  checks.push({ name: "Prepared v3 rejects a changed source-cut ACK before history/cache publication while preserving newer draft, focus and scroll", passed: true, stable: v3BadAckStable });
+  await screenshot("v3-source-cut-bad-ack"); await budget("prepared v3 source-cut ACK refusal");
+
   await boot(); await field("Branch 1 ID").fill("history-draft"); await apply();
   await page.evaluate(() => window.__antennaPortEditorFixture.resetHistory()); const fenced = await read();
   await release(); await page.waitForTimeout(350); const reset = await read();

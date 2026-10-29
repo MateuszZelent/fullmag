@@ -12,6 +12,8 @@ import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { KernelContext } from "@/kernel/KernelContext";
 import { DiagnosticRecorderController } from "@/kernel/performance/diagnostic-recorder/DiagnosticRecorderController";
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
+import { sharedResourceRuntimeStore } from "@/kernel/resources/ResourceRuntimeStore";
+import { resourceRuntimeKeyForClientScope } from "@/kernel/resources/resourceClientScope";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
@@ -26,12 +28,15 @@ const sourceId = "antenna-source", returnId = "antenna-return", portId = "antenn
 const subscribeHydration = () => () => {};
 const hydrated = () => true, serverHydrated = () => false;
 type Call = { method: string; path: string; scope: string | null; body: unknown };
+type SceneCacheObservation = { revision: number | null; sourceCutRef: string | null; transportCutRef: string | null };
 interface FixtureControl {
-  read(): { calls: Call[]; pending: number; renders: number; scene: SceneResource; canUndo: boolean; invalidations: number; unexpected: string[] };
+  read(): { calls: Call[]; pending: number; renders: number; scene: SceneResource; canUndo: boolean; invalidations: number; unexpected: string[]; sceneCacheTrace: SceneCacheObservation[] };
   release(): void;
   conflict(renameFirstBranch?: string): void;
   rejectNext(): void;
-  malformedNext(kind?: "normalization" | "scene_revision" | "scene_id"): void;
+  malformedNext(kind?: "normalization" | "scene_revision" | "scene_id" | "source_cut"): void;
+  watchSceneCache(): void;
+  stopWatchingSceneCache(): void;
   switchSession(name: "A" | "B"): void;
   resetHistory(): void;
 }
@@ -68,6 +73,18 @@ function makeScene(name: string): SceneResource {
     Object.assign(scene.current_transports![0], { structured_current_closure: { schema_version: "structured_current_closure.v2", kind: "closed_geometry",
       source_cuts: [{ source_cut_id: "cut", region: { object_id: sourceId } }] } });
   }
+  if (scenario === "prepared-v3") {
+    Object.assign(scene.antenna_port_modes![0], { schema_version: "antenna_port_mode.v3",
+      normalization: { kind: "source_cut_rt0", source_cut_ref: "cut", orientation: "minus_outward" } });
+    Object.assign(scene.current_transports![0], { conservative_current_source: {
+      schema_version: "conservative_current_source.v2", kind: "closed_geometry_potential_jump", object_id: sourceId,
+      closure: { kind: "closed_geometry", source_cuts: [{ id: "cut" }] },
+      terminal_observations: ["signal", "return"].flatMap(part => [
+        { id: `${part}-in`, part_id: part, selector: "local_u_min" },
+        { id: `${part}-out`, part_id: part, selector: "local_u_max" },
+      ]),
+    } });
+  }
   if (typeof window !== "undefined" && new URL(window.location.href).searchParams.get("creator") === "1") {
     Object.assign(scene.objects![0], { geometry: { geometry_kind: "MicrostripAntennaLayout", geometry_params: {
       conductivity_s_per_m: 58000000, conductors: [{ id: "signal" }, { id: "return" }],
@@ -82,7 +99,7 @@ function makeScene(name: string): SceneResource {
 }
 
 function makeFixture() {
-  const state = { name: "A" as "A" | "B", clock: 1, scenes: { A: makeScene("A"), B: makeScene("B") }, renders: 0, reject: false, malformed: null as "normalization" | "scene_revision" | "scene_id" | null };
+  const state = { name: "A" as "A" | "B", clock: 1, scenes: { A: makeScene("A"), B: makeScene("B") }, renders: 0, reject: false, malformed: null as "normalization" | "scene_revision" | "scene_id" | "source_cut" | null };
   const calls: Call[] = [], unexpected: string[] = [], pending: (() => void)[] = [];
   const bus = new EventBus<KernelEventMap>(), resources = new ResourceInvalidationController(bus);
   let invalidations = 0;
@@ -124,6 +141,13 @@ function makeFixture() {
           state.scenes[name] = after;
           const acknowledgement = structuredClone(after);
           if (malformed === "normalization" && acknowledgement.antenna_port_modes) acknowledgement.antenna_port_modes[0].normalization_current_a = 2;
+          if (malformed === "source_cut") {
+            const mode = acknowledgement.antenna_port_modes![0];
+            if (mode.normalization?.kind !== "source_cut_rt0") throw new Error("Expected prepared v3 source-cut fixture");
+            mode.normalization.source_cut_ref = "changed-cut";
+            const source = acknowledgement.current_transports![0].conservative_current_source as { closure: { source_cuts: { id: string }[] } };
+            source.closure.source_cuts[0].id = "changed-cut";
+          }
           if (malformed === "scene_revision") acknowledgement.scene_revision = revision + 1;
           if (malformed === "scene_id" && acknowledgement.scene) acknowledgement.scene.id = "foreign-model";
           resolve(json({ transaction_kind: "merge_patch", scene_revision: revision, committed_scene: acknowledgement }));
@@ -133,11 +157,30 @@ function makeFixture() {
     } });
   const history = new AuthoringHistoryController(api, resources);
   const kernel = { api, bus, resources, diagnostics, diagnosticRecorder, authoringHistory: history, commands: { getSessionScopeKey: scope } } as unknown as KernelApi;
+  const sceneCacheTrace: SceneCacheObservation[] = [];
+  let stopWatchingSceneCache: (() => void) | null = null;
+  const sampleSceneCache = () => {
+    const key = resourceRuntimeKeyForClientScope(`${scope()}|${MODEL_SCENE_PATH}`, api.resourceCacheScope);
+    const snapshot = sharedResourceRuntimeStore.getSnapshot<SceneResource>(key);
+    const mode = snapshot.data?.antenna_port_modes?.find(port => port.id === portId);
+    const source = snapshot.data?.current_transports?.find(transport => transport.name === "transport")?.conservative_current_source as { closure?: { source_cuts?: { id: string }[] } } | undefined;
+    if (sceneCacheTrace.length >= 128) throw new Error("Port scene-cache observation budget exceeded");
+    sceneCacheTrace.push({ revision: snapshot.data?.revision ?? null, sourceCutRef: mode?.normalization?.source_cut_ref ?? null,
+      transportCutRef: source?.closure?.source_cuts?.[0]?.id ?? null });
+  };
   const control: FixtureControl = {
-    read: () => ({ calls: structuredClone(calls), pending: pending.length, renders: state.renders, scene: structuredClone(state.scenes[state.name]), canUndo: history.canUndo(), invalidations, unexpected: [...unexpected] }),
+    read: () => ({ calls: structuredClone(calls), pending: pending.length, renders: state.renders, scene: structuredClone(state.scenes[state.name]), canUndo: history.canUndo(), invalidations, unexpected: [...unexpected], sceneCacheTrace: structuredClone(sceneCacheTrace) }),
     release: () => { const release = pending.shift(); if (!release) throw new Error("No pending port write"); release(); },
     rejectNext: () => { state.reject = true; },
     malformedNext: (kind = "normalization") => { state.malformed = kind; },
+    watchSceneCache: () => {
+      if (stopWatchingSceneCache) throw new Error("Port scene-cache observation is already active");
+      sceneCacheTrace.length = 0;
+      const key = resourceRuntimeKeyForClientScope(`${scope()}|${MODEL_SCENE_PATH}`, api.resourceCacheScope);
+      stopWatchingSceneCache = sharedResourceRuntimeStore.subscribe(key, sampleSceneCache);
+      sampleSceneCache();
+    },
+    stopWatchingSceneCache: () => { stopWatchingSceneCache?.(); stopWatchingSceneCache = null; },
     conflict: (renameFirstBranch) => { const scene = structuredClone(state.scenes[state.name]), revision = (scene.revision ?? 0) + 1;
       if (renameFirstBranch && scene.antenna_port_modes) scene.antenna_port_modes[0].branches[0].id = renameFirstBranch;
       state.scenes[state.name] = { ...scene, revision, scene_revision: revision }; state.clock += 1;
@@ -170,7 +213,7 @@ function EditorOwner() {
 export default function AntennaPortEditorFixturePage() {
   const fixture = useMemo(() => makeFixture(), []);
   const mounted = useSyncExternalStore(subscribeHydration, hydrated, serverHydrated);
-  useEffect(() => { window.__antennaPortEditorFixture = fixture.control; return () => { delete window.__antennaPortEditorFixture; }; }, [fixture]);
+  useEffect(() => { window.__antennaPortEditorFixture = fixture.control; return () => { fixture.control.stopWatchingSceneCache(); delete window.__antennaPortEditorFixture; }; }, [fixture]);
   return <main style={{ padding: 32, maxWidth: 900 }}>
     <h1>Production antenna port editor</h1><p>Controlled HTTP authoring fixture, not native current closure or field qualification.</p>
     <label>Unrelated draft <input data-testid="port-unrelated" defaultValue="untouched" /></label>

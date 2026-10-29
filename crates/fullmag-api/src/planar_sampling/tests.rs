@@ -862,3 +862,198 @@ fn planar_sampling_surface_preserves_nanometer_scale_boundary_measure() {
         .any(|occupancy| *occupancy != Occupancy::Empty));
     assert!(result.meta.occupied_measure > 0.0);
 }
+
+#[test]
+fn planar_sampling_fdm_plane_area_averages_cells_under_coarse_pixels() {
+    // 4 x 2 cells of 0.25 m x 0.5 m on [-0.5, 0.5]^2; values encode the cell.
+    let values = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+    let field = FdmPlanarField::new(1, [4, 2, 1], [-0.5; 3], [0.25, 0.5, 1.0], values).unwrap();
+    let frame = explicit_frame([0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+
+    let coarse = PlanarSamplingEngine::sample_fdm(
+        &field,
+        &request(frame.clone(), PlanarOperatorIR::PlaneSample, [2, 1]),
+    )
+    .unwrap();
+    assert_eq!(coarse.meta.sampling_method, "fdm_cell_area_plane");
+    // Each pixel covers two columns of both rows: mean of four cells.
+    assert_eq!(coarse.scalar_values, vec![3.5, 5.5]);
+
+    let native = PlanarSamplingEngine::sample_fdm(
+        &field,
+        &request(frame, PlanarOperatorIR::PlaneSample, [4, 2]),
+    )
+    .unwrap();
+    assert_eq!(
+        native.scalar_values,
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+    );
+}
+
+#[test]
+fn planar_sampling_fdm_plane_area_average_excludes_empty_cells() {
+    let field = FdmPlanarField::new(1, [2, 1, 1], [-0.5; 3], [0.5, 1.0, 1.0], vec![4.0, 9.0])
+        .unwrap()
+        .with_membership_mask(vec![true, false])
+        .unwrap();
+    let frame = explicit_frame([0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+    let result = PlanarSamplingEngine::sample_fdm(
+        &field,
+        &request(frame, PlanarOperatorIR::PlaneSample, [1, 1]),
+    )
+    .unwrap();
+    assert_eq!(result.occupancy, vec![Occupancy::Occupied]);
+    assert_eq!(result.scalar_values, vec![4.0]);
+}
+
+#[test]
+fn planar_fem_plane_operator_cache_matches_direct_sampling_and_builds_once() {
+    let field = skew_tetra_field();
+    let frame = explicit_frame([0.25, 0.25, 0.3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+    let sample = request(frame, PlanarOperatorIR::PlaneSample, [24, 24]);
+    let direct = PlanarSamplingEngine::sample_fem(&field, &sample).unwrap();
+    let cache = super::PlanarOperatorCache::new(4, 64 * 1024 * 1024);
+    let cached = PlanarSamplingEngine::sample_fem_cached(&field, &sample, &cache, "geometry").unwrap();
+    assert_eq!(cached.occupancy, direct.occupancy);
+    let scale = direct
+        .scalar_values
+        .iter()
+        .filter(|value| value.is_finite())
+        .fold(0.0_f64, |max, value| max.max(value.abs()))
+        .max(1.0);
+    for (left, right) in cached.scalar_values.iter().zip(&direct.scalar_values) {
+        assert_eq!(left.is_finite(), right.is_finite());
+        if left.is_finite() {
+            assert!((left - right).abs() <= 1.0e-13 * scale);
+        }
+    }
+    // A new field revision on the same geometry reuses the operator.
+    let mut shifted = field.clone();
+    shifted.shift_values_for_test(3.0);
+    let next = PlanarSamplingEngine::sample_fem_cached(&shifted, &sample, &cache, "geometry").unwrap();
+    assert_eq!(cache.build_count(), 1);
+    for (left, right) in next.scalar_values.iter().zip(&cached.scalar_values) {
+        if right.is_finite() {
+            assert!((left - (right + 3.0)).abs() <= 1.0e-12 * scale);
+        }
+    }
+}
+
+#[test]
+fn planar_point_component_matches_raster_component_derivation() {
+    let frame = explicit_frame([0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+    let mut sample = request(frame, PlanarOperatorIR::PlaneSample, [1, 1]);
+    sample.component = PlanarComponent::Index(2);
+    let (scalar, vector) = super::evaluate_point_component(&[3.0, 4.0, 12.0], &sample).unwrap();
+    assert_eq!(scalar, Some(12.0));
+    assert_eq!(vector, Some([3.0, 4.0, 12.0]));
+}
+
+fn unit_hex_nodes() -> Vec<[f64; 3]> {
+    vec![
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 1.0],
+        [1.0, 1.0, 1.0],
+        [0.0, 1.0, 1.0],
+    ]
+}
+
+#[test]
+fn planar_sampling_hex8_and_pyramid5_reproduce_affine_fields() {
+    let affine = |p: [f64; 3]| 2.0 * p[0] - 3.0 * p[1] + 5.0 * p[2] + 7.0;
+    // Skewed hexahedron (affine image of the unit cube) and a pyramid.
+    let hex_nodes = unit_hex_nodes()
+        .into_iter()
+        .map(|p| [p[0] + 0.3 * p[2], p[1] + 0.1 * p[0], 0.8 * p[2]])
+        .collect::<Vec<_>>();
+    let hex = FemPlanarField::new_mixed(
+        1,
+        hex_nodes.clone(),
+        vec![super::FemPlanarElement::Hex8([0, 1, 2, 3, 4, 5, 6, 7])],
+        vec![1],
+        hex_nodes.iter().map(|p| affine(*p)).collect(),
+    )
+    .unwrap();
+    let point = [0.55, 0.45, 0.4];
+    let (_, value) = super::fem::interpolate_at(&hex, point).unwrap();
+    assert!((value[0] - affine(point)).abs() < 1.0e-12);
+
+    let pyramid_nodes = vec![
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.5, 0.5, 0.7],
+    ];
+    let pyramid = FemPlanarField::new_mixed(
+        1,
+        pyramid_nodes.clone(),
+        vec![super::FemPlanarElement::Pyramid5([0, 1, 2, 3, 4])],
+        vec![1],
+        pyramid_nodes.iter().map(|p| affine(*p)).collect(),
+    )
+    .unwrap();
+    let point = [0.5, 0.45, 0.2];
+    let (_, value) = super::fem::interpolate_at(&pyramid, point).unwrap();
+    assert!((value[0] - affine(point)).abs() < 1.0e-12);
+    assert!(super::fem::interpolate_at(&pyramid, [0.05, 0.05, 0.6]).is_none());
+}
+
+#[test]
+fn planar_sampling_hex8_slab_integrates_the_trilinear_interpolant() {
+    // q = x·y·z is the element's own trilinear interpolant on the unit cube;
+    // its mean over the cube is 1/8. Linear clipping of vertex values gives a
+    // different value, so this checks the clipped-element quadrature.
+    let nodes = unit_hex_nodes();
+    let field = FemPlanarField::new_mixed(
+        1,
+        nodes.clone(),
+        vec![super::FemPlanarElement::Hex8([0, 1, 2, 3, 4, 5, 6, 7])],
+        vec![1],
+        nodes.iter().map(|p| p[0] * p[1] * p[2]).collect(),
+    )
+    .unwrap();
+    let mut frame = explicit_frame([0.5, 0.5, 0.5], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+    frame.extent = PlanarExtentIR::Explicit {
+        u_min_m: -0.5,
+        u_max_m: 0.5,
+        v_min_m: -0.5,
+        v_max_m: 0.5,
+    };
+    let result = PlanarSamplingEngine::sample_fem(
+        &field,
+        &request(frame, PlanarOperatorIR::SlabAverage { thickness_m: 1.0 }, [1, 1]),
+    )
+    .unwrap();
+    assert!((result.scalar_values[0] - 0.125).abs() < 1.0e-12, "{}", result.scalar_values[0]);
+}
+
+#[test]
+fn planar_fem_navigation_step_is_the_median_cut_extent() {
+    let extent = super::fem::section_extent(vec![4.0e-9, 1.0e-9, 0.0, 2.0e-9, f64::NAN]).unwrap();
+    // Degenerate and non-finite extents are not counted.
+    assert_eq!(extent.cut_element_count, 3);
+    assert_eq!(extent.normal_extent_median_m, 2.0e-9);
+    let even = super::fem::section_extent(vec![1.0, 3.0, 2.0, 10.0]).unwrap();
+    assert_eq!(even.normal_extent_median_m, 2.5);
+    assert!(super::fem::section_extent(Vec::new()).is_none());
+}
+
+#[test]
+fn planar_fem_plane_operator_publishes_cut_elements() {
+    let field = skew_tetra_field();
+    let frame = explicit_frame([0.25, 0.25, 0.3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+    let result = PlanarSamplingEngine::sample_fem(
+        &field,
+        &request(frame, PlanarOperatorIR::PlaneSample, [8, 8]),
+    )
+    .unwrap();
+    // One tetrahedron spanning z in [0, 3] is cut by the plane z = 0.3.
+    let extent = result.section_extent.expect("a cutting plane publishes its extent");
+    assert_eq!(extent.cut_element_count, 1);
+    assert!((extent.normal_extent_median_m - 3.0).abs() < 1.0e-12);
+}

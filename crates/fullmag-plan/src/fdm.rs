@@ -1861,6 +1861,7 @@ fn active_transport_grid_refs(
         for boundary in &spin.boundaries {
             match boundary {
                 fullmag_ir::SpinBoundaryIR::SpinInsulating { surfaces, .. }
+                | fullmag_ir::SpinBoundaryIR::HomogeneousSpinPotentialGradient { surfaces, .. }
                 | fullmag_ir::SpinBoundaryIR::SpinSink { surfaces, .. }
                 | fullmag_ir::SpinBoundaryIR::SpecifiedSpinPotential { surfaces, .. }
                 | fullmag_ir::SpinBoundaryIR::SpecifiedSpinFlux { surfaces, .. } => {

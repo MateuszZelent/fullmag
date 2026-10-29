@@ -77,7 +77,7 @@ export const FULLMAG_BIBTEX = `@software{fullmag_2026,
 export const FULLMAG_REPOSITORY_URL = "https://github.com/MateuszZelent/fullmag";
 
 export const FULLMAG_LICENSE =
-  "The repository does not currently contain a root-level license file. Contact the project coordinator before reuse or redistribution.";
+  "FullMag is free software, licensed under the GNU General Public License, version 3 or (at your option) any later version (GPL-3.0-or-later). The full text is in the LICENSE file at the repository root; the fullmag Python package ships the same text.";
 
 export const FULLMAG_FUNDING =
   "Mateusz Zelent acknowledges funding from the European Union's Horizon Europe programme under HORIZON-MSCA-2024-PF-01, Marie Skłodowska-Curie Grant Agreement No. 101208951 (CNMA).";

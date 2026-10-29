@@ -107,7 +107,11 @@ def verify(origin, project, run, solution, revision, member):
             query["expected_geometry_object_ref"] = "0" * 64
             require(request(origin, route + "?" + urlencode(query), {}, META).status == 409, "foreign saved geometry pin accepted")
             binaries[kind] = digest
-        query = {"expected_manifest_object_ref": dataset["manifest_object_ref"], "element_offset": "0", "element_count": str(rows), "max_response_bytes": str(size)}
+        query = {"schema_version": dataset["dataset"]["schema_version"],
+                 "dataset_id": dataset["dataset"]["dataset_id"], "dataset_revision": dataset["dataset"]["revision"],
+                 "sample_id": dataset["sample_id"], "item_id": dataset["item_id"], "field_id": dataset["field_id"],
+                 "expected_manifest_object_ref": dataset["manifest_object_ref"],
+                 "element_offset": "0", "element_count": str(rows), "max_response_bytes": str(size)}
         response = request(origin, path + "/materialized-dataset/slice?" + urlencode(query), {}, BINARY + META + 12)
         require(response.status == 200, "saved field slice unavailable")
         payload_hash = verify_slice(response.body, dataset)

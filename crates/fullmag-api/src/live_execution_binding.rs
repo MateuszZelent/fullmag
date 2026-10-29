@@ -2,11 +2,12 @@
 
 use crate::error::ApiError;
 use crate::types::{AppState, SessionStateResponse};
+use fullmag_application::RunSpecification;
 use fullmag_authoring::{
     scene_execution_input_identity, SceneDocument, SceneExecutionInputIdentity,
     SCENE_EXECUTION_INPUT_SCHEMA,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 
 pub(crate) fn input_identity(scene: &SceneDocument) -> Result<SceneExecutionInputIdentity, ApiError> {
     scene_execution_input_identity(scene)
@@ -37,8 +38,13 @@ pub(crate) fn validate_input_binding(
             if identity.schema_version != SCENE_EXECUTION_INPUT_SCHEMA
                 || identity.sha256.len() != 64
                 || !identity.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
-                || &identity != current_identity
             {
+                return Err(ApiError::conflict_with_code(
+                    "accepted_execution_input_invalid",
+                    "accepted execution input identity has an unsupported schema or malformed digest",
+                ));
+            }
+            if &identity != current_identity {
                 return Err(ApiError::conflict_with_code(
                     "accepted_execution_input_mismatch",
                     "current authored input differs from the immutable accepted run",
@@ -52,6 +58,39 @@ pub(crate) fn validate_input_binding(
         )),
     }
     Ok(())
+}
+
+/// Reconstruct the authored scene projection from an accepted immutable
+/// definition. Historical acceptance may have injected the legacy default
+/// profile into the stored effective scene after pinning authored input. Only
+/// that exact profile may be projected away, and only when the complete
+/// versioned input identity then matches the immutable RunSpecification.
+pub(crate) fn recover_scene_projection(
+    scene: SceneDocument,
+    specification: &RunSpecification,
+) -> Result<SceneDocument, ApiError> {
+    let binding = json!({ "parameters": specification.parameters.clone() });
+    let current_identity = input_identity(&scene)?;
+    let mismatch = match validate_input_binding(&binding, &current_identity, scene.revision) {
+        Ok(()) => return Ok(scene),
+        Err(error)
+            if error.code.as_deref() == Some("accepted_execution_input_mismatch") =>
+        {
+            error
+        }
+        Err(error) => return Err(error),
+    };
+
+    let legacy_profile = fullmag_application::legacy_live_execution_profile();
+    if scene.study.execution_profile.as_ref() != Some(&legacy_profile) {
+        return Err(mismatch);
+    }
+
+    let mut authored_projection = scene;
+    authored_projection.study.execution_profile = None;
+    let projected_identity = input_identity(&authored_projection)?;
+    validate_input_binding(&binding, &projected_identity, authored_projection.revision)?;
+    Ok(authored_projection)
 }
 
 /// Called under the live transition fence and scene write lock, before the
@@ -113,4 +152,170 @@ pub(crate) async fn validate_active_scene_mutation(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fullmag_application::{
+        ProjectId, ProjectSnapshot, RequestedExecution, RequestedResourceBudget, StudyId,
+        StudyReference,
+    };
+    use serde_json::json;
+
+    fn specification(parameters: Value) -> fullmag_application::RunSpecification {
+        fullmag_application::RunSpecification::new(
+            ProjectSnapshot {
+                project_id: ProjectId::parse("project-binding-test").unwrap(),
+                definition_revision: 7,
+                definition_sha256: "a".repeat(64),
+            },
+            StudyReference {
+                study_id: StudyId::parse("study-binding-test").unwrap(),
+                plan_version: "study_plan.v1".into(),
+                plan_sha256: "b".repeat(64),
+            },
+            "c".repeat(64),
+            parameters,
+            RequestedExecution {
+                backend: "fdm".into(),
+                device: "cpu".into(),
+                precision: "double".into(),
+                mode: "strict".into(),
+                minimum_resources: Some(RequestedResourceBudget {
+                    cpu_millis: 100,
+                    memory_bytes: 1,
+                    gpu_memory_bytes: 0,
+                    storage_bytes: 1,
+                }),
+            },
+        )
+    }
+
+    fn versioned_specification(identity: Value) -> fullmag_application::RunSpecification {
+        specification(json!({
+            "live_workspace": { "execution_input": identity }
+        }))
+    }
+
+    #[test]
+    fn exact_authored_input_is_restored_unchanged() {
+        let scene = SceneDocument::default();
+        let identity = serde_json::to_value(input_identity(&scene).unwrap()).unwrap();
+        let restored =
+            recover_scene_projection(scene.clone(), &versioned_specification(identity)).unwrap();
+
+        assert_eq!(restored, scene);
+        assert!(restored.study.execution_profile.is_none());
+    }
+
+    #[test]
+    fn historical_injected_legacy_profile_is_removed_for_authored_projection() {
+        let authored = SceneDocument::default();
+        let identity = serde_json::to_value(input_identity(&authored).unwrap()).unwrap();
+        let mut stored = authored;
+        stored.study.execution_profile =
+            Some(fullmag_application::legacy_live_execution_profile());
+
+        let restored =
+            recover_scene_projection(stored.clone(), &versioned_specification(identity)).unwrap();
+
+        stored.study.execution_profile = None;
+        assert_eq!(restored, stored);
+    }
+
+    #[test]
+    fn explicitly_authored_legacy_profile_is_preserved_when_exactly_pinned() {
+        let mut scene = SceneDocument::default();
+        scene.study.execution_profile =
+            Some(fullmag_application::legacy_live_execution_profile());
+        let identity = serde_json::to_value(input_identity(&scene).unwrap()).unwrap();
+
+        let restored =
+            recover_scene_projection(scene.clone(), &versioned_specification(identity)).unwrap();
+
+        assert_eq!(restored, scene);
+    }
+
+    #[test]
+    fn custom_profile_mismatch_is_not_reconstructed_as_legacy_absence() {
+        let authored = SceneDocument::default();
+        let identity = serde_json::to_value(input_identity(&authored).unwrap()).unwrap();
+        let mut candidate = authored;
+        let mut custom = fullmag_application::legacy_live_execution_profile();
+        custom.profile_id = "exec:custom".into();
+        candidate.study.execution_profile = Some(custom);
+
+        let error = recover_scene_projection(candidate, &versioned_specification(identity))
+            .unwrap_err();
+
+        assert_eq!(error.code.as_deref(), Some("accepted_execution_input_mismatch"));
+    }
+
+    #[test]
+    fn physics_change_still_mismatches_after_legacy_profile_projection() {
+        let authored = SceneDocument::default();
+        let identity = serde_json::to_value(input_identity(&authored).unwrap()).unwrap();
+        let mut candidate = authored;
+        candidate.study.external_field = Some([0.0, 0.0, 1.0]);
+        candidate.study.execution_profile =
+            Some(fullmag_application::legacy_live_execution_profile());
+
+        let error = recover_scene_projection(candidate, &versioned_specification(identity))
+            .unwrap_err();
+
+        assert_eq!(error.code.as_deref(), Some("accepted_execution_input_mismatch"));
+    }
+
+    #[test]
+    fn malformed_versioned_identity_is_rejected_without_projection_guessing() {
+        let mut candidate = SceneDocument::default();
+        candidate.study.execution_profile =
+            Some(fullmag_application::legacy_live_execution_profile());
+        for identity in [
+            json!({
+                "schema_version": "fullmag.scene_execution_input.v0",
+                "sha256": "a".repeat(64)
+            }),
+            json!({
+                "schema_version": SCENE_EXECUTION_INPUT_SCHEMA,
+                "sha256": "not-a-digest"
+            }),
+        ] {
+            let error =
+                recover_scene_projection(candidate.clone(), &versioned_specification(identity))
+                    .unwrap_err();
+            assert_eq!(error.code.as_deref(), Some("accepted_execution_input_invalid"));
+        }
+    }
+
+    #[test]
+    fn legacy_revision_binding_preserves_the_candidate_without_profile_guessing() {
+        let mut candidate = SceneDocument::default();
+        candidate.revision = 7;
+        candidate.study.execution_profile =
+            Some(fullmag_application::legacy_live_execution_profile());
+        let specification = specification(json!({
+            "live_workspace": { "scene_revision": 7 }
+        }));
+
+        let restored = recover_scene_projection(candidate.clone(), &specification).unwrap();
+
+        assert_eq!(restored, candidate);
+    }
+
+    #[test]
+    fn stale_legacy_revision_binding_is_rejected() {
+        let mut candidate = SceneDocument::default();
+        candidate.revision = 7;
+        candidate.study.execution_profile =
+            Some(fullmag_application::legacy_live_execution_profile());
+        let specification = specification(json!({
+            "live_workspace": { "scene_revision": 6 }
+        }));
+
+        let error = recover_scene_projection(candidate, &specification).unwrap_err();
+
+        assert_eq!(error.code.as_deref(), Some("accepted_execution_input_legacy_revision"));
+    }
 }

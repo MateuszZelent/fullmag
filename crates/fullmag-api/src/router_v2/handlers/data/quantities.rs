@@ -87,13 +87,16 @@ fn annotate_runtime_quantity_state(
     // An unresolved workspace remains unknown. A resolved nonmagnetic
     // inspection, however, has no magnetic provider: use the canonical
     // unavailable capability path even without a magnetic runtime profile.
+    let field_only = snapshot.metadata.as_ref()
+        .and_then(|metadata| metadata.get("magnetic_state_present"))
+        .and_then(serde_json::Value::as_bool) == Some(false);
     let prepared_m_without_runtime_capabilities = snapshot.capabilities.is_none()
         && !standalone_inspection
         && quantity_spec("m").is_some_and(|spec| {
             prepared_initial_state_m_carriers(snapshot, spec, spec.domain.as_str()).is_some()
         });
     if snapshot.capabilities.is_none() && !standalone_inspection
-        && !prepared_m_without_runtime_capabilities
+        && !prepared_m_without_runtime_capabilities && !field_only
     {
         return;
     }
@@ -195,19 +198,19 @@ fn annotate_runtime_quantity_state(
             carriers,
             spec.domain.as_str(),
         );
-        entry.capability_state = if supported {
+        entry.capability_state = if resolved.provider == fullmag_runner::QuantityProviderCapability::Available {
             "supported"
         } else {
             "unsupported"
         }
         .to_string();
-        entry.solver_capability = entry.capability_state.clone();
+        entry.solver_capability = if supported { "supported" } else { "unsupported" }.to_string();
         entry.requestable = matches!(
             resolved.request,
             fullmag_runner::QuantityRequestCapability::FieldVector
                 | fullmag_runner::QuantityRequestCapability::ScalarResource
         );
-        entry.materializable = matches!(
+        entry.materializable = supported && matches!(
             resolved.request,
             fullmag_runner::QuantityRequestCapability::FieldVector
         ) && resolved.reason_code.as_deref() != Some("prepared_initial_state");
@@ -246,6 +249,7 @@ pub(crate) fn current_field_carriers(
     if !matches!(
         spec.shape,
         fullmag_quantities::QuantityShape::VectorField
+            | fullmag_quantities::QuantityShape::TensorField
             | fullmag_quantities::QuantityShape::SpatialScalar
     ) || carrier_id.trim().is_empty()
         || carrier_fingerprint.is_none_or(|fingerprint| fingerprint.trim().is_empty())
@@ -279,7 +283,13 @@ pub(crate) fn resolved_quantity_capability_for_snapshot(
         .resolved_precision
         .as_deref()
         .unwrap_or(snapshot.session.precision.as_str());
-    match snapshot.capabilities.as_ref() {
+    let field_only = snapshot.metadata.as_ref()
+        .and_then(|metadata| metadata.get("magnetic_state_present"))
+        .and_then(serde_json::Value::as_bool) == Some(false);
+    let capabilities = snapshot.capabilities.as_ref().filter(|_| {
+        !(field_only && spec.domain == fullmag_quantities::QuantityDomain::MagneticOnly)
+    });
+    match capabilities {
         Some(capabilities) => resolve_quantity_capability(
             capabilities,
             spec,
@@ -290,6 +300,41 @@ pub(crate) fn resolved_quantity_capability_for_snapshot(
                 carriers,
             },
         ),
+        None if materialization == QuantityMaterializationCapability::Materialized
+            && !carriers.is_empty()
+            && spec.domain != fullmag_quantities::QuantityDomain::MagneticOnly
+            && field_only =>
+        {
+            // A validated stored field is a read provider, not a solver provider.
+            // No BackendCapabilities or ComputeFields availability is fabricated.
+            fullmag_runner::ResolvedQuantityCapability {
+                quantity_id: spec.id.as_str().to_string(),
+                provider: fullmag_runner::QuantityProviderCapability::Available,
+                request: fullmag_runner::QuantityRequestCapability::FieldVector,
+                materialization,
+                render: match spec.shape {
+                    fullmag_quantities::QuantityShape::VectorField
+                    | fullmag_quantities::QuantityShape::SpatialScalar
+                        if spec.ui_exposed && spec.interactive_preview && spec.supports_preview_3d =>
+                    { fullmag_runner::QuantityRenderCapability::Renderable },
+                    fullmag_quantities::QuantityShape::TensorField => {
+                        fullmag_runner::QuantityRenderCapability::UnsupportedShape
+                    },
+                    _ => fullmag_runner::QuantityRenderCapability::Unavailable,
+                },
+                publication: if spec.ui_exposed && spec.interactive_preview {
+                    fullmag_runner::QuantityPublicationCapability::Interactive
+                } else if spec.supports_export {
+                    fullmag_runner::QuantityPublicationCapability::ExportOnly
+                } else { fullmag_runner::QuantityPublicationCapability::Hidden },
+                scope: scope.to_string(), reason_code: Some("saved_field_read_only".into()),
+                lane: "stored_field_read_only".into(), precision: precision.to_string(),
+                projections: fullmag_runner::resolve_quantity_projection_capabilities(spec,
+                    fullmag_runner::QuantityProviderCapability::Available,
+                    fullmag_runner::QuantityRequestCapability::FieldVector, materialization, &carriers),
+                carriers,
+            }
+        },
         None => {
             let mut unavailable = fullmag_runner::ResolvedQuantityCapability {
                 quantity_id: spec.id.as_str().to_string(),
@@ -309,9 +354,10 @@ pub(crate) fn resolved_quantity_capability_for_snapshot(
                 lane: "unresolved".to_string(),
                 precision: precision.to_string(),
                 carriers: Vec::new(),
+                projections: Vec::new(),
             };
             if let Some(prepared_carriers) =
-                prepared_initial_state_m_carriers(snapshot, spec, scope)
+                (!field_only).then(|| prepared_initial_state_m_carriers(snapshot, spec, scope)).flatten()
             {
                 unavailable.request = fullmag_runner::QuantityRequestCapability::FieldVector;
                 unavailable.materialization = QuantityMaterializationCapability::Materialized;
@@ -607,6 +653,53 @@ mod tests {
             Vec::new(),
             scope,
         )
+    }
+
+    #[test]
+    fn field_only_stored_carrier_is_readable_without_solver_capabilities() {
+        let mut snapshot = snapshot_with_field_provider("V_electric");
+        snapshot.capabilities = None;
+        snapshot.metadata = Some(serde_json::json!({"magnetic_state_present":false}).into());
+        for id in ["V_electric", "J_charge"] {
+            let spec = quantity_spec(id).unwrap();
+            let carriers = current_field_carriers(spec, "object", Some("antenna"), "source-mesh",
+                Some("source-fingerprint"), None);
+            let resolved = resolved_quantity_capability_for_snapshot(&snapshot, spec,
+                QuantityMaterializationCapability::Materialized, carriers, "object");
+            assert_eq!(resolved.provider, fullmag_runner::QuantityProviderCapability::Available);
+            assert_eq!(resolved.render, fullmag_runner::QuantityRenderCapability::Renderable);
+            assert_eq!(resolved.publication, fullmag_runner::QuantityPublicationCapability::Interactive);
+            assert_eq!(resolved.reason_code.as_deref(), Some("saved_field_read_only"));
+            assert!(snapshot.capabilities.is_none());
+            assert!(!spec.cached_preview);
+            let unmaterialized = resolved_quantity_capability_for_snapshot(&snapshot, spec,
+                QuantityMaterializationCapability::Unmaterialized, vec![], "object");
+            assert_eq!(unmaterialized.request, fullmag_runner::QuantityRequestCapability::Unavailable);
+        }
+        for id in ["m", "H_ex", "mat_ms"] {
+            let magnetic = quantity_spec(id).unwrap();
+            assert_eq!(magnetic.domain, fullmag_quantities::QuantityDomain::MagneticOnly);
+            let carriers = current_field_carriers(magnetic, "object", Some("antenna"), "source-mesh",
+                Some("source-fingerprint"), None);
+            let resolved = resolved_quantity_capability_for_snapshot(&snapshot, magnetic,
+                QuantityMaterializationCapability::Materialized, carriers, "object");
+            assert_eq!(resolved.provider, fullmag_runner::QuantityProviderCapability::Unavailable);
+            assert_eq!(resolved.request, fullmag_runner::QuantityRequestCapability::Unavailable);
+            assert_eq!(resolved.render, fullmag_runner::QuantityRenderCapability::Unavailable);
+        }
+        let tensor = quantity_spec("spin_current_tensor").unwrap();
+        let carriers = current_field_carriers(tensor, "object", Some("antenna"), "source-mesh",
+            Some("source-fingerprint"), None);
+        let resolved = resolved_quantity_capability_for_snapshot(&snapshot, tensor,
+            QuantityMaterializationCapability::Materialized, carriers, "object");
+        assert_eq!(resolved.request, fullmag_runner::QuantityRequestCapability::FieldVector);
+        assert_eq!(resolved.render, fullmag_runner::QuantityRenderCapability::UnsupportedShape);
+        assert_eq!(resolved.publication, fullmag_runner::QuantityPublicationCapability::ExportOnly);
+        snapshot.capabilities = snapshot_with_field_provider("H_ex").capabilities;
+        let magnetic = quantity_spec("H_ex").unwrap();
+        let resolved = resolved_quantity_capability_for_snapshot(&snapshot, magnetic,
+            QuantityMaterializationCapability::Materialized, vec![], "object");
+        assert_eq!(resolved.provider, fullmag_runner::QuantityProviderCapability::Unavailable);
     }
 
     #[test]

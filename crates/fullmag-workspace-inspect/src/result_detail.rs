@@ -41,9 +41,9 @@ pub fn is_result_dir(dir: &Path) -> bool {
     if !dir.is_dir() {
         return false;
     }
-    // The explicit playback sidecar is a result marker only when its bounded
-    // descriptor and referenced Zarr metadata satisfy the playback contract.
-    if crate::playback::read_playback(dir).is_ok() {
+    // Discovery only needs the bounded descriptor. Full geometry/Zarr
+    // qualification remains explicit in playback metadata/frame requests.
+    if crate::playback::probe_playback(dir).is_ok() {
         return true;
     }
     if manifest_path(dir).is_file() {

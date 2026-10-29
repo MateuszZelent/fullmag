@@ -50,6 +50,31 @@ pub(crate) fn execute_fdm_in_mode<'a>(
     live: Option<LiveStepConsumer<'a>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    execute_fdm_in_mode_with_terminal_context(engine, requested_backend, requested_device,
+        execution_mode, plan, until_seconds, outputs, live, artifact_writer, None)
+}
+
+pub(crate) fn execute_fdm_in_mode_with_terminal_context<'a>(
+    engine: FdmEngine,
+    requested_backend: fullmag_ir::BackendTarget,
+    requested_device: &str,
+    execution_mode: fullmag_ir::ExecutionMode,
+    plan: &FdmPlanIR,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    live: Option<LiveStepConsumer<'a>>,
+    artifact_writer: Option<ArtifactPipelineSender>,
+    terminal: Option<cpu_reference::FdmTerminalContext<'a>>,
+) -> Result<ExecutedRun, RunError> {
+    if terminal.is_some() && !matches!(engine, FdmEngine::CpuReference) {
+        return Err(RunError { message: "frozen terminal context requires the resolved CPU reference lane; fallback is forbidden".into() });
+    }
+    if terminal.is_some() {
+        // Only the existing vector field recorder is realized in this path.
+        // Refuse unsupported spatial scalar/tensor history before solving.
+        let (_,fields)=crate::terminal_output_schedule_bindings(outputs)?;
+        for field in fields {crate::terminal_output_field_component_count(&field.name)?;}
+    }
     use crate::fdm::gpu::cuda::route::{public_gpu_transport_route, PublicGpuTransportRoute};
 
     let transport_route = public_gpu_transport_route(plan, matches!(engine, FdmEngine::CudaFdm));
@@ -106,12 +131,8 @@ pub(crate) fn execute_fdm_in_mode<'a>(
         }
     }
     let mut executed = match engine {
-        FdmEngine::CpuReference => cpu_reference::execute_reference_fdm(
-            plan,
-            until_seconds,
-            outputs,
-            live,
-            artifact_writer,
+        FdmEngine::CpuReference => cpu_reference::execute_reference_fdm_with_terminal_context(
+            plan, until_seconds, outputs, live, artifact_writer, None, terminal,
         ),
         FdmEngine::CudaFdm => execute_cuda_fdm(
             requested_backend,

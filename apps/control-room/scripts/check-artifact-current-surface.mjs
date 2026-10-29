@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import vm from "node:vm";
+import ts from "typescript";
 const root = new URL("../src/", import.meta.url), cache = new Map();
-function load(url) { if (!cache.has(url.href)) cache.set(url.href, new vm.SourceTextModule(stripTypeScriptTypes(readFileSync(url, "utf8")), { identifier: url.href })); return cache.get(url.href); }
+function load(url) { if (!cache.has(url.href)) cache.set(url.href, new vm.SourceTextModule(stripTypeScriptTypes(readFileSync(url, "utf8"), { mode: "transform" }), { identifier: url.href })); return cache.get(url.href); }
 const entry = load(new URL("modules/viewport-3d/model/artifactFieldOverlayModel.ts", root));
 await entry.link((name, parent) => load(name.startsWith("@/") ? new URL(`${name.slice(2)}.ts`, root) : new URL(`${name}.ts`, parent.identifier))); await entry.evaluate();
 const { buildArtifactFieldOverlayModel: build } = entry.namespace;
@@ -116,6 +117,81 @@ check("signed V uses source-node scalar interpolation and never creates vector g
 });
 const glyphRenderer=load(new URL("modules/viewport-3d/layers/vectorGlyphGeometry.ts",root));
 await glyphRenderer.link((name,parent)=>load(name.startsWith("@/")?new URL(`${name.slice(2)}.ts`,root):new URL(`${name}.ts`,parent.identifier)));await glyphRenderer.evaluate();
+const glyphBuild = load(new URL("modules/viewport-3d/layers/vectorGlyphBuildModel.ts", root));
+await glyphBuild.link((name, parent) => load(new URL(`${name}.ts`, parent.identifier))); await glyphBuild.evaluate();
+const palette = cache.get(new URL("shared/visualization/scalarColorPalette.ts", root).href).namespace;
+check("physical vector components keep palette and full-carrier range across glyph budgets", () => {
+  const f = fixture(), indexing = "point_samples", count = 7;
+  Object.assign(f.locator, { indexing, sample_count: count, carrier_id: `artifact:${digest}:${indexing}` });
+  Object.assign(f.field, { quantityId: "H_ant", pointCount: count, indexing,
+    values: Float64Array.from([1,-2,3, 8,-16,24, -3,6,-9, 2,-4,6, 0,0,0, -1,2,-3, 4,-8,12]),
+    artifactMapping: { indexing, identityIds: BigUint64Array.from([0n,1n,2n,3n,4n,5n,6n]), elementOrdinals: null, localVertexIndices: null } });
+  Object.assign(f.topology, { positions: Float64Array.from(Array.from({length: count}, (_, i) => [0,0,i]).flat()), nodeCount: count, cellTypes: undefined, cellOffsets: undefined, cellNodes: undefined });
+  f.headers.carrierId = f.geometry.carrierId = f.locator.carrier_id;
+  Object.assign(f.settings, { shaderVisible: false, wireframeVisible: false, vectorBudget: count });
+  for (const mode of ["x", "y", "z"]) for (const colorPalette of ["inferno", "coolwarm"]) {
+    const settings = { ...f.settings, vectorColorMode: mode, scalarColorPalette: colorPalette };
+    const full = render({ ...f, settings }), small = render({ ...f, settings: { ...settings, vectorBudget: 3, vectorLengthScale: 3 } });
+    assert.equal(palette.normalizeScalarColorPalette(colorPalette), colorPalette, "Test must use a supported palette");
+    const axis = { x: 0, y: 1, z: 2 }[mode];
+    const actualBounds = [{ min: -3, max: 8 }, { min: -16, max: 6 }, { min: -9, max: 24 }][axis];
+    const extent = Math.max(Math.abs(actualBounds.min), Math.abs(actualBounds.max));
+    const range = colorPalette === "coolwarm" ? { min: -extent, max: extent } : actualBounds;
+    assert.deepEqual(full.vectorColorRange, range);
+    assert.deepEqual(small.vectorColorRange, range, "Hidden extrema must remain in the physical scale");
+    for (const model of [full, small]) for (let i = 0; i < model.glyphCount; i++) {
+      const index = model.vectorSampleIndices[i], span = Math.max(range.max - range.min, 1e-12);
+      const expected = Float32Array.from(palette.scalarColorRgb(Math.max(0, Math.min(1, (f.field.values[index * 3 + axis] - range.min) / span)), colorPalette));
+      assert.deepEqual(model.glyphColors.subarray(i * 3, i * 3 + 3), expected);
+    }
+    for (const model of [full, small]) {
+      const built = glyphBuild.namespace.buildViewport3DVectorGlyphs({ segments: model.vectorSegments, colorMode: mode, colorsOverride: model.glyphColors });
+      assert.equal(built.transforms.count, model.glyphCount); assert.deepEqual(built.colors, model.glyphColors);
+      assert.notStrictEqual(built.colors.buffer, model.glyphColors.buffer, "Worker owns its output colors");
+    }
+    for (let i = 0; i < small.glyphCount; i++) assert.deepEqual(small.glyphColors.subarray(i * 3, i * 3 + 3), full.glyphColors.subarray(small.vectorSampleIndices[i] * 3, small.vectorSampleIndices[i] * 3 + 3));
+  }
+  const magnitude = render({ ...f, settings: { ...f.settings, vectorColorMode: "magnitude", scalarColorPalette: "inferno" } });
+  assert.deepEqual(magnitude.vectorColorRange, { min: 0, max: Math.hypot(8, -16, 24) });
+  for (const vectorColorMode of ["orientation", "monochrome"]) {
+    const model = render({ ...f, settings: { ...f.settings, vectorColorMode } });
+    assert.equal(model.vectorColorRange, null); assert.equal(model.glyphColors, null);
+  }
+});
+check("artifact layer and vector legend consume the same physical color model", () => {
+  const layerUrl = new URL("modules/viewport-3d/layers/ArtifactFieldLayer.tsx", root);
+  const layer = ts.createSourceFile(layerUrl.pathname, readFileSync(layerUrl, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let overrideExpression;
+  function findOverride(node) {
+    if (ts.isJsxAttribute(node) && node.name.getText(layer) === "glyphColorsOverride") overrideExpression = node.initializer.expression.getText(layer);
+    ts.forEachChild(node, findOverride);
+  }
+  findOverride(layer); assert.ok(overrideExpression);
+  const viewportUrl = new URL("modules/viewport-3d/Viewport3DModule.tsx", root);
+  const viewport = ts.createSourceFile(viewportUrl.pathname, readFileSync(viewportUrl, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const declaration = viewport.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "resolveArtifactFieldColorbars");
+  assert.ok(declaration);
+  const code = stripTypeScriptTypes(declaration.getText(viewport).replace(/^export /, ""), { mode: "transform" });
+  const context = vm.createContext({ resolveViewport3DColorbarLegend: input => input });
+  vm.runInContext(code, context);
+  for (const mode of ["x", "y", "z", "magnitude", "orientation", "monochrome"]) {
+    const f = fixture(); Object.assign(f.settings, { visible: true, shaderVisible: false, vectorColorMode: mode, viewportColorbarVisible: true, scalarColorPalette: "inferno" });
+    const model = render(f), passed = new vm.Script(overrideExpression).runInNewContext({ model });
+    assert.strictEqual(passed, model.glyphColors, `Layer must pass physical RGB for ${mode}`);
+    context.model = model;
+    const legends = vm.runInContext("resolveArtifactFieldColorbars(model)", context);
+    assert.equal(legends.length, model.vectorColorRange ? 1 : 0);
+    if (model.vectorColorRange) {
+      const legend = legends[0].legend;
+      assert.equal(legend.colorMode, mode); assert.equal(legend.colorPalette, "inferno"); assert.equal(legend.quantityId, "J_charge"); assert.equal(legend.unit, "A/m^2");
+      assert.equal(legend.range.min, model.vectorColorRange.min); assert.equal(legend.range.max, model.vectorColorRange.max);
+    }
+    for (const overrides of [{ visible: false }, { vectorsVisible: false }, { viewportColorbarVisible: false }, { vectorBudget: 0 }]) {
+      context.model = render({ ...f, settings: { ...f.settings, ...overrides } });
+      assert.equal(vm.runInContext("resolveArtifactFieldColorbars(model)", context).length, 0);
+    }
+  }
+});
 for(const count of [7,14])check(`${count} samples keep exact renderer glyph cardinality`,()=>{
   const f=fixture(),indexing="point_samples";f.locator.indexing=indexing;f.locator.sample_count=count;f.locator.carrier_id=`artifact:${digest}:${indexing}`;
   const xyz=Float64Array.from(Array.from({length:count},(_,i)=>[0,0,i]).flat()), data=Float64Array.from(Array.from({length:count},(_,i)=>[i+1,0,0]).flat());
@@ -234,5 +310,43 @@ check("carrier accounting never labels requested glyphs as GPU adoption",()=>{
  assert.equal(entry.namespace.artifactInspectionPresentation(render({...f,settings:{...f.settings,vectorBudget:0}})).adoptedGlyphCount,0);
  assert.equal(entry.namespace.artifactInspectionPresentation(render({...f,settings:{...f.settings,visible:false}})).expectedGlyphCount,0);
  assert.equal(entry.namespace.artifactInspectionPresentation(null),null);
+});
+check("Universe surface Inspector reads the exact rendered owner/projection range", () => {
+  const f = fixture(), indexing = "sample_nodes", presentationTarget = { kind: "airbox", id: "airbox" };
+  Object.assign(f.locator, { indexing, sample_count: 4, carrier_id: `artifact:${digest}:${indexing}`, carrier_scope_kind: "full", carrier_scope_id: null });
+  Object.assign(f.field, { quantityId: "H_ant", scopeKind: "full", scopeId: null, pointCount: 4, indexing, values: values.slice(0, 12),
+    artifactMapping: { indexing, identityIds: BigUint64Array.from([0n, 1n, 2n, 3n]), elementOrdinals: null, localVertexIndices: null } });
+  Object.assign(f.topology, { positions: positions.slice(0, 12), nodeCount: 4, cellTypes: Uint32Array.from([1]), cellOffsets: Uint32Array.from([0, 4]), cellNodes: Uint32Array.from([0, 1, 2, 3]) });
+  f.headers.carrierId = f.geometry.carrierId = f.locator.carrier_id;
+  const data = entry.namespace.prepareArtifactFieldOverlay(carrier.admitArtifactFieldCarrier(f.locator, f.field, f.headers, f.topology, f.geometry));
+  const panelUrl = new URL("modules/inspector/panels/ObjectVisualizationTargetSection.tsx", root);
+  const panel = ts.createSourceFile(panelUrl.pathname, readFileSync(panelUrl, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const section = panel.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "VisualizationSurfaceColoringSection");
+  let rangeExpression;
+  function findRange(node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(panel) === "renderedRange") rangeExpression = node.initializer.getText(panel);
+    ts.forEachChild(node, findRange);
+  }
+  findRange(section); assert.ok(rangeExpression);
+  const selection = cache.get(new URL("kernel/visualization/artifactFieldSelection.ts", root).href).namespace;
+  for (const projection of ["raw_nodal", "surface_faces"]) {
+    const settings = { ...f.settings, visible: true, surfaceColorSource: "component_x", activeQuantityId: "H_ant", surfaceProjectionMode: projection };
+    const model = entry.namespace.presentArtifactFieldOverlay(data, settings, presentationTarget);
+    const [row] = entry.namespace.artifactRenderedSurfaceRanges(model); assert.ok(row);
+    const binding = { historical: true, presentationTarget, expectedOwner: { ...model.locator.owner, quantityId: "H_ant" },
+      query: { carrier_id: model.locator.carrier_id, expected_carrier_revision: model.locator.carrier_revision, scope_kind: "full", scope_id: null } };
+    let requested;
+    const read = () => new vm.Script(rangeExpression).runInNewContext({
+      historicalSurface: true, colorbarComponent: "x", settings, artifactFieldBinding: binding, fieldMetaScopeQuery: {},
+      artifactSurfaceRangeKey: selection.artifactSurfaceRangeKey,
+      useViewport3DRenderedScalarRange: query => { requested = query; return query.inspectionKey === row.inspectionKey ? row.range : null; },
+    });
+    assert.strictEqual(read(), row.range, "Inspector must consume the range produced for the same Universe presentation");
+    assert.equal(requested.inspectionKey, row.inspectionKey);
+    const objectKey = selection.artifactSurfaceRangeKey(binding.expectedOwner, binding.query, projection);
+    assert.notEqual(requested.inspectionKey, objectKey, "Universe must not read a source object's range alias");
+    binding.presentationTarget = { kind: "object", id: "object:object_id" };
+    assert.equal(read(), null, "A different presentation must not read the Universe scale");
+  }
 });
 console.log(JSON.stringify({status:"passed",checks,unit_test_compilation:false,browser_qualification:false}));

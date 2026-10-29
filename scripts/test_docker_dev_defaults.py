@@ -66,6 +66,30 @@ class DockerDevDefaultsTests(unittest.TestCase):
         fallback = self._defaults(self.main, environment={})
         self.assertEqual(fallback.source_root, self.main)
 
+    def test_worktree_toolchain_uses_main_dotenv_and_bounded_keys(self) -> None:
+        (self.main / ".env").write_text(
+            "FULLMAG_CUDA_ARCHITECTURES='86-real;86-virtual'\n"
+            "FULLMAG_MFEM_BUILD_JOBS=2\nUNRELATED_SECRET=private\n")
+        (self.worktree / ".env").write_text("FULLMAG_MFEM_BUILD_JOBS=99\n")
+        with patch.object(defaults, "_known_checkouts", return_value=self.known):
+            values = defaults.configured_toolchain_environment(self.worktree, {})
+        self.assertEqual(values, {"FULLMAG_CUDA_ARCHITECTURES": "86-real;86-virtual",
+                                  "FULLMAG_MFEM_BUILD_JOBS": "2"})
+
+    def test_toolchain_process_override_preserves_other_main_settings(self) -> None:
+        (self.main / ".env").write_text(
+            "FULLMAG_MFEM_BUILD_JOBS=2\nFULLMAG_HYPRE_GPU_ARCHITECTURES=86\n")
+        with patch.object(defaults, "_known_checkouts", return_value=self.known):
+            values = defaults.configured_toolchain_environment(
+                self.worktree, {"FULLMAG_MFEM_BUILD_JOBS": "4",
+                                "FULLMAG_HYPRE_GPU_ARCHITECTURES": ""})
+        self.assertEqual(values, {"FULLMAG_MFEM_BUILD_JOBS": "4",
+                                  "FULLMAG_HYPRE_GPU_ARCHITECTURES": "86"})
+
+    def test_absent_toolchain_settings_leave_compose_defaults(self) -> None:
+        with patch.object(defaults, "_known_checkouts", return_value=self.known):
+            self.assertEqual(defaults.configured_toolchain_environment(self.worktree, {}), {})
+
     def test_port_priority_and_conflicts_fail_closed(self) -> None:
         self.assertEqual(self._defaults(self.main, port=3210).port, 3210)
         self.assertEqual(
@@ -246,6 +270,10 @@ class DockerDevDefaultsTests(unittest.TestCase):
             ("up --port '32900' --gpu-access 'required' --source-root '/selected source' --script 'examples/a.py'",
              ["up", "--port", "32900", "--gpu-access", "required", "--source-root", "/selected source", "--script", "examples/a.py"]),
             ("script --script 'examples/a.py'", ["script", "--script", "examples/a.py"]),
+            ("resume-volume --attempt '" + "a"*32 + "' --config-sha256 '" + "b"*64 + "' --source-root '/selected source' --port '3203'",
+             ["resume-volume", "--attempt", "a"*32, "--config-sha256", "b"*64, "--source-root", "/selected source", "--port", "3203"]),
+            ("resume-volume --attempt '" + "a"*32 + "' --config-sha256 '" + "b"*64 + "' --source-root '/selected source' --port '3203' --restart-backend --prestart-reconciliation '" + "c"*32 + "' --prestart-reconciliation-sha256 '" + "d"*64 + "'",
+             ["resume-volume", "--attempt", "a"*32, "--config-sha256", "b"*64, "--source-root", "/selected source", "--port", "3203", "--restart-backend", "--prestart-reconciliation", "c"*32, "--prestart-reconciliation-sha256", "d"*64]),
         ):
             result = subprocess.run(["bash", str(root / "scripts/just_storage_shell.sh"), prefix + body],
                                     env={**os.environ, "FULLMAG_STORAGE_PYTHON": str(probe)},
@@ -254,6 +282,29 @@ class DockerDevDefaultsTests(unittest.TestCase):
             actual = json.loads(result.stdout)
             self.assertEqual(actual[3:], expected)
             self.assertNotIn("fullmag_storage.py", actual[0])
+
+    @unittest.skipUnless(os.name == "posix", "POSIX executable shell fixture")
+    def test_shell_refuses_partial_or_unpinned_prestart_continuations(self):
+        root = Path(__file__).resolve().parents[1]
+        probe = Path(self.temp.name) / "python-prestart-probe"
+        probe.write_text(f"#!{sys.executable}\nimport sys\n"
+                         "if sys.argv[1:2] != ['-c']: print('unexpected dispatch')\n")
+        probe.chmod(0o700)
+        prefix = (f'python3 "{root}/scripts/docker_dev.py" --repo-root "{root}" '
+                  + "resume-volume --attempt '" + "a"*32 + "' --config-sha256 '" + "b"*64
+                  + "' --source-root '/selected source' --port '3203'")
+        pair = " --prestart-reconciliation '" + "c"*32 + "' --prestart-reconciliation-sha256 '" + "d"*64 + "'"
+        for suffix in (pair, " --restart-backend --prestart-reconciliation '" + "c"*32 + "'",
+                       " --restart-backend --prestart-reconciliation-sha256 '" + "d"*64 + "'",
+                       " --restart-backend" + pair.replace("c"*32, "C"*32),
+                       " --restart-backend" + pair + " --unknown",
+                       " --restart-backend" + pair + "; echo bypass"):
+            with self.subTest(suffix=suffix):
+                result = subprocess.run(["bash", str(root / "scripts/just_storage_shell.sh"), prefix + suffix],
+                                        env={**os.environ, "FULLMAG_STORAGE_PYTHON": str(probe)},
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertEqual(result.stdout, "")
 
     def test_discovery_deduplicates_one_live_pair_and_uses_its_overridden_port(self):
         attempt = "a" * 32

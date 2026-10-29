@@ -71,14 +71,15 @@ try {
   const manifest=await manifestResponse.json();
   assert.equal(manifest.schema,"fullmag.saved_playback.v1");
   const stage=manifest.stages[0];
-  assert.equal(stage.frame_count,801,"This qualification targets the complete 801-frame YIG recording.");
-  const indices=[0,400,800],expected=[];
+  if(!manifest.fem_mesh) assert.equal(stage.frame_count,801,"FDM qualification targets the complete 801-frame YIG recording.");
+  assert(Number.isSafeInteger(stage.frame_count) && stage.frame_count>=3 && stage.frame_count<=100000);
+  const indices=[0,Math.floor((stage.frame_count-1)/2),stage.frame_count-1],expected=[];
   for(const index of indices) {
     const query=new URLSearchParams({stage_id:stage.stage_id,revision:manifest.revision});
     const response=await context.request.get(proxy.origin+"/v2/workspace/items/"+itemId+"/playback/frames/"+index+"?"+query);
     assert.equal(response.status(),200);
     const bytes=await response.body();
-    assert.equal(bytes.length,manifest.grid_cells_xyz.reduce((a,b)=>a*b,1)*24);
+    assert.equal(bytes.length,(manifest.fem_mesh?.node_count ?? manifest.grid_cells_xyz.reduce((a,b)=>a*b,1))*24);
     expected.push(sha(bytes));
   }
   await page.goto(proxy.origin+"/home",{waitUntil:"domcontentloaded",timeout});
@@ -100,7 +101,7 @@ try {
   const canvasHashes=[];
   for(const index of indices) {
     if(index===0) await slider.press("Home");
-    else if(index===800) await slider.press("End");
+    else if(index===stage.frame_count-1) await slider.press("End");
     else {
       const bounds=await page.locator("#fm-saved-results-frame").boundingBox();
       assert(bounds);
@@ -163,6 +164,7 @@ try {
   result={schema:"fullmag.docker-dev-saved-playback-result.v1",state:"passed",scenario:"saved-playback",
     item_id:itemId,public_url:publicUrl,probe_url:probeUrl,playwright_version:version,
     browser_gpu_mode:process.env.CONTROL_ROOM_BROWSER_GPU_MODE,script_sha256:scriptSha,
+    geometry_kind:manifest.fem_mesh ? "fem" : "fdm",frame_count:stage.frame_count,
     frame_indices:indices,frame_sha256:expected,canvas_visible:true,context_lost:false,
     ...result,field_payloads_verified:true,changed_canvas:true,inspector_stable:true,
     camera_stable:true,hook_errors:hookErrors,errors,screenshot_base64:screenshot.toString("base64")};

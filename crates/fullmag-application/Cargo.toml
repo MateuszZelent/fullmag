@@ -13,7 +13,7 @@ fullmag-ir = { path = "../fullmag-ir" }
 fullmag-plan = { path = "../fullmag-plan" }
 fullmag-quantities = { path = "../fullmag-quantities" }
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 sha2 = "0.10"
 zip = { version = "2", default-features = false, features = ["deflate"] }

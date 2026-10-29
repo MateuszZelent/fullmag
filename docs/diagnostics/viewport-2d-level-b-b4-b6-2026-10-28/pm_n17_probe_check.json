@@ -1,0 +1,34 @@
+{
+ "xy@0.5": {
+  "cut_elements": 5638,
+  "equal": 42,
+  "differ": 0,
+  "empty_both": 32,
+  "occupancy_mismatch": 1,
+  "examples": []
+ },
+ "xy@0.31": {
+  "cut_elements": 5758,
+  "equal": 52,
+  "differ": 0,
+  "empty_both": 23,
+  "occupancy_mismatch": 0,
+  "examples": []
+ },
+ "xz@0.62": {
+  "cut_elements": 3813,
+  "equal": 36,
+  "differ": 0,
+  "empty_both": 39,
+  "occupancy_mismatch": 0,
+  "examples": []
+ },
+ "yz@0.44": {
+  "cut_elements": 2865,
+  "equal": 38,
+  "differ": 0,
+  "empty_both": 37,
+  "occupancy_mismatch": 0,
+  "examples": []
+ }
+}

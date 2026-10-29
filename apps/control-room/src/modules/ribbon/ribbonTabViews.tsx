@@ -53,6 +53,7 @@ import type {
   VisualizationRenderMode,
   VisualizationTargetKind,
 } from "@/kernel/visualization/ObjectVisualizationController";
+import { SCALAR_COLOR_PALETTE_ITEMS } from "@/shared/visualization/scalarColorPalette";
 
 export type FieldComponentPatch = NonNullable<VisualizationStatePatch["field_component"]>;
 export type VectorColorModePatch = NonNullable<
@@ -420,13 +421,7 @@ export const viewTab: RibbonTabContent = {
                   id: "quantity:shader",
                   label: "Colormap",
                   value: "viridis",
-                  items: [
-                    { value: "viridis",  label: "Viridis" },
-                    { value: "inferno",  label: "Inferno" },
-                    { value: "magma",    label: "Magma" },
-                    { value: "coolwarm", label: "Coolwarm" },
-                    { value: "jet",      label: "Jet" },
-                  ],
+                  items: SCALAR_COLOR_PALETTE_ITEMS,
                 },
                 { type: "checkbox",    id: "quantity:auto-scale",         label: "Auto-scale range",       checked: true },
                 { type: "separator",   id: "quantity:colormap:s0" },

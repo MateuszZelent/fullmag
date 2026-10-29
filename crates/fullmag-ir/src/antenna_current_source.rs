@@ -217,9 +217,27 @@ pub struct ResolvedAntennaClosedLoopCurrentInputIR {
     pub conductivity_spm_per_element: Vec<f64>,
     pub boundary_roles: Vec<crate::ConservativeCurrentBoundaryFaceIR>,
     pub solver: ChargeSolverPolicyIR,
-    pub direct_field_policy: AntennaDirectFieldInputPolicyIR,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct_field_policy: Option<AntennaDirectFieldInputPolicyIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface_field_policy: Option<crate::AntennaSurfaceFieldPolicyIR>,
     pub field_sampling: AntennaFieldSamplingPlanIR,
     pub algebraic_relative_tolerance: f64,
     pub physical_relative_gate: f64,
     pub physical_absolute_gate_a: f64,
+}
+
+impl ResolvedAntennaClosedLoopCurrentInputIR {
+    pub fn validate_field_policy(&self) -> Result<(), String> {
+        match (&self.stage.oersted_realization, &self.direct_field_policy, &self.surface_field_policy) {
+            (crate::AntennaOerstedRealizationIR::DirectTetraQuadrature, Some(_), None)
+                if self.stage.surface_field_policy.is_none() => Ok(()),
+            (crate::AntennaOerstedRealizationIR::AnalyticRt0Surface, None, Some(policy))
+                if self.stage.surface_field_policy.as_ref() == Some(policy) => {
+                let errors = policy.validation_errors("surface_field_policy");
+                if errors.is_empty() { Ok(()) } else { Err(errors.join("; ")) }
+            }
+            _ => Err("prepared field method requires exactly its matching typed policy".into()),
+        }
+    }
 }

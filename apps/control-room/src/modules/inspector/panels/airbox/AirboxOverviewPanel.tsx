@@ -7,6 +7,7 @@ import {
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
+import { shouldLoadRuntimeMeshBuild } from "@/kernel/resources/studyRuntimeResources";
 import { useKernel } from "@/kernel/KernelContext";
 import { Button } from "@/shared/ui/Button";
 import { buildUniverseDomainPolicyPresentation } from "@/shared/domain/mesh/domainPresentation";
@@ -54,8 +55,8 @@ export function AirboxOverviewPanel({ selection }: InspectorPanelProps) {
   const manifest = useMeshSharedDomainManifestResource({
     enabled: shouldLoadAirboxMeshManifest(true, runtimeStatus),
   });
-  const build = useMeshBuildCurrent({ enabled: runtimeResolved });
-  const scene = useSceneResource({ enabled: runtimeResolved });
+  const build = useMeshBuildCurrent({ enabled: shouldLoadRuntimeMeshBuild(true, runtimeStatus) });
+  const scene = useSceneResource();
   const visualization = useVisualizationStateResource();
   const topologyMatches = matchesAirboxTopologyIdentity(runtimeStatus, manifest.data);
   const currentManifest = topologyMatches ? manifest.data : null;

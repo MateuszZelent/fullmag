@@ -31,4 +31,30 @@ describe("PlanarPinnedProbe", () => {
     expect(html).not.toContain('<th scope="row">u</th>');
     expect(html).not.toContain('<th scope="row">v</th>');
   });
+
+  it("reports outside and empty probes without inventing a value", () => {
+    const html = renderToStaticMarkup(
+      <PlanarPinnedProbe
+        axisState={null}
+        legendUnit=""
+        probe={{ occupancy: "outside", scalar: null, u_m: 2, v_m: 3 }}
+        probeScale={1}
+      />,
+    );
+    expect(html).toContain("no sample");
+    expect(html).toContain("Outside the sampled plane");
+  });
+
+  it("shows vector components and the source cell", () => {
+    const html = renderToStaticMarkup(
+      <PlanarPinnedProbe
+        axisState={null}
+        legendUnit=""
+        probe={{ cell_id: 42, occupancy: "occupied", scalar: 1, u_m: 0, v_m: 0, vector: [0.6, 0.8, 0] }}
+        probeScale={1}
+      />,
+    );
+    expect(html).toContain("(0.6, 0.8, 0)");
+    expect(html).toContain("cell 42");
+  });
 });

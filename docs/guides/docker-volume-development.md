@@ -131,6 +131,37 @@ a kolizja tworzy nową nazwę. Export nadal pobiera archiwum przez przeglądark�
 Wyniki i sesje nie są danymi buildu. Pliki wynikowe bez wpisu w indeksie Git
 nie zmieniają source identity; świadomie śledzone fixtures nadal są sprawdzane.
 
+### Historyczna odmowa mapowania wyjścia bez przyjęcia wykonania
+
+Starszy helper mógł zapisać `started`, mimo kompletnej odpowiedzi HTTP422
+`docker_startup_output_mapping_required` albo `docker_startup_output_mapping_invalid`.
+Nowy helper zapisuje dla tych konkretnych kodów terminal `rejected`; odczyt
+terminalu nie wysyła ponownie POST. Błędy nieznane,409 i500 pozostają odrębne.
+
+Historyczne rozstrzygnięcie korzysta wyłącznie z przypiętego requestu w control
+volume i istniejącej blokady oryginalnej operacji. `docker_activation_preflight`
+wymaga kompletnej końcowej odpowiedzi422 z receiptu kontrolera, zgodnych bajtów
+autoryzacji/provenance, skryptu, obrazu i nieprzerwanej inkarnacji backendu.
+Skan store/ledgera i bieżącej sesji jest kontrolą anomalii, a nie dowodem globalnej
+bezczynności API. Przypadek przyjętego wykonania lub niepełnego logu jest odrzucany.
+
+```text
+just docker-dev-reconcile-activation <request-w-control-volume> <sha256-requestu> <source> <port> true
+just docker-dev-reconcile-activation <ten-sam-request> <ten-sam-sha256> <source> <port> false
+```
+
+Pierwsza komenda wykonuje wyłącznie preview. Druga zachowuje oryginalny receipt
+i started marker, utrwala prepared journal, publikuje marker `rejected`, a na
+końcu terminal operacji. Oryginalny helper sam zwalnia `active`. Kontroler nie
+restartuje usług, nie usuwa danych i nie ponawia aktywacji/Solve. Częściowy zapis
+może przyjąć tylko oryginalne albo dokładnie przygotowane bajty; nieznany stan
+obserwatora zachowuje jego blokadę i dokładną tożsamość w journal, zamiast
+uruchamiać nowego startera. Replay kompletnego terminalu jest tylko odczytem.
+
+Po naprawie konfiguracji nowa aktywacja jest osobnym żądaniem i ponownie podlega
+zwykłym kontrolom sesji, źródeł, mountów oraz uprawnień do katalogu wyników.
+Ta procedura nie przyznaje automatycznie prawa zapisu do `examples`.
+
 ## Iteracje i awarie
 
 Gotowy kandydat pakietu po nieudanej publikacji jest odrębny od działającego
@@ -151,6 +182,14 @@ sprawdza prywatną sieć bez obcych konsumentów, restartuje backend i ponownie
 uruchamia ten sam frontend. Zachowuje cache oraz storage hosta. Nie jest komendą do przerywania obliczeń. Wymaga wyłącznego okna operatorskiego,
 bez równoległych klientów wysyłających polecenia do tej grupy; odczyt health
 nie jest dowodem opróżnienia wszystkich kolejek aplikacji.
+
+Opcjonalny ostatni argument `true` recepty `docker-dev-restart-idle` przekazuje
+istniejący tryb `--allow-prepared-session`. Pozwala zachować nigdy niewykonane,
+wstrzymane zadania Study również po zakończonym zadaniu. Nadal wymagane są
+sprawdzenie ich historii i brak aktywnych konsumentów oraz natywny drain;
+tryb nie zwalnia Solve i nie anuluje zadań. Domyślne `false` zachowuje
+restrykcyjny restart; inne wartości argumentu są odrzucane.
+
 Wyjątkiem od braku aktywnej sesji jest dokładnie przypięty model nieudanej
 aktywacji, którego przyjęte zadanie zostało jawnie anulowane przed rozpoczęciem
 przygotowania. Wymagany jest trwały dowód anulowania, brak rezerwacji i bieżącego
@@ -168,6 +207,64 @@ sprawdza obraz, mount, subpath namespace i właściciela wolumenu jeszcze przed
 lease `iteration` i przed zatrzymaniem którejkolwiek usługi; błąd tej kontroli
 zostawia grupę działającą i nie tworzy próby. Grupa bez kwarantanny namespace
 ma `BuildControl.namespace == ""` i używa subpath `runtime-control`.
+
+#### Zapis pustej sesji UI przed restartem
+
+Zwykłą, aktywną sesję `ui_authoring` w stanie `awaiting_command`, bez bieżącego
+runu i bez obiektów sceny, można zachować w archiwum projektu przed
+`restart-idle`. Dla tego przypadku checkpoint używa osobnego schematu
+`fullmag.saved-empty-authoring-restart.v1`: oba piny źródła (`source_entry` i
+`source_sha256`) muszą jawnie mieć wartość `null`. Archiwum zachowuje dokładne
+hashowane rewizje projektu i sceny; scena musi wskazywać `source_of_truth: ui`,
+a `objects` musi być pominięte albo puste. Nie dodaje się zastępczego skryptu
+Python ani metadanych skryptu, historii źródeł, historii projektu lub runów.
+
+Ta ścieżka nadal wymaga zwykłego ścisłego probe stanu przed i po zatrzymaniu
+frontendu, identycznych pinów kontenerów, źródeł, właściciela i archiwum oraz
+uwierzytelnionego natywnego drainu. Nie przyjmuje checkpointów rozszerzonych o
+anulowane lub historyczne preclaim ani katalogi zachowanych runów. Istniejący
+schemat `fullmag.saved-authoring-restart.v1` pozostaje przeznaczony dla
+archiwów z przypiętym skryptem źródłowym i nadal wymaga obu pinów źródła.
+
+Do bezpiecznego zatrzymania tej grupy użyj `just docker-dev-stop-saved-authoring`
+z przypiętym checkpointem. Recepta przechodzi przez probe i native drain,
+następnie pozostawia frontend oraz backend zatrzymane. Nie odtwarza sesji ani
+nie uruchamia skryptu; archiwum pozostaje zachowane do osobnego, jawnego otwarcia
+projektu.
+
+#### Początkowy start odrzucony z powodu wyczerpanej puli sieci
+
+Błąd Dockera `all predefined address pools have been fully subnetted` może
+wystąpić przed utworzeniem obu usług. Zachowany helper i receipt
+`outcome-unknown-resources-retained` nie są zgodą na ponowne `up` ani ręczne
+usunięcie `active`. Najpierw sprawdź właścicieli sieci; nie stosuj globalnego
+`network prune` i nie usuwaj sieci grup z zachowanymi kontenerami lub recovery.
+Usunięcie osieroconej sieci innego zadania wymaga odrębnej autoryzacji.
+
+Dla wyłącznie początkowej próby, bez wcześniejszego udanego deploymentu,
+recepta `docker-dev-reconcile-network-failure` potwierdza nieudany start.
+Przyjmuje wybrany checkout, dokładny attempt, hashe oryginalnego `receipt.json`
+i `compose.json` oraz ID silnika Docker. Domyślnie wykonuje tylko preview:
+
+```text
+just docker-dev-reconcile-network-failure <source> <attempt> <receipt-sha256> <compose-sha256> <engine-id>
+```
+
+Po sprawdzeniu dowodów końcowy argument `true` wykonuje failure-only CAS.
+Wymagane są: dokładny błąd puli, brak usług (także zatrzymanych) i sieci tej
+próby oraz zgodny oryginalny helper z potwierdzonym `LOGGED`, nadal trzymający
+`operation.lock`. Pełny spis kontenerów wyklucza obcych konsumentów wolumenu
+kontrolnego i checkoutu tej grupy. Dowody są ponownie sprawdzane przed publikacją.
+Ta początkowa procedura failure-only jest lokalna dla grupy (ADR 0067); nie
+wymaga zatrzymania procesów innych grup. Starsze procedury odzyskiwania
+BuildKit zachowują własne, globalne kontrole.
+Adapter zachowuje oryginalny receipt i dowód, nie publikuje sukcesu ani
+`verified`, nie uruchamia usług i nie usuwa danych. Wyłącznie oryginalny helper
+zwalnia swój marker `active` po odebraniu terminalnego wyniku. Nieznany wynik
+publikacji wymaga odczytu zachowanych dowodów; nie ponawiaj mutacji w ciemno.
+Dopiero potwierdzony terminal i zwolnienie helpera pozwalają na nowy start
+standardową receptą. Ta procedura nie służy do odzyskiwania zatrzymanego
+mastera z istniejącą sesją.
 
 #### Odzyskanie grupy zablokowanej w `iteration`
 
@@ -219,6 +316,26 @@ odtworzenia usług; sam restart zachowuje przypięty obraz.
 
 `docker-dev-resume` wznawia obserwację konkretnego potwierdzonego nieudanego
 startu; opcja `restart_backend=true` może uruchomić zachowany zatrzymany backend, również po wcześniej udanym starcie.
+Po wcześniej udanym starcie `docker-dev-resume` może również odzyskać frontend
+zakończony przez OOM. Wymaga zdrowego, niezmienionego backendu, dokładnych
+ID/konfiguracji oraz ponownego sprawdzenia inkarnacji przed operacją i po niej.
+Dla zgodnej konfiguracji uruchamia ten sam kontener bez zmiany seeda i zależności;
+osobny receipt `frontend-recovery` potwierdza odzyskanie procesu UI.
+
+Starszy frontend bez prywatnego tmpfs właściciela nie jest uruchamiany ponownie.
+Launcher wymaga już przygotowanego obrazu zgodnego z bieżącą receptą oraz
+zweryfikowanego łańcucha receiptów toolchain → development → backend. Tworzy nowy
+seed i wolumen frontendu, dodaje tmpfs i odtwarza wyłącznie usługę `frontend`.
+Zachowuje stary wolumen i konfigurację do przeglądu. Nowy receipt `development`
+z `recovery_scope=legacy-oom-frontend-recreation` przypina osobno obrazy obu usług.
+Backend zachowuje swój obraz, kontener, procesy, pakiet, sesję i rewizję sceny;
+launcher porównuje te dane przed odtworzeniem frontendu i po nim.
+
+Żaden wariant odzyskania frontendu nie restartuje backendu ani nie ponawia Solve.
+Zgodność zachowanego pakietu backendu z bieżącymi źródłami pozostaje
+`NOT VERIFIED`. Odzyskanie UI nie zastępuje buildu backendu ani kontroli
+przeglądarki. Nieznany wynik operacji zachowuje lease do jawnej rekonsyliacji.
+
 `docker-dev-recreate-volume` wymaga zatrzymanego backendu i dokładnych pinów
 próby/konfiguracji. Zachowuje wolumeny; opcja `fresh_state=true` tworzy nowy root
 sesji, pozostawiając poprzedni. Nie powtarza automatycznie aktywacji Solve.
@@ -514,6 +631,29 @@ ten odrębny wariant i domyka receipt również bez sygnału. Następnie zwykła
 źródeł do czasu potwierdzenia spójnego cienia; restart z Docker Desktop może
 zbiec się z edycją hosta i nie jest dowodem ukończonego buildu ani API.
 
+### Zachowanie profilu urządzeń przy odtwarzaniu
+
+Odtwarzanie zachowuje zarówno żądany tryb `auto/required/disabled`, jak i
+zweryfikowany wcześniej dostęp `gpu/cpu`. Dla zachowanego GPU launcher wymaga
+świeżego dowodu hostowego i kontenerowego przed zatrzymaniem lub usunięciem
+usług, a następnie przed nowym startem. Błąd probe lub nieznany wynik nie
+powoduje przejścia na CPU. Nowa grupa nadal może rozstrzygnąć `auto` do CPU.
+Nie zmienia to polityki istniejącego ledgera.
+
+`recreate-volume` rozpoznaje także wąski przypadek następcy, który po poprawnym
+buildzie zakończył się przed API na błędzie `stored host resource policy differs
+from explicit ledger configuration`, ponieważ `auto` zmieniło dostęp GPU na CPU.
+Osobny witness wiąże dokładny terminal, logi i namespace następcy z poprzednim
+ukończonym odtworzeniem, oryginalnym dowodem afterReady oraz niezmienionymi
+OWNER/config/process. Wszystkie zasoby muszą być Released; nowy skrypt startowy
+jest zabroniony. Witness i obie usługi są ponownie sprawdzane pod blokadą.
+Oryginalny kontekst restartu pozostaje identyczny, a nowy start wymaga GPU.
+
+Ta ścieżka nie resetuje ownera, nie migruje ledgera i nie powtarza Solve.
+Celowo nie udaje recovery po usunięciu namespace: przerwane odtworzenie
+wymaga osobnego przeglądu zachowanych dowodów. Zwykłe uruchomienie tej samej
+komendy nie zastępuje brakującego potwierdzenia.
+
 ## Granica zapisu i retencja
 
 | Dane | Miejsce |
@@ -756,3 +896,66 @@ Po zatwierdzonym preview tej operacji `--apply` zatrzymuje jedynie diagnostyczny
 ### Restart pustego runtime po utracie hosta
 
 `stop-restarted-terminal-volume` rozpoznaje także dokładny błąd rotacji konfiguracji po udanym odtworzeniu cgroup. Ten wariant wymaga dowodu `worker-cgroup-ready` z failed resume, przypiętego do tego backendu, obrazu i grupy; ponadto store musi mieć wyłącznie dopuszczone techniczne pliki i katalogi pustego namespace, a ledger v4 nie może zawierać rezerwacji. Podgląd i apply porównują hashe store oraz poprzedniego właściciela i sprawdzają wyłącznie diagnostyczne drzewo procesów. Nie powstaje sztuczny receipt drain. Nie jest usuwany helper cgroup, gdy jego odtworzenie się udało. Dalsze `recreate-volume --fresh-state` zachowuje poprzednie dane i nie ponawia Solve. Wariant z niepustymi katalogami zakończonych zadań zachowuje wcześniejsze wymagania.
+## Authored input after accepted recovery
+
+Accepted live runs retain the authored SceneDocument in the immutable project
+definition, with the same versioned execution-input identity as the RunIntent.
+The legacy default execution profile used to materialize the Study remains in
+the accepted Study and execution catalog; it does not become an authored scene
+change merely because the API restarts.
+
+Older definitions may contain that automatically inserted default profile.
+Recovery first validates the unchanged scene. Only if its input digest differs
+and the profile equals the exact canonical legacy default may recovery project
+that field back to absence, and only when the complete input digest then equals
+the immutable pin. Explicit profiles, actual input changes, and malformed pins
+remain protected. Stored definitions and RunIntent/CAS bytes are never rewritten.
+
+This keeps terminal cancellation visible to the accepted projector: a completed
+Stop must publish its terminal command resource and durable journal ACK instead
+of leaving the UI at accepted/stopping. It does not replay Solve, release a held
+run, or authorize editing historical journals.
+
+## Kolejne recovery po zatrzymaniu odtworzonej grupy
+
+Po potwierdzonym uruchomieniu isolated snapshot użytkownik może utworzyć nową
+sesję. Kolejne recovery musi jawnie wskazać jej aktualny held-manual run;
+ponowne użycie pierwotnego `start.json` przywróciłoby wcześniejszy model.
+`docker-dev-recover-isolated` przyjmuje ostatni argument `successor_snapshot=true`
+(CLI: `--successor-snapshot`). Domyślnie nadal odmawia wyboru innego recovery ID.
+
+Ścieżka successor wymaga natywnego admission poprzednika oraz zgodności
+`development/current.json` z przypiętym terminalnym receiptem. Zwykły udany start
+wymaga identycznego `verified.json`. Po potwierdzonej awarii kolejnego startu
+(`failed-confirmed`) verified musi wskazywać swój wcześniejszy, niezmienny
+terminal udanego startu i Compose, w tym samym namespace oraz z tymi samymi
+katalogami state i user-data. Obie pary dokumentów pozostają przypięte do CAS;
+awaria nie jest przedstawiana jako udany start ani dowód braku OWNER.
+Ścieżka sprawdza namespace, registry, attempt, konfigurację i dokładne
+kontenery, po czym wykonuje dotychczasowe kontrole wszystkich runów, ledgeru,
+blokad OWNER/WRITER i spójności SQLite. Kopiuje bieżące dane do nowej namespace;
+oryginały, poprzedni registry i `start.json` pozostają zachowane. Piny admission
+są ponownie sprawdzane przy publikacji. Podgląd niczego nie uruchamia, a apply
+nie odtwarza Solve ani nie kończy runów. Nowy start nadal przechodzi osobną
+natywną bramkę. Operacja dotyczy wyłącznie przypiętej, zatrzymanej grupy mastera.
+Nowy snapshot ma odrębną generację prywatnego ledgeru, wyprowadzoną z recovery ID;
+stary ledger pozostaje zachowany. Kontrole readmission poza tą jawną ścieżką
+nadal wymagają udanego terminalnego receiptu.
+
+Jeżeli nieudany start zakończył się przed zapisaniem identyfikatorów usług,
+successor nie odgaduje ich z listy kontenerów. Operator musi jawnie przypiąć
+typed journal bezpiecznego zatrzymania diagnostycznego API przez parę opcji
+`--stopped-predecessor-proof` i `--stopped-predecessor-proof-sha256`.
+Adapter przyjmuje tylko `fullmag.docker-preowner-policy-stop.v1` dla tej samej
+nieudanej próby: potwierdzone zatrzymanie po odmowie polityki zasobów,
+brak bieżącej sesji API i zachowane dane. Sprawdza surowy hash journala,
+niezmienny plan oraz udany terminal operacji Stop, a także zachowane piny
+OWNER, procesu i provenance. Journal nie stanowi dowodu native drain.
+
+Brakujące lub null identyfikatory terminala uzupełnia wyłącznie w pamięci;
+inne pola i istniejące identyfikatory muszą pozostać zgodne. Oryginalne bajty
+terminala, current i wszystkich dokumentów dowodu pozostają pinami końcowego
+CAS. Każdy ponowny odczyt zatrzymanej pary sprawdza identyfikator, obraz,
+fingerprint, `StartedAt` oraz poprawne zakończenie kontenera. Dotychczasowe
+bramki natywnego admission, ledgeru i magazynu wszystkich runów nadal obowiązują.
+Opcje nie są dostępne dla zwykłego readmission ani udanego terminala.

@@ -223,7 +223,9 @@ def run(args):
             rows[service] = row
         state = storage.validate_path(Path(previous["state_root"]), layout["runtime_root"], "retained Linux state")
         bind = next((m for m in rows["backend"]["Mounts"] if m["Destination"] == "/state"), {})
-        if bind.get("Type") != "bind" or bind.get("Source") != str(state):
+        if (bind.get("Type") != "bind"
+                or not isinstance(bind.get("Source"), str)
+                or bind_host_path(bind["Source"], state) != state):
             raise BuildControlError("Host reattestation state bind differs")
         # Refuse any other consumer of this directory or an ancestor/descendant.
         all_ids = dev.docker_text("ps", "--all", "--quiet").split()

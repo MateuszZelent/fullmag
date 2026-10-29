@@ -249,6 +249,20 @@ pub(crate) fn resample_grid_mask(mask: &[bool], plan: &GridPreviewPlan) -> Vec<b
     out
 }
 
+/// Disable display downsampling so a cached field covers the full domain.
+pub(crate) fn full_resolution_preview_request(
+    mut request: LivePreviewRequest,
+) -> LivePreviewRequest {
+    request.component = "3D".to_string();
+    request.layer = 0;
+    request.all_layers = true;
+    request.x_chosen_size = 0;
+    request.y_chosen_size = 0;
+    request.auto_scale_enabled = false;
+    request.max_points = 0;
+    request
+}
+
 pub(crate) fn build_grid_preview_field(
     request: &LivePreviewRequest,
     values: &[[f64; 3]],

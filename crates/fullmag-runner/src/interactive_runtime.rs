@@ -24,8 +24,8 @@ use crate::fem_baseline;
 #[cfg(feature = "fem-gpu")]
 use crate::native_fem::{DeviceInfo as FemDeviceInfo, NativeFemBackend};
 use crate::preview::{
-    build_grid_preview_field, build_mesh_preview_field_with_active_mask, mesh_quantity_active_mask,
-    select_observables,
+    build_grid_preview_field, build_mesh_preview_field_with_active_mask,
+    full_resolution_preview_request, mesh_quantity_active_mask, select_observables,
 };
 use crate::quantities::{
     active_fdm_preview_quantities, active_fem_preview_quantities, normalized_quantity_name,
@@ -76,6 +76,27 @@ pub(crate) fn cached_preview_quantities_for(
         .into_iter()
         .filter(|quantity| Some(*quantity) != active_quantity)
         .collect()
+}
+
+/// Spatial quantities demanded by visualization consumers (for example the
+/// planar field map) other than the active display quantity. They are
+/// published at full resolution because those consumers resample the whole
+/// domain themselves and reject display-downsampled frames.
+pub(crate) fn observation_preview_quantities_for(
+    display_state: &DisplaySelectionState,
+) -> Vec<&'static str> {
+    let active_quantity = (!display_is_global_scalar(display_state))
+        .then_some(display_state.selection.quantity.as_str());
+    let mut quantities = Vec::new();
+    for requested in &display_state.observation_quantities {
+        let Ok(quantity) = normalized_quantity_name(requested) else {
+            continue;
+        };
+        if Some(quantity) != active_quantity && !quantities.contains(&quantity) {
+            quantities.push(quantity);
+        }
+    }
+    quantities
 }
 
 fn interactive_time_event_schedule(
@@ -130,15 +151,26 @@ pub(crate) fn build_cached_grid_preview_fields(
     grid: [u32; 3],
     active_mask: Option<&[bool]>,
 ) -> Option<Vec<LivePreviewField>> {
-    let quantities = cached_preview_quantities_for(display_state);
+    let observed = observation_preview_quantities_for(display_state);
+    let mut quantities = cached_preview_quantities_for(display_state);
+    for quantity in &observed {
+        if !quantities.contains(quantity) {
+            quantities.push(quantity);
+        }
+    }
     if quantities.is_empty() {
         return None;
     }
     let expected_len = grid[0] as usize * grid[1] as usize * grid[2] as usize;
     let base_request = display_state.preview_request();
+    let observed_request = full_resolution_preview_request(base_request.clone());
     let mut cached = Vec::new();
     for quantity in quantities {
-        let mut request = base_request.clone();
+        let mut request = if observed.contains(&quantity) {
+            observed_request.clone()
+        } else {
+            base_request.clone()
+        };
         request.quantity = quantity.to_string();
         let Ok(values) = select_observables(observables, quantity) else {
             continue;
@@ -165,7 +197,12 @@ fn build_cached_mesh_preview_fields(
     observables: &StateObservables,
     mesh: &fullmag_ir::MeshIR,
 ) -> Option<Vec<LivePreviewField>> {
-    let quantities = cached_preview_quantities_for(display_state);
+    let mut quantities = cached_preview_quantities_for(display_state);
+    for quantity in observation_preview_quantities_for(display_state) {
+        if !quantities.contains(&quantity) {
+            quantities.push(quantity);
+        }
+    }
     if quantities.is_empty() {
         return None;
     }
@@ -221,8 +258,9 @@ fn attach_fem_crossover_decision_to_provenance(
 mod tests {
     use super::{
         attach_fem_crossover_decision_to_provenance, attach_resolved_fallback_to_provenance,
-        cached_display_refresh_due, cpu_execution_provenance, display_refresh_due,
-        normalize_runtime_context_signature, should_materialize_terminal_fields,
+        build_grid_preview_field, cached_display_refresh_due, cpu_execution_provenance,
+        display_refresh_due, full_resolution_preview_request, normalize_runtime_context_signature,
+        observation_preview_quantities_for, should_materialize_terminal_fields,
         InteractiveFdmPreviewRuntime, InteractiveFdmPreviewRuntimeInner,
     };
     use crate::dispatch::FdmEngine;
@@ -1154,6 +1192,41 @@ mod tests {
         assert!(!cached_display_refresh_due(Some(3), &display_state, 2, 25));
         assert!(!cached_display_refresh_due(Some(3), &display_state, 24, 25));
         assert!(cached_display_refresh_due(Some(3), &display_state, 25, 25));
+    }
+
+    #[test]
+    fn observation_quantities_exclude_active_display_and_duplicates() {
+        let mut display_state = DisplaySelectionState::default();
+        display_state.selection.quantity = "m".to_string();
+        display_state.observation_quantities = vec![
+            "m".to_string(),
+            "H_demag".to_string(),
+            "H_demag".to_string(),
+            "not_a_quantity".to_string(),
+        ];
+
+        assert_eq!(
+            observation_preview_quantities_for(&display_state),
+            vec!["H_demag"]
+        );
+    }
+
+    #[test]
+    fn observed_grid_fields_are_not_display_downsampled() {
+        let grid = [256_u32, 128, 1];
+        let values = vec![[0.0, 0.0, 1.0]; 256 * 128];
+        let display_request = DisplaySelectionState::default().preview_request();
+        let downsampled = build_grid_preview_field(&display_request, &values, grid, None);
+        assert_ne!(downsampled.preview_grid, grid);
+
+        let full = build_grid_preview_field(
+            &full_resolution_preview_request(display_request),
+            &values,
+            grid,
+            None,
+        );
+        assert_eq!(full.preview_grid, grid);
+        assert_eq!(full.vector_field_values.len(), values.len() * 3);
     }
 
     #[test]

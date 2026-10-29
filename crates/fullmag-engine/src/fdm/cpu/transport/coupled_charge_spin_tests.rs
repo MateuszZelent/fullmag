@@ -12,6 +12,7 @@ fn norm3(value: [f64; 3]) -> f64 {
 
 fn material(count: usize) -> CoupledChargeSpinMaterialFields {
     CoupledChargeSpinMaterialFields {
+        magnetic_active_mask: vec![true; count],
         reciprocal: vec![
             ReciprocalConstitutiveMaterial {
                 sigma_s_per_m: 4.0,
@@ -412,6 +413,7 @@ fn m2_anisotropic_nf_interface_meets_the_declared_physical_balance_tolerance() {
             dz: 1.0e-9,
         },
         CoupledChargeSpinMaterialFields {
+            magnetic_active_mask: vec![true; count],
             reciprocal,
             magnetization,
             reactions,
@@ -513,6 +515,7 @@ fn m2_refined_anisotropic_bar_converges_with_declared_linear_budget() {
             dz: 1.0e-9,
         },
         CoupledChargeSpinMaterialFields {
+            magnetic_active_mask: vec![true; count],
             reciprocal,
             magnetization,
             reactions,
@@ -1163,4 +1166,123 @@ fn m2_specified_outward_charge_flux_preserves_face_orientation() {
             .0,
         3.0
     );
+}
+
+#[test]
+fn explicit_nonmagnetic_domain_admission_preserves_spin_flip_and_rejects_conflicts() {
+    let mut fields = material(1);
+    fields.magnetic_active_mask[0] = false;
+    fields.magnetization[0] = [0.0; 3];
+    fields.reciprocal[0].polarization = 0.0;
+    fields.reciprocal[0].sigma_parallel_s_per_m = 4.0;
+    fields.reciprocal[0].sigma_perpendicular_s_per_m = 4.0;
+    fields.reciprocal[0].sigma_ahe_s_per_m = 0.0;
+    let build = |fields| CoupledChargeSpinProblem::new(
+        GridShape { nx: 1, ny: 1, nz: 1 },
+        CellSize { dx: 1.0, dy: 1.0, dz: 1.0 },
+        fields,
+        Some(vec![true]),
+        CoupledChargeSpinBoundaryConditions {
+            charge: ChargeBoundaryConditions { x_min: ChargeBoundaryCondition::Voltage(0.0), ..Default::default() },
+            spin: SpinBoundaryConditions::default(),
+        },
+    );
+    let problem = build(fields.clone()).unwrap();
+    let reactions = problem.reaction_channels_for_test(&[[1.0, 2.0, 3.0]]);
+    assert_eq!(reactions.spin_flip[0], [0.375, 0.75, 1.125]);
+    assert_eq!(reactions.magnetic_torque_sink[0], [0.0; 3]);
+    assert!(problem.with_torque_targets(SpinTorqueTargets {
+        target_cells: vec![true], saturation_magnetization_a_per_m: vec![8.0e5], gamma_e_rad_per_s_t: 1.76085963023e11,
+    }).is_err());
+    let mut wrong = fields.clone();
+    wrong.magnetic_active_mask.clear();
+    assert!(build(wrong).is_err());
+    let mut wrong = fields.clone();
+    wrong.magnetization[0] = [1.0, 0.0, 0.0];
+    assert!(build(wrong).is_err());
+    for exchange in [true, false] {
+        let mut wrong = fields.clone();
+        if exchange { wrong.reactions[0].exchange_m = Some(2.0); }
+        else { wrong.reactions[0].dephasing_m = Some(2.0); }
+        assert!(build(wrong).is_err());
+    }
+}
+
+#[test]
+fn m2_homogeneous_gradient_retains_constitutive_flux_on_all_face_normals() {
+    for axis in 0..3 {
+        let mut fields = material(8);
+        fields.magnetization.fill([1.0, 0.0, 0.0]);
+        fields.reciprocal.fill(ReciprocalConstitutiveMaterial {
+            sigma_s_per_m: 1.0,
+            sigma_spin_s_per_m: 1.0,
+            sigma_parallel_s_per_m: 1.0,
+            sigma_perpendicular_s_per_m: 1.0,
+            sigma_ahe_s_per_m: 0.0,
+            polarization: 0.25,
+            spin_hall_angle: 0.1,
+        });
+        let mut boundary = CoupledChargeSpinBoundaryConditions::default();
+        let (charge_min, charge_max, spin_min, spin_max) = match axis {
+            0 => (&mut boundary.charge.x_min, &mut boundary.charge.x_max,
+                &mut boundary.spin.x_min, &mut boundary.spin.x_max),
+            1 => (&mut boundary.charge.y_min, &mut boundary.charge.y_max,
+                &mut boundary.spin.y_min, &mut boundary.spin.y_max),
+            _ => (&mut boundary.charge.z_min, &mut boundary.charge.z_max,
+                &mut boundary.spin.z_min, &mut boundary.spin.z_max),
+        };
+        *charge_min = ChargeBoundaryCondition::Voltage(0.0);
+        *charge_max = ChargeBoundaryCondition::Voltage(1.0);
+        *spin_min = SpinBoundaryCondition::HomogeneousSpinPotentialGradient;
+        *spin_max = SpinBoundaryCondition::HomogeneousSpinPotentialGradient;
+        let problem = CoupledChargeSpinProblem::new(
+            GridShape { nx: 2, ny: 2, nz: 2 },
+            CellSize { dx: 1.0, dy: 1.0, dz: 1.0 },
+            fields, None, boundary,
+        ).unwrap();
+        let e = [-99.0, 2.0, 3.0];
+        let g = [[7.0, 8.0, 9.0], [1.0, 2.0, 3.0], [4.0, 5.0, 6.0]];
+        let potential = (0..8).map(|cell| {
+            let point = [cell % 2, (cell / 2) % 2, cell / 4];
+            0.5 - (0..3).filter(|i| *i != axis)
+                .map(|i| e[i] * point[i] as f64).sum::<f64>()
+        }).collect::<Vec<_>>();
+        let spin = (0..8).map(|cell| {
+            let point = [cell % 2, (cell / 2) % 2, cell / 4];
+            [0, 1, 2].map(|a| -2.0 * (0..3)
+                .map(|i| g[i][a] * point[i] as f64).sum::<f64>())
+        }).collect::<Vec<_>>();
+        let expected_charge = [-1.2, -1.5, -0.3][axis];
+        let expected_spin = [[-0.25, -0.3, 0.2], [0.05, 0.0, 9.9], [-0.45, -9.9, 0.0]][axis];
+        for positive in [false, true] {
+            let cell = if positive { 1 << axis } else { 0 };
+            let (charge, flux) = problem.boundary_flux_for_test(
+                axis, positive, cell, &potential, &spin,
+            );
+            assert!((charge - expected_charge).abs() < 1.0e-12);
+            for component in 0..3 {
+                assert!((flux[component] - expected_spin[component]).abs() < 1.0e-12);
+            }
+        }
+    }
+}
+
+#[test]
+fn m2_homogeneous_gradient_rejects_charge_neumann_before_solve() {
+    for charge in [ChargeBoundaryCondition::Insulating,
+        ChargeBoundaryCondition::SpecifiedOutwardCurrentDensity(1.0)] {
+        let result = CoupledChargeSpinProblem::new(
+            GridShape { nx: 1, ny: 1, nz: 1 },
+            CellSize { dx: 1.0, dy: 1.0, dz: 1.0 },
+            material(1), None,
+            CoupledChargeSpinBoundaryConditions {
+                charge: ChargeBoundaryConditions { x_min: charge, ..Default::default() },
+                spin: SpinBoundaryConditions {
+                    x_min: SpinBoundaryCondition::HomogeneousSpinPotentialGradient,
+                    ..Default::default()
+                },
+            },
+        );
+        assert!(result.err().unwrap().to_string().contains("requires a voltage boundary"));
+    }
 }

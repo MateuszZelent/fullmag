@@ -32,7 +32,8 @@ pub use detail::{
 };
 pub use frames::{read_frames, read_frames_page, FramesIndexData, FRAMES_PAGE_MAX};
 pub use playback::{
-    read_playback, read_playback_frame, PlaybackError, SavedPlaybackResource,
+    read_playback, read_playback_frame, read_playback_geometry, read_playback_with_geometry,
+    PlaybackError, SavedPlaybackFemMesh, SavedPlaybackInspection, SavedPlaybackResource,
     SavedPlaybackStage,
 };
 pub use project_detail::inspect_project;

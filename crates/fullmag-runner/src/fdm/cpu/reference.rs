@@ -115,7 +115,7 @@ struct FdmAbm3RunnerCheckpointV1 {
     frozen_spins: Option<FrozenSpinsCheckpointV1>,
 }
 
-fn fdm_abm3_plan_sha256(plan: &FdmPlanIR) -> Result<String, RunError> {
+pub(super) fn fdm_abm3_plan_sha256(plan: &FdmPlanIR) -> Result<String, RunError> {
     let bytes = serde_json::to_vec(plan).map_err(|error| RunError {
         message: format!("serializing FDM plan for ABM3 checkpoint identity: {error}"),
     })?;
@@ -1537,13 +1537,36 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
     plan: &FdmPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    mut live: Option<LiveStepConsumer<'_>>,
+    live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
     coupled_checkpoint: Option<serde_json::Value>,
 ) -> Result<ExecutedRun, RunError> {
-    if until_seconds <= 0.0 {
+    execute_reference_fdm_with_terminal_context(
+        plan, until_seconds, outputs, live, artifact_writer, coupled_checkpoint, None,
+    )
+}
+
+pub(crate) struct FdmTerminalContext<'a> {
+    pub frozen: &'a crate::constraints::FrozenStageContextV1,
+    pub source_frozen_plan: Option<&'a fullmag_ir::ResolvedFrozenSpinsPlanIR>,
+    pub drain_writer: &'a mut (dyn FnMut() -> Result<(), RunError> + Send),
+}
+
+pub(crate) fn execute_reference_fdm_with_terminal_context(
+    plan: &FdmPlanIR,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    mut live: Option<LiveStepConsumer<'_>>,
+    artifact_writer: Option<ArtifactPipelineSender>,
+    coupled_checkpoint: Option<serde_json::Value>,
+    mut terminal: Option<FdmTerminalContext<'_>>,
+) -> Result<ExecutedRun, RunError> {
+    if terminal.is_some() && coupled_checkpoint.is_some() {
+        return Err(RunError { message: "terminal publication context cannot authorize checkpoint resume".into() });
+    }
+    if !until_seconds.is_finite() || until_seconds <= 0.0 {
         return Err(RunError {
-            message: "until_seconds must be positive".to_string(),
+            message: "until_seconds must be finite and positive".to_string(),
         });
     }
     if plan.precision != ExecutionPrecision::Double {
@@ -1558,10 +1581,28 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         });
     }
     let mut spin_transport = FdmSpinTransportWorkflow::from_plan(plan)?;
+    if let Some(checkpoint) = coupled_checkpoint.as_ref() {
+        // Preserve the existing non-frozen M3 V1 solver-state continuation.
+        // Full checkpoint/output ExactResume admission remains a separate gate.
+        let legacy_m3_solver_state = plan.frozen_spins.is_none()
+            && spin_transport
+                .as_ref()
+                .is_some_and(FdmSpinTransportWorkflow::has_transient)
+            && checkpoint.get("schema").and_then(serde_json::Value::as_str)
+                == Some("fullmag.fdm.coupled_m3_checkpoint.v1");
+        if !legacy_m3_solver_state {
+            crate::validate_fdm_transport_checkpoint_resume_support(plan)?;
+        }
+    }
     if spin_transport.is_some() {
         let transient = spin_transport
             .as_ref()
             .is_some_and(FdmSpinTransportWorkflow::has_transient);
+        if transient && plan.relaxation.is_some() {
+            return Err(RunError {
+                message: "Relax with active transient M3 transport is unsupported: no transport-convergence contract exists, including with disabled torque".into(),
+            });
+        }
         if !transient && plan.integrator.unwrap_or(IntegratorChoice::Heun) != IntegratorChoice::Heun
         {
             return Err(RunError {
@@ -1587,6 +1628,19 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
 
     let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
     let stage_end_time_s = plan.time_stage.start_time_s + until_seconds;
+    if spin_transport.is_some()
+        && (!plan.time_stage.start_time_s.is_finite()
+            || !stage_end_time_s.is_finite()
+            || stage_end_time_s <= plan.time_stage.start_time_s)
+    {
+        return Err(RunError {
+            message: "transport stage endpoint must be finite and advance the representable clock"
+                .into(),
+        });
+    }
+    let execute_auxiliary_transport_time = spin_transport.is_some()
+        && plan.relaxation.is_none()
+        && plan.time_stage.study_kind == fullmag_ir::StudyKindIR::TimeEvolution;
     let is_direct_minimization = plan.relaxation.as_ref().is_some_and(|control| {
         matches!(
             control.algorithm,
@@ -1605,7 +1659,21 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
     };
     let initial_dt = timestep_policy.as_ref().map(|policy| policy.initial_dt());
 
-    let (mut problem, mut state) = build_snapshot_problem_and_state(plan)?;
+    let (mut problem, mut state) = if let Some(context) = terminal.as_ref() {
+        // Lifecycle installation below is the sole activation owner on this path.
+        let problem = build_reference_problem(plan)?;
+        let mut state = problem.new_state(plan.initial_magnetization.clone())
+            .map_err(|error| RunError { message: error.to_string() })?;
+        state.time_seconds = plan.time_stage.start_time_s;
+        if context.frozen.entry_kind == crate::constraints::FrozenStageEntryKind::ContinuedStage {
+            // The input adapter has already checked the exact source space and bytes.
+            state.restore_exact_checkpoint(plan.initial_magnetization.clone(), plan.time_stage.start_time_s)
+                .map_err(|error| RunError { message: error.to_string() })?;
+        }
+        (problem, state)
+    } else {
+        build_snapshot_problem_and_state(plan)?
+    };
     let mut restored_frozen_checkpoint = None;
     let mut restored_abm3_checkpoint = None;
     let mut restored_checkpoint =
@@ -1707,6 +1775,10 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         resume_timestep = (checkpoint.dt > 0.0).then_some(checkpoint.dt);
         resume_previous_timestep = (checkpoint.dt > 0.0).then_some(checkpoint.dt);
         resume_step_count = Some(checkpoint.step);
+    } else if let Some(context) = terminal.as_ref() {
+        context.frozen.install_before_solve(
+            context.source_frozen_plan, plan.frozen_spins.as_ref(), &mut problem, &mut state,
+        )?;
     } else if let Some(frozen_plan) = plan.frozen_spins.as_ref() {
         problem
             .capture_frozen_spins_at_activation(frozen_plan, &mut state)
@@ -1775,6 +1847,17 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
     let all_active_dofs_frozen = problem
         .frozen_spins()
         .is_some_and(fullmag_engine::FrozenSpinsState::all_active_dofs_frozen);
+    if all_active_dofs_frozen
+        && spin_transport.is_some()
+        && plan.relaxation.is_none()
+        && !execute_auxiliary_transport_time
+    {
+        return Err(RunError {
+            message: "all-frozen auxiliary transport requires an explicit TimeEvolution study"
+                .into(),
+        });
+    }
+    let skip_frozen_dynamics = all_active_dofs_frozen && !execute_auxiliary_transport_time;
     let initial_magnetization = state.magnetization().to_vec();
 
     let mut dt = resume_timestep.unwrap_or_else(|| {
@@ -1876,16 +1959,54 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
 
     let mut scalar_schedules = collect_scalar_schedules(outputs)?;
     let mut field_schedules = collect_field_schedules(outputs)?;
-    let time_events = crate::time_events::build_resolved_stage_event_schedule_with_origin(
+    if spin_transport.is_some() {
+        for schedule in scalar_schedules.iter_mut().chain(field_schedules.iter_mut()) {
+            schedule.next_time = plan.time_stage.start_time_s;
+        }
+    }
+    let mut time_events = crate::time_events::build_resolved_stage_event_schedule_with_origin(
         &plan.field_drives,
         &plan.solved_antenna_drive_bases,
         plan.time_stage.start_time_s,
         plan.time_stage.waveform_origin_time_s(),
         stage_end_time_s,
         outputs,
-        crate::schedules::OUTPUT_TIME_TOLERANCE,
+        if spin_transport.is_some() {
+            0.0
+        } else {
+            crate::schedules::OUTPUT_TIME_TOLERANCE
+        },
     );
+    if spin_transport.is_some() {
+        let envelopes = plan.spin_transport_plans.iter().filter_map(|resolved| {
+            resolved
+                .fdm_cpu_double
+                .as_ref()
+                .and_then(|value| value.time_envelope.as_ref())
+                .or_else(|| {
+                    resolved
+                        .fdm_cpu_double_reciprocal
+                        .as_ref()
+                        .and_then(|value| value.time_envelope.as_ref())
+                })
+                .or_else(|| {
+                    resolved
+                        .fdm_cpu_double_transient
+                        .as_ref()
+                        .and_then(|value| value.steady_operator.time_envelope.as_ref())
+                })
+        });
+        crate::time_events::extend_fdm_transport_envelope_events(
+            &mut time_events,
+            envelopes,
+            plan.time_stage.start_time_s,
+            stage_end_time_s,
+        )
+        .map_err(|message| RunError { message })?;
+    }
     let default_scalar_trace = scalar_schedules.is_empty();
+    if terminal.is_some() { artifacts.begin_terminal_history(outputs)?; }
+
 
     if default_scalar_trace {
         record_scalar_snapshot(
@@ -2042,8 +2163,12 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                 )
             })
             .unwrap_or_default();
-        while !all_active_dofs_frozen
-            && !stage_endpoint_reached(state.time_seconds, stage_end_time_s, dt)
+        while !skip_frozen_dynamics
+            && if spin_transport.is_some() {
+                state.time_seconds < stage_end_time_s
+            } else {
+                !stage_endpoint_reached(state.time_seconds, stage_end_time_s, dt)
+            }
         {
             if live
                 .as_ref()
@@ -2168,27 +2293,37 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
             let transient_coupling = spin_transport
                 .as_ref()
                 .is_some_and(FdmSpinTransportWorkflow::has_transient);
-            let canonical_fixed_target = transient_coupling
-                .then_some(())
-                .and(plan.fixed_timestep)
-                .and_then(|fixed_dt| {
-                    spin_transport.as_ref().map(|workflow| {
-                        plan.time_stage.start_time_s
-                            + (workflow.accepted_steps().saturating_add(1) as f64) * fixed_dt
-                    })
-                });
-            let endpoint_roundoff = stage_endpoint_roundoff(stage_end_time_s, dt);
-            let dt_step = canonical_fixed_target
-                .filter(|target| *target <= stage_end_time_s + endpoint_roundoff)
-                .and(plan.fixed_timestep)
-                .unwrap_or_else(|| {
+            let step_start_time_s = state.time_seconds;
+            let transport_step_end = if spin_transport.is_some() {
+                Some(
+                    crate::time_events::next_fdm_transport_step_end(
+                        state.time_seconds,
+                        plan.time_stage.start_time_s,
+                        if transient_coupling && plan.adaptive_timestep.is_none() {
+                            plan.fixed_timestep
+                        } else {
+                            None
+                        },
+                        dt,
+                        stage_end_time_s,
+                        &time_events.times_s,
+                    )
+                    .map_err(|message| RunError { message })?,
+                )
+            } else {
+                None
+            };
+            let dt_step = transport_step_end.map_or_else(
+                || {
                     crate::time_events::cap_timestep_to_next_event(
                         state.time_seconds,
                         dt.min(remaining),
                         &time_events.times_s,
                         crate::schedules::OUTPUT_TIME_TOLERANCE,
                     )
-                });
+                },
+                |target| target - state.time_seconds,
+            );
             let step_evaluation = fdm_step_evaluation_request(
                 plan,
                 state.time_seconds + dt_step,
@@ -2206,7 +2341,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                 .as_ref()
                 .filter(|workflow| workflow.has_transient())
                 .map(|_| state.magnetization().to_vec());
-            let mut report = if let Some(workflow) = spin_transport.as_mut() {
+            let report = if let Some(workflow) = spin_transport.as_mut() {
                 let transient = workflow.has_transient();
                 if transient {
                     if let Some(adaptive) = plan.adaptive_timestep.as_ref() {
@@ -2217,6 +2352,21 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                         let mut rejected_trials = 0u64;
                         let mut attempted_dt = dt_step;
                         loop {
+                            let trial_start = committed_state.time_seconds;
+                            let trial_end = trial_start + attempted_dt;
+                            let first_half_dt = 0.5 * attempted_dt;
+                            let first_half_end = trial_start + first_half_dt;
+                            if !trial_end.is_finite()
+                                || !first_half_dt.is_finite()
+                                || first_half_dt <= 0.0
+                                || first_half_end <= trial_start
+                                || first_half_end >= trial_end
+                                || transport_step_end.is_some_and(|target| trial_end > target)
+                            {
+                                return Err(RunError {
+                                    message: "coupled adaptive trial cannot represent two positive progressing half intervals at the requested endpoint".into(),
+                                });
+                            }
                             let mut full_state = committed_state.clone();
                             let mut full_workflow = committed_workflow.clone();
                             let _full_report = execute_coupled_ars_trial(
@@ -2227,24 +2377,47 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                                 &mut fft_workspace,
                                 &mut integrator_bufs,
                             )?;
+                            if full_state.time_seconds != trial_end {
+                                return Err(RunError {
+                                    message: "coupled adaptive full trial did not solve the selected endpoint".into(),
+                                });
+                            }
                             let mut half_state = committed_state.clone();
                             let mut half_workflow = committed_workflow.clone();
                             execute_coupled_ars_trial(
                                 &problem,
                                 &mut half_state,
                                 &mut half_workflow,
-                                0.5 * attempted_dt,
+                                first_half_dt,
                                 &mut fft_workspace,
                                 &mut integrator_bufs,
                             )?;
+                            // Derive the second represented interval before solving it.
+                            // Its roundoff may differ from the first half; history keeps
+                            // the interval actually solved, never a relabelled duration.
+                            let second_half_dt = trial_end - half_state.time_seconds;
+                            if !second_half_dt.is_finite()
+                                || second_half_dt <= 0.0
+                                || half_state.time_seconds != first_half_end
+                                || half_state.time_seconds + second_half_dt != trial_end
+                            {
+                                return Err(RunError {
+                                    message: "coupled adaptive second half cannot reach the same represented endpoint".into(),
+                                });
+                            }
                             let mut half_report = execute_coupled_ars_trial(
                                 &problem,
                                 &mut half_state,
                                 &mut half_workflow,
-                                0.5 * attempted_dt,
+                                second_half_dt,
                                 &mut fft_workspace,
                                 &mut integrator_bufs,
                             )?;
+                            if half_state.time_seconds != trial_end {
+                                return Err(RunError {
+                                    message: "coupled adaptive half trials did not solve the full trial endpoint".into(),
+                                });
+                            }
                             let error = full_workflow.normalized_coupled_difference(
                                 &half_workflow,
                                 full_state.magnetization(),
@@ -2382,16 +2555,25 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     }
                 }
             };
-            if let (Some(target), Some(workflow)) =
-                (canonical_fixed_target, spin_transport.as_mut())
-            {
-                let canonical_dt = plan.fixed_timestep.ok_or_else(|| RunError {
-                    message: "canonical coupled fixed-step target requires fixed_timestep".into(),
+            if let (Some(target), Some(workflow)) = (transport_step_end, spin_transport.as_ref()) {
+                let accepted = workflow.accepted().ok_or_else(|| RunError {
+                    message: "transport step produced no accepted endpoint".into(),
                 })?;
-                state.time_seconds = target;
-                workflow.canonicalize_fixed_step_time(target, canonical_dt)?;
-                report.time_seconds = target;
-                report.dt_used = canonical_dt;
+                if !state.time_seconds.is_finite()
+                    || !report.dt_used.is_finite()
+                    || report.dt_used <= 0.0
+                    || state.time_seconds <= step_start_time_s
+                    || state.time_seconds > target
+                    || report.time_seconds != state.time_seconds
+                    || accepted.evaluated_time_s != state.time_seconds
+                    || (plan.adaptive_timestep.is_none() && state.time_seconds != target)
+                    || ((state.time_seconds - step_start_time_s) - report.dt_used).abs()
+                        > stage_endpoint_roundoff(state.time_seconds, report.dt_used)
+                {
+                    return Err(RunError {
+                        message: "transport accepted state/report/time/dt does not match the solved endpoint; timestamp relabel is forbidden".into(),
+                    });
+                }
             }
             let wall_elapsed = wall_start.elapsed().as_nanos() as u64;
             match step_evaluation {
@@ -2746,12 +2928,30 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
     // clock to the requested endpoint without invoking RHS kernels. Relaxation
     // retains immediate completion semantics and does not manufacture time.
     if all_active_dofs_frozen
+        && spin_transport.is_none()
         && plan.relaxation.is_none()
         && !is_direct_minimization
         && !paused
         && !cancelled
     {
         state.time_seconds = stage_end_time_s;
+    }
+
+    if execute_auxiliary_transport_time && !paused && !cancelled {
+        let accepted = spin_transport
+            .as_ref()
+            .and_then(FdmSpinTransportWorkflow::accepted)
+            .ok_or_else(|| RunError {
+                message: "transport TimeEvolution cannot complete without an accepted endpoint"
+                    .into(),
+            })?;
+        if state.time_seconds != stage_end_time_s || accepted.evaluated_time_s != state.time_seconds
+        {
+            return Err(RunError {
+                message: "transport TimeEvolution did not accept the requested physical endpoint"
+                    .into(),
+            });
+        }
     }
 
     let finalization_field_snapshot_metrics = record_final_outputs(
@@ -2978,6 +3178,24 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
     artifacts.replace_provenance_synchronously(final_provenance)?;
     let diagnostic_trace = artifacts.take_solver_steps();
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
+    if let Some(context) = terminal.as_mut() {
+        (context.drain_writer)()?;
+    }
+    let terminal_output_coverage = terminal.as_ref().map(|_| serde_json::json!({
+        "schema_version": "fullmag.runner.terminal_output_coverage.v1", "outputs": outputs,
+        "origin_s": plan.time_stage.start_time_s,
+        "scalar_cursors": scalar_schedules.iter().enumerate().map(|(index, schedule)| serde_json::json!({
+            "schedule_index": index, "name": schedule.name, "every_s": schedule.every_seconds,
+            "next_time_s": schedule.next_time, "last_sampled_time_s": schedule.last_sampled_time,
+        })).collect::<Vec<_>>(),
+        "field_cursors": field_schedules.iter().enumerate().map(|(index, schedule)| serde_json::json!({
+            "schedule_index": index, "name": schedule.name, "every_s": schedule.every_seconds,
+            "next_time_s": schedule.next_time, "last_sampled_time_s": schedule.last_sampled_time,
+        })).collect::<Vec<_>>(),
+        "default_scalar_trace": default_scalar_trace,
+        "terminal_step": step_count, "terminal_time_s": state.time_seconds,
+    }));
+
     let mut status = if paused {
         RunStatus::Paused
     } else if cancelled {
@@ -2985,7 +3203,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
     } else {
         RunStatus::Completed
     };
-    let completion = if all_active_dofs_frozen {
+    let completion = if skip_frozen_dynamics && !paused && !cancelled {
         StageCompletionIR {
             status: "completed".to_string(),
             converged: true,
@@ -3050,6 +3268,38 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
     if let Some(trace) = crate::artifacts::solver_diagnostic_trace_artifact(diagnostic_trace) {
         auxiliary_artifacts.push(trace);
     }
+    if let Some(coverage) = terminal_output_coverage.filter(|_| status == RunStatus::Completed) {
+        auxiliary_artifacts.push(crate::types::AuxiliaryArtifact {
+            relative_path: "solver/terminal_output_coverage.v1.json".into(),
+            bytes: serde_json::to_vec(&coverage).map_err(|error| RunError { message: error.to_string() })?,
+        });
+    }
+    if let Some(context) = terminal.as_ref().filter(|_| status == RunStatus::Completed) {
+        let clock = crate::ObservationClock { accepted_step: step_count, time_seconds: state.time_seconds,
+            dt_seconds: (last_solver_dt > 0.0).then_some(last_solver_dt) };
+        let lifecycle = crate::constraints::FrozenOutputLifecycleV1 {
+            schema_version: "fullmag.frozen_output_lifecycle.v1".into(),
+            frozen_spins: frozen_spins_checkpoint(
+                plan, &problem, &state, step_count, state.time_seconds, last_solver_dt,
+            )?,
+            frozen_activation_set: context.frozen.prepared_activation_set.clone(),
+        };
+        lifecycle.validate(plan.frozen_spins.as_ref(), clock, state.magnetization())?;
+        let bytes = serde_json::to_vec(&lifecycle).map_err(|error| terminal_primary_error(error.to_string()))?;
+        crate::constraints::FrozenOutputLifecycleV1::decode(&bytes)?
+            .validate(plan.frozen_spins.as_ref(), clock, state.magnetization())?;
+        auxiliary_artifacts.push(crate::types::AuxiliaryArtifact {
+            relative_path: "solver/frozen_output_lifecycle.v1.json".into(), bytes,
+        });
+        if spin_transport.as_ref().is_some_and(FdmSpinTransportWorkflow::has_transient) {
+            let coupled = final_coupled_checkpoint.as_ref()
+                .ok_or_else(|| terminal_primary_error("terminal M3 publication has no accepted coupled preimage"))?;
+            auxiliary_artifacts.extend(terminal_primary_artifacts(
+                plan, &problem, &state, clock, coupled, lifecycle.frozen_spins.as_ref(),
+                &context.frozen.prepared_activation_set,
+            )?);
+        }
+    }
     if let Some(checkpoint) = final_coupled_checkpoint {
         auxiliary_artifacts.push(crate::types::AuxiliaryArtifact {
             relative_path: "transport/coupled_checkpoint.json".to_string(),
@@ -3096,6 +3346,199 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         auxiliary_artifacts,
         provenance,
     })
+}
+
+
+fn terminal_primary_error(message: impl Into<String>) -> RunError {
+    RunError { message: message.into() }
+}
+
+fn decode_terminal_preimage<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, RunError> {
+    let crate::artifact_json::UnambiguousJson(value) = serde_json::from_slice(bytes)
+        .map_err(|error| terminal_primary_error(error.to_string()))?;
+    serde_json::from_value(value).map_err(|error| terminal_primary_error(error.to_string()))
+}
+
+fn same_primary_vectors(left: &[[f64; 3]], right: &[[f64; 3]]) -> bool {
+    left.len() == right.len()
+        && left.iter().flatten().zip(right.iter().flatten()).all(|(left, right)|
+            left.is_finite() && right.is_finite() && left.to_bits() == right.to_bits())
+}
+
+/// Reopen the actual primary preimages through existing engine/transport codecs.
+/// This validates a terminal observation; it does not authorize checkpoint resume.
+pub fn validate_terminal_primary_package(
+    plan: &FdmPlanIR,
+    snapshot_bytes: &[u8],
+    preimages: &[crate::observation::TerminalPrimaryPreimage],
+    expected_magnetization: &[[f64; 3]],
+    max_preimage_bytes: u64,
+) -> Result<crate::observation::FdmCpuAcceptedStateSnapshotV2, RunError> {
+    use crate::observation::{EngineAcceptedPreimageV1, FdmCpuAcceptedStateSnapshotV2,
+        FrozenPrimaryPreimageV1, TERMINAL_PRIMARY_ROLES};
+    let snapshot = FdmCpuAcceptedStateSnapshotV2::decode_metadata(snapshot_bytes)?;
+    if preimages.len() != 4 || max_preimage_bytes == 0 {
+        return Err(terminal_primary_error("terminal primary package has invalid cardinality or budget"));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut total = 0_u64;
+    for raw in preimages {
+        if !seen.insert(raw.carrier_id.as_str()) {
+            return Err(terminal_primary_error("duplicate terminal primary preimage"));
+        }
+        let meta = snapshot.primary_carriers.iter().find(|meta| meta.carrier_id == raw.carrier_id)
+            .ok_or_else(|| terminal_primary_error("unexpected terminal primary preimage"))?;
+        total = total.checked_add(raw.bytes.len() as u64)
+            .ok_or_else(|| terminal_primary_error("terminal preimage length overflow"))?;
+        if raw.bytes.len() as u64 != meta.byte_count || total > max_preimage_bytes
+            || format!("{:x}", Sha256::digest(&raw.bytes)) != meta.preimage_sha256
+        {
+            return Err(terminal_primary_error("terminal primary raw bytes differ or exceed budget"));
+        }
+    }
+    let bytes = |index: usize| -> Result<&[u8], RunError> {
+        preimages.iter().find(|raw| raw.carrier_id == TERMINAL_PRIMARY_ROLES[index].0)
+            .map(|raw| raw.bytes.as_slice()).ok_or_else(|| terminal_primary_error("terminal role missing"))
+    };
+    let engine: EngineAcceptedPreimageV1 = decode_terminal_preimage(bytes(0)?)?;
+    if engine.schema_version != "fullmag.fdm.engine-accepted-preimage.v1"
+        || !engine.thermal_dt_s.is_finite() || engine.thermal_dt_s <= 0.0
+        || engine.solver.time_seconds.to_bits() != snapshot.clock.time_seconds.to_bits()
+        || !same_primary_vectors(&engine.solver.magnetization, expected_magnetization)
+    {
+        return Err(terminal_primary_error("terminal engine preimage differs from accepted frame"));
+    }
+    let mut problem = build_reference_problem(plan)?;
+    let mut state = problem.new_state(vec![[0.0; 3]; expected_magnetization.len()])
+        .map_err(|error| terminal_primary_error(error.to_string()))?;
+    problem.thermal_seed = engine.thermal_seed;
+    problem.thermal_dt = engine.thermal_dt_s;
+    problem.restore_thermal_step(engine.thermal_step);
+    state.restore_solver_checkpoint(engine.solver)
+        .map_err(|error| terminal_primary_error(error.to_string()))?;
+    let engine_digest = problem.transactional_state_digest(&state)
+        .map_err(|error| terminal_primary_error(error.to_string()))?;
+
+    let coupled: FdmCoupledCheckpoint = decode_terminal_preimage(bytes(1)?)?;
+    super::spin_transport::validate_complete_coupled_checkpoint(&coupled, expected_magnetization.len())?;
+    if coupled.time_s.to_bits() != snapshot.clock.time_seconds.to_bits()
+        || snapshot.clock.dt_seconds.map(f64::to_bits) != Some(coupled.previous_dt_s.to_bits())
+        || coupled.accepted_steps != snapshot.clock.accepted_step
+        || coupled.thermal_seed != engine.thermal_seed || coupled.thermal_counter != engine.thermal_step
+        || !same_primary_vectors(&coupled.magnetization, expected_magnetization)
+    {
+        return Err(terminal_primary_error("terminal M3 history differs from accepted frame"));
+    }
+    let coupled_digest = format!("sha256:{}", coupled.payload_sha256);
+    let mut workflow = FdmSpinTransportWorkflow::from_plan(plan)?
+        .filter(FdmSpinTransportWorkflow::has_transient)
+        .ok_or_else(|| terminal_primary_error("terminal primary package requires an M3 plan"))?;
+    workflow.restore_coupled_checkpoint(coupled)?;
+
+    let frozen: FrozenPrimaryPreimageV1 = decode_terminal_preimage(bytes(2)?)?;
+    if frozen.schema_version != "fullmag.fdm.frozen-primary-preimage.v1"
+        || frozen.frozen_spins.is_some() != plan.frozen_spins.is_some()
+    {
+        return Err(terminal_primary_error("terminal frozen preimage/plan presence differs"));
+    }
+    let activation: crate::constraints::FrozenSpinsActivationSet = decode_terminal_preimage(bytes(3)?)?;
+    if let Some(child) = &frozen.frozen_spins {
+        child.validate_for_plan(plan.frozen_spins.as_ref().expect("presence checked"))
+            .map_err(|error| terminal_primary_error(error.to_string()))?;
+        if child.step != snapshot.clock.accepted_step
+            || child.time_s.to_bits() != snapshot.clock.time_seconds.to_bits()
+            || snapshot.clock.dt_seconds.map(f64::to_bits) != Some(child.dt.to_bits())
+            || !same_primary_vectors(&child.magnetization, expected_magnetization)
+            || child.constraint_activation_epochs != activation.constraint_activation_epochs
+            || child.active_constraint_ids != activation.active_constraint_ids
+            || child.resolved_constraint_set_revision != activation.resolved_constraint_set_revision
+        {
+            return Err(terminal_primary_error("terminal frozen child differs from full activation history"));
+        }
+    } else if !activation.active_constraint_ids.is_empty() {
+        return Err(terminal_primary_error("inactive frozen child has active constraints"));
+    }
+    if activation.constraint_activation_epochs.iter().any(|(id, epoch)| id.trim().is_empty() || *epoch == 0)
+        || activation.active_constraint_ids.iter().any(|id| !activation.constraint_activation_epochs.contains_key(id))
+        || (activation.resolved_constraint_set_revision == 0 && !activation.constraint_activation_epochs.is_empty())
+    {
+        return Err(terminal_primary_error("terminal historical activation set is invalid"));
+    }
+    let frozen_digest = format!("sha256:{}", fullmag_session::canonical_json_sha256(
+        &serde_json::to_value(&frozen).map_err(|error| terminal_primary_error(error.to_string()))?));
+    let activation_digest = format!("sha256:{}", fullmag_session::canonical_json_sha256(
+        &serde_json::to_value(&activation).map_err(|error| terminal_primary_error(error.to_string()))?));
+    for (role, expected) in TERMINAL_PRIMARY_ROLES.iter().zip([
+        engine_digest, coupled_digest, frozen_digest, activation_digest,
+    ]) {
+        if snapshot.primary_carriers.iter().find(|meta| meta.carrier_id == role.0)
+            .is_none_or(|meta| meta.value_digest != expected)
+        {
+            return Err(terminal_primary_error("terminal semantic carrier differs from decoded preimage"));
+        }
+    }
+    if crate::observation::magnetization_digest_f64be(expected_magnetization)
+        .map_err(|error| terminal_primary_error(error.to_string()))? != snapshot.magnetization_digest
+    {
+        return Err(terminal_primary_error("terminal magnetization digest differs"));
+    }
+    Ok(snapshot)
+}
+
+fn terminal_primary_artifacts(
+    plan: &FdmPlanIR,
+    problem: &ExchangeLlgProblem,
+    state: &ExchangeLlgState,
+    clock: crate::ObservationClock,
+    coupled: &serde_json::Value,
+    frozen: Option<&FrozenSpinsCheckpointV1>,
+    activation: &crate::constraints::FrozenSpinsActivationSet,
+) -> Result<Vec<crate::types::AuxiliaryArtifact>, RunError> {
+    use crate::observation::{EngineAcceptedPreimageV1, FdmCpuAcceptedStateSnapshotV2,
+        FrozenPrimaryPreimageV1, TerminalPrimaryPreimage, TERMINAL_PRIMARY_ROLES};
+    let engine = EngineAcceptedPreimageV1 {
+        schema_version: "fullmag.fdm.engine-accepted-preimage.v1".into(),
+        solver: state.solver_checkpoint(), thermal_seed: problem.thermal_seed,
+        thermal_step: problem.thermal_step(), thermal_dt_s: problem.thermal_dt,
+    };
+    let frozen = FrozenPrimaryPreimageV1 {
+        schema_version: "fullmag.fdm.frozen-primary-preimage.v1".into(),
+        frozen_spins: frozen.cloned(),
+    };
+    let engine_bytes = serde_json::to_vec(&engine).map_err(|error| terminal_primary_error(error.to_string()))?;
+    let coupled_bytes = serde_json::to_vec(coupled).map_err(|error| terminal_primary_error(error.to_string()))?;
+    let frozen_bytes = serde_json::to_vec(&frozen).map_err(|error| terminal_primary_error(error.to_string()))?;
+    let activation_bytes = serde_json::to_vec(activation).map_err(|error| terminal_primary_error(error.to_string()))?;
+    let raw = vec![engine_bytes, coupled_bytes, frozen_bytes, activation_bytes];
+    let preimages: Vec<_> = TERMINAL_PRIMARY_ROLES.iter().zip(raw).map(|(role, bytes)|
+        TerminalPrimaryPreimage { carrier_id: role.0.into(), bytes }).collect();
+    let values = [
+        problem.transactional_state_digest(state).map_err(|error| terminal_primary_error(error.to_string()))?,
+        format!("sha256:{}", coupled.get("payload_sha256").and_then(serde_json::Value::as_str)
+            .ok_or_else(|| terminal_primary_error("M3 preimage hash missing"))?),
+        format!("sha256:{}", fullmag_session::canonical_json_sha256(&serde_json::to_value(&frozen)
+            .map_err(|error| terminal_primary_error(error.to_string()))?)),
+        format!("sha256:{}", fullmag_session::canonical_json_sha256(&serde_json::to_value(activation)
+            .map_err(|error| terminal_primary_error(error.to_string()))?)),
+    ];
+    let snapshot = FdmCpuAcceptedStateSnapshotV2::from_terminal_preimages(
+        clock, state.magnetization(), &preimages, &values,
+    )?;
+    let snapshot_bytes = serde_json::to_vec(&snapshot).map_err(|error| terminal_primary_error(error.to_string()))?;
+    let raw_size = preimages.iter().try_fold(0_u64, |size, raw| size.checked_add(raw.bytes.len() as u64))
+        .ok_or_else(|| terminal_primary_error("terminal raw byte count overflow"))?;
+    let decoded = validate_terminal_primary_package(plan, &snapshot_bytes, &preimages, state.magnetization(), raw_size)?;
+    if decoded.clock.time_seconds.to_bits() != clock.time_seconds.to_bits()
+        || decoded.clock.dt_seconds.map(f64::to_bits) != clock.dt_seconds.map(f64::to_bits)
+    {
+        return Err(terminal_primary_error("terminal clock serialization changed accepted bits"));
+    }
+    let mut artifacts = vec![crate::types::AuxiliaryArtifact {
+        relative_path: crate::observation::FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE_V2.into(), bytes: snapshot_bytes,
+    }];
+    artifacts.extend(TERMINAL_PRIMARY_ROLES.iter().zip(preimages).map(|(role, raw)|
+        crate::types::AuxiliaryArtifact { relative_path: role.2.into(), bytes: raw.bytes }));
+    Ok(artifacts)
 }
 
 fn frozen_spins_checkpoint_value(
@@ -3306,19 +3749,21 @@ fn record_due_outputs(
         .iter()
         .any(|schedule| is_due(state.time_seconds, schedule.next_time));
     let due_field_names = field_schedules
-        .iter()
-        .filter(|schedule| is_due(state.time_seconds, schedule.next_time))
-        .map(|schedule| schedule.name.clone())
+        .iter().enumerate()
+        .filter(|(_, schedule)| is_due(state.time_seconds, schedule.next_time))
+        .map(|(index, schedule)| (index, schedule.name.clone()))
         .collect::<Vec<_>>();
     let has_due_fields = !due_field_names.is_empty();
 
     if !scalar_due && due_field_names.is_empty() {
         return Ok(copy_metrics);
     }
+    artifacts.record_history_schedule_causes(step, state.time_seconds, "scalar", scalar_schedules)?;
+
 
     if due_field_names
         .iter()
-        .all(|name| direct_field_values_available(name))
+        .all(|(_, name)| direct_field_values_available(name))
         && (!scalar_due || step_report.is_some())
     {
         if let Some(report) = step_report.filter(|_| scalar_due) {
@@ -3335,7 +3780,8 @@ fn record_due_outputs(
         }
 
         let mut direct_fields = DirectFieldSnapshotCache::new(problem, state);
-        for name in due_field_names {
+        for (schedule_index, name) in due_field_names {
+            artifacts.record_history_field_cause(step, state.time_seconds, schedule_index, &name)?;
             let (values, field_metrics) = flatten_field_snapshot(direct_fields.select(&name)?);
             copy_metrics.add(field_metrics);
             artifacts.record_field_snapshot(FieldSnapshot {
@@ -3380,7 +3826,8 @@ fn record_due_outputs(
     }
 
     if !due_field_names.is_empty() {
-        for name in due_field_names {
+        for (schedule_index, name) in due_field_names {
+            artifacts.record_history_field_cause(step, state.time_seconds, schedule_index, &name)?;
             let (values, field_metrics) =
                 flatten_field_snapshot(select_state_observable_field(&observables, &name, true)?);
             copy_metrics.add(field_metrics);
@@ -3445,6 +3892,7 @@ fn record_final_outputs(
     steps: &mut Vec<StepStats>,
     artifacts: &mut ArtifactRecorder,
 ) -> Result<FieldCopyMetrics, RunError> {
+    artifacts.record_history_final_cause(step, state.time_seconds)?;
     let mut copy_metrics = FieldCopyMetrics::default();
     let has_current_scalar = steps
         .last()

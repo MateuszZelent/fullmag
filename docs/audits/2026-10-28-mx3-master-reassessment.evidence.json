@@ -1,0 +1,199 @@
+{
+  "schema": "fullmag.mx3_master_reassessment.v1",
+  "observed_at": "2026-10-28T20:44:55.405657+01:00",
+  "checkout": "/home/kkingstoun/git/fullmag/fullmag",
+  "scope": "Read-only source, Git metadata, stopped Docker state and retained metadata; documentation edits only. No builds, tests, simulation, restart, recovery or Git index/ref writes.",
+  "git": {
+    "head": {
+      "exit_code": 0,
+      "stdout": "3ffd6896a45109f881ae1dd072107727cf5d5d15",
+      "stderr": ""
+    },
+    "branch": {
+      "exit_code": 0,
+      "stdout": "master",
+      "stderr": ""
+    },
+    "origin_master_local_ref": {
+      "exit_code": 0,
+      "stdout": "3ffd6896a45109f881ae1dd072107727cf5d5d15",
+      "stderr": ""
+    },
+    "commits_since_thread_base": {
+      "exit_code": 0,
+      "stdout": "618",
+      "stderr": ""
+    },
+    "status_tracked": {
+      "exit_code": 0,
+      "stdout": "M external_solvers/3",
+      "stderr": ""
+    },
+    "unmerged": {
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "staged_paths": {
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "mx3_tracked": {
+      "exit_code": 0,
+      "stdout": "mx3.md",
+      "stderr": ""
+    },
+    "old_report_ignore": {
+      "exit_code": 0,
+      "stdout": ".gitignore:107:docs/reports/*\tdocs/reports/2026-10-24/fem-fdm-runtime-resume.md",
+      "stderr": ""
+    }
+  },
+  "containers": [
+    {
+      "name": "/fullmag-master-backend-1",
+      "id": "924bbf46e6ee66c20dc45815e3923c11c39565f8ce99f623ff29f3bd83818afe",
+      "image": "sha256:034300c2c2b8772ce95e2f0309a67876e0b37b50ad97f0aefa13423eea44db83",
+      "state": {
+        "Status": "exited",
+        "ExitCode": 255,
+        "StartedAt": "2026-10-28T10:51:56.557010247Z",
+        "FinishedAt": "2026-10-28T18:57:48.772492992Z",
+        "OOMKilled": false,
+        "Error": ""
+      },
+      "compose_project": "fullmag-master",
+      "compose_working_directory_label": "/home/kkingstoun/git/fullmag/worktrees/linux-wsl-master-recovery-20261027",
+      "memory_bytes": 34359738368,
+      "nano_cpus": 8000000000,
+      "port_bindings": {},
+      "source_and_ledger_mounts": [
+        {
+          "Type": "volume",
+          "Name": "fullmag-dev-group-ledger-v1-bd7aadbfa4d0ef3cf6f0b215",
+          "Source": "/var/lib/docker/volumes/fullmag-dev-group-ledger-v1-bd7aadbfa4d0ef3cf6f0b215/_data",
+          "Destination": "/host-ledger",
+          "RW": true
+        },
+        {
+          "Type": "bind",
+          "Name": null,
+          "Source": "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/902a54b7b1f633a711db875c7c4f0df3be26032e7c473d7383e7e83fd376ff10",
+          "Destination": "/opt/fullmag/source",
+          "RW": false
+        }
+      ]
+    },
+    {
+      "name": "/fullmag-master-frontend-1",
+      "id": "c040c05d3fe0079fada3e7617fddfd7a043985fa36bb6d76119013be36be6711",
+      "image": "sha256:034300c2c2b8772ce95e2f0309a67876e0b37b50ad97f0aefa13423eea44db83",
+      "state": {
+        "Status": "exited",
+        "ExitCode": 255,
+        "StartedAt": "2026-10-28T10:51:57.168494632Z",
+        "FinishedAt": "2026-10-28T18:57:48.768945076Z",
+        "OOMKilled": false,
+        "Error": ""
+      },
+      "compose_project": "fullmag-master",
+      "compose_working_directory_label": "/home/kkingstoun/git/fullmag/worktrees/linux-wsl-master-recovery-20261027",
+      "memory_bytes": 17179869184,
+      "nano_cpus": 4000000000,
+      "port_bindings": {
+        "8080/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "3198"
+          }
+        ]
+      },
+      "source_and_ledger_mounts": [
+        {
+          "Type": "bind",
+          "Name": null,
+          "Source": "/home/kkingstoun/git/fullmag/fullmag",
+          "Destination": "/opt/fullmag/source",
+          "RW": false
+        }
+      ]
+    }
+  ],
+  "retained_metadata": {
+    "process": {
+      "sha256": "bdfeb461771818b60d64fe300e8438025867d2562d773f84ac5f164c43bbd41e",
+      "fields": {
+        "schema": "fullmag.docker-process-tree.v1",
+        "state": "ready",
+        "api_pid": 13408,
+        "qualification": "NOT VERIFIED"
+      }
+    },
+    "provenance": {
+      "sha256": "64740367f663f49dc4812e0ac1e9ff44afc2800c2326043c3240e4c4087361e2",
+      "fields": {
+        "schema": "fullmag.docker-all-image.v1",
+        "state": "succeeded",
+        "commit": "44dccd0dc40d4017f6784ea93460b79b714bf6a3",
+        "source_snapshot_sha256": "64485fd91ad0e86d3ae4818566700114467668995a74015f01b4eaab53f88856",
+        "qualification": "NOT VERIFIED",
+        "build_kind": "direct-compose"
+      }
+    }
+  },
+  "current_head_runtime_qualified": false,
+  "frontend_probe": {
+    "exit_code": 7,
+    "stdout": "000",
+    "stderr": "curl: (7) Failed to connect to 127.0.0.1 port 3198 after 0 ms: Connection refused"
+  },
+  "source_hashes": {
+    "crates/fullmag-authoring/src/geometry.rs": "904f96184aa6d1f590b33181525e56951106fdda206f610733c41a1b587c03c4",
+    "crates/fullmag-api/src/accepted_field_materialization.rs": "c5a89d913d7faa99f96da3525adabb0eeabfdd28b4d767afb07edb55b38ff389",
+    "crates/fullmag-api/src/accepted_fem_preparer.rs": "e051afd8869e704ee444646acf4954a3d21b149949468a0822a0e54d42df438b",
+    "crates/fullmag-api/src/prepared_observation_adoption.rs": "8947b9ebd95ee6913c51a357e89c8d5ca5694230a3d69806d1cdb63463a94c5a",
+    "crates/fullmag-api/src/prepared_observation_bundle.rs": "9a4bd2e57f36dbcda039303c93e0f8cea7e73b5163cc82d5d14c7c118fc918f5",
+    "crates/fullmag-api/src/live_accepted_projection.rs": "3840eb2619361b63b3f1f47578aaa4132119ff22e453c13f4d9fc82fecb7825c",
+    "crates/fullmag-api/src/accepted_scheduler_main.rs": "4eb5b5c73695d16a4129913dcc476a82667f53e3245039a44c81543eb14cb4fd",
+    "crates/fullmag-api/src/accepted_fem_preparation_scheduler_main.rs": "092c6c378e3cd47c277842940b1d4e7d827ea19c743bfb1825f4154a4cbf9442",
+    "crates/fullmag-runner/src/accepted_materialization.rs": "be73e32597f4635434a0f1ca508dba56ebbbe87fa6b0caa73a6a0425a42766cb",
+    "docker/all-in-one/entrypoint.py": "451b7e9bf332e2a0ff84564b54e1c49fb552a06745129e45aa451604a97a0850",
+    "docker/all-in-one/runtime_service.py": "b4938f1c423e5ba634d3b48b8c68b1adc07f7f0860c2f6a4e2fb0d5285714e77",
+    "scripts/docker_dev_run_script.py": "13d180388f63355a22251b7f6ed24e8de8c5a30f2cddd4e2f72a6adb964efd84",
+    "justfile": "05260d845249244d5448c9dfa6de4a48f40efa42867ab5d94797a06e084d5923",
+    "apps/control-room/src/modules/explorer/builders/buildModelTree.ts": "5ae14ca9d72599d78b0235afabede9ecc32420816decdeebe836ab500dfede0b",
+    "apps/control-room/src/modules/explorer/builders/airboxExplorerNodes.ts": "e818853055d9653081a9070e73a751ae8a6262afb74c45d831fd6ccdd91cee7d",
+    "apps/control-room/src/modules/inspector/panels/airbox/AirboxVisualizationPanel.tsx": "beda5a182d23a73ac4706014d7ad507448b34590609d316db9f2de0701af1d7d",
+    "apps/control-room/src/modules/inspector/panels/airbox/AirboxInspectorLanePanel.tsx": "8476ba6d254aacd79fd3e587475c0eeefba58beacec9d624c88db3d9465682c8",
+    "apps/control-room/src/modules/inspector/panels/geometryObjectPanelModel.ts": "93eb5ef74c35116ed95277eee2edb85354da448548ee9bc6e5e621f941251bb8",
+    "apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.tsx": "3206ba0ac1ddd1a6224967ec744aeff1362a960224c039adc1611c86d8febfb7",
+    "apps/control-room/src/kernel/visualization/primitiveSurfaceColor.ts": "49c174368538543cc1becfdb4b90f6840eb0fb8964bb76da397a5fb0d3ceba46",
+    "apps/control-room/src/modules/viewport-3d/layers/PrimitiveObjectLayer.tsx": "891536e0662be9744e5592ebf73ba2f6b66a50626bea2a55d7459654ab8c9ddc",
+    "apps/control-room/src/modules/inspector/panels/ObjectVisualizationPanelModel.ts": "00f27d62441ee1a355417353bea71c14e6ab765a501b5f8c1e0cb070ca3c862b",
+    "apps/control-room/src/modules/inspector/panels/ObjectVisualizationTargetSection.tsx": "4207cb7f30b16e7b94aa448fdc9aae66c1da4eeefdceda9ef8fffcd4d63f1ec2",
+    "apps/control-room/src/kernel/commands/CommandRegistry.ts": "8614454a6a84496e40b0954ae6ba64d0c61e0755fb79a29387ee1d1a7c049907",
+    "apps/control-room/src/kernel/commands/CommandFeedbackController.ts": "387ff76ffb72798694e38e19e14b7d51886b1d1a59cc6b503bc9874645664ce2",
+    "apps/control-room/src/kernel/layout/CommandFeedbackPresenter.tsx": "dff960b95a8bf13fdb9c4d09d5cf4de98974199dfafeb0a6386546d9ab0c4b51",
+    "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts": "04b1966b0a816479860e328e29386c8f36b6fb27b8a9d7f6772a44d6ac57b1b6",
+    "crates/fullmag-api/src/accepted_study_worker.rs": "a8d6e9775068b44fe91ed971555d2c054dbf19cac07b6e7e9dda1cb95ff47d4e",
+    "crates/fullmag-session/src/solution_field_geometry.rs": "c4b82fe39d38a922f3c42067ae271805ef6d8506eca326efa4e94a2f38efa037",
+    "crates/fullmag-api/src/schemas/saved_field_geometry.rs": "b7e498d29a8af6a790132aaaeea5c90b0d966fef81034bc5816a7ddaadadd170",
+    "crates/fullmag-api/src/router_v2/middleware/development_admission.rs": "92b8fb58b5da01288b3be3f4a86b3da0e18a112f57d6a9fad7f94e6148496cd8"
+  },
+  "reviewed_sources_sha256_verified": 31,
+  "documentation_link_check": {
+    "checked_by_document": {
+      "mx3.md": 3,
+      "docs/reports/2026-10-24/fem-fdm-runtime-resume.md": 1,
+      "docs/audits/2026-10-28-mx3-master-reassessment.md": 7
+    },
+    "broken": []
+  },
+  "final_documentation_verification": {
+    "head_unchanged": true,
+    "index_empty": true,
+    "unmerged_entries": 0,
+    "tests_builds_simulations_executed": false
+  }
+}

@@ -15,6 +15,7 @@ import { buildRuntimeResourceTree } from "./resourceExplorerNodes";
 import { buildStudyNodes } from "./study/studyExplorerNodes";
 import { buildPhysicsGraphTree } from "./physicsGraphTree";
 import {
+  buildAirboxPresentationNode,
   buildBoundaryFacesNode,
   buildFdmAirboxNode,
   buildFemAirboxNode,
@@ -93,6 +94,9 @@ export function buildModelTree(
             buildBoundaryFacesNode(snapshot),
           ])
         : [];
+  if (!universeChildren.some((node) => node.kind === "airbox.root")) {
+    universeChildren.unshift(buildAirboxPresentationNode());
+  }
 
   const physicsGraphDataPresent =
     snapshot?.physicsGraph !== undefined && snapshot?.physicsGraph !== null;

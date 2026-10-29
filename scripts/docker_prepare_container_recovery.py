@@ -67,14 +67,17 @@ def _read_retained_run_inputs(terminal_path, held_path):
 
 def prepare(
     control, pins, compose, *,
-    retained_terminal_runs=None, retained_held_manual_runs=None, publish=False
+    retained_terminal_runs=None, retained_held_manual_runs=None, retained_attempt_histories=None, publish=False
 ):
     """Return proof/auth references; publish only after a second frozen read."""
     if retained_held_manual_runs is not None and retained_terminal_runs is None:
         raise BuildControlError("V4 held-manual pins require --retained-terminal-runs, including an empty array")
+    if retained_attempt_histories is not None and retained_held_manual_runs is None:
+        raise BuildControlError("V5 attempt history requires both retained-run arrays")
     proof = recovery.prepare_abrupt_stop_proof(
         control, pins, compose, retained_terminal_runs=retained_terminal_runs,
         retained_held_manual_runs=retained_held_manual_runs,
+        **({"retained_attempt_histories": retained_attempt_histories} if retained_attempt_histories is not None else {}),
     )
     proof_raw = recovery._canonical(proof)
     root = recovery.RECOVERY_RELATIVE_ROOT + "/" + pins["request_id"]
@@ -114,6 +117,7 @@ def prepare(
         fresh = recovery.prepare_abrupt_stop_proof(
             control, pins, compose, retained_terminal_runs=retained_terminal_runs,
             retained_held_manual_runs=retained_held_manual_runs,
+            **({"retained_attempt_histories": retained_attempt_histories} if retained_attempt_histories is not None else {}),
         )
         if recovery._canonical(fresh) != proof_raw:
             raise BuildControlError("Abrupt-stop evidence changed before publication")
@@ -134,11 +138,21 @@ def main(argv=None):
     parser.add_argument("--operator-pins", required=True, type=Path)
     parser.add_argument("--retained-terminal-runs", type=Path)
     parser.add_argument("--retained-held-manual-runs", type=Path)
+    parser.add_argument("--retained-attempt-histories", type=Path)
     parser.add_argument("--publish", action="store_true", help="Publish evidence and operator capability under the group lease; never start services")
     args = parser.parse_args(argv)
     terminal_pins, held_pins = _read_retained_run_inputs(
         args.retained_terminal_runs, args.retained_held_manual_runs
     )
+    history_pins = None
+    if args.retained_attempt_histories is not None:
+        if held_pins is None:
+            raise BuildControlError("--retained-attempt-histories requires both retained-run arrays")
+        from docker_volume_dev import _session_host
+        raw = _session_host().read_owned_regular(args.retained_attempt_histories.absolute(), MAX_INPUT_BYTES)
+        history_pins = json.loads(raw, object_pairs_hook=_unique_object)
+        if not isinstance(history_pins, list):
+            raise BuildControlError("Retained attempt histories input must be an array")
     source = select_checkout(args.repo_root.resolve(strict=True), args.source_root).resolve(strict=True)
     layout = storage.resolve_layout(source)
     identity = compose_project_identity(layout)
@@ -154,7 +168,7 @@ def main(argv=None):
     if hashlib.sha256(recovery._canonical(compose)).hexdigest() != pins.get("compose_config_sha256"):
         raise BuildControlError("Retained Compose bytes differ from the operator pin")
     print(json.dumps(prepare(control, pins, compose, retained_terminal_runs=terminal_pins,
-                             retained_held_manual_runs=held_pins, publish=args.publish), indent=2))
+                             retained_held_manual_runs=held_pins, retained_attempt_histories=history_pins, publish=args.publish), indent=2))
     return 0
 
 

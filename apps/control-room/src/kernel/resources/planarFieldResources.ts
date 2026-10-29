@@ -21,6 +21,8 @@ import type {
   PlanarFieldMetaResource,
   PlanarFieldProbeQuery,
   PlanarFieldProbeResource,
+  PlanarFieldProfileQuery,
+  PlanarFieldProfileResource,
   PlanarFieldQuery,
   PlanarFieldSource,
   PlanarSampleSourceResource,
@@ -270,9 +272,22 @@ function planarFieldQueryFromMetaLink(link: string): PlanarFieldQuery {
     resolution_y: integer("resolution_y"),
     scope_id: url.searchParams.get("scope_id") ?? undefined,
     scope_kind: required("scope_kind"),
+    scope_region_id: url.searchParams.get("scope_region_id") ?? undefined,
     snapshot_id: url.searchParams.get("snapshot_id") ?? undefined,
     stage_id: url.searchParams.get("stage_id") ?? undefined,
+    ...positionFractionFromLink(url),
   });
+}
+
+/** Multislice panels carry their slice position in the canonical links. */
+function positionFractionFromLink(url: URL): { position_fraction?: number } {
+  const raw = url.searchParams.get("position_fraction");
+  if (raw === null) return {};
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error("Canonical planar metadata link has invalid position_fraction");
+  }
+  return { position_fraction: value };
 }
 
 function requireCanonicalU64(value: string, name: string): string {
@@ -499,6 +514,7 @@ export function usePlanarProbeResource(
       resolution_y: query.resolution_y,
       scope_id: query.scope_id,
       scope_kind: query.scope_kind,
+      scope_region_id: query.scope_region_id,
       snapshot_id: query.snapshot_id,
       stage_id: query.stage_id,
       u_m: query.u_m,
@@ -518,6 +534,7 @@ export function usePlanarProbeResource(
       query.resolution_y,
       query.scope_id,
       query.scope_kind,
+      query.scope_region_id,
       query.snapshot_id,
       query.stage_id,
       query.u_m,
@@ -538,6 +555,7 @@ export function usePlanarProbeResource(
     resolution_y: stableQuery.resolution_y,
     scope_id: stableQuery.scope_id,
     scope_kind: stableQuery.scope_kind,
+    scope_region_id: stableQuery.scope_region_id,
     snapshot_id: stableQuery.snapshot_id,
     stage_id: stableQuery.stage_id,
   };
@@ -555,6 +573,81 @@ export function usePlanarProbeResource(
     load,
     resourceKey,
   });
+}
+
+/**
+ * Line profile of the current planar sample (F6 B1). A derived resource of the
+ * same sample token as the raster; disabled while no segment is drawn.
+ */
+export function usePlanarProfileResource(
+  quantityId: string,
+  source: PlanarFieldSource,
+  query: PlanarFieldProfileQuery | null,
+  options: ResourceHookOptions = {},
+) {
+  const { api } = useKernel();
+  const sessionIdentity = useSessionResourceIdentity();
+  const queryKey = query ? JSON.stringify(normalizeProfileQuery(query)) : null;
+  const stableQuery = useMemo<PlanarFieldProfileQuery | null>(
+    () => (queryKey ? (JSON.parse(queryKey) as PlanarFieldProfileQuery) : null),
+    [queryKey],
+  );
+  const unscopedResourceKey = stableQuery
+    ? `${planarFieldResourceKey(quantityId, source, profileFieldQuery(stableQuery))}#profile=${stableQuery.u0_m},${stableQuery.v0_m},${stableQuery.u1_m},${stableQuery.v1_m},${stableQuery.samples ?? ""}`
+    : `planar-profile:${quantityId}:none`;
+  const resourceKey = sessionIdentity
+    ? sessionScopedResourceKey(sessionIdentity, unscopedResourceKey)
+    : unscopedResourceKey;
+  const load = useCallback(
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      stableQuery
+        ? api.data.fields.planar.profile(quantityId, source, stableQuery, { sessionScopeKey, signal })
+        : Promise.resolve(null),
+    [api, quantityId, source, stableQuery],
+  );
+  return useResource<PlanarFieldProfileResource | null>({
+    enabled: options.enabled !== false && sessionIdentity !== null && stableQuery !== null,
+    load,
+    resourceKey,
+  });
+}
+
+const PROFILE_QUERY_KEYS = [
+  "sample_token",
+  "component",
+  "expected_carrier_revision",
+  "expected_field_revision",
+  "expected_mesh_revision",
+  "expected_monitor_revision",
+  "expected_source_revision",
+  "expected_scene_revision",
+  "quality",
+  "resolution_x",
+  "resolution_y",
+  "samples",
+  "scope_id",
+  "scope_kind",
+  "scope_region_id",
+  "snapshot_id",
+  "stage_id",
+  "u0_m",
+  "u1_m",
+  "v0_m",
+  "v1_m",
+] as const satisfies readonly (keyof PlanarFieldProfileQuery)[];
+
+function normalizeProfileQuery(query: PlanarFieldProfileQuery): PlanarFieldProfileQuery {
+  const normalized: Record<string, unknown> = {};
+  for (const key of PROFILE_QUERY_KEYS) {
+    const value = query[key];
+    if (value !== undefined && value !== null && value !== "") normalized[key] = value;
+  }
+  return normalized as unknown as PlanarFieldProfileQuery;
+}
+
+function profileFieldQuery(query: PlanarFieldProfileQuery): PlanarFieldQuery {
+  const { samples: _samples, u0_m: _u0, u1_m: _u1, v0_m: _v0, v1_m: _v1, ...fieldQuery } = query;
+  return fieldQuery;
 }
 
 export async function loadCachedPlanarBinary(
@@ -633,11 +726,13 @@ function useStablePlanarFieldQuery(query: PlanarFieldQuery): PlanarFieldQuery {
       expected_source_revision: query.expected_source_revision,
       expected_scene_revision: query.expected_scene_revision,
         include_mesh: query.include_mesh,
+        position_fraction: query.position_fraction,
         quality: query.quality,
         resolution_x: query.resolution_x,
         resolution_y: query.resolution_y,
         scope_id: query.scope_id,
         scope_kind: query.scope_kind,
+        scope_region_id: query.scope_region_id,
         snapshot_id: query.snapshot_id,
         stage_id: query.stage_id,
         vector_budget: query.vector_budget,
@@ -652,11 +747,13 @@ function useStablePlanarFieldQuery(query: PlanarFieldQuery): PlanarFieldQuery {
       query.expected_source_revision,
       query.expected_scene_revision,
       query.include_mesh,
+      query.position_fraction,
       query.quality,
       query.resolution_x,
       query.resolution_y,
       query.scope_id,
       query.scope_kind,
+      query.scope_region_id,
       query.snapshot_id,
       query.stage_id,
       query.vector_budget,

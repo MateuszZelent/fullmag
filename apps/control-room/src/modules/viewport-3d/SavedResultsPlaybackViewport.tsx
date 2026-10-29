@@ -1,17 +1,17 @@
 "use client";
-import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { OrbitControls } from "@react-three/drei";
 import { useThree } from "@react-three/fiber";
-import { BoxGeometry, Color, InstancedMesh, Matrix4, MeshBasicMaterial } from "three";
+import { BoxGeometry, BufferAttribute, BufferGeometry, Color, DoubleSide, InstancedMesh, Matrix4, MeshBasicMaterial, type Mesh } from "three";
 import { useKernel } from "@/kernel/KernelContext";
 import { useSavedResultsPlaybackSelection } from "@/kernel/saved-results/useSavedResultsPlayback";
-import { useSavedResultsFrameResource, useSavedResultsManifestResource } from "@/kernel/resources/savedResultsPlaybackResources";
+import { useSavedResultsFrameResource, useSavedResultsManifestResource, useSavedResultsGeometryResource } from "@/kernel/resources/savedResultsPlaybackResources";
 import { scalarColorPaletteGradientCss } from "@/shared/visualization/scalarColorPalette";
 import { Viewport3DCanvas } from "./Viewport3DCanvas";
 import { useBatchedInvalidate } from "./viewport3dBatchedInvalidate";
 import { Viewport3DErrorBoundary } from "./Viewport3DErrorBoundary";
 import { useViewport3DColors } from "./hooks/useViewport3DColors";
-import { savedFrameColors, savedGridGeometry } from "./model/savedResultsPlaybackModel";
+import { savedCameraDistance, savedFrameColors, savedGridGeometry, savedSurfaceGeometry } from "./model/savedResultsPlaybackModel";
 
 type Geometry = ReturnType<typeof savedGridGeometry>;
 
@@ -52,13 +52,55 @@ function SavedGridLayer({geometry,colors}: {geometry:Geometry;colors:Float32Arra
   return <instancedMesh ref={meshRef} args={args} visible={colors !== null} dispose={null} />;
 }
 
-function SavedCamera({center,frameIndex}: {center:[number,number,number];frameIndex:number}) {
+function SavedSurfaceLayer({geometry,colors}: {geometry:ReturnType<typeof savedSurfaceGeometry>;colors:Float32Array|null}) {
+  const invalidate=useBatchedInvalidate("frame-commit");
+  const gl=useThree(state=>state.gl);
+  const meshRef=useRef<Mesh>(null);
+  const resources=useMemo(()=>{
+    const meshGeometry=new BufferGeometry();
+    meshGeometry.setAttribute("position",new BufferAttribute(geometry.positions,3));
+    meshGeometry.setIndex(new BufferAttribute(geometry.indices,1));
+    meshGeometry.setAttribute("color",new BufferAttribute(new Float32Array(geometry.count*3),3));
+    meshGeometry.computeBoundingSphere();
+    return {geometry:meshGeometry,material:new MeshBasicMaterial({vertexColors:true,toneMapped:false,side:DoubleSide})};
+  },[geometry]);
+  useLayoutEffect(()=>{
+    const mesh=meshRef.current;
+    if(!mesh)return;
+    gl.domElement.setAttribute("data-saved-geometry-id",resources.geometry.uuid);
+    gl.domElement.setAttribute("data-saved-instance-id",mesh.uuid);
+    if(colors) {
+      const attribute=resources.geometry.getAttribute("color");
+      attribute.array.set(colors);
+      attribute.needsUpdate=true;
+    }
+    invalidate();
+  },[resources,colors,gl,invalidate]);
+  useEffect(()=>()=>{resources.geometry.dispose();resources.material.dispose();},[resources]);
+  return <mesh ref={meshRef} geometry={resources.geometry} material={resources.material} visible={colors !== null} dispose={null}/>;
+}
+
+function SavedCamera({geometry,frameIndex}: {geometry:Geometry|ReturnType<typeof savedSurfaceGeometry>;frameIndex:number}) {
   const invalidate=useBatchedInvalidate("frame-commit");
   const camera=useThree(state=>state.camera);
   const gl=useThree(state=>state.gl);
-  const report=()=>{gl.domElement.setAttribute("data-saved-camera-pose",JSON.stringify({position:camera.position.toArray(),quaternion:camera.quaternion.toArray()}));};
-  useLayoutEffect(()=>{gl.domElement.setAttribute("data-saved-camera-pose",JSON.stringify({position:camera.position.toArray(),quaternion:camera.quaternion.toArray()}));},[camera,gl,frameIndex]);
-  return <OrbitControls target={center} makeDefault enableDamping={false} onChange={()=>{report();invalidate();}} />;
+  const size=useThree(state=>state.size);
+  const fitted=useRef<typeof geometry|null>(null);
+  const report=useCallback(()=>{gl.domElement.setAttribute("data-saved-camera-pose",JSON.stringify({position:camera.position.toArray(),quaternion:camera.quaternion.toArray()}));},[camera,gl]);
+  useLayoutEffect(()=>{
+    if(fitted.current===geometry || size.width<=0 || size.height<=0)return;
+    const distance=savedCameraDistance(geometry.size,size.width/size.height);
+    const directionLength=Math.hypot(0.2,0.9,0.8);
+    const center=geometry.center;
+    camera.position.set(center[0]+distance*0.2/directionLength,center[1]-distance*0.9/directionLength,center[2]+distance*0.8/directionLength);
+    camera.lookAt(...center);
+    camera.updateMatrixWorld();
+    fitted.current=geometry;
+    report();
+    invalidate();
+  },[camera,geometry,invalidate,report,size.width,size.height]);
+  useLayoutEffect(()=>{report();},[report,frameIndex]);
+  return <OrbitControls target={geometry.center} makeDefault enableDamping={false} onChange={()=>{report();invalidate();}} />;
 }
 
 export default function SavedResultsPlaybackViewport() {
@@ -69,8 +111,13 @@ export default function SavedResultsPlaybackViewport() {
   const stage=manifest?.stages.find(s=>s.stage_id===source?.stageId) ?? (!source?.stageId ? manifest?.stages[0] : undefined);
   const index=Math.min(source?.frameIndex ?? 0,Math.max(0,(stage?.frame_count ?? 1)-1));
   const frame=useSavedResultsFrameResource(source?.itemId ?? null,manifest,stage?.stage_id ?? null,index);
-  const geometry=useMemo(()=>manifest ? savedGridGeometry(manifest):null,[manifest]);
-  const presentation=useMemo(()=>frame.data && source ? savedFrameColors(frame.data,source.component,source.colorLimit):null,[frame.data,source]);
+  const mesh=useSavedResultsGeometryResource(source?.itemId ?? null,manifest);
+  const geometryResult=useMemo(()=>{
+    try {return {geometry:manifest ? manifest.fem_mesh ? (mesh.data ? savedSurfaceGeometry(mesh.data.topology,mesh.data.support):null) : savedGridGeometry(manifest):null,error:null};}
+    catch(error) {return {geometry:null,error:error instanceof Error ? error.message : "Saved geometry is invalid."};}
+  },[manifest,mesh.data]);
+  const geometry=geometryResult.geometry;
+  const presentation=useMemo(()=>frame.data && source && geometry ? savedFrameColors(frame.data,source.component,source.colorLimit,geometry.activeNodes):null,[frame.data,source,geometry]);
   const {colors}=useViewport3DColors();
   const camera=useMemo(()=>{
     if(!geometry) return undefined;
@@ -78,7 +125,7 @@ export default function SavedResultsPlaybackViewport() {
     const c=geometry.center;
     return {position:[c[0]+radius*0.2,c[1]-radius*0.9,c[2]+radius*0.8] as [number,number,number],near:radius/10000,far:radius*100,fov:45};
   },[geometry]);
-  const error=metadata.error?.message ?? frame.error?.message ?? (!stage && manifest ? "This saved stage is unavailable." : null);
+  const error=metadata.error?.message ?? geometryResult.error ?? mesh.error?.message ?? frame.error?.message ?? (!stage && manifest ? "This saved stage is unavailable." : null);
   const currentReady=frame.status==="ready" && !error && Boolean(presentation);
   return <section className="fm-saved-playback-viewport" aria-label="Saved simulation 3D"
     style={{height:"100%",minHeight:320,position:"relative",display:"flex",flexDirection:"column"}}
@@ -91,8 +138,8 @@ export default function SavedResultsPlaybackViewport() {
       <Viewport3DErrorBoundary diagnosticRecorder={kernel.diagnosticRecorder}>
         <Viewport3DCanvas camera={camera} frameloop="demand" gl={{preserveDrawingBuffer:true,antialias:true}}
           style={{background:typeof colors?.background === "string" ? colors.background : "var(--fm-bg-viewport)"}}>
-          <SavedCamera center={geometry.center} frameIndex={index}/>
-          <SavedGridLayer geometry={geometry} colors={currentReady && presentation ? presentation.colors : null}/>
+          <SavedCamera geometry={geometry} frameIndex={index}/>
+          {geometry.kind === "instances" ? <SavedGridLayer geometry={geometry} colors={currentReady && presentation ? presentation.colors : null}/> : <SavedSurfaceLayer geometry={geometry} colors={currentReady && presentation ? presentation.colors : null}/>}
         </Viewport3DCanvas>
       </Viewport3DErrorBoundary>
     </div> : null}

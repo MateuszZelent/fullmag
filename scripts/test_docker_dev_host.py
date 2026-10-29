@@ -71,13 +71,10 @@ class DockerDevHostTests(unittest.TestCase):
             self.assertEqual(command.call_args.args[0], host.docker_argv("info"))
 
     def test_control_helpers_use_host_adapter_and_keep_project(self):
-        # The adapter contract uses a new, absent registry volume. Do not
-        # contact the developer's Docker daemon while constructing the fixture.
-        absent = subprocess.CompletedProcess([], 1, b"", b"no such volume")
-        listed = subprocess.CompletedProcess([], 0, b"", b"")
-        with mock.patch("docker_control_namespace.docker_capture", side_effect=[absent, listed]):
+        with mock.patch("docker_control_namespace.resolve_namespace") as namespace:
             instance = control.BuildControl({"project_name": "fullmag-master", "worktree_id": "main",
                                              "project_id": "fullmag", "checkout_kind": "main"}, "sha256:" + "a" * 64)
+            namespace.assert_called_once_with(instance)
         args = instance.helper_args("true")
         self.assertEqual(args[:len(host.docker_argv("run"))], host.docker_argv("run"))
         self.assertIn("com.docker.compose.project=fullmag-master", args)

@@ -123,7 +123,24 @@ function scalarValueColorRgb(
   range: Viewport3DScalarColorRange,
   palette: string | null | undefined = "viridis",
 ): [number, number, number] {
-  const span = Math.max(range.max - range.min, 1e-12);
-  const normalized = Math.min(Math.max((value - range.min) / span, 0), 1);
-  return magnitudeColorRgb(normalized, palette);
+  return magnitudeColorRgb(normalizeViewport3DScalarColorValue(value, range), palette);
+}
+
+/** Unit-independent normalization, including narrow SI ranges and finite extremes. */
+export function normalizeViewport3DScalarColorValue(
+  value: number,
+  range: Viewport3DScalarColorRange,
+): number {
+  if (
+    !Number.isFinite(value) ||
+    !Number.isFinite(range.min) ||
+    !Number.isFinite(range.max) ||
+    range.min >= range.max
+  ) return 0.5;
+  if (value <= range.min) return 0;
+  if (value >= range.max) return 1;
+  const span = range.max - range.min;
+  if (Number.isFinite(span)) return (value - range.min) / span;
+  const scale = Math.max(Math.abs(range.min), Math.abs(range.max));
+  return (value / scale - range.min / scale) / (range.max / scale - range.min / scale);
 }

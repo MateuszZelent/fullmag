@@ -709,6 +709,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::data::get_planar_field_probe),
         )
         .route(
+            "/v2/sessions/current/data/fields/:quantity_id/planar-monitors/:monitor_id/profile",
+            get(handlers::data::get_planar_field_profile),
+        )
+        .route(
             "/v2/sessions/current/data/fields/:quantity_id/planar-monitors/:monitor_id/render.png",
             get(handlers::data::get_planar_field_render_png),
         )
@@ -735,6 +739,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/sessions/current/data/fields/:quantity_id/planar-default/probe",
             get(handlers::data::get_planar_default_field_probe),
+        )
+        .route(
+            "/v2/sessions/current/data/fields/:quantity_id/planar-default/profile",
+            get(handlers::data::get_planar_default_field_profile),
         )
         .route(
             "/v2/sessions/current/data/fields/:quantity_id/planar-default/render.png",
@@ -929,6 +937,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/workspace/items/:id/playback/frames/:frame_index",
             get(handlers::workspace_items::get_item_playback_frame),
+        )
+        .route(
+            "/v2/workspace/items/:id/playback/geometry",
+            get(handlers::workspace_items::get_item_playback_geometry),
         )
         .route(
             "/v2/workspace/settings/:key",

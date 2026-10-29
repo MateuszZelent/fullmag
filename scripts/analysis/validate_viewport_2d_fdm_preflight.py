@@ -19,6 +19,24 @@ EXPECTED_NATIVE_CELL_COUNTS = {
     "mesh-refined": {"planar_film": 6144, "isolation_neighbor": 1536},
 }
 MATERIAL_ARRAY_KEYS = ("ms_field", "a_field", "alpha_field")
+# Native geometry authored by examples/viewport_2d_planar_monitor_fdm_smoke.py;
+# a plan may not reproduce only the cell product with another grid/origin/cell.
+EXPECTED_NATIVE_GEOMETRY = {
+    "base": {
+        "planar_film": {"grid": [16, 12, 4], "origin": [-40e-9, -30e-9, -10e-9], "cell": [5e-9] * 3},
+        "isolation_neighbor": {"grid": [4, 12, 4], "origin": [45e-9, -30e-9, -10e-9], "cell": [5e-9] * 3},
+    },
+    "mesh-refined": {
+        "planar_film": {"grid": [32, 24, 8], "origin": [-40e-9, -30e-9, -10e-9], "cell": [2.5e-9] * 3},
+        "isolation_neighbor": {"grid": [8, 24, 8], "origin": [45e-9, -30e-9, -10e-9], "cell": [2.5e-9] * 3},
+    },
+}
+# Scalar material identity of each fixture object (canonical fallback values).
+EXPECTED_SCALAR_MATERIAL = {
+    "planar_film": {"saturation_magnetisation": 800e3, "exchange_stiffness": 13e-12, "damping": 0.1},
+    "isolation_neighbor": {"saturation_magnetisation": 400e3, "exchange_stiffness": 13e-12, "damping": 0.1},
+}
+GEOMETRY_ABS_TOL_M = 1e-15
 
 
 class PreflightError(ValueError):
@@ -167,7 +185,16 @@ def _validate_membership(
         )
         return False
     if entry["numeric_id"] not in mask:
-        errors.append("planar_film qualification_core numeric_id is absent from native_region_mask")
+        errors.append(
+            "planar_film qualification_core native_region_mask does not contain the legend numeric_id"
+        )
+        return False
+    expected_mask = _expected_core_mask(film.get("native_grid"), entry["numeric_id"])
+    if expected_mask is None or mask != expected_mask:
+        errors.append(
+            "planar_film qualification_core native_region_mask does not match the authored "
+            "central core region (x and y in the middle half, full thickness)"
+        )
         return False
 
     neighbor = layers.get("isolation_neighbor", {})
@@ -182,6 +209,68 @@ def _validate_membership(
     if neighbor_legend not in (None, []):
         errors.append("isolation_neighbor must not inherit planar_film region legend entries")
     return True
+
+
+def _expected_core_mask(grid: Any, numeric_id: int) -> list[int] | None:
+    if not isinstance(grid, list) or len(grid) != 3 or not all(isinstance(n, int) for n in grid):
+        return None
+    nx, ny, nz = grid
+    return [
+        numeric_id if (nx // 4 <= x < 3 * nx // 4 and ny // 4 <= y < 3 * ny // 4) else 0
+        for _z in range(nz)
+        for y in range(ny)
+        for x in range(nx)
+    ]
+
+
+def _validate_native_geometry(
+    layers: dict[str, dict[str, Any]], qualification_profile: str, errors: list[str]
+) -> None:
+    expected_profile = EXPECTED_NATIVE_GEOMETRY[qualification_profile]
+    for object_id, expected in expected_profile.items():
+        layer = layers.get(object_id)
+        if layer is None:
+            continue
+        if layer.get("native_grid") != expected["grid"]:
+            errors.append(
+                f"{object_id} native_grid {layer.get('native_grid')}, expected {expected['grid']}"
+            )
+        for key, label in (("native_origin", "origin"), ("native_cell_size", "cell")):
+            actual = _require_vector3(layer.get(key), f"{object_id} {key}", errors)
+            if any(
+                not math.isclose(a, e, rel_tol=1e-12, abs_tol=GEOMETRY_ABS_TOL_M)
+                for a, e in zip(actual, expected[label])
+            ):
+                errors.append(f"{object_id} {key} {actual}, expected {expected[label]}")
+
+
+def _validate_layer_identity_and_scalars(
+    layers: dict[str, dict[str, Any]], errors: list[str]
+) -> None:
+    for object_id, expected_material in EXPECTED_SCALAR_MATERIAL.items():
+        layer = layers.get(object_id)
+        if layer is None:
+            continue
+        if layer.get("layer_id") != f"layer:{object_id}":
+            errors.append(
+                f"{object_id} layer_id {layer.get('layer_id')!r}, expected 'layer:{object_id}'"
+            )
+        if layer.get("magnet_name") != object_id:
+            errors.append(
+                f"{object_id} magnet_name {layer.get('magnet_name')!r}, expected {object_id!r}"
+            )
+        material = layer.get("material")
+        if not isinstance(material, dict):
+            continue
+        for key, expected_value in expected_material.items():
+            value = material.get(key)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or not math.isclose(float(value), expected_value, rel_tol=1e-12, abs_tol=0.0)
+            ):
+                errors.append(f"{object_id} material {key} {value!r}, expected {expected_value!r}")
 
 
 def _validate_disjoint_coplanar(
@@ -252,6 +341,8 @@ def validate_execution_plan(
                 f"for profile {qualification_profile}"
             )
 
+    _validate_native_geometry(layers, qualification_profile, errors)
+    _validate_layer_identity_and_scalars(layers, errors)
     material_owners = _validate_material_arrays(layers, native_counts, errors)
     membership = _validate_membership(layers, native_counts, errors)
     disjoint_coplanar = _validate_disjoint_coplanar(layers, errors)
@@ -366,15 +457,31 @@ def main() -> int:
         )
     except (OSError, PreflightError, RuntimeError, ValueError) as error:
         print(f"viewport 2D FDM plan preflight failed:\n{error}", file=sys.stderr)
+        # A failure must never leave an older passing report in place.
+        _write_report_atomically(
+            args.output,
+            {
+                "schema_version": "viewport-2d-fdm-plan-preflight.v1",
+                "pass": False,
+                "qualification_profile": args.qualification_profile,
+                "error": str(error),
+            },
+        )
         return 1
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n",
-        encoding="utf-8",
-    )
+    _write_report_atomically(args.output, report)
     print(f"viewport 2D FDM plan preflight passed: {args.output}")
     return 0
+
+
+def _write_report_atomically(output: Path, report: dict[str, Any]) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=output.parent, prefix=f".{output.name}.", delete=False
+    ) as handle:
+        handle.write(json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n")
+        temporary = Path(handle.name)
+    os.replace(temporary, output)
 
 
 if __name__ == "__main__":

@@ -27,6 +27,7 @@ use fullmag_workspace_inspect::scanner::{
 use fullmag_workspace_inspect::{display_path, inspect_item, link};
 
 use super::workspace_archive as archive;
+use crate::router_v2::handlers::persistence::solutions::saved_geometry as saved_geometry_binary;
 use crate::error::ApiError;
 use crate::schemas::workspace_items::{
     FramesPage, WorkspaceAddRequest, WorkspaceEvent, WorkspaceForgetResult, WorkspaceFramesQuery,
@@ -34,7 +35,8 @@ use crate::schemas::workspace_items::{
     SavedPlaybackResource, WorkspaceHistoryQuery, WorkspaceItem, WorkspaceItemDetail, WorkspaceItemKind, WorkspaceItemList,
     WorkspaceItemStatus, WorkspaceItemsQuery, WorkspaceOpenState, WorkspaceOutcome,
     WorkspacePinRequest, WorkspaceRoot, WorkspaceRoots, WorkspaceRootsRequest,
-    WorkspacePlaybackFrameQuery, WorkspaceRootsSource, WorkspaceScanReport, WorkspaceScanRequest,
+    WorkspacePlaybackFrameQuery, WorkspacePlaybackGeometryQuery, WorkspaceRootsSource,
+    WorkspaceScanReport, WorkspaceScanRequest,
     WorkspaceThumbnailOrigin,
 };
 
@@ -273,6 +275,39 @@ pub async fn get_item_playback_frame(
     let headers = response.headers_mut();
     headers.insert(header::CONTENT_TYPE, "application/octet-stream".parse().expect("static"));
     headers.insert(header::CACHE_CONTROL, "no-store".parse().expect("static"));
+    Ok(response)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/workspace/items/{id}/playback/geometry",
+    params(
+        ("id" = String, Path, description = "Registered result item id (decimal string)"),
+        WorkspacePlaybackGeometryQuery,
+    ),
+    responses(
+        (status = 200, description = "Revision-pinned saved FEM topology (FMMT v2) or active-node support (FMSP v1)", content_type = "application/octet-stream"),
+        (status = 400, description = "Invalid item id or geometry part"),
+        (status = 404, description = "The item or geometry file is missing"),
+        (status = 409, description = "The supplied playback revision is stale or the source changed during the read"),
+        (status = 422, description = "The result has no FEM geometry or its metadata is invalid"),
+    ),
+    tag = "workspace_items"
+)]
+pub async fn get_item_playback_geometry(
+    AxumPath(id): AxumPath<String>,
+    Query(query): Query<WorkspacePlaybackGeometryQuery>,
+) -> Result<Response, ApiError> {
+    let body = run(move |db| playback_geometry_at(db, &id, &query)).await?;
+    let mut response = Response::new(axum::body::Body::from(body));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        "application/octet-stream".parse().expect("static"),
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        "no-store".parse().expect("static"),
+    );
     Ok(response)
 }
 
@@ -774,7 +809,26 @@ pub(crate) fn playback_at(db: &Path, id: &str) -> Result<SavedPlaybackResource, 
             "only registered result folders have saved playback",
         ));
     }
-    fullmag_workspace_inspect::read_playback(Path::new(&item.path)).map_err(map_playback_error)
+    let inspection = fullmag_workspace_inspect::read_playback_with_geometry(Path::new(&item.path))
+        .map_err(map_playback_error)?;
+    let mut resource = inspection.resource;
+    if let (Some(fem_mesh), Some(geometry)) =
+        (resource.fem_mesh.as_mut(), inspection.fem_geometry.as_ref())
+    {
+        let support = saved_geometry_binary::support_binary_identity(
+            &geometry.field_semantics.active_node_mask,
+        )
+        .map_err(|error| ApiError::unprocessable_with_code("saved_playback_invalid", error.message))?;
+        fem_mesh.support_byte_length = Some(support.0.len());
+        fem_mesh.support_sha256 = Some(support.1);
+        if let Some((length, hash)) = saved_geometry_binary::topology_binary_identity(geometry)
+            .map_err(|error| ApiError::unprocessable_with_code("saved_playback_invalid", error.message))?
+        {
+            fem_mesh.topology_byte_length = Some(length);
+            fem_mesh.topology_sha256 = Some(hash);
+        }
+    }
+    Ok(resource)
 }
 
 /// Read-only, revision-checked binary playback data for one selected frame.
@@ -799,6 +853,72 @@ pub(crate) fn playback_frame_at(
         &query.revision,
     )
     .map_err(map_playback_error)
+}
+
+/// Read one revision-pinned FEM topology/support binary body. The selected
+/// geometry is parsed and checked in workspace-inspect before any serializer
+/// runs, and the serializer's existing bounded codecs remain authoritative.
+pub(crate) fn playback_geometry_at(
+    db: &Path,
+    id: &str,
+    query: &WorkspacePlaybackGeometryQuery,
+) -> Result<Vec<u8>, ApiError> {
+    let id = parse_id(id)?;
+    let (workspace, _) = open(db)?;
+    let item = require_visible(&workspace, id)?;
+    if item.kind != ItemKind::Result {
+        return Err(ApiError::bad_request(
+            "only registered result folders have saved playback geometry",
+        ));
+    }
+    if !matches!(query.part.as_str(), "support" | "topology") {
+        return Err(ApiError::bad_request(
+            "playback geometry part must be topology or support",
+        ));
+    }
+    let geometry = fullmag_workspace_inspect::read_playback_geometry(
+        Path::new(&item.path),
+        &query.revision,
+    )
+    .map_err(map_playback_error)?;
+    match query.part.as_str() {
+        "support" => saved_geometry_binary::encode_saved_support(
+            &geometry.field_semantics.active_node_mask,
+        )
+        .map_err(|error| {
+            ApiError::unprocessable_with_code("saved_playback_invalid", error.message)
+        }),
+        "topology" => {
+            let Some((estimated, _)) = saved_geometry_binary::topology_binary_identity(&geometry)
+                .map_err(|error| {
+                    ApiError::unprocessable_with_code("saved_playback_invalid", error.message)
+                })?
+            else {
+                return Err(ApiError::unprocessable_with_code(
+                    "saved_playback_invalid",
+                    "saved FEM topology exceeds the 64 MiB playback output limit",
+                ));
+            };
+            if estimated > crate::schemas::saved_field_geometry::MAX_SAVED_FIELD_GEOMETRY_DECODE_BYTES as usize {
+                return Err(ApiError::unprocessable_with_code(
+                    "saved_playback_invalid",
+                    "saved FEM topology exceeds the 64 MiB playback output limit",
+                ));
+            }
+            let topology_fingerprint = geometry.mesh.topology_fingerprint_v6();
+            let payload = saved_geometry_binary::fem_mesh_payload(geometry, topology_fingerprint)
+                .map_err(|error| {
+                    ApiError::unprocessable_with_code("saved_playback_invalid", error.message)
+                })?;
+            crate::field_store::serialize_fem_mesh_topology_binary_v2(&payload).map_err(|error| {
+                ApiError::unprocessable_with_code(
+                    "saved_playback_invalid",
+                    format!("saved FEM topology is unsupported: {error}"),
+                )
+            })
+        }
+        _ => unreachable!("geometry part was validated before reading"),
+    }
 }
 
 fn map_playback_error(error: fullmag_workspace_inspect::PlaybackError) -> ApiError {

@@ -331,7 +331,7 @@ def capture_binding(root, commit, selected_source, *, context_files, launcher_fi
     for relative in ordered_paths:
         relative_path = _relative_path(relative)
         path = _ensure_no_links(root, relative_path)
-        metadata = path.stat(follow_symlinks=False)
+        metadata = path.lstat()
         if not stat.S_ISREG(metadata.st_mode):
             raise HelperSourceError("Pinned helper file is not a regular file: " + relative)
         if metadata.st_size > _MAX_FILE_BYTES:
@@ -500,3 +500,223 @@ def revalidate_binding(binding, selected_source=None, *, context_files=None, lau
     if current != binding:
         raise HelperSourceError("Helper source changed after its recreation pin was recorded")
     return current
+
+
+SAME_ROOT_TRANSITION_SCHEMA = "fullmag.docker-same-root-helper-transition.v1"
+SAME_ROOT_HELPER_PATHS = frozenset({
+    "justfile", "scripts/docker_dev.py", "scripts/docker_volume_dev.py",
+    "scripts/docker_volume_reconcile.py", "scripts/docker_volume_frontend_frozen_recovery.py",
+    "scripts/test_docker_frontend_frozen_recovery.py", "scripts/docker_helper_source.py",
+    "scripts/test_docker_helper_source_transition.py", "scripts/test_docker_volume_reconcile.py",
+    "docs/superpowers/plans/2026-10-27-frontend-frozen-recovery-proposal.md",
+    "docs/superpowers/plans/2026-10-27-antenna-master-pr247-checkpoint.md",
+    "scripts/just_storage_shell.sh", "scripts/test_just_development_recovery_shell.py",
+    ".github/workflows/bootstrap.yml",
+})
+
+
+def _transition_require(condition, message):
+    if not condition:
+        raise HelperSourceError(message)
+
+
+def _source_capture_canonical(value):
+    # backend_source._canonical_bytes/_live_canonical terminate records with LF.
+    return _canonical(value) + b"\n"
+
+
+def _same_root_untracked(root, expected):
+    allowed = {"examples/fem_antenna_closed_loop_nonmagnetic.20261022.fms"}
+    _transition_require(isinstance(expected, dict) and set(expected) <= allowed,
+                        "Untracked baseline escapes its closed FMS path")
+    rows = []
+    for name in sorted(expected):
+        path = _ensure_no_links(root, _relative_path(name))
+        metadata = path.lstat()
+        _transition_require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1
+                            and 0 < metadata.st_size <= _MAX_FILE_BYTES,
+                            "Pre-existing FMS is not one bounded regular file")
+        data = path.read_bytes()
+        row = {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data),
+               "mode": "100755" if metadata.st_mode & 0o111 else "100644", "status": "??"}
+        _transition_require(metadata.st_size == len(data) and expected[name] == row,
+                            "Pre-existing excluded FMS bytes/mode/size changed")
+        rows.append(b"?? " + name.encode("utf-8") + b"\0")
+    _transition_require(_git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+                        == b"".join(rows), "Helper status contains an unreviewed change")
+
+
+def _transition_capture(document):
+    """Verify the complete capture hashes, rather than trusting a path-name diff."""
+    _transition_require(isinstance(document, dict)
+                        and document.get("schema") == "fullmag.docker-backend-live-source.v1",
+                        "Unsupported same-root source capture")
+    unsigned = dict(document)
+    observed = unsigned.pop("live_manifest_sha256", None)
+    _transition_require(hashlib.sha256(_source_capture_canonical(unsigned)).hexdigest() == observed,
+                        "Same-root live capture digest differs")
+    capsule = document.get("source_manifest")
+    native = document.get("native_source_identity")
+    _transition_require(isinstance(capsule, dict) and isinstance(native, dict),
+                        "Same-root capture is incomplete")
+    _transition_require(hashlib.sha256(_source_capture_canonical(capsule)).hexdigest()
+                        == document.get("source_manifest_sha256"),
+                        "Same-root capsule digest differs")
+    core_keys = ("schema_version", "source_mode", "resolved_commit", "files",
+                 "deleted", "included_untracked", "excluded")
+    _transition_require(all(key in capsule for key in core_keys),
+                        "Same-root capsule core is incomplete")
+    core = {key: capsule[key] for key in core_keys}
+    _transition_require(hashlib.sha256(_source_capture_canonical(core)).hexdigest()
+                        == capsule.get("source_digest") == document.get("source_digest"),
+                        "Same-root source digest differs")
+    _transition_require(capsule.get("entries") == capsule["files"]
+                        and capsule.get("resolved_commit") == document.get("resolved_commit")
+                        == native.get("head_commit_full")
+                        and native.get("source_snapshot_sha256") == document.get("source_snapshot_sha256")
+                        and native.get("source_snapshot_dirty") is False
+                        and native.get("dirty_path_content") == []
+                        and native.get("git_status_porcelain_v1") == [],
+                        "Same-root capture must be clean and internally consistent")
+    native_core = {key: native[key] for key in (
+        "schema", "head_commit_full", "head_tree_sha256", "git_status_porcelain_v1",
+        "dirty_path_content", "ignored_non_runtime_dirty")}
+    _transition_require(hashlib.sha256(_source_capture_canonical(native_core)).hexdigest()
+                        == native["source_snapshot_sha256"],
+                        "Same-root native snapshot digest differs")
+    rows = capsule["files"]
+    _transition_require(isinstance(rows, list) and 0 < len(rows) <= 65536,
+                        "Same-root file inventory exceeds its bound")
+    files = {}
+    for row in rows:
+        _transition_require(isinstance(row, dict), "Invalid same-root file entry")
+        path = _relative_path(row.get("path")).as_posix()
+        _transition_require(set(row) == {"path", "mode", "sha256", "size", "type"}
+                            and path not in files and row["mode"] in {"100644", "100755"}
+                            and row["type"] == "file" and type(row["size"]) is int and row["size"] >= 0
+                            and isinstance(row["sha256"], str) and _SHA256.fullmatch(row["sha256"]),
+                            "Same-root file entry is duplicate, linked, or malformed")
+        files[path] = row
+    return capsule, native, files
+
+
+def _same_root_executed_helpers(root, binding):
+    pinned_paths = {row["path"] for row in binding["files"]}
+    for module_name, module in tuple(sys.modules.items()):
+        module_file = getattr(module, "__file__", None)
+        if module_file is None or Path(module_file).suffix != ".py":
+            continue
+        path = Path(module_file).resolve(strict=True)
+        try:
+            path.relative_to(root / "scripts")
+            inside = True
+        except ValueError:
+            inside = False
+        helper_name = module_name.startswith(("docker_", "fullmag_", "linux_native_host",
+                                               "windows_folder_host", "bootstrap_docker_toolchain"))
+        if not (inside or helper_name):
+            continue
+        _transition_require(inside and path.relative_to(root).as_posix() in pinned_paths,
+                            "An executing helper is outside the bound checkout")
+
+
+def verify_same_root_transition(raw, expected_sha256, base_raw, current, backend, receipt_source,
+                                selected_source, *, base_context_files, runtime_context_files):
+    """Bind a sealed app capture to a clean helper commit in the same checkout."""
+    _transition_require(isinstance(expected_sha256, str) and _SHA256.fullmatch(expected_sha256)
+                        and len(raw) <= _MAX_MANIFEST_BYTES
+                        and hashlib.sha256(raw).hexdigest() == expected_sha256,
+                        "Reviewed same-root transition CAS differs")
+    value = json.loads(raw)
+    _transition_require(isinstance(value, dict) and set(value) == {
+        "schema", "app_source", "helper_source", "changes", "submodules", "excluded_files"}
+        and value["schema"] == SAME_ROOT_TRANSITION_SCHEMA,
+        "Same-root transition schema/keys differ")
+    _transition_require(hashlib.sha256(base_raw).hexdigest() == receipt_source.get("manifest_sha256"),
+                        "Base capture is not the sealed package input")
+    base = json.loads(base_raw)
+    before, native_before, base_files = _transition_capture(base)
+    after, native_after, current_files = _transition_capture(current)
+    app_source = {"commit": base["resolved_commit"], "source_digest": base["source_digest"],
+                  "snapshot": base["source_snapshot_sha256"], "native": native_before,
+                  "manifest_sha256": hashlib.sha256(base_raw).hexdigest()}
+    _transition_require(value["app_source"] == app_source
+                        and all(app_source[key] == backend[key]
+                                for key in ("commit", "source_digest", "snapshot", "native"))
+                        and receipt_source.get("live_manifest_sha256") == base["live_manifest_sha256"],
+                        "Sealed app source differs from the reviewed transition")
+    binding = revalidate_binding(value["helper_source"], selected_source,
+                                 base_context_files=base_context_files,
+                                 runtime_context_files=runtime_context_files)
+    root = Path(selected_source).resolve(strict=True)
+    _transition_require(binding["root"] == binding["app_source_root"] == str(root)
+                        and current["resolved_commit"] == binding["commit"],
+                        "Same-root helper checkout/commit differs")
+    _same_root_executed_helpers(root, binding)
+    changes = value["changes"]
+    _transition_require(isinstance(changes, dict) and changes
+                        and set(changes) <= SAME_ROOT_HELPER_PATHS,
+                        "Transition changes escape the closed helper path set")
+    for name, row in changes.items():
+        _transition_require(isinstance(row, dict) and set(row) == {
+            "base_sha256", "candidate_sha256", "base_mode", "candidate_mode"},
+            "Invalid reviewed helper change")
+        old, new = base_files.get(name), current_files.get(name)
+        expected = {"base_sha256": old["sha256"] if old else None,
+                    "candidate_sha256": new["sha256"] if new else None,
+                    "base_mode": old["mode"] if old else None,
+                    "candidate_mode": new["mode"] if new else None}
+        _transition_require(new is not None and row == expected,
+                            "Reviewed helper bytes/mode differ: " + name)
+    changed_files = {name for name in set(base_files) | set(current_files)
+                     if base_files.get(name) != current_files.get(name)}
+    _transition_require(changed_files == set(changes),
+                        "Entire source file map differs outside the reviewed helper delta")
+    variable_capsule = {"resolved_commit", "head_commit", "files", "entries",
+                        "source_digest", "source_digest_sha256"}
+    _transition_require(set(before) == set(after) and all(
+        before[key] == after[key] for key in before if key not in variable_capsule),
+        "Source capsule metadata/deletion/untracked/exclusion inventory changed")
+    variable_native = {"head_commit_full", "head_tree_sha256", "source_snapshot_sha256"}
+    _transition_require(set(native_before) == set(native_after) and all(
+        native_before[key] == native_after[key]
+        for key in native_before if key not in variable_native),
+        "Native source metadata changed beyond the committed helper transition")
+    _transition_require(set(base) == set(current)
+                        and base.get("source_root") == current.get("source_root")
+                        and base.get("git_common_dir") == current.get("git_common_dir")
+                        and base.get("source_mode") == current.get("source_mode"),
+                        "Live capture shape/root/source mode changed")
+    _transition_require(base.get("git_object_ids") == current.get("git_object_ids"),
+                        "Sparse source objects changed")
+    base_tree_raw = _git(root, "ls-tree", "-r", "-z", "--full-tree", app_source["commit"])
+    current_tree_raw = _git(root, "ls-tree", "-r", "-z", "--full-tree", binding["commit"])
+    _transition_require(hashlib.sha256(base_tree_raw).hexdigest() == native_before["head_tree_sha256"]
+                        and hashlib.sha256(current_tree_raw).hexdigest() == native_after["head_tree_sha256"],
+                        "Complete Git tree is not bound by its native capture")
+    base_tree = _read_tree(root, app_source["commit"], [])
+    current_tree = _read_tree(root, binding["commit"], [])
+    index = _read_index(root, [])
+    _transition_require(set(index) == set(current_tree) and all(
+        rows == [{"mode": current_tree[name]["mode"], "blob": current_tree[name]["blob"], "stage": "0"}]
+        for name, rows in index.items()), "Entire helper index must equal its committed tree")
+    _same_root_untracked(root, value["excluded_files"])
+    changed_tree = {name for name in set(base_tree) | set(current_tree)
+                    if base_tree.get(name) != current_tree.get(name)}
+    _transition_require(changed_tree == set(changes),
+                        "Entire committed tree differs outside the reviewed helper delta")
+    gitlinks = {name: entry for name, entry in current_tree.items() if entry["mode"] == "160000"}
+    _transition_require(isinstance(value["submodules"], dict)
+                        and set(value["submodules"]) == set(gitlinks), "Submodule baseline inventory differs")
+    for name, entry in gitlinks.items():
+        _transition_require(base_tree.get(name) == entry, "Submodule Gitlink changed")
+        child = _ensure_no_links(root, _relative_path(name))
+        # This recovery admits only the recorded empty, uninitialized Gitlinks.
+        _transition_require(value["submodules"][name] == {
+            "gitlink": entry["blob"], "state": "uninitialized_empty"}
+            and child.is_dir() and not child.is_symlink() and not any(child.iterdir()),
+            "Physical submodule state differs from its explicit pre-apply baseline")
+    return {"schema": SAME_ROOT_TRANSITION_SCHEMA, "transition_manifest_sha256": expected_sha256,
+            "app_source": app_source, "helper_source": binding,
+            "fresh_source_digest": current["source_digest"],
+            "fresh_source_snapshot_sha256": current["source_snapshot_sha256"]}

@@ -134,6 +134,103 @@ pub(super) fn integrate_clipped_convex_element(
     integrate_polyhedron(&polyhedron)
 }
 
+/// Clip an element against a pixel prism and integrate a field evaluated by
+/// `evaluate` (the element's own basis) over the clipped region. The region is
+/// split into tetrahedra around its vertex centroid and each tetrahedron uses
+/// the five-point degree-3 rule, so fields that are not affine in physical
+/// space (Prism6, Hex8, Pyramid5 interpolants) are integrated with the
+/// element basis instead of linear vertex interpolation along clipped edges.
+pub(super) fn integrate_clipped_element_quadrature(
+    positions: &[[f64; 3]],
+    faces: &[&[usize]],
+    bounds: [f64; 6],
+    n_comp: usize,
+    evaluate: impl Fn([f64; 3]) -> Option<Vec<f64>>,
+) -> MeasureIntegral {
+    let empty = MeasureIntegral {
+        measure: 0.0,
+        integral: Vec::new(),
+    };
+    let mut polyhedron = ConvexPolyhedron {
+        faces: faces
+            .iter()
+            .map(|face| {
+                face.iter()
+                    .map(|index| LinearVertex {
+                        position: positions[*index],
+                        value: Vec::new(),
+                    })
+                    .collect()
+            })
+            .collect(),
+    };
+    for (axis, limit, keep_greater) in [
+        (0, bounds[0], true),
+        (0, bounds[1], false),
+        (1, bounds[2], true),
+        (1, bounds[3], false),
+        (2, bounds[4], true),
+        (2, bounds[5], false),
+    ] {
+        polyhedron = clip_polyhedron(polyhedron, axis, limit, keep_greater);
+        if polyhedron.faces.is_empty() {
+            return empty;
+        }
+    }
+    let mut unique = Vec::new();
+    for vertex in polyhedron.faces.iter().flatten() {
+        push_unique(&mut unique, vertex.clone());
+    }
+    if unique.len() < 4 {
+        return empty;
+    }
+    let center = [0, 1, 2].map(|axis| {
+        unique.iter().map(|vertex| vertex.position[axis]).sum::<f64>() / unique.len() as f64
+    });
+    let mut measure = 0.0;
+    let mut integral = vec![0.0; n_comp];
+    for face in &polyhedron.faces {
+        for index in 1..face.len().saturating_sub(1) {
+            let corners = [
+                center,
+                face[0].position,
+                face[index].position,
+                face[index + 1].position,
+            ];
+            let volume = tetra_volume(corners[0], corners[1], corners[2], corners[3]);
+            if volume == 0.0 {
+                continue;
+            }
+            // Degree-3 rule: centroid weight −4/5, four points (1/2,1/6,1/6,1/6) weight 9/20.
+            let mut points = vec![(-0.8, [0.25; 4])];
+            for vertex in 0..4 {
+                let mut barycentric = [1.0 / 6.0; 4];
+                barycentric[vertex] = 0.5;
+                points.push((0.45, barycentric));
+            }
+            let mut accumulated = vec![0.0; n_comp];
+            for (weight, barycentric) in points {
+                let point = [0, 1, 2].map(|axis| {
+                    (0..4)
+                        .map(|corner| barycentric[corner] * corners[corner][axis])
+                        .sum::<f64>()
+                });
+                let Some(value) = evaluate(point) else {
+                    return empty;
+                };
+                for component in 0..n_comp {
+                    accumulated[component] += weight * value[component];
+                }
+            }
+            measure += volume;
+            for component in 0..n_comp {
+                integral[component] += volume * accumulated[component];
+            }
+        }
+    }
+    MeasureIntegral { measure, integral }
+}
+
 fn clip_polyhedron(
     polyhedron: ConvexPolyhedron,
     axis: usize,

@@ -845,7 +845,8 @@ pozostają dokładne; nie wynikają z pomiaru CPU/RAM deskryptora H1.
 Decyzja operatora: błąd zadania nie zamyka API, konflikt writer-lock odracza
 pracę schedulera, a utrata sprawnego runtime blokuje nowe operacje bez
 odcinania diagnostyki. Nie wolno automatycznie ponawiać Solve ani restartować
-symulacji. Implementacja i weryfikacja runtime tej zmiany: **w toku**.
+symulacji. Implementacja i weryfikacja runtime tej zmiany: **w toku**;
+[aktualny odbiór i pozostałe luki](../audits/2026-10-29-runtime-failure-isolation.md).
 
 Nadzorca przekazuje każdej nowej instancji API prywatną, unikalną ścieżkę
 `FULLMAG_API_RUNTIME_FAILURE_FENCE` w wolumenie runtime-control. Po utracie
@@ -863,8 +864,10 @@ Potwierdzenie tożsamości API nie wymaga potwierdzonego ownera schedulera.
 Jeśli API zostało zweryfikowane, a późniejsze `service-ensure` zawiedzie,
 nadzorca zachowuje tę tożsamość i może uzyskać ACK blokady od tego samego API.
 Nie tworzy w tym celu zastępczego ownera ani nie wykonuje drain bez ownera.
-Nie oznacza to jeszcze diagnostycznego startu po błędzie występującym przed
-spawnem API; wydzielenie tej ścieżki pozostaje wymagane.
+Oddzielny cold-start zapisuje fence przed spawnem API i pomija inicjalizację
+oraz odtwarzanie wykonania. Odmowa konfiguracji budżetu podczas próby
+`7e0b39179f574e778e8cd7aebf5f70a3` potwierdziła health HTTP200/degraded,
+brak aktywnej sesji i zablokowane wykonanie przy nadal działającym API.
 Odczyty ostatnich opublikowanych wyników należy dopuścić na podstawie ich
 kontraktu bez uruchamiania nowego compute/materializacji. Prywatne recovery i
 retirement nadal muszą respektować bramkę i własność runtime.
@@ -873,6 +876,34 @@ Publiczny model JSON health nie zmienia kształtu. `status=degraded` oznacza
 żywe API z zablokowanymi operacjami. Istniejący zasób runtime-service zachowuje
 maszynowy kod i opis stanu właściciela. UI ma zachować workspace i pokazać
 problem oraz następne działanie, bez automatycznego restartu/replay.
+
+Uzupełnienie źródłowe 29.10: końcowy konflikt writera podczas odczytu wyniku
+zakończonego workera zachowuje `PendingTaskOutcome` do kolejnego przebiegu
+schedulera. Rekord blokuje ponowny admission/recovery dla runu i zasobu oraz
+fałszywe `drained`; ponawiane są wyłącznie odczyty katalogu i lease. Nie jest
+to ponowienie workera ani nieskończona blokująca pętla. Błąd zadania w workspace
+ma pokazać etap i `state_transition_reason` z tego samego runu oraz prowadzić
+do logu Engine i historii komend.
+
+Prywatna terminal-observation może odtworzyć również `Completed`, gdy
+hash-bound publiczny preflight ma ten sam wynik, katalog zawiera wyłącznie
+`Succeeded`, a istniejący natywny terminal fence i pełny łańcuch drain/claim/
+lease/digestów zostają spełnione. Dotychczasowe proofy `Failed` zachowują
+schemat i treść. Nie dodaje się automatycznego Solve, wznowienia workera ani
+nowych profili Cancelled/Interrupted. Wynik terminalny nie zastępuje walidacji
+artefaktów i renderu. Nowe delty wymagają odrębnego odbioru runtime; nie
+przypisuje się im wcześniejszego udanego uruchomienia CoFeB.
+
+Przy odmowie startupu przed utworzeniem nowego native ownera osobny
+`preowner-drained-stop` może zatrzymać wyłącznie dokładnie przypięte usługi
+backend/frontend. Wymaga autentycznego wcześniejszego nativeDrained i proofu
+Completed, zgodnych niezmienionych katalogów, zwolnionych lease, dostępnej
+blokady OWNER.lock oraz cold API bez procesów solvera. Jego journal zapisuje
+`native_drain_performed=false`; nie zastępuje starego drain ani nie upoważnia
+do recovery/Solve. Recreate ponownie sprawdza journal, tożsamość zatrzymanych
+kontenerów i zapisany profil zasobów przed usunięciem usług. Zapisany profil
+grupy obejmuje zarówno Docker limits, jak i native environment; samo
+podniesienie limitów działającego kontenera nie zmienia jego environment.
 
 Rollback wymaga zarządzanego zatrzymania/odzyskania konkretnej grupy; markerów,
 receiptów ani danych runu nie usuwa się w celu obejścia blokady. Build nie jest

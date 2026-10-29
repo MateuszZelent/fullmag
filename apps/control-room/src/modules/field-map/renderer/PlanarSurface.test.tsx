@@ -421,7 +421,8 @@ describe("PlanarSurface lifecycle", () => {
       expect(onPin).not.toHaveBeenCalled();
       expect(onRenderEvidence).not.toHaveBeenCalled();
       expect(canvas.getAttribute("data-probes-enabled")).toBe("false");
-      expect(canvas.getAttribute("tabindex")).toBe("-1");
+      // Keyboard pan, zoom and fit stay reachable without probes.
+      expect(canvas.getAttribute("tabindex")).toBe("0");
     } finally {
       await act(async () => root.unmount());
       if (previousWorker) Object.defineProperty(globalThis, "Worker", previousWorker); else Reflect.deleteProperty(globalThis, "Worker");

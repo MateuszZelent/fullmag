@@ -937,7 +937,8 @@ def build_volume_runtime_images(repo, control, toolchain, *, helper_source_bindi
             identity["helper_source"] = helper_source_binding
         digest = hashlib.sha256(canonical(identity)).hexdigest()
         tag = "fullmag/development-" + kind + ":inputs-" + digest[:24]
-        parent_ref = "fullmag/" + control.project + "-base:sha-" + parent.removeprefix("sha256:")
+        parent_digest = parent[7:] if parent.startswith("sha256:") else parent
+        parent_ref = "fullmag/" + control.project + "-base:sha-" + parent_digest
         arguments = {"FULLMAG_DOCKER_HELPERS": "docker/all-in-one/"}
         if kind == "dev":
             arguments.update(RUNTIME_BASE=parent_ref, FULLMAG_TOOLCHAIN_IMAGE_ID=parent,

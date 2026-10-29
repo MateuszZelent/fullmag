@@ -102,6 +102,22 @@ class HostDeviceTests(unittest.TestCase):
             self.assertEqual(target.read_bytes(),raw)
 
 
+    def test_desktop_state_alias_resolves_only_through_observed_filesystem(self):
+        from types import SimpleNamespace
+        state = Path("/owned/state")
+        alias = "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/" + "a" * 64
+        with patch.object(Path, "stat", return_value=SimpleNamespace(st_dev=22)), \
+             patch.object(recovery.subprocess, "run", side_effect=[
+                 SimpleNamespace(stdout="/\n"), SimpleNamespace(stdout=str(state) + "\n")]):
+            self.assertEqual(recovery.bind_host_path(alias, state), state)
+        with patch.object(Path, "stat", side_effect=[SimpleNamespace(st_dev=11), SimpleNamespace(st_dev=22)]):
+            self.assertIsNone(recovery.bind_host_path(alias, state))
+        with patch.object(Path, "stat", return_value=SimpleNamespace(st_dev=22)), \
+             patch.object(recovery.subprocess, "run", return_value=SimpleNamespace(stdout="relative\n")):
+            with self.assertRaises(BuildControlError):
+                recovery.bind_host_path(alias, state)
+        self.assertEqual(recovery.bind_host_path("/foreign/state", state), Path("/foreign/state"))
+
     def test_command_rejects_running_foreign_and_changed_groups_before_write(self):
         from contextlib import nullcontext
         from types import SimpleNamespace

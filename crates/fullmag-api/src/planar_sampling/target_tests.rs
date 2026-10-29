@@ -239,6 +239,7 @@ fn scalar_fdm_field(
             cell_size_m: Some([1.0, 1.0, 1.0]),
             grid_fingerprint: Some("grid-fingerprint-1".to_string()),
             membership: Some(membership),
+            membership_error: None,
             multilayer_scope: None,
         },
     }
@@ -682,6 +683,7 @@ fn sample_identity_distinguishes_target_operator_resolution_quality_and_quantity
                 target_entity_count: 4,
                 scope_kind: "monitor_target".to_string(),
                 scope_id: None,
+                scope_region_id: None,
                 quantity_id: "m".to_string(),
                 component: "magnitude".to_string(),
                 quantity_revision,
@@ -865,4 +867,66 @@ fn illegal_surface_support_fails_without_substitution() {
     )
     .unwrap_err();
     assert!(error.message.contains("surface") || error.message.contains("boundary"));
+}
+
+#[test]
+fn fdm_region_scope_gives_each_region_its_own_map() {
+    let field = scalar_fdm_field(multi_object_membership(vec![1, 2]), vec![4.0, 9.0]);
+    let req = request(
+        explicit_frame(
+            [0.0, 0.0, 0.5],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 2.0, 0.0, 1.0],
+        ),
+        PlanarOperatorIR::PlaneSample,
+        [2, 1],
+    );
+    let sample_region = |object_id: &str| {
+        let target = resolve_spatial_target(
+            &field,
+            &MonitorTargetIR::Domain,
+            ResolvedSpatialScope::Region {
+                object_id: object_id.to_string(),
+                region_id: "core".to_string(),
+            },
+            &PlanarOperatorIR::PlaneSample,
+        )
+        .unwrap();
+        sample_resolved_target(&target, &req).unwrap().scalar_values
+    };
+    let left = sample_region("left");
+    let right = sample_region("right");
+    assert_eq!(left[0], 4.0);
+    assert!(left[1].is_nan());
+    assert!(right[0].is_nan());
+    assert_eq!(right[1], 9.0);
+}
+
+#[test]
+fn fem_region_scope_selects_region_elements_and_rejects_unknown_regions() {
+    let field = fem_field(EntityMapping::Identity { entity_count: 8 }, vec![1.0; 24]);
+    let target = resolve_spatial_target(
+        &field,
+        &MonitorTargetIR::Domain,
+        ResolvedSpatialScope::Region {
+            object_id: "right".to_string(),
+            region_id: "right-geometry".to_string(),
+        },
+        &PlanarOperatorIR::PlaneSample,
+    )
+    .unwrap();
+    assert_eq!(target.selected_entity_ids(), &[1]);
+
+    let missing = resolve_spatial_target(
+        &field,
+        &MonitorTargetIR::Domain,
+        ResolvedSpatialScope::Region {
+            object_id: "right".to_string(),
+            region_id: "absent".to_string(),
+        },
+        &PlanarOperatorIR::PlaneSample,
+    );
+    assert!(missing.is_err());
 }

@@ -8,35 +8,56 @@ See docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-
 import fullmag as fm
 
 
+# %% Editable parameters (SI): geometry, source and observation volume
+length_m = 2.0e-6
+thickness_m = 0.2e-6
+signal_end_width_m = 0.3e-6
+signal_neck_width_m = 0.1e-6
+return_width_m = 1.0e-6
+return_offset_m = 0.4e-6
+connection_length_m = 0.2e-6
+connection_width_m = 0.4e-6
+conductor_conductivity_s_per_m = 5.8e7
+connection_conductivity_s_per_m = 3.0e7
+source_voltage_v = 0.25
+# Object-frame z: the source plane must remain inside the inlet bridge.
+source_cut_z_m = -0.3e-6
+mesh_size_m = 0.15e-6
+sampling_size_m = 0.08e-6
+sampling_center_m = (0.5 * length_m, 0.0, 0.3e-6)
+charge_relative_tolerance = 1.0e-12
+charge_max_iterations = 10000
+
+
 # %% Explicit execution: the only stage solves charge and inspects its field
 study = fm.study("fem_antenna_closed_loop_nonmagnetic")
 study.engine("fem")
 study.device("cpu", precision="double")
 study.mode("strict")
-study.objects.mesh.defaults(maximum_element_size=0.15e-6, minimum_element_size=0.15e-6, order=1)
+study.objects.mesh.defaults(maximum_element_size=mesh_size_m, minimum_element_size=mesh_size_m, order=1)
 
 
 # %% Signal taper, wide return plate and two fully conducting bridges
 study.antenna_object(
     fm.MicrostripAntennaLayout(
-        name="antenna", length_m=2.0e-6, thickness_m=0.2e-6,
-        conductivity_s_per_m=5.8e7,
-        stations=[fm.MicrostripWidthStation(0.0, 0.3e-6),
-                  fm.MicrostripWidthStation(0.5, 0.1e-6),
-                  fm.MicrostripWidthStation(1.0, 0.3e-6)],
-        return_width_m=1.0e-6, return_offset_m=0.4e-6,
+        name="antenna", length_m=length_m, thickness_m=thickness_m,
+        conductivity_s_per_m=conductor_conductivity_s_per_m,
+        stations=[fm.MicrostripWidthStation(0.0, signal_end_width_m),
+                  fm.MicrostripWidthStation(0.5, signal_neck_width_m),
+                  fm.MicrostripWidthStation(1.0, signal_end_width_m)],
+        return_width_m=return_width_m, return_offset_m=return_offset_m,
         signal_part_id="signal", return_part_id="return", closed_loop=True,
-        inlet_connection_length_m=0.2e-6, inlet_connection_width_m=0.4e-6,
+        inlet_connection_length_m=connection_length_m, inlet_connection_width_m=connection_width_m,
         inlet_connection_offset_v_m=0.0, inlet_connection_part_id="inlet",
-        inlet_connection_conductivity_s_per_m=3.0e7,
-        outlet_connection_length_m=0.2e-6, outlet_connection_width_m=0.4e-6,
+        inlet_connection_conductivity_s_per_m=connection_conductivity_s_per_m,
+        outlet_connection_length_m=connection_length_m, outlet_connection_width_m=connection_width_m,
         outlet_connection_offset_v_m=0.0, outlet_connection_part_id="outlet",
-        outlet_connection_conductivity_s_per_m=3.0e7,
+        outlet_connection_conductivity_s_per_m=connection_conductivity_s_per_m,
     ), name="antenna", object_id="antenna",
 )
 # A small field-only volume above the signal, without magnetic material/state.
 study.geometry_object(
-    fm.Box(0.08e-6, 0.08e-6, 0.08e-6, name="sampling").translate((1.0e-6, 0.0, 0.3e-6)),
+    fm.Box(sampling_size_m, sampling_size_m, sampling_size_m, name="sampling").translate(sampling_center_m),
     name="sampling", object_id="sampling", type="geometry",
 )
 
@@ -46,19 +67,19 @@ study.current_transport(
     name="antenna_charge", model="ohmic_poisson", coupling="one_way",
     domain=[fm.RegionRef("antenna")],
     materials=[
-        fm.ChargeTransportMaterialAssignment(fm.RegionRef("antenna", "signal"), fm.ChargeTransportMaterial(5.8e7)),
-        fm.ChargeTransportMaterialAssignment(fm.RegionRef("antenna", "return"), fm.ChargeTransportMaterial(5.8e7)),
-        fm.ChargeTransportMaterialAssignment(fm.RegionRef("antenna", "inlet"), fm.ChargeTransportMaterial(3.0e7)),
-        fm.ChargeTransportMaterialAssignment(fm.RegionRef("antenna", "outlet"), fm.ChargeTransportMaterial(3.0e7)),
+        fm.ChargeTransportMaterialAssignment(fm.RegionRef("antenna", "signal"), fm.ChargeTransportMaterial(conductor_conductivity_s_per_m)),
+        fm.ChargeTransportMaterialAssignment(fm.RegionRef("antenna", "return"), fm.ChargeTransportMaterial(conductor_conductivity_s_per_m)),
+        fm.ChargeTransportMaterialAssignment(fm.RegionRef("antenna", "inlet"), fm.ChargeTransportMaterial(connection_conductivity_s_per_m)),
+        fm.ChargeTransportMaterialAssignment(fm.RegionRef("antenna", "outlet"), fm.ChargeTransportMaterial(connection_conductivity_s_per_m)),
     ],
     boundaries=[], gauge=fm.ChargePotentialGauge("zero_mean"),
-    solver=fm.ChargeSolverPolicy(relative_tolerance=1.0e-12, absolute_tolerance=0.0,
-        max_iterations=10000, operator_version="fem_charge_conforming_h1_p1.transparent.v1"),
+    solver=fm.ChargeSolverPolicy(relative_tolerance=charge_relative_tolerance, absolute_tolerance=0.0,
+        max_iterations=charge_max_iterations, operator_version="fem_charge_conforming_h1_p1.transparent.v1"),
     structured_current_closure=fm.StructuredCurrentClosure(
         "antenna_loop", [fm.StructuredCurrentSourceCut(
             "inlet_cut", "antenna_circuit", fm.RegionRef("antenna", "inlet"),
-            fm.StructuredCutPlane("z", -0.3e-6, coordinate_frame="object"),
-            fm.ImpressedPotentialJump("inlet_voltage", 0.25),
+            fm.StructuredCutPlane("z", source_cut_z_m, coordinate_frame="object"),
+            fm.ImpressedPotentialJump("inlet_voltage", source_voltage_v),
         )], schema_version="structured_current_closure.v2",
     ),
 )

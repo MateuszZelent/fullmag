@@ -78,7 +78,9 @@ class ToolchainBootstrapTests(unittest.TestCase):
         compose = (Path(__file__).resolve().parents[1] / "compose.toolchain.yaml").read_text()
         required = set(re.findall(r"\$\{([A-Z_]+):\?", compose))
         self.assertTrue(required)
-        with mock.patch.object(bootstrap, "docker", return_value="{}") as command:
+        with mock.patch.object(bootstrap.storage, "worktree_records",
+                               return_value=[{"worktree": str(self.repo)}]), \
+                mock.patch.object(bootstrap, "docker", return_value="{}") as command:
             bootstrap.read_control(self.repo, project, bootstrap.CONTROL_RECEIPT)
             bootstrap.write_control(self.repo, project, bootstrap.CONTROL_RECEIPT, b"{}")
         self.assertEqual(command.call_count, 2)

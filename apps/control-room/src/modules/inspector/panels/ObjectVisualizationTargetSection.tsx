@@ -16,12 +16,15 @@ import {
   type FieldMetaResource,
   type QuantityCatalogResource,
 } from "@/kernel/api/apiTypes";
-import { quantityUnitForColorbar } from "@/kernel/api/quantityIds";
+import { isFlowMajorTensorDescriptor, normalizeTensorProjection } from "@/kernel/api/tensorFieldProjection";
+import { resolveCanonicalQuantityId, quantityUnitForColorbar, quantityCatalogEntrySpatialProjections } from "@/kernel/api/quantityIds";
+import { primitiveMonoColorForRole } from "@/kernel/visualization/primitiveSurfaceColor";
 import { Button } from "@/shared/ui/Button";
 import {
   SegmentedControl,
 } from "@/shared/ui/SegmentedControl";
 import { Slider } from "@/shared/ui/Slider";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/Select";
 import { Switch } from "@/shared/ui/Switch";
 import { controlVariants } from "@/shared/ui/controlVariants";
 import { cn } from "@/shared/utils/className";
@@ -75,6 +78,7 @@ import {
   type TargetFieldAvailability,
   type RegionVisualizationCarrier,
   visualizationQuantityItems,
+  visualizationQuantitySelectionState,
   type ScalarColorbarDisplayUnit,
   colorPickerInputValue,
 } from "./ObjectVisualizationPanelModel";
@@ -118,6 +122,7 @@ type SectionDisabled = (
 ) => boolean;
 
 export function VisualizationDisplayPassesSection({
+  artifactInspection = false,
   displaySettings,
   passControlsDisabled,
   patch,
@@ -126,7 +131,9 @@ export function VisualizationDisplayPassesSection({
   settings,
   target,
   primitiveDisplayToggleVisible,
+  presentationRole,
 }: {
+  artifactInspection?: boolean;
   displaySettings: VisualizationTargetSettings;
   passControlsDisabled: boolean;
   patch: PatchVisualizationTarget;
@@ -135,8 +142,9 @@ export function VisualizationDisplayPassesSection({
   settings: VisualizationTargetSettings;
   target: VisualizationTargetRef;
   primitiveDisplayToggleVisible: boolean;
+  presentationRole?: string | null;
 }) {
-  const capabilities = visualizationTargetCapabilities(target);
+  const capabilities = visualizationTargetCapabilities(target, artifactInspection);
   return (
     <div className="grid min-w-0 gap-0" data-slot="visualization-display-passes">
       {renderWarning ? (
@@ -208,7 +216,7 @@ export function VisualizationDisplayPassesSection({
           <ColorField
             disabled={isFieldPending("primitiveMonoColor")}
             label="Primitive color"
-            value={settings.primitiveMonoColor ?? settings.shaderMonoColor}
+            value={primitiveMonoColorForRole(presentationRole, settings.primitiveMonoColor ?? settings.shaderMonoColor)}
             onChange={(value) => void patch({ primitiveMonoColor: value })}
           />
           <NumberField
@@ -234,19 +242,21 @@ export function VisualizationDisplayPassesSection({
 
 
 export function VisualizationRenderModeSection({
+  artifactInspection = false,
   displaySettings,
   passControlsDisabled,
   isFieldPending,
   patch,
   target,
 }: {
+  artifactInspection?: boolean;
   displaySettings: VisualizationTargetSettings;
   passControlsDisabled: boolean;
   isFieldPending: IsVisualizationFieldPending;
   patch: PatchVisualizationTarget;
   target: VisualizationTargetRef;
 }) {
-  const capabilities = visualizationTargetCapabilities(target);
+  const capabilities = visualizationTargetCapabilities(target, artifactInspection);
   const currentMode = resolveVisualizationDisplayMode(displaySettings);
   const renderModeOptions = RENDER_MODE_VALUES.filter(
     (option) =>
@@ -358,7 +368,7 @@ export function VisualizationSurfaceColoringSection({
     quantityId: settings.activeQuantityId,
     scopeId: historicalSurface ? artifactFieldBinding?.query?.scope_id : fieldMetaScopeQuery.scope_id,
     scopeKind: historicalSurface ? artifactFieldBinding?.query?.scope_kind : viewportRenderedRangeScopeKind(fieldMetaScopeQuery.scope_kind),
-    inspectionKey: historicalSurface ? artifactSurfaceRangeKey(artifactFieldBinding?.expectedOwner ?? null, artifactFieldBinding?.query ?? null, settings.surfaceProjectionMode) ?? "unavailable-artifact-owner" : null,
+    inspectionKey: historicalSurface ? artifactSurfaceRangeKey(artifactFieldBinding?.expectedOwner ?? null, artifactFieldBinding?.query ?? null, settings.surfaceProjectionMode, artifactFieldBinding?.presentationTarget) ?? "unavailable-artifact-owner" : null,
   });
   const ownFieldMeta = useVisualizationFieldMeta({
     binding: artifactFieldBinding,
@@ -664,8 +674,11 @@ function viewportRenderedRangeScopeKind(
 }
 
 export function VisualizationQuantitySection({
+  executionRequired = false,
   fieldCatalog,
   fieldCatalogLoading,
+  fieldCatalogError,
+  fieldCatalogRefreshWarning,
   quantityCatalog,
   onFieldCatalogRequest,
   patch,
@@ -674,8 +687,11 @@ export function VisualizationQuantitySection({
   targetFieldAvailability,
   targetKind,
 }: {
+  executionRequired?: boolean;
   fieldCatalog: FieldCatalogResource | null;
   fieldCatalogLoading: boolean;
+  fieldCatalogError?: string | null;
+  fieldCatalogRefreshWarning?: string | null;
   quantityCatalog: QuantityCatalogResource | null;
   onFieldCatalogRequest: () => void;
   patch: PatchVisualizationTarget;
@@ -684,39 +700,101 @@ export function VisualizationQuantitySection({
   targetFieldAvailability?: ReadonlyMap<string, TargetFieldAvailability>;
   targetKind?: VisualizationTargetKind;
 }) {
+  const quantityItems = visualizationQuantityItems(
+    settings.activeQuantityId, targetKind, fieldCatalog, quantityCatalog, targetFieldAvailability,
+  );
+  const { selectedValue, summary, status } = visualizationQuantitySelectionState({
+    activeQuantityId: settings.activeQuantityId, items: quantityItems,
+    loading: fieldCatalogLoading, error: fieldCatalogError, executionRequired,
+  });
+  const quantityFeedbackId = useId();
+  const [quantityMenuOpen, setQuantityMenuOpen] = useState(false);
+  const quantityPending = isFieldPending("activeQuantityId");
+  const noQuantities = quantityItems.length === 0;
+  const selectedQuantity = selectedValue ? quantityCatalog?.quantities.find((entry) =>
+    resolveCanonicalQuantityId(entry.id) === resolveCanonicalQuantityId(selectedValue),
+  ) : undefined;
+  const descriptor = selectedQuantity?.tensor;
+  const tensorOptions = quantityCatalogEntrySpatialProjections(selectedQuantity);
   return (
-    <FormField
-      disabled={
-        isFieldPending("activeQuantityId") ||
-        !settings.visible ||
-        fieldCatalogLoading
-      }
-      inline
-      label="Quantity Source"
-      type="select"
-      value={settings.activeQuantityId}
-      onChange={(event) => {
-        const patchValue = quantitySourcePatch(settings, event.target.value);
-        const nextSurfaceColorSource =
-          patchValue.surfaceColorSource ?? settings.surfaceColorSource;
-        if (nextSurfaceColorSource !== "solid") {
-          onFieldCatalogRequest();
-        }
-        void patch(patchValue);
-      }}
-    >
-      {visualizationQuantityItems(
-        settings.activeQuantityId,
-        targetKind,
-        fieldCatalog,
-        quantityCatalog,
-        targetFieldAvailability,
-      ).map((quantity) => (
-        <option disabled={quantity.disabled} key={quantity.value} value={quantity.value}>
-          {quantity.label}
-        </option>
-      ))}
-    </FormField>
+    <>
+    <InspectorPropertyRow label="Quantity source" layout="stacked">
+      <div className="fm-quantity-source-control flex w-full min-w-0 flex-col gap-1">
+      <Select
+        disabled={executionRequired || !settings.visible || fieldCatalogLoading || Boolean(fieldCatalogError) || noQuantities}
+        open={quantityMenuOpen}
+        onOpenChange={(open) => {
+          if (!open || !quantityPending) setQuantityMenuOpen(open);
+        }}
+        value={selectedValue}
+        onValueChange={(quantityId) => {
+          if (quantityPending) return;
+          const patchValue = quantitySourcePatch(settings, quantityId);
+          const nextQuantity = quantityCatalog?.quantities.find((entry) => entry.id === quantityId);
+          if (isFlowMajorTensorDescriptor(nextQuantity?.tensor)) {
+            const options = quantityCatalogEntrySpatialProjections(nextQuantity);
+            if (options.length === 0) return;
+            patchValue.tensorProjection = options[0].value;
+            patchValue.surfaceColorSource = "colormap";
+            patchValue.vectorsVisible = false;
+          }
+          const nextSurfaceColorSource =
+            patchValue.surfaceColorSource ?? settings.surfaceColorSource;
+          if (nextSurfaceColorSource !== "solid") {
+            onFieldCatalogRequest();
+          }
+          void patch(patchValue);
+        }}
+      >
+        {/* Keep the trigger focusable while saving so closing the menu can
+            restore focus. The controlled menu and value guard block reentry. */}
+        <SelectTrigger aria-label="Quantity source" aria-describedby={quantityFeedbackId} aria-invalid={Boolean(fieldCatalogError) || undefined} aria-busy={quantityPending || undefined} aria-disabled={quantityPending || undefined}>
+          <SelectValue placeholder={summary}>{summary}</SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          {quantityItems.map((quantity) => (
+            <SelectItem disabled={quantity.disabled} key={quantity.value} value={quantity.value}>
+              {quantity.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <p id={quantityFeedbackId} role={fieldCatalogError ? "alert" : "status"} className="fm-quantity-source-help m-0 text-fm-help leading-snug text-fm-muted">
+        {fieldCatalogError ?? (fieldCatalogRefreshWarning
+          ? `Catalog refresh failed: ${fieldCatalogRefreshWarning}. Keeping the last verified catalog for this target.`
+          : status === "loading" ? "Loading the field catalog for this target…" : "Only fields supported on this target are listed. Display settings do not start a simulation.")}
+      </p>
+      </div>
+    </InspectorPropertyRow>
+    {status === "selected" && selectedQuantity?.unit ? <FieldRow label="Field unit" value={selectedQuantity.unit} /> : null}
+    {status === "execution-required" ? <p role="status" className="fm-quantity-source-empty">Select a source and execution above to load its field catalog. No simulation is started by this selection.</p> : null}
+    {status === "unavailable" ? <p role="status">The selected quantity is not available for this target. Choose an available field or check its computation status.</p> : null}
+    {status === "empty" ? <p role="status" className="fm-quantity-source-empty">
+      {targetKind === "airbox"
+        ? "No verified field is available on the Universe sampling mesh. Visible geometry or mesh points alone do not contain field values. Check the selected execution and its sampling domain."
+        : "No compatible field is available for this target. Check the selected source, execution status, and sampling domain."}
+    </p> : null}
+    {isFlowMajorTensorDescriptor(descriptor) ? (
+      <>
+      <FormField
+        disabled={!settings.visible || isFieldPending("tensorProjection")}
+        inline
+        label="Tensor projection"
+        type="select"
+        value={settings.tensorProjection ?? ""}
+        onChange={(event) => {
+          const tensorProjection = normalizeTensorProjection(event.target.value);
+          if (tensorProjection && tensorOptions.some((option) => option.value === tensorProjection)) void patch({ tensorProjection, surfaceColorSource: "colormap" });
+        }}
+      >
+        <option disabled value="">Select tensor projection</option>
+        {tensorOptions.map((option) => (
+          <option key={option.value} value={option.value}>{option.label}</option>
+        ))}
+      </FormField>
+      </>
+    ) : null}
+    </>
   );
 }
 
@@ -839,7 +917,7 @@ export function VisualizationVectorsSection({
   vectorTopologyHash: string | null;
 }) {
   const supportsVectorSurfaceOffset =
-    visualizationTargetCapabilities(target).supportsVectorSurfaceOffset;
+    visualizationTargetCapabilities(target, artifactFieldBinding?.presentationTarget?.kind === "airbox").supportsVectorSurfaceOffset;
   const colorbarComponent = vectorColorModeFieldMetaComponent(
     settings.vectorColorMode,
     settings.activeQuantityId,

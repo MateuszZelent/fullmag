@@ -28,6 +28,8 @@ function statusForSelection(
   selection: Selection,
   lane: AirboxInspectorLane,
   artifactLane: "fem" | "fdm" | null,
+  publishedFemMesh: boolean,
+  executionState?: string,
 ) {
   const ref = selection.ref?.type === "airbox" ? selection.ref : null;
   return {
@@ -37,11 +39,17 @@ function statusForSelection(
         ? "unsupported"
         : artifactLane
           ? "partial"
-          : lane === "unresolved"
-            ? "unavailable"
-            : "unknown"),
-    execution: ref?.executionState ?? (lane === "unresolved" ? "not_started" : "unknown"),
-    resource: ref?.resourceState ?? (artifactLane ? "loading" : lane === "unresolved" ? "idle" : "unknown"),
+          : publishedFemMesh
+            ? "mesh inspection available"
+            : lane === "unresolved"
+              ? "unavailable"
+              : "unknown"),
+    execution: executionState && executionState !== "unknown"
+      ? executionState
+      : ref?.executionState ?? (lane === "unresolved" ? "not_started" : "unknown"),
+    resource: ref?.resourceState ?? (publishedFemMesh
+      ? "mesh published"
+      : artifactLane ? "loading" : lane === "unresolved" ? "idle" : "unknown"),
   };
 }
 
@@ -68,19 +76,23 @@ function diagnosticsForSelection(
 export function AirboxInspectorIdentityFrame({
   children,
   artifactLane = null,
+  executionState,
   lane,
   runtimeReason = null,
   owner = "airbox-inspector",
+  publishedFemMesh = false,
   selection,
 }: InspectorPanelProps & {
   children: ReactNode;
   artifactLane?: "fem" | "fdm" | null;
+  executionState?: string;
   lane: AirboxInspectorLane;
   runtimeReason?: string | null;
   owner?: string;
+  publishedFemMesh?: boolean;
 }) {
   const ref = selection.ref?.type === "airbox" ? selection.ref : null;
-  const status = statusForSelection(selection, lane, artifactLane);
+  const status = statusForSelection(selection, lane, artifactLane, publishedFemMesh, executionState);
   const title = TITLES[selection.kind ?? ""] ?? "Airbox Inspector";
   const target = ref?.visualizationTargetId ?? "airbox";
 
@@ -90,7 +102,7 @@ export function AirboxInspectorIdentityFrame({
         showIdentity={false}
         breadcrumbs={["Model", "Airbox", title]}
         diagnostics={diagnosticsForSelection(selection, lane, runtimeReason, artifactLane)}
-        methodLabel={laneLabel(lane)}
+        methodLabel={publishedFemMesh && lane === "unresolved" ? "FEM mesh" : laneLabel(lane)}
         physicalLabel="Airbox"
         properties={[
           { label: "Method", value: laneLabel(lane) },

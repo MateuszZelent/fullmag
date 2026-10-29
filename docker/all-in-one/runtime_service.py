@@ -740,6 +740,7 @@ def process_environment(
     if service:
         for name in SERVICE_MODE_VARIABLES:
             environment.pop(name, None)
+        environment.pop("FULLMAG_DEVELOPMENT_TERMINAL_OBSERVATION_STDIN", None)
     return environment
 
 
@@ -6037,3 +6038,224 @@ def check(handle: RuntimeHandle, *, full_api_probe: bool = True) -> None:
     # Recheck after the liveness request so a pin change during the request
     # cannot be mistaken for a healthy observation on the next cycle.
     _assert_pinned_ready_owner(handle)
+
+
+# Private terminal observation transport. This grants no admission/recovery
+# authority and never activates a script or dispatches a Compute command.
+TERMINAL_OBSERVATION_REQUEST_ENV = "FULLMAG_TERMINAL_OBSERVATION_REQUEST"
+TERMINAL_OBSERVATION_DIGEST_ENV = "FULLMAG_TERMINAL_OBSERVATION_REQUEST_SHA256"
+TERMINAL_OBSERVATION_STDIN_ENV = "FULLMAG_DEVELOPMENT_TERMINAL_OBSERVATION_STDIN"
+
+
+def _terminal_observation_documents(paths):
+    environment = process_environment(paths)
+    relative = environment.get(TERMINAL_OBSERVATION_REQUEST_ENV)
+    digest = environment.get(TERMINAL_OBSERVATION_DIGEST_ENV)
+    if TERMINAL_OBSERVATION_STDIN_ENV in environment:
+        _fail("terminal observation stdin switch is owned by PID 1")
+    if relative is None and digest is None:
+        return environment, None
+    if (not isinstance(relative, str)
+            or re.fullmatch(r"terminal-observation/[0-9a-f]{64}/request\.json", relative) is None
+            or not isinstance(digest, str) or HEX64.fullmatch(digest) is None):
+        _fail("terminal observation requires exact private request path and digest")
+    if (environment.get("FULLMAG_STARTUP_ENABLED") == "1"
+            or any(environment.get(key) is not None for key in (
+                "FULLMAG_DEVELOPMENT_RESTORE_STDIN", ACCEPTED_REATTACH_STDIN_ENV,
+                ACCEPTED_REATTACH_REQUEST_ENV, ACCEPTED_REATTACH_DIGEST_ENV))):
+        _fail("terminal observation cannot combine with startup, authoring or accepted reattach")
+    raw = _bounded_regular(_reattach_relative(paths.state_root, relative, "terminal request"),
+                           "terminal observation request", 64 * 1024)
+    if _sha256_bytes(raw) != digest:
+        _fail("terminal observation request CAS differs")
+    request = _accepted_reattach_json(raw, "terminal observation request")
+    if (set(request) != {"schema", "proof_path", "proof_sha256"}
+            or request.get("schema") != "fullmag.terminal-observation-request.v1"
+            or request.get("proof_path") != str(PurePosixPath(relative).parent / "proof.json")
+            or request.get("proof_sha256") != PurePosixPath(relative).parent.name):
+        _fail("terminal observation request fields or proof identity differ")
+    proof_raw = _bounded_regular(
+        _reattach_relative(paths.state_root, request["proof_path"], "terminal proof"),
+        "terminal observation proof", 256 * 1024)
+    if _sha256_bytes(proof_raw) != request["proof_sha256"]:
+        _fail("terminal observation proof CAS differs")
+    proof = _accepted_reattach_json(proof_raw, "terminal observation proof")
+    if proof.get("schema") != "fullmag.development-terminal-observation-proof.v1":
+        _fail("terminal observation proof schema differs")
+    for key in ("run_id", "session_id", "source_root", "compose_project", "control_volume"):
+        if not isinstance(proof.get(key), str) or not proof[key] or len(proof[key]) > 4096:
+            _fail("terminal observation proof is missing " + key)
+    for key in ("native_config_sha256", "terminal_evidence_sha256"):
+        if not isinstance(proof.get(key), str) or HEX64.fullmatch(proof[key]) is None:
+            _fail("terminal observation proof has invalid " + key)
+    return environment, {
+        "request_relative": relative, "request_sha256": digest,
+        "proof_relative": request["proof_path"], "proof_sha256": request["proof_sha256"],
+        "proof": proof,
+    }
+
+
+def terminal_observation_preflight(paths):
+    # Read only. Ordinary startup, native admission and namespace recovery keep
+    # their existing gates; this value is not a substitute for any native proof.
+    return _terminal_observation_documents(paths)[1]
+
+
+@contextmanager
+def terminal_observation_api_input(paths, *, terminal_preflight=None, accepted_preflight=None):
+    environment, observation = _terminal_observation_documents(paths)
+    if observation is None:
+        if terminal_preflight is not None:
+            _fail("terminal observation disappeared after preflight")
+        with accepted_reattach_api_input(paths, preflight=accepted_preflight) as pair:
+            yield pair[0], pair[1], None
+        return
+    if observation != terminal_preflight or accepted_preflight is not None:
+        _fail("terminal observation preflight changed or conflicts with accepted reattach")
+    proof = observation["proof"]
+    parent = PurePosixPath(observation["proof_relative"]).parent
+    lock_path = _reattach_relative(paths.state_root, str(parent / "launch.lock"),
+                                  "terminal observation launch mutex")
+    import fcntl
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            _fail("terminal observation launch mutex is not a private regular file")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            _fail("terminal observation launch is already owned")
+        if environment.get("FULLMAG_RUNTIME_PROVENANCE") != str(ACCEPTED_REATTACH_PROVENANCE):
+            _fail("terminal observation requires fixed Docker runtime provenance")
+        provenance = _read_json(ACCEPTED_REATTACH_PROVENANCE, "terminal target provenance")
+        commit, snapshot, image = (provenance.get(key) for key in
+                                  ("commit", "source_snapshot_sha256", "image_id"))
+        if (provenance.get("schema") != "fullmag.docker-all-image.v1"
+                or provenance.get("state") != "succeeded"
+                or not isinstance(commit, str) or HEX40.fullmatch(commit) is None
+                or not isinstance(snapshot, str) or HEX64.fullmatch(snapshot) is None
+                or not isinstance(image, str) or re.fullmatch("sha256:[0-9a-f]{64}", image) is None
+                or environment.get("FULLMAG_RUNTIME_IMAGE_ID") != image):
+            _fail("terminal observation target provenance is not the current succeeded build")
+        configuration = _bounded_regular(paths.config, "terminal target native config", 64 * 1024)
+        config_sha = _sha256_bytes(configuration)
+        inspected = _run_cli(paths, [
+            "runtime", "service-inspect-terminal-run", "--config", str(paths.config),
+            "--config-sha256", config_sha, "--run-id", proof["run_id"],
+        ], timeout=30.0)
+        if (set(inspected) != {"schema_version", "run_id", "terminal_evidence_sha256",
+                              "mutations_applied", "solve_replayed"}
+                or inspected.get("schema_version") != "runtime_service_terminal_run_evidence.v1"
+                or inspected.get("run_id") != proof["run_id"]
+                or inspected.get("terminal_evidence_sha256") != proof["terminal_evidence_sha256"]
+                or inspected.get("mutations_applied") is not False
+                or inspected.get("solve_replayed") is not False
+                or _bounded_regular(paths.config, "terminal target native config", 64 * 1024)
+                   != configuration):
+            _fail("terminal observation native evidence changed at target launch")
+        binding = {
+            "schema": "fullmag.terminal-observation-launch.v1",
+            "source_proof_sha256": observation["proof_sha256"],
+            "source_native_config_sha256": proof["native_config_sha256"],
+            "target_build_id": commit, "target_source_sha256": snapshot,
+            "target_image_id": image, "native_config_sha256": config_sha,
+            "terminal_evidence_sha256": proof["terminal_evidence_sha256"],
+        }
+        binding_raw = json.dumps(binding, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        binding_sha = _sha256_bytes(binding_raw)
+        binding_relative = str(parent / ("launch-" + binding_sha + ".json"))
+        binding_path = _reattach_relative(paths.state_root, binding_relative, "terminal launch")
+        _publish_accepted_reattach_raw(binding_path, binding_raw, "terminal observation launch binding")
+        if _terminal_observation_documents(paths)[1] != observation:
+            _fail("terminal observation controls changed before API launch")
+        payload = {
+            "schema": "fullmag.development-terminal-observation-input.v1",
+            "target_build_id": commit, "target_source_sha256": snapshot,
+            "target_image_id": image, "proof_path": observation["proof_relative"],
+            "proof_sha256": observation["proof_sha256"],
+            "launch_path": binding_relative, "launch_sha256": binding_sha,
+        }
+        launch = {"relative": binding_relative, "sha256": binding_sha, "binding": binding}
+        with tempfile.TemporaryFile(mode="w+b", dir=paths.state_root) as stream:
+            raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+            if len(raw) > 64 * 1024:
+                _fail("terminal observation stdin exceeds its bound")
+            stream.write(raw)
+            stream.seek(0)
+            environment[TERMINAL_OBSERVATION_STDIN_ENV] = "1"
+            yield environment, stream, launch
+    finally:
+        os.close(fd)
+
+
+def terminal_observation_runtime_receipt(paths, *, preflight, launch, handle):
+    if _terminal_observation_documents(paths)[1] != preflight:
+        _fail("terminal observation controls changed before native receipt")
+    proof = preflight["proof"]
+    # Match the outcome already authenticated by the native installation to
+    # its immutable public preflight. The v1 proof stays byte-compatible.
+    original = proof.get("original_iteration")
+    preflight_sha = proof.get("preflight_raw_sha256")
+    if (not isinstance(original, str) or re.fullmatch(r"[0-9a-f]{32}", original) is None
+            or not isinstance(preflight_sha, str) or HEX64.fullmatch(preflight_sha) is None):
+        _fail("terminal observation source preflight identity is invalid")
+    source_raw = _bounded_regular(
+        _reattach_relative(BUILD_CONTROL_ROOT,
+            "iteration/attempts/" + original + "/terminal-session-preflight.json", "terminal source preflight"),
+        "terminal source preflight", 8 * 1024 * 1024)
+    if _sha256_bytes(source_raw) != preflight_sha:
+        _fail("terminal observation source preflight CAS differs")
+    source = _accepted_reattach_json(source_raw, "terminal source preflight")
+    source_run = source.get("run")
+    if not isinstance(source_run, dict):
+        _fail("terminal observation source run is invalid")
+    outcome = source_run.get("status")
+    if (not isinstance(outcome, str) or outcome not in {"failed", "completed"}
+            or source_run.get("run_id") != proof["run_id"]
+            or source.get("session_id") != proof["session_id"]):
+        _fail("terminal observation source outcome differs")
+    if not isinstance(launch, dict) or set(launch) != {"relative", "sha256", "binding"}:
+        _fail("terminal observation has no exact launch binding")
+    binding = launch["binding"]
+    if _sha256_bytes(_bounded_regular(
+            _reattach_relative(paths.state_root, launch["relative"], "terminal launch"),
+            "terminal launch", 64 * 1024)) != launch["sha256"]:
+        _fail("terminal observation launch binding CAS differs")
+    identity = handle.api_identity
+    if not isinstance(identity, Mapping):
+        _fail("terminal observation has no authenticated API identity")
+    api_id = _accepted_reattach_api_id(identity.get("api_instance_id"), "terminal observation API")
+    relative = str(PurePosixPath(preflight["proof_relative"]).parent / ("installed-" + api_id + ".json"))
+    raw = _bounded_regular(_reattach_relative(paths.state_root, relative, "terminal installed receipt"),
+                           "terminal observation installed receipt", 64 * 1024)
+    receipt = _accepted_reattach_json(raw, "terminal observation installed receipt")
+    expected = {
+        "schema": "fullmag.terminal-observation-restored.v1", "api_instance_id": api_id,
+        "run_id": proof["run_id"], "session_id": proof["session_id"],
+        "session_epoch": proof["session_epoch"], "scene_revision": proof["scene_revision"],
+        "terminal_outcome": outcome, "proof_sha256": preflight["proof_sha256"],
+        "launch_sha256": launch["sha256"], "source_image_id": proof["image_id"],
+        "source_config_sha256": proof["config_sha256"],
+        "target_build_id": binding["target_build_id"],
+        "target_source_sha256": binding["target_source_sha256"],
+        "target_image_id": binding["target_image_id"],
+        "native_config_sha256": binding["native_config_sha256"],
+        "terminal_evidence_sha256": proof["terminal_evidence_sha256"],
+    }
+    if receipt != expected:
+        _fail("terminal observation receipt differs from the real target installation")
+    code, headers, run = _http_json(8081, "/v2/sessions/current/simulation/runs/current")
+    if (code != 200 or _single_header(headers, "x-fullmag-api-instance") != api_id
+            or run.get("run_id") != proof["run_id"] or run.get("session_id") != proof["session_id"]
+            or run.get("status") != outcome):
+        _fail("terminal observation live readback differs from its native receipt")
+    return {
+        "schema": "fullmag.terminal-observation-runtime.v1", "api_instance_id": api_id,
+        "run_id": proof["run_id"], "session_id": proof["session_id"],
+        "proof_sha256": preflight["proof_sha256"], "launch_sha256": launch["sha256"],
+        "installed_relative": relative, "installed_sha256": _sha256_bytes(raw),
+        "target_build_id": binding["target_build_id"],
+        "target_source_sha256": binding["target_source_sha256"],
+        "target_image_id": binding["target_image_id"],
+    }

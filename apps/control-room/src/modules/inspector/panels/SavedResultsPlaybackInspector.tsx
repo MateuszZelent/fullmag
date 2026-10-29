@@ -137,16 +137,16 @@ export function SavedResultsPlaybackInspector() {
         <>
           <dl className="fm-saved-results-playback-inspector__metadata">
             <div className="fm-saved-results-playback-inspector__metadata-row">
-              <dt>Grid</dt>
-              <dd>{manifest.grid_cells_xyz.join(" × ")} cells</dd>
+              <dt>{manifest.fem_mesh ? "FEM mesh" : "Grid"}</dt>
+              <dd>{manifest.fem_mesh ? `${manifest.fem_mesh.node_count} nodes · ${manifest.fem_mesh.cell_count} cells` : `${manifest.grid_cells_xyz?.join(" × ")} cells`}</dd>
             </div>
             <div className="fm-saved-results-playback-inspector__metadata-row">
-              <dt>Cell size</dt>
-              <dd>{manifest.cell_size_m.map((value) => `${value} m`).join(" × ")}</dd>
+              <dt>{manifest.fem_mesh ? "Field support" : "Cell size"}</dt>
+              <dd>{manifest.fem_mesh ? "Canonical H1/P1 nodes · saved active support" : manifest.cell_size_m?.map((value) => `${value} m`).join(" × ")}</dd>
             </div>
             <div className="fm-saved-results-playback-inspector__metadata-row">
-              <dt>Origin</dt>
-              <dd>{manifest.origin_m.map((value) => `${value} m`).join(", ")}</dd>
+              <dt>{manifest.fem_mesh ? "Coordinates" : "Origin"}</dt>
+              <dd>{manifest.fem_mesh ? "Saved mesh · metres" : manifest.origin_m?.map((value) => `${value} m`).join(", ")}</dd>
             </div>
           </dl>
           {manifest.source_note ? (

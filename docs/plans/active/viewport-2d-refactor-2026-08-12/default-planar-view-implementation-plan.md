@@ -1,5 +1,10 @@
 # Domyślny przekrój 2D bez wymaganego monitora — szczegółowy plan implementacji
 
+> **Status: superseded (2026-10-27).** Otwarte pozycje tego planu przeniesiono do
+> `docs/plans/active/viewport-2d-mumax-parity-2026-10-27/05-plan-wdrozenia.md`;
+> jedynym ledgerem statusu jest `docs/status/2d-slice-capabilities.md`. Checkboxy
+> poniżej są historyczne i nie są dowodem działania.
+
 > **Status dokumentu:** zatwierdzony kierunek produktowy i plan wykonawczy; żadna opisana niżej zmiana nie jest jeszcze potwierdzeniem implementacji ani kwalifikacji produkcyjnej.
 
 > **Status snapshot (2026-08-16):** Tasks 0–9 are implemented and have

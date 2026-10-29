@@ -98,3 +98,49 @@ Po kontrolowanej zbiórce published artifact refs i strumieniowym SHA rzeczywist
 Regresje po ostatnich zmianach: abrupt-stop 24, prepare wrapper 8, bridge v3/v4 15, legacy container recovery 13, legacy runtime bridge 5 — wszystkie PASS. Test strumieniowego hashowania obejmuje 81 MiB przy limicie pamięci subprocessu 64 MiB, drift mtime i oversized object. Niezależne review protokołu i snapshotu nie wykazało dalszych P1/P2 po naprawie obecności held field przy v3.
 
 Adapter Windows–WSL ma osobny ownership w skoordynowanym zadaniu sprzątania Dockera, które otrzymało bezpośrednie polecenie użytkownika dokończenia tego adaptera bez przerywania innych zadań. Ten etap nie zawiera niekwalifikowanego adaptera ani migracji; małe call sites zostaną uzgodnione po jego kwalifikacji. Recovery mastera, build/start i browser Airbox nadal NOT VERIFIED.
+
+## Checkpoint strażnika aliasów przed wpięciem Windows
+
+PR #302 scalono jako `2c67d8f904b1dede9268bbbc8bf6257cbe33aa4f`; main i zachowany worktree przeszły fast-forward do tego wyniku. Następna kontrola ujawniła dwie luki hostowego guarda: znany surowy alias store nie był porównywany jako chroniona ścieżka, a ścieżki namespace Docker Desktop mogły przejść porównanie leksykalne jako lokalny POSIX. Reprodukcje wykazały brak wymaganej odmowy przed poprawką.
+
+Poprawka dodaje raw alias i jego przodków/potomków do wczesnej ochrony przed resolverem; Docker Desktop drive namespaces wymagają odrębnej atestacji, bez lokalnego fallbacku. Review ujawniło dodatkowo wariant `//`; jest odrzucany jako niekanoniczny przed każdym resolverem. Readmission 25/25 i abrupt-stop 25/25 PASS, niezależny review bez otwartych P1/P2. Wyjątek dokładnie uwierzytelnionego własnego helpera oraz obecne canonical/kernel proof pozostają zachowane. To checkpoint fail-closed; nie kwalifikuje jeszcze adaptera Windows.
+
+Adapter drugiego zadania ma już wykonalny odczyt actual mount przez same-UID, cap-drop-ALL observer i pełne VPD83 GUID jako powiązanie VHDX, lecz nadal wymaga negatywnych testów oraz kwalifikacji całości. Nie ma zgody na stop/restart cudzych grup, a migracje pozostają na ich kolejne świadome uruchomienie.
+
+Podczas dalszych odczytów silnik Docker stał się niedostępny. Jeden odczyt `info` potwierdził brak połączenia; ten wątek nie wysłał stop/restart/down/start usług. Stare PID/incarnation/backing observations nie kwalifikują przyszłego wykonania po tej zmianie stanu. Przed runtime wymagane są świeże dowody; sesja i wyniki pozostają bez mutacji z tego zadania.
+
+## 28.10: osobny kontrakt izolowanego snapshotu
+
+Użytkownik jawnie zlecił naprawić blokadę i uruchomić mastera bez zatrzymywania
+innych grup. Wybór: ADR0073, nowa zweryfikowana kopia zamiast rozluźniania
+Windows guards. Stary store/OWNER/certyfikaty pozostają bez zmian.
+
+- [ ] Native readonly retained-snapshot validation CLI i CI (worker Luna).
+- [ ] Typed namespace receipt/resolver oraz testy (skoordynowany czat sprzątania).
+- [ ] Bezpieczna kopia danych + manifest i hostowy operator jednej grupy.
+- [ ] Podpięcie namespace, admission kopii i native gate przed API.
+- [ ] Review, wymagane CI, integracja mastera.
+- [ ] Rzeczywiste recovery/master build/start, porównanie historii i UI Airbox.
+
+To plan, nie wykonana migracja. Nie wykonano snapshotu ani nowego startu.
+
+
+## Checkpoint izolowanego importu i wyboru modelu — 28.10
+
+PR #307 zawiera nową oddzielną authority: pełna kopia pod source WRITER/OWNER
+oraz wyłącznym OFD SQLite lock, nowy namespace/ledger, hashe faktycznych payloadów
+przed natywną walidacją readonly i OWNER/API. Stare admission/reattach nie są
+rozluźniane. Oryginał pozostaje niezmieniony, dwa held runy zachowują manual gate.
+
+Historia activation potwierdza ostatni succeeded `31e9e383af124fa680392b583c7c0a49`
+(request `master-ui-preview-20261026`, źródło `examples/airbox_inspector_mixed.py`,
+SHA `cf0e9604ba159e4b5c67e4d55903d13de8da2f61689ac1f1e9778ad497517fdc`,
+backend `822ce222f6d3117ecee7da37d65d3333901928a9fc3645726ae22b3cd3c24826`,
+development attempt `9fcc2458f15a4318ad2f59c8c445c206`). Odpowiada immutable
+RunIntent `run-live-b781c7576b7635f5aa93ebcc93723be13aa91537bfb958c7a137d79ff4e71dca`.
+Późniejszy YIG `0e4ed56cdff64a09bbdc9be367e8b918` ma failed-confirmed
+`live_retirement_busy` przed mutacją. Nie traktujemy activation/current jako
+successful ani nie wybieramy modelu wyłącznie według wieku pliku.
+
+Kwalifikacja kopii, końcowego admission, buildu, GPU i browser nadal NOT VERIFIED.
+Nie zatrzymano innych grup. Nie uruchomiono Solve ani Compute Fields.

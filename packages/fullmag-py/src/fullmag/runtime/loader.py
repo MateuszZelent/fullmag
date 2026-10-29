@@ -273,6 +273,7 @@ class LoadedProblem:
         runtime_device_override: str | None = None,
         source_root: str | Path | None = None,
         _copy_cached_geometry_assets: bool = True,
+        _accepted_preparation: dict[str, object] | None = None,
     ) -> dict[str, object]:
         study_pipeline = self.study_pipeline_document()
         base_problem = self.pipeline_base_problem()
@@ -291,6 +292,7 @@ class LoadedProblem:
               study_pipeline=study_pipeline,
               runtime_device_override=runtime_device_override,
               _copy_cached_geometry_assets=_copy_cached_geometry_assets,
+              _accepted_preparation=_accepted_preparation,
         )
         runtime_metadata = ir.get("problem_meta", {}).get("runtime_metadata")
         if isinstance(runtime_metadata, dict):

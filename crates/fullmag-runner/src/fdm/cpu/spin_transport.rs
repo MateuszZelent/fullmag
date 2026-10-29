@@ -1,3 +1,6 @@
+#[allow(dead_code)]
+pub(crate) mod composite_checkpoint;
+
 use std::collections::BTreeMap;
 
 use crate::time_envelope::evaluate_time_envelope;
@@ -590,7 +593,7 @@ fn compare_checkpoint_module_contracts(
     Ok(())
 }
 
-fn validate_complete_coupled_checkpoint(
+pub(crate) fn validate_complete_coupled_checkpoint(
     checkpoint: &FdmCoupledCheckpoint,
     vector_count: usize,
 ) -> Result<(), RunError> {
@@ -893,7 +896,26 @@ impl FdmSpinTransportWorkflow {
                     validate_descriptor(descriptor, grid.cell_count(), &resolved.module_id)?
                 }
                 (None, Some(descriptor)) => {
-                    validate_coupled_descriptor(descriptor, grid.cell_count(), &resolved.module_id)?
+                    validate_coupled_descriptor(descriptor, grid.cell_count(), &resolved.module_id)?;
+                    if descriptor.spin_boundaries.iter().any(|boundary| {
+                        boundary.condition == ResolvedSpinBoundaryConditionIR::HomogeneousSpinPotentialGradient
+                    }) && (resolved.requested_execution.discretization != fullmag_ir::BackendTarget::Fdm
+                        || resolved.requested_execution.device != fullmag_ir::ExecutionDevice::Cpu
+                        || resolved.requested_execution.precision != fullmag_ir::ExecutionPrecision::Double
+                        || resolved.requested_execution.execution_mode != fullmag_ir::ExecutionMode::Strict
+                        || resolved.resolved_execution_mode != fullmag_ir::ExecutionMode::Strict
+                        || resolved.resolved_coupling != fullmag_ir::TransportCouplingIR::Bidirectional)
+                    {
+                        return Err(run_error("homogeneous spin-potential gradient requires explicit reciprocal M2 FDM/CPU/double/strict; fallback is forbidden"));
+                    }
+                    let magnetic_mask_matches = match plan.active_mask.as_ref() {
+                        Some(mask) => mask.len() == grid.cell_count()
+                            && mask == &descriptor.magnetic_active_mask,
+                        None => descriptor.magnetic_active_mask.iter().all(|active| *active),
+                    };
+                    if !magnetic_mask_matches {
+                        return Err(run_error("M2 descriptor magnetic mask differs from the resolved FDM magnetic domain"));
+                    }
                 }
                 _ => {
                     return Err(run_error(format!(
@@ -1745,6 +1767,11 @@ fn validate_descriptor(
     count: usize,
     module_id: &str,
 ) -> Result<(), RunError> {
+    if descriptor.spin_boundaries.iter().any(|boundary| {
+        boundary.condition == ResolvedSpinBoundaryConditionIR::HomogeneousSpinPotentialGradient
+    }) {
+        return Err(run_error("homogeneous spin-potential gradient requires reciprocal M2; M1 and transient M3 are unsupported"));
+    }
     if descriptor.descriptor_schema != "fullmag.fdm.spin_transport_descriptor.v1" {
         return Err(run_error(format!(
             "spin transport '{module_id}' uses incompatible descriptor schema '{}'",
@@ -1822,11 +1849,12 @@ fn validate_descriptor(
             matches!(
                 boundary.condition,
                 ResolvedSpinBoundaryConditionIR::SpecifiedOutwardFlux { .. }
+                    | ResolvedSpinBoundaryConditionIR::HomogeneousSpinPotentialGradient
                     | ResolvedSpinBoundaryConditionIR::PeriodicSpin
             )
         }) {
             return Err(run_error(format!(
-                "spin transport '{module_id}' native_m1_v1 rejects specified spin flux and periodic boundaries"
+                "spin transport '{module_id}' native_m1_v1 rejects specified spin flux, homogeneous spin-potential gradient and periodic boundaries"
             )));
         }
         if descriptor.interfaces.iter().any(|interface| {
@@ -1867,7 +1895,7 @@ fn validate_coupled_descriptor(
     count: usize,
     module_id: &str,
 ) -> Result<(), RunError> {
-    if descriptor.descriptor_schema != "fullmag.fdm.coupled_spin_transport_descriptor.v1" {
+    if descriptor.descriptor_schema != "fullmag.fdm.coupled_spin_transport_descriptor.v2" {
         return Err(run_error(format!(
             "spin transport '{module_id}' uses incompatible coupled descriptor schema '{}'",
             descriptor.descriptor_schema
@@ -1875,6 +1903,7 @@ fn validate_coupled_descriptor(
     }
     let lengths = [
         descriptor.active_cells.len(),
+        descriptor.magnetic_active_mask.len(),
         descriptor.reciprocal_materials.len(),
         descriptor.reactions.len(),
         descriptor.region_ids.len(),
@@ -1888,6 +1917,32 @@ fn validate_coupled_descriptor(
         return Err(run_error(format!(
             "spin transport '{module_id}' coupled descriptor does not match the FDM grid"
         )));
+    }
+    for cell in 0..count {
+        if descriptor.magnetic_active_mask[cell] && !descriptor.active_cells[cell]
+            || descriptor.torque_target_cells[cell] && !descriptor.magnetic_active_mask[cell]
+        {
+            return Err(run_error(format!("spin transport '{module_id}' coupled magnetic/torque masks are inconsistent at cell {cell}")));
+        }
+        if descriptor.active_cells[cell] && !descriptor.magnetic_active_mask[cell] {
+            let material = &descriptor.reciprocal_materials[cell];
+            let reaction = &descriptor.reactions[cell];
+            if material.polarization_p != 0.0
+                || material.sigma_parallel_spm != material.sigma_perpendicular_spm
+                || material.sigma_ahe_spm != 0.0
+                || reaction.exchange_m.is_some()
+                || reaction.dephasing_m.is_some()
+            {
+                return Err(run_error(format!("spin transport '{module_id}' coupled nonmagnetic cell {cell} has magnetic coefficients")));
+            }
+        }
+    }
+    for interface in &descriptor.interfaces {
+        let from = interface.from_cell as usize;
+        let to = interface.to_cell as usize;
+        if from >= count || to >= count || !descriptor.active_cells[from] || !descriptor.active_cells[to] || !descriptor.magnetic_active_mask[to] {
+            return Err(run_error(format!("spin transport '{module_id}' coupled interface has no magnetic target")));
+        }
     }
     if descriptor.constitutive_version != "transport_constitutive.reciprocal.fullmag.v1"
         || descriptor.operator_version != "fdm_coupled_charge_spin_fv_block_gmres.v1"
@@ -1916,6 +1971,7 @@ fn solve_coupled_module(
     let evaluated_envelope_multiplier =
         source_envelope_multiplier(descriptor.time_envelope.as_ref(), stage_time_s)?;
     let materials = CoupledChargeSpinMaterialFields {
+        magnetic_active_mask: descriptor.magnetic_active_mask.clone(),
         reciprocal: descriptor
             .reciprocal_materials
             .iter()
@@ -3212,6 +3268,9 @@ fn spin_boundary_conditions(
             ResolvedSpinBoundaryConditionIR::SpinInsulating => {
                 SpinBoundaryCondition::SpinInsulating
             }
+            ResolvedSpinBoundaryConditionIR::HomogeneousSpinPotentialGradient => {
+                SpinBoundaryCondition::HomogeneousSpinPotentialGradient
+            }
             ResolvedSpinBoundaryConditionIR::SpinSink => SpinBoundaryCondition::SpinSink,
             ResolvedSpinBoundaryConditionIR::SpecifiedPotential { value_v } => {
                 SpinBoundaryCondition::SpecifiedPotential(value_v)
@@ -3444,9 +3503,10 @@ mod tests {
             "transport.coupling.bidirectional".into(),
         ];
         resolved.fdm_cpu_double_reciprocal = Some(ResolvedFdmCoupledSpinTransportIR {
-            descriptor_schema: "fullmag.fdm.coupled_spin_transport_descriptor.v1".into(),
+            descriptor_schema: "fullmag.fdm.coupled_spin_transport_descriptor.v2".into(),
             time_envelope: None,
             active_cells: one_way.charge_active_cells,
+            magnetic_active_mask: vec![true; count],
             reciprocal_materials: (0..count)
                 .map(|_| ResolvedReciprocalMaterialIR {
                     sigma_spm: 2.0,
@@ -3970,15 +4030,32 @@ mod tests {
                 };
                 object.as_object_mut().unwrap().remove(key);
             }
-            super::super::reference::execute_reference_fdm_with_coupled_checkpoint(
+            let mut published_steps = 0;
+            let error = super::super::reference::execute_reference_fdm_with_coupled_checkpoint(
                 &plan,
                 2.0e-4,
                 &[],
-                None,
+                Some(crate::types::LiveStepConsumer {
+                    grid: plan.grid.cells,
+                    field_every_n: 1,
+                    initial_snapshot: true,
+                    display_selection: None,
+                    interrupt_requested: None,
+                    on_step: &mut |_| {
+                        published_steps += 1;
+                        crate::StepAction::Continue
+                    },
+                }),
                 None,
                 Some(raw),
             )
             .expect_err(label);
+            assert_ne!(
+                error.message,
+                crate::FDM_CPU_TRANSPORT_EXACT_RESUME_UNSUPPORTED,
+                "invalid V1 state must reach payload validation for {label}",
+            );
+            assert_eq!(published_steps, 0, "invalid V1 state published for {label}");
         }
 
         type Mutation = Box<dyn Fn(&mut FdmCoupledCheckpoint)>;
@@ -4101,6 +4178,109 @@ mod tests {
                 .restore_coupled_checkpoint(malformed)
                 .expect_err(label);
             assert_eq!(workflow, pristine, "restore mutated workflow for {label}");
+        }
+    }
+
+    #[test]
+    fn legacy_m3_solver_state_rejects_changed_plan_and_frozen_before_publication() {
+        let plan = fixed_transient_plan(1.0e-4);
+        let first =
+            super::super::reference::execute_reference_fdm(&plan, 1.0e-4, &[], None, None).unwrap();
+        let checkpoint: FdmCoupledCheckpoint = serde_json::from_slice(
+            &first
+                .auxiliary_artifacts
+                .iter()
+                .find(|artifact| artifact.relative_path == "transport/coupled_checkpoint.json")
+                .unwrap()
+                .bytes,
+        )
+        .unwrap();
+        let mut changed_plan = plan.clone();
+        changed_plan.material.damping += 0.01;
+        let mut workflow = FdmSpinTransportWorkflow::from_plan(&changed_plan)
+            .unwrap()
+            .unwrap();
+        let pristine = workflow.clone();
+        let error = workflow
+            .restore_coupled_checkpoint(checkpoint.clone())
+            .expect_err("changed original plan must reject V1 continuation");
+        assert_eq!(error.message, "coupled checkpoint plan revision mismatch");
+        assert_eq!(workflow, pristine, "identity rejection mutated workflow");
+
+        let mut frozen_plan = plan.clone();
+        let mask = vec![true; plan.initial_magnetization.len()];
+        let count = mask.len() as u64;
+        let mut hash = Sha256::new();
+        hash.update(count.to_le_bytes());
+        hash.update(vec![1_u8; mask.len()]);
+        let mask_sha256 = format!("{:x}", hash.finalize());
+        frozen_plan.frozen_spins = Some(ResolvedFrozenSpinsPlanIR {
+            schema_version: RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION.into(),
+            constraint_ids: vec!["pinned".into()],
+            frozen_mask: mask,
+            active_dof_count: count,
+            frozen_dof_count: count,
+            free_dof_count: 0,
+            mask_sha256: mask_sha256.clone(),
+            grid_or_mesh_fingerprint: "transport-test-grid".into(),
+            source_state_revision: Some(1),
+            all_active_dofs_frozen: true,
+            certificate: SelectionCertificateIR {
+                schema_version: SELECTION_CERTIFICATE_SCHEMA_VERSION.into(),
+                evaluator_id: "selection.fdm_cell_center.v1".into(),
+                constraint_ids: vec!["pinned".into()],
+                authored_fingerprints: vec![SelectionAuthoredFingerprintIR {
+                    constraint_id: "pinned".into(),
+                    selector_sha256: "a".repeat(64),
+                }],
+                raw_candidate_dof_count: count,
+                inactive_candidate_dof_count: 0,
+                active_dof_count: count,
+                frozen_dof_count: count,
+                free_dof_count: 0,
+                bounds_m: None,
+                grid_or_mesh_fingerprint: "transport-test-grid".into(),
+                source_state_revision: Some(1),
+                mask_sha256,
+                resolved_reference_sha256: "b".repeat(64),
+                warnings: Vec::new(),
+            },
+        });
+        frozen_plan
+            .frozen_spins
+            .as_ref()
+            .unwrap()
+            .validate_intrinsic()
+            .unwrap();
+        for (candidate_plan, expected_frozen_refusal) in
+            [(&changed_plan, false), (&frozen_plan, true)]
+        {
+            let mut published_steps = 0;
+            let error = super::super::reference::execute_reference_fdm_with_coupled_checkpoint(
+                candidate_plan,
+                2.0e-4,
+                &[],
+                Some(crate::types::LiveStepConsumer {
+                    grid: candidate_plan.grid.cells,
+                    field_every_n: 1,
+                    initial_snapshot: true,
+                    display_selection: None,
+                    interrupt_requested: None,
+                    on_step: &mut |_| {
+                        published_steps += 1;
+                        crate::StepAction::Continue
+                    },
+                }),
+                None,
+                Some(serde_json::to_value(&checkpoint).unwrap()),
+            )
+            .expect_err("unsupported or changed-plan continuation must fail before publication");
+            if expected_frozen_refusal {
+                assert_eq!(error.message, crate::FDM_CPU_TRANSPORT_EXACT_RESUME_UNSUPPORTED);
+            } else {
+                assert_eq!(error.message, "coupled checkpoint plan revision mismatch");
+            }
+            assert_eq!(published_steps, 0, "rejected restore published a live state");
         }
     }
 

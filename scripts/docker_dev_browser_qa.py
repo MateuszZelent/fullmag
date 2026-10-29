@@ -215,15 +215,8 @@ def _validate_frontend_volume(
         raise BuildControlError("Frontend inputs have an invalid dependency seed digest")
     if not isinstance(toolpins_digest, str) or SHA256_RE.fullmatch(toolpins_digest) is None:
         raise BuildControlError("Frontend inputs have an invalid tool pin digest")
-    cache_key = hashlib.sha256(
-        canonical(
-            {
-                "project": control.project,
-                "dependencies": dependency_digest,
-                "tools": toolpins_digest,
-            }
-        )
-    ).hexdigest()
+    from docker_development_inputs import metadata_cache_key
+    cache_key = metadata_cache_key(frontend_inputs, control.project)
     expected_name = "fullmag-dev-frontend-v1-" + cache_key[:24]
     if frontend_volume != expected_name:
         raise BuildControlError("Frontend state volume is not the deterministic selected-group volume")
@@ -425,9 +418,24 @@ def _validate_frontend(
     state = document.get("State")
     if not isinstance(state, Mapping) or state.get("Running") is not True:
         raise BuildControlError("Selected frontend is not running")
-    expected_image = (current.get("inputs") or {}).get("image_id")
-    if not isinstance(expected_image, str) or document.get("Image") != expected_image:
-        raise BuildControlError("Observed frontend image differs from the live development receipt")
+    attempt = current.get("attempt")
+    digest = current.get("config_sha256")
+    if (not isinstance(attempt, str) or re.fullmatch(r"[0-9a-f]{32}", attempt) is None
+            or not isinstance(digest, str) or SHA256_RE.fullmatch(digest) is None):
+        raise BuildControlError("Development receipt has no exact Compose attempt/configuration pin")
+    compose = control.read(f"development/attempts/{attempt}/compose.json")
+    if (not isinstance(compose, Mapping) or compose.get("name") != control.project
+            or hashlib.sha256(canonical(compose)).hexdigest() != digest):
+        raise BuildControlError("Pinned development Compose identity/configuration differs")
+    services = compose.get("services")
+    if (not isinstance(services, Mapping) or not isinstance(services.get("frontend"), Mapping)
+            or not isinstance(services.get("backend"), Mapping)
+            or services["backend"].get("image") != (current.get("inputs") or {}).get("image_id")):
+        raise BuildControlError("Pinned development service image declarations differ")
+    expected_image = services["frontend"].get("image")
+    if (not isinstance(expected_image, str) or IMAGE_ID_RE.fullmatch(expected_image) is None
+            or document.get("Image") != expected_image):
+        raise BuildControlError("Observed frontend image differs from its pinned Compose service")
     if host.get("NetworkMode") in {"host", "none"}:
         raise BuildControlError("Frontend uses a forbidden host/none network")
     networks = network_settings.get("Networks") or {}
@@ -1674,7 +1682,16 @@ def _parse_saved_playback_result(
     if (payload.get("script_sha256") != expected_script_sha256
             or not SHA256_RE.fullmatch(expected_script_sha256)):
         raise BuildControlError("Saved Playback helper source hash differs from the admitted script")
-    if payload.get("frame_indices") != [0, 400, 800]:
+    geometry_kind = payload.get("geometry_kind", "fdm")
+    if geometry_kind not in {"fdm", "fem"}:
+        raise BuildControlError("Saved Playback geometry kind is unsupported")
+    expected_indices = [0, 400, 800]
+    if geometry_kind == "fem":
+        frame_count = payload.get("frame_count")
+        if type(frame_count) is not int or not 3 <= frame_count <= 100_000:
+            raise BuildControlError("Saved FEM Playback frame count is invalid")
+        expected_indices = [0, (frame_count - 1) // 2, frame_count - 1]
+    if payload.get("frame_indices") != expected_indices:
         raise BuildControlError("Saved Playback helper did not inspect first, midpoint, and last frames")
     frame_hashes = payload.get("frame_sha256")
     if (not isinstance(frame_hashes, list)

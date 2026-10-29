@@ -1,5 +1,5 @@
 import { fmsFileSizeError, MAX_FMS_FILE_BYTES } from "@/shared/domain/persistence/fmsFileTransport";
-import { WORKSPACE_ITEM_PLAYBACK_PATH, WORKSPACE_ITEM_PLAYBACK_FRAME_PATH } from "./apiPaths";
+import { WORKSPACE_ITEM_PLAYBACK_PATH, WORKSPACE_ITEM_PLAYBACK_FRAME_PATH, WORKSPACE_ITEM_PLAYBACK_GEOMETRY_PATH } from "./apiPaths";
 import type { SavedPlaybackResource } from "./savedResultsPlayback";
 import { artifactFieldResponseIdentityError } from "./artifactFieldResponseIdentity";
 import { objectMeshPolicyWireRequest } from "./objectMeshPolicyWire";
@@ -81,6 +81,7 @@ import {
   DATA_PLANAR_FIELD_MESH_OVERLAY_PATH,
   DATA_PLANAR_FIELD_META_PATH,
   DATA_PLANAR_FIELD_PROBE_PATH,
+  DATA_PLANAR_FIELD_PROFILE_PATH,
   DATA_PLANAR_FIELD_RENDER_PNG_PATH,
   DATA_PLANAR_FIELD_SCALAR_PATH,
   DATA_PLANAR_FIELD_VECTORS_PATH,
@@ -88,6 +89,7 @@ import {
   DATA_PLANAR_DEFAULT_FIELD_MESH_OVERLAY_PATH,
   DATA_PLANAR_DEFAULT_FIELD_META_PATH,
   DATA_PLANAR_DEFAULT_FIELD_PROBE_PATH,
+  DATA_PLANAR_DEFAULT_FIELD_PROFILE_PATH,
   DATA_PLANAR_DEFAULT_FIELD_RENDER_PNG_PATH,
   DATA_PLANAR_DEFAULT_FIELD_SCALAR_PATH,
   DATA_PLANAR_DEFAULT_FIELD_VECTORS_PATH,
@@ -358,6 +360,8 @@ import type {
   PlanarFieldMetaResource,
   PlanarFieldProbeQuery,
   PlanarFieldProbeResource,
+  PlanarFieldProfileQuery,
+  PlanarFieldProfileResource,
   PlanarFieldQuery,
   PlanarFieldSource,
   AnalyticReferenceModelCollectionResource,
@@ -1140,6 +1144,9 @@ export class ControlRoomApi {
   readonly workspace = {
     playback: (id: string, options?: RequestOptions) =>
       this.requestJson<SavedPlaybackResource>(WORKSPACE_ITEM_PLAYBACK_PATH, options, {path: {id}}),
+    playbackGeometry: (id: string, revision: string, part: "topology"|"support", options?: BinaryRequestOptions) =>
+      this.requestBinaryBytes(WORKSPACE_ITEM_PLAYBACK_GEOMETRY_PATH, {...options, maxResponseBytes: part === "support" ? 1024*1024 : 64*1024*1024},
+        {id}, {revision, part}),
     playbackFrame: (id: string, stageId: string, frameIndex: number, revision: string, options?: BinaryRequestOptions) =>
       this.requestBinaryBytes(WORKSPACE_ITEM_PLAYBACK_FRAME_PATH, {...options, maxResponseBytes: 64 * 1024 * 1024},
         {id, frame_index: String(frameIndex)}, {stage_id: stageId, revision}),
@@ -2122,6 +2129,23 @@ export class ControlRoomApi {
             DATA_PLANAR_DEFAULT_FIELD_PROBE_PATH,
           );
           return this.requestJson<PlanarFieldProbeResource>(request.path, options, {
+            path: request.pathParams,
+            query,
+          });
+        },
+        profile: (
+          quantityId: string,
+          source: PlanarFieldSource,
+          query: PlanarFieldProfileQuery,
+          options?: RequestOptions,
+        ) => {
+          const request = planarRequestSpec(
+            source,
+            quantityId,
+            DATA_PLANAR_FIELD_PROFILE_PATH,
+            DATA_PLANAR_DEFAULT_FIELD_PROFILE_PATH,
+          );
+          return this.requestJson<PlanarFieldProfileResource>(request.path, options, {
             path: request.pathParams,
             query,
           });

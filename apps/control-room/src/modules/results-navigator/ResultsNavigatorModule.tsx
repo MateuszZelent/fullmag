@@ -41,6 +41,7 @@ import { ResultsNavigatorTree } from "./ResultsNavigatorTree";
 import { ResultDatasetBrowser } from "./ResultDatasetBrowser";
 import { SavedResultsBrowser } from "./SavedResultsBrowser";
 import { useWorkspaceContentScope } from "@/kernel/layout/WorkspaceContentScope";
+import { useLayoutSelector } from "@/kernel/layout/useLayout";
 import {
   buildResultDatasetBrowserModel,
   buildResultDatasetItemPageQuery,
@@ -822,7 +823,7 @@ function CurrentResultsNavigator({
 }
 
 export default function ResultsNavigatorModule(props: ModuleProps) {
-  const [surface, setSurface] = useState<"current" | "saved">("current");
+  const surface = useLayoutSelector((state) => state.resultsSource ?? "current");
   const projectOnly = useWorkspaceContentScope() === "project";
 
   if (projectOnly) return (
@@ -837,7 +838,7 @@ export default function ResultsNavigatorModule(props: ModuleProps) {
         className="fm-results-navigator__surface-tabs px-2 pt-2"
         value={surface}
         onValueChange={(value) => {
-          if (value === "current" || value === "saved") setSurface(value);
+          if (value === "current" || value === "saved") props.kernel.layout.setResultsSource(value);
         }}
       >
         <TabsList presentation="segmented" aria-label="Results source">

@@ -55,6 +55,59 @@ pub(crate) fn encode_scalar_png(
     encode_rgba_png(width, height, &rgba)
 }
 
+/// Colormap id of the mumax3 direction wheel shared with the Control Room.
+pub(crate) const DIRECTION_COLORMAP: &str = "hsl_direction";
+
+/// mumax3 `HSLMap` in the world frame: hue = atan2(v̂y, v̂x), saturation 1,
+/// lightness = 0.5·v̂z + 0.5. A vector without a direction is neutral grey.
+/// Matches `shared/visualization/directionColor.ts` in the Control Room.
+pub(crate) fn direction_hsl_rgb(vector: [f64; 3]) -> [u8; 3] {
+    let magnitude = (vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]).sqrt();
+    if !(magnitude > 1e-30) {
+        return [153, 153, 153];
+    }
+    let lightness = (0.5 * vector[2] / magnitude + 0.5).clamp(0.0, 1.0);
+    let hue = (vector[1] / magnitude).atan2(vector[0] / magnitude).to_degrees() / 60.0;
+    let h = hue.rem_euclid(6.0);
+    let c = 1.0 - (2.0 * lightness - 1.0).abs();
+    let x = c * (1.0 - (h.rem_euclid(2.0) - 1.0).abs());
+    let m = lightness - c / 2.0;
+    let (r, g, b) = match h {
+        h if h < 1.0 => (c, x, 0.0),
+        h if h < 2.0 => (x, c, 0.0),
+        h if h < 3.0 => (0.0, c, x),
+        h if h < 4.0 => (0.0, x, c),
+        h if h < 5.0 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    [r, g, b].map(|channel| ((channel + m) * 255.0).round().clamp(0.0, 255.0) as u8)
+}
+
+/// Raster coloured by full vector direction; empty pixels are transparent.
+pub(crate) fn encode_direction_png(
+    width: u32,
+    height: u32,
+    vectors: &[[f64; 3]],
+    mask: &[u8],
+) -> Result<Vec<u8>, ApiError> {
+    let expected = width as usize * height as usize;
+    if vectors.len() != expected || mask.len() != expected {
+        return Err(ApiError::internal(
+            "render_png: direction vectors and mask length must match image size",
+        ));
+    }
+    let mut rgba = Vec::with_capacity(expected * 4);
+    for (index, vector) in vectors.iter().copied().enumerate() {
+        if mask[index] != 0 || !vector.iter().all(|component| component.is_finite()) {
+            rgba.extend_from_slice(&[0, 0, 0, 0]);
+            continue;
+        }
+        let [r, g, b] = direction_hsl_rgb(vector);
+        rgba.extend_from_slice(&[r, g, b, 255]);
+    }
+    encode_rgba_png(width, height, &rgba)
+}
+
 pub(crate) fn encode_rgba_matrix_png(
     width: u32,
     height: u32,
@@ -287,6 +340,15 @@ fn encode_rgba_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, ApiE
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direction_colormap_matches_mumax3_axes() {
+        assert_eq!(direction_hsl_rgb([1.0, 0.0, 0.0]), [255, 0, 0]);
+        assert_eq!(direction_hsl_rgb([-2.0, 0.0, 0.0]), [0, 255, 255]);
+        assert_eq!(direction_hsl_rgb([0.0, 0.0, 5.0]), [255, 255, 255]);
+        assert_eq!(direction_hsl_rgb([0.0, 0.0, -1.0]), [0, 0, 0]);
+        assert_eq!(direction_hsl_rgb([0.0, 0.0, 0.0]), [153, 153, 153]);
+    }
 
     #[test]
     fn png_encoder_returns_png_magic() {

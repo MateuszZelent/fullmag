@@ -13,7 +13,9 @@ import { activeLaneCapabilityFixture } from "@/kernel/resources/activeLaneCapabi
 import {
   buildFooterTelemetryModel,
   footerTelemetryStatusEquals,
+  resolveFooterMagneticModelPresent,
   resolvePrimaryTelemetryObjectId,
+  resolveFooterScalarResourceSample,
   selectFooterTelemetryStatus,
 } from "./FooterTelemetry";
 
@@ -162,6 +164,132 @@ const objectMetrics: ObjectMetricsResource = {
 };
 
 describe("FooterTelemetry", () => {
+  const currentStatus = selectFooterTelemetryStatus({
+    data: status, error: null, refetch: () => {}, revision: 1, status: "ready",
+  });
+
+
+  const antennaProgress = {
+    phase: "evaluating_field" as const,
+    completed_targets: 1_000, total_targets: 2_000,
+    source_cells: 1_856, elapsed_seconds: 61,
+  };
+  function antennaExecution(progress: unknown = antennaProgress, state = "running"): StageExecutionResource {
+    return {
+      session_id: status.session.session_id,
+      session_epoch: status.session.session_epoch,
+      request_scope_epoch: status.session.request_scope_epoch,
+      run_id: status.run!.run_id,
+      runtime_state: state,
+      active_stage_index: 0,
+      stages: [{
+        index: 0, stage_id: "authored-stage", antenna_solve_stage_id: "solve-loop",
+        status: state, antenna_progress: progress,
+      }],
+    } as StageExecutionResource;
+  }
+  const antennaModel = (execution = antennaExecution()) =>
+    buildFooterTelemetryModel(currentStatus, null, null, null, execution);
+  const antennaMetric = (model: ReturnType<typeof antennaModel>, id: string) =>
+    model.metrics.find((metric) => metric.id === id)?.value;
+
+  it("uses field samples as bounded numerical progress without LLG metrics", () => {
+    const model = antennaModel();
+    expect(model.antennaProgress).toEqual({ active: true, percent: 50, samples: "1,000 / 2,000" });
+    expect(antennaMetric(model, "antenna-phase")).toBe("Evaluating Oersted field");
+    expect(antennaMetric(model, "antenna-source")).toBe("1,856");
+    expect(antennaMetric(model, "antenna-elapsed")).toBe("1m 01.000s");
+    expect(model.metrics.some((metric) => ["step", "time", "dt", "avg-m", "energy-total"].includes(metric.id))).toBe(false);
+  });
+
+  it.each([
+    null,
+    { ...antennaProgress, phase: "future_phase" },
+    { ...antennaProgress, completed_targets: Number.NaN },
+    { ...antennaProgress, completed_targets: -1 },
+    { ...antennaProgress, completed_targets: 0.5 },
+    { ...antennaProgress, completed_targets: 2_001 },
+    { ...antennaProgress, total_targets: 0 },
+    { ...antennaProgress, source_cells: 0 },
+    { ...antennaProgress, phase: "preparing_source" },
+    { ...antennaProgress, phase: "publishing_result" },
+    { ...antennaProgress, source_cells: Number.POSITIVE_INFINITY },
+    { ...antennaProgress, source_cells: Number.MAX_SAFE_INTEGER + 1 },
+    { ...antennaProgress, elapsed_seconds: -1 },
+  ])("does not invent a field percentage or phase for absent/invalid progress: %j", (progress) => {
+    const model = antennaModel(antennaExecution(progress));
+    expect(model.antennaProgress?.percent).toBeNull();
+    expect(antennaMetric(model, "antenna-targets")).toBe("Progress not reported");
+    expect(antennaMetric(model, "antenna-phase")).toBe("Progress not reported");
+  });
+
+  it("distinguishes operation elapsed from the earlier stage journal clock", () => {
+    const execution = antennaExecution();
+    execution.stages[0].started_at_unix_ms = 1_000;
+    execution.stages[0].completed_at_unix_ms = null;
+    const numerical = buildFooterTelemetryModel(currentStatus, null, null, null,
+      execution, null, null, null, { nowMs: 121_000 });
+    const operationMetric = numerical.metrics.find((metric) => metric.id === "antenna-elapsed");
+    expect(operationMetric?.label).toBe("Operation elapsed");
+    expect(operationMetric?.value).toBe("1m 01.000s");
+    expect(operationMetric?.detail).toContain("operation runner started");
+    execution.stages[0].antenna_progress = undefined;
+    const legacy = buildFooterTelemetryModel(currentStatus, null, null, null,
+      execution, null, null, null, { nowMs: 121_000 });
+    const stageMetric = legacy.metrics.find((metric) => metric.id === "antenna-elapsed");
+    expect(stageMetric?.label).toBe("Stage elapsed");
+    expect(stageMetric?.value).toBe("2m 00.000s");
+    expect(stageMetric?.detail).toContain("published stage timestamps");
+  });
+
+  it("does not imply field progress during the source solve", () => {
+    const model = antennaModel(antennaExecution({
+      ...antennaProgress, phase: "solving_potential", completed_targets: 0,
+    }));
+    expect(model.antennaProgress?.percent).toBeNull();
+    expect(antennaMetric(model, "antenna-phase")).toBe("Solving electric potential");
+  });
+
+  it("does not animate a running record when the enclosing runtime is terminal", () => {
+    const execution = antennaExecution();
+    execution.runtime_state = "failed";
+    expect(antennaModel(execution).antennaProgress?.active).toBe(false);
+  });
+
+  it("keeps publication failure visible after all field targets were evaluated", () => {
+    const execution = antennaExecution({
+      ...antennaProgress, phase: "publishing_result", completed_targets: 2_000,
+    }, "failed");
+    execution.stages[0].state_transition_reason = "Result store is locked";
+    const model = antennaModel(execution);
+    expect(model.antennaProgress?.percent).toBe(100);
+    expect(model.antennaProgress?.active).toBe(false);
+    expect(model.statusTitle).toContain("Failed");
+    expect(model.statusDetail).toBe("Result store is locked");
+    expect(antennaMetric(model, "antenna-results")).toBe("Not completed");
+  });
+
+  it.each(["session_id", "session_epoch", "request_scope_epoch", "run_id"] as const)(
+    "rejects stale antenna progress from a foreign %s", (key) => {
+      const execution = antennaExecution();
+      execution[key] = "foreign";
+      expect(antennaModel(execution).antennaProgress).toBeNull();
+    },
+  );
+
+  it.each(["pending", "completed", "failed", "cancelled"])(
+    "does not animate a non-running antenna stage: %s", (state) => {
+      expect(antennaModel(antennaExecution(null, state)).antennaProgress?.active).toBe(false);
+    },
+  );
+
+  it("does not publish fabricated metrics without current session telemetry", () => {
+    const model = buildFooterTelemetryModel(null, objectMetrics);
+    expect(model.metrics).toEqual([]);
+    expect(model.statusTitle).toBe("System Status: No live telemetry");
+    expect(model.awaitingCompute).toBe(false);
+  });
+
   it("builds a responsive metric model from live status and object metrics", () => {
     const telemetryStatus = selectFooterTelemetryStatus({
       data: status,
@@ -183,6 +311,59 @@ describe("FooterTelemetry", () => {
     expect(byId.rate?.label).toBe("End-to-end rate");
     expect(byId.rate?.detail).toBe("Closed profiler span");
 
+  });
+
+  it("hides magnetic telemetry only for a ready, explicitly nonmagnetic scene", () => {
+    const scene = { objects: [{ id: "conductor", name: "Conductor" }], revision: 1 } satisfies SceneResource;
+    const magneticModelPresent = resolveFooterMagneticModelPresent({ data: scene, status: "ready" });
+    expect(magneticModelPresent).toBe(false);
+    const model = buildFooterTelemetryModel(currentStatus, objectMetrics, null, null, null, null, null, null, { magneticModelPresent });
+    expect(model.metrics.some((metric) => metric.id.startsWith("avg-m") || metric.id.startsWith("energy-") || metric.id === "max-torque")).toBe(false);
+    expect(model.metrics.some((metric) => metric.id === "time")).toBe(true);
+  });
+
+  it("keeps telemetry cards stable while a retained nonmagnetic scene refreshes", () => {
+    const scene = { objects: [{ id: "conductor", name: "Conductor" }], revision: 1 } satisfies SceneResource;
+    const cards = (["ready", "stale", "ready"] as const).map((resourceStatus) => {
+      const magneticModelPresent = resolveFooterMagneticModelPresent({ data: scene, status: resourceStatus });
+      return buildFooterTelemetryModel(currentStatus, null, null, null, null, null, null, null,
+        { magneticModelPresent }).metrics.map(({ id }) => id);
+    });
+    expect(cards[1]).toEqual(cards[0]);
+    expect(cards[2]).toEqual(cards[0]);
+    expect(cards[0]).not.toContain("energy-total");
+  });
+
+  it("retains global magnetic telemetry when a nonmagnetic object is selected in a mixed scene", () => {
+    const scene = { objects: [
+      { id: "conductor", name: "Conductor" },
+      { id: "film", name: "Film", magnetization_ref: "initial_m" },
+    ], revision: 1 } satisfies SceneResource;
+    expect(resolvePrimaryTelemetryObjectId(scene, "conductor")).toBeNull();
+    const magneticModelPresent = resolveFooterMagneticModelPresent({ data: scene, status: "ready" });
+    expect(magneticModelPresent).toBe(true);
+    const model = buildFooterTelemetryModel(currentStatus, null, null, null, null, null, null, null, { magneticModelPresent });
+    expect(model.metrics.some((metric) => metric.id === "avg-mx")).toBe(true);
+    expect(model.metrics.some((metric) => metric.id === "energy-total")).toBe(true);
+  });
+
+  it("keeps unknown scene availability distinct from a nonmagnetic scene", () => {
+    expect(resolveFooterMagneticModelPresent({ data: null, status: "loading" })).toBeNull();
+    expect(resolveFooterMagneticModelPresent({ data: { revision: 1 }, status: "ready" })).toBeNull();
+    expect(resolveFooterMagneticModelPresent({ data: { objects: [], revision: 1 }, status: "loading" })).toBeNull();
+    const model = buildFooterTelemetryModel({ ...currentStatus!, solver: { state: "unknown", dt: null, max_torque_T: null } }, null, null, null, null, null, null, null, { magneticModelPresent: null });
+    expect(model.metrics.find((metric) => metric.id === "max-torque")?.value).toBe("—");
+    expect(model.metrics.find((metric) => metric.id === "dt")?.value).toBe("—");
+  });
+
+  it.each([null, Number.NaN, Number.POSITIVE_INFINITY, 0])("distinguishes absent torque and timestep from genuine zero: %s", (value) => {
+    const telemetryStatus = selectFooterTelemetryStatus({
+      data: { ...status, solver: { ...status.solver, max_torque_T: value, dt: value } },
+      error: null, refetch: () => {}, revision: 1, status: "ready",
+    });
+    const model = buildFooterTelemetryModel(telemetryStatus, null);
+    expect(model.metrics.find((metric) => metric.id === "max-torque")?.value).toBe(value === 0 ? "0.000000e0 T" : "—");
+    expect(model.metrics.find((metric) => metric.id === "dt")?.value).toBe(value === 0 ? "0.000000e+0" : "—");
   });
 
   it("uses detailed runtime state for the visible compute status", () => {
@@ -332,7 +513,12 @@ describe("FooterTelemetry", () => {
     expect(byId.rate?.value).toBe("4.2");
     expect(byId.rate?.unit).toBe("steps/s");
 
-    const emptyModel = buildFooterTelemetryModel(null, null);
+    const emptyModel = buildFooterTelemetryModel({
+      ...telemetryStatus,
+      run: null,
+      metrics: { ...telemetryStatus.metrics, steps_per_second: Number.NaN, total_steps: Number.NaN },
+      solver: { ...telemetryStatus.solver, dt: Number.NaN, max_torque_T: Number.NaN },
+    }, null);
     const emptyById = Object.fromEntries(emptyModel.metrics.map((metric) => [metric.id, metric]));
     expect(emptyById.time?.value).toBe("—");
     expect(emptyById.time?.unit).toBe("s");
@@ -412,6 +598,7 @@ describe("FooterTelemetry", () => {
         revision: 26,
         row: {
           active_runtime_s: 0.2,
+          mx: 1, my: 0, mz: 0,
           pseudo_time_s: 9e-6,
           step: 9,
           time: 0,
@@ -904,6 +1091,31 @@ describe("FooterTelemetry", () => {
     expect(model.frequencyDomainProgress?.detail).not.toContain("range 2.000-5.000 GHz");
   });
 
+  it("does not replace a complete live sample with a sparse history row at the same revision", () => {
+    const live = {
+      revision: 26, sessionId: currentStatus!.sessionId, runId: currentStatus!.run!.run_id,
+      step: 9, time: 0,
+      row: { step: 9, time: 0, mx: 1, my: 0, mz: 0, pseudo_time_s: 9e-6,
+        active_runtime_s: 3, solver_dt: 1e-8, e_ex: 7, e_total: 8 },
+    };
+    const window = { revision: 26, total_rows: 1, returned_rows: 1,
+      columns: ["step", "time", "mx", "my", "mz", "e_total"],
+      rows: [[9, 0, 1, 0, 0, 8]], observation_frames: [] };
+    const history = resolveFooterScalarResourceSample(currentStatus, window);
+    const before = buildFooterTelemetryModel(currentStatus, null, null, live);
+    const after = buildFooterTelemetryModel(currentStatus, null, null, live, null, null, null, history);
+    expect(after.metrics).toEqual(before.metrics);
+    expect(after.metrics.find(({ id }) => id === "time")?.label).toBe("Pseudo time");
+    // A strictly newer history sample must still win, without mixing revisions.
+    const newer = resolveFooterScalarResourceSample(currentStatus, {
+      ...window, revision: 27, rows: [[10, 1e-9, 0, 1, 0, 12]],
+    });
+    const updated = buildFooterTelemetryModel(currentStatus, null, null, live, null, null, null, newer);
+    expect(updated.metrics.find(({ id }) => id === "step")?.value).toBe("10");
+    expect(updated.metrics.find(({ id }) => id === "time")?.label).toBe("Sim time");
+    expect(updated.metrics.some(({ id }) => id === "active-runtime")).toBe(false);
+  });
+
   it("ignores stale live scalar samples from a previous run", () => {
     const telemetryStatus = selectFooterTelemetryStatus({
       data: {
@@ -935,6 +1147,7 @@ describe("FooterTelemetry", () => {
     expect(byId.time?.label).toBe("Sim time");
     expect(byId["sim-time"]).toBeUndefined();
     expect(byId.dt?.label).toBe("dt");
+    expect(byId["avg-mx"]?.value).toBe("—");
   });
 
   it("selects only telemetry-relevant status fields", () => {

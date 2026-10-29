@@ -1247,6 +1247,40 @@ class TerminalLeadExtension:
         if type(self.layers) is not int or not 2 <= self.layers <= 1 << 20:
             raise ValueError("layers must be an exact integer between 2 and the bounded cell budget")
 
+    @classmethod
+    def from_antenna_terminal(
+        cls,
+        *,
+        id: str,
+        observation_id: str,
+        object_id: str,
+        conductor_part_id: str,
+        selector: str,
+        length_m: float,
+        outward_direction_xyz: tuple[float, float, float],
+        conductivity_spm: float,
+        layers: int = 2,
+    ) -> TerminalLeadExtension:
+        """Select an antenna cap by semantic identity, without preparing its mesh.
+
+        The existing marker-form IR is preserved. Cap existence, ownership and
+        outward direction are still checked against the actual prepared mesh.
+        """
+        from fullmag.model._antenna_terminal import antenna_terminal_marker
+
+        id = _source_text(id, "id")
+        observation_id = _source_text(observation_id, "observation_id")
+        object_id = _source_text(object_id, "object_id")
+        conductor_part_id = _source_text(conductor_part_id, "conductor_part_id")
+        selector = _source_text(selector, "selector")
+        marker = antenna_terminal_marker(object_id, conductor_part_id, selector)
+        return cls(
+            id=id, observation_id=observation_id, object_id=object_id,
+            boundary_markers=(marker,), length_m=length_m,
+            outward_direction_xyz=outward_direction_xyz,
+            conductivity_spm=conductivity_spm, layers=layers,
+        )
+
     def to_ir(self) -> dict[str, object]:
         return {
             "id": self.id, "observation_id": self.observation_id, "object_id": self.object_id,

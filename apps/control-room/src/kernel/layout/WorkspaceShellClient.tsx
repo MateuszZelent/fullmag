@@ -7,7 +7,11 @@ import {
   useSimulationStartupOverlayState,
 } from "./SimulationStartupOverlay";
 import { useSessionCollection } from "../resources/useSessionCollection";
-import { useSessionBootstrapStatus } from "../resources/useSessionStatus";
+import {
+  useSessionBootstrapStatus,
+  useSessionStatusSelector,
+} from "../resources/useSessionStatus";
+import { useStageExecutionResource } from "../resources/studyRuntimeResources";
 import {
   usePlatformHealthResource,
   usePlatformRuntimeServiceResource,
@@ -184,7 +188,7 @@ function ProjectWorkspaceShell({
   return (
     <WorkspaceContentScopeProvider scope="project">
       <SlotHost slotId="app-menu" />
-      <RuntimeDegradedBanner />
+      <RuntimeDegradedBanner hasWorkspaceDiagnostics />
       <section
         className="flex flex-wrap items-center justify-between gap-2 border-b border-fm-border bg-fm-surface px-4 py-2"
         data-project-workspace-session-state={sessionState}
@@ -222,8 +226,10 @@ function HomeShell({
   readonly onRetry: () => void;
 }) {
   const sessionUnavailable = state !== "no-session";
+  const platformHealth = usePlatformHealthResource();
+  const runtimeUnavailable = platformHealth.data?.status === "degraded";
   const startScreenFallback = (
-    <StartScreenLoadingFallback mode={sessionUnavailable ? "reconnecting" : "empty"} />
+    <StartScreenLoadingFallback mode={runtimeUnavailable ? "runtime-unavailable" : sessionUnavailable ? "reconnecting" : "empty"} />
   );
 
   return (
@@ -234,11 +240,16 @@ function HomeShell({
       {sessionUnavailable ? (
         <div
           className="fm-start-session-status"
-          data-session-connection="reconnecting"
+          data-session-connection={runtimeUnavailable ? "runtime-unavailable" : "reconnecting"}
           role="status"
         >
-          <span>Session services are reconnecting. Home remains available.</span>
-          <Button size="sm" type="button" variant="ghost" onClick={onRetry}>Retry</Button>
+          <span>{runtimeUnavailable
+            ? "Runtime execution is unavailable. Home and diagnostics remain available."
+            : "Session services are reconnecting. Home remains available."}</span>
+          <Button size="sm" type="button" variant="ghost" onClick={() => {
+            platformHealth.refetch();
+            onRetry();
+          }}>{runtimeUnavailable ? "Refresh status" : "Retry"}</Button>
         </div>
       ) : null}
       <RuntimeDegradedBanner />
@@ -254,9 +265,11 @@ function HomeShell({
 function StartScreenLoadingFallback({
   mode,
 }: {
-  readonly mode: "reconnecting" | "empty" | "overlay";
+  readonly mode: "reconnecting" | "runtime-unavailable" | "empty" | "overlay";
 }) {
-  const detail = mode === "reconnecting"
+  const detail = mode === "runtime-unavailable"
+    ? "Runtime execution is unavailable. Home and diagnostics remain available."
+    : mode === "reconnecting"
     ? "Session services are reconnecting. Home remains available."
     : mode === "empty"
       ? "Start from an empty FDM or FEM problem, or open a project archive."
@@ -281,7 +294,7 @@ function ActiveWorkspaceShell() {
     <>
       <SlotHost slotId="app-menu" />
       <SlotHost slotId="ribbon" />
-      <RuntimeDegradedBanner />
+      <RuntimeDegradedBanner hasWorkspaceDiagnostics />
       <WorkspaceRenderProfiler id="WorkspaceDockLayout">
         <WorkspaceDockLayout />
       </WorkspaceRenderProfiler>
@@ -296,7 +309,12 @@ function ActiveWorkspaceShell() {
   );
 }
 
-function RuntimeDegradedBanner() {
+function RuntimeDegradedBanner({
+  hasWorkspaceDiagnostics = false,
+}: {
+  readonly hasWorkspaceDiagnostics?: boolean;
+}) {
+  const kernel = useKernel();
   // An idle healthy workspace issues no periodic requests. Health is read on
   // mount, again whenever the realtime connection changes or the page becomes
   // visible, and polled only while the runtime is already degraded.
@@ -322,37 +340,93 @@ function RuntimeDegradedBanner() {
     enabled: degraded,
     pollIntervalMs: degraded ? 5_000 : 0,
   });
+  const taskState = useSessionStatusSelector(
+    (status) => status.data?.solver.state ?? null,
+    { enabled: hasWorkspaceDiagnostics },
+  );
+  const runId = useSessionStatusSelector(
+    (status) => status.data?.run?.run_id ?? null,
+    { enabled: hasWorkspaceDiagnostics },
+  );
+  const taskFailed = hasWorkspaceDiagnostics && (taskState === "error" || taskState === "failed");
+  const stageExecution = useStageExecutionResource({ enabled: taskFailed });
+  // The hook fences session/request identity. Also require the current run;
+  // a cached stage from another run must never explain this task's failure.
+  const failedStage = stageExecution.status === "ready" && runId !== null &&
+      stageExecution.data?.run_id === runId
+    ? stageExecution.data.stages.find((stage) => stage.status === "failed")
+    : undefined;
 
-  if (!degraded) return null;
+  if (!degraded && !taskFailed) return null;
 
   const service = runtimeService.data;
   const reasonCode = service?.reason.code.trim();
   const reasonMessage = service?.reason.message.trim();
   return (
     <div
-      aria-label="Native runtime degraded"
+      aria-label={degraded ? "Native runtime degraded" : "Simulation task failed"}
       className="fm-runtime-degraded-banner"
-      data-runtime-state="degraded"
+      data-runtime-state={health.data?.status ?? "unknown"}
+      data-task-state={taskFailed ? taskState : undefined}
       role="alert"
     >
       <div className="fm-runtime-degraded-banner__copy">
-        <strong>Native runtime is degraded. New computation requests are blocked.</strong>
-        <span>
+        <strong>{degraded
+          ? "Native runtime is degraded. New computation requests are blocked."
+          : "Simulation task failed. Inspect its diagnostics before starting another run."}</strong>
+        {degraded ? <span>
           {reasonMessage || (runtimeService.status === "error"
             ? "Runtime diagnostics are temporarily unavailable."
             : "Loading the runtime failure reason.")}
-        </span>
-        {service ? (
+        </span> : null}
+        {degraded && service ? (
           <span className="fm-runtime-degraded-banner__reason">
             Runtime service: {service.state}
             {reasonCode ? ` · Reason: ${reasonCode}` : ""}
           </span>
+        ) : null}
+        {taskFailed ? (
+          <>
+            <span className="break-words">Task status: {taskState}{runId ? ` · Run: ${runId}` : ""}</span>
+            <span>Stage: {failedStage?.label || failedStage?.stage_id ||
+              (stageExecution.status === "loading" ? "Loading failure stage…" : "Not published for this run")}</span>
+            <span className="break-words">Cause: {failedStage?.state_transition_reason?.trim() ||
+              (stageExecution.status === "loading" ? "Loading failure details…" : "No detailed cause is available; inspect the engine log and command history.")}</span>
+          </>
         ) : null}
         <span>
           No computation will be rerun automatically. API diagnostics remain available;
           previously loaded results are retained. Inspect the runtime logs for the failed
           stage and cause. A task&apos;s completion status is shown separately from API availability.
         </span>
+        {hasWorkspaceDiagnostics ? (
+          <div className="flex flex-wrap gap-2" aria-label="Runtime failure diagnostics">
+            <Button
+              size="sm"
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                homeView.close();
+                kernel.layout.openBottomPanel("engine");
+              }}
+            >
+              Open engine log
+            </Button>
+            <Button
+              size="sm"
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                homeView.close();
+                kernel.layout.openBottomPanel("operations");
+              }}
+            >
+              Inspect commands
+            </Button>
+          </div>
+        ) : (
+          <span>No workspace is loaded. Inspect the backend container log for startup details.</span>
+        )}
       </div>
     </div>
   );

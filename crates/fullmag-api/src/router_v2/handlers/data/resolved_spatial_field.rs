@@ -128,6 +128,9 @@ pub(crate) enum SpatialFieldCarrier<'a> {
         cell_size_m: Option<[f64; 3]>,
         grid_fingerprint: Option<String>,
         membership: Option<FdmCellMembership>,
+        /// Exact loader error when membership could not be resolved; non-domain
+        /// targets report it instead of a generic missing-membership error.
+        membership_error: Option<String>,
         multilayer_scope: Option<FdmMultilayerScopeCarrier<'a>>,
     },
     FemNodes {
@@ -276,6 +279,9 @@ impl ResolvedSpatialField<'static> {
         quantity_revision: u64,
     ) -> Result<Self, ApiError> {
         let spec = quantity_spec(quantity_id).ok_or_else(|| ApiError::not_found("unknown artifact quantity"))?;
+        if carrier.sample_carrier.is_some() && quantity_id != "H_ant" {
+            return Err(ApiError::conflict("verified H sampling descriptor cannot describe a conductor field"));
+        }
         carrier.validate(values.len(), spec.n_comp as usize)?;
         if values.iter().any(|value| !value.is_finite()) {return Err(ApiError::conflict("nonfinite artifact field payload"));}
         let field = Self {
@@ -469,6 +475,7 @@ impl ResolvedSpatialField<'_> {
                 cell_size_m,
                 grid_fingerprint,
                 membership,
+                membership_error: _,
                 multilayer_scope,
             } => {
                 validate_grid_count(*cells, local_count, &self.quantity_id)?;
@@ -2358,7 +2365,10 @@ fn resolve_spatial_field_metadata<'a>(
         let (origin_m, cell_size_m) = fdm_grid_geometry(snapshot)
             .map(|(origin, spacing)| (Some(origin), Some(spacing)))
             .unwrap_or((None, None));
-        let membership = load_resolved_fdm_membership(snapshot).ok();
+        let (membership, membership_error) = match load_resolved_fdm_membership(snapshot) {
+            Ok(membership) => (Some(membership), None),
+            Err(error) => (None, Some(error.to_string())),
+        };
         let multilayer_scope = snapshot.metadata.as_ref().and_then(|metadata| {
             let artifact_layout = metadata.get("artifact_layout")?;
             let execution_plan = metadata.get("execution_plan")?;
@@ -2380,6 +2390,7 @@ fn resolve_spatial_field_metadata<'a>(
             cell_size_m,
             grid_fingerprint,
             membership: membership.as_ref().map(FdmCellMembership::from),
+            membership_error,
             multilayer_scope,
         }
     } else {
@@ -2726,6 +2737,7 @@ mod tests {
                 cell_size_m: Some(cell_size_m),
                 grid_fingerprint: None,
                 membership: None,
+                membership_error: None,
                 multilayer_scope: None,
             },
         }

@@ -99,4 +99,19 @@ describe("projectPlanarPresentationState", () => {
       },
     ]);
   });
+
+  it("adopts a pending component only when the switch is client-side (D2D-12)", () => {
+    const pending = { planar: { ...base.planar, component: "x" } } as unknown as VisualizationStateResource;
+    const derivable = (component: string) => ["x", "y", "z", "magnitude"].includes(component);
+    const clientComponent = (authoritative: string, optimistic: string) =>
+      derivable(authoritative) && derivable(optimistic);
+
+    expect(projectPlanarPresentationState(base as unknown as VisualizationStateResource, pending)?.component)
+      .toBe("magnitude");
+    expect(projectPlanarPresentationState(base as unknown as VisualizationStateResource, pending, { clientComponent })?.component)
+      .toBe("x");
+    const toNormal = { planar: { ...base.planar, component: "normal" } } as unknown as VisualizationStateResource;
+    expect(projectPlanarPresentationState(base as unknown as VisualizationStateResource, toNormal, { clientComponent })?.component)
+      .toBe("magnitude");
+  });
 });

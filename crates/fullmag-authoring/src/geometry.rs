@@ -1446,10 +1446,35 @@ fn derive_geometry_bounds(geometry: &SceneGeometry) -> Option<([f64; 3], [f64; 3
             if !(radius.is_finite() && radius > 0.0 && height.is_finite() && height > 0.0) {
                 return None;
             }
-            Some((
-                [-radius, -radius, -height / 2.0],
-                [radius, radius, height / 2.0],
-            ))
+            let axis = match geometry.geometry_params.get("axis") {
+                Some(_) => vec3_param(&geometry.geometry_params, "axis")?,
+                None => [0.0, 0.0, 1.0],
+            };
+            if !finite_vec3(axis) {
+                return None;
+            }
+            let axis_scale = axis.iter().map(|component| component.abs()).fold(0.0, f64::max);
+            if axis_scale <= 0.0 {
+                return None;
+            }
+            let scaled_axis = axis.map(|component| component / axis_scale);
+            let scaled_norm = scaled_axis[0].hypot(scaled_axis[1]).hypot(scaled_axis[2]);
+            if !scaled_norm.is_finite() || scaled_norm <= 0.0 {
+                return None;
+            }
+            let unit_axis = scaled_axis.map(|component| component / scaled_norm);
+            let half_height = height / 2.0;
+            let extent = std::array::from_fn(|index| {
+                let axial_component = unit_axis[index].abs();
+                let radial_component = (1.0 - unit_axis[index] * unit_axis[index])
+                    .max(0.0)
+                    .sqrt();
+                radius * radial_component + half_height * axial_component
+            });
+            if !finite_vec3(extent) {
+                return None;
+            }
+            Some((extent.map(|value| -value), extent))
         }
         "ArchWaveguide" => {
             let length = number_param(&geometry.geometry_params, "length")?;
@@ -1876,6 +1901,7 @@ mod tests {
                 allocated_region_ids: Vec::new(),
                 material_parameter_fields: Vec::new(),
                 absorbing_boundary: None,
+                visualization_hint: Default::default(),
                 notes: None,
                 visible: true,
                 locked: false,

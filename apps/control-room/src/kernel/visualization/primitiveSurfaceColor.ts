@@ -120,6 +120,16 @@ function circularHueDistance(left: number, right: number): number {
   return Math.min(difference, 360 - difference);
 }
 
+/** Resolve the editable primitive preference independently of a solid-shader override. */
+export function primitiveMonoColorForRole(
+  role: string | null | undefined,
+  requested: string | undefined,
+): string {
+  return role === "antenna" && (!requested || requested.startsWith("var("))
+    ? "var(--fm-surface-antenna)"
+    : requested ?? "";
+}
+
 /** Presentation only; the authored role never determines solver physics. */
 export function resolvePrimitiveSurfaceColor(
   role: string | null | undefined,

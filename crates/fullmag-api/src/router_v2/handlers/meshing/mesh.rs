@@ -2487,6 +2487,14 @@ pub async fn get_mesh_object_report(
         .find(|entry| entry.id == object_id)
         .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))?;
     let mesh_workspace = current_mesh_workspace(&snapshot)?;
+    let source_mesh = field_only_source_payload(&snapshot, &object_id)?;
+    let last_build_summary = source_mesh.as_ref().map(|mesh| json!({
+        "source": "pinned_current_source", "mesh_id": mesh.mesh_id,
+        "generation_id": mesh.generation_id, "node_count": mesh.nodes.len(),
+        "element_count": mesh.cells.len(), "boundary_face_count": mesh.facets.len(),
+        "source_scene_revision": mesh_source_scene_revision(&snapshot),
+        "markers": mesh.element_markers.iter().copied().collect::<BTreeSet<_>>(),
+    })).unwrap_or_else(|| mesh_workspace.get("last_build_summary").cloned().unwrap_or(Value::Null));
     let report = Some(json!({
         "object_id": object.id,
         "object_name": object.name,
@@ -2496,7 +2504,7 @@ pub async fn get_mesh_object_report(
             .and_then(|targets| targets.get(object_id.as_str()))
             .cloned()
             .unwrap_or(Value::Null),
-        "last_build_summary": mesh_workspace.get("last_build_summary").cloned().unwrap_or(Value::Null),
+        "last_build_summary": last_build_summary,
     }));
     Ok(Json(MeshObjectReportResource {
         revision: snapshot.mesh_revision,
@@ -2529,7 +2537,7 @@ pub async fn get_mesh_object_quality(
         .find(|entry| entry.id == object_id)
         .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))?;
     let mesh_workspace = current_mesh_workspace(&snapshot)?;
-    let quality = object_quality(&snapshot, mesh_workspace, &object_id);
+    let quality = object_quality(&snapshot, mesh_workspace, &object_id)?;
     Ok(Json(MeshObjectQualityResource {
         revision: snapshot.mesh_revision,
         object_id,
@@ -2642,13 +2650,18 @@ pub async fn get_mesh_object_topology(
     Path(object_id): Path<String>,
 ) -> Result<axum::response::Response, ApiError> {
     let (snapshot, request_context) = current_snapshot_with_context(&state).await?;
-    match snapshot.fem_mesh.as_ref() {
+    let source_mesh = field_only_source_payload(&snapshot, &object_id)?;
+    match source_mesh.as_ref().or(snapshot.fem_mesh.as_deref()) {
         Some(mesh) => {
-            let object_mesh = subset_object_mesh(mesh, &object_id)
-                .map_err(ApiError::conflict)?
-                .ok_or_else(|| {
-                    ApiError::not_found(format!("object mesh not found: {object_id}"))
-                })?;
+            let object_mesh = if source_mesh.is_some() {
+                // All electrical regions and both sides of the source cut
+                // belong to this object; the first part is not the union.
+                mesh.clone()
+            } else {
+                subset_object_mesh(mesh, &object_id)
+                    .map_err(ApiError::conflict)?
+                    .ok_or_else(|| ApiError::not_found(format!("object mesh not found: {object_id}")))?
+            };
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
             let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(&object_mesh);
             let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
@@ -3443,6 +3456,10 @@ fn merge_mesh_scope_size_statistics(
 }
 
 fn mesh_scope_size_statistics(mesh: &FemMeshPayload, marker: u32) -> Option<Value> {
+    mesh_size_statistics(mesh, Some(marker))
+}
+
+fn mesh_size_statistics(mesh: &FemMeshPayload, marker: Option<u32>) -> Option<Value> {
     if mesh.element_markers.len() != mesh.cell_count() {
         return None;
     }
@@ -3451,7 +3468,7 @@ fn mesh_scope_size_statistics(mesh: &FemMeshPayload, marker: u32) -> Option<Valu
     let mut edge_lengths = Vec::new();
 
     for element_index in 0..mesh.cell_count() {
-        if mesh.element_markers[element_index] != marker {
+        if marker.is_some_and(|marker| mesh.element_markers[element_index] != marker) {
             continue;
         }
         let geometry = super::mesh_cell_geometry::cell_geometry(mesh, element_index)?;
@@ -3477,10 +3494,10 @@ fn mesh_scope_size_statistics(mesh: &FemMeshPayload, marker: u32) -> Option<Valu
     edge_statistics["unit"] = json!("m");
 
     Some(json!({
-        "scope_id": format!("marker:{marker}"),
-        "kind": if marker == 0 { "airbox" } else { "domain" },
-        "label": if marker == 0 { "Airbox".to_string() } else { format!("Domain {marker}") },
-        "role": if marker == 0 { "air" } else { "domain" },
+        "scope_id": marker.map(|marker| format!("marker:{marker}")).unwrap_or_else(|| "mesh".into()),
+        "kind": if marker == Some(0) { "airbox" } else { "domain" },
+        "label": match marker { Some(0) => "Airbox".to_string(), Some(marker) => format!("Domain {marker}"), None => "Mesh".into() },
+        "role": if marker == Some(0) { "air" } else { "domain" },
         "marker": marker,
         "element_count": element_count,
         "geometry_source": "canonical_cell_decomposition",
@@ -3984,7 +4001,24 @@ fn object_quality(
     snapshot: &SessionStateResponse,
     mesh_workspace: &Value,
     object_id: &str,
-) -> Option<Value> {
+) -> Result<Option<Value>, ApiError> {
+    if let Some(source) = field_only_source_payload(snapshot, object_id)? {
+        let mut global = mesh_size_statistics(&source, None).unwrap_or_else(|| json!({}));
+        // Shape-quality summaries belong to individual electrical markers.
+        // Percentiles cannot be combined without the per-cell measurements.
+        global["scope_id"] = json!(format!("object:{object_id}"));
+        global["kind"] = json!("object");
+        global["role"] = json!("conductor");
+        global["label"] = json!(object_id);
+        return Ok(Some(json!({
+            "quality_source": "pinned_current_source", "global": global,
+            "markers": source.element_markers.iter().copied().collect::<BTreeSet<_>>(),
+            "per_domain_quality": if source.per_domain_quality.len() == 1 {
+                source.per_domain_quality.values().next().and_then(|quality| serde_json::to_value(quality).ok())
+            } else { None },
+            "per_marker_quality": source.per_domain_quality,
+        })));
+    }
     let effective_target = mesh_workspace
         .get("effective_per_object_targets")
         .and_then(|targets| targets.get(object_id))
@@ -4035,7 +4069,7 @@ fn object_quality(
         "per_domain_quality",
         per_domain_quality.unwrap_or(Value::Null),
     );
-    Some(quality)
+    Ok(Some(quality))
 }
 
 fn region_quality(
@@ -4203,6 +4237,19 @@ struct MeshBuildProvenance {
 }
 
 fn mesh_build_provenance(snapshot: &SessionStateResponse) -> MeshBuildProvenance {
+    // Field-only preparation owns a source mesh; independent sampling objects
+    // intentionally do not belong to that mesh. Invalid prepared ownership must
+    // not fall back to the all-visible-objects heuristic.
+    let field_only_publication = [snapshot.mesh_workspace.as_ref(), snapshot.metadata.as_ref()]
+        .into_iter().flatten().any(|document|
+            document.pointer("/execution_plan/backend_plan/kind").and_then(Value::as_str)
+                == Some("antenna_field_only"));
+    if field_only_publication {
+        return field_only_source_mesh_for_inspection(snapshot).map(|_| MeshBuildProvenance {
+            source_scene_revision: snapshot.scene_document.as_ref().map(|scene| scene.revision),
+            geometry_realization_revision: None,
+        }).unwrap_or_default();
+    }
     let last_build = snapshot
         .mesh_workspace
         .as_ref()
@@ -4232,6 +4279,82 @@ fn mesh_build_provenance(snapshot: &SessionStateResponse) -> MeshBuildProvenance
 
 pub(crate) fn mesh_source_scene_revision(snapshot: &SessionStateResponse) -> Option<u64> {
     mesh_build_provenance(snapshot).source_scene_revision
+}
+
+
+pub(crate) fn prepared_field_only_source_mesh(snapshot: &SessionStateResponse) -> Option<&Value> {
+    let preparation = snapshot.simulation_preparation.as_ref()?;
+    let workspace = snapshot.mesh_workspace.as_ref()?;
+    if preparation.preparation_id.is_empty() || preparation.status != "ready"
+        || workspace["preparation_id"].as_str() != Some(preparation.preparation_id.as_str())
+    { return None; }
+    field_only_source_mesh_binding(snapshot)
+}
+
+// Persistent geometry identity alone never grants live execution readiness.
+pub(crate) fn field_only_source_mesh_binding(snapshot: &SessionStateResponse) -> Option<&Value> {
+    let scene = snapshot.scene_document.as_ref()?;
+    let workspace = snapshot.mesh_workspace.as_ref()?;
+    let mesh = snapshot.fem_mesh.as_ref()?;
+    let plan = workspace.pointer("/execution_plan/backend_plan")?;
+    let metadata_plan = snapshot.metadata.as_ref()?.pointer("/execution_plan/backend_plan")?;
+    if scene.study.requested_backend != "fem"
+        || workspace["schema_version"].as_str()
+            != Some(crate::live_scene_preparation::LIVE_SCENE_PREPARATION_READ_MODEL_SCHEMA)
+        || workspace["status"].as_str() != Some("completed")
+        || workspace["source_scene_revision"].as_u64() != Some(scene.revision)
+        || workspace["preparation_id"].as_str().is_none_or(str::is_empty)
+        || workspace.get("accepted_run_id")
+            .is_some_and(|run| run.as_str() != Some(snapshot.session.run_id.as_str()))
+        || plan["kind"].as_str() != Some("antenna_field_only")
+        || plan["schema_version"].as_str() != Some("antenna_field_only_plan.v1")
+        || mesh.nodes.is_empty() || mesh.cells.is_empty()
+    {
+        return None;
+    }
+    // Both projections were published atomically by the canonical preparation owner.
+    // Compare only its small identity, never deserialize or clone the numerical plan.
+    for key in ["kind", "schema_version", "stage_id", "port_mode_id", "source_object_id"] {
+        let value = plan.get(key)?.as_str()?;
+        if value.is_empty() || metadata_plan.get(key)?.as_str()? != value { return None; }
+    }
+    let generation = mesh.generation_id.as_deref()?;
+    if generation.is_empty() || mesh.mesh_id != format!("{}:{generation}", mesh.mesh_name) {
+        return None;
+    }
+    if plan.pointer("/field_sampling/domain") != metadata_plan.pointer("/field_sampling/domain")
+        || plan.pointer("/field_sampling/carrier_kind") != metadata_plan.pointer("/field_sampling/carrier_kind")
+    { return None; }
+    let global = plan.pointer("/field_sampling/domain/kind").and_then(Value::as_str) == Some("global");
+    if global {
+        let binding = snapshot.metadata.as_ref()?.get("antenna_domain_publication")?;
+        if binding["mesh_generation_id"].as_str() != Some(generation)
+            || binding["mesh_name"].as_str() != Some(mesh.mesh_name.as_str())
+            || binding.get("sampling_topology_digest") != plan.pointer("/field_sampling/topology_digest")
+            || plan.pointer("/field_sampling/topology_digest") != metadata_plan.pointer("/field_sampling/topology_digest")
+        { return None; }
+    } else if plan.pointer("/source_mesh/mesh_name").and_then(Value::as_str) != Some(mesh.mesh_name.as_str()) {
+        return None;
+    }
+    let source_id = plan["source_object_id"].as_str()?;
+    let source = scene.objects.iter().find(|object| object.id == source_id)?;
+    if source.tags.iter().any(|tag| tag == "mesh:dirty")
+        || !(plan.get("source_object_segments").and_then(Value::as_array).is_some_and(|segments|
+                segments.iter().any(|segment| segment["object_id"].as_str() == Some(source_id)))
+            || plan.get("source_mesh_parts").and_then(Value::as_array).is_some_and(|parts|
+                parts.iter().any(|part| part["object_id"].as_str() == Some(source_id))))
+    {
+        return None;
+    }
+    Some(plan)
+}
+
+fn field_only_source_mesh_for_inspection(snapshot: &SessionStateResponse) -> Option<&Value> {
+    prepared_field_only_source_mesh(snapshot).or_else(|| {
+        snapshot.imported_antenna_mesh_proof.as_ref()
+            .filter(|proof| proof.valid_for(snapshot))?;
+        field_only_source_mesh_binding(snapshot)
+    })
 }
 
 fn clean_scene_mesh_provenance(snapshot: &SessionStateResponse) -> Option<MeshBuildProvenance> {
@@ -4660,6 +4783,10 @@ fn mesh_manifest_region_for_object(
         .filter(|segment| segment.object_id == object.id)
         .map(|segment| segment.element_count)
         .sum::<u32>();
+    let element_count = if element_count == 0 {
+        mesh.mesh_parts.iter().filter(|part| part.object_id.as_deref() == Some(object.id.as_str()))
+            .map(|part| part.element_count).sum()
+    } else { element_count };
     if mesh_part_ids.is_empty() && element_count == 0 {
         return None;
     }
@@ -4836,19 +4963,120 @@ fn push_region_geometry_aliases(aliases: &mut BTreeSet<String>, value: &str) {
     aliases.insert(trimmed.replace(':', "%3A"));
 }
 
+/// The current solve and Global sampling have independent topology. Object
+/// reads must retain the cut conductor used by V/J, not subset the air mesh.
+pub(crate) fn field_only_source_payload(
+    snapshot: &SessionStateResponse,
+    object_id: &str,
+) -> Result<Option<FemMeshPayload>, ApiError> {
+    let expected_source = [snapshot.metadata.as_ref(), snapshot.mesh_workspace.as_ref()]
+        .into_iter()
+        .flatten()
+        .any(|document| {
+            let plan = document.pointer("/execution_plan/backend_plan");
+            plan.is_some_and(|plan| {
+                plan["kind"].as_str() == Some("antenna_field_only")
+                    && plan["source_object_id"].as_str() == Some(object_id)
+            })
+        });
+    if !expected_source {
+        return Ok(None);
+    }
+    let execution = snapshot
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.execution_plan())
+        .ok_or_else(|| {
+            ApiError::conflict_with_code(
+                "antenna_source_mesh_invalid",
+                "current-source execution plan is missing or not typed",
+            )
+        })?;
+    let fullmag_ir::BackendPlanIR::AntennaFieldOnly(plan) = &execution.backend_plan else {
+        return Err(ApiError::conflict("current-source plan changed backend"));
+    };
+    if plan.source_object_id != object_id {
+        return Err(ApiError::conflict(
+            "current-source plan changed object identity",
+        ));
+    }
+    // The guard also remains valid after Solve: it binds preparation, scene,
+    // run and mesh identity, rather than requiring a running solver.
+    field_only_source_mesh_for_inspection(snapshot).ok_or_else(|| {
+        ApiError::conflict_with_code(
+            "antenna_source_mesh_stale",
+            "current-source mesh has no valid preparation binding",
+        )
+    })?;
+    Ok(Some(
+        fullmag_runner::StageFemMeshAsset::build_from_antenna_field_only_plan(plan).payload,
+    ))
+}
+
 fn subset_object_mesh(
     mesh: &FemMeshPayload,
     object_id: &str,
 ) -> Result<Option<FemMeshPayload>, String> {
-    if let Some(part) = mesh.mesh_parts.iter().find(|part| {
-        part.role == "magnetic_object"
-            && part
+    let parts = mesh
+        .mesh_parts
+        .iter()
+        .filter(|part| {
+            matches!(
+                part.role.as_str(),
+                "magnetic_object" | "conductor" | "geometry"
+            ) && part
                 .object_id
                 .as_deref()
-                .map(|id| object_ids_match(id, object_id))
-                .unwrap_or(false)
-    }) {
+                .is_some_and(|id| object_ids_match(id, object_id))
+        })
+        .collect::<Vec<_>>();
+    if let [part] = parts.as_slice() {
         return subset_part_payload(mesh, part, object_id).map(Some);
+    }
+    if !parts.is_empty() {
+        let mut part = (*parts[0]).clone();
+        let mut nodes = BTreeSet::new();
+        let mut elements = BTreeSet::new();
+        let mut facets = BTreeSet::new();
+        let mut facet_ordinals = BTreeSet::new();
+        for source in parts {
+            nodes.extend(collect_part_source_node_indices(mesh, source)?);
+            elements
+                .extend(part_source_element_indices(mesh, source).map_err(|error| error.message)?);
+            if source.boundary_face_indices.is_empty() {
+                facets.extend(
+                    source.boundary_face_start
+                        ..source
+                            .boundary_face_start
+                            .saturating_add(source.boundary_face_count),
+                );
+            } else {
+                facets.extend(source.boundary_face_indices.iter().copied());
+            }
+            facet_ordinals.extend(source.facet_global_ordinals.iter().copied());
+        }
+        part.id = object_id.to_owned();
+        part.label = object_id.to_owned();
+        part.geometry_id = None;
+        part.element_start = 0;
+        // Explicit elements below own the union, not a fabricated range.
+        part.element_count = 0;
+        part.node_start = 0;
+        part.node_count = nodes.len() as u32;
+        part.node_indices = nodes.into_iter().collect();
+        part.boundary_face_start = 0;
+        part.boundary_face_count = facets.len() as u32;
+        part.boundary_face_indices = facets.into_iter().collect();
+        part.facet_global_ordinals = facet_ordinals.into_iter().collect();
+        part.bounds_min = None;
+        part.bounds_max = None;
+        return subset_part_payload_with_elements(
+            mesh,
+            &part,
+            object_id,
+            Some(&elements.into_iter().collect::<Vec<_>>()),
+        )
+        .map(Some);
     }
 
     let Some(segment) = mesh
@@ -5004,6 +5232,15 @@ fn subset_part_payload(
     part: &FemMeshPartPayload,
     mesh_suffix: &str,
 ) -> Result<FemMeshPayload, String> {
+    subset_part_payload_with_elements(mesh, part, mesh_suffix, None)
+}
+
+fn subset_part_payload_with_elements(
+    mesh: &FemMeshPayload,
+    part: &FemMeshPartPayload,
+    mesh_suffix: &str,
+    explicit_elements: Option<&[usize]>,
+) -> Result<FemMeshPayload, String> {
     let has_cell_mesh_parts = !mesh.cells.mesh_parts.is_empty();
     if has_cell_mesh_parts && mesh.cells.mesh_parts.len() != mesh.cells.types.len() {
         return Err(malformed_part_topology(
@@ -5029,14 +5266,17 @@ fn subset_part_payload(
     }
 
     let element_start = part.element_start as usize;
-    let element_end = element_start.saturating_add(part.element_count as usize);
+    let element_count =
+        explicit_elements.map_or(part.element_count as usize, |indices| indices.len());
     let mut cell_types = Vec::new();
     let mut cell_offsets = vec![0];
     let mut cell_nodes = Vec::new();
     let mut cell_global_ordinals = Vec::new();
     let mut cell_mesh_parts = Vec::new();
     let mut element_markers = Vec::new();
-    for source_element_index in element_start..element_end {
+    for ordinal in 0..element_count {
+        let source_element_index =
+            explicit_elements.map_or(element_start + ordinal, |indices| indices[ordinal]);
         let cell_type = *mesh.cells.types.get(source_element_index).ok_or_else(|| {
             malformed_part_topology(
                 part,
@@ -5547,6 +5787,25 @@ mod tests {
             vec![[0, 1, 3]]
         );
         assert_eq!(part_mesh.mesh_parts[0].node_count, 4);
+
+        let mut owned = mesh.clone();
+        let mut first = owned.mesh_parts[0].clone();
+        first.role = "magnetic_object".into();
+        first.object_id = Some("waveguide".into());
+        first.element_start = 0;
+        first.node_indices = vec![0, 1, 2, 3];
+        first.boundary_face_start = 0;
+        let mut second = first.clone();
+        second.element_start = 1;
+        second.node_indices = vec![0, 1, 2, 4];
+        second.boundary_face_start = 1;
+        owned.mesh_parts = vec![first, second];
+        let union = subset_object_mesh(&owned, "waveguide").unwrap().unwrap();
+        assert_eq!(union.nodes.len(), 5);
+        assert_eq!(union.cells.global_ordinals, vec![0, 1]);
+        assert_eq!(union.element_markers, vec![1, 0]);
+        assert_eq!(union.facets.len(), 2);
+        assert_eq!(mesh_size_statistics(&union, None).unwrap()["element_count"], 2);
     }
 
     #[test]

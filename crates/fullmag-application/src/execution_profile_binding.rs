@@ -54,12 +54,12 @@ pub fn bind_materialized_execution(
             .into(),
         ),
     );
-    // This is a newly materialized input, not an environment mutation. The
-    // canonical request retains explicit Auto while the legacy adapter omits
-    // its numeric-only field so it cannot contradict that request.
+    // Preserve either valid legacy spelling of Auto (null or absent).
+    // Prepared sources hash runtime_selection, so removing an authored null
+    // would change their identity despite an unchanged execution request.
     if let Some(threads) = requested.resources.cpu.threads.count() {
         selection.insert("cpu_threads".into(), json!(threads));
-    } else {
+    } else if selection.get("cpu_threads").is_some_and(|value| !value.is_null()) {
         selection.remove("cpu_threads");
     }
     metadata.insert(

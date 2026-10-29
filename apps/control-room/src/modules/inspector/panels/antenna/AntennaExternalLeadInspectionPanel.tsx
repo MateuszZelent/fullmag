@@ -50,12 +50,12 @@ export function AntennaExternalLeadInspectionPanel({ authoredStageId }: { author
     { pauseLoad: !executionCurrent },
   );
   const preview = resolveInspectionPreviewState({ authoredStageId, identity, execution, inspection, mapping });
-  const { viewRecord, current, count } = preview;
+  const { viewRecord, current, count, closed } = preview;
   let { state, message } = preview;
   const range = count > 0 ? `bytes=0-${count * 3 * 8 - 1}` : undefined;
   const payloadOwner = state === "inspection_only" ? current : null;
-  const positions = useAntennaExternalLeadInspectionPayloadResource(payloadOwner, "sample_positions", { range });
-  const field = useAntennaExternalLeadInspectionPayloadResource(payloadOwner, "magnetic_field", { range });
+  const positions = useAntennaExternalLeadInspectionPayloadResource(payloadOwner, closed ? "sample_xyz" : "sample_positions", { range });
+  const field = useAntennaExternalLeadInspectionPayloadResource(payloadOwner, closed ? "h_raw" : "magnetic_field", { range });
   let samples: ReturnType<typeof decodeInspectionPreview> | null = null;
   const payloadError = positions.error ?? positions.refreshError ?? field.error ?? field.refreshError;
   if (payloadError) {
@@ -63,7 +63,7 @@ export function AntennaExternalLeadInspectionPanel({ authoredStageId }: { author
     message = payloadError.message;
   } else if (payloadOwner && positions.status === "ready" && field.status === "ready" && positions.data && field.data) {
     try {
-      samples = decodeInspectionPreview(positions.data, field.data, count, payloadOwner.manifest!.sample_positions.byte_count);
+      samples = decodeInspectionPreview(positions.data, field.data, count, closed?.payloads.sample_xyz.byte_length ?? payloadOwner.manifest!.sample_positions.byte_count);
     } catch (error) {
       state = "error";
       message = error instanceof Error ? error.message : String(error);
@@ -76,8 +76,8 @@ export function AntennaExternalLeadInspectionPanel({ authoredStageId }: { author
   }
   return (
     <div className="fm-antenna-inspection" data-testid="antenna-external-lead-inspection" data-state={state}>
-      <InspectorGroup title="External-lead inspection" badge={state} collapsible>
-        <FeedbackBanner kind="warning" message="NOT VERIFIED · external_electrode_truncation. Raw H for the recorded drive, not H/I. This is not a qualified field basis, LLG drive or spin-wave/FFT result. Current-scene freshness is not certified." />
+      <InspectorGroup title="Antenna field inspection" badge={state} collapsible>
+        <FeedbackBanner kind="warning" message="NOT VERIFIED · inspection only. Raw H for the recorded drive, not H/I. The exact field scope is shown below. This is not a qualified field basis, LLG drive or spin-wave/FFT result. Current-scene freshness is not certified." />
         <FieldRow label="Antenna solve definition" value={authoredStageId} mono />
         <Select
           value={mapping.state === "mapped" ? mapping.runtimeStageId : ""}
@@ -128,12 +128,26 @@ export function AntennaExternalLeadInspectionPanel({ authoredStageId }: { author
             ))}
           </>
         ) : null}
+        {closed ? <>
+          <FieldRow label="Validation scope" value={closed.validation_scope} />
+          <FieldRow label="Content digest" value={closed.content_digest} mono />
+          <FieldRow label="Source object" value={closed.source_object_id} mono />
+          <FieldRow label="Current transport" value={closed.current_transport_id} mono />
+          <FieldRow label="Requested execution" value={executionValue(closed.requested_intent.requested_execution)} />
+          <FieldRow label="Resolved execution" value={executionValue(closed.resolved_execution)} />
+          <FieldRow label="H carrier" value={`${closed.sample_carrier.carrier_kind} · ${closed.sample_carrier.location} · ${closed.sample_carrier.domain.kind}`} />
+          <FieldRow label="Carrier counts" value={`${closed.vertex_count} V nodes · ${closed.cell_count} J cells · ${closed.target_count} H samples / ${closed.sample_cell_count} sampling cells`} />
+          <FieldRow label="Signed cut current" value={closed.source.source_current_a.toExponential(6)} unit="A" />
+          <FieldRow label="Per-A scale" value={closed.scale_per_a.toExponential(6)} unit="1/A" />
+          {(["prepared_execution_digest", "accepted_charge_field_digest", "accepted_source_state_digest", "current_balance_certificate_digest"] as const).map((key) => <FieldRow key={key} label={key} value={closed.source[key]} mono />)}
+          {Object.entries(closed.payloads).map(([kind, descriptor]) => <FieldRow key={kind} label={kind} value={`${descriptor.byte_length} bytes · ${descriptor.layout}`} unit={descriptor.unit} />)}
+        </> : null}
         <p className="fm-antenna-inspection__status" role={state === "loading" || state === "unavailable" || !message ? "status" : "alert"}>
           {message ?? "Recorded inspection metadata; no native or physics qualification."}
         </p>
         {previewCount > 0 && (state === "inspection_only" || state === "loading") ? (
           <div data-testid="antenna-inspection-sample-preview" data-preview-state={samples ? "ready" : "loading"}>
-            <FieldRow label="Preview samples" value={`${previewCount} of ${manifest?.sampling_carrier.sample_count ?? 0}`} />
+            <FieldRow label="Preview samples" value={`${previewCount} of ${closed?.target_count ?? manifest?.sampling_carrier.sample_count ?? 0}`} />
             <p className="fm-antenna-inspection__status" role="status">{samples ? "Digest-pinned raw samples (not qualified)." : "Awaiting current digest-pinned samples…"}</p>
             {Array.from({ length: previewCount }, (_, index) => (
               <div key={index} className="fm-antenna-field-preview__sample">

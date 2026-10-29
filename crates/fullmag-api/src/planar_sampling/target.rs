@@ -22,6 +22,8 @@ pub(crate) enum ResolvedSpatialScope {
     MeshPart { scope_id: String },
     Airbox { scope_id: Option<String> },
     FdmNativeLayer { layer_id: String },
+    /// One region of a ferromagnetic object, intersected with the target.
+    Region { object_id: String, region_id: String },
 }
 
 #[derive(Debug, Clone)]
@@ -43,7 +45,54 @@ pub(crate) struct ResolvedSpatialTarget {
     source_entity_kind: &'static str,
 }
 
+/// Point count from which a FEM locator builds the element index.
+const POINT_LOCATOR_INDEX_THRESHOLD: usize = 32;
+
+/// Point evaluation with an optional element index; results equal
+/// `ResolvedSpatialTarget::evaluate_point`.
+pub(crate) struct PointLocator<'a> {
+    target: &'a ResolvedSpatialTarget,
+    index: Option<super::element_index::ElementBvh>,
+    candidates: Vec<u32>,
+}
+
+impl PointLocator<'_> {
+    pub(crate) fn evaluate(&mut self, point: [f64; 3]) -> Option<(u32, Vec<f64>)> {
+        match (&self.target.field, &self.index) {
+            (TargetField::Fem(field), Some(index)) => {
+                super::fem::interpolate_at_indexed(field, index, &mut self.candidates, point)
+            }
+            _ => self.target.evaluate_point(point),
+        }
+    }
+}
+
 impl ResolvedSpatialTarget {
+    /// Raw carrier value at a world point with the raster's own locator and
+    /// basis: containing FDM cell or FEM shape functions. `None` when the point
+    /// lies outside the selected target.
+    pub(crate) fn evaluate_point(&self, point: [f64; 3]) -> Option<(u32, Vec<f64>)> {
+        match &self.field {
+            TargetField::Fdm(field) => {
+                super::fdm::cell_value_at(field, point).map(|(cell, value)| (cell, value.to_vec()))
+            }
+            TargetField::Fem(field) => super::fem::interpolate_at(field, point),
+        }
+    }
+
+    /// Locator for `expected_points` evaluations. FEM targets with many points
+    /// build an element AABB hierarchy once (PM-N28); a few points keep the
+    /// direct scan, which is cheaper than building the index.
+    pub(crate) fn point_locator(&self, expected_points: usize) -> PointLocator<'_> {
+        let index = match &self.field {
+            TargetField::Fem(field) if expected_points >= POINT_LOCATOR_INDEX_THRESHOLD => {
+                Some(super::fem::element_index(field))
+            }
+            _ => None,
+        };
+        PointLocator { target: self, index, candidates: Vec::new() }
+    }
+
     pub(crate) fn selected_entity_ids(&self) -> &[u32] {
         &self.selected_entity_ids
     }
@@ -168,6 +217,10 @@ pub(crate) struct PlanarSampleIdentity {
     pub target_entity_count: usize,
     pub scope_kind: String,
     pub scope_id: Option<String>,
+    /// Region within the `scope_id` object for `region` scopes; omitted from
+    /// the token otherwise so existing sample identities are unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope_region_id: Option<String>,
     pub quantity_id: String,
     pub component: String,
     pub quantity_revision: u64,
@@ -191,6 +244,8 @@ impl PlanarSampleIdentity {
     }
 }
 
+/// Uncached sampling; production requests use [`sample_resolved_target_cached`].
+#[cfg(test)]
 pub(crate) fn sample_resolved_target(
     target: &ResolvedSpatialTarget,
     request: &ResolvedPlanarSampleRequest,
@@ -198,6 +253,22 @@ pub(crate) fn sample_resolved_target(
     match &target.field {
         TargetField::Fdm(field) => PlanarSamplingEngine::sample_fdm(field, request),
         TargetField::Fem(field) => PlanarSamplingEngine::sample_fem(field, request),
+    }
+}
+
+/// Like [`sample_resolved_target`], but FEM plane sampling reuses a cached
+/// geometry operator keyed by `geometry_key`.
+pub(crate) fn sample_resolved_target_cached(
+    target: &ResolvedSpatialTarget,
+    request: &ResolvedPlanarSampleRequest,
+    cache: &super::PlanarOperatorCache,
+    geometry_key: &str,
+) -> Result<PlanarSampleResult, ApiError> {
+    match &target.field {
+        TargetField::Fdm(field) => PlanarSamplingEngine::sample_fdm(field, request),
+        TargetField::Fem(field) => {
+            PlanarSamplingEngine::sample_fem_cached(field, request, cache, geometry_key)
+        }
     }
 }
 
@@ -215,6 +286,7 @@ pub(crate) fn resolve_spatial_target(
             cell_size_m,
             grid_fingerprint,
             membership,
+            membership_error,
             ..
         } => {
             if matches!(operator, PlanarOperatorIR::SurfaceProjection { .. }) {
@@ -222,9 +294,12 @@ pub(crate) fn resolve_spatial_target(
                     "unsupported_planar_surface: FDM boundary topology is not published",
                 ));
             }
-            if !matches!(scope, ResolvedSpatialScope::MonitorTarget) {
+            if !matches!(
+                scope,
+                ResolvedSpatialScope::MonitorTarget | ResolvedSpatialScope::Region { .. }
+            ) {
                 return Err(ApiError::unprocessable(
-                    "target_unsupported: FDM cell fields are not an airbox carrier and support monitor_target only",
+                    "target_unsupported: FDM cell fields are not an airbox carrier and support monitor_target or region only",
                 ));
             }
             let origin = origin_m.ok_or_else(|| {
@@ -233,7 +308,28 @@ pub(crate) fn resolve_spatial_target(
             let spacing = cell_size_m.ok_or_else(|| {
                 ApiError::conflict("missing_fdm_geometry: exact cell size is unavailable")
             })?;
-            let selected = select_fdm_target(*cells, membership.as_ref(), target)?;
+            let mut selected = select_fdm_target(
+                *cells,
+                membership.as_ref(),
+                membership_error.as_deref(),
+                target,
+            )?;
+            if let ResolvedSpatialScope::Region {
+                object_id,
+                region_id,
+            } = scope
+            {
+                let region = select_fdm_target(
+                    *cells,
+                    membership.as_ref(),
+                    membership_error.as_deref(),
+                    &MonitorTargetIR::Region {
+                        object_id: object_id.clone(),
+                        region_id: region_id.clone(),
+                    },
+                )?;
+                intersect_masks(&mut selected, &region);
+            }
             let carrier_identity = grid_fingerprint
                 .clone()
                 .unwrap_or_else(|| format!("fdm:{cells:?}:{origin:?}:{spacing:?}"));
@@ -311,7 +407,7 @@ pub(crate) fn resolve_spatial_target(
                     ));
                 }
             }
-            let selected = select_fdm_target(*cells, Some(membership), target)?;
+            let selected = select_fdm_target(*cells, Some(membership), None, target)?;
             build_fdm_target(
                 field,
                 *cells,
@@ -414,13 +510,14 @@ fn select_fdm_target(
     membership: Option<
         &crate::router_v2::handlers::data::resolved_spatial_field::FdmCellMembership,
     >,
+    membership_error: Option<&str>,
     target: &MonitorTargetIR,
 ) -> Result<Vec<bool>, ApiError> {
     let count = cell_count(cells)?;
     match target {
         MonitorTargetIR::Domain => Ok(vec![true; count]),
         MonitorTargetIR::MagneticDomain => {
-            let membership = require_fdm_membership(membership, count)?;
+            let membership = require_fdm_membership(membership, membership_error, count)?;
             Ok(membership
                 .cell_membership
                 .iter()
@@ -428,7 +525,7 @@ fn select_fdm_target(
                 .collect())
         }
         MonitorTargetIR::Object { object_id } => {
-            let membership = require_fdm_membership(membership, count)?;
+            let membership = require_fdm_membership(membership, membership_error, count)?;
             let indices = resolve_fdm_object_indices(membership, object_id)?;
             Ok(mask_from_indices(count, indices))
         }
@@ -436,7 +533,7 @@ fn select_fdm_target(
             object_id,
             region_id,
         } => {
-            let membership = require_fdm_membership(membership, count)?;
+            let membership = require_fdm_membership(membership, membership_error, count)?;
             let numeric_ids = membership
                 .region_legend
                 .iter()
@@ -457,15 +554,22 @@ fn select_fdm_target(
     }
 }
 
-fn require_fdm_membership(
+fn require_fdm_membership<'a>(
     membership: Option<
-        &crate::router_v2::handlers::data::resolved_spatial_field::FdmCellMembership,
+        &'a crate::router_v2::handlers::data::resolved_spatial_field::FdmCellMembership,
     >,
+    membership_error: Option<&str>,
     count: usize,
-) -> Result<&crate::router_v2::handlers::data::resolved_spatial_field::FdmCellMembership, ApiError>
+) -> Result<&'a crate::router_v2::handlers::data::resolved_spatial_field::FdmCellMembership, ApiError>
 {
     let membership = membership.ok_or_else(|| {
-        ApiError::conflict("missing_fdm_membership: target cannot be resolved exactly")
+        // Keep the loader's exact reason (P1-11); the target still fails closed.
+        ApiError::conflict(match membership_error {
+            Some(reason) => format!(
+                "missing_fdm_membership: target cannot be resolved exactly ({reason})"
+            ),
+            None => "missing_fdm_membership: target cannot be resolved exactly".to_string(),
+        })
     })?;
     if membership.cell_membership.len() != count {
         return Err(ApiError::conflict(
@@ -511,6 +615,25 @@ fn build_fem_target(
             return Err(ApiError::unprocessable(
                 "target_unsupported: native FDM layer scope is not valid for FEM topology",
             ));
+        }
+        ResolvedSpatialScope::Region {
+            object_id,
+            region_id,
+        } => {
+            let region = select_fem_monitor_target(
+                mesh,
+                &elements,
+                &MonitorTargetIR::Region {
+                    object_id: object_id.clone(),
+                    region_id: region_id.clone(),
+                },
+            );
+            if !region.iter().any(|selected| *selected) {
+                return Err(ApiError::unprocessable(format!(
+                    "empty_target: FEM region scope not found: {object_id}/{region_id}"
+                )));
+            }
+            region
         }
     };
     let mut selected = select_fem_monitor_target(mesh, &elements, target);
@@ -766,11 +889,14 @@ fn fem_planar_elements(
                     .try_into()
                     .map(FemPlanarElement::Prism6)
                     .map_err(|_| ApiError::conflict("invalid_fem_connectivity: Prism6 arity is not 6")),
-                fullmag_ir::FemCellTypeIR::Pyramid5 | fullmag_ir::FemCellTypeIR::Hex8 => {
-                    Err(ApiError::unprocessable(format!(
-                        "unsupported_element_order: planar P1 sampling does not support {cell_type:?}"
-                    )))
-                }
+                fullmag_ir::FemCellTypeIR::Pyramid5 => nodes
+                    .try_into()
+                    .map(FemPlanarElement::Pyramid5)
+                    .map_err(|_| ApiError::conflict("invalid_fem_connectivity: Pyramid5 arity is not 5")),
+                fullmag_ir::FemCellTypeIR::Hex8 => nodes
+                    .try_into()
+                    .map(FemPlanarElement::Hex8)
+                    .map_err(|_| ApiError::conflict("invalid_fem_connectivity: Hex8 arity is not 8")),
             }
         })
         .collect()

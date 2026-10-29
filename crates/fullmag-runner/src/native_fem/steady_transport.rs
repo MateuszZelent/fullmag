@@ -22,6 +22,18 @@ fn preflight_direct_oersted_pair_budget(
     source_cell_count: usize,
     target_count: usize,
 ) -> Result<u64, RunError> {
+    preflight_direct_oersted_pair_budget_with_limit(
+        source_cell_count, target_count, DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS,
+        fullmag_ir::ANTENNA_DIRECT_OERSTED_BUDGET_POLICY_V1,
+    )
+}
+
+fn preflight_direct_oersted_pair_budget_with_limit(
+    source_cell_count: usize,
+    target_count: usize,
+    maximum_pairs: u64,
+    policy_version: &str,
+) -> Result<u64, RunError> {
     if source_cell_count == 0 || target_count == 0 {
         return Err(RunError {
             message: format!(
@@ -40,11 +52,11 @@ fn preflight_direct_oersted_pair_budget(
             "antenna Oersted preflight source-target pair count overflows: {source_count} source tetrahedra x {target_count} target points"
         ),
     })?;
-    if pairs > DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS {
+    if pairs > maximum_pairs {
         return Err(RunError {
             message: format!(
-                "antenna Oersted preflight policy='{}' requires {pairs} source-target pairs ({source_count} source tetrahedra x {target_count} target points), exceeding the limit {DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS}; reduce the authored target resolution or select the qualified vector-potential realization",
-                fullmag_ir::ANTENNA_DIRECT_OERSTED_BUDGET_POLICY_V1,
+                "antenna Oersted preflight policy='{}' requires {pairs} source-target pairs ({source_count} source tetrahedra x {target_count} target points), exceeding the limit {maximum_pairs}; reduce the authored target resolution or select the qualified vector-potential realization",
+                policy_version,
             ),
         });
     }
@@ -85,6 +97,10 @@ pub(crate) fn preflight_direct_oersted_pair_budget_for_evaluations(
 mod artifact_identity;
 mod descriptor;
 mod direct_oersted_snapshot;
+#[path = "surface_rt0.rs"]
+mod surface_rt0;
+use surface_rt0::SurfaceSnapshotBuffer;
+use crate::antenna_field_solution::surface_rt0_evidence_v1::SurfaceRt0Snapshot;
 mod closed_loop_source_snapshot;
 mod prepared_closed_loop;
 pub(crate) use prepared_closed_loop::{NativeFemPreparedClosedLoopChargeRequest, PreparedClosedLoopRuntimeBinding, PreparedClosedLoopAcceptedSnapshot};
@@ -135,6 +151,7 @@ pub(crate) enum NativeFemSteadyTransportGauge {
 pub(crate) enum NativeFemSteadyTransportOerstedMethod {
     DirectTetraQuadrature,
     FemVectorPotential,
+    AnalyticRt0Surface,
 }
 
 #[derive(Debug, Clone)]
@@ -261,6 +278,7 @@ pub(crate) struct NativeFemSteadyTransportRt0Result {
     pub oersted_maximum_pair_error_apm: Option<f64>,
     pub oersted_diagnostics: Option<Value>,
     pub oersted_quadrature_snapshot: Option<DirectOerstedSnapshot>,
+    pub oersted_surface_snapshot: Option<SurfaceRt0Snapshot>,
 }
 
 pub(crate) struct NativeFemSteadyTransportBundle {
@@ -328,12 +346,13 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
             .fem_cpu_double
             .as_ref()
             .filter(|descriptor| descriptor.oersted_source_bound)
-            .map(|_| match oersted_method {
+            .map(|_| -> Result<&[[f64; 3]], RunError> { Ok(match oersted_method {
                 NativeFemSteadyTransportOerstedMethod::DirectTetraQuadrature => {
                     plan.mesh.nodes.as_slice()
                 }
                 NativeFemSteadyTransportOerstedMethod::FemVectorPotential => &[][..],
-            });
+                NativeFemSteadyTransportOerstedMethod::AnalyticRt0Surface => return Err(RunError { message: "RT0 surface requires prepared closed-loop inspection".into() }),
+            }) }).transpose()?;
         let rt0_view = if let Some(view) = resolved
             .fem_cpu_double
             .as_ref()
@@ -413,6 +432,7 @@ pub(crate) fn execute_native_fem_steady_transport_plans(
                         NativeFemSteadyTransportOerstedMethod::FemVectorPotential => {
                             "fem_conservative_current_rt0_vector_potential.v1"
                         }
+                        NativeFemSteadyTransportOerstedMethod::AnalyticRt0Surface => return Err(RunError { message: "RT0 surface requires prepared closed-loop inspection".into() }),
                     };
                     transport_provenance.oersted_source_kind = Some(source_kind.into());
                     transport_provenance.oersted_field_sha256 = Some(field_sha256);
@@ -1168,22 +1188,119 @@ pub(crate) fn solve_native_fem_steady_transport_rt0(
     oersted_method: NativeFemSteadyTransportOerstedMethod,
     target_points: Option<&[[f64; 3]]>,
 ) -> Result<NativeFemSteadyTransportRt0Result, RunError> {
+    if oersted_method == NativeFemSteadyTransportOerstedMethod::AnalyticRt0Surface {
+        return Err(RunError { message: "RT0 surface is unavailable outside prepared closed-loop inspection".into() });
+    }
     solve_rt0_common(Rt0NumericInput::legacy(request), Rt0InputView {
         stable_vertex_ids: &view.stable_vertex_ids, boundary_faces: &view.boundary_faces,
         identity: Some(&view.identity), pins: Some(&view.pins), closure: &view.closure,
         algebraic_relative_tolerance:view.algebraic_relative_tolerance,physical_relative_gate:view.physical_relative_gate,
         physical_absolute_gate_a:view.physical_absolute_gate_a,reference_mpi_gather_broadcast:view.reference_mpi_gather_broadcast,
-    }, oersted_method,target_points,None)
+    }, oersted_method,target_points,None,None,None,None,None,None)
 }
+#[derive(Debug, Clone, Default)]
+pub(crate) struct NativeFemSurfaceRt0Profile {
+    pub available: bool,
+    pub accounting_issue: bool,
+    pub operator_wall_time_ns: u64,
+    pub native_call_wall_ns: Option<u64>,
+    pub phase_wall_time_ns: [u64; 9],
+}
+
 pub(crate) fn solve_native_fem_prepared_closed_loop(
     request:&NativeFemPreparedClosedLoopChargeRequest,input:&fullmag_ir::ResolvedAntennaClosedLoopCurrentInputIR,
     binding:&PreparedClosedLoopRuntimeBinding,target_points:Option<&[[f64;3]]>,
 )->Result<NativeFemSteadyTransportRt0Result,RunError>{
+    solve_native_fem_prepared_closed_loop_classified(request,input,binding,target_points,None,None,None)
+}
+pub(crate) fn solve_native_fem_prepared_closed_loop_classified(
+    request:&NativeFemPreparedClosedLoopChargeRequest,input:&fullmag_ir::ResolvedAntennaClosedLoopCurrentInputIR,
+    binding:&PreparedClosedLoopRuntimeBinding,target_points:Option<&[[f64;3]]>,
+    native_failure:Option<&mut Option<crate::antenna_field_solution::closed_loop_execution::KnownNativeCallFailure>>,
+    surface_profile:Option<&mut NativeFemSurfaceRt0Profile>,
+    observer:Option<&crate::AntennaOperationProgressObserver<'_>>,
+)->Result<NativeFemSteadyTransportRt0Result,RunError>{
+    let (method, direct_budget, surface_policy) = match input.stage.oersted_realization {
+        fullmag_ir::AntennaOerstedRealizationIR::DirectTetraQuadrature => {
+            let budget = fullmag_ir::antenna_closed_loop_direct_budget(&input.stage.solver_policy)
+                .ok_or_else(|| RunError { message: "unsupported prepared closed-loop direct solver policy".into() })?;
+            let policy = input.direct_field_policy.as_ref().ok_or_else(|| RunError { message: "prepared direct field policy absent".into() })?;
+            if policy.policy_version != budget.policy_version
+                || policy.maximum_source_target_pairs != budget.maximum_source_target_pairs
+                || policy.base_quadrature_order != fullmag_ir::ANTENNA_DIRECT_OERSTED_BASE_QUADRATURE_ORDER
+                || policy.maximum_subdivision_depth != fullmag_ir::ANTENNA_DIRECT_OERSTED_MAX_SUBDIVISION_DEPTH
+                || policy.absolute_tolerance_apm.to_bits() != fullmag_ir::ANTENNA_DIRECT_OERSTED_ABSOLUTE_TOLERANCE_APM.to_bits()
+                || policy.relative_tolerance.to_bits() != fullmag_ir::ANTENNA_DIRECT_OERSTED_RELATIVE_TOLERANCE.to_bits()
+                || policy.relative_scale_floor_apm.to_bits() != 0.0_f64.to_bits()
+            {
+                return Err(RunError { message: "prepared closed-loop direct policy differs from the selected budget".into() });
+            }
+            if let Some(points) = target_points {
+                let pairs = preflight_direct_oersted_pair_budget_with_limit(
+                    request.mesh.cell_count(), points.len(), budget.maximum_source_target_pairs, budget.policy_version,
+                )?;
+                if policy.source_target_pairs != pairs {
+                    return Err(RunError { message: "prepared closed-loop source-target pair pin differs".into() });
+                }
+            }
+            if input.surface_field_policy.is_some() || input.stage.surface_field_policy.is_some() {
+                return Err(RunError { message: "direct method cannot carry surface policy".into() });
+            }
+            (NativeFemSteadyTransportOerstedMethod::DirectTetraQuadrature, Some(budget), None)
+        }
+        fullmag_ir::AntennaOerstedRealizationIR::AnalyticRt0Surface => {
+            let policy = input.surface_field_policy.as_ref().ok_or_else(|| RunError { message: "prepared surface field policy absent".into() })?;
+            if input.direct_field_policy.is_some() || input.stage.surface_field_policy.as_ref() != Some(policy)
+                || !policy.validation_errors("surface_field_policy").is_empty() {
+                return Err(RunError { message: "prepared surface field policy binding invalid".into() });
+            }
+            let points = target_points.filter(|points| !points.is_empty()).ok_or_else(|| RunError { message: "prepared surface requires nonempty ordered targets".into() })?;
+            let source_count = u64::try_from(request.mesh.cell_count()).map_err(|_| RunError { message: "surface source count overflow".into() })?;
+            let pairs = source_count.checked_mul(points.len() as u64).ok_or_else(|| RunError { message: "surface pair count overflow".into() })?;
+            if source_count == 0 || source_count > policy.limits.per_target[0] || pairs > policy.limits.total[0] {
+                return Err(RunError { message: "prepared surface exceeds explicit total or per-target pair limit".into() });
+            }
+            (NativeFemSteadyTransportOerstedMethod::AnalyticRt0Surface, None, Some(policy))
+        }
+        _ => return Err(RunError { message: "prepared closed-loop method is unsupported".into() }),
+    };
+    if surface_profile.is_some() && method != NativeFemSteadyTransportOerstedMethod::AnalyticRt0Surface {
+        return Err(RunError { message: "operation profiling requires the analytic RT0 surface method".into() });
+    }
     let prepared=prepared_closed_loop::PreparedRequestBuffer::new(input,binding,request)?;
     solve_rt0_common(Rt0NumericInput{mesh:&request.mesh,charge_conductivity_spm_per_element:&request.charge_conductivity_spm_per_element,gauge:request.gauge,relative_tolerance:request.relative_tolerance,absolute_tolerance:request.absolute_tolerance,maximum_iterations:request.maximum_iterations,legacy:None},Rt0InputView{stable_vertex_ids:&input.source.stable_vertex_ids,boundary_faces:&input.boundary_roles,
         identity:None,pins:None,closure:&input.source.closure,algebraic_relative_tolerance:input.algebraic_relative_tolerance,
         physical_relative_gate:input.physical_relative_gate,physical_absolute_gate_a:input.physical_absolute_gate_a,
-        reference_mpi_gather_broadcast:false},NativeFemSteadyTransportOerstedMethod::DirectTetraQuadrature,target_points,Some(prepared))
+        reference_mpi_gather_broadcast:false},method,target_points,Some(prepared),direct_budget,surface_policy,native_failure,surface_profile,observer)
+}
+unsafe extern "C" fn antenna_operation_progress_callback(
+    user_data: *mut std::ffi::c_void,
+    raw: *const ffi::fullmag_fem_antenna_operation_progress_v1,
+) {
+    // This trampoline only validates and copies POD. The caller's observer
+    // owns a bounded latest-value channel, never store transactions or JSON.
+    if user_data.is_null() || raw.is_null() { return; }
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let observer = unsafe {
+            &*(user_data as *const Option<&crate::AntennaOperationProgressObserver<'_>>)
+        };
+        let raw = unsafe { &*raw };
+        if raw.abi_version != 1 || raw.reserved_flags != 0 || raw.reserved != 0
+            || raw.struct_size != std::mem::size_of_val(raw) as u64 { return; }
+        let phase = match raw.phase {
+            0 => crate::AntennaOperationPhase::PreparingSource,
+            1 => crate::AntennaOperationPhase::SolvingPotential,
+            2 => crate::AntennaOperationPhase::ReconstructingCurrent,
+            3 => crate::AntennaOperationPhase::EvaluatingField,
+            4 => crate::AntennaOperationPhase::ValidatingResult,
+            5 => crate::AntennaOperationPhase::PublishingResult,
+            _ => return,
+        };
+        crate::antenna_operation_progress::notify(*observer, crate::AntennaOperationProgress {
+            phase, completed_targets: raw.completed_targets, total_targets: raw.total_targets,
+            source_cells: raw.source_cells, elapsed_seconds: raw.elapsed_seconds,
+        });
+    }));
 }
 struct Rt0NumericInput<'a>{mesh:&'a MeshIR,charge_conductivity_spm_per_element:&'a [f64],gauge:NativeFemSteadyTransportGauge,relative_tolerance:f64,absolute_tolerance:f64,maximum_iterations:u32,legacy:Option<&'a NativeFemSteadyTransportRequest>}
 impl<'a> Rt0NumericInput<'a>{fn legacy(r:&'a NativeFemSteadyTransportRequest)->Self{Self{mesh:&r.mesh,charge_conductivity_spm_per_element:&r.charge_conductivity_spm_per_element,gauge:r.gauge,relative_tolerance:r.relative_tolerance,absolute_tolerance:r.absolute_tolerance,maximum_iterations:r.maximum_iterations,legacy:Some(r)}}}
@@ -1194,15 +1311,25 @@ struct Rt0InputView<'a> {
     physical_absolute_gate_a:f64,reference_mpi_gather_broadcast:bool,
 }
 fn solve_rt0_common(request:Rt0NumericInput<'_>,view:Rt0InputView<'_>,oersted_method:NativeFemSteadyTransportOerstedMethod,
-    target_points:Option<&[[f64;3]]>, mut prepared:Option<prepared_closed_loop::PreparedRequestBuffer<'_>>) -> Result<NativeFemSteadyTransportRt0Result,RunError> {
+    target_points:Option<&[[f64;3]]>, mut prepared:Option<prepared_closed_loop::PreparedRequestBuffer<'_>>,
+    direct_budget:Option<fullmag_ir::AntennaClosedLoopDirectBudgetIR>,
+    surface_policy:Option<&fullmag_ir::AntennaSurfaceFieldPolicyIR>,
+    native_failure:Option<&mut Option<crate::antenna_field_solution::closed_loop_execution::KnownNativeCallFailure>>,
+    mut surface_profile:Option<&mut NativeFemSurfaceRt0Profile>,
+    observer:Option<&crate::AntennaOperationProgressObserver<'_>>) -> Result<NativeFemSteadyTransportRt0Result,RunError> {
+    let surface = oersted_method == NativeFemSteadyTransportOerstedMethod::AnalyticRt0Surface;
+    if surface && (prepared.is_none() || surface_policy.is_none() || target_points.is_none_or(|points| points.is_empty())) {
+        return Err(RunError { message: "RT0 surface requires prepared closed-loop inspection, explicit policy and targets".into() });
+    }
     let coincident = matches!(view.closure, ConservativeCurrentClosureIR::ClosedGeometry { operator_version, .. }
         if operator_version == "fem_closed_current_geometry.v2");
+    if surface && !coincident { return Err(RunError { message: "RT0 surface requires coincident cut v2".into() }); }
     if coincident && (request.gauge != NativeFemSteadyTransportGauge::ZeroMeanPotential ||
             request.legacy.is_some_and(|r|!r.charge_dirichlet.is_empty() || !r.spin_dirichlet.is_empty()) ||
             request.relative_tolerance > 1.0e-12 || view.algebraic_relative_tolerance > 1.0e-12 ||
             view.physical_relative_gate > 1.0e-10 || view.physical_absolute_gate_a > 1.0e-18 ||
-            oersted_method != NativeFemSteadyTransportOerstedMethod::DirectTetraQuadrature) {
-        return Err(RunError { message: "coincident cut v2 requires zero-mean CPU-double charge, no terminal actuators, preregistered gates and direct RT0 Oersted".into() });
+            (!surface && oersted_method != NativeFemSteadyTransportOerstedMethod::DirectTetraQuadrature)) {
+        return Err(RunError { message: "coincident cut v2 requires zero-mean CPU-double charge, no terminal actuators, preregistered gates and prepared direct/surface RT0 Oersted".into() });
     }
     let (lead_cell_count, lead_nodes, lead_ids) = match view.closure {
         ConservativeCurrentClosureIR::ExternalLead {
@@ -1217,7 +1344,12 @@ fn solve_rt0_common(request:Rt0NumericInput<'_>,view:Rt0InputView<'_>,oersted_me
         NativeFemSteadyTransportOerstedMethod::DirectTetraQuadrature
     ) {
         if let Some(target_points) = target_points {
-            preflight_direct_oersted_pair_budget(rt0_cell_count, target_points.len())?;
+            if let Some(budget) = direct_budget {
+                preflight_direct_oersted_pair_budget_with_limit(rt0_cell_count, target_points.len(),
+                    budget.maximum_source_target_pairs, budget.policy_version)?;
+            } else {
+                preflight_direct_oersted_pair_budget(rt0_cell_count, target_points.len())?;
+            }
         }
     }
     // The legacy H1 preflight rejects periodic topology because its old ABI
@@ -1580,6 +1712,7 @@ fn solve_rt0_common(request:Rt0NumericInput<'_>,view:Rt0InputView<'_>,oersted_me
     let mut source_snapshot_buffer = if coincident { Some(SourceSnapshotBuffer::new(rt0_cell_count, request.mesh.nodes.len())?) } else { None };
     let mut direct_oersted_result_ffi = None;
     let mut vector_potential_result_ffi = None;
+    let mut surface_result_ffi = None;
     let status = match oersted_method {
         NativeFemSteadyTransportOerstedMethod::DirectTetraQuadrature => {
             if let Some(target_points) = target_points {
@@ -1604,7 +1737,7 @@ fn solve_rt0_common(request:Rt0NumericInput<'_>,view:Rt0InputView<'_>,oersted_me
                     maximum_subdivision_depth: fullmag_ir::ANTENNA_DIRECT_OERSTED_MAX_SUBDIVISION_DEPTH,
                     absolute_tolerance_apm: fullmag_ir::ANTENNA_DIRECT_OERSTED_ABSOLUTE_TOLERANCE_APM,
                     relative_tolerance: fullmag_ir::ANTENNA_DIRECT_OERSTED_RELATIVE_TOLERANCE,
-                    maximum_source_target_pairs: DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS,
+                    maximum_source_target_pairs: direct_budget.map_or(DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS, |budget| budget.maximum_source_target_pairs),
                 };
                 let mut outer_result = ffi::fullmag_fem_steady_transport_rt0_oersted_result_v1 {
                     abi_version: ffi::FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_ABI_VERSION,
@@ -1667,6 +1800,73 @@ fn solve_rt0_common(request:Rt0NumericInput<'_>,view:Rt0InputView<'_>,oersted_me
                     }
                 }
             }
+        }
+        NativeFemSteadyTransportOerstedMethod::AnalyticRt0Surface => {
+            if !coincident { return Err(RunError { message: "RT0 surface requires coincident cut v2".into() }); }
+            let points = target_points.ok_or_else(|| RunError { message: "surface targets absent".into() })?;
+            let flat_points = points.iter().flatten().copied().collect::<Vec<_>>();
+            if flat_points.iter().any(|v| !v.is_finite()) { return Err(RunError { message: "surface targets contain nonfinite coordinates".into() }); }
+            let policy = surface_policy.ok_or_else(|| RunError { message: "surface policy absent".into() })?;
+            let mut buffer = SurfaceSnapshotBuffer::new(policy, points.len(), result_ffi)?;
+            let prepared = prepared.as_mut().ok_or_else(|| RunError { message: "surface prepared source absent".into() })?;
+            let source = source_snapshot_buffer.as_ref().ok_or_else(|| RunError { message: "surface source buffer absent".into() })?;
+            prepared.attach(source);
+            let surface_request = ffi::fullmag_fem_prepared_closed_loop_rt0_surface_request_v1 {
+                abi_version:1, reserved_flags:0,
+                struct_size:std::mem::size_of::<ffi::fullmag_fem_prepared_closed_loop_rt0_surface_request_v1>() as u64,
+                rt0:prepared.descriptor(&request_ffi), target_points_xyz:flat_points.as_ptr(),
+                target_points_xyz_len:flat_points.len() as u64, options:buffer.options(),
+            };
+            let native_observer = observer.map(|_| ffi::fullmag_fem_antenna_operation_observer_v1 {
+                abi_version: 1, reserved_flags: 0,
+                struct_size: std::mem::size_of::<ffi::fullmag_fem_antenna_operation_observer_v1>() as u64,
+                callback: Some(antenna_operation_progress_callback),
+                user_data: (&observer as *const Option<&crate::AntennaOperationProgressObserver<'_>>).cast_mut().cast(),
+            });
+            let status = if let Some(profile) = surface_profile.as_deref_mut() {
+                let mut native_profile = ffi::fullmag_fem_surface_rt0_profile_result_v1 {
+                    abi_version: ffi::FULLMAG_FEM_SURFACE_RT0_PROFILE_ABI_VERSION,
+                    reserved_flags: 0,
+                    struct_size: std::mem::size_of::<ffi::fullmag_fem_surface_rt0_profile_result_v1>() as u64,
+                    ..Default::default()
+                };
+                // The profile is a separate, disjoint fixed buffer. The native
+                // call fills it on controlled refusal as well as success.
+                let started = std::time::Instant::now();
+                let status = unsafe {
+                    if let Some(observer) = native_observer.as_ref() {
+                        ffi::fullmag_fem_solve_prepared_closed_loop_rt0_surface_observed_v1(
+                            &surface_request, &mut buffer.header, &mut charge_snapshot_ffi, &mut prepared.outer,
+                            &mut native_profile, observer)
+                    } else {
+                        ffi::fullmag_fem_solve_prepared_closed_loop_rt0_surface_profiled_v1(
+                            &surface_request, &mut buffer.header, &mut charge_snapshot_ffi, &mut prepared.outer,
+                            &mut native_profile)
+                    }
+                };
+                profile.native_call_wall_ns = Some(started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64);
+                if native_profile.abi_version != ffi::FULLMAG_FEM_SURFACE_RT0_PROFILE_ABI_VERSION
+                    || native_profile.reserved_flags != 0
+                    || native_profile.struct_size != std::mem::size_of::<ffi::fullmag_fem_surface_rt0_profile_result_v1>() as u64
+                    || native_profile.available > 1 || native_profile.accounting_issue > 1 {
+                    return Err(RunError { message: "native surface profile ABI mismatch".into() });
+                }
+                profile.available = native_profile.available == 1;
+                profile.accounting_issue = native_profile.accounting_issue == 1;
+                profile.operator_wall_time_ns = native_profile.operator_wall_time_ns;
+                profile.phase_wall_time_ns = native_profile.phase_wall_time_ns;
+                status
+            } else if let Some(observer) = native_observer.as_ref() {
+                unsafe { ffi::fullmag_fem_solve_prepared_closed_loop_rt0_surface_observed_v1(
+                    &surface_request, &mut buffer.header, &mut charge_snapshot_ffi, &mut prepared.outer,
+                    std::ptr::null_mut(), observer) }
+            } else {
+                unsafe { ffi::fullmag_fem_solve_prepared_closed_loop_rt0_surface_v1(
+                    &surface_request, &mut buffer.header, &mut charge_snapshot_ffi, &mut prepared.outer) }
+            };
+            result_ffi = buffer.header.rt0;
+            surface_result_ffi = Some(buffer);
+            status
         }
         NativeFemSteadyTransportOerstedMethod::FemVectorPotential => {
             if target_points.is_some() {
@@ -1754,6 +1954,13 @@ fn solve_rt0_common(request:Rt0NumericInput<'_>,view:Rt0InputView<'_>,oersted_me
         }
     };
     if status != ffi::FULLMAG_FEM_OK {
+        if prepared.is_some()
+            && matches!(oersted_method, NativeFemSteadyTransportOerstedMethod::DirectTetraQuadrature | NativeFemSteadyTransportOerstedMethod::AnalyticRt0Surface)
+        {
+            if let Some(native_failure) = native_failure {
+                *native_failure = crate::antenna_field_solution::closed_loop_execution::known_native_call_failure(status);
+            }
+        }
         let error_message = vector_potential_result_ffi
             .as_ref()
             .map(|(result, _)| chars(&result.error_message))
@@ -1764,6 +1971,7 @@ fn solve_rt0_common(request:Rt0NumericInput<'_>,view:Rt0InputView<'_>,oersted_me
                     .map(|(result, _, _)| chars(&result.error_message))
                     .filter(|message| !message.is_empty())
             })
+            .or_else(|| surface_result_ffi.as_ref().map(|buffer| chars(&buffer.header.error_message)).filter(|message| !message.is_empty()))
             .unwrap_or_else(|| chars(&result_ffi.error_message));
         return Err(RunError {
             message: error_message,
@@ -1823,7 +2031,13 @@ fn solve_rt0_common(request:Rt0NumericInput<'_>,view:Rt0InputView<'_>,oersted_me
     let prepared_closed_loop_source_snapshot=prepared.map(|buffer|buffer.finish(
         closed_loop_source_snapshot.take().ok_or_else(||RunError{message:"prepared accepted source absent".into()})?,
         &charge_potential_snapshot.electric_potential_v,&canonical_face_records,&chars(&result_ffi.balance_certificate_digest))).transpose()?;
-    let oersted = if let Some((oersted_result, mut h_xyz_apm, snapshot_buffer)) = direct_oersted_result_ffi {
+    let mut oersted_surface_snapshot = None;
+    let oersted = if let Some(buffer) = surface_result_ffi {
+        let source = prepared_closed_loop_source_snapshot.as_ref().ok_or_else(|| RunError { message: "accepted surface source absent".into() })?;
+        let (field, snapshot) = buffer.finish(target_points.ok_or_else(|| RunError { message: "surface targets absent".into() })?, source, &chars(&result_ffi.view_identity_digest))?;
+        oersted_surface_snapshot = Some(snapshot);
+        Some(field)
+    } else if let Some((oersted_result, mut h_xyz_apm, snapshot_buffer)) = direct_oersted_result_ffi {
         if oersted_result.h_xyz_apm_len != h_xyz_apm.len() as u64
             || oersted_result.h_xyz_apm_capacity != h_xyz_apm.len() as u64
             || oersted_result.h_xyz_apm != h_xyz_apm.as_mut_ptr()
@@ -1854,15 +2068,16 @@ fn solve_rt0_common(request:Rt0NumericInput<'_>,view:Rt0InputView<'_>,oersted_me
             oersted_result.unconverged_pair_count,
             oersted_result.maximum_pair_error_apm,
         )?;
-        let quadrature_snapshot = snapshot_buffer.finish(
-            &oersted_result,
-            target_points.ok_or_else(|| RunError {
-                message: "native FEM OE-F1 snapshot has no authored target points".into(),
-            })?,
-            &h_xyz_apm,
-            rt0_cell_count,
-            &source_view_identity_digest,
-        )?;
+        let points = target_points.ok_or_else(|| RunError {
+            message: "native FEM OE-F1 snapshot has no authored target points".into(),
+        })?;
+        let quadrature_snapshot = if let Some(budget) = direct_budget {
+            snapshot_buffer.finish_with_budget(&oersted_result, points, &h_xyz_apm,
+                rt0_cell_count, &source_view_identity_digest, budget)?
+        } else {
+            snapshot_buffer.finish(&oersted_result, points, &h_xyz_apm,
+                rt0_cell_count, &source_view_identity_digest)?
+        };
         let diagnostics = quadrature_snapshot.diagnostics();
         Some(NativeFemOerstedField {
             field: h_xyz_apm,
@@ -1967,6 +2182,7 @@ fn solve_rt0_common(request:Rt0NumericInput<'_>,view:Rt0InputView<'_>,oersted_me
             .and_then(|value| value.maximum_pair_error_apm),
         oersted_diagnostics: oersted.as_ref().map(|value| value.diagnostics.clone()),
         oersted_quadrature_snapshot: oersted.and_then(|value| value.quadrature_snapshot),
+        oersted_surface_snapshot,
     })
 }
 
@@ -2456,9 +2672,10 @@ mod tests {
     fn common_reciprocal_m2_fdm_plan(nz: usize) -> FdmPlanIR {
         let cells = nz;
         let descriptor = ResolvedFdmCoupledSpinTransportIR {
-            descriptor_schema: "fullmag.fdm.coupled_spin_transport_descriptor.v1".into(),
+            descriptor_schema: "fullmag.fdm.coupled_spin_transport_descriptor.v2".into(),
             time_envelope: None,
             active_cells: vec![true; cells],
+            magnetic_active_mask: vec![true; cells],
             reciprocal_materials: vec![
                 ResolvedReciprocalMaterialIR {
                     sigma_spm: 4.0,
@@ -2809,7 +3026,7 @@ mod tests {
     fn reciprocal_m2_common_si_limit_matches_fdm_and_fem_reference_profiles() {
         if !crate::native_fem::is_cpu_available() {
             eprintln!(
-                "skipping reciprocal M2 FDM↔FEM common-limit test: native FEM CPU unavailable"
+                "skipping reciprocal M2 FDMâ†”FEM common-limit test: native FEM CPU unavailable"
             );
             return;
         }
@@ -2924,7 +3141,7 @@ mod tests {
         for pair in resolution_errors.windows(2) {
             assert!(
                 pair[1].1 < pair[0].1 && pair[1].2 < pair[0].2,
-                "reciprocal M2 FDM↔FEM profiles must converge under Nz refinement: coarse={:?}, fine={:?}",
+                "reciprocal M2 FDMâ†”FEM profiles must converge under Nz refinement: coarse={:?}, fine={:?}",
                 pair[0],
                 pair[1]
             );
@@ -2932,7 +3149,7 @@ mod tests {
         assert!(
             resolution_errors.last().unwrap().1 < 1.0e-2
                 && resolution_errors.last().unwrap().2 < 1.0e-2,
-            "reciprocal M2 FDM↔FEM common-limit envelope is too large at fine Nz: {:?}",
+            "reciprocal M2 FDMâ†”FEM common-limit envelope is too large at fine Nz: {:?}",
             resolution_errors.last().unwrap()
         );
     }
@@ -2941,7 +3158,7 @@ mod tests {
     fn reciprocal_m2_3d_she_ishe_common_limit_matches_fdm_and_fem_profiles() {
         if !crate::native_fem::is_cpu_available() {
             eprintln!(
-                "skipping reciprocal M2 3-D SHE/iSHE FDM↔FEM test: native FEM CPU unavailable"
+                "skipping reciprocal M2 3-D SHE/iSHE FDMâ†”FEM test: native FEM CPU unavailable"
             );
             return;
         }
@@ -3097,7 +3314,7 @@ mod tests {
         for pair in cross_errors.windows(2) {
             assert!(
                 pair[1].2 < pair[0].2,
-                "3-D reciprocal M2 FDM↔FEM spin profiles must converge under h refinement: coarse={pair:?}"
+                "3-D reciprocal M2 FDMâ†”FEM spin profiles must converge under h refinement: coarse={pair:?}"
             );
         }
         let fine = cross_errors.last().expect("3-D cross-backend sweep result");
@@ -3107,7 +3324,7 @@ mod tests {
         );
         assert!(
             fine.1 < 1.0e-3 && fine.2 < 5.0e-2,
-            "3-D reciprocal M2 FDM↔FEM common-limit envelope is too large: {fine:?}"
+            "3-D reciprocal M2 FDMâ†”FEM common-limit envelope is too large: {fine:?}"
         );
     }
 
@@ -3115,7 +3332,7 @@ mod tests {
     fn direct_she_common_si_limit_matches_fdm_and_fem_reference_profiles() {
         if !crate::native_fem::is_cpu_available() {
             eprintln!(
-                "skipping M1 direct-SHE FDM↔FEM common-limit test: native FEM CPU unavailable"
+                "skipping M1 direct-SHE FDMâ†”FEM common-limit test: native FEM CPU unavailable"
             );
             return;
         }

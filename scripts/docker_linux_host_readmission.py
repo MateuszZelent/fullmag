@@ -45,6 +45,7 @@ import linux_native_readmission as native
 
 
 OPERATOR_SCHEMA = "fullmag.linux-host-readmission-operator.v1"
+SNAPSHOT_OPERATOR_SCHEMA = "fullmag.isolated-snapshot-operator.v1"
 PREPARED_SCHEMA = "fullmag.linux-host-readmission-prepared.v1"
 RESULT_SCHEMA = "fullmag.linux-host-readmission-result.v1"
 PHASE = "linux-host-readmission"
@@ -85,6 +86,9 @@ _WSL_ALIAS_PREFIXES = (
     "/run/desktop/mnt/host/wsl/",
     "/mnt/host/wsl/",
     "/mnt/wsl/docker-desktop-bind-mounts/",
+)
+_DESKTOP_HOST_PREFIXES = (
+    "/run/desktop/mnt/host/", "/host_mnt/", "/mnt/host/",
 )
 
 
@@ -155,6 +159,15 @@ def _canonical_uuid(value, label):
 
 def parse_operator_bytes(raw):
     """Validate the exact frozen operator JSON and all strict scalar types."""
+    return _parse_operator_bytes(raw, schema=OPERATOR_SCHEMA, require_device_change=True)
+
+
+def parse_snapshot_operator_bytes(raw):
+    """Validate copy-only pins, which do not grant storage readmission."""
+    return _parse_operator_bytes(raw, schema=SNAPSHOT_OPERATOR_SCHEMA, require_device_change=False)
+
+
+def _parse_operator_bytes(raw, *, schema, require_device_change):
     value = _parse_object(raw, "Linux host readmission operator request")
     required = {
         "schema_version", "request_id", "source_root", "compose_project",
@@ -166,7 +179,7 @@ def parse_operator_bytes(raw):
     }
     if set(value) != required:
         raise ValueError("operator request fields do not match the frozen readmission schema")
-    if value.get("schema_version") != OPERATOR_SCHEMA:
+    if value.get("schema_version") != schema:
         raise ValueError("operator request schema_version is unsupported")
     _canonical_uuid(value.get("request_id"), "request_id")
     source = _bounded_text(value.get("source_root"), "source_root")
@@ -190,19 +203,19 @@ def parse_operator_bytes(raw):
         raise ValueError("old_image_id must be an immutable image ID")
     old_device = _strict_int(value.get("old_host_device"), "old_host_device")
     new_device = _strict_int(value.get("new_host_device"), "new_host_device")
-    if old_device == new_device:
+    if require_device_change and old_device == new_device:
         raise ValueError("readmission requires an actual host_device change")
     _strict_int(value.get("expected_inode"), "expected_inode", minimum=1)
     _canonical_uuid(value.get("filesystem_uuid"), "filesystem_uuid")
     return value
 
 
-def _read_operator_file(path):
+def _read_operator_file(path, *, parser=parse_operator_bytes):
     request_path = Path(path).expanduser()
     if not request_path.is_absolute():
         request_path = Path.cwd() / request_path
     raw = host.read_owned_regular(request_path, MAX_OPERATOR_BYTES)
-    return parse_operator_bytes(raw), raw, request_path
+    return parser(raw), raw, request_path
 
 
 def _json_sha(raw):
@@ -268,7 +281,8 @@ def _terminal_paths(attempt):
     return root + "/terminal.json", root + "/compose.json"
 
 
-def _validate_terminal_and_compose(control, request, identity, raw_terminal, raw_compose, layout):
+def _validate_terminal_and_compose(control, request, identity, raw_terminal, raw_compose, layout,
+                                   *, allowed_terminal_states=("succeeded",)):
     terminal = _parse_object(raw_terminal, "retained development terminal receipt")
     compose = _parse_object(raw_compose, "retained Compose document")
     inputs = terminal.get("inputs")
@@ -282,7 +296,7 @@ def _validate_terminal_and_compose(control, request, identity, raw_terminal, raw
     }
     if (terminal.get("schema") != "fullmag.docker-build-operation.v1"
             or terminal.get("phase") != "development"
-            or terminal.get("state") != "succeeded"
+            or terminal.get("state") not in allowed_terminal_states
             or terminal.get("attempt") != request["development_attempt"]
             or terminal.get("compose_project") != control.project
             or terminal.get("config_sha256") != request["compose_config_sha256"]
@@ -582,7 +596,7 @@ def _assert_no_live_consumers(containers, *, state_paths, control_volume,
         raise ValueError("one of the exact controlled readmission helpers is not in the live inventory")
 
     canonical_paths = []
-    for value in (*state_paths, *protected_paths):
+    for value in (*state_paths, *protected_paths, *state_alias_sources):
         if not isinstance(value, str) or not value.startswith("/") or ".." in PurePosixPath(value).parts:
             raise ValueError("protected state path is unsafe")
         canonical_paths.append(str(PurePosixPath(value)))
@@ -613,10 +627,21 @@ def _assert_no_live_consumers(containers, *, state_paths, control_volume,
                     raise ValueError("a live Docker consumer references the control volume or ledger")
             elif kind == "bind":
                 source = mount.get("Source")
-                if (not isinstance(source, str) or not source.startswith("/")
+                if (not isinstance(source, str) or not source.startswith("/") or source.startswith("//")
                         or ".." in PurePosixPath(source).parts
                         or str(PurePosixPath(source)) != source):
                     raise ValueError("running Docker consumer bind source is unsafe")
+                # Raw protected aliases must win over both a canonical
+                # resolver and any future platform-specific disjoint proof.
+                if any(_under(source, path) or _under(path, source) for path in canonical_paths):
+                    raise ValueError("a live Docker consumer references the retained Linux state/control/ledger")
+                if (any(source == prefix.rstrip("/") or source.startswith(prefix)
+                        for prefix in _DESKTOP_HOST_PREFIXES)
+                        and not source.startswith(_WSL_ALIAS_PREFIXES)):
+                    # This is the daemon's Windows namespace, not a path in
+                    # the Linux caller's filesystem. Lexical comparison here
+                    # cannot establish physical disjointness.
+                    raise ValueError("foreign Windows Docker Desktop bind has unresolved storage identity")
                 canonical_source = source
                 alias_was_authenticated = False
                 use_kernel_fallback = False

@@ -8,13 +8,14 @@ rust-version = "1.89"
 [dependencies]
 anyhow.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
 sha2 = "0.10"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 tracing.workspace = true
 libc = "0.2"
+fullmag-authoring = { path = "../fullmag-authoring" }
 fullmag-ir = { path = "../fullmag-ir" }
 fullmag-quantities = { path = "../fullmag-quantities" }
 utoipa = { version = "5", features = ["chrono"] }

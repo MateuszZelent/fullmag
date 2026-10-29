@@ -647,12 +647,18 @@ describe("buildModelTree", () => {
     });
   });
 
-  it("does not fabricate a FEM Airbox from discretization alone", () => {
+  it("keeps Airbox visualization reachable without fabricating a FEM mesh", () => {
     const flattened = flattenExplorerNodes(
       buildModelTree({ domainDiscretization: "fem" }),
     );
 
-    expect(flattened.map((node) => node.kind)).not.toContain("airbox.root");
+    expect(flattened.find((node) => node.kind === "airbox.root")).toMatchObject({
+      badge: "no mesh", status: "unavailable", visualizationTargetId: "airbox",
+    });
+    expect(flattened.find((node) => node.kind === "airbox.visualization")).toMatchObject({
+      status: "ready", visualizationTargetId: "airbox",
+    });
+    expect(flattened.map((node) => node.kind)).not.toContain("airbox.mesh");
   });
 
   it("marks authored FEM Airbox policy stale until a matching carrier is realized", () => {
@@ -4489,7 +4495,7 @@ describe("buildModelTree", () => {
     ]) {
       expect(nodes.map((node) => node.kind)).toContain(kind);
     }
-    expect(nodes.map((node) => node.kind)).not.toContain("airbox.visualization.debug");
+    expect(nodes.map((node) => node.kind)).toContain("airbox.visualization.debug");
   });
 
   it("places each frozen-spins constraint once under its stable object or region owner", () => {

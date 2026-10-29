@@ -593,7 +593,28 @@ fn preparation_candidates(
     next_run_id: Option<&str>,
 ) -> Result<Vec<PreparationCandidate>> {
     let mut candidates = Vec::new();
-    for intent in store.list_run_intents()? {
+    for run_id in store.list_run_intent_ids()? {
+        let Some(catalog) = store.read_run_catalog(&run_id)? else {
+            continue;
+        };
+        // A catalog observation is not preparation authorization. It avoids
+        // loading immutable RunSpec data for runs with no preparation frontier.
+        if !catalog.tasks.iter().any(|task| {
+            task.lifecycle == FmsTaskLifecycle::Accepted
+                && matches!(
+                    &task.readiness,
+                    FmsTaskReadiness::Blocked { reason }
+                        if reason == FMS_TASK_AWAITING_PREPARATION_REASON
+                )
+                && task.attempt_id.is_none()
+                && task.ownership_epoch.is_none()
+                && task.resource_id.is_none()
+        }) {
+            continue;
+        }
+        let intent = store
+            .read_run_intent(&run_id)?
+            .context("preparation candidate requires its immutable run intent")?;
         let specification: RunSpecification = serde_json::from_value(intent.specification)
             .with_context(|| format!("run `{}` has an invalid RunSpec", intent.run_id))?;
         specification
@@ -602,9 +623,6 @@ fn preparation_candidates(
         if specification.run_id.as_str() != intent.run_id {
             bail!("run intent identity differs from its immutable RunSpec");
         }
-        let Some(catalog) = store.read_run_catalog(&intent.run_id)? else {
-            continue;
-        };
         for task in catalog.tasks {
             if task.lifecycle == FmsTaskLifecycle::Accepted
                 && matches!(
@@ -1064,6 +1082,40 @@ fn retry_store_writer_busy<T>(mut operation: impl FnMut() -> Result<T>) -> Resul
     fullmag_runtime_control::retry_store_writer_busy(&mut operation)
 }
 
+/// Classify only the final result of acquiring the recovery fence. The
+/// transaction body has not run, so deferral cannot replay a durable effect.
+fn classify_recovery_transaction<T>(result: Result<T>) -> Result<Option<T>> {
+    match result.context("preparation scheduler: acquire recovery transaction") {
+        Ok(transaction) => Ok(Some(transaction)),
+        Err(error) if is_store_writer_busy(&error) => {
+            tracing::warn!(
+                error = ?error,
+                "preparation scheduler deferred recovery while the session store writer is busy"
+            );
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// A failed discovery returns no partial candidate list. Only typed writer
+/// contention is deferred; validation and identity failures remain fatal.
+fn classify_candidate_discovery(
+    result: Result<Vec<PreparationCandidate>>,
+) -> Result<Option<Vec<PreparationCandidate>>> {
+    match result.context("preparation scheduler: discover preparation candidates") {
+        Ok(candidates) => Ok(Some(candidates)),
+        Err(error) if is_store_writer_busy(&error) => {
+            tracing::warn!(
+                error = ?error,
+                "preparation scheduler deferred candidate discovery while the session store writer is busy"
+            );
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn retry_host_admission_writer_busy<T>(
     operation: impl FnMut() -> Result<T>,
     context: impl FnOnce() -> String,
@@ -1094,7 +1146,15 @@ fn defer_if_compute_sample_expired<T>(
         Ok(operation) => return Ok(operation),
         Err(error) => error,
     };
-    if preparation_admission_snapshot_ready(|| host.has_current_compute_snapshot())? {
+    // A sample that was stale when admission read it may be fresh again by
+    // now; the typed refusal still means "wait for the sampler", never a
+    // fatal admission error.
+    let sample_was_stale = error.chain().any(|cause| {
+        cause.is::<fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent>()
+    });
+    if !sample_was_stale
+        && preparation_admission_snapshot_ready(|| host.has_current_compute_snapshot())?
+    {
         return Err(error);
     }
     eprintln!(
@@ -1316,10 +1376,203 @@ fn parse_usize(flag: &str, value: std::ffi::OsString) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        preparation_admission_snapshot_ready, retry_host_admission_writer_busy,
-        HostAdmissionOperation,
+        classify_candidate_discovery, classify_recovery_transaction, preparation_admission_snapshot_ready,
+        retry_host_admission_writer_busy, retry_store_writer_busy,
+        ActivePreparation, ActivePreparations, CompletedPreparation, HostAdmissionOperation,
     };
     use anyhow::Context;
+
+    #[test]
+    fn candidate_discovery_defers_only_typed_busy() {
+        let busy = anyhow::Error::new(fullmag_session::StoreWriterBusy).context("wrapped");
+        assert!(classify_candidate_discovery(Err(busy)).unwrap().is_none());
+        assert!(classify_candidate_discovery(Ok(Vec::new())).unwrap().unwrap().is_empty());
+        for message in ["invalid RunSpec", "session store writer is busy"] {
+            let error = classify_candidate_discovery(Err(anyhow::anyhow!(message.to_owned())))
+                .err().expect("ordinary errors must remain fatal");
+            assert_eq!(error.to_string(), "preparation scheduler: discover preparation candidates");
+            assert!(format!("{error:#}").contains(message));
+        }
+    }
+
+    #[test]
+    fn candidate_discovery_survives_cross_process_writer_and_preserves_pending_task() {
+        use std::io::{BufRead, Read, Write};
+        use std::process::{Command, Stdio};
+        const HOLDER_ROOT: &str = "FULLMAG_TEST_PREPARATION_DISCOVERY_HOLDER";
+        const HELD: &str = "fullmag-candidate-discovery-writer-held";
+        if let Some(root) = std::env::var_os(HOLDER_ROOT) {
+            let store = fullmag_session::SessionStore::open_existing(root).unwrap();
+            let _transaction = store.write_transaction().unwrap();
+            println!("{HELD}");
+            std::io::stdout().flush().unwrap();
+            std::io::stdin().read_to_end(&mut Vec::new()).unwrap();
+            return;
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("store");
+        let store = fullmag_session::SessionStore::open(&root).unwrap();
+        let run_id = "run-discovery";
+        let task_id = "task-discovery";
+        let spec = serde_json::json!({
+            "schema_version": "run_spec.v2", "run_id": run_id,
+            "snapshot": {"project_id": "project-discovery", "definition_revision": 1,
+                "definition_sha256": "a".repeat(64)},
+            "study": {"study_id": "study-discovery", "plan_version": "study_plan.v4",
+                "plan_sha256": "b".repeat(64)},
+            "study_catalog_sha256": "c".repeat(64), "parameters": {}, "seeds": {},
+            "dependencies": [], "immutable_assets": [],
+            "requested_execution": {"backend": "fem", "device": "cpu", "precision": "double",
+                "mode": "strict", "minimum_resources": {"cpu_millis": 1000,
+                    "memory_bytes": 1, "gpu_memory_bytes": 0, "storage_bytes": 1}}
+        });
+        let typed: fullmag_application::RunSpecification = serde_json::from_value(spec.clone()).unwrap();
+        typed.validate().unwrap();
+        store.commit_run_intent(&fullmag_session::FmsRunIntent::new(
+            run_id, "submit-discovery", spec,
+        )).unwrap();
+        let catalog: fullmag_session::FmsRunCatalog = serde_json::from_value(serde_json::json!({
+            "schema_version": "run_catalog.v1", "run_id": run_id, "revision": 1,
+            "updated_at": chrono::Utc::now(), "tasks": [{"task_id": task_id,
+                "input_fingerprint": "d".repeat(64), "lifecycle": "accepted",
+                "readiness": {"state": "blocked", "reason": fullmag_session::FMS_TASK_AWAITING_PREPARATION_REASON},
+                "artifact_ids": []}]
+        })).unwrap();
+        store.commit_run_catalog(&catalog).unwrap();
+        let before = std::fs::read(root.join("runs").join(run_id).join("run_catalog.json")).unwrap();
+        let mut holder = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tests::candidate_discovery_survives_cross_process_writer_and_preserves_pending_task", "--nocapture"])
+            .env(HOLDER_ROOT, &root).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        let mut output = std::io::BufReader::new(holder.stdout.take().unwrap());
+        loop {
+            let mut line = String::new();
+            assert!(output.read_line(&mut line).unwrap() > 0, "holder exited before acquiring writer");
+            if line.contains(HELD) { break; }
+        }
+        let deferred = classify_candidate_discovery(super::preparation_candidates(&store, None)).unwrap();
+        assert!(deferred.is_none(), "native descriptor conflict must defer discovery");
+        assert_eq!(std::fs::read(root.join("runs").join(run_id).join("run_catalog.json")).unwrap(), before);
+        assert!(store.list_active_preparation_resource_leases().unwrap().is_empty());
+        assert!(store.read_preparation_scheduler_pool_checkpoint("pool-discovery").unwrap().is_none());
+        drop(holder.stdin.take());
+        assert!(holder.wait().unwrap().success());
+        let candidates = classify_candidate_discovery(super::preparation_candidates(&store, None))
+            .unwrap().expect("next observation must succeed after writer release");
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].run_id, run_id);
+        assert_eq!(candidates[0].task_id, task_id);
+        assert_eq!(candidates[0].authorization_sequence, 0);
+        assert_eq!(std::fs::read(root.join("runs").join(run_id).join("run_catalog.json")).unwrap(), before);
+        assert!(store.list_active_preparation_resource_leases().unwrap().is_empty());
+        assert!(store.read_preparation_scheduler_pool_checkpoint("pool-discovery").unwrap().is_none());
+    }
+
+    #[test]
+    fn recovery_fence_defers_exhausted_typed_busy_and_preserves_real_errors() {
+        let mut acquisitions = 0;
+        let deferred = classify_recovery_transaction::<u8>({
+            acquisitions += 1;
+            Err(anyhow::Error::new(fullmag_session::StoreWriterBusy).context("exhausted retry"))
+        }).unwrap();
+        assert!(deferred.is_none());
+        assert_eq!(acquisitions, 1, "classification must not replay the recovery pass");
+        assert_eq!(classify_recovery_transaction(Ok(7_u8)).unwrap(), Some(7));
+        for message in ["recovery identity mismatch", "session store writer is busy"] {
+            let error = classify_recovery_transaction::<u8>(
+                Err(anyhow::anyhow!(message.to_owned())),
+            ).unwrap_err();
+            assert_eq!(error.to_string(), "preparation scheduler: acquire recovery transaction");
+            assert!(format!("{error:#}").contains(message));
+        }
+    }
+
+    #[test]
+    fn real_recovery_writer_retry_can_exhaust_then_acquire_after_release() {
+        use fullmag_session::SessionStore;
+        use std::sync::{mpsc, Arc};
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(SessionStore::open(directory.path().join("store")).unwrap());
+        let holder_store = Arc::clone(&store);
+        let (held, observed_held) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let transaction = holder_store.write_transaction().unwrap();
+            held.send(()).unwrap();
+            released.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
+            drop(transaction);
+        });
+        observed_held.recv().unwrap();
+        let mut attempts = 0;
+        let exhausted = retry_store_writer_busy(|| {
+            attempts += 1;
+            store.write_transaction()
+        });
+        let deferred = classify_recovery_transaction(exhausted).unwrap();
+        assert!(deferred.is_none());
+        assert!(attempts > 1, "exercise the existing bounded retry, not a fabricated string");
+        // A refused fence has not adopted a lease, published a pool or admitted work.
+        assert!(store.read_preparation_resource_pool("pool-busy").unwrap().is_none());
+        assert!(store.list_active_preparation_resource_leases().unwrap().is_empty());
+        assert!(store.list_run_intents().unwrap().is_empty());
+        release.send(()).unwrap();
+        holder.join().unwrap();
+        let acquired = classify_recovery_transaction(
+            retry_store_writer_busy(|| store.write_transaction()),
+        ).unwrap();
+        assert!(acquired.is_some());
+        drop(acquired);
+    }
+
+    #[test]
+    fn deferred_recovery_retains_and_joins_an_owned_supervisor() {
+        use fullmag_session::{
+            FmsPreparationResourceLease, FmsResourceBudget, FmsResourceLeaseState,
+            FMS_PREPARATION_RESOURCE_LEASE_SCHEMA,
+        };
+        use std::sync::{atomic::{AtomicBool, Ordering}, mpsc, Arc};
+        let now = chrono::Utc::now();
+        let lease = FmsPreparationResourceLease {
+            schema_version: FMS_PREPARATION_RESOURCE_LEASE_SCHEMA.into(),
+            resource_id: "owned-resource".into(),
+            budget: FmsResourceBudget {
+                cpu_millis: 1_000, memory_bytes: 1, gpu_memory_bytes: 0, storage_bytes: 1,
+            },
+            run_id: "owned-run".into(), task_id: "owned-task".into(),
+            preparation_attempt_id: "owned-attempt".into(), lease_token: "owned-token".into(),
+            state: FmsResourceLeaseState::Active, acquired_at: now, heartbeat_at: now,
+            heartbeat_sequence: 0, released_at: None, host_launch_binding: None,
+        };
+        let expected_lease = lease.clone();
+        let (release, released) = mpsc::channel();
+        let joined = Arc::new(AtomicBool::new(false));
+        let finished = Arc::clone(&joined);
+        let handle = std::thread::spawn(move || {
+            released.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
+            finished.store(true, Ordering::Release);
+            Err::<CompletedPreparation, _>(anyhow::anyhow!("test supervisor terminal"))
+        });
+        let thread_id = handle.thread().id();
+        let mut active = ActivePreparations::default();
+        let checkpoint_run_ids = Some(vec![lease.run_id.clone()]);
+        let next_run_id = Some("next-run".to_owned());
+        active.insert(lease.resource_id.clone(), ActivePreparation {
+            lease, handle, checkpoint_run_ids: checkpoint_run_ids.clone(),
+            next_run_id: next_run_id.clone(),
+        });
+        assert!(classify_recovery_transaction::<u8>(
+            Err(anyhow::Error::new(fullmag_session::StoreWriterBusy)),
+        ).unwrap().is_none());
+        let retained = active.get("owned-resource").unwrap();
+        assert_eq!(retained.lease, expected_lease);
+        assert_eq!(retained.handle.thread().id(), thread_id);
+        assert_eq!(retained.checkpoint_run_ids, checkpoint_run_ids);
+        assert_eq!(retained.next_run_id, next_run_id);
+        assert!(!joined.load(Ordering::Acquire));
+        release.send(()).unwrap();
+        drop(active);
+        assert!(joined.load(Ordering::Acquire), "owned supervisor must be joined on drain/drop");
+    }
 
     #[test]
     fn pre_admission_snapshot_deferral_classifies_only_typed_busy() {

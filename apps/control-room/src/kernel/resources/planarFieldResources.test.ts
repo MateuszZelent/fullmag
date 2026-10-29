@@ -33,6 +33,15 @@ describe("planar field resources", () => {
     monitorId,
   });
 
+  it("gives each default slice its own resource identity without changing the request path", () => {
+    const query = { component: "magnitude", resolution_x: 64, resolution_y: 64 };
+    const first = planarFieldResourceKey("m", { kind: "default", sliceKey: "xy:0.25" }, query);
+    const second = planarFieldResourceKey("m", { kind: "default", sliceKey: "xy:0.75" }, query);
+    expect(first).not.toBe(second);
+    expect(first.split("#")[0]).toBe(second.split("#")[0]);
+    expect(planarFieldResourceKey("m", { kind: "default" }, query)).toBe(first.split("#")[0]);
+  });
+
   it("keeps default and monitor source families distinct even for a monitor id named default", () => {
     const defaultKey = planarFieldResourceKey("m", { kind: "default" }, {});
     const monitorKey = planarFieldResourceKey(

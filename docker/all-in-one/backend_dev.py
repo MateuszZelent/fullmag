@@ -110,6 +110,7 @@ WINDOWS_FOLDER_GATE_POLL_SECONDS = 0.25
 PACKAGE_DEVELOPMENT_SCHEMA = "fullmag.direct-compose.package-development.v1"
 PACKAGE_DEVELOPMENT_OWNER = "owner.json"
 PACKAGE_CANDIDATES_DIRNAME = "candidates"
+PACKAGE_QUARANTINE_DIRNAME = "quarantine"
 PACKAGE_BACKUPS_DIRNAME = "backups"
 PACKAGE_RETENTION_ARCHIVE_DIRNAME = "retired"
 PACKAGE_CANDIDATE_MARKER = ".candidate-owner.json"
@@ -558,6 +559,7 @@ def _ensure_package_development_root(output: Path) -> Path:
     allowed = {
         PACKAGE_DEVELOPMENT_OWNER,
         PACKAGE_CANDIDATES_DIRNAME,
+        PACKAGE_QUARANTINE_DIRNAME,
         PACKAGE_BACKUPS_DIRNAME,
         PACKAGE_RETENTION_ARCHIVE_DIRNAME,
         PACKAGE_RETIREMENT_INTENTS_DIRNAME,
@@ -575,6 +577,10 @@ def _ensure_package_development_root(output: Path) -> Path:
         metadata = entry.lstat()
         if stat.S_ISLNK(metadata.st_mode):
             _fail(f"backend package development control contains a symlink: {entry.name}")
+    quarantine = control / PACKAGE_QUARANTINE_DIRNAME
+    if quarantine.exists():
+        # Explicit recovery owns this archive; ordinary start/retention never removes it.
+        _ensure_directory(quarantine, "backend package recovery archive")
     journal = control / PACKAGE_ROTATION_JOURNAL_NAME
     if journal.exists() or journal.is_symlink():
         metadata = journal.lstat()
@@ -6821,6 +6827,14 @@ def _serve(extra: list[str]) -> int:
         files=len(actual_artifacts),
         duration_ms=round((time.monotonic() - package_started) * 1000),
     )
+    source = receipt.get("source")
+    if (not isinstance(source, Mapping) or not isinstance(source.get("resolved_commit"), str)
+            or not GIT_OBJECT_RE.fullmatch(source["resolved_commit"])):
+        _fail("runtime package receipt has no pinned source commit")
+    native = _validate_native_identity(receipt.get("native_source_identity"), source["resolved_commit"])
+    if (source.get("source_snapshot_sha256") != native["source_snapshot_sha256"]
+            or receipt.get("native_source_identity_sha256") != _sha256_bytes(_canonical(native))):
+        _fail("runtime package source snapshot identity differs from its receipt")
     receipt_sha256 = _sha256_bytes(receipt_bytes)
     if os.environ.get("FULLMAG_SESSION_STORAGE_PROFILE") == WINDOWS_FOLDER_STORAGE_PROFILE:
         _log_phase("gate", "start", profile=WINDOWS_FOLDER_STORAGE_PROFILE)
@@ -6872,6 +6886,10 @@ def _serve(extra: list[str]) -> int:
             "FULLMAG_RUNTIME_PACKAGE_ROOT": str(PACKAGE_ROOT),
             "FULLMAG_PACKAGE_PROVENANCE": str(PROVENANCE_PATH),
             "FULLMAG_RUNTIME_PROVENANCE": str(PROVENANCE_PATH),
+            # Python mesh caches must use the same verified source identity as the binaries.
+            "FULLMAG_SOURCE_GIT_COMMIT": native["head_commit_full"],
+            "FULLMAG_SOURCE_SNAPSHOT_SHA256": native["source_snapshot_sha256"],
+            "FULLMAG_SOURCE_WORKTREE_STATE": "dirty" if native["source_snapshot_dirty"] else "clean",
             "FULLMAG_WEB_STATIC_DIR": str(PACKAGE_ROOT / "web"),
             "PATH": f"{PACKAGE_ROOT / 'bin'}:/opt/fullmag-deps/bin:/usr/local/cuda/bin:/usr/local/bin:/usr/bin:/bin",
         }

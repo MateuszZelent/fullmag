@@ -1445,6 +1445,122 @@ FULLMAG_FEM_API int fullmag_fem_solve_prepared_closed_loop_rt0_oersted_v2(
     fullmag_fem_prepared_closed_loop_source_snapshot_result_v2 *source);
 
 
+/* Additive inspection-only surface RT0 ABI. All numeric limits are caller-owned. */
+#define FULLMAG_FEM_SURFACE_RT0_ABI_VERSION 1u
+#define FULLMAG_FEM_SURFACE_RT0_WORK_KIND_COUNT 14u
+typedef struct {
+    uint64_t total[14], per_target[14];
+    uint64_t maximum_raw_integer_bits, maximum_reduced_fraction_bits;
+    uint64_t maximum_lifetime_peak_rss_bytes, guard_interval_events;
+    double maximum_total_seconds, maximum_target_seconds;
+} fullmag_fem_surface_rt0_work_limits_v1;
+typedef struct {
+    double absolute_field_apm, relative_field, cancellation_floor_apm;
+    double scalar_relative_80, scalar_relative_120;
+    double angle_relative_80, angle_relative_120;
+    double binary_scalar_epsilon_factor, binary_roundoff_epsilon_factor;
+    double binary_cancellation_limit, highprecision_cancellation_limit;
+} fullmag_fem_surface_rt0_tolerances_v1;
+typedef struct {
+    fullmag_fem_surface_rt0_work_limits_v1 work_limits;
+    fullmag_fem_surface_rt0_tolerances_v1 tolerances;
+    const char *policy_version;
+} fullmag_fem_surface_rt0_options_v1;
+typedef struct {
+    uint32_t abi_version, reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_prepared_closed_loop_request_v2 rt0;
+    const double *target_points_xyz;
+    uint64_t target_points_xyz_len;
+    fullmag_fem_surface_rt0_options_v1 options;
+} fullmag_fem_prepared_closed_loop_rt0_surface_request_v1;
+typedef struct {
+    uint32_t abi_version, reserved_flags;
+    uint64_t struct_size;
+    fullmag_fem_steady_transport_rt0_result_v1 rt0;
+    double *h_xyz_apm;
+    uint64_t h_xyz_apm_capacity, h_xyz_apm_len;
+    uint8_t *evidence_json;
+    uint64_t evidence_json_capacity, evidence_json_len;
+    char error_message[256];
+} fullmag_fem_prepared_closed_loop_rt0_surface_result_v1;
+#if defined(__cplusplus) && INTPTR_MAX == INT64_MAX
+static_assert(sizeof(fullmag_fem_surface_rt0_work_limits_v1) == 272, "surface limits ABI");
+static_assert(sizeof(fullmag_fem_surface_rt0_tolerances_v1) == 88, "surface tolerances ABI");
+static_assert(sizeof(fullmag_fem_surface_rt0_options_v1) == 368, "surface options ABI");
+static_assert(sizeof(fullmag_fem_prepared_closed_loop_rt0_surface_request_v1) == 1008, "surface request ABI");
+static_assert(sizeof(fullmag_fem_prepared_closed_loop_rt0_surface_result_v1) == 2072, "surface result ABI");
+static_assert(offsetof(fullmag_fem_prepared_closed_loop_rt0_surface_result_v1, evidence_json) == 1792, "surface evidence pointer ABI");
+#endif
+FULLMAG_FEM_API int fullmag_fem_solve_prepared_closed_loop_rt0_surface_v1(
+    const fullmag_fem_prepared_closed_loop_rt0_surface_request_v1 *request,
+    fullmag_fem_prepared_closed_loop_rt0_surface_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge,
+    fullmag_fem_prepared_closed_loop_source_snapshot_result_v2 *source);
+
+/* Optional caller-owned diagnostics, separate from scientific surface evidence.
+ * The legacy symbol remains unprofiled. A profile is available after kernel
+ * entry even when the native call refuses; no partial H is thereby published.
+ * Phase order: source_prepare, exact_geometry, binary64, precision80,
+ * precision120, consistency, reduction, serialization, unattributed. */
+#define FULLMAG_FEM_SURFACE_RT0_PROFILE_ABI_VERSION 1u
+#define FULLMAG_FEM_SURFACE_RT0_PROFILE_PHASE_COUNT 9u
+typedef struct {
+    uint32_t abi_version, reserved_flags;
+    uint64_t struct_size;
+    uint64_t available, accounting_issue;
+    uint64_t operator_wall_time_ns;
+    uint64_t phase_wall_time_ns[9];
+} fullmag_fem_surface_rt0_profile_result_v1;
+#if defined(__cplusplus) && INTPTR_MAX == INT64_MAX
+static_assert(sizeof(fullmag_fem_surface_rt0_profile_result_v1) == 112, "surface profile ABI");
+static_assert(offsetof(fullmag_fem_surface_rt0_profile_result_v1, phase_wall_time_ns) == 40, "surface profile phase ABI");
+#endif
+FULLMAG_FEM_API int fullmag_fem_solve_prepared_closed_loop_rt0_surface_profiled_v1(
+    const fullmag_fem_prepared_closed_loop_rt0_surface_request_v1 *request,
+    fullmag_fem_prepared_closed_loop_rt0_surface_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge,
+    fullmag_fem_prepared_closed_loop_source_snapshot_result_v2 *source,
+    fullmag_fem_surface_rt0_profile_result_v1 *profile);
+
+
+/* Optional thin operation diagnostics. The callback must not block, allocate,
+ * access the session store, throw, or retain the transient progress pointer.
+ * Completed targets count only fully validated field values, never LLG steps. */
+#define FULLMAG_FEM_ANTENNA_OPERATION_PROGRESS_ABI_VERSION 1u
+#define FULLMAG_FEM_ANTENNA_PREPARING_SOURCE 0u
+#define FULLMAG_FEM_ANTENNA_SOLVING_POTENTIAL 1u
+#define FULLMAG_FEM_ANTENNA_RECONSTRUCTING_CURRENT 2u
+#define FULLMAG_FEM_ANTENNA_EVALUATING_FIELD 3u
+#define FULLMAG_FEM_ANTENNA_VALIDATING_RESULT 4u
+#define FULLMAG_FEM_ANTENNA_PUBLISHING_RESULT 5u
+typedef struct {
+    uint32_t abi_version, reserved_flags;
+    uint64_t struct_size;
+    uint32_t phase, reserved;
+    uint64_t completed_targets, total_targets, source_cells;
+    double elapsed_seconds;
+} fullmag_fem_antenna_operation_progress_v1;
+typedef struct {
+    uint32_t abi_version, reserved_flags;
+    uint64_t struct_size;
+    void (*callback)(void *user_data, const fullmag_fem_antenna_operation_progress_v1 *progress);
+    void *user_data;
+} fullmag_fem_antenna_operation_observer_v1;
+#if defined(__cplusplus) && INTPTR_MAX == INT64_MAX
+static_assert(sizeof(fullmag_fem_antenna_operation_progress_v1) == 56, "antenna progress ABI");
+static_assert(sizeof(fullmag_fem_antenna_operation_observer_v1) == 32, "antenna observer ABI");
+#endif
+FULLMAG_FEM_API int fullmag_fem_solve_prepared_closed_loop_rt0_surface_observed_v1(
+    const fullmag_fem_prepared_closed_loop_rt0_surface_request_v1 *request,
+    fullmag_fem_prepared_closed_loop_rt0_surface_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge,
+    fullmag_fem_prepared_closed_loop_source_snapshot_result_v2 *source,
+    fullmag_fem_surface_rt0_profile_result_v1 *profile,
+    const fullmag_fem_antenna_operation_observer_v1 *observer);
+
+
+
 typedef struct {
     uint32_t abi_version;
     uint32_t reserved_flags;

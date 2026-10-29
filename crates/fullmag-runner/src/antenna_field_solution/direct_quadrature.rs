@@ -9,6 +9,7 @@ pub(crate) const HEADER_BYTES: usize = 288;
 pub(crate) const RECORD_BYTES: usize = 96;
 pub(crate) const MAX_TARGETS: u64 = 1_000_000;
 pub(crate) const MAX_LEAVES: u64 = 1_000_000;
+#[cfg(test)]
 pub(crate) const MAX_WORK: u64 = 100_000_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -106,6 +107,22 @@ impl DirectOerstedSnapshot {
     }
 
     pub(crate) fn validate(&self) -> Result<(), RunError> {
+        self.validate_with_budget(false)
+    }
+
+    pub(crate) fn validate_closed_loop(&self) -> Result<(), RunError> {
+        self.validate_with_budget(true)
+    }
+
+    fn validate_with_budget(&self, closed_loop: bool) -> Result<(), RunError> {
+        let budget = ["production_default", "volume_inspection_v1"]
+            .into_iter()
+            .filter(|name| closed_loop || *name == "production_default")
+            .filter_map(fullmag_ir::antenna_closed_loop_direct_budget)
+            .find(|budget| self.maximum_source_target_pairs == budget.maximum_source_target_pairs
+                && self.maximum_kernel_evaluations == budget.maximum_kernel_evaluations
+                && self.maximum_ledger_leaf_visits == budget.maximum_ledger_leaf_visits)
+            .ok_or_else(|| invalid("unsupported or mixed work budget"))?;
         let n = self.targets.len() as u64;
         if n == 0
             || n > MAX_TARGETS
@@ -119,11 +136,7 @@ impl DirectOerstedSnapshot {
             || self.relative_tolerance.to_bits()
                 != fullmag_ir::ANTENNA_DIRECT_OERSTED_RELATIVE_TOLERANCE.to_bits()
             || self.relative_scale_floor_apm.to_bits() != 0.0_f64.to_bits()
-            || self.maximum_source_target_pairs
-                != fullmag_ir::ANTENNA_DIRECT_OERSTED_MAX_SOURCE_TARGET_PAIRS
             || self.maximum_final_leaves_per_target != MAX_LEAVES
-            || self.maximum_kernel_evaluations != MAX_WORK
-            || self.maximum_ledger_leaf_visits != MAX_WORK
             || self.source_target_pairs == 0
             || self.source_target_pairs > self.maximum_source_target_pairs
             || self.source_target_pairs % n != 0
@@ -189,8 +202,8 @@ impl DirectOerstedSnapshot {
             .and_then(|value| self.source_target_pairs.checked_add(value))
             .ok_or_else(|| invalid("refinement count overflow"))?;
         if sums != [leaves, self.kernel_evaluations, self.ledger_leaf_visits]
-            || self.kernel_evaluations > MAX_WORK
-            || self.ledger_leaf_visits > MAX_WORK
+            || self.kernel_evaluations > budget.maximum_kernel_evaluations
+            || self.ledger_leaf_visits > budget.maximum_ledger_leaf_visits
         {
             return Err(invalid("global work/refinement conservation"));
         }

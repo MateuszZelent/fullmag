@@ -1217,6 +1217,17 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
             encoded(payload), public_url, browser_url, item_id, script_sha256,
         )
         self.assertEqual(parsed["frame_sha256"], payload["frame_sha256"])
+        fem = {**payload, "geometry_kind": "fem", "frame_count": 3, "frame_indices": [0, 1, 2]}
+        self.assertEqual(self.qa._parse_saved_playback_result(
+            encoded(fem), public_url, browser_url, item_id, script_sha256,
+        )["frame_indices"], [0, 1, 2])
+        for change in ({"frame_count": True}, {"frame_count": 2}, {"frame_count": 100001},
+                       {"frame_indices": [0, 0, 2]}, {"geometry_kind": "unknown"}):
+            with self.assertRaises(self.qa.BuildControlError):
+                self.qa._parse_saved_playback_result(
+                    encoded({**fem, **change}), public_url, browser_url, item_id, script_sha256,
+                )
+
 
         for key, value in (
             ("item_id", "74"),
@@ -1480,6 +1491,7 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
             },
             "HostConfig": {
                 "ReadonlyRootfs": True,
+                "GroupAdd": qa._script_bind_groups(ROOT),
                 "NetworkMode": identity["network_name"],
                 "PortBindings": None,
                 "Tmpfs": {"/tmp": "rw,nosuid,nodev,size=256m"},
@@ -1548,6 +1560,10 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
                             "fullmag-frontend-state", browser_id, 0, ROOT,
                         )
 
+        wrong_group = deepcopy(document)
+        wrong_group["HostConfig"]["GroupAdd"] = ["123456789"]
+        with self.assertRaisesRegex(qa.ControlOutcomeUnknown, "source read group differs"):
+            qa._validate_browser_helper(wrong_group, FakeControl(), identity, "fullmag-frontend-state", browser_id, 0, ROOT)
         wrong_user = deepcopy(document)
         wrong_user["Config"]["User"] = "0:0"
         with self.assertRaises(qa.ControlOutcomeUnknown):
@@ -1560,6 +1576,68 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
         wrong_read_group["HostConfig"]["GroupAdd"] = qa._script_bind_groups(ROOT) + ["99999999"]
         with self.assertRaises(qa.ControlOutcomeUnknown):
             qa._validate_browser_helper(wrong_read_group, FakeControl(), identity, "fullmag-frontend-state", browser_id, 0, ROOT)
+
+    def test_frontend_image_uses_exact_per_service_compose_pin(self):
+        qa = self.qa
+        backend_image = "sha256:" + "a" * 64
+        frontend_image = "sha256:" + "b" * 64
+        identity = {
+            "project_name": "fullmag-worktree-fixture", "project_id": "fullmag",
+            "worktree_id": "fixture", "checkout_kind": "worktree",
+            "source_root": str(ROOT), "network_name": "fullmag-worktree-fixture_fullmag",
+        }
+        compose = {"name": identity["project_name"], "services": {
+            "backend": {"image": backend_image}, "frontend": {"image": frontend_image},
+        }}
+        current = {"attempt": "c" * 32, "inputs": {"image_id": backend_image}}
+        document = {
+            "Image": frontend_image, "State": {"Running": True},
+            "Config": {"Labels": {
+                **qa.source_labels(identity),
+                "com.docker.compose.project": identity["project_name"],
+                "com.docker.compose.service": "frontend",
+            }},
+            "HostConfig": {"NetworkMode": identity["network_name"],
+                "PortBindings": {"8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": "3202"}]}},
+            "NetworkSettings": {"Networks": {identity["network_name"]: {}}},
+            "Mounts": [
+                {"Type": "volume", "Name": "frontend-fixture", "Destination": "/state/development", "RW": True},
+                {"Type": "volume", "Name": "control-fixture", "Destination": "/opt/fullmag/control", "RW": False},
+            ],
+        }
+        reads = []
+        class FakeControl:
+            project = identity["project_name"]
+            volume = "control-fixture"
+            def read(self, path):
+                reads.append(path)
+                return deepcopy(compose)
+        control = FakeControl()
+        def check(observed, receipt):
+            qa._validate_frontend(observed, control, identity, "frontend-fixture", receipt, 3202)
+        for image in (backend_image, frontend_image):
+            with self.subTest(valid_frontend_image=image):
+                compose["services"]["frontend"]["image"] = image
+                current["config_sha256"] = hashlib.sha256(qa.canonical(compose)).hexdigest()
+                document["Image"] = image
+                check(document, current)
+        self.assertEqual(reads, ["development/attempts/" + "c" * 32 + "/compose.json"] * 2)
+        base_compose = deepcopy(compose)
+        for case in ("digest", "attempt", "project", "backend-image", "mutable-image", "observed-image", "missing-service"):
+            with self.subTest(rejected=case):
+                compose = deepcopy(base_compose)
+                bad_current = deepcopy(current)
+                bad_document = deepcopy(document)
+                if case == "attempt": bad_current["attempt"] = "../other"
+                elif case == "project": compose["name"] = "fullmag-other"
+                elif case == "backend-image": compose["services"]["backend"]["image"] = frontend_image
+                elif case == "mutable-image": compose["services"]["frontend"]["image"] = "fullmag:latest"
+                elif case == "observed-image": bad_document["Image"] = backend_image
+                elif case == "missing-service": del compose["services"]["frontend"]
+                bad_current["config_sha256"] = hashlib.sha256(qa.canonical(compose)).hexdigest()
+                if case == "digest": bad_current["config_sha256"] = "d" * 64
+                with self.assertRaises(qa.BuildControlError):
+                    check(bad_document, bad_current)
 
     def test_control_volume_preflight_is_read_only_and_fail_closed_when_absent(self):
         qa = self.qa
@@ -1826,6 +1904,10 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
                     "http://127.0.0.1:32871",
                     "http://frontend:8080",
                     180,
+                    canvas_only=False,
+                    expect_live_field=None,
+                    expect_airbox_vectors=False,
+                    expect_ambiguous_compute_fields=False,
                 )
 
         self.assertEqual(operation["receipt"]["helper_container"], "fullmag-control-" + "a" * 32)
@@ -1858,6 +1940,7 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
             "canvas_only": False,
             "expect_live_field": None,
             "expect_airbox_vectors": False,
+            "expect_ambiguous_compute_fields": False,
             "qa_scope": "full-browser-qa",
             "skipped_areas": [],
             "home_round_trip": True,
@@ -1869,34 +1952,43 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
             "workspace": {"visible": True, "canvas_dom_stable": True},
             "canvas_before": canvas,
             "canvas_after": deepcopy(canvas),
+            "viewport_dom_observations": {
+                "field_data_proven": False,
+                "note": self.qa.VIEWPORT_DOM_OBSERVATIONS_NOTE,
+                **{
+                    key: {
+                        "dataset": {}, "quantity_labels": [],
+                        "dataset_entry_count": 0, "quantity_label_count": 0,
+                        "dataset_truncated": False, "quantity_labels_truncated": False,
+                    }
+                    for key in ("before_home", "after_home")
+                },
+            },
             "page_errors": 0,
             "console_errors": 0,
             "request_failures": 0,
             "http_errors": [],
-            "viewport_dom_observations": {
-                "field_data_proven": False,
-                "note": self.qa.VIEWPORT_DOM_OBSERVATIONS_NOTE,
-                "before_home": {
-                    "dataset": {},
-                    "quantity_labels": [],
-                    "dataset_entry_count": 0,
-                    "quantity_label_count": 0,
-                    "dataset_truncated": False,
-                    "quantity_labels_truncated": False,
-                },
-                "after_home": {
-                    "dataset": {},
-                    "quantity_labels": [],
-                    "dataset_entry_count": 0,
-                    "quantity_label_count": 0,
-                    "dataset_truncated": False,
-                    "quantity_labels_truncated": False,
-                },
-            },
             "resource_responses": [],
         }
         encoded = lambda value: (json.dumps(value) + "\n").encode("utf-8")
         self.assertEqual(self.qa._parse_result(encoded(payload), payload["public_url"], payload["probe_url"]), payload)
+        for field, bad_value in (
+            ("canvas_only", True),
+            ("qa_scope", "canvas-home-only"),
+            ("skipped_areas", ["viewport-appearance"]),
+            ("expect_live_field", "H_Oersted"),
+            ("expect_airbox_vectors", True),
+            ("expect_ambiguous_compute_fields", True),
+            ("viewport_dom_observations", None),
+            ("http_errors", [{"status": 400}]),
+            ("resource_responses", None),
+            ("canvas_screenshot", {"state": "captured"}),
+        ):
+            with self.subTest(rejected_field=field):
+                invalid = deepcopy(payload)
+                invalid[field] = bad_value
+                with self.assertRaises(self.qa.BuildControlError):
+                    self.qa._parse_result(encoded(invalid), payload["public_url"], payload["probe_url"])
         invalid_buffer = deepcopy(payload)
         invalid_buffer["canvas_after"]["drawing_buffer_width"] = 0
         with self.assertRaises(self.qa.BuildControlError):
@@ -1930,6 +2022,14 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
             "drawingBufferHeight",
             "browser_gpu_mode",
             "canvas_dom_stable",
+        ):
+            self.assertIn(required, text)
+        for required in (
+            'page.locator(".fm-viewport-3d canvas").first().screenshot',
+            "maxCanvasScreenshotBytes",
+            'state: "omitted-size-limit", image_proof: false',
+            'state: "omitted-capture-failed", image_proof: false',
+            "canvas_screenshot: await captureCanvasScreenshot(page, after)",
         ):
             self.assertIn(required, text)
         self.assertIn("const captureCanvasScreenshot = async", text)

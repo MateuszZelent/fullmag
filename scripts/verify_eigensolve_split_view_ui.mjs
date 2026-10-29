@@ -26,7 +26,7 @@ try{
  const analysis=page.locator('.fm-viewport-tabs__trigger').filter({hasText:/^Analysis$/}); await analysis.first().click({timeout:60000});
  await page.locator('.fm-explorer .fm-tabs-trigger').filter({hasText:/^Results$/}).click({timeout:60000});
  console.log('tree'); const root=`results:run:${run}`, family=root+':k-resolved', stage=family+':stage:eigenmodes:modal_eigen';
- await expand(root);await expand(family);await tree(family).click(); 
+ await expand(root);await expand(family);await tree(family).click();
  await expand(stage);await expand(stage+':modes-at-k');
  const mode=page.locator(`[role="treeitem"][data-node-id*="sample-${sampleId(initialSample)}"][data-node-id*="mode-0000"]`).last();
  await mode.click();await page.waitForTimeout(700);

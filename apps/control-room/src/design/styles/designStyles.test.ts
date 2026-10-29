@@ -8,6 +8,7 @@ const locallyScopedCssVars = new Set([
   "--depth",
   "--fm-results-navigator-depth",
   "--fm-mesh-build-progress",
+  "--fm-planar-aspect",
   "--fm-refresh-progress",
   "--pct",
   "--radix-accordion-content-height",

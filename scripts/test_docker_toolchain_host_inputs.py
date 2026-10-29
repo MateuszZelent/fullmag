@@ -7,6 +7,10 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
+
+import bootstrap_docker_toolchain as bootstrap
+import docker_build_control as control
 
 from docker_dev_host import docker_argv
 
@@ -48,6 +52,38 @@ class ToolchainHostInputsTests(unittest.TestCase):
                 cwd=fixture, env=environment, text=True, capture_output=True, timeout=30)
             self.assertEqual(configured.returncode, 0, configured.stderr)
             return json.loads(configured.stdout)["services"]["fem-gpu-toolchain"]["build"]["args"]
+
+    def test_main_dotenv_reaches_worktree_bootstrap_and_control_rendering(self):
+        with tempfile.TemporaryDirectory() as directory:
+            main = Path(directory) / "main"
+            worktree = Path(directory) / "worktrees" / "task"
+            main.mkdir()
+            worktree.mkdir(parents=True)
+            shutil.copyfile(self.compose, worktree / "compose.toolchain.yaml")
+            selected = {
+                "FULLMAG_CUDA_ARCHITECTURES": "86-real;86-virtual",
+                "FULLMAG_HYPRE_GPU_ARCHITECTURES": "86",
+                "FULLMAG_PETSC_CUDA_ARCHITECTURES": "86",
+                "FULLMAG_MFEM_BUILD_JOBS": "2",
+                "FULLMAG_MFEM_CUDA_FAST_COMPILE": "0",
+            }
+            (main / ".env").write_text(
+                "".join(f"{key}={value}\n" for key, value in selected.items())
+                + "UNRELATED_SECRET=private\n")
+            (worktree / ".env").write_text("FULLMAG_MFEM_BUILD_JOBS=99\n")
+            environment = {key: value for key, value in os.environ.items() if key not in self.inputs}
+            environment["FULLMAG_MFEM_BUILD_JOBS"] = "4"
+            selected["FULLMAG_MFEM_BUILD_JOBS"] = "4"
+            with patch.dict(os.environ, environment, clear=True), \
+                    patch.object(bootstrap.storage, "worktree_records", return_value=[
+                        {"worktree": str(main)}, {"worktree": str(worktree)}]):
+                resolved = bootstrap._compose_environment(worktree, "fullmag-worktree-input-test")
+                self.assertNotIn("UNRELATED_SECRET", resolved)
+                configured = control.toolchain_configuration(
+                    worktree, {"project_name": "fullmag-worktree-input-test"})
+            args = configured["services"]["fem-gpu-toolchain"]["build"]["args"]
+            self.assertEqual({key: resolved[key] for key in selected}, selected)
+            self.assertEqual({key: args[key] for key in selected}, selected)
 
     def test_default_mfem_concurrency_and_cuda_architectures(self):
         args = self.configuration({})

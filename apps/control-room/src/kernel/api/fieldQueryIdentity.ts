@@ -266,11 +266,13 @@ const PLANAR_FIELD_QUERY_ORDER = [
   "expected_source_revision",
   "expected_scene_revision",
   "include_mesh",
+  "position_fraction",
   "quality",
   "resolution_x",
   "resolution_y",
   "scope_id",
   "scope_kind",
+  "scope_region_id",
   "snapshot_id",
   "stage_id",
   "vector_budget",
@@ -339,5 +341,8 @@ export function planarFieldResourceKey(
     if (value !== undefined) search.set(key, String(value));
   }
   const serialized = search.toString();
-  return serialized ? `${resolvedPath}?${serialized}` : resolvedPath;
+  const key = serialized ? `${resolvedPath}?${serialized}` : resolvedPath;
+  return source.kind === "default" && source.sliceKey
+    ? `${key}#slice=${encodeURIComponent(source.sliceKey)}`
+    : key;
 }

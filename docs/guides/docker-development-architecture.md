@@ -256,6 +256,47 @@ Dokładnie przypięte częściowe zakończenie można dokończyć tym samym żą
 reset, ponowienie Solve ani automatyczne odtworzenie zaakceptowanego skryptu.
 Implementacja i regresje źródłowe nie zastępują testu tej operacji w Dockerze.
 
+Zarządzany wrapper dla działającego diagnostycznego backendu:
+
+```text
+just docker-dev-cancel-failed-no-spawn <source_root> <backend_id> <image_id> <process_receipt_sha256> <request.json> <request_sha256> false
+```
+
+Ostatni argument `false` wykonuje podgląd. `true` wywołuje istniejący operator
+natywny dokładnie raz, wewnątrz przypiętego backendu i pod lease operacji grupy.
+Wrapper wymaga prywatnego ledgeru DEV, aktualnych immutable development/Compose
+receiptów oraz identycznych pinów native. Publikuje trwały wynik natywny przed
+oddaniem odpowiedzi i osobny record `fullmag.docker-no-spawn-cancellation.v1`
+z referencją `no-spawn-cancellation/current.json`. Niepewne zakończenie zachowuje
+lease operacji do inspekcji; nie jest zgodą na ponowienie.
+
+Wrapper przygotowuje image-owned środowisko CPU CUDA ABI tak samo jak
+entrypoint i sprawdza zależności loadera przed przyjęciem operacji oraz przed
+wywołaniem native. Historyczny błąd tego wrappera, w którym loader odmówił
+załadowania `libcuda.so.1`, ma wąską ścieżkę technicznego zakończenia operacji:
+do recepty po argumencie `apply` przekazuje się attempt i SHA niepewnego
+receiptu. Wymaga ona rozpoznanej wersji wykonawcy, dokładnego błędu loadera,
+niezmienionych danych runu i niewykorzystanej bramki pod istniejącymi lockami.
+Zachowuje oryginalny receipt oraz żądanie; tylko pierwotny helper zwalnia swój
+lease po publikacji terminala technicznego. Nie rozlicza zadania ani native
+zasobów i nie obejmuje innych niepewnych zakończeń operatora.
+
+Po potwierdzonej cancellation, dla profilu Linux z zachowanym niepustym store,
+`docker-dev-stop-failed` ma osobną ścieżkę
+`native-runtime-supervision-linux-retained`. Sprawdza natywny wynik, wszystkie
+lease/rezerwacje, pełny bounded inventory runów, immutable CAS i runy manualne
+bez release/claim. Zatrzymuje wyłącznie przypiętą prywatną parę usług; zachowuje
+owner `Failed` oraz receipt `shutdown_unknown`, nie przedstawia ich jako drain.
+Recreate ponownie sprawdza ten sam dowód i zachowuje state/user-data. Poprzednia
+ścieżka Windows i klasyfikator API exit-101 mają niezmienione warunki.
+
+Przy braku aktualnej próbki compute-node przed spawnem scheduler zachowuje
+typ `ComputeNodeSampleNotCurrent` i szczegółową przyczynę. Po ograniczonym retry
+oddaje sterowanie pętli jako `WorkerLaunchDeferred`, zwalniając tylko slot
+supervisora. Claim, Start, lease i niewykorzystany permit pozostają bez zmian;
+drain i cancellation mogą być obsługiwane. Nieaktualna próbka nadal blokuje
+spawn; błędy konfiguracji, ownera i uszkodzonego rekordu pozostają fatalne.
+
 ### Kontrolowane odtworzenie terminalnego failed run
 
 Jeżeli własny backend zakończył się terminalnym błędem, a jego usługi są
@@ -567,7 +608,23 @@ wejść używa tego samego klucza receiptu. Do checkoutu wracają wyłącznie cz
 wersjonowane pliki API. Przed publikacją ponownie sprawdzane są źródła,
 kontenery, obrazy i backing wolumenów.
 
-Zmiana źródeł wymaga najpierw zwykłego restartu backendu tej grupy. Timeout
+Zmiana źródeł wymaga najpierw zwykłego restartu backendu tej grupy.
+
+Codegen wiąże się z wejściami buildu backendu: wymaga zgodności commita,
+`source_snapshot_sha256` i natywnej tożsamości źródeł z receiptem pakietu, a
+nie pełnego `source_digest` drzewa. Snapshot wyklucza ścieżki nieużywane przez
+runtime (`LIVE_RUNTIME_STATUS_EXCLUSIONS` i `LIVE_NON_RUNTIME_*` w
+`docker/all-in-one/backend_source.py`: m.in. `docs/**`, `apps/control-room/**`,
+`scripts/test_*`, `*.md`, `*.source-map.json`), a backend po samej zmianie
+takich plików weryfikuje istniejący pakiet zamiast go przebudowywać. Pełny
+skrót drzewa różniłby się wtedy trwale, choć binarka i OpenAPI są aktualne.
+Na hoście WSL z Docker Desktop źródło bind mountu ma postać
+`/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/<dystrybucja>/<sha256>`;
+codegen potwierdza je przez ten sam inode aliasu
+`/mnt/wsl/docker-desktop-bind-mounts/…` i wybranego checkoutu. Zapieczętowane (bez bitów zapisu) binarki pakietu współdzielonego
+między grupami mogą mieć wiele hardlinków; ich zawartość jest sprawdzana
+skrótem z receiptu. Opublikowane pliki zachowują poprzedni tryb (domyślnie
+`0644`), aby usługa `frontend` mogła je czytać. Timeout
 klienta Docker nie dowodzi zakończenia zdalnego procesu generatora; receipt
 awarii zachowuje identyfikator stagingu i potrzebę uzgodnienia stanu zamiast
 usuwać potencjalnie używane dane. `generate-api-openapi-legacy` zachowuje

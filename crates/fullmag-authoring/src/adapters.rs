@@ -235,6 +235,7 @@ pub fn scene_document_to_script_builder(
                 allocated_region_ids: object.allocated_region_ids.clone(),
                 material_parameter_fields: object.material_parameter_fields.clone(),
                 absorbing_boundary: object.absorbing_boundary.clone(),
+                visualization_hint: object.visualization_hint.clone(),
             })
         })
         .collect::<Result<Vec<_>, SceneDocumentValidationError>>()?;
@@ -490,6 +491,7 @@ pub fn scene_document_to_script_builder_overrides(
             "name": builder_geometry_name_for_object(object),
             "object_id": object.id,
             "role": object.role,
+            "visualization_hint": object.visualization_hint,
             "geometry_kind": object.geometry.geometry_kind,
             "geometry_params": geometry_params,
             "bounds_min": object.geometry.bounds_min,
@@ -966,6 +968,7 @@ fn geometry_override_value(geo: &ScriptBuilderGeometryEntry) -> Value {
         Value::String(geo.geometry_kind.clone()),
     );
     map.insert("geometry_params".to_string(), geo.geometry_params.clone());
+    map.insert("visualization_hint".to_string(), serde_json::json!(geo.visualization_hint));
     map.insert(
         "bounds_min".to_string(),
         serde_json::to_value(geo.bounds_min).unwrap_or(Value::Null),
@@ -1383,6 +1386,7 @@ fn scene_object_from_geometry(geometry: &ScriptBuilderGeometryEntry) -> SceneObj
         allocated_region_ids: geometry.allocated_region_ids.clone(),
         material_parameter_fields: geometry.material_parameter_fields.clone(),
         absorbing_boundary: geometry.absorbing_boundary.clone(),
+        visualization_hint: geometry.visualization_hint.clone(),
         notes: None,
         visible: true,
         locked: false,
@@ -2896,6 +2900,7 @@ mod tests {
                 allocated_region_ids: vec!["flower:r1".to_string()],
                 material_parameter_fields: Vec::new(),
                 absorbing_boundary: None,
+                visualization_hint: Default::default(),
             }],
             mesh_interfaces: vec![ScriptBuilderMeshInterfaceState {
                 interface_id: "object:flower|air".to_string(),
@@ -3952,6 +3957,10 @@ mod tests {
         antenna.allocated_region_ids.clear();
         antenna.material_parameter_fields.clear();
         antenna.absorbing_boundary = None;
+        antenna.visualization_hint = BTreeMap::from([
+            ("display".into(), serde_json::json!("shaded_frame")),
+            ("role".into(), serde_json::json!("antenna")),
+        ]);
         antenna.transform.translation = [0.0, 0.0, 50e-9];
         scene.objects.insert(0, antenna);
 
@@ -3960,6 +3969,10 @@ mod tests {
         assert_eq!(exported["object_id"], "immutable-conductor-owner");
         assert_eq!(exported["name"], "Renamed antenna");
         assert_eq!(exported["role"], "antenna");
+        assert_eq!(exported["visualization_hint"], serde_json::json!({
+            "display":"shaded_frame","role":"antenna"
+        }));
+        assert!(exported.get("physics_stack").is_none());
         assert_eq!(exported["geometry_params"]["translation"], serde_json::json!([0.0, 0.0, 50e-9]));
         assert!(exported.get("material").is_none());
         assert!(exported.get("magnetization").is_none());
@@ -3967,6 +3980,28 @@ mod tests {
         scene.objects[0].transform.scale = [2.0, 1.0, 1.0];
         let error = scene_document_to_script_builder_overrides(&scene).expect_err("unsupported scale");
         assert!(error.message.contains("owner_transform_rotation_scale_unsupported"));
+    }
+
+    #[test]
+    fn presentation_hints_survive_builder_adapters_without_changing_physics() {
+        let mut builder = sample_builder();
+        let before = builder.geometries[0].clone();
+        builder.geometries[0].visualization_hint = BTreeMap::from([
+            ("display".into(), serde_json::json!("shaded_frame")),
+            // A presentation label must never reclassify this authored magnet.
+            ("role".into(), serde_json::json!("antenna")),
+        ]);
+        let scene = scene_document_from_script_builder(&builder);
+        assert_eq!(scene.objects[0].role, "magnet");
+        assert_eq!(scene.objects[0].visualization_hint, builder.geometries[0].visualization_hint);
+        let restored = scene_document_to_script_builder(&scene).unwrap();
+        assert_eq!(restored.geometries[0].visualization_hint, builder.geometries[0].visualization_hint);
+        assert_eq!(restored.geometries[0].material, before.material);
+        assert_eq!(restored.geometries[0].magnetization, before.magnetization);
+        assert_eq!(restored.geometries[0].physics_stack, before.physics_stack);
+        let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+        assert_eq!(overrides["geometries"][0]["visualization_hint"],
+            serde_json::json!(builder.geometries[0].visualization_hint));
     }
 
     #[test]

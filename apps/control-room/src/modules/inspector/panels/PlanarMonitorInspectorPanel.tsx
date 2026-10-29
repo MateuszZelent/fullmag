@@ -24,7 +24,10 @@ import {
   type PlanarMonitor,
   type PlanarMonitorDraft,
 } from "@/kernel/workspace/crossSectionWorkspace";
-import { planarMonitorFramePreviewStore } from "@/kernel/workspace/planarMonitorFramePreview";
+import {
+  planarMonitorFramePreviewStore,
+  usePlanarMonitorPickFaceArmed,
+} from "@/kernel/workspace/planarMonitorFramePreview";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -120,6 +123,7 @@ function CommittedPlanarMonitorEditor({
     ...planarMonitorDefinitionAvailabilityErrors(draft.monitor, definitionAvailability),
   ];
   const dirty = JSON.stringify(draft.monitor) !== JSON.stringify(baseline.monitor);
+  const pickFaceArmed = usePlanarMonitorPickFaceArmed();
   const incomingDefinitionConflict =
     sceneRevision > acknowledgedBaseline.revision &&
     JSON.stringify(monitor) !== JSON.stringify(baselineState.monitor) &&
@@ -162,6 +166,25 @@ function CommittedPlanarMonitorEditor({
     planarMonitorFramePreviewStore.setDraft(dirty ? draft : null);
     return () => planarMonitorFramePreviewStore.clearDraft();
   }, [dirty, draft]);
+  // The 3D normal handle edits this draft through the same update as the fields.
+  useEffect(() => planarMonitorFramePreviewStore.registerDraftEditor({
+    monitorId: monitor.id,
+    proposeFrame: (frame) => {
+      const current = draftRef.current;
+      const next = {
+        ...current,
+        monitor: {
+          ...current.monitor,
+          frame: {
+            ...current.monitor.frame,
+            ...Object.fromEntries(Object.entries(frame).map(([key, value]) => [key, [...value]])),
+          },
+        },
+      };
+      draftRef.current = next;
+      setDraft(next);
+    },
+  }), [monitor.id]);
   const run = (commandId: string, input?: Record<string, unknown>) =>
     kernel.commands.execute(
       commandId,
@@ -370,6 +393,16 @@ function CommittedPlanarMonitorEditor({
           </Button>
           <Button size="sm" type="button" variant="ghost" onClick={() => void run("planar-monitor.show-frame-3d")}>
             Show frame in 3D
+          </Button>
+          <Button
+            aria-pressed={pickFaceArmed}
+            size="sm"
+            title="Click an object face in the 3D view to place this monitor on it"
+            type="button"
+            variant={pickFaceArmed ? "primary" : "ghost"}
+            onClick={() => planarMonitorFramePreviewStore.setPickFaceArmed(!pickFaceArmed)}
+          >
+            Pick face in 3D
           </Button>
           <Button disabled={pending || !visualizationState.data?.planar} size="sm" type="button" variant="ghost" onClick={() => void duplicate()}>
             Duplicate

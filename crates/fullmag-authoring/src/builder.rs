@@ -237,6 +237,7 @@ pub struct ScriptBuilderMeshOperationState {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(try_from = "crate::universe_state::UniverseStateWire")]
 pub struct ScriptBuilderUniverseState {
     pub mode: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -761,6 +762,9 @@ pub struct ScriptBuilderGeometryEntry {
     pub material_parameter_fields: Vec<SceneMaterialParameterAssignment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub absorbing_boundary: Option<fullmag_ir::AbsorbingBoundaryLayerIR>,
+    /// Authored presentation only; this map never selects or activates physics.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub visualization_hint: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

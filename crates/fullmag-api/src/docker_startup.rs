@@ -1598,9 +1598,6 @@ async fn publish_accepted_startup_realtime(
     result
 }
 
-/// Metadata members written by the prepared domain publication.
-const PREPARED_DOMAIN_METADATA_KEYS: [&str; 2] = ["execution_plan", "artifact_layout"];
-
 async fn publish_startup_result(
     state: &Arc<AppState>,
     context: &CurrentLiveRequestContext,
@@ -1619,6 +1616,17 @@ async fn publish_startup_result(
         context,
         state.current_live_session_epoch.load(Ordering::Acquire),
     )?;
+    // Preparation has already published the execution plan and carrier identity.
+    // Validate before mutating the snapshot; startup owns only its own entry.
+    let mut metadata = match snapshot.metadata.as_ref() {
+        Some(metadata) => metadata.as_object().cloned().ok_or_else(|| {
+            ApiError::conflict_with_code(
+                "docker_startup_metadata_invalid",
+                "prepared scene metadata must be an object",
+            )
+        })?,
+        None => serde_json::Map::new(),
+    };
     let artifact_dir = snapshot.session.artifact_dir.clone();
     snapshot.session.run_id = run_id.clone();
     // The accepted run keeps the durable wait gate, while the current live
@@ -1647,8 +1655,7 @@ async fn publish_startup_result(
         final_e_total: None,
         artifact_dir,
     });
-    let mut metadata = json!({
-        STARTUP_METADATA_KEY: {
+    metadata.insert(STARTUP_METADATA_KEY.to_string(), json!({
             "request": request,
             "request_id": request.request_id,
             "source_sha256": loaded.source.sha256,
@@ -1659,20 +1666,8 @@ async fn publish_startup_result(
             "scene_revision": loaded.scene.revision,
             "runtime_metadata": loaded.runtime,
             "output_storage_binding": loaded.output_storage_binding,
-        }
-    });
-    // Keep the prepared domain published for this session. An FDM grid
-    // exists only as this plan/layout (FEM keeps its mesh separately), so
-    // dropping it left FDM sessions with an empty domain: no geometry in the
-    // viewport and material fields that never qualified.
-    if let (Some(previous), Some(object)) = (snapshot.metadata.as_deref(), metadata.as_object_mut()) {
-        for key in PREPARED_DOMAIN_METADATA_KEYS {
-            if let Some(value) = previous.get(key) {
-                object.insert(key.to_string(), value.clone());
-            }
-        }
-    }
-    snapshot.metadata = Some(metadata.into());
+    }));
+    snapshot.metadata = Some(Value::Object(metadata).into());
     snapshot.state_version = snapshot.state_version.saturating_add(1);
     let response = DockerStartupResponse {
         schema: RESPONSE_SCHEMA,
@@ -3188,6 +3183,55 @@ mod tests {
                 wait_for_solve: true
             }
         );
+    }
+
+    #[tokio::test]
+    async fn startup_result_preserves_prepared_scene_metadata() {
+        let state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        let prepared = json!({
+            "execution_plan": {"prepared": "plan"},
+            "antenna_domain_publication": {"generation": "accepted-domain"},
+            "magnetic_state_present": false,
+            "other_owner": {"keep": true},
+            STARTUP_METADATA_KEY: {"status": "preparing"},
+        });
+        state.current_live_state.write().await.as_mut().unwrap().metadata =
+            Some(prepared.clone().into());
+        let context = crate::capture_current_live_request_context(&state).await.unwrap();
+        publish_startup_result(
+            &state, &context, &request(),
+            &loaded_scene_for_test(SceneDocument::default()),
+            "accepted-run".to_string(), vec!["antenna-stage".to_string()],
+            "waiting_for_solve",
+        ).await.unwrap();
+        let current = state.current_live_state.read().await;
+        let snapshot = current.as_ref().unwrap();
+        let metadata = snapshot.metadata.as_ref().unwrap();
+        for key in ["execution_plan", "antenna_domain_publication", "magnetic_state_present", "other_owner"] {
+            assert_eq!(metadata.get(key), prepared.get(key), "lost prepared metadata: {key}");
+        }
+        assert_eq!(metadata.pointer("/docker_startup/status"), Some(&json!("waiting_for_solve")));
+        assert_eq!(metadata.pointer("/docker_startup/run_id"), Some(&json!("accepted-run")));
+        assert_eq!(snapshot.session.status, "awaiting_command");
+    }
+
+    #[tokio::test]
+    async fn startup_result_rejects_nonobject_metadata_before_mutation() {
+        for malformed in [Value::Null, json!([]), json!("invalid")] {
+            let state = crate::router_v2::tests::test_app_state_with_live_session().await;
+            state.current_live_state.write().await.as_mut().unwrap().metadata =
+                Some(malformed.into());
+            let context = crate::capture_current_live_request_context(&state).await.unwrap();
+            let before = serde_json::to_value(state.current_live_state.read().await.as_ref().unwrap()).unwrap();
+            let error = publish_startup_result(
+                &state, &context, &request(),
+                &loaded_scene_for_test(SceneDocument::default()),
+                "must-not-publish".to_string(), vec![], "waiting_for_solve",
+            ).await.unwrap_err();
+            assert_eq!(error.code.as_deref(), Some("docker_startup_metadata_invalid"));
+            let after = serde_json::to_value(state.current_live_state.read().await.as_ref().unwrap()).unwrap();
+            assert_eq!(before, after);
+        }
     }
 
     #[tokio::test]

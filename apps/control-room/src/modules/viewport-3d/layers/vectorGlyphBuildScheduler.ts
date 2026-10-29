@@ -86,7 +86,7 @@ export async function buildViewport3DVectorGlyphsOffMainThread(
   return scheduler.schedule(
     {
       groupKey: options.groupKey,
-      inputBytes: request.segments.byteLength,
+      inputBytes: request.segments.byteLength + (request.colorsOverride?.byteLength ?? 0),
       itemCount: Math.floor(request.segments.length / 7),
       key: buildKey,
       lane: "vector-glyph",
@@ -223,7 +223,10 @@ class VectorGlyphWorkerClient {
     this.clearIdleDisposeTimer();
     const id = this.nextId++;
     const segments = new Float32Array(input.segments);
+    const colorsOverride = input.colorsOverride ? new Float32Array(input.colorsOverride) : null;
     const request: VectorGlyphWorkerRequest = {
+      colorScale: input.colorScale,
+      colorsOverride,
       colorMode: input.colorMode,
       headLengthRatio: input.headLengthRatio,
       headRadiusRatio: input.headRadiusRatio,
@@ -233,6 +236,7 @@ class VectorGlyphWorkerClient {
     };
     const transferables: Transferable[] = [];
     addArrayBufferTransferable(transferables, segments.buffer);
+    addArrayBufferTransferable(transferables, colorsOverride?.buffer);
 
     return new Promise((resolve, reject) => {
       let lease: Viewport3DWorkerPoolLease<Worker>;

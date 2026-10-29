@@ -1,0 +1,29 @@
+{
+  "domain_id": "current",
+  "discretization": "fem",
+  "generation_id": "14850812098407037233",
+  "dimension": 3,
+  "coordinate_system": "cartesian",
+  "units": {
+    "length": "m"
+  },
+  "bounds": {
+    "min": [
+      -1.4e-06,
+      -1.05e-06,
+      -6e-07
+    ],
+    "max": [
+      1.4e-06,
+      1.05e-06,
+      6e-07
+    ]
+  },
+  "counts": {
+    "cells": null,
+    "nodes": 183764,
+    "elements": 1087250,
+    "boundary_faces": 52454
+  },
+  "element_type": "mixed"
+}

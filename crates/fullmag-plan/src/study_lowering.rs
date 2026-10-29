@@ -448,8 +448,13 @@ where
 
 /// Replan the typed physical operation; a carrier alone cannot choose inspection vs basis.
 pub fn validate_closed_loop_operation(problem: &ProblemIR, stage_id: &str, port_mode_id: &str, output_id: &str) -> Result<crate::AntennaFieldSolveExecutionPlan, StudyLoweringError> {
-    if !matches!(problem.study, fullmag_ir::StudyIR::FieldOnly { .. }) {
-        return Err(StudyLoweringError::Contract("closed-loop inspection requires FieldOnly without magnetic state".into()));
+    let selected_nonmagnetic_study = matches!(&problem.study, fullmag_ir::StudyIR::FieldOnly { .. })
+        || matches!(&problem.study,
+            fullmag_ir::StudyIR::AntennaFieldSolve { selection: Some(selection), .. }
+                if selection.stage_id == stage_id && selection.port_mode_id == port_mode_id);
+    if !selected_nonmagnetic_study {
+        return Err(StudyLoweringError::Contract(
+            "closed-loop inspection requires FieldOnly or an exactly selected nonmagnetic AntennaFieldSolve".into()));
     }
     let carrier = lower_problem_plan(problem).map_err(|error| StudyLoweringError::Planner { step_id: stage_id.into(), reasons: error.reasons })?;
     if !matches!(&carrier.backend_plan, fullmag_ir::BackendPlanIR::AntennaFieldOnly(plan) if plan.stage_id == stage_id && plan.port_mode_id == port_mode_id) {

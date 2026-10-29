@@ -5,24 +5,64 @@ import { DEFAULT_OBJECT_VISUALIZATION } from "@/kernel/visualization/ObjectVisua
 
 import { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { TopologyMeshLayer } from "./TopologyMeshLayer";
+import { resolveViewport3DRealizedTopologyObjectIds } from "./Viewport3DScene";
+import { shouldRenderPrimitiveObject } from "./PrimitiveObjectLayerModel";
 
 vi.mock("./FallbackTopologyMeshLayer", () => ({
   FallbackTopologyMeshLayer: () => "fallback-topology",
 }));
 
 vi.mock("./MeshPartLayer", () => ({
-  MeshPartLayer: ({ modeCompositionSnapshot, partModel }: {
+  MeshPartLayer: ({ modeCompositionSnapshot, partModel, renderVisible }: {
     modeCompositionSnapshot?: { status: string } | null;
+    renderVisible?: boolean;
     partModel: { part: { id: string } };
   }) => (
     <span
       data-mode-status={modeCompositionSnapshot?.status ?? "none"}
       data-part-id={partModel.part.id}
+      data-render-visible={renderVisible ?? true}
     />
   ),
 }));
 
 describe("TopologyMeshLayer", () => {
+  it("atomically replaces a primitive only after every matching surface upload is committed", () => {
+    const object = { objectId: "antenna", role: "antenna", meshState: "mesh-ready" } as never;
+    const primitiveModel = { objects: [object] } as never;
+    const part = (id: string, owner: string) => ({
+      part: { id, object_id: owner }, surfaceIndices: new Uint32Array([0, 1, 2]),
+    });
+    const signal = part("signal", "antenna_geom");
+    const ground = part("ground", "antenna_geom");
+    const other = part("other", "unrelated");
+    const topologyModel = { positions: new Float32Array(9), magneticParts: [signal, ground, other] } as never;
+    for (const committed of [[], [signal], [signal, ground], []]) {
+      const ids = resolveViewport3DRealizedTopologyObjectIds({
+        enabled: true, committedParts: new Set(committed) as never, primitiveModel,
+        topologyModel, topologyFreshness: "current",
+      });
+      const ready = committed.length === 2;
+      expect(shouldRenderPrimitiveObject(object, DEFAULT_OBJECT_VISUALIZATION, ids.has("antenna"), true)).toBe(!ready);
+      expect(shouldRenderPrimitiveObject(object, DEFAULT_OBJECT_VISUALIZATION, ids.has("antenna"))).toBe(false);
+      const markup = renderToStaticMarkup(
+        <TopologyMeshLayer
+          colors={{} as never} fieldModel={null}
+          getPartSettings={() => DEFAULT_OBJECT_VISUALIZATION}
+          materialProfile={{} as never} magnetizationTexturePreviews={new Map()}
+          meshQualityColors={null} meshQualityOverlayVisible={false}
+          onSelectPart={() => undefined} primitiveModel={primitiveModel}
+          replacementObjectIds={ids} topologyFreshness="current" topologyModel={topologyModel}
+          tracker={new Viewport3DResourceTracker()} vectorColorMode="orientation" vectorScale={1} vectorStyle={{}}
+        />,
+      );
+      expect(markup).toContain('data-part-id="signal" data-render-visible="' + String(ready) + '"');
+      expect(markup).toContain('data-part-id="ground" data-render-visible="' + String(ready) + '"');
+      expect(markup).toContain('data-part-id="other" data-render-visible="true"');
+    }
+  });
+
+
   it("fails closed instead of rendering global FEM topology without magnetic carriers", () => {
     const markup = renderToStaticMarkup(
       <TopologyMeshLayer

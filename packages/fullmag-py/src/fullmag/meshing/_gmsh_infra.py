@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace as _dc_replace
 from pathlib import Path
 import threading
 import time
@@ -14,6 +15,7 @@ from fullmag.model.geometry import Geometry, Translate
 
 from ._gmsh_types import (
     MeshData,
+    MeshQualityReport,
     MixedLayerTopologyCertificateV2,
     _rebuild_mixed_layer_topology_certificate,
     _rebuild_mixed_layer_topology_certificate_v2,
@@ -76,6 +78,26 @@ def _source_hmax_from_scale(hmax: float, scale_xyz: NDArray[np.float64]) -> floa
     if positive_scales.size == 0:
         raise ValueError("imported geometry scale must be strictly positive")
     return float(hmax / float(np.max(positive_scales)))
+
+
+def _quality_volumes_in_si(
+    quality: MeshQualityReport | None, coordinate_scale: float
+) -> MeshQualityReport | None:
+    """Convert dimensional volumes when Gmsh coordinates are scaled from SI."""
+    if quality is None:
+        return None
+    volume_factor = coordinate_scale ** -3
+    return _dc_replace(
+        quality,
+        volume_min=quality.volume_min * volume_factor,
+        volume_max=quality.volume_max * volume_factor,
+        volume_mean=quality.volume_mean * volume_factor,
+        volume_std=quality.volume_std * volume_factor,
+        element_volume=(
+            [volume * volume_factor for volume in quality.element_volume]
+            if quality.element_volume is not None else None
+        ),
+    )
 
 
 def _scale_mesh_nodes(mesh: MeshData, scale_xyz: NDArray[np.float64]) -> MeshData:

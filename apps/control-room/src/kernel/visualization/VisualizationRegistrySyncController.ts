@@ -149,6 +149,7 @@ export class VisualizationRegistrySyncController {
   private transactionSequence = 0;
   private firstPendingAt: number | null = null;
   private flushPromise: Promise<void> | null = null;
+  private flushAfterInflight = false;
   private inflightCameraInvalidationSuppressed = false;
   private remoteState: VisualizationStateResource | null = null;
   private rejectedPatch: VisualizationStatePatch | null = null;
@@ -194,6 +195,7 @@ export class VisualizationRegistrySyncController {
     this.sessionScopeGeneration += 1;
     this.clearScheduledFlush();
     this.flushPromise = null;
+    this.flushAfterInflight = false;
     this.firstPendingAt = null;
     this.inflightCameraInvalidationSuppressed = false;
     this.remoteState = null;
@@ -271,7 +273,13 @@ export class VisualizationRegistrySyncController {
   }
 
   flushNow(): Promise<void> {
-    if (this.flushPromise) return this.flushPromise;
+    if (this.flushPromise) {
+      // An explicit flush during a request in flight (e.g. repeated layer
+      // steps) sends the newly pending patch right after it instead of
+      // waiting for the quiet window again.
+      this.flushAfterInflight = true;
+      return this.flushPromise;
+    }
     const patch = this.snapshot.pendingPatch;
     if (!patch) return Promise.resolve();
     const targetIds = this.snapshot.pendingTargetIds;
@@ -421,6 +429,11 @@ export class VisualizationRegistrySyncController {
           this.inflightCameraInvalidationSuppressed = false;
         }
         this.flushPromise = null;
+        if (this.flushAfterInflight) {
+          this.flushAfterInflight = false;
+          void this.flushNow();
+          return;
+        }
         this.scheduleFlush();
       });
 

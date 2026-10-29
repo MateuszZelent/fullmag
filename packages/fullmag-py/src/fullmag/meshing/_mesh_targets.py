@@ -155,6 +155,7 @@ def _geometry_name_aliases(name: str) -> tuple[str, ...]:
 
 _MESH_GEOMETRY_POLICY_KEYS = frozenset(
     {
+        "source",
         "bulk_hmax",
         "hmax",
         "maximum_element_size",

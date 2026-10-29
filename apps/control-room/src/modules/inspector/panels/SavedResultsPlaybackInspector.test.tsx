@@ -85,6 +85,16 @@ describe("SavedResultsPlaybackInspector", () => {
     expect(html).toContain('aria-label="Saved results magnetization component"');
   });
 
+  it("shows nodal FEM support while retaining the same time controls", () => {
+    playbackMocks.resource={data:{...manifest,grid_cells_xyz:undefined,cell_size_m:undefined,origin_m:undefined,fem_mesh:{node_count:5,cell_count:2,facet_count:6}},error:null,refreshError:null,status:"ready"};
+    const html=renderInspector();
+    expect(html).toContain("FEM mesh");
+    expect(html).toContain("5 nodes · 2 cells");
+    expect(html).toContain("Canonical H1/P1 nodes");
+    expect(html).toContain('aria-label="Saved frame index"');
+    expect(html).not.toContain("Cell size");
+  });
+
   it("bounds frame navigation at the first and last saved frames", () => {
     const firstFrame = renderInspector();
     expect(firstFrame).toMatch(/<button[^>]*aria-label="First frame"[^>]*disabled=""/);

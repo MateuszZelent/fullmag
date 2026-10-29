@@ -37,6 +37,17 @@ GROUP_BUDGET_ENVS = (
     "FULLMAG_DEV_FRONTEND_CPUS",
     "FULLMAG_DEV_FRONTEND_MEMORY_GIB",
 )
+# Dependency build inputs declared by compose.toolchain.yaml.
+TOOLCHAIN_ENVS = (
+    "FULLMAG_CUDA_BASE_IMAGE",
+    "FULLMAG_CUDA_BASE_IMAGE_DIGEST",
+    "FULLMAG_CUDA_ARCHITECTURES",
+    "FULLMAG_HYPRE_GPU_ARCHITECTURES",
+    "FULLMAG_HYPRE_MEMORY_VARIANT",
+    "FULLMAG_MFEM_BUILD_JOBS",
+    "FULLMAG_MFEM_CUDA_FAST_COMPILE",
+    "FULLMAG_PETSC_CUDA_ARCHITECTURES",
+)
 _VERIFIED_RECEIPTS = (
     "development/verified.json",
     "resume/verified.json",
@@ -123,7 +134,7 @@ def _read_dotenv(path: Path) -> dict[str, str]:
         if not match:
             continue
         key = match.group(1)
-        if key not in {_SOURCE_ENV, *_PORT_ENVS, *GROUP_BUDGET_ENVS,
+        if key not in {_SOURCE_ENV, *_PORT_ENVS, *GROUP_BUDGET_ENVS, *TOOLCHAIN_ENVS,
                        "FULLMAG_PROJECT_STORAGE_ROOT", "FULLMAG_SCRIPT_OUTPUT_DIRECTORY"}:
             continue
         if key in values:
@@ -285,6 +296,21 @@ def resolve_defaults(
             else:
                 resolved_port = DEFAULT_PORT
     return ScriptDefaults(source_root=selected, port=resolved_port)
+
+
+def configured_toolchain_environment(
+    repo: Path, environ: Mapping[str, str] | None = None
+) -> dict[str, str]:
+    """Resolve dependency inputs from process overrides and the main .env."""
+    repo = Path(repo).resolve(strict=True)
+    environ = os.environ if environ is None else environ
+    dotenv = _read_dotenv(_known_checkouts(repo)[0] / ".env")
+    values: dict[str, str] = {}
+    for name in TOOLCHAIN_ENVS:
+        raw = environ.get(name, "").strip() or dotenv.get(name, "").strip()
+        if raw:
+            values[name] = raw
+    return values
 
 
 def configured_group_budget(

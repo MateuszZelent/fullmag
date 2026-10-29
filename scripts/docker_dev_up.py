@@ -865,11 +865,29 @@ def _build_inputs_match(group: RetainedGroup) -> bool:
     ):
         raise BuildInputUnknown("Retained Docker build receipt lineage is not authenticated")
     actual_image = group.backend.get("Image")
+    environment = _backend_environment(group.backend)
     if actual_image != backend_image:
+        # Preparing a new wrapper advances verified.json before replacing the
+        # running services. Authenticate the old image against its saved Compose
+        # and runtime receipt; this permits only the existing managed drain path.
+        services = group.document.get("services")
+        saved = services.get("backend") if isinstance(services, Mapping) else None
+        saved_environment = saved.get("environment") if isinstance(saved, Mapping) else None
+        saved_inputs = group.terminal.get("inputs")
+        if (isinstance(actual_image, str) and IMAGE_ID_RE.fullmatch(actual_image)
+                and isinstance(saved_inputs, Mapping)
+                and saved_inputs.get("image_id") == actual_image
+                and isinstance(saved, Mapping) and saved.get("image") == actual_image
+                and isinstance(saved_environment, Mapping)
+                and saved_environment.get("FULLMAG_RUNTIME_IMAGE_ID") == actual_image
+                and environment.get("FULLMAG_RUNTIME_IMAGE_ID") == actual_image
+                and IMAGE_ID_RE.fullmatch(str(saved_environment.get("FULLMAG_TOOLCHAIN_IMAGE_ID", "")))
+                and environment.get("FULLMAG_TOOLCHAIN_IMAGE_ID")
+                    == saved_environment.get("FULLMAG_TOOLCHAIN_IMAGE_ID")):
+            raise BuildInputDrift(["image-backend"])
         raise BuildInputUnknown(
             "Retained backend image is not bound to image-backend/verified.json"
         )
-    environment = _backend_environment(group.backend)
     retained_toolchain_image = development_inputs.get("parent_image_id")
     if (
         environment.get("FULLMAG_TOOLCHAIN_IMAGE_ID") != retained_toolchain_image

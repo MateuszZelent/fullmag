@@ -12,7 +12,7 @@ export interface VisualizationInspectorOverviewProps {
   context?: ReactNode;
   advanced: ReactNode;
   camera: ReactNode;
-  clipping: ReactNode;
+  clipping?: ReactNode;
   clippingSummary?: string;
   dataState: string;
   display: ReactNode;
@@ -34,7 +34,7 @@ export function VisualizationInspectorOverview({
   advanced,
   camera,
   clipping,
-  clippingSummary = "Section: Off",
+  clippingSummary = "Viewport controls",
   context,
   dataState,
   display,
@@ -78,20 +78,20 @@ export function VisualizationInspectorOverview({
         primaryIcon={<Box size={18} strokeWidth={1.5} />}
         primaryTitle="Display"
         sections={[
-          {
+          ...(clipping == null ? [] : [{
             content: clipping,
             defaultOpen: false,
             icon: <Scissors size={16} strokeWidth={1.75} />,
             id: "clipping",
             summary: clippingSummary,
             title: "Clipping & Section",
-          },
+          }]),
           {
             content: camera,
             defaultOpen: false,
             icon: <Camera size={16} strokeWidth={1.75} />,
             id: "camera",
-            summary: "Perspective • Auto",
+            summary: "Viewport controls",
             title: "Camera & View",
           },
           {

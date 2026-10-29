@@ -47,6 +47,7 @@ import {
   createPrimitiveSurfaceColorAssignments,
   isFerromagneticPrimitiveRole,
   resolvePrimitiveSurfaceColor,
+  primitiveMonoColorForRole,
 } from "@/kernel/visualization/primitiveSurfaceColor";
 import { Button } from "@/shared/ui/Button";
 
@@ -203,6 +204,8 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
   const validation = useGeometryValidationResource();
   const object = resolveObjectGeneralPanelModel(selection, scene.data);
   const sceneObject = scene.data?.objects?.find((entry) => entry.id === object.objectId);
+  const geometrySelectionKind = sceneObject?.role === "antenna"
+    ? "object.antenna.geometry" : "object.geometry";
   const antennaWithoutMagnetization = sceneObject?.role === "antenna"
     && hasEmptyObjectMagneticModel(sceneObject);
   const visualizationState = useVisualizationStateResource({
@@ -938,6 +941,7 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
             <FieldRow label="Region" value={object.region} />
           </>
         )}
+
       </InspectorGroup>
 
       {object.mode === "committed" && visualizationSettings ? (
@@ -948,7 +952,7 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
           <ColorValueField
             description="Viewport-local primitive preference; a solid shader override takes precedence."
             label="Primitive color"
-            value={visualizationSettings.primitiveMonoColor ?? ""}
+            value={primitiveMonoColorForRole(presentationObject?.role, visualizationSettings.primitiveMonoColor)}
             onChange={(value) => patchObjectColor("primitiveColor", value)}
           />
           <FieldRow
@@ -1007,12 +1011,12 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
                 onClick={() => {
                   kernel.selection.set(
                     {
-                      kind: "object.geometry",
+                      kind: geometrySelectionKind,
                       label: `${object.name} Geometry`,
                       nodeId: `model:object:${object.objectId}:geometry`,
                       objectId: object.objectId,
                       ref: {
-                        kind: "object.geometry",
+                        kind: geometrySelectionKind,
                         nodeId: `model:object:${object.objectId}:geometry`,
                         objectId: object.objectId,
                         type: "scene-object",
