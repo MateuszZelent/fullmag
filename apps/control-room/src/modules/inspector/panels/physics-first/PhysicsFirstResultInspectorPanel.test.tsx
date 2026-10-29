@@ -24,6 +24,7 @@ vi.mock("@/kernel/resources/studyRuntimeResources", async (importOriginal) => {
 });
 
 import { resolveInspectorRoute } from "../../inspectorRouteCatalog";
+import { PhysicsFirstResultInspectorFrame } from "./PhysicsFirstResultInspectorPanel";
 
 function renderRoute(kind: string, ref: Record<string, unknown>, label: string) {
   const route = resolveInspectorRoute(kind);
@@ -74,6 +75,19 @@ function renderFrequencyRoute(
 }
 
 describe("routed postprocessing Inspectors", () => {
+  it("delegates an owned provenance panel without duplicating generic metadata", () => {
+    inspectorTab.value = "provenance";
+    const html = renderToStaticMarkup(createElement(PhysicsFirstResultInspectorFrame, {
+      contentTabs: ["provenance"],
+      selection: {
+        kind: "results.dispersion.modal.mode_at_k", label: "Selected mode",
+        moduleSource: "explorer", nodeId: "mode-7", objectId: null, ref: null,
+      },
+    }, createElement("p", null, "Exact selected mode provenance")));
+    expect(html).toContain("Exact selected mode provenance");
+    expect(html).not.toContain("Artifact provenance");
+  });
+
   it("renders the selected result status facets and contract gap truthfully", () => {
     inspectorTab.value = "diagnostics";
     const html = renderFrequencyRoute(

@@ -1407,6 +1407,7 @@ mod tests {
             runtime_generation_sha256: Some("b".repeat(64)),
             compute_node_owner_id: None,
             compute_node_owner_epoch: None,
+            pending_inventory_recovery_sha256: None,
             topology_sha256: "c".repeat(64),
             budget: FmsResourceBudget {
                 cpu_millis: 1000,

@@ -100,6 +100,7 @@ export function EigenModeInspectorPanel({
     <div
       data-inspector-owner="frequency-domain.eigen-mode"
       data-inspector-surface="eigen-mode"
+      data-inspector-tab={activeTab}
     >
       {activeTab === "overview" ? <>
         <EigenModePicker samples={summary.samples} selection={selection} />
@@ -151,6 +152,15 @@ export function EigenModeInspectorPanel({
         <EigenModeDampingFields damping={summary.damping} />
         <FieldRow label="Mode identity" value={summary.modeIdentity} />
         <FieldRow label="Field ID" value={summary.fieldIdLabel} />
+      </InspectorGroup> : null}
+      {activeTab === "provenance" ? <InspectorGroup title="Mode provenance">
+        <FieldRow label="Run" mono value={summary.owner?.analysisRunId ?? "Owner identity not published"} />
+        <FieldRow label="Stage" mono value={summary.owner?.analysisStageId ?? "Stage identity not published"} />
+        <FieldRow label="Equilibrium" mono value={summary.owner?.equilibriumId ?? "Equilibrium identity not published"} />
+        <FieldRow label="Artifact revision" mono value={summary.owner?.artifactRevision ?? "Revision not published"} />
+        <FieldRow label="Mode identity" value={summary.modeIdentity} />
+        <FieldRow label="Field ID" mono value={summary.fieldIdLabel} />
+        <FieldRow label="Resource" mono value={summary.fieldResource} />
       </InspectorGroup> : null}
       {activeTab === "diagnostics" ? <>
         <InspectorGroup title="Mode residual">

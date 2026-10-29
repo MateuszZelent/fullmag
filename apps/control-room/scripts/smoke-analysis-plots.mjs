@@ -1867,8 +1867,8 @@ async function clickFrequencyDomainPoint(page, expected, fixtureId, fixture, fre
     throw new Error(`Rendered row ${expected.rowId} selected another mode in the Data tab: ${inspectorText}`);
   }
   await inspector.getByRole("tab", { name: "Provenance", exact: true }).click();
-  await inspector.locator('.fm-result-inspector[data-result-tab="provenance"]').waitFor({ state: "visible" });
-  const provenance = await inspector.locator(".fm-result-inspector").textContent();
+  await inspector.locator('[data-inspector-owner="frequency-domain.eigen-mode"][data-inspector-tab="provenance"]').waitFor({ state: "visible" });
+  const provenance = await inspector.locator('[data-inspector-owner="frequency-domain.eigen-mode"]').textContent();
   if (!provenance?.includes(expected.resourceRef)) {
     throw new Error(`Selected mode lost its exact resource in Provenance: ${provenance}`);
   }
@@ -1878,7 +1878,7 @@ async function clickFrequencyDomainPoint(page, expected, fixtureId, fixture, fre
     residualFields = await waitForFrequencyDomainResidualFields(page, expected.residualFields);
   }
   await inspector.getByRole("tab", { name: "Overview", exact: true }).click();
-  await inspector.locator('.fm-result-inspector[data-result-tab="overview"]').waitFor({ state: "visible" });
+  await inspector.locator('[data-inspector-owner="frequency-domain.eigen-mode"][data-inspector-tab="overview"]').waitFor({ state: "visible" });
   const renderedClick = await page.evaluate(({ rowId, sourceGapRow }) => {
     const diagnostics = window.__FULLMAG_CHART_DIAGNOSTICS__;
     const click = diagnostics?.lastRenderedClick;

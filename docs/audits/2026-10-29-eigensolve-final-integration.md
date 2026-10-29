@@ -119,3 +119,33 @@ w jednym panelu. Aktualny test przechodzi przez Data (sample/mode/field),
 Provenance (exact resource) i Diagnostics (niezależne residuale), a potem wraca
 do Overview. Zachowuje wcześniejsze asercje właściciela JSON, generacji,
 equilibrium i indeksu źródłowego rzeczywistego kliknięcia ECharts.
+
+
+## Korekta pomiaru dysku i wznowienia runtime
+
+Pomiar `df /` dystrybucji WSL (6,5 GiB) nie opisywał filesystemu demona
+Docker Desktop. Kanoniczny `BuildControl.space` potwierdził 300818042880 B
+wolnego w VM Dockera (około 280 GiB); fizyczny C: z DataFolder Dockera ma
+około 165 GiB wolnego. Prośba o 30 GiB sprzątania WSL była nieuzasadniona.
+Nie obniżono progu 32 GiB i nie usunięto żadnych danych.
+
+Resume `40a38150f556478682c8ae027d8acb0b` zakończył się failed-confirmed:
+stary obraz nie zawiera GMP/MPFR wymaganych przez nowy master. Kanoniczny
+bootstrap Compose zakończył `toolchain` sukcesem, attempt
+`2b267de511f64ead930925e0ca4a08ac`, image
+`sha256:84bd740324c9c498cd23b4fdeb026603e5e039073b2fc31ec126f56878517d67`.
+Recepta wymaga teraz kontrolowanego odtworzenia usług z tym toolchainem.
+
+Browser CI ujawnił rzeczywisty pusty Provenance przy bezpośrednim wyborze
+legacy EigenModeInspectorPanel. Mod publikuje teraz własny panel provenance
+(run/stage/equilibrium/revision/sample/mode/field/resource) zarówno dla tego
+route'u, jak i physics-first. Wrapper deleguje tę zakładkę zamiast dublować
+metadane. Browser gate sprawdza aktywną zakładkę własnego panelu modu.
+
+
+Kontrola wszystkich inicjalizatorów HostResourceReservation wykazała jeszcze
+jeden stary fixture w failed_worker_recovery::tests::reservation (wykrywany
+przez feature runtime-service-control CI). Dodano opcjonalny pin recovery=None.
+Obraz CPU bramek MFEM również nie instalował GMP/MPFR wymaganych przez wspólny
+CMake; dodano późną warstwę z tym samym pinem MPFR co w obrazie GPU oraz
+pkg-config preflight. Weryfikacja natywna wyłącznie w GitHub Actions.

@@ -38,7 +38,7 @@ export function PhysicsFirstResultInspectorFrame({
         {ref?.kContextKind ? <FieldRow label="Wavevector sampling" value={ref.kContextKind.replaceAll("_", " ")} /> : null}
         <FieldRow label="Result" value={model.description} />
       </InspectorGroup> : null}
-      {activeTab === "provenance" ? <InspectorGroup title="Artifact provenance">
+      {activeTab === "provenance" && !contentTabs.includes("provenance") ? <InspectorGroup title="Artifact provenance">
         <FieldRow label="Run" mono value={ref?.analysisRunId ?? "Owner identity not published"} />
         {!collection ? <>
           <FieldRow label="Stage" mono value={ref?.analysisStageId ?? "Stage identity not published"} />
