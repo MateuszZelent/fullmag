@@ -13,7 +13,7 @@ Właścicielem fizyki pozostaje docs/physics/0104-material-regions-parameter-fie
 
 ## Dowody
 
-Regresje: UI zero/linear/radial/unknown; lokalna skala rotacja/refinement/disconnected/invalid; API owner/asset/pending; Python unknown attr i zachowanie wspieranych parametrów. Osobne noty FDM/FEM dotyczą pozostałych wyzwalaczy audytu.
+Regresje: UI zero/linear/radial/unknown; lokalna skala rotacja/refinement/disconnected/invalid; API owner/asset/pending; Python unknown attr i zachowanie wspieranych parametrów. Osobne noty [FDM](material-boundaries-fdm-20261029.md) i [FEM](material-boundaries-fem-20261029.md) dokumentują pozostałe wyzwalacze audytu. Są wewnętrznym zapisem implementacji i testów, nie nowymi kanonicznymi publikacjami naukowymi.
 
 Stan bieżący w tabelach poniżej. Użytkownik jawnie zezwolił na kompilowanie i uruchamianie testów tego zadania; wcześniejszy repozytoryjny zakaz nie blokuje tej weryfikacji.
 
