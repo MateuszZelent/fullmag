@@ -737,6 +737,17 @@ pub(crate) fn encode_saved_support(mask: &[bool]) -> Result<Vec<u8>, ApiError> {
     Ok(body)
 }
 
+/// Metadata remains available when support is valid but exceeds the binary
+/// transport limit; callers advertise visualization only with both identities.
+pub(crate) fn bounded_support_binary_identity(
+    mask: &[bool],
+) -> Result<Option<(Vec<u8>, String)>, ApiError> {
+    if support_body_len(mask.len())? > MAX_SAVED_FIELD_SUPPORT_BINARY_BYTES as usize {
+        return Ok(None);
+    }
+    support_binary_identity(mask).map(Some)
+}
+
 pub(crate) fn support_binary_identity(mask: &[bool]) -> Result<(Vec<u8>, String), ApiError> {
     let body = encode_saved_support(mask)?;
     let hash = sha256_hex(&body);

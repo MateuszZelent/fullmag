@@ -27,17 +27,16 @@ use fullmag_workspace_inspect::scanner::{
 use fullmag_workspace_inspect::{display_path, inspect_item, link};
 
 use super::workspace_archive as archive;
-use crate::router_v2::handlers::persistence::solutions::saved_geometry as saved_geometry_binary;
 use crate::error::ApiError;
+use crate::router_v2::handlers::persistence::solutions::saved_geometry as saved_geometry_binary;
 use crate::schemas::workspace_items::{
-    FramesPage, WorkspaceAddRequest, WorkspaceEvent, WorkspaceForgetResult, WorkspaceFramesQuery,
-    WorkspaceSetting, WorkspaceSettingRequest, WorkspaceHistory,
-    SavedPlaybackResource, WorkspaceHistoryQuery, WorkspaceItem, WorkspaceItemDetail, WorkspaceItemKind, WorkspaceItemList,
-    WorkspaceItemStatus, WorkspaceItemsQuery, WorkspaceOpenState, WorkspaceOutcome,
-    WorkspacePinRequest, WorkspaceRoot, WorkspaceRoots, WorkspaceRootsRequest,
-    WorkspacePlaybackFrameQuery, WorkspacePlaybackGeometryQuery, WorkspaceRootsSource,
-    WorkspaceScanReport, WorkspaceScanRequest,
-    WorkspaceThumbnailOrigin,
+    FramesPage, SavedPlaybackResource, WorkspaceAddRequest, WorkspaceEvent, WorkspaceForgetResult,
+    WorkspaceFramesQuery, WorkspaceHistory, WorkspaceHistoryQuery, WorkspaceItem,
+    WorkspaceItemDetail, WorkspaceItemKind, WorkspaceItemList, WorkspaceItemStatus,
+    WorkspaceItemsQuery, WorkspaceOpenState, WorkspaceOutcome, WorkspacePinRequest,
+    WorkspacePlaybackFrameQuery, WorkspacePlaybackGeometryQuery, WorkspaceRoot, WorkspaceRoots,
+    WorkspaceRootsRequest, WorkspaceRootsSource, WorkspaceScanReport, WorkspaceScanRequest,
+    WorkspaceSetting, WorkspaceSettingRequest, WorkspaceThumbnailOrigin,
 };
 
 const DEFAULT_LIMIT: usize = 200;
@@ -80,7 +79,9 @@ pub async fn list_items(
     ),
     tag = "workspace_items"
 )]
-pub async fn get_item(AxumPath(id): AxumPath<String>) -> Result<Json<WorkspaceItemDetail>, ApiError> {
+pub async fn get_item(
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<WorkspaceItemDetail>, ApiError> {
     run(move |db| get_item_at(db, &id)).await.map(Json)
 }
 
@@ -120,10 +121,15 @@ pub async fn get_item_thumbnail(
     if !not_modified {
         headers.insert(header::CONTENT_TYPE, "image/png".parse().expect("static"));
     }
-    headers.insert(header::ETAG, etag.parse().expect("hex digest is a header value"));
+    headers.insert(
+        header::ETAG,
+        etag.parse().expect("hex digest is a header value"),
+    );
     headers.insert(
         header::CACHE_CONTROL,
-        "private, max-age=0, must-revalidate".parse().expect("static"),
+        "private, max-age=0, must-revalidate"
+            .parse()
+            .expect("static"),
     );
     Ok(response)
 }
@@ -146,7 +152,10 @@ pub async fn get_item_archive(AxumPath(id): AxumPath<String>) -> Result<Response
     let body = archive::archive_body(plan, archive::MAX_ARCHIVE_BYTES);
     let mut response = Response::new(body);
     let headers = response.headers_mut();
-    headers.insert(header::CONTENT_TYPE, "application/zip".parse().expect("static"));
+    headers.insert(
+        header::CONTENT_TYPE,
+        "application/zip".parse().expect("static"),
+    );
     headers.insert(
         header::CONTENT_DISPOSITION,
         format!("attachment; filename=\"{file_name}\"")
@@ -273,7 +282,10 @@ pub async fn get_item_playback_frame(
     let bytes = run(move |db| playback_frame_at(db, &id, frame_index, &query)).await?;
     let mut response = Response::new(axum::body::Body::from(bytes));
     let headers = response.headers_mut();
-    headers.insert(header::CONTENT_TYPE, "application/octet-stream".parse().expect("static"));
+    headers.insert(
+        header::CONTENT_TYPE,
+        "application/octet-stream".parse().expect("static"),
+    );
     headers.insert(header::CACHE_CONTROL, "no-store".parse().expect("static"));
     Ok(response)
 }
@@ -304,10 +316,9 @@ pub async fn get_item_playback_geometry(
         header::CONTENT_TYPE,
         "application/octet-stream".parse().expect("static"),
     );
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        "no-store".parse().expect("static"),
-    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, "no-store".parse().expect("static"));
     Ok(response)
 }
 
@@ -321,7 +332,9 @@ pub async fn get_item_playback_geometry(
     ),
     tag = "workspace_items"
 )]
-pub async fn get_setting(AxumPath(key): AxumPath<String>) -> Result<Json<WorkspaceSetting>, ApiError> {
+pub async fn get_setting(
+    AxumPath(key): AxumPath<String>,
+) -> Result<Json<WorkspaceSetting>, ApiError> {
     run(move |db| get_setting_at(db, &key)).await.map(Json)
 }
 
@@ -373,7 +386,9 @@ pub async fn get_roots() -> Result<Json<WorkspaceRoots>, ApiError> {
 pub async fn put_roots(
     Json(request): Json<WorkspaceRootsRequest>,
 ) -> Result<Json<WorkspaceRoots>, ApiError> {
-    run(move |db| put_roots_at(db, &request.roots)).await.map(Json)
+    run(move |db| put_roots_at(db, &request.roots))
+        .await
+        .map(Json)
 }
 
 #[utoipa::path(
@@ -423,7 +438,9 @@ pub async fn post_scan(body: Bytes) -> Result<Json<WorkspaceScanReport>, ApiErro
     ),
     tag = "workspace_items"
 )]
-pub async fn post_item(Json(request): Json<WorkspaceAddRequest>) -> Result<Json<WorkspaceItem>, ApiError> {
+pub async fn post_item(
+    Json(request): Json<WorkspaceAddRequest>,
+) -> Result<Json<WorkspaceItem>, ApiError> {
     run(move |db| add_item_at(db, &request)).await.map(Json)
 }
 
@@ -434,7 +451,9 @@ async fn run<T: Send + 'static>(
     body: impl FnOnce(&Path) -> Result<T, ApiError> + Send + 'static,
 ) -> Result<T, ApiError> {
     let db = fullmag_workspace::default_database_path().map_err(|error| {
-        ApiError::internal(format!("cannot resolve the Fullmag state directory: {error}"))
+        ApiError::internal(format!(
+            "cannot resolve the Fullmag state directory: {error}"
+        ))
     })?;
     tokio::task::spawn_blocking(move || body(&db))
         .await
@@ -465,7 +484,9 @@ fn read_only_error(found: u32, supported: u32) -> ApiError {
 
 fn map_error(error: WorkspaceError) -> ApiError {
     match error {
-        WorkspaceError::NotFound(what) => ApiError::not_found(format!("workspace item not found: {what}")),
+        WorkspaceError::NotFound(what) => {
+            ApiError::not_found(format!("workspace item not found: {what}"))
+        }
         WorkspaceError::ReadOnly { found, supported } => read_only_error(found, supported),
         WorkspaceError::Invalid(message) => ApiError::bad_request(message),
         other => ApiError::internal(other.to_string()),
@@ -635,19 +656,27 @@ fn thumbnails_of(workspace: &Workspace) -> Result<Thumbnails, ApiError> {
 
 fn items_dto(workspace: &Workspace, items: &[Item]) -> Result<Vec<WorkspaceItem>, ApiError> {
     let thumbnails = thumbnails_of(workspace)?;
-    Ok(items.iter().map(|item| item_dto(item, &thumbnails)).collect())
+    Ok(items
+        .iter()
+        .map(|item| item_dto(item, &thumbnails))
+        .collect())
 }
 
 fn require_visible(workspace: &Workspace, id: i64) -> Result<Item, ApiError> {
     match workspace.find(id).map_err(map_error)? {
         Some(item) if !item.forgotten => Ok(item),
-        _ => Err(ApiError::not_found(format!("workspace item not found: {id}"))),
+        _ => Err(ApiError::not_found(format!(
+            "workspace item not found: {id}"
+        ))),
     }
 }
 
 // ── operations (testable without HTTP or the process environment) ─────────
 
-pub(crate) fn list_items_at(db: &Path, query: &WorkspaceItemsQuery) -> Result<WorkspaceItemList, ApiError> {
+pub(crate) fn list_items_at(
+    db: &Path,
+    query: &WorkspaceItemsQuery,
+) -> Result<WorkspaceItemList, ApiError> {
     let (kind, include_results) = match query.kind.as_deref().unwrap_or("all") {
         "all" => (None, true),
         other => match ItemKind::parse(other) {
@@ -809,20 +838,33 @@ pub(crate) fn playback_at(db: &Path, id: &str) -> Result<SavedPlaybackResource, 
             "only registered result folders have saved playback",
         ));
     }
-    let inspection = fullmag_workspace_inspect::read_playback_with_geometry(Path::new(&item.path))
-        .map_err(map_playback_error)?;
+    playback_resource_from_root(Path::new(&item.path))
+}
+
+/// Read playback metadata and enrich its FEM mesh with the exact byte
+/// lengths/hashes emitted by the shared FMMT/FMSP serializers. Result-array
+/// metadata uses this same helper so the browser can validate a geometry
+/// payload before requesting it.
+pub(crate) fn playback_resource_from_root(root: &Path) -> Result<SavedPlaybackResource, ApiError> {
+    let inspection =
+        fullmag_workspace_inspect::read_playback_with_geometry(root).map_err(map_playback_error)?;
     let mut resource = inspection.resource;
     if let (Some(fem_mesh), Some(geometry)) =
         (resource.fem_mesh.as_mut(), inspection.fem_geometry.as_ref())
     {
-        let support = saved_geometry_binary::support_binary_identity(
+        if let Some((body, hash)) = saved_geometry_binary::bounded_support_binary_identity(
             &geometry.field_semantics.active_node_mask,
         )
-        .map_err(|error| ApiError::unprocessable_with_code("saved_playback_invalid", error.message))?;
-        fem_mesh.support_byte_length = Some(support.0.len());
-        fem_mesh.support_sha256 = Some(support.1);
+        .map_err(|error| {
+            ApiError::unprocessable_with_code("saved_playback_invalid", error.message)
+        })? {
+            fem_mesh.support_byte_length = Some(body.len());
+            fem_mesh.support_sha256 = Some(hash);
+        }
         if let Some((length, hash)) = saved_geometry_binary::topology_binary_identity(geometry)
-            .map_err(|error| ApiError::unprocessable_with_code("saved_playback_invalid", error.message))?
+            .map_err(|error| {
+                ApiError::unprocessable_with_code("saved_playback_invalid", error.message)
+            })?
         {
             fem_mesh.topology_byte_length = Some(length);
             fem_mesh.topology_sha256 = Some(hash);
@@ -871,35 +913,45 @@ pub(crate) fn playback_geometry_at(
             "only registered result folders have saved playback geometry",
         ));
     }
+    playback_geometry_from_root(Path::new(&item.path), query)
+}
+
+/// Encode one revision-pinned canonical FEM geometry from an already resolved
+/// result root.  Workspace-item playback and the current-session results
+/// browser share this exact conversion path so FMMT/FMSP bytes cannot drift.
+pub(crate) fn playback_geometry_from_root(
+    root: &Path,
+    query: &WorkspacePlaybackGeometryQuery,
+) -> Result<Vec<u8>, ApiError> {
     if !matches!(query.part.as_str(), "support" | "topology") {
         return Err(ApiError::bad_request(
             "playback geometry part must be topology or support",
         ));
     }
-    let geometry = fullmag_workspace_inspect::read_playback_geometry(
-        Path::new(&item.path),
-        &query.revision,
-    )
-    .map_err(map_playback_error)?;
+    let geometry = fullmag_workspace_inspect::read_playback_geometry(root, &query.revision)
+        .map_err(map_playback_error)?;
     match query.part.as_str() {
-        "support" => saved_geometry_binary::encode_saved_support(
-            &geometry.field_semantics.active_node_mask,
-        )
-        .map_err(|error| {
-            ApiError::unprocessable_with_code("saved_playback_invalid", error.message)
-        }),
+        "support" => {
+            saved_geometry_binary::encode_saved_support(&geometry.field_semantics.active_node_mask)
+                .map_err(|error| {
+                    ApiError::unprocessable_with_code("saved_playback_invalid", error.message)
+                })
+        }
         "topology" => {
             let Some((estimated, _)) = saved_geometry_binary::topology_binary_identity(&geometry)
                 .map_err(|error| {
-                    ApiError::unprocessable_with_code("saved_playback_invalid", error.message)
-                })?
+                ApiError::unprocessable_with_code("saved_playback_invalid", error.message)
+            })?
             else {
                 return Err(ApiError::unprocessable_with_code(
                     "saved_playback_invalid",
                     "saved FEM topology exceeds the 64 MiB playback output limit",
                 ));
             };
-            if estimated > crate::schemas::saved_field_geometry::MAX_SAVED_FIELD_GEOMETRY_DECODE_BYTES as usize {
+            if estimated
+                > crate::schemas::saved_field_geometry::MAX_SAVED_FIELD_GEOMETRY_DECODE_BYTES
+                    as usize
+            {
                 return Err(ApiError::unprocessable_with_code(
                     "saved_playback_invalid",
                     "saved FEM topology exceeds the 64 MiB playback output limit",
@@ -908,8 +960,8 @@ pub(crate) fn playback_geometry_at(
             let topology_fingerprint = geometry.mesh.topology_fingerprint_v6();
             let payload = saved_geometry_binary::fem_mesh_payload(geometry, topology_fingerprint)
                 .map_err(|error| {
-                    ApiError::unprocessable_with_code("saved_playback_invalid", error.message)
-                })?;
+                ApiError::unprocessable_with_code("saved_playback_invalid", error.message)
+            })?;
             crate::field_store::serialize_fem_mesh_topology_binary_v2(&payload).map_err(|error| {
                 ApiError::unprocessable_with_code(
                     "saved_playback_invalid",
@@ -933,10 +985,9 @@ fn map_playback_error(error: fullmag_workspace_inspect::PlaybackError) -> ApiErr
             "saved_playback_unsupported",
             format!("saved playback is unsupported: {reason}"),
         ),
-        PlaybackError::Invalid(message) => ApiError::unprocessable_with_code(
-            "saved_playback_invalid",
-            message,
-        ),
+        PlaybackError::Invalid(message) => {
+            ApiError::unprocessable_with_code("saved_playback_invalid", message)
+        }
         PlaybackError::StaleRevision => ApiError::conflict_with_code(
             "saved_playback_stale",
             "the supplied playback revision is stale; reload the playback resource",
@@ -1180,12 +1231,16 @@ pub(crate) fn scan_at(
     })
 }
 
-pub(crate) fn add_item_at(db: &Path, request: &WorkspaceAddRequest) -> Result<WorkspaceItem, ApiError> {
+pub(crate) fn add_item_at(
+    db: &Path,
+    request: &WorkspaceAddRequest,
+) -> Result<WorkspaceItem, ApiError> {
     let path = PathBuf::from(&request.path);
-    let kind = classify_path(&path, request.kind.map(kind_from_dto)).map_err(ApiError::bad_request)?;
+    let kind =
+        classify_path(&path, request.kind.map(kind_from_dto)).map_err(ApiError::bad_request)?;
     let workspace = open_writable(db)?;
-    let receipt = store_observed(&workspace, &describe(&path, kind), Actor::Web, true)
-        .map_err(map_error)?;
+    let receipt =
+        store_observed(&workspace, &describe(&path, kind), Actor::Web, true).map_err(map_error)?;
     let item = workspace
         .find(receipt.item_id)
         .map_err(map_error)?

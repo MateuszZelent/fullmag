@@ -21,6 +21,8 @@ pub mod project;
 mod project_detail;
 pub mod provenance;
 mod result_detail;
+pub mod results;
+mod results_fs;
 pub mod scanner;
 mod script_detail;
 
@@ -38,6 +40,15 @@ pub use playback::{
 };
 pub use project_detail::inspect_project;
 pub use result_detail::{display_path, inspect_result, is_result_dir, read_layout, Layout};
+pub use results::{
+    ensure_results_revision, locate_results_fem_playback_revision, read_results_array,
+    read_results_catalog, read_results_entry, read_results_sample, with_results_read_budget,
+    ResultsError, ResultsReadBudget, WorkspaceResultArray, WorkspaceResultCoordinateKind,
+    WorkspaceResultEntry, WorkspaceResultEntryKind, WorkspaceResultEntryPayload,
+    WorkspaceResultEntryStatus, WorkspaceResultGeometry, WorkspaceResultGeometryKind,
+    WorkspaceResultSample, WorkspaceResultSampleCoordinate, WorkspaceResultsCatalog,
+    WorkspaceResultsSource, WorkspaceResultsStatus,
+};
 pub use script_detail::{apply_python_inspection, inspect_script};
 
 use fullmag_workspace::{Item, ItemKind};

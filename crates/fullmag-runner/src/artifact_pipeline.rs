@@ -83,6 +83,33 @@ pub(crate) struct ArtifactPipelineSummary {
     /// solver returns, so the caller must finalize this tree after the writer
     /// thread has flushed it.
     pub autosave_root: Option<PathBuf>,
+    /// Target name and accepted physical times for the FEM `m` autosave
+    /// samples.  These are captured at the producer append boundary instead
+    /// of reconstructed from node counts or array order later.
+    pub autosave_target: Option<String>,
+    pub fem_autosave_samples: Vec<FemAutosaveSample>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct FemAutosaveSample {
+    pub stage_id: String,
+    pub time_s: f64,
+    pub field_layout: FemAutosaveFieldLayout,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FemAutosaveFieldLayout {
+    AosNodeMajor,
+    SoaComponentMajor,
+}
+
+impl FemAutosaveFieldLayout {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::AosNodeMajor => "aos_node_major",
+            Self::SoaComponentMajor => "soa_component_major",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -833,10 +860,13 @@ impl AutosaveTargetWriter for StageAutosaveWriter {
 }
 
 struct StageAutosaveRuntime {
+    stage_id: String,
     state: AutosaveTargetState,
     writer: StageAutosaveWriter,
     table: Option<TableStore>,
     fields: std::collections::BTreeMap<String, FieldCadenceState>,
+    field_layouts: std::collections::BTreeMap<String, FemAutosaveFieldLayout>,
+    zarr_stage_path: Option<PathBuf>,
     relaxation_clock: bool,
     last_stats: Option<StepStats>,
 }
@@ -855,7 +885,10 @@ impl StageAutosaveRuntime {
     }
 
     fn new(output_dir: &Path, config: StageAutosavePipelineConfig) -> Result<Self, String> {
+        let stage_id = config.stage_id.clone();
         let policy = config.policy;
+        let zarr_target =
+            (policy.format == fullmag_ir::AutosaveFormatIR::Zarr).then(|| policy.target.clone());
         let writer = match policy.format {
             fullmag_ir::AutosaveFormatIR::Txt => {
                 StageAutosaveWriter::Txt(crate::autosave_txt::TxtAutosaveWriter::new(output_dir))
@@ -910,10 +943,13 @@ impl StageAutosaveRuntime {
             })
             .collect();
         let mut runtime = Self {
+            stage_id,
             state: AutosaveTargetState::resume(output_dir, &policy.target)?,
             writer,
             table,
             fields,
+            field_layouts: std::collections::BTreeMap::new(),
+            zarr_stage_path: None,
             relaxation_clock,
             last_stats: None,
         };
@@ -929,7 +965,18 @@ impl StageAutosaveRuntime {
                 .map(|field| field.quantity.clone())
                 .collect(),
         )?;
+        if let Some(target) = zarr_target {
+            runtime.zarr_stage_path = Some(resolve_zarr_stage_path(
+                output_dir,
+                &target,
+                &runtime.stage_id,
+            )?);
+        }
         Ok(runtime)
+    }
+
+    fn stage_id(&self) -> &str {
+        &self.stage_id
     }
 
     fn append_scalar(&mut self, stats: &StepStats) -> Result<(), String> {
@@ -951,7 +998,11 @@ impl StageAutosaveRuntime {
         Ok(())
     }
 
-    fn append_field(&mut self, snapshot: &FieldSnapshot) -> Result<(), String> {
+    fn append_field(
+        &mut self,
+        snapshot: &FieldSnapshot,
+        field_layout: FemAutosaveFieldLayout,
+    ) -> Result<bool, String> {
         let values = snapshot.values.clone();
         self.append_field_values(
             &snapshot.name,
@@ -959,6 +1010,7 @@ impl StageAutosaveRuntime {
             snapshot.time,
             snapshot.solver_dt,
             &values,
+            field_layout,
         )
     }
 
@@ -969,9 +1021,10 @@ impl StageAutosaveRuntime {
         time: f64,
         solver_dt: f64,
         values: &[f64],
-    ) -> Result<(), String> {
+        field_layout: FemAutosaveFieldLayout,
+    ) -> Result<bool, String> {
         let Some(cadence) = self.fields.get_mut(name) else {
-            return Ok(());
+            return Ok(false);
         };
         let due = if cadence.every_steps.is_some() {
             true
@@ -988,7 +1041,7 @@ impl StageAutosaveRuntime {
             false
         };
         if !due || cadence.last_step == Some(step) {
-            return Ok(());
+            return Ok(false);
         }
         cadence.last_step = Some(step);
         self.state.append_field_sample(
@@ -1005,6 +1058,56 @@ impl StageAutosaveRuntime {
             name,
             values,
         )?;
+        self.mark_field_layout(name, field_layout)?;
+        Ok(true)
+    }
+
+    fn mark_field_layout(
+        &mut self,
+        quantity: &str,
+        field_layout: FemAutosaveFieldLayout,
+    ) -> Result<(), String> {
+        if let Some(existing) = self.field_layouts.get(quantity) {
+            if *existing != field_layout {
+                return Err(format!(
+                    "stage autosave field '{quantity}' changed storage layout from '{}' to '{}'",
+                    existing.as_str(),
+                    field_layout.as_str()
+                ));
+            }
+            return Ok(());
+        }
+        let Some(stage_path) = self.zarr_stage_path.as_ref() else {
+            self.field_layouts
+                .insert(quantity.to_string(), field_layout);
+            return Ok(());
+        };
+        let attrs_path = stage_path.join("fields").join(quantity).join(".zattrs");
+        if !attrs_path.is_file() {
+            return Err(format!(
+                "stage autosave field '{quantity}' did not create attrs at '{}'",
+                attrs_path.display()
+            ));
+        }
+        let mut attrs: serde_json::Value =
+            serde_json::from_slice(&fs::read(&attrs_path).map_err(|error| error.to_string())?)
+                .map_err(|error| format!("stage autosave field attrs are malformed: {error}"))?;
+        for key in ["storage_layout", "field_layout"] {
+            if let Some(existing) = attrs.get(key).and_then(serde_json::Value::as_str) {
+                if existing != field_layout.as_str() {
+                    return Err(format!(
+                        "stage autosave field '{quantity}' attrs key '{key}' declares '{}' but producer supplied '{}'",
+                        existing,
+                        field_layout.as_str()
+                    ));
+                }
+            }
+        }
+        attrs["storage_layout"] = serde_json::Value::String(field_layout.as_str().into());
+        attrs["field_layout"] = serde_json::Value::String(field_layout.as_str().into());
+        crate::autosave_zarr::write_json_atomic(&attrs_path, &attrs)?;
+        self.field_layouts
+            .insert(quantity.to_string(), field_layout);
         Ok(())
     }
 
@@ -1028,6 +1131,52 @@ impl StageAutosaveRuntime {
             }
         }
         self.state.finish_stage(&mut self.writer).map(|_| ())
+    }
+}
+
+fn resolve_zarr_stage_path(
+    autosave_root: &Path,
+    target: &str,
+    stage_id: &str,
+) -> Result<PathBuf, String> {
+    let manifest_path = autosave_root.join(format!("{target}.autosave.json"));
+    let manifest: crate::autosave_storage::AutosaveArtifactManifest =
+        serde_json::from_slice(&fs::read(&manifest_path).map_err(|error| error.to_string())?)
+            .map_err(|error| format!("stage autosave manifest is malformed: {error}"))?;
+    let stage = manifest
+        .stages
+        .iter()
+        .filter(|stage| stage.stage_id == stage_id)
+        .max_by_key(|stage| stage.stage_index)
+        .ok_or_else(|| format!("stage autosave manifest has no stage '{stage_id}'"))?;
+    Ok(autosave_root.join(format!(
+        "{target}.zarr/stages/stage_{:04}_{}",
+        stage.stage_index, stage.stage_id
+    )))
+}
+
+fn record_fem_autosave_sample(
+    summary: &mut ArtifactPipelineSummary,
+    runtime: &StageAutosaveRuntime,
+    field_context: &FieldArtifactContext,
+    name: &str,
+    time_s: f64,
+    field_layout: FemAutosaveFieldLayout,
+    appended: bool,
+) {
+    if appended
+        && name == "m"
+        && field_context
+            .layout
+            .get("backend")
+            .and_then(serde_json::Value::as_str)
+            == Some("fem")
+    {
+        summary.fem_autosave_samples.push(FemAutosaveSample {
+            stage_id: runtime.stage_id().to_string(),
+            time_s,
+            field_layout,
+        });
     }
 }
 
@@ -1714,6 +1863,9 @@ fn writer_loop(
         autosave_root: stage_autosave_config
             .as_ref()
             .map(|_| autosave_root.to_path_buf()),
+        autosave_target: stage_autosave_config
+            .as_ref()
+            .map(|config| config.policy.target.clone()),
         ..ArtifactPipelineSummary::default()
     };
     let mut scalar_writer: Option<BufWriter<File>> = None;
@@ -1864,18 +2016,40 @@ fn writer_loop(
                 }
                 if let Some(runtime) = stage_autosave.as_mut() {
                     match field_storage {
-                        FieldArtifactStorage::Json => runtime.append_field(&snapshot)?,
+                        FieldArtifactStorage::Json => {
+                            let appended = runtime
+                                .append_field(&snapshot, FemAutosaveFieldLayout::AosNodeMajor)?;
+                            record_fem_autosave_sample(
+                                &mut summary,
+                                runtime,
+                                &field_context,
+                                &snapshot.name,
+                                snapshot.time,
+                                FemAutosaveFieldLayout::AosNodeMajor,
+                                appended,
+                            );
+                        }
                         FieldArtifactStorage::Zarr => {
                             #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
                             if let Some(writer) = zarr_writers.get(&snapshot.name) {
                                 let values = writer.last_chunk_values_f64()?;
-                                runtime.append_field_values(
+                                let appended = runtime.append_field_values(
                                     &snapshot.name,
                                     snapshot.step,
                                     snapshot.time,
                                     snapshot.solver_dt,
                                     &values,
+                                    FemAutosaveFieldLayout::SoaComponentMajor,
                                 )?;
+                                record_fem_autosave_sample(
+                                    &mut summary,
+                                    runtime,
+                                    &field_context,
+                                    &snapshot.name,
+                                    snapshot.time,
+                                    FemAutosaveFieldLayout::SoaComponentMajor,
+                                    appended,
+                                );
                             }
                         }
                     }
@@ -1914,18 +2088,32 @@ fn writer_loop(
                     &snapshot.name,
                     snapshot.step,
                     snapshot.time,
-                    crate::frames_index::snapshot_relative_path(&snapshot.name, snapshot.step, false),
+                    crate::frames_index::snapshot_relative_path(
+                        &snapshot.name,
+                        snapshot.step,
+                        false,
+                    ),
                     None,
                 )?;
                 if let Some(runtime) = stage_autosave.as_mut() {
                     let values = writer.last_chunk_values_f64()?;
-                    runtime.append_field_values(
+                    let appended = runtime.append_field_values(
                         &snapshot.name,
                         snapshot.step,
                         snapshot.time,
                         snapshot.solver_dt,
                         &values,
+                        FemAutosaveFieldLayout::SoaComponentMajor,
                     )?;
+                    record_fem_autosave_sample(
+                        &mut summary,
+                        runtime,
+                        &field_context,
+                        &snapshot.name,
+                        snapshot.time,
+                        FemAutosaveFieldLayout::SoaComponentMajor,
+                        appended,
+                    );
                 }
                 summary.field_snapshots_written += 1;
                 record_writer_job_time(
@@ -1964,18 +2152,32 @@ fn writer_loop(
                     &snapshot.name,
                     snapshot.step,
                     snapshot.time,
-                    crate::frames_index::snapshot_relative_path(&snapshot.name, snapshot.step, false),
+                    crate::frames_index::snapshot_relative_path(
+                        &snapshot.name,
+                        snapshot.step,
+                        false,
+                    ),
                     None,
                 )?;
                 if let Some(runtime) = stage_autosave.as_mut() {
                     let values = writer.last_chunk_values_f64()?;
-                    runtime.append_field_values(
+                    let appended = runtime.append_field_values(
                         &snapshot.name,
                         snapshot.step,
                         snapshot.time,
                         snapshot.solver_dt,
                         &values,
+                        FemAutosaveFieldLayout::SoaComponentMajor,
                     )?;
+                    record_fem_autosave_sample(
+                        &mut summary,
+                        runtime,
+                        &field_context,
+                        &snapshot.name,
+                        snapshot.time,
+                        FemAutosaveFieldLayout::SoaComponentMajor,
+                        appended,
+                    );
                 }
                 summary.field_snapshots_written += 1;
                 record_writer_job_time(
@@ -2904,8 +3106,63 @@ mod tests {
             field_zattrs["provenance"]["execution_resolution"],
             serde_json::to_value(&resolution).expect("serialize resolution")
         );
+        assert_eq!(field_zattrs["storage_layout"], "aos_node_major");
+        assert_eq!(field_zattrs["field_layout"], "aos_node_major");
         fs::remove_dir_all(output_dir).expect("remove autosave output fixture");
         fs::remove_dir_all(autosave_root).expect("remove autosave provenance fixture");
+    }
+
+    #[test]
+    fn stage_autosave_marks_soa_layout_at_append_boundary() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let autosave_root = std::env::temp_dir().join(format!(
+            "fullmag-autosave-layout-marker-{}-{unique}",
+            std::process::id()
+        ));
+        let config = StageAutosavePipelineConfig {
+            stage_id: "relax".into(),
+            policy: fullmag_ir::StageAutosaveIR {
+                kind: "stage_autosave".into(),
+                target: "state".into(),
+                layout: fullmag_ir::AutosaveLayoutIR::Separate,
+                format: fullmag_ir::AutosaveFormatIR::Zarr,
+                table: None,
+                fields: vec![fullmag_ir::FieldAutosaveIR {
+                    kind: "field_autosave".into(),
+                    quantity: "m".into(),
+                    every_seconds: None,
+                    sample_period_policy: None,
+                    every_steps: Some(1),
+                }],
+            },
+        };
+        let mut runtime = StageAutosaveRuntime::new(&autosave_root, config)
+            .expect("start direct stage autosave runtime");
+        assert!(runtime
+            .append_field_values(
+                "m",
+                1,
+                1.0e-13,
+                1.0e-13,
+                &[1.0, 0.0, 0.0],
+                FemAutosaveFieldLayout::SoaComponentMajor,
+            )
+            .expect("append SoA field sample"));
+        runtime
+            .finish()
+            .expect("finish direct stage autosave runtime");
+
+        let attrs: serde_json::Value = serde_json::from_slice(
+            &fs::read(autosave_root.join("state.zarr/stages/stage_0000_relax/fields/m/.zattrs"))
+                .expect("read SoA field attrs"),
+        )
+        .expect("decode SoA field attrs");
+        assert_eq!(attrs["storage_layout"], "soa_component_major");
+        assert_eq!(attrs["field_layout"], "soa_component_major");
+        fs::remove_dir_all(autosave_root).expect("remove layout marker fixture");
     }
 
     #[cfg(feature = "fem-gpu")]

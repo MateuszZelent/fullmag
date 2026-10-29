@@ -2628,6 +2628,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/data/results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_results"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/results/arrays/{array_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_results_arrays_array_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/results/arrays/{array_id}/geometry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_results_arrays_array_id_geometry"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/results/arrays/{array_id}/samples/{sample_index}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_results_arrays_array_id_samples_sample_index"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/results/entries/{entry_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_results_entries_entry_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/data/scalars": {
         parameters: {
             query?: never;
@@ -4947,6 +5027,86 @@ export interface paths {
             cookie?: never;
         };
         get: operations["workspace_items_get_workspace_items_id_playback_geometry"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/items/{id}/results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_results_get_workspace_items_id_results"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/items/{id}/results/arrays/{array_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_results_get_workspace_items_id_results_arrays_array_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/items/{id}/results/arrays/{array_id}/geometry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_results_get_workspace_items_id_results_arrays_array_id_geometry"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/items/{id}/results/arrays/{array_id}/samples/{sample_index}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_results_get_workspace_items_id_results_arrays_array_id_samples_sample_index"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/items/{id}/results/entries/{entry_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_results_get_workspace_items_id_results_entries_entry_id"];
         put?: never;
         post?: never;
         delete?: never;
@@ -16909,9 +17069,145 @@ export interface components {
         WorkspacePlaybackGeometryQuery: {
             /** @description `topology` returns FMMT v2; `support` returns FMSP v1. */
             part: string;
-            /** @description Exact revision returned by `GET /v2/workspace/items/{id}/playback`. */
+            /**
+             * @description Exact revision returned by the selected playback or results-array
+             *     metadata endpoint.
+             */
             revision: string;
         };
+        /**
+         * @description Public array metadata.  The `revision` belongs on the array response so
+         *     every subsequent sample read can be pinned to this exact source snapshot.
+         */
+        WorkspaceResultArray: {
+            can_read_values: boolean;
+            can_visualize_3d: boolean;
+            chunks: number[];
+            component_count?: number | null;
+            coordinates: components["schemas"]["WorkspaceResultSampleCoordinate"][];
+            dtype: string;
+            field_layout?: string | null;
+            geometry?: null | components["schemas"]["WorkspaceResultGeometry"];
+            id: string;
+            path: string;
+            quantity_id?: string | null;
+            /**
+             * @description Ordered quantity/column identifiers declared by the producer. Older
+             *     array responses may omit this field; deserialization keeps them
+             *     compatible by treating the omission as an empty list.
+             */
+            quantity_ids?: string[];
+            reason?: string | null;
+            revision: string;
+            sample_count: number;
+            shape: number[];
+            unit?: string | null;
+        };
+        /** @enum {string} */
+        WorkspaceResultCoordinateKind: "physical_time" | "accepted_step";
+        /**
+         * @description One catalog entry. Array metadata stays behind the array endpoint; payload
+         *     chunks are addressed through the bounded sample endpoint so a large folder
+         *     catalog remains cheap while ordinary files outside arrays stay visible.
+         */
+        WorkspaceResultEntry: {
+            array_id?: string | null;
+            format?: string | null;
+            id: string;
+            kind: components["schemas"]["WorkspaceResultEntryKind"];
+            mime_type?: string | null;
+            name: string;
+            parent_id?: string | null;
+            path: string;
+            reason?: string | null;
+            /** Format: int64 */
+            size_bytes?: number | null;
+            status: components["schemas"]["WorkspaceResultEntryStatus"];
+        };
+        /** @enum {string} */
+        WorkspaceResultEntryKind: "directory" | "zarr_group" | "zarr_array" | "file";
+        WorkspaceResultEntryResponse: {
+            content_type: string;
+            id: string;
+            path: string;
+            revision: string;
+            /**
+             * @description UTF-8 preview for JSON/text/CSV files. Binary or non-UTF-8 files use
+             *     the same bounded JSON endpoint with `null` here; raw payloads are
+             *     exposed only by the sample endpoint.
+             */
+            text?: string | null;
+            truncated: boolean;
+        };
+        /** @enum {string} */
+        WorkspaceResultEntryStatus: "ready" | "metadata_only" | "unsupported" | "unreadable";
+        /**
+         * @description Geometry is emitted only when persisted producer metadata gives an
+         *     unambiguous mapping from values to cells/nodes.
+         */
+        WorkspaceResultGeometry: {
+            cell_count?: number | null;
+            cell_size_m?: number[] | null;
+            cells_xyz?: number[] | null;
+            component_count?: number | null;
+            fem_mesh?: null | components["schemas"]["SavedPlaybackFemMesh"];
+            kind: components["schemas"]["WorkspaceResultGeometryKind"];
+            node_count?: number | null;
+            origin_m?: number[] | null;
+            playback_geometry_sha256?: string | null;
+            reason?: string | null;
+            topology_array_id?: string | null;
+        };
+        /** @enum {string} */
+        WorkspaceResultGeometryKind: "fdm" | "fem_p1" | "unknown";
+        WorkspaceResultSampleCoordinate: {
+            /**
+             * @description Decimal spelling of an accepted step, retained without an f64 round
+             *     trip.  This is present for accepted-step coordinates.
+             */
+            accepted_step?: string | null;
+            kind: components["schemas"]["WorkspaceResultCoordinateKind"];
+            sample_index: number;
+            /**
+             * Format: double
+             * @description Physical-time coordinates are finite f64 values.  Accepted solver
+             *     steps may exceed the exact integer range of f64, so callers must use
+             *     `accepted_step` when `value` is absent.
+             */
+            value?: number | null;
+        };
+        WorkspaceResultsCatalog: {
+            can_read_values: boolean;
+            can_visualize_3d: boolean;
+            entries: components["schemas"]["WorkspaceResultEntry"][];
+            next_cursor?: string | null;
+            reason?: string | null;
+            resource_binding: components["schemas"]["WorkspaceResultsSource"];
+            revision: string;
+            root_label: string;
+            run_id?: string | null;
+            schema: string;
+            status: components["schemas"]["WorkspaceResultsStatus"];
+            total_count: number;
+            truncated: boolean;
+        };
+        WorkspaceResultsQuery: {
+            /** @description Opaque revision-pinned cursor returned as `next_cursor`. */
+            cursor?: string | null;
+            /** @description Requested page size; the server bounds it to 1000. */
+            limit?: number | null;
+        };
+        WorkspaceResultsRevisionQuery: {
+            /** @description Revision returned by the catalog or array metadata response. */
+            revision: string;
+        };
+        /**
+         * @description Namespace from which the provider resolved a result root.
+         * @enum {string}
+         */
+        WorkspaceResultsSource: "workspace_item" | "current";
+        /** @enum {string} */
+        WorkspaceResultsStatus: "ready" | "empty" | "partial" | "unavailable";
         WorkspaceRibbonReplaceRequest: {
             active_contextual_tab?: string | null;
             active_core_tab: string;
@@ -25372,6 +25668,185 @@ export interface operations {
             };
         };
     };
+    data_get_sessions_current_data_results: {
+        parameters: {
+            query?: {
+                /** @description Opaque revision-pinned cursor returned as `next_cursor`. */
+                cursor?: string | null;
+                /** @description Requested page size; the server bounds it to 1000. */
+                limit?: number | null;
+            };
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded current-run result-folder catalog */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceResultsCatalog"];
+                };
+            };
+        };
+    };
+    data_get_sessions_current_data_results_arrays_array_id: {
+        parameters: {
+            query: {
+                /** @description Revision returned by the catalog or array metadata response. */
+                revision: string;
+            };
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path: {
+                /** @description Opaque array id from the catalog */
+                array_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revision-pinned current-run array metadata */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceResultArray"];
+                };
+            };
+        };
+    };
+    data_get_sessions_current_data_results_arrays_array_id_geometry: {
+        parameters: {
+            query: {
+                /**
+                 * @description Exact revision returned by the selected playback or results-array
+                 *     metadata endpoint.
+                 */
+                revision: string;
+                /** @description `topology` returns FMMT v2; `support` returns FMSP v1. */
+                part: string;
+            };
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path: {
+                /** @description Opaque FEM array id from the catalog */
+                array_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revision-pinned exact FEM topology (FMMT v2) or active-node support (FMSP v1) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Invalid geometry part or result revision */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The active result array is missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The result revision or live session changed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The array has no exact FEM playback geometry */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_results_arrays_array_id_samples_sample_index: {
+        parameters: {
+            query: {
+                /** @description Revision returned by the catalog or array metadata response. */
+                revision: string;
+            };
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path: {
+                /** @description Opaque array id from the catalog */
+                array_id: string;
+                /** @description Zero-based sample index */
+                sample_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revision-pinned current-run f64LE sample */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+        };
+    };
+    data_get_sessions_current_data_results_entries_entry_id: {
+        parameters: {
+            query: {
+                /** @description Revision returned by the catalog or array metadata response. */
+                revision: string;
+            };
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path: {
+                /** @description Opaque entry id from the catalog */
+                entry_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded current-run text/JSON/CSV preview */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceResultEntryResponse"];
+                };
+            };
+        };
+    };
     data_get_sessions_current_data_scalars: {
         parameters: {
             query?: {
@@ -32571,7 +33046,10 @@ export interface operations {
     workspace_items_get_workspace_items_id_playback_geometry: {
         parameters: {
             query: {
-                /** @description Exact revision returned by `GET /v2/workspace/items/{id}/playback`. */
+                /**
+                 * @description Exact revision returned by the selected playback or results-array
+                 *     metadata endpoint.
+                 */
                 revision: string;
                 /** @description `topology` returns FMMT v2; `support` returns FMSP v1. */
                 part: string;
@@ -32621,6 +33099,181 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    workspace_results_get_workspace_items_id_results: {
+        parameters: {
+            query?: {
+                /** @description Opaque revision-pinned cursor returned as `next_cursor`. */
+                cursor?: string | null;
+                /** @description Requested page size; the server bounds it to 1000. */
+                limit?: number | null;
+            };
+            header?: never;
+            path: {
+                /** @description Result item id (decimal string) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded result-folder catalog */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceResultsCatalog"];
+                };
+            };
+        };
+    };
+    workspace_results_get_workspace_items_id_results_arrays_array_id: {
+        parameters: {
+            query: {
+                /** @description Revision returned by the catalog or array metadata response. */
+                revision: string;
+            };
+            header?: never;
+            path: {
+                /** @description Result item id (decimal string) */
+                id: string;
+                /** @description Opaque array id from the catalog */
+                array_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revision-pinned array metadata */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceResultArray"];
+                };
+            };
+        };
+    };
+    workspace_results_get_workspace_items_id_results_arrays_array_id_geometry: {
+        parameters: {
+            query: {
+                /**
+                 * @description Exact revision returned by the selected playback or results-array
+                 *     metadata endpoint.
+                 */
+                revision: string;
+                /** @description `topology` returns FMMT v2; `support` returns FMSP v1. */
+                part: string;
+            };
+            header?: never;
+            path: {
+                /** @description Result item id (decimal string) */
+                id: string;
+                /** @description Opaque FEM array id from the catalog */
+                array_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revision-pinned exact FEM topology (FMMT v2) or active-node support (FMSP v1) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Invalid geometry part or result revision */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The result array is missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The result revision changed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The array has no exact FEM playback geometry */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    workspace_results_get_workspace_items_id_results_arrays_array_id_samples_sample_index: {
+        parameters: {
+            query: {
+                /** @description Revision returned by the catalog or array metadata response. */
+                revision: string;
+            };
+            header?: never;
+            path: {
+                /** @description Result item id (decimal string) */
+                id: string;
+                /** @description Opaque array id from the catalog */
+                array_id: string;
+                /** @description Zero-based sample index */
+                sample_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revision-pinned f64LE sample */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+        };
+    };
+    workspace_results_get_workspace_items_id_results_entries_entry_id: {
+        parameters: {
+            query: {
+                /** @description Revision returned by the catalog or array metadata response. */
+                revision: string;
+            };
+            header?: never;
+            path: {
+                /** @description Result item id (decimal string) */
+                id: string;
+                /** @description Opaque entry id from the catalog */
+                entry_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded text/JSON/CSV preview */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceResultEntryResponse"];
+                };
             };
         };
     };

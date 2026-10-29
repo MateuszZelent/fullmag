@@ -4,19 +4,20 @@
 //! manifests and Zarr metadata when listing playback, and reads one bounded
 //! array chunk only when the caller requests a frame.
 
+use crate::results_fs::{open_directory, open_regular, PinnedDirectory};
 use std::collections::HashSet;
-use std::fs::{self, File, Metadata};
+use std::fs::{self, Metadata};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use sha2::{Digest, Sha256};
 use fullmag_session::solution_field_geometry::{
     parse_saved_fem_p1_geometry, SavedFemP1FieldGeometry, SavedFieldGeometryRef,
     FEM_P1_GEOMETRY_SCHEMA, MAX_FEM_P1_GEOMETRY_BYTES,
 };
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 pub const SAVED_PLAYBACK_SCHEMA: &str = "fullmag.saved_playback.v1";
 const PLAYBACK_FILE: &str = "playback.json";
@@ -221,15 +222,14 @@ pub fn read_playback(root: &Path) -> Result<SavedPlaybackResource, PlaybackError
 pub(crate) fn probe_playback(root: &Path) -> Result<(), PlaybackError> {
     let root = canonical_root(root)?;
     let _ = read_playback_sidecar_at(&root)?;
+    root.verify()?;
     Ok(())
 }
 
 /// Read playback metadata together with its already-validated canonical FEM
 /// geometry. The geometry is kept out of the serialized resource so callers
 /// can derive binary topology/support payloads without a second unpinned read.
-pub fn read_playback_with_geometry(
-    root: &Path,
-) -> Result<SavedPlaybackInspection, PlaybackError> {
+pub fn read_playback_with_geometry(root: &Path) -> Result<SavedPlaybackInspection, PlaybackError> {
     let loaded = load_playback(root)?;
     Ok(SavedPlaybackInspection {
         resource: loaded.resource,
@@ -249,11 +249,14 @@ pub fn read_playback_geometry(
     if before.resource.revision != revision {
         return Err(PlaybackError::StaleRevision);
     }
-    let geometry = before
-        .fem_geometry
-        .ok_or(PlaybackError::Unsupported("playback has no FEM mesh geometry"))?;
+    let geometry = before.fem_geometry.ok_or(PlaybackError::Unsupported(
+        "playback has no FEM mesh geometry",
+    ))?;
     match load_playback_at(&root) {
-        Ok(after) if after.resource.revision == before.resource.revision => Ok(geometry),
+        Ok(after) if after.resource.revision == before.resource.revision => {
+            root.verify()?;
+            Ok(geometry)
+        }
         _ => Err(PlaybackError::SourceChanged),
     }
 }
@@ -280,7 +283,10 @@ pub fn read_playback_frame(
         return Err(PlaybackError::NotFound("frame"));
     }
 
-    let chunk_name = match (stage.metadata.dimension_separator, stage.metadata.chunk_rank) {
+    let chunk_name = match (
+        stage.metadata.dimension_separator,
+        stage.metadata.chunk_rank,
+    ) {
         ('.', 2) => format!("{frame_index}.0"),
         ('/', 2) => format!("{frame_index}/0"),
         ('.', 3) => format!("{frame_index}.0.0"),
@@ -295,7 +301,10 @@ pub fn read_playback_frame(
     // Re-read the sidecar and every .zarray after the payload read. Any
     // failure here means the selected source could not be proven stable.
     match load_playback_at(&root) {
-        Ok(after) if after.resource.revision == before.resource.revision => Ok(bytes),
+        Ok(after) if after.resource.revision == before.resource.revision => {
+            root.verify()?;
+            Ok(bytes)
+        }
         _ => Err(PlaybackError::SourceChanged),
     }
 }
@@ -334,20 +343,64 @@ fn normalize_frame_layout(
     Ok(normalized)
 }
 
-fn canonical_root(root: &Path) -> Result<PathBuf, PlaybackError> {
-    let canonical = fs::canonicalize(root).map_err(|error| map_io(error, "result folder"))?;
-    let metadata = fs::metadata(&canonical).map_err(|error| map_io(error, "result folder"))?;
-    if !metadata.is_dir() {
-        return Err(PlaybackError::Invalid(
-            "the selected result is not a folder".into(),
-        ));
+struct PlaybackRoot {
+    path: PathBuf,
+    pinned: PinnedDirectory,
+    identity: FileIdentity,
+}
+
+impl std::ops::Deref for PlaybackRoot {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.path
     }
-    Ok(canonical)
+}
+
+impl PlaybackRoot {
+    fn verify(&self) -> Result<(), PlaybackError> {
+        let current = open_directory(&self.path).map_err(|_| PlaybackError::SourceChanged)?;
+        let original = self
+            .pinned
+            .metadata()
+            .map_err(|_| PlaybackError::SourceChanged)?;
+        let current = current
+            .metadata()
+            .map_err(|_| PlaybackError::SourceChanged)?;
+        if file_identity(&original) != self.identity || file_identity(&current) != self.identity {
+            return Err(PlaybackError::SourceChanged);
+        }
+        Ok(())
+    }
+}
+
+fn canonical_root(root: &Path) -> Result<PlaybackRoot, PlaybackError> {
+    let absolute = if root.is_absolute() {
+        root.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| map_io(error, "result folder"))?
+            .join(root)
+    };
+    // Preserve the original path: canonicalizing first would erase an unsafe
+    // ancestor symlink before the no-follow traversal could reject it.
+    let pinned = open_directory(&absolute).map_err(|error| map_io(error, "result folder"))?;
+    let identity = file_identity(
+        &pinned
+            .metadata()
+            .map_err(|error| map_io(error, "result folder"))?,
+    );
+    Ok(PlaybackRoot {
+        path: pinned.logical_path().to_path_buf(),
+        pinned,
+        identity,
+    })
 }
 
 fn load_playback(root: &Path) -> Result<LoadedPlayback, PlaybackError> {
     let root = canonical_root(root)?;
-    load_playback_at(&root)
+    let loaded = load_playback_at(&root)?;
+    root.verify()?;
+    Ok(loaded)
 }
 
 fn load_playback_at(root: &Path) -> Result<LoadedPlayback, PlaybackError> {
@@ -374,8 +427,8 @@ fn load_playback_at(root: &Path) -> Result<LoadedPlayback, PlaybackError> {
             object_ref: fem_mesh.geometry_sha256.clone(),
             byte_length: geometry_bytes.len() as u64,
         };
-        let geometry = parse_saved_fem_p1_geometry(&geometry_bytes, &geometry_reference)
-            .map_err(|error| {
+        let geometry =
+            parse_saved_fem_p1_geometry(&geometry_bytes, &geometry_reference).map_err(|error| {
                 PlaybackError::Invalid(format!("FEM geometry is not canonical: {error}"))
             })?;
         (
@@ -402,10 +455,16 @@ fn load_playback_at(root: &Path) -> Result<LoadedPlayback, PlaybackError> {
             grid.iter()
                 .try_fold(1_usize, |total, value| total.checked_mul(*value))
                 .filter(|count| *count > 0)
-                .ok_or_else(|| PlaybackError::Invalid("grid cell count is zero or overflows".into()))
+                .ok_or_else(|| {
+                    PlaybackError::Invalid("grid cell count is zero or overflows".into())
+                })
         })
         .transpose()?
-        .unwrap_or_else(|| fem_geometry.as_ref().map_or(0, |geometry| geometry.mesh.nodes.len()));
+        .unwrap_or_else(|| {
+            fem_geometry
+                .as_ref()
+                .map_or(0, |geometry| geometry.mesh.nodes.len())
+        });
     if cell_count == 0 {
         return Err(PlaybackError::Invalid(
             "playback vector layout has no cells or FEM nodes".into(),
@@ -523,9 +582,7 @@ fn load_playback_at(root: &Path) -> Result<LoadedPlayback, PlaybackError> {
     })
 }
 
-fn read_playback_sidecar_at(
-    root: &Path,
-) -> Result<(Vec<u8>, PlaybackSidecar), PlaybackError> {
+fn read_playback_sidecar_at(root: &Path) -> Result<(Vec<u8>, PlaybackSidecar), PlaybackError> {
     let (sidecar_bytes, _) =
         match read_file_bounded(root, Path::new(PLAYBACK_FILE), MAX_PLAYBACK_BYTES) {
             Err(PlaybackError::NotFound(_)) => {
@@ -661,7 +718,8 @@ fn validate_sidecar(sidecar: &PlaybackSidecar) -> Result<(), PlaybackError> {
             (true, Some(layout)) if FemFieldLayout::parse(layout).is_some() => {}
             (true, _) => {
                 return Err(PlaybackError::Invalid(
-                    "FEM stages must declare field_layout as aos_node_major or soa_component_major".into(),
+                    "FEM stages must declare field_layout as aos_node_major or soa_component_major"
+                        .into(),
                 ));
             }
             (false, None) => {}
@@ -708,9 +766,8 @@ fn parse_array_path(raw: &str, fem: bool) -> Result<PathBuf, PlaybackError> {
     let components: Vec<_> = parsed.components().collect();
     let fields_component = components.get(components.len().saturating_sub(2));
     let array_component = components.last();
-    let valid_array_name = array_component.is_some_and(|name| {
-        name.as_os_str() == "m" || (fem && name.as_os_str() == "m.zarr")
-    });
+    let valid_array_name = array_component
+        .is_some_and(|name| name.as_os_str() == "m" || (fem && name.as_os_str() == "m.zarr"));
     if components.len() < 2
         || fields_component.is_none_or(|name| name.as_os_str() != "fields")
         || !valid_array_name
@@ -874,10 +931,7 @@ fn validate_stage_manifest(bytes: &[u8]) -> Result<(), PlaybackError> {
     Ok(())
 }
 
-fn validate_array_attributes(
-    bytes: &[u8],
-    metadata: &ArrayMetadata,
-) -> Result<(), PlaybackError> {
+fn validate_array_attributes(bytes: &[u8], metadata: &ArrayMetadata) -> Result<(), PlaybackError> {
     if metadata.fem_layout.is_none() {
         return Ok(());
     }
@@ -945,10 +999,12 @@ fn validate_array_attributes(
         }
     }
     if let Some(axes) = object.get("axes") {
-        let axes = axes.as_array().ok_or_else(|| {
-            PlaybackError::Invalid("FEM .zattrs axes must be an array".into())
-        })?;
-        if axes.len() != metadata.chunk_rank || axes.first().and_then(Value::as_str) != Some("sample") {
+        let axes = axes
+            .as_array()
+            .ok_or_else(|| PlaybackError::Invalid("FEM .zattrs axes must be an array".into()))?;
+        if axes.len() != metadata.chunk_rank
+            || axes.first().and_then(Value::as_str) != Some("sample")
+        {
             return Err(PlaybackError::Invalid(
                 "FEM .zattrs axes do not match the Zarr rank".into(),
             ));
@@ -962,9 +1018,7 @@ fn validate_array_attributes(
             let valid_carrier_axis = matches!(carrier_axis, Some("node") | Some("cell"));
             let legacy_cell_axis_has_nodal_location = carrier_axis != Some("cell")
                 || object.get("location").and_then(Value::as_str) == Some("node");
-            if !valid_component_axis
-                || !valid_carrier_axis
-                || !legacy_cell_axis_has_nodal_location
+            if !valid_component_axis || !valid_carrier_axis || !legacy_cell_axis_has_nodal_location
             {
                 return Err(PlaybackError::Invalid(
                     "FEM rank-3 .zattrs axes must be [sample,component,node|cell]".into(),
@@ -987,7 +1041,9 @@ fn read_file_bounded(
             "metadata file exceeds its size limit".into(),
         ));
     }
-    let mut file = File::open(&path).map_err(|error| map_io(error, "metadata"))?;
+    crate::results::charge_metadata(before.length)
+        .map_err(|error| PlaybackError::Invalid(error.to_string()))?;
+    let mut file = open_regular(&path).map_err(|error| map_io(error, "metadata"))?;
     let opened = file.metadata().map_err(|error| map_io(error, "metadata"))?;
     if !same_identity(&before, &file_identity(&opened)) {
         return Err(PlaybackError::SourceChanged);
@@ -1012,6 +1068,8 @@ fn read_file_bounded(
     {
         return Err(PlaybackError::SourceChanged);
     }
+    crate::results::charge_metadata(0)
+        .map_err(|error| PlaybackError::Invalid(error.to_string()))?;
     Ok((bytes, before))
 }
 
@@ -1027,7 +1085,7 @@ fn read_exact_binary(
             "frame chunk has a length different from 3*N f64 values".into(),
         ));
     }
-    let mut file = File::open(&path).map_err(|error| map_io(error, "frame"))?;
+    let mut file = open_regular(&path).map_err(|error| map_io(error, "frame"))?;
     let opened = file.metadata().map_err(|error| map_io(error, "frame"))?;
     if !same_identity(&before, &file_identity(&opened)) {
         return Err(PlaybackError::SourceChanged);
@@ -1075,19 +1133,11 @@ fn resolve_existing(root: &Path, relative: &Path) -> Result<PathBuf, PlaybackErr
             ));
         }
     }
-    let canonical = fs::canonicalize(&current).map_err(|error| map_io(error, "file"))?;
-    if !canonical.starts_with(root) || canonical == root {
-        return Err(PlaybackError::Invalid(
-            "playback file escaped the selected result folder".into(),
-        ));
-    }
-    let metadata = fs::symlink_metadata(&current).map_err(|error| map_io(error, "file"))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(PlaybackError::Invalid(
-            "playback metadata and chunks must be regular files".into(),
-        ));
-    }
-    Ok(canonical)
+    // Relative components above are all normal, so the lexical child remains
+    // inside the selected root. Validate every ancestor without dereferencing
+    // it, and keep that original path for the final bounded open.
+    let _validated = open_regular(&current).map_err(|error| map_io(error, "file"))?;
+    Ok(current)
 }
 
 fn validate_frame_values(bytes: &[u8]) -> Result<(), PlaybackError> {
@@ -1227,6 +1277,33 @@ mod tests {
                 "field_layout": "soa_component_major",
             }],
         })
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_replacement_of_a_pinned_regular_root_directory() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("result");
+        fs::create_dir(&root).unwrap();
+        let pinned = super::canonical_root(&root).unwrap();
+        fs::rename(&root, temporary.path().join("original")).unwrap();
+        fs::create_dir(&root).unwrap();
+        assert!(matches!(pinned.verify(), Err(PlaybackError::SourceChanged)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_result_root_with_a_symlink_ancestor() {
+        use std::os::unix::fs::symlink;
+        let temporary = tempfile::tempdir().unwrap();
+        let real = temporary.path().join("real");
+        let result = real.join("results");
+        write_array(&result, "fields/m", 1, &[0.0; 6]);
+        write_sidecar(&result, sidecar(json!([stage("run", "fields/m", &[0.0])])));
+        assert!(read_playback(&result).is_ok());
+        let alias = temporary.path().join("alias");
+        symlink(&real, &alias).unwrap();
+        assert!(read_playback(&alias.join("results")).is_err());
     }
 
     #[test]

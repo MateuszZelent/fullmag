@@ -188,3 +188,18 @@ fn binary_query_requires_three_canonical_roots() {
         );
     }
 }
+
+#[test]
+fn bounded_support_identity_keeps_oversized_masks_metadata_only() {
+    let small = bounded_support_binary_identity(&[true, false, true])
+        .unwrap()
+        .unwrap();
+    assert_eq!(small.0.len(), FMSP_HEADER_LEN + 1);
+    assert_eq!(small.1, sha256_hex(&small.0));
+    let largest_node_count = (MAX_SAVED_FIELD_SUPPORT_BINARY_BYTES as usize - FMSP_HEADER_LEN) * 8;
+    assert!(
+        bounded_support_binary_identity(&vec![true; largest_node_count + 1])
+            .unwrap()
+            .is_none()
+    );
+}

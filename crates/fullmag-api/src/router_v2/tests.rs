@@ -54933,6 +54933,9 @@ mod session_scope;
 #[path = "tests/workspace_items.rs"]
 mod workspace_items;
 
+#[path = "tests/workspace_results.rs"]
+mod workspace_results;
+
 #[path = "tests/antenna_inspection.rs"]
 mod antenna_inspection;
 

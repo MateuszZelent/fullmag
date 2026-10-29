@@ -47075,7 +47075,7 @@
             "type": "string"
           },
           "revision": {
-            "description": "Exact revision returned by `GET /v2/workspace/items/{id}/playback`.",
+            "description": "Exact revision returned by the selected playback or results-array\nmetadata endpoint.",
             "type": "string"
           }
         },
@@ -47084,6 +47084,490 @@
           "part"
         ],
         "type": "object"
+      },
+      "WorkspaceResultArray": {
+        "description": "Public array metadata.  The `revision` belongs on the array response so\nevery subsequent sample read can be pinned to this exact source snapshot.",
+        "properties": {
+          "can_read_values": {
+            "type": "boolean"
+          },
+          "can_visualize_3d": {
+            "type": "boolean"
+          },
+          "chunks": {
+            "items": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "component_count": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "coordinates": {
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceResultSampleCoordinate"
+            },
+            "type": "array"
+          },
+          "dtype": {
+            "type": "string"
+          },
+          "field_layout": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "geometry": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WorkspaceResultGeometry"
+              }
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "quantity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quantity_ids": {
+            "description": "Ordered quantity/column identifiers declared by the producer. Older\narray responses may omit this field; deserialization keeps them\ncompatible by treating the omission as an empty list.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "type": "string"
+          },
+          "sample_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "shape": {
+            "items": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "revision",
+          "shape",
+          "chunks",
+          "dtype",
+          "sample_count",
+          "coordinates",
+          "can_read_values",
+          "can_visualize_3d"
+        ],
+        "type": "object"
+      },
+      "WorkspaceResultCoordinateKind": {
+        "enum": [
+          "physical_time",
+          "accepted_step"
+        ],
+        "type": "string"
+      },
+      "WorkspaceResultEntry": {
+        "description": "One catalog entry. Array metadata stays behind the array endpoint; payload\nchunks are addressed through the bounded sample endpoint so a large folder\ncatalog remains cheap while ordinary files outside arrays stay visible.",
+        "properties": {
+          "array_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "format": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/WorkspaceResultEntryKind"
+          },
+          "mime_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "size_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkspaceResultEntryStatus"
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "name",
+          "kind",
+          "status"
+        ],
+        "type": "object"
+      },
+      "WorkspaceResultEntryKind": {
+        "enum": [
+          "directory",
+          "zarr_group",
+          "zarr_array",
+          "file"
+        ],
+        "type": "string"
+      },
+      "WorkspaceResultEntryResponse": {
+        "properties": {
+          "content_type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "text": {
+            "description": "UTF-8 preview for JSON/text/CSV files. Binary or non-UTF-8 files use\nthe same bounded JSON endpoint with `null` here; raw payloads are\nexposed only by the sample endpoint.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "revision",
+          "content_type",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "WorkspaceResultEntryStatus": {
+        "enum": [
+          "ready",
+          "metadata_only",
+          "unsupported",
+          "unreadable"
+        ],
+        "type": "string"
+      },
+      "WorkspaceResultGeometry": {
+        "description": "Geometry is emitted only when persisted producer metadata gives an\nunambiguous mapping from values to cells/nodes.",
+        "properties": {
+          "cell_count": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cell_size_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "cells_xyz": {
+            "items": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "component_count": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "fem_mesh": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SavedPlaybackFemMesh",
+                "description": "Exact saved-playback FEM descriptor metadata. Binary lengths and\nhashes are filled by the HTTP adapter after it reuses the canonical\nFMMT/FMSP encoders; the reader never guesses them from node counts."
+              }
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/WorkspaceResultGeometryKind"
+          },
+          "node_count": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "origin_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "playback_geometry_sha256": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "topology_array_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "WorkspaceResultGeometryKind": {
+        "enum": [
+          "fdm",
+          "fem_p1",
+          "unknown"
+        ],
+        "type": "string"
+      },
+      "WorkspaceResultSampleCoordinate": {
+        "properties": {
+          "accepted_step": {
+            "description": "Decimal spelling of an accepted step, retained without an f64 round\ntrip.  This is present for accepted-step coordinates.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/WorkspaceResultCoordinateKind"
+          },
+          "sample_index": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "value": {
+            "description": "Physical-time coordinates are finite f64 values.  Accepted solver\nsteps may exceed the exact integer range of f64, so callers must use\n`accepted_step` when `value` is absent.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "sample_index",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "WorkspaceResultsCatalog": {
+        "properties": {
+          "can_read_values": {
+            "type": "boolean"
+          },
+          "can_visualize_3d": {
+            "type": "boolean"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceResultEntry"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resource_binding": {
+            "$ref": "#/components/schemas/WorkspaceResultsSource"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "root_label": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schema": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkspaceResultsStatus"
+          },
+          "total_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "schema",
+          "revision",
+          "resource_binding",
+          "root_label",
+          "status",
+          "can_read_values",
+          "can_visualize_3d",
+          "entries",
+          "total_count",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "WorkspaceResultsQuery": {
+        "properties": {
+          "cursor": {
+            "description": "Opaque revision-pinned cursor returned as `next_cursor`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "description": "Requested page size; the server bounds it to 1000.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "WorkspaceResultsRevisionQuery": {
+        "properties": {
+          "revision": {
+            "description": "Revision returned by the catalog or array metadata response.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "type": "object"
+      },
+      "WorkspaceResultsSource": {
+        "description": "Namespace from which the provider resolved a result root.",
+        "enum": [
+          "workspace_item",
+          "current"
+        ],
+        "type": "string"
+      },
+      "WorkspaceResultsStatus": {
+        "enum": [
+          "ready",
+          "empty",
+          "partial",
+          "unavailable"
+        ],
+        "type": "string"
       },
       "WorkspaceRibbonReplaceRequest": {
         "properties": {
@@ -61395,6 +61879,251 @@
         ]
       }
     },
+    "/v2/sessions/current/data/results": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_results",
+        "parameters": [
+          {
+            "description": "Opaque revision-pinned cursor returned as `next_cursor`.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Requested page size; the server bounds it to 1000.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceResultsCatalog"
+                }
+              }
+            },
+            "description": "Bounded current-run result-folder catalog"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/results/arrays/{array_id}": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_results_arrays_array_id",
+        "parameters": [
+          {
+            "description": "Opaque array id from the catalog",
+            "in": "path",
+            "name": "array_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Revision returned by the catalog or array metadata response.",
+            "in": "query",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceResultArray"
+                }
+              }
+            },
+            "description": "Revision-pinned current-run array metadata"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/results/arrays/{array_id}/geometry": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_results_arrays_array_id_geometry",
+        "parameters": [
+          {
+            "description": "Opaque FEM array id from the catalog",
+            "in": "path",
+            "name": "array_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact revision returned by the selected playback or results-array\nmetadata endpoint.",
+            "in": "query",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`topology` returns FMMT v2; `support` returns FMSP v1.",
+            "in": "query",
+            "name": "part",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Revision-pinned exact FEM topology (FMMT v2) or active-node support (FMSP v1)"
+          },
+          "400": {
+            "description": "Invalid geometry part or result revision"
+          },
+          "404": {
+            "description": "The active result array is missing"
+          },
+          "409": {
+            "description": "The result revision or live session changed"
+          },
+          "422": {
+            "description": "The array has no exact FEM playback geometry"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/results/arrays/{array_id}/samples/{sample_index}": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_results_arrays_array_id_samples_sample_index",
+        "parameters": [
+          {
+            "description": "Opaque array id from the catalog",
+            "in": "path",
+            "name": "array_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Zero-based sample index",
+            "in": "path",
+            "name": "sample_index",
+            "required": true,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Revision returned by the catalog or array metadata response.",
+            "in": "query",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Revision-pinned current-run f64LE sample"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/results/entries/{entry_id}": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_results_entries_entry_id",
+        "parameters": [
+          {
+            "description": "Opaque entry id from the catalog",
+            "in": "path",
+            "name": "entry_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Revision returned by the catalog or array metadata response.",
+            "in": "query",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceResultEntryResponse"
+                }
+              }
+            },
+            "description": "Bounded current-run text/JSON/CSV preview"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
     "/v2/sessions/current/data/scalars": {
       "get": {
         "operationId": "data_get_sessions_current_data_scalars",
@@ -69411,7 +70140,7 @@
             }
           },
           {
-            "description": "Exact revision returned by `GET /v2/workspace/items/{id}/playback`.",
+            "description": "Exact revision returned by the selected playback or results-array\nmetadata endpoint.",
             "in": "query",
             "name": "revision",
             "required": true,
@@ -69451,6 +70180,281 @@
         },
         "tags": [
           "workspace_items"
+        ]
+      }
+    },
+    "/v2/workspace/items/{id}/results": {
+      "get": {
+        "operationId": "workspace_results_get_workspace_items_id_results",
+        "parameters": [
+          {
+            "description": "Result item id (decimal string)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque revision-pinned cursor returned as `next_cursor`.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Requested page size; the server bounds it to 1000.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceResultsCatalog"
+                }
+              }
+            },
+            "description": "Bounded result-folder catalog"
+          }
+        },
+        "tags": [
+          "workspace_results"
+        ]
+      }
+    },
+    "/v2/workspace/items/{id}/results/arrays/{array_id}": {
+      "get": {
+        "operationId": "workspace_results_get_workspace_items_id_results_arrays_array_id",
+        "parameters": [
+          {
+            "description": "Result item id (decimal string)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque array id from the catalog",
+            "in": "path",
+            "name": "array_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Revision returned by the catalog or array metadata response.",
+            "in": "query",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceResultArray"
+                }
+              }
+            },
+            "description": "Revision-pinned array metadata"
+          }
+        },
+        "tags": [
+          "workspace_results"
+        ]
+      }
+    },
+    "/v2/workspace/items/{id}/results/arrays/{array_id}/geometry": {
+      "get": {
+        "operationId": "workspace_results_get_workspace_items_id_results_arrays_array_id_geometry",
+        "parameters": [
+          {
+            "description": "Result item id (decimal string)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque FEM array id from the catalog",
+            "in": "path",
+            "name": "array_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact revision returned by the selected playback or results-array\nmetadata endpoint.",
+            "in": "query",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`topology` returns FMMT v2; `support` returns FMSP v1.",
+            "in": "query",
+            "name": "part",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Revision-pinned exact FEM topology (FMMT v2) or active-node support (FMSP v1)"
+          },
+          "400": {
+            "description": "Invalid geometry part or result revision"
+          },
+          "404": {
+            "description": "The result array is missing"
+          },
+          "409": {
+            "description": "The result revision changed"
+          },
+          "422": {
+            "description": "The array has no exact FEM playback geometry"
+          }
+        },
+        "tags": [
+          "workspace_results"
+        ]
+      }
+    },
+    "/v2/workspace/items/{id}/results/arrays/{array_id}/samples/{sample_index}": {
+      "get": {
+        "operationId": "workspace_results_get_workspace_items_id_results_arrays_array_id_samples_sample_index",
+        "parameters": [
+          {
+            "description": "Result item id (decimal string)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque array id from the catalog",
+            "in": "path",
+            "name": "array_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Zero-based sample index",
+            "in": "path",
+            "name": "sample_index",
+            "required": true,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Revision returned by the catalog or array metadata response.",
+            "in": "query",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Revision-pinned f64LE sample"
+          }
+        },
+        "tags": [
+          "workspace_results"
+        ]
+      }
+    },
+    "/v2/workspace/items/{id}/results/entries/{entry_id}": {
+      "get": {
+        "operationId": "workspace_results_get_workspace_items_id_results_entries_entry_id",
+        "parameters": [
+          {
+            "description": "Result item id (decimal string)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque entry id from the catalog",
+            "in": "path",
+            "name": "entry_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Revision returned by the catalog or array metadata response.",
+            "in": "query",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceResultEntryResponse"
+                }
+              }
+            },
+            "description": "Bounded text/JSON/CSV preview"
+          }
+        },
+        "tags": [
+          "workspace_results"
         ]
       }
     },
@@ -69697,6 +70701,10 @@
     {
       "description": "Per-user recent projects, scripts and result folders (shared workspace database)",
       "name": "workspace_items"
+    },
+    {
+      "description": "Bounded read-only result-folder and Zarr browser",
+      "name": "workspace_results"
     },
     {
       "description": "Analysis products such as eigenmodes and dispersion",

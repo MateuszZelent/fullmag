@@ -1,6 +1,8 @@
 //! Artifact writing: metadata, scalars CSV, field snapshots.
 
-use crate::artifact_pipeline::ArtifactPipelineSummary;
+use crate::artifact_pipeline::{
+    ArtifactPipelineSummary, FemAutosaveFieldLayout, FemAutosaveSample,
+};
 use crate::dispatch::{
     effective_fem_device_request, normalized_runtime_element_markers,
     requested_registry_device_for_fdm, runtime_device, runtime_precision,
@@ -14,7 +16,8 @@ use crate::types::{
     FemCpuRelaxationDemagPolicyMetadata, FemCpuRelaxationDemagTimingsNs,
     FemCpuRelaxationEnergyTerms, FemCpuRelaxationQualificationMetadata,
     FemGpuRelaxationAlgorithmPolicyMetadata, FemGpuRelaxationDevicePolicyMetadata,
-    FemGpuRelaxationQualificationMetadata, FinalExecutionResolutionProvenance, StepStats,
+    FemGpuRelaxationQualificationMetadata, FinalExecutionResolutionProvenance, RunStatus,
+    StepStats,
 };
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -312,6 +315,18 @@ pub(crate) fn artifact_provenance_json(
         serde_json::to_value(context.execution_mode).expect("execution mode must serialize"),
     );
     object.insert("build_identity".to_string(), build_identity_json());
+    // Bind each streamed array to its producing regular grid. Keep this
+    // compact: full support masks stay in their existing persisted assets.
+    if context.layout.get("backend").and_then(serde_json::Value::as_str) == Some("fdm") {
+        object.insert("field_geometry".to_string(), serde_json::json!({
+            "backend": "fdm",
+            "grid_cells": context.layout.get("grid_cells"),
+            "cell_size": context.layout.get("cell_size"),
+            "origin_m": context.layout.get("origin_m"),
+            "grid_fingerprint": context.layout.get("grid_fingerprint"),
+        }));
+    }
+
     if let Some(resolution) = context.execution_resolution.as_ref() {
         object.insert(
             "execution_resolution".to_string(),
@@ -1913,6 +1928,15 @@ fn collect_streamed_provenance_files(
             collect_streamed_provenance_files(&path, files)?;
             continue;
         }
+        // Portable playback sidecars are canonical typed payloads. They are
+        // deliberately published after execution provenance finalization and
+        // must not receive an extra `provenance` member on a resumed run.
+        if matches!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("geometry.json") | Some("playback.json")
+        ) {
+            continue;
+        }
         let is_zarr_attributes = path.file_name().and_then(|name| name.to_str()) == Some(".zattrs");
         if is_zarr_attributes
             || path.extension().and_then(|extension| extension.to_str()) == Some("json")
@@ -2342,6 +2366,225 @@ fn validate_immutable_generation_references(
     }
     Ok(())
 }
+/// Publish the portable FEM playback envelope beside a completed stage
+/// autosave.  The mesh and active-node support come from the exact execution
+/// plan, while stage times and storage layout are recorded by the writer at
+/// the point where each `m` sample is appended.  This intentionally refuses
+/// to recover either from array widths or from a later count-based guess.
+fn publish_fem_autosave_playback(
+    autosave_root: &Path,
+    autosave_target: &str,
+    problem: &fullmag_ir::ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    field_context: &FieldArtifactContext,
+    samples: &[FemAutosaveSample],
+) -> std::io::Result<()> {
+    let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
+        return Ok(());
+    };
+    if fem.fe_order != 1 || samples.is_empty() {
+        return Ok(());
+    }
+    let semantics = match &field_context.magnetization_field_semantics {
+        Ok(Some(semantics)) => semantics,
+        // Unsupported or invalid semantics must not acquire an apparently
+        // usable geometry descriptor as a side effect of autosave writing.
+        _ => return Ok(()),
+    };
+
+    let manifest_path = autosave_root.join(format!("{autosave_target}.autosave.json"));
+    if !manifest_path.is_file() {
+        return Ok(());
+    }
+    let manifest_bytes = fs::read(&manifest_path)?;
+    let manifest: crate::autosave_storage::AutosaveArtifactManifest =
+        serde_json::from_slice(&manifest_bytes).map_err(|error| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "FEM autosave manifest '{}' is malformed: {error}",
+                    manifest_path.display()
+                ),
+            )
+        })?;
+    if manifest.target != autosave_target || manifest.format != fullmag_ir::AutosaveFormatIR::Zarr {
+        return Ok(());
+    }
+
+    let candidate_stages = manifest
+        .stages
+        .iter()
+        .filter(|stage| {
+            stage.complete
+                && stage.format == fullmag_ir::AutosaveFormatIR::Zarr
+                && stage
+                    .field_quantities
+                    .iter()
+                    .any(|quantity| quantity == "m")
+        })
+        .collect::<Vec<_>>();
+    let mut playback_stages = Vec::new();
+    for stage in candidate_stages.iter().filter(|stage| {
+        // A resumed target can contain several completed stages with the
+        // same logical id. The samples captured by this writer belong to the
+        // newest one; never emit duplicate sidecar stage ids.
+        !candidate_stages
+            .iter()
+            .any(|newer| newer.stage_id == stage.stage_id && newer.stage_index > stage.stage_index)
+    }) {
+        let stage_samples = samples
+            .iter()
+            .filter(|sample| sample.stage_id == stage.stage_id)
+            .collect::<Vec<_>>();
+        if stage_samples.is_empty() {
+            continue;
+        }
+
+        let field_layout = stage_samples[0].field_layout;
+        if stage_samples
+            .iter()
+            .any(|sample| sample.field_layout != field_layout)
+        {
+            // A descriptor cannot safely explain a stage that mixed producer
+            // layouts.  Leave the run readable without a false mapping.
+            return Ok(());
+        }
+        let times_s = stage_samples
+            .iter()
+            .map(|sample| sample.time_s)
+            .collect::<Vec<_>>();
+        if times_s.is_empty()
+            || times_s.iter().any(|time| !time.is_finite())
+            || times_s.windows(2).any(|pair| pair[1] <= pair[0])
+        {
+            return Ok(());
+        }
+
+        let array_path = format!(
+            "{autosave_target}.zarr/stages/stage_{:04}_{}/fields/m",
+            stage.stage_index, stage.stage_id
+        );
+        let zarray_path = autosave_root.join(&array_path).join(".zarray");
+        let zarray_bytes = fs::read(&zarray_path)?;
+        let zarray: serde_json::Value = serde_json::from_slice(&zarray_bytes).map_err(|error| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!("FEM autosave array metadata is malformed: {error}"),
+            )
+        })?;
+        let shape = zarray
+            .get("shape")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|shape| {
+                if shape.len() != 2 {
+                    return None;
+                }
+                Some((
+                    usize::try_from(shape[0].as_u64()?).ok()?,
+                    usize::try_from(shape[1].as_u64()?).ok()?,
+                ))
+            });
+        let Some((frame_count, scalar_count)) = shape else {
+            return Ok(());
+        };
+        let expected_scalar_count =
+            semantics
+                .active_node_mask
+                .len()
+                .checked_mul(3)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::InvalidData,
+                        "FEM playback scalar count overflows usize",
+                    )
+                })?;
+        if frame_count != times_s.len() || scalar_count != expected_scalar_count {
+            return Ok(());
+        }
+        if zarray
+            .get("zarr_format")
+            .and_then(serde_json::Value::as_u64)
+            != Some(2)
+            || zarray.get("dtype").and_then(serde_json::Value::as_str) != Some("<f8")
+            || zarray.get("order").and_then(serde_json::Value::as_str) != Some("C")
+            || zarray.get("compressor") != Some(&serde_json::Value::Null)
+        {
+            return Ok(());
+        }
+
+        playback_stages.push(serde_json::json!({
+            "stage_id": stage.stage_id,
+            "array_path": array_path,
+            "times_s": times_s,
+            "quantity_ids": ["m"],
+            "field_layout": field_layout.as_str(),
+        }));
+    }
+    if playback_stages.is_empty() {
+        return Ok(());
+    }
+
+    let geometry = fullmag_session::solution_field_geometry::SavedFemP1FieldGeometry {
+        schema_version: fullmag_session::solution_field_geometry::FEM_P1_GEOMETRY_SCHEMA.into(),
+        coordinate_unit: "m".into(),
+        representation_evidence:
+            fullmag_session::solution_field_geometry::SavedFieldRepresentationEvidence::NotVerified,
+        mesh: fem.mesh.clone(),
+        field_semantics: semantics.clone(),
+    };
+    geometry.validate().map_err(|error| {
+        Error::new(
+            ErrorKind::InvalidData,
+            format!("FEM autosave geometry failed canonical validation: {error}"),
+        )
+    })?;
+    let geometry_bytes = serde_json::to_vec_pretty(&geometry).map_err(|error| {
+        Error::new(
+            ErrorKind::InvalidData,
+            format!("FEM autosave geometry cannot be serialized: {error}"),
+        )
+    })?;
+    if geometry_bytes.len() as u64
+        > fullmag_session::solution_field_geometry::MAX_FEM_P1_GEOMETRY_BYTES
+    {
+        return Ok(());
+    }
+    let geometry_sha256 = fullmag_session::hex_sha256(&geometry_bytes);
+    let geometry_path = autosave_root.join("geometry.json");
+    crate::autosave_zarr::write_json_atomic(&geometry_path, &geometry).map_err(|error| {
+        Error::new(
+            ErrorKind::Other,
+            format!(
+                "publish FEM autosave geometry '{}': {error}",
+                geometry_path.display()
+            ),
+        )
+    })?;
+
+    let playback = serde_json::json!({
+        "schema": "fullmag.saved_playback.v1",
+        "complete": true,
+        "name": format!("{} FEM H1/P1", problem.problem_meta.name),
+        "source_note": "runner-published from a completed FEM H1/P1 stage autosave; representation evidence is not_verified",
+        "fem_mesh": {
+            "geometry_path": "geometry.json",
+            "geometry_sha256": geometry_sha256,
+        },
+        "stages": playback_stages,
+    });
+    let playback_path = autosave_root.join("playback.json");
+    crate::autosave_zarr::write_json_atomic(&playback_path, &playback).map_err(|error| {
+        Error::new(
+            ErrorKind::Other,
+            format!(
+                "publish FEM autosave playback '{}': {error}",
+                playback_path.display()
+            ),
+        )
+    })?;
+    Ok(())
+}
+
 pub(crate) fn write_artifacts(
     output_dir: &Path,
     problem: &fullmag_ir::ProblemIR,
@@ -2733,6 +2976,24 @@ pub(crate) fn write_artifacts(
             frequency_publication_owner(problem)?,
             members,
         )?;
+    }
+
+    if executed.result.status == RunStatus::Completed {
+        if let Some(summary) = streamed {
+            if let (Some(autosave_root), Some(autosave_target)) = (
+                summary.autosave_root.as_deref(),
+                summary.autosave_target.as_deref(),
+            ) {
+                publish_fem_autosave_playback(
+                    autosave_root,
+                    autosave_target,
+                    problem,
+                    plan,
+                    &field_context,
+                    &summary.fem_autosave_samples,
+                )?;
+            }
+        }
     }
 
     Ok(())
@@ -6419,10 +6680,110 @@ mod tests {
     };
     use std::collections::HashMap;
     use std::fs;
+    use std::path::{Path, PathBuf};
     use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static FINAL_EXECUTION_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn fem_autosave_fixture_root(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-fem-autosave-playback-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create FEM autosave playback fixture root");
+        root
+    }
+
+    fn write_fem_autosave_fixture(
+        root: &Path,
+        target: &str,
+        stage_id: &str,
+        frame_count: usize,
+        scalar_width: usize,
+        shape: serde_json::Value,
+    ) {
+        let stage_root = root.join(format!("{target}.zarr/stages/stage_0000_{stage_id}"));
+        let array_root = stage_root.join("fields/m");
+        fs::create_dir_all(&array_root).expect("create FEM autosave array");
+        let rank = shape.as_array().expect("fixture shape array").len();
+        let chunks = if rank == 3 {
+            serde_json::json!([1, 3, scalar_width / 3])
+        } else {
+            serde_json::json!([1, scalar_width])
+        };
+        fs::write(
+            array_root.join(".zarray"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "zarr_format": 2,
+                "shape": shape,
+                "chunks": chunks,
+                "dtype": "<f8",
+                "compressor": null,
+                "fill_value": null,
+                "order": "C",
+                "filters": null,
+                "dimension_separator": "."
+            }))
+            .expect("serialize FEM autosave zarray"),
+        )
+        .expect("write FEM autosave zarray");
+        fs::write(
+            array_root.join(".zattrs"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "quantity": "m",
+                "dimension_order": ["sample", "value"],
+                "storage_layout": if rank == 3 {
+                    "soa_component_major"
+                } else {
+                    "aos_node_major"
+                },
+                "field_layout": if rank == 3 {
+                    "soa_component_major"
+                } else {
+                    "aos_node_major"
+                }
+            }))
+            .expect("serialize FEM autosave attrs"),
+        )
+        .expect("write FEM autosave attrs");
+
+        let stage_manifest = serde_json::json!({
+            "schema_version": "fullmag.stage_autosave.v1",
+            "target": target,
+            "stage_id": stage_id,
+            "stage_index": 0,
+            "layout": "continuous",
+            "format": "zarr",
+            "table_quantities": [],
+            "field_quantities": ["m"],
+            "complete": true,
+            "table_sample_count": 0,
+            "field_sample_count": frame_count,
+        });
+        fs::write(
+            stage_root.join("manifest.json"),
+            serde_json::to_vec_pretty(&stage_manifest).expect("serialize stage manifest"),
+        )
+        .expect("write stage manifest");
+
+        let artifact_manifest = serde_json::json!({
+            "schema_version": "fullmag.stage_autosave.artifact.v1",
+            "target": target,
+            "format": "zarr",
+            "layout": "continuous",
+            "stages": [stage_manifest],
+        });
+        fs::write(
+            root.join(format!("{target}.autosave.json")),
+            serde_json::to_vec_pretty(&artifact_manifest).expect("serialize artifact manifest"),
+        )
+        .expect("write artifact manifest");
+    }
 
     #[test]
     fn artifact_provenance_preserves_fem_gpu_execution_receipt_verbatim() {
@@ -6468,6 +6829,260 @@ mod tests {
         assert_eq!(receipt["hot_loop_compute_h2d_bytes"], 24);
         assert_eq!(receipt["hot_loop_compute_d2h_bytes"], 24);
         assert_eq!(receipt["hot_loop_compute_host_sync_count"], 2);
+    }
+
+    #[test]
+    fn fdm_streamed_artifact_provenance_binds_compact_field_geometry() {
+        let context = FieldArtifactContext {
+            problem_name: "fdm-geometry".into(),
+            ir_version: "v0".into(),
+            source_hash: None,
+            execution_mode: ExecutionMode::Strict,
+            layout: serde_json::json!({
+                "backend": "fdm",
+                "grid_cells": [4, 3, 2],
+                "cell_size": [1.0e-9, 2.0e-9, 3.0e-9],
+                "origin_m": [0.0, 1.0, 2.0],
+                "grid_fingerprint": "grid-v1",
+            }),
+            magnetization_field_semantics: Ok(None),
+            execution_resolution: None,
+        };
+
+        assert_eq!(
+            artifact_provenance_json(&context, &ExecutionProvenance::default())["field_geometry"],
+            serde_json::json!({
+                "backend": "fdm",
+                "grid_cells": [4, 3, 2],
+                "cell_size": [1.0e-9, 2.0e-9, 3.0e-9],
+                "origin_m": [0.0, 1.0, 2.0],
+                "grid_fingerprint": "grid-v1",
+            })
+        );
+    }
+
+    #[test]
+    fn fem_autosave_playback_publishes_canonical_same_root_descriptor() {
+        let root = fem_autosave_fixture_root("valid");
+        let problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let plan = test_fem_execution_plan();
+        let context = build_field_context(&problem, &plan);
+        let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
+            panic!("fixture plan must be FEM");
+        };
+        let scalar_width = fem.mesh.nodes.len() * 3;
+        write_fem_autosave_fixture(
+            &root,
+            "state",
+            "propagate",
+            2,
+            scalar_width,
+            serde_json::json!([2, scalar_width]),
+        );
+
+        publish_fem_autosave_playback(
+            &root,
+            "state",
+            &problem,
+            &plan,
+            &context,
+            &[
+                FemAutosaveSample {
+                    stage_id: "propagate".into(),
+                    time_s: 1.0e-12,
+                    field_layout: FemAutosaveFieldLayout::AosNodeMajor,
+                },
+                FemAutosaveSample {
+                    stage_id: "propagate".into(),
+                    time_s: 2.0e-12,
+                    field_layout: FemAutosaveFieldLayout::AosNodeMajor,
+                },
+            ],
+        )
+        .expect("valid FEM autosave should publish playback");
+
+        let playback_bytes = fs::read(root.join("playback.json")).expect("playback sidecar");
+        let playback: serde_json::Value =
+            serde_json::from_slice(&playback_bytes).expect("playback JSON");
+        assert_eq!(playback["schema"], "fullmag.saved_playback.v1");
+        assert_eq!(playback["complete"], true);
+        assert_eq!(playback["fem_mesh"]["geometry_path"], "geometry.json");
+        assert_eq!(playback["stages"][0]["stage_id"], "propagate");
+        assert_eq!(
+            playback["stages"][0]["array_path"],
+            "state.zarr/stages/stage_0000_propagate/fields/m"
+        );
+        assert_eq!(
+            playback["stages"][0]["times_s"],
+            serde_json::json!([1.0e-12, 2.0e-12])
+        );
+        assert_eq!(
+            playback["stages"][0]["quantity_ids"],
+            serde_json::json!(["m"])
+        );
+        assert_eq!(playback["stages"][0]["field_layout"], "aos_node_major");
+        let field_attrs: serde_json::Value = serde_json::from_slice(
+            &fs::read(root.join("state.zarr/stages/stage_0000_propagate/fields/m/.zattrs"))
+                .expect("field attrs"),
+        )
+        .expect("field attrs JSON");
+        assert_eq!(field_attrs["storage_layout"], "aos_node_major");
+        assert_eq!(field_attrs["field_layout"], "aos_node_major");
+
+        let geometry_bytes = fs::read(root.join("geometry.json")).expect("geometry sidecar");
+        let geometry_hash = fullmag_session::hex_sha256(&geometry_bytes);
+        assert_eq!(playback["fem_mesh"]["geometry_sha256"], geometry_hash);
+        let geometry_reference = fullmag_session::solution_field_geometry::SavedFieldGeometryRef {
+            schema_id: fullmag_session::solution_field_geometry::FEM_P1_GEOMETRY_SCHEMA.into(),
+            object_ref: geometry_hash,
+            byte_length: geometry_bytes.len() as u64,
+        };
+        let geometry = fullmag_session::solution_field_geometry::parse_saved_fem_p1_geometry(
+            &geometry_bytes,
+            &geometry_reference,
+        )
+        .expect("published geometry should satisfy the canonical saved FEM parser");
+        assert_eq!(geometry.mesh, fem.mesh);
+        assert_eq!(
+            geometry.field_semantics,
+            context
+                .magnetization_field_semantics
+                .as_ref()
+                .expect("FEM semantics should be available")
+                .as_ref()
+                .expect("FEM semantics should be present")
+                .clone()
+        );
+
+        fs::remove_dir_all(root).expect("remove FEM autosave playback fixture");
+    }
+
+    #[test]
+    fn fem_autosave_playback_refuses_unsupported_semantics_or_mixed_layout() {
+        let unsupported_root = fem_autosave_fixture_root("unsupported-semantics");
+        let problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let plan = test_fem_execution_plan();
+        let mut unsupported_context = build_field_context(&problem, &plan);
+        unsupported_context.magnetization_field_semantics = Ok(None);
+        let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
+            panic!("fixture plan must be FEM");
+        };
+        let scalar_width = fem.mesh.nodes.len() * 3;
+        write_fem_autosave_fixture(
+            &unsupported_root,
+            "state",
+            "propagate",
+            2,
+            scalar_width,
+            serde_json::json!([2, scalar_width]),
+        );
+        let samples = vec![
+            FemAutosaveSample {
+                stage_id: "propagate".into(),
+                time_s: 1.0e-12,
+                field_layout: FemAutosaveFieldLayout::AosNodeMajor,
+            },
+            FemAutosaveSample {
+                stage_id: "propagate".into(),
+                time_s: 2.0e-12,
+                field_layout: FemAutosaveFieldLayout::AosNodeMajor,
+            },
+        ];
+        publish_fem_autosave_playback(
+            &unsupported_root,
+            "state",
+            &problem,
+            &plan,
+            &unsupported_context,
+            &samples,
+        )
+        .expect("unsupported semantics should fail closed");
+        assert!(!unsupported_root.join("playback.json").exists());
+        assert!(!unsupported_root.join("geometry.json").exists());
+        fs::remove_dir_all(unsupported_root).expect("remove unsupported semantics fixture");
+
+        let mixed_root = fem_autosave_fixture_root("mixed-layout");
+        let context = build_field_context(&problem, &plan);
+        write_fem_autosave_fixture(
+            &mixed_root,
+            "state",
+            "propagate",
+            2,
+            scalar_width,
+            serde_json::json!([2, scalar_width]),
+        );
+        let mut mixed_samples = samples;
+        mixed_samples[1].field_layout = FemAutosaveFieldLayout::SoaComponentMajor;
+        publish_fem_autosave_playback(
+            &mixed_root,
+            "state",
+            &problem,
+            &plan,
+            &context,
+            &mixed_samples,
+        )
+        .expect("mixed producer layouts should fail closed");
+        assert!(!mixed_root.join("playback.json").exists());
+        assert!(!mixed_root.join("geometry.json").exists());
+        fs::remove_dir_all(mixed_root).expect("remove mixed-layout fixture");
+    }
+
+    #[test]
+    fn fem_autosave_playback_refuses_partial_or_nonportable_array_shape() {
+        let problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let plan = test_fem_execution_plan();
+        let context = build_field_context(&problem, &plan);
+        let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
+            panic!("fixture plan must be FEM");
+        };
+        let scalar_width = fem.mesh.nodes.len() * 3;
+        let samples = vec![FemAutosaveSample {
+            stage_id: "propagate".into(),
+            time_s: 1.0e-12,
+            field_layout: FemAutosaveFieldLayout::AosNodeMajor,
+        }];
+
+        let partial_root = fem_autosave_fixture_root("partial");
+        write_fem_autosave_fixture(
+            &partial_root,
+            "state",
+            "propagate",
+            2,
+            scalar_width,
+            serde_json::json!([2, scalar_width]),
+        );
+        publish_fem_autosave_playback(&partial_root, "state", &problem, &plan, &context, &samples)
+            .expect("partial producer samples should fail closed");
+        assert!(!partial_root.join("playback.json").exists());
+        assert!(!partial_root.join("geometry.json").exists());
+        fs::remove_dir_all(partial_root).expect("remove partial fixture");
+
+        let shape_root = fem_autosave_fixture_root("rank3");
+        write_fem_autosave_fixture(
+            &shape_root,
+            "state",
+            "propagate",
+            2,
+            scalar_width,
+            serde_json::json!([2, 3, fem.mesh.nodes.len()]),
+        );
+        let samples = vec![
+            FemAutosaveSample {
+                stage_id: "propagate".into(),
+                time_s: 1.0e-12,
+                field_layout: FemAutosaveFieldLayout::SoaComponentMajor,
+            },
+            FemAutosaveSample {
+                stage_id: "propagate".into(),
+                time_s: 2.0e-12,
+                field_layout: FemAutosaveFieldLayout::SoaComponentMajor,
+            },
+        ];
+        publish_fem_autosave_playback(&shape_root, "state", &problem, &plan, &context, &samples)
+            .expect("nonportable rank-3 autosave shape should fail closed");
+        assert!(!shape_root.join("playback.json").exists());
+        assert!(!shape_root.join("geometry.json").exists());
+        fs::remove_dir_all(shape_root).expect("remove nonportable shape fixture");
     }
 
     #[test]
@@ -9724,6 +10339,8 @@ mod tests {
             field_snapshot_writer_wall_time_ns: 80,
             native_field_snapshot_writer_wall_time_ns: 0,
             autosave_root: None,
+            autosave_target: None,
+            fem_autosave_samples: Vec::new(),
         };
 
         write_artifacts(&output_dir, &problem, &plan, &executed, Some(&streamed))
