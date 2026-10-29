@@ -256,6 +256,47 @@ Dokładnie przypięte częściowe zakończenie można dokończyć tym samym żą
 reset, ponowienie Solve ani automatyczne odtworzenie zaakceptowanego skryptu.
 Implementacja i regresje źródłowe nie zastępują testu tej operacji w Dockerze.
 
+Zarządzany wrapper dla działającego diagnostycznego backendu:
+
+```text
+just docker-dev-cancel-failed-no-spawn <source_root> <backend_id> <image_id> <process_receipt_sha256> <request.json> <request_sha256> false
+```
+
+Ostatni argument `false` wykonuje podgląd. `true` wywołuje istniejący operator
+natywny dokładnie raz, wewnątrz przypiętego backendu i pod lease operacji grupy.
+Wrapper wymaga prywatnego ledgeru DEV, aktualnych immutable development/Compose
+receiptów oraz identycznych pinów native. Publikuje trwały wynik natywny przed
+oddaniem odpowiedzi i osobny record `fullmag.docker-no-spawn-cancellation.v1`
+z referencją `no-spawn-cancellation/current.json`. Niepewne zakończenie zachowuje
+lease operacji do inspekcji; nie jest zgodą na ponowienie.
+
+Wrapper przygotowuje image-owned środowisko CPU CUDA ABI tak samo jak
+entrypoint i sprawdza zależności loadera przed przyjęciem operacji oraz przed
+wywołaniem native. Historyczny błąd tego wrappera, w którym loader odmówił
+załadowania `libcuda.so.1`, ma wąską ścieżkę technicznego zakończenia operacji:
+do recepty po argumencie `apply` przekazuje się attempt i SHA niepewnego
+receiptu. Wymaga ona rozpoznanej wersji wykonawcy, dokładnego błędu loadera,
+niezmienionych danych runu i niewykorzystanej bramki pod istniejącymi lockami.
+Zachowuje oryginalny receipt oraz żądanie; tylko pierwotny helper zwalnia swój
+lease po publikacji terminala technicznego. Nie rozlicza zadania ani native
+zasobów i nie obejmuje innych niepewnych zakończeń operatora.
+
+Po potwierdzonej cancellation, dla profilu Linux z zachowanym niepustym store,
+`docker-dev-stop-failed` ma osobną ścieżkę
+`native-runtime-supervision-linux-retained`. Sprawdza natywny wynik, wszystkie
+lease/rezerwacje, pełny bounded inventory runów, immutable CAS i runy manualne
+bez release/claim. Zatrzymuje wyłącznie przypiętą prywatną parę usług; zachowuje
+owner `Failed` oraz receipt `shutdown_unknown`, nie przedstawia ich jako drain.
+Recreate ponownie sprawdza ten sam dowód i zachowuje state/user-data. Poprzednia
+ścieżka Windows i klasyfikator API exit-101 mają niezmienione warunki.
+
+Przy braku aktualnej próbki compute-node przed spawnem scheduler zachowuje
+typ `ComputeNodeSampleNotCurrent` i szczegółową przyczynę. Po ograniczonym retry
+oddaje sterowanie pętli jako `WorkerLaunchDeferred`, zwalniając tylko slot
+supervisora. Claim, Start, lease i niewykorzystany permit pozostają bez zmian;
+drain i cancellation mogą być obsługiwane. Nieaktualna próbka nadal blokuje
+spawn; błędy konfiguracji, ownera i uszkodzonego rekordu pozostają fatalne.
+
 ### Kontrolowane odtworzenie terminalnego failed run
 
 Jeżeli własny backend zakończył się terminalnym błędem, a jego usługi są

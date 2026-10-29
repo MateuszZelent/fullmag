@@ -2,6 +2,8 @@ import type {
   DecodedComplexFieldVector,
   DecodedFieldVector,
 } from "@/kernel/api/codecs";
+import { isTensorFrobeniusSurfaceField } from "@/kernel/api/tensorFieldProjection";
+import type { Viewport3DFieldColorBuildTarget } from "./field-colors/viewport3dFieldColorBuildModel";
 import type { SurfaceFieldProjectionMode } from "@/kernel/visualization/ObjectVisualizationController";
 
 import { buildFdmFieldIndexResolver } from "./model/fdmFieldIndexing";
@@ -9,6 +11,7 @@ import { srgbToLinearChannel } from "./viewport3dColorSpace";
 
 import {
   normalizeViewport3DVectorColorMode,
+  normalizeViewport3DScalarColorValue,
   resolveViewport3DVectorColorRgb,
   resolveViewport3DVectorColorScalar,
   type Viewport3DScalarColorRange,
@@ -64,6 +67,9 @@ export interface Viewport3DProjectionNodeMembership {
 }
 
 export interface ScalarColorBuffer {
+  tensorRows?: readonly [Float32Array, Float32Array, Float32Array];
+  tensorScale?: number;
+  tensorCarrierKey?: string;
   amplitudeScale?: number;
   buildKey?: string;
   colors: Float32Array;
@@ -182,6 +188,8 @@ export function buildVertexScalarColors(
   ) {
     return null;
   }
+
+  if (isTensorFrobeniusSurfaceField(fieldVector)) return buildTensorSurfaceColorBuffer(fieldVector, { kind: "full-domain", vertexCount }, colorPalette, scalarRange);
 
   return buildVertexScalarColorsUnchecked(
     fieldVector,
@@ -363,6 +371,8 @@ export function buildMappedVertexScalarColors(
     return null;
   }
 
+  if (isTensorFrobeniusSurfaceField(fieldVector)) return buildTensorSurfaceColorBuffer(fieldVector, { kind: "mapped-vertices", vertexCount, targetNodeIndices: targetNodeIndices }, colorPalette, scalarRange);
+
   const range =
     resolveProvidedScalarRange(scalarRange) ??
     resolveScalarRange(fieldVector, resolvedColorMode, colorPalette);
@@ -433,6 +443,8 @@ export function buildSurfaceFaceScalarColors(
   ) {
     return null;
   }
+
+  if (isTensorFrobeniusSurfaceField(fieldVector)) return buildTensorSurfaceColorBuffer(fieldVector, { kind: "surface-faces", vertexCount, surfaceIndices, targetNodeIndices: targetNodeIndices instanceof Uint32Array ? targetNodeIndices : targetNodeIndices ? Uint32Array.from(targetNodeIndices) : null }, colorPalette, scalarRange);
 
   const nodeToFieldIndex = buildNodeToFieldIndexMap(
     fieldVector,
@@ -591,6 +603,8 @@ export function buildThicknessAverageZScalarColors(
   ) {
     return null;
   }
+
+  if (isTensorFrobeniusSurfaceField(fieldVector)) return buildTensorSurfaceColorBuffer(fieldVector, { kind: "thickness-average-z", vertexCount, positions: positions instanceof Float32Array ? positions : Float32Array.from(positions), surfaceIndices, targetNodeIndices: targetNodeIndices instanceof Uint32Array ? targetNodeIndices : targetNodeIndices ? Uint32Array.from(targetNodeIndices) : null }, colorPalette, scalarRange);
 
   const nodeToFieldIndex = buildNodeToFieldIndexMap(
     fieldVector,
@@ -937,6 +951,7 @@ export async function buildVertexScalarColorsChunked(
   options: ChunkedFieldTransformOptions = {},
 ): Promise<ScalarColorBuffer | null> {
   const chunkSize = Math.max(Math.floor(options.chunkSize ?? 10_000), 1);
+  if (isTensorFrobeniusSurfaceField(fieldVector)) return buildTensorSurfaceColorBuffer(fieldVector, { kind: "full-domain", vertexCount: fieldVector.pointCount }, options.colorPalette ?? "viridis", options.scalarRange);
   const colorMode = normalizeViewport3DVectorColorMode(
     options.colorMode,
     "magnitude",
@@ -1010,7 +1025,9 @@ export function fieldVectorSupportsScalarColorMode(
   fieldVector: Pick<Viewport3DFieldVector, "nComp">,
   colorMode: Viewport3DVectorColorMode,
 ): boolean {
-  return colorMode !== "orientation" || fieldVector.nComp >= 3;
+  if (isTensorFrobeniusSurfaceField(fieldVector)) return colorMode === "magnitude";
+  return (fieldVector.nComp === 1 || fieldVector.nComp === 3) &&
+    (colorMode !== "orientation" || fieldVector.nComp === 3);
 }
 
 export function fieldVectorUsesDirectNodeOrder(
@@ -1144,6 +1161,7 @@ export function resolveScalarRange(
     return { max: 0, min: 0 };
   }
 
+  if (isTensorFrobeniusSurfaceField(fieldVector)) min = 0;
   return resolveDivergingSymmetricRange(
     { max, min },
     resolvedColorMode,
@@ -1795,6 +1813,11 @@ function colorAt(
   colorPalette = "viridis",
 ): [number, number, number] {
   const offset = pointIndex * fieldVector.nComp;
+  if (isTensorFrobeniusSurfaceField(fieldVector)) {
+    let norm = 0;
+    for (let c = 0; c < 9; c++) norm = Math.hypot(norm, fieldVector.values[offset + c]);
+    return resolveViewport3DVectorColorRgb("magnitude", norm, 0, 0, range, normalizeScalarValue(norm, range), colorPalette) ?? [1, 1, 1];
+  }
   if (fieldVector.nComp === 1) {
     const value = fieldVector.values[offset] ?? 0;
     return resolveViewport3DVectorColorRgb(
@@ -1851,18 +1874,7 @@ function normalizeScalarValue(
   value: number,
   range: Viewport3DScalarColorRange,
 ): number {
-  if (
-    !range ||
-    !Number.isFinite(value) ||
-    !Number.isFinite(range.min) ||
-    !Number.isFinite(range.max)
-  ) {
-    return 0.5;
-  }
-  const scale = Math.max(Math.abs(range.max), Math.abs(range.min));
-  const span = range.max - range.min;
-  if (span <= 1e-6 * Math.max(scale, 1)) return 0.5;
-  return Math.min(Math.max((value - range.min) / span, 0), 1);
+  return range ? normalizeViewport3DScalarColorValue(value, range) : 0.5;
 }
 
 /**
@@ -1898,10 +1910,148 @@ function shaderVectorModeSupports(
   mode: Viewport3DVectorColorMode,
   fieldVector: Viewport3DFieldVector,
 ): boolean {
-  return mode === "orientation" && fieldVector.nComp >= 3;
+  return mode === "orientation" && fieldVector.nComp === 3;
 }
 
 export const resolveScalarRangeChunkedForTests = resolveScalarRangeChunked;
 export const scalarRangeFromValuesForTests = scalarRangeFromValues;
 export const normalizeScalarValueFieldMappingForTests = normalizeScalarValue;
 export const normalizeScalarValueForShaderAttributeFieldMappingForTests = normalizeScalarValueForShaderAttribute;
+
+const tensorSurfaceBuffers = new WeakMap<Viewport3DFieldVector, Map<string, ScalarColorBuffer>>();
+const tensorTargetIds = new WeakMap<object, number>();
+let tensorNextTargetId = 0;
+function tensorTargetId(value: object | null | undefined): number {
+  if (!value) return 0;
+  let id = tensorTargetIds.get(value);
+  if (!id) { id = ++tensorNextTargetId; tensorTargetIds.set(value, id); }
+  return id;
+}
+
+/** Full tensor shader carrier, with reduction applied component by component before any norm. */
+function* tensorSurfaceColorBufferSteps(
+  field: Viewport3DFieldVector,
+  target: Viewport3DFieldColorBuildTarget,
+  colorPalette = "viridis",
+  scalarRange?: ScalarRange | null,
+): Generator<void, ScalarColorBuffer | null> {
+  if (!isTensorFrobeniusSurfaceField(field)) return null;
+  const key = JSON.stringify([target.kind, "vertexCount" in target ? target.vertexCount : 0,
+    tensorTargetId("pointIndices" in target ? target.pointIndices : null),
+    tensorTargetId("targetNodeIndices" in target ? target.targetNodeIndices : null),
+    tensorTargetId("surfaceIndices" in target ? target.surfaceIndices : null),
+    tensorTargetId("positions" in target ? target.positions : null)]);
+  const cached = tensorSurfaceBuffers.get(field)?.get(key);
+  if (cached) return { ...cached, colorPalette, range: scalarRange ?? cached.range };
+
+  const vertexCount = target.kind === "sampled" ? target.pointIndices.length : target.vertexCount;
+  const nodeMap = target.kind === "sampled" ? null : buildNodeToFieldIndexMap(field, vertexCount,
+    "targetNodeIndices" in target ? target.targetNodeIndices : null);
+  if (target.kind !== "sampled" && !nodeMap) return null;
+  let scale = 0;
+  let processed = 0;
+  for (const value of field.values) {
+    if (++processed % 8192 === 0) yield;
+    if (!Number.isFinite(value)) return null;
+    scale = Math.max(scale, Math.abs(value));
+  }
+  scale = scale || 1;
+  const outputCount = "surfaceIndices" in target ? target.surfaceIndices.length : vertexCount;
+  const rows: [Float32Array, Float32Array, Float32Array] = [0, 1, 2].map(() => new Float32Array(outputCount * 3)) as [Float32Array, Float32Array, Float32Array];
+  let max = 0;
+  const columns = new Map<string, { count: number; sums: Float64Array }>();
+  const nodeColumns = new Map<number, string>();
+  if (target.kind === "thickness-average-z") {
+    const bounds = worldZProjectionBounds(target.positions, vertexCount, null);
+    if (!bounds) return null;
+    const tolerance = worldZProjectionTolerance(bounds);
+    for (const [node, index] of nodeMap!) {
+      if (index % 8192 === 0) yield;
+      const key = `${Math.round(target.positions[node * 3] / tolerance)}:${Math.round(target.positions[node * 3 + 1] / tolerance)}`;
+      const column = columns.get(key) ?? { count: 0, sums: new Float64Array(9) };
+      column.count++;
+      for (let c = 0; c < 9; c++) column.sums[c] += field.values[index * 9 + c] / scale;
+      columns.set(key, column); nodeColumns.set(node, key);
+    }
+    let minimumCount = Infinity;
+    for (const column of columns.values()) minimumCount = Math.min(minimumCount, column.count);
+    if (resolveWorldZProjectionSuitability({ samplesPerBinMin: minimumCount, tolerance,
+      xExtent: bounds.maxX - bounds.minX, yExtent: bounds.maxY - bounds.minY, zExtent: bounds.maxZ - bounds.minZ }) !== "world_z_thin_film") return null;
+  }
+  const at = (node: number, c: number): number | null => {
+    const index = nodeMap?.get(node);
+    if (index === undefined) return null;
+    if (target.kind === "thickness-average-z") {
+      const column = columns.get(nodeColumns.get(node)!);
+      return column ? column.sums[c] / column.count : null;
+    }
+    return field.values[index * 9 + c] / scale;
+  };
+  const write = (output: number, component: number, value: number) => { rows[Math.floor(component / 3)][output * 3 + component % 3] = value; };
+  if ("surfaceIndices" in target) {
+    for (let face = 0; face < outputCount; face += 3) {
+      if (face % 8192 === 0) yield;
+      let norm = 0;
+      for (let c = 0; c < 9; c++) {
+        const a = at(target.surfaceIndices[face], c), b = at(target.surfaceIndices[face + 1], c), d = at(target.surfaceIndices[face + 2], c);
+        if (a === null || b === null || d === null) return null;
+        const average = (a + b + d) / 3;
+        for (let vertex = 0; vertex < 3; vertex++) write(face + vertex, c, average);
+        norm = Math.hypot(norm, average);
+      }
+      max = Math.max(max, norm * scale);
+    }
+  } else if (target.kind === "sampled") {
+    for (let vertex = 0; vertex < outputCount; vertex++) {
+      if (vertex % 8192 === 0) yield;
+      const index = target.pointIndices[vertex];
+      if (index >= field.pointCount) return null;
+      let norm = 0;
+      for (let c = 0; c < 9; c++) { const value = field.values[index * 9 + c] / scale; write(vertex, c, value); norm = Math.hypot(norm, value); }
+      max = Math.max(max, norm * scale);
+    }
+  } else {
+    for (const [node, index] of nodeMap!) {
+      if (index % 8192 === 0) yield;
+      let norm = 0;
+      for (let c = 0; c < 9; c++) { const value = field.values[index * 9 + c] / scale; write(node, c, value); norm = Math.hypot(norm, value); }
+      max = Math.max(max, norm * scale);
+    }
+  }
+  if (!Number.isFinite(max)) return null;
+  const result: ScalarColorBuffer = { colors: new Float32Array(0), tensorRows: rows, tensorScale: scale, tensorCarrierKey: `${tensorTargetId(field)}:${key}`, colorMode: "magnitude", colorPalette, quantityId: field.quantityId,
+    geometryRole: "surfaceIndices" in target ? "face_expanded_surface" : "indexed_topology",
+    range: { min: 0, max }, rangeSource: scalarRange ? "manual" : "projected_values",
+    projectionMode: target.kind === "surface-faces" ? "surface_faces" : target.kind === "thickness-average-z" ? "thickness_average_z" : "raw_nodal" };
+  let cache = tensorSurfaceBuffers.get(field);
+  if (!cache) { cache = new Map(); tensorSurfaceBuffers.set(field, cache); }
+  const bytes = rows.reduce((total, row) => total + row.byteLength, 0);
+  if (bytes <= 64 * 1024 * 1024) {
+    let retainedBytes = bytes;
+    for (const retained of cache.values()) retainedBytes += retained.tensorRows!.reduce((total, row) => total + row.byteLength, 0);
+    while (cache.size > 0 && (cache.size >= 4 || retainedBytes > 64 * 1024 * 1024)) {
+      const oldestKey = cache.keys().next().value!;
+      retainedBytes -= cache.get(oldestKey)!.tensorRows!.reduce((total, row) => total + row.byteLength, 0);
+      cache.delete(oldestKey);
+    }
+    cache.set(key, result);
+  }
+  return scalarRange ? { ...result, range: scalarRange, rangeSource: "manual" } : result;
+}
+
+export function buildTensorSurfaceColorBuffer(field: Viewport3DFieldVector, target: Viewport3DFieldColorBuildTarget,
+  colorPalette = "viridis", scalarRange?: ScalarRange | null): ScalarColorBuffer | null {
+  const steps = tensorSurfaceColorBufferSteps(field, target, colorPalette, scalarRange);
+  for (;;) { const step = steps.next(); if (step.done) return step.value; }
+}
+
+export async function buildTensorSurfaceColorBufferChunked(field: Viewport3DFieldVector, target: Viewport3DFieldColorBuildTarget,
+  options: ChunkedFieldTransformOptions): Promise<ScalarColorBuffer | null> {
+  const steps = tensorSurfaceColorBufferSteps(field, target, options.colorPalette ?? "viridis", options.scalarRange);
+  for (;;) {
+    throwIfAborted(options.signal);
+    const step = steps.next();
+    if (step.done) return step.value;
+    await (options.yieldToMain?.() ?? Promise.resolve());
+  }
+}

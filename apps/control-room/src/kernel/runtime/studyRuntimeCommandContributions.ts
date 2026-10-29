@@ -771,8 +771,8 @@ function restoreCheckpointDisabledReason(context: CommandContext): string | null
 
   const checkpoint = resolveCheckpointForRestore(context);
   if (!checkpoint) return "No checkpoint is selected.";
-  if (checkpoint.resume_class === "config_only") {
-    return "Selected checkpoint does not contain magnetization state.";
+  if (checkpoint.resume_class !== "exact_resume") {
+    return `Selected checkpoint cannot be resumed exactly (${checkpoint.resume_class}).`;
   }
   return null;
 }
@@ -1237,7 +1237,7 @@ function resolveHysteresisLoopCommandInput(
   };
 }
 
-function hysteresisPointSelectionPayload(input: HysteresisPointCommandInput) {
+export function hysteresisPointSelectionPayload(input: HysteresisPointCommandInput) {
   return {
     kind: "analysis.chart-point" as const,
     label: `Point ${input.point.point_id} (${input.point.field_value_mT} mT)`,
@@ -2440,6 +2440,12 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
         ),
       });
       if (outcome.kind === "rejected") return outcome.result;
+      if (outcome.kind === "server-prepares") {
+        return {
+          message: "No live preparation is published; Compute prepares the accepted run.",
+          status: "failed",
+        };
+      }
       const planFingerprint =
         outcome.kind === "materialized"
           ? outcome.resource.plan_fingerprint

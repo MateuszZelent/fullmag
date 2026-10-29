@@ -1,0 +1,108 @@
+{
+  "schema": "fullmag.results-browser.integration-checkpoint.v1",
+  "scope": "Completion receipt compatibility/integrity and group-aware frontend refresh; full Results UI qualification remains open",
+  "source": {
+    "head": "ef3cb578032d734404642cb58369c43b31262075",
+    "merge_head": "82a43e62041c1e7f2a1e6bf311aaae7449240931",
+    "file_sha256": {
+      "crates/fullmag-api/src/accepted_study_worker.rs": "3bc715464678280ae7b3c5efeafc40f74556b916bf63649b636ac279fc5d73ae",
+      "crates/fullmag-api/src/accepted_worker_execution_receipt.rs": "67bbe78469a1b7a3225411f6483d51672b16c0b8f3b308c432fdc06c96c18b38",
+      "crates/fullmag-api/src/accepted_study_supervisor.rs": "1a5b94ddc9ccda9dc2360c1bc42abd4857c515a580f5863a1c5a849edde88b87",
+      "crates/fullmag-api/src/failed_worker_recovery.rs": "5a4bf242fb000855af697ad29e36811cd4b074e236e12684768f21cd762e1f01",
+      "crates/fullmag-api/src/live_accepted_projection.rs": "273c199dfaf8ad076904dc96118285b47ffff5a14335d25718b33e1b8303b9dc",
+      "crates/fullmag-session/src/runtime_service/retained_attempt_histories.rs": "5a78677528b948f211288a47150a67020b9c48c7c2e51a0a4491cf348edad389",
+      "scripts/docker_volume_dev.py": "d007fe40bc9064055bd962073b58d1c5e3b69beaacbaac4eb1e161db3e32f558",
+      "scripts/test_docker_volume_frontend_recovery.py": "f7eb0e13b25780a4aedcd62726f88d95972b192f176d47d802313926fbf5c671",
+      "apps/control-room/scripts/check-saved-playback-browser.mjs": "ddc3edf588c29a838965bdad2882df46d00a06808af1c7993de0f23cbd988130"
+    }
+  },
+  "native": {
+    "iteration": "43bd4379171143e692b0b9a03589ba82",
+    "snapshot": "a8b46a957897aeb3d4243a8c3329a998f72e957c7ee57f9af0ef70170d35fc91",
+    "state": "succeeded",
+    "limitation": "Frontend-refresh helper correction and diagnostic harness were edited after this capture and require managed refresh"
+  },
+  "tests": {
+    "rust_unique_passed": 56,
+    "frontend_refresh_python_passed": 22,
+    "frontend_refresh_python_subtests_passed": 35,
+    "logs": [
+      {
+        "path": "/build/results-v3-verification/a8b46a957897/completion.log",
+        "sha256": "110bf2915b5f360783144d3d94ee2ec3736c541da476b77ab98b7f83940b770b",
+        "summary": [
+          "test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 1839 filtered out; finished in 4.98s"
+        ]
+      },
+      {
+        "path": "/build/results-v3-verification/a8b46a957897/projection-local-unit.log",
+        "sha256": "bb89cd121a90322f5c8480b4d009009e6ab48a9506c05d5f29bac827469e1758",
+        "summary": [
+          "test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 1825 filtered out; finished in 18.84s"
+        ]
+      },
+      {
+        "path": "/build/results-v3-verification/a8b46a957897/failure-fence-local-unit.log",
+        "sha256": "eb632709986ccdb350a295bf54f312e99490ecd80bc0673bb4c4e1b15ae4e3ef",
+        "summary": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 72 filtered out; finished in 4.19s"
+        ]
+      },
+      {
+        "path": "/build/results-v3-verification/a8b46a957897/retention.log",
+        "sha256": "5f3632568ff0c18de954183af2cd1642fcba2d71c870430df112f668ccb93d70",
+        "summary": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 478 filtered out; finished in 0.00s"
+        ]
+      },
+      {
+        "path": "/build/results-v3-verification/frontend-refresh-fixture-alignment.log",
+        "sha256": "dd239e79ca1328ba2db8d7e4f7418c87618a76dba957e386fc25825ae4bd0aa9",
+        "summary": [
+          "22 passed, 35 subtests passed in 0.67s"
+        ]
+      }
+    ],
+    "unit_environment": "Ledger fixtures ran with an isolated /state TMPDIR and without production FULLMAG_SESSION_STORAGE_PROFILE in the test child only. Production service configuration and provenance unchanged. This does not qualify managed runtime admission.",
+    "prior_python_validation": "89 tests +51 subtests passed for six unchanged completion validator files; see earlier checkpoint."
+  },
+  "review": {
+    "completion_v3": "No remaining scoped source findings after integrity fixes",
+    "frontend_refresh": "No remaining scoped source findings after full-record validation and fixture alignment; independent reviewer ran no tests"
+  },
+  "codegen": {
+    "state": "succeeded",
+    "receipt": "cf282820340eb07266e20f61e514631122f0cb06736966f7f01647ce7e9aedb9",
+    "generated_diff": false
+  },
+  "ui": {
+    "state": "NOT VERIFIED after merge",
+    "failed_attempts": [
+      "c9a103047f5f4f949a85b3911ba5f157",
+      "8fd6bed057c44e5fb772437a0d28e254",
+      "465f4f9a35fb4eaa92c0711788e94820"
+    ],
+    "endpoint_observation": {
+      "saved_item_10": 200,
+      "saved_playback_item_10": 200,
+      "current_status": 404,
+      "current_commands": 404,
+      "current_visualization": 404,
+      "saved_sessions": 0
+    },
+    "required_precondition": "Prepare a new owned FEM smoke run using examples/results_snapshot_browser_fem_smoke.py after managed refresh"
+  },
+  "frontend_refresh_failure": {
+    "attempt": "53f4f2b78b974ac6afb98ed790dce459",
+    "state": "failed-confirmed before stop",
+    "cause": "Group-ledger backend was incorrectly required to supply legacy host-ledger documents",
+    "services_after": "both healthy; no lease or receipt manually changed"
+  },
+  "remaining": [
+    "Apply reviewed refresh helper on current native capture",
+    "Fresh real FEM and browser scrubbing/Live proof",
+    "Early quantity-specific FEM geometry, Current run stage/attempt collection and active publications",
+    "FDM/YIG and remaining UX matrix",
+    "Required CI and final merge"
+  ]
+}

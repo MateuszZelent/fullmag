@@ -2470,15 +2470,11 @@ pub async fn get_field_catalog(
         } else {
             Vec::new()
         };
-        descriptor.resolved_capability = Some(
+        apply_field_descriptor_capability(
+            descriptor,
             resolved_quantity_capability_for_snapshot(
-                snapshot,
-                spec,
-                materialization,
-                carriers,
-                scope,
-            )
-            .into(),
+                snapshot, spec, materialization, carriers, scope,
+            ),
         );
     }
 
@@ -3665,18 +3661,50 @@ fn remember_materialized_carrier_metadata(
     );
 }
 
+fn apply_field_descriptor_capability(
+    descriptor: &mut FieldDescriptor,
+    resolved: fullmag_runner::ResolvedQuantityCapability,
+) {
+    // Payload presence alone must not contradict the canonical provider plane.
+    descriptor.available &=
+        resolved.provider == fullmag_runner::QuantityProviderCapability::Available;
+    descriptor.resolved_capability = Some(resolved.into());
+}
+
 fn capability_supports_quantity(
     snapshot: &SessionStateResponse,
     quantity_id: &str,
 ) -> Option<bool> {
-    snapshot.capabilities.as_ref()?;
+    let field_only = snapshot.metadata.as_ref()
+        .and_then(|metadata| metadata.get("magnetic_state_present"))
+        .and_then(serde_json::Value::as_bool) == Some(false);
+    if snapshot.capabilities.is_none() && !field_only {
+        return None;
+    }
     let spec = quantity_spec(quantity_id)?;
+    // A stored read provider needs its actual qualified payload and carrier.
+    let stored_field = if snapshot.capabilities.is_none() {
+        resolve_transport_spatial_field(snapshot, quantity_id)
+            .and_then(|field| match field {
+                Some(field) => Ok(Some(field)),
+                None => resolve_current_spatial_field_metadata(snapshot, quantity_id, usize::from(spec.n_comp)),
+            }).ok().flatten()
+    } else {
+        None
+    };
+    let carriers = stored_field.as_ref()
+        .and_then(full_field_publication_carrier_identity)
+        .map(|identity| current_field_carriers(spec, &identity.scope_kind,
+            identity.scope_id.as_deref(), &identity.carrier_id,
+            Some(&identity.carrier_fingerprint), None))
+        .unwrap_or_default();
+    let materialization = if carriers.is_empty() {
+        QuantityMaterializationCapability::Unmaterialized
+    } else {
+        QuantityMaterializationCapability::Materialized
+    };
     let resolved = resolved_quantity_capability_for_snapshot(
-        snapshot,
-        spec,
-        QuantityMaterializationCapability::Unmaterialized,
-        Vec::new(),
-        spec.domain.as_str(),
+        snapshot, spec, materialization, carriers, spec.domain.as_str(),
     );
     Some(resolved.provider == fullmag_runner::QuantityProviderCapability::Available)
 }
@@ -5578,7 +5606,13 @@ fn artifact_field_vector_response(
     let mut response=crate::router_v2::handlers::shared::conditional_binary_response(headers,&etag,binary);
     insert_field_headers(&mut response,&field.quantity_id,&component,field.quantity_revision,&locator.carrier_digest,
         locator.sample_count as usize,values.len());
-    for (name,value) in [(HDR_ENCODING,"FMVP;version=6".to_owned()),(HDR_FIELD_INDEXING,locator.indexing.as_str().to_owned()),
+    if let Some(scope_id)=locator.carrier_scope_id.as_deref() {
+        response.headers_mut().insert(HeaderName::from_static(HDR_SCOPE_ID),
+            HeaderValue::from_str(scope_id).map_err(|_| ApiError::conflict("invalid artifact response header"))?);
+    }
+    for (name,value) in [(HDR_ENCODING,"FMVP;version=6".to_owned()),
+        (HDR_SCOPE_KIND,locator.carrier_scope_kind),("x-fullmag-mesh-topology-hash",locator.carrier_digest.clone()),
+        (HDR_FIELD_INDEXING,locator.indexing.as_str().to_owned()),
         ("x-fullmag-carrier-id",locator.carrier_id),("x-fullmag-carrier-revision",locator.carrier_revision.to_string()),
         ("x-fullmag-carrier-digest",locator.carrier_digest),("x-fullmag-source-kind","artifact_inspection".into()),
         ("x-fullmag-source-id",locator.owner.source_digest),("x-fullmag-source-revision",field.quantity_revision.to_string()),
@@ -5703,22 +5737,28 @@ fn analysis_frequency_response_vector_response(
     } = serialize_analysis_field_vector_binary(
         snapshot, field_id, out_n_comp, out_grid, &projected, None,
     )?;
-    let revision = analysis_payload_revision(
-        snapshot,
+    let content_digest = crate::router_v2::handlers::analysis::frequency_domain::response_field_content_digest_from_bytes(
+        &artifact_dir,
+        &frequency_point_path,
         &relative_path,
-        bytes.len(),
-        artifact_generation_id.as_deref(),
-    );
-    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-        "fmvp5:{field_id}:{revision}:{}:{}:{}:{:x}",
+        &bytes,
+        generation.as_ref(),
+    )?;
+    let revision = sha256_hex_revision(
+        content_digest.strip_prefix("sha256:").unwrap_or(&content_digest),
+    )
+    .ok_or_else(|| ApiError::internal("invalid frequency-response source content digest"))?;
+    let etag = analysis_response_field_etag(
+        field_id,
+        &content_digest,
         effective_view,
         query
             .component
             .as_deref()
             .unwrap_or(default_component.unwrap_or("full")),
         effective_phase_rad,
-        Sha256::digest(&binary)
-    ));
+        &binary,
+    );
     let mut resp =
         crate::router_v2::handlers::shared::conditional_binary_response(headers, &etag, binary);
     insert_field_headers(
@@ -6958,6 +6998,20 @@ fn decode_complex_f64_pairs_little_endian(bytes: &[u8]) -> Result<Vec<f64>, ApiE
         values.push(value);
     }
     Ok(values)
+}
+
+fn analysis_response_field_etag(
+    field_id: &str,
+    content_digest: &str,
+    view: &str,
+    component: &str,
+    phase_rad: f64,
+    binary: &[u8],
+) -> String {
+    let representation_digest = format!("{:x}", Sha256::digest(binary));
+    crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+        "{field_id}:{content_digest}:{view}:{component}:{phase_rad}:{representation_digest}"
+    ))
 }
 
 fn analysis_payload_revision(
@@ -9233,6 +9287,100 @@ fn urlencoding(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn artifact_response_headers_follow_owned_scope_on_200_and_304() {
+        use crate::router_v2::handlers::data::artifact_field_carrier::{
+            ArtifactSampleCarrier, ArtifactSampleIdentity,
+        };
+        use crate::schemas::fields::{ArtifactFieldOwnerBinding, ArtifactSampleIndexing};
+        use axum::http::{HeaderMap, StatusCode, header::{ETAG, IF_NONE_MATCH}};
+
+        for (quantity, indexing, components, scope) in [
+            ("V_electric", ArtifactSampleIndexing::SourceNodes, 1, "object"),
+            ("J_charge", ArtifactSampleIndexing::Tet4CellLocalNodes, 3, "object"),
+            ("H_ant", ArtifactSampleIndexing::SampleNodes, 3, "object"),
+            ("H_ant", ArtifactSampleIndexing::SampleNodes, 3, "full"),
+        ] {
+            let owner = ArtifactFieldOwnerBinding {
+                session_id: "header-session".into(), session_epoch: "header-epoch".into(),
+                request_scope_epoch: "header-scope".into(), run_id: "header-run".into(),
+                runtime_stage_id: "header-runtime-stage".into(), authored_stage_id: "inspect".into(),
+                module_id: "transport".into(), object_id: "antenna".into(), output_id: "inspection".into(),
+                source_digest: format!("sha256:{}", "b".repeat(64)),
+                content_digest: format!("sha256:{}", "c".repeat(64)),
+                observation_mesh_revision: 1, observation_topology_revision: 1,
+                historical_inspection: true, accepted_artifact: None,
+                native_mesh_identity: "native-mesh".into(), native_topology_identity: "native-topology".into(),
+            };
+            let identities = (0_u8..4).map(|local| match indexing {
+                ArtifactSampleIndexing::SourceNodes => ArtifactSampleIdentity::SourceNode(10 + u64::from(local)),
+                ArtifactSampleIndexing::Tet4CellLocalNodes => ArtifactSampleIdentity::CellLocal {
+                    source_element_ordinal: 7, local_vertex_index: local, stable_vertex_id: 10 + u64::from(local),
+                },
+                ArtifactSampleIndexing::SampleNodes => ArtifactSampleIdentity::SampleOrdinal(u64::from(local)),
+                _ => unreachable!(),
+            }).collect();
+            let carrier = std::sync::Arc::new(ArtifactSampleCarrier {
+                owner, sample_carrier: None, carrier_scope_kind: scope.into(),
+                carrier_scope_id: (scope == "object").then(|| "antenna".into()),
+                indexing, positions_xyz_m: vec![[0., 0., 0.], [1e-6, 0., 0.],
+                    [0., 1e-6, 0.], [0., 0., 1e-6]],
+                sample_identity: identities,
+                // This response serializes FMVP samples, not a topology response.
+                topology: None, carrier_digest: "a".repeat(64),
+                carrier_revision: u64::from_le_bytes([0xaa; 8]),
+            });
+            let field = ResolvedSpatialField::from_artifact_samples(
+                quantity, vec![1.; 4 * components], carrier, 3,
+            ).unwrap();
+            let locator = crate::router_v2::handlers::data::inspection_field_provider::locator(&field).unwrap();
+            // "full" is a supported complete-carrier alias, even for an object-owned carrier.
+            let query: FieldVectorQuery = serde_json::from_value(serde_json::json!({
+                "component": "full", "scope_kind": "full",
+                "carrier_id": locator.carrier_id, "stage_id": locator.owner.runtime_stage_id,
+                "expected_carrier_revision": locator.carrier_revision,
+                "expected_generation_id": locator.carrier_digest
+            })).unwrap();
+            let response = super::artifact_field_vector_response(&field, &query, &HeaderMap::new()).unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let mut conditional = HeaderMap::new();
+            conditional.insert(IF_NONE_MATCH, response.headers().get(ETAG).unwrap().clone());
+            let cached = super::artifact_field_vector_response(&field, &query, &conditional).unwrap();
+            assert_eq!(cached.status(), StatusCode::NOT_MODIFIED);
+            for response in [&response, &cached] {
+                let headers = response.headers();
+                assert_eq!(headers.get("x-fullmag-scope-kind").unwrap().to_str().unwrap(),
+                    locator.carrier_scope_kind.as_str());
+                assert_eq!(headers.get("x-fullmag-scope-id").map(|v| v.to_str().unwrap()),
+                    locator.carrier_scope_id.as_deref());
+                let hash = headers.get("x-fullmag-mesh-topology-hash").unwrap().to_str().unwrap();
+                assert_eq!(hash.strip_prefix("sha256:").unwrap_or(hash), locator.carrier_digest.as_str());
+                assert_eq!(headers.get("x-fullmag-encoding").unwrap().to_str().unwrap(), "FMVP;version=6");
+                assert_eq!(headers.get("x-fullmag-n-comp").unwrap().to_str().unwrap(), components.to_string());
+            }
+        }
+    }
+
+    #[test]
+    fn response_etag_tracks_source_and_representation_independently() {
+        let etag = |digest, view, component, phase| {
+            super::analysis_response_field_etag(
+                "analysis:frequency-response:frequency-0000",
+                digest, view, component, phase, b"binary",
+            )
+        };
+        let baseline = etag("sha256:a", "complex", "full", 0.0);
+        assert_eq!(baseline, etag("sha256:a", "complex", "full", 0.0));
+        assert_ne!(baseline, etag("sha256:b", "complex", "full", 0.0));
+        assert_ne!(baseline, etag("sha256:a", "real", "full", 0.0));
+        assert_ne!(baseline, etag("sha256:a", "complex", "c0", 0.0));
+        assert_ne!(baseline, etag("sha256:a", "complex", "full", 0.5));
+        assert_ne!(baseline, super::analysis_response_field_etag(
+            "analysis:frequency-response:frequency-0000",
+            "sha256:a", "complex", "full", 0.0, b"changed",
+        ));
+    }
+
     use super::{
         analysis_complex_vector_view_values, analysis_frequency_response_view_values,
         AcceptedObservationFrameRef,
@@ -9884,6 +10032,107 @@ mod tests {
     }
 
     #[test]
+    fn field_only_availability_rejects_magnetic_fields_with_missing_or_inherited_capabilities() {
+        let mut snapshot = snapshot_with_field_provider("m");
+        snapshot.metadata = Some(serde_json::json!({"magnetic_state_present": false}).into());
+        for inherited in [true, false] {
+            if !inherited { snapshot.capabilities = None; }
+            for spec in fullmag_quantities::quantity_specs().iter()
+                .filter(|spec| spec.domain == fullmag_quantities::QuantityDomain::MagneticOnly)
+            {
+                assert_eq!(super::capability_supports_quantity(&snapshot, spec.id.as_str()),
+                    Some(false), "{}", spec.id.as_str());
+            }
+            let availability = resolve_target_field_availability(&snapshot, "m",
+                &TargetFieldAvailabilityQuery { scope_kind: Some("full".into()), ..Default::default() })
+                .expect("resolved nonmagnetic availability");
+            assert!(!availability.supported && !availability.materialized && !availability.pending);
+            assert_eq!(availability.reason_code.as_deref(), Some("quantity_not_supported"));
+        }
+        snapshot.metadata = None;
+        assert_eq!(super::capability_supports_quantity(&snapshot, "m"), None,
+            "An unresolved workspace retains unknown capability");
+    }
+
+    #[test]
+    fn field_only_availability_preserves_only_qualified_stored_read_providers() {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "field-only-stored-availability"
+        })).expect("minimal snapshot");
+        let mut snapshot = default_current_live_state(&request);
+        snapshot.capabilities = None;
+        snapshot.metadata = Some(serde_json::json!({"magnetic_state_present": false}).into());
+        snapshot.fem_mesh = Some(FemMeshPayload {
+            mesh_name: "stored-domain".into(), mesh_id: "mesh:stored-domain".into(),
+            nodes: vec![[0.0,0.0,0.0],[1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0,1,2,3]]),
+            element_markers: vec![1], facets: fullmag_ir::FemFacetConnectivityIR::empty(),
+            boundary_markers: Vec::new(), periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(), object_segments: Vec::new(), mesh_parts: Vec::new(),
+            domain_mesh_mode: None, domain_frame: None, generation_id: Some("stored-generation".into()),
+            per_domain_quality: std::collections::HashMap::new(), build_report: None,
+        }.into());
+        add_physical_field_source(&mut snapshot, 2, None);
+        for quantity in ["V_electric", "J_charge", "H_ant", "spin_current_tensor"] {
+            let spec = fullmag_quantities::quantity_spec(quantity).expect("canonical stored quantity");
+            let points = if spec.location == fullmag_quantities::QuantityLocation::Node { 4 } else { 1 };
+            assert_eq!(super::capability_supports_quantity(&snapshot, quantity), Some(false),
+                "No descriptor may invent a stored provider");
+            snapshot.field_quantity_revisions.insert(quantity.into(), 9);
+            snapshot.preview_cache.insert(LivePreviewField {
+                config_revision: 1, source_step: 2, source_time_seconds: None, source_revision: 2,
+                materialized_at_unix_ms: 1, materialization_wall_time_ns: 1,
+                quantity: quantity.into(), unit: spec.unit.into(),
+                spatial_kind: if points == 4 { "fem_nodes" } else { "fem_elements" }.into(),
+                quantity_domain: spec.domain.as_str().into(),
+                preview_grid: [points,1,1], original_grid: [points,1,1],
+                vector_field_values: vec![1.0; points as usize * usize::from(spec.n_comp)],
+                x_chosen_size: points, y_chosen_size: 1, applied_x_chosen_size: points,
+                applied_y_chosen_size: 1, applied_layer_stride: 1, auto_downscaled: false,
+                auto_downscale_message: None, active_mask: None,
+            });
+            let field = super::resolve_current_spatial_field_metadata(&snapshot, quantity, usize::from(spec.n_comp))
+                .expect("stored metadata").expect("qualified stored payload");
+            let identity = super::full_field_publication_carrier_identity(&field)
+                .expect("actual FEM topology identity");
+            let carriers = super::current_field_carriers(spec, &identity.scope_kind,
+                identity.scope_id.as_deref(), &identity.carrier_id, Some(&identity.carrier_fingerprint), None);
+            let resolved = super::resolved_quantity_capability_for_snapshot(&snapshot, spec,
+                fullmag_runner::QuantityMaterializationCapability::Materialized, carriers, "full");
+            assert_eq!(super::capability_supports_quantity(&snapshot, quantity), Some(true));
+            assert_eq!(resolved.lane, "stored_field_read_only");
+            assert_eq!(resolved.carriers.len(), 1);
+            let mut descriptors = Vec::new();
+            push_field_descriptor(&mut descriptors, quantity, spec.unit, None, 9, "stored-generation",
+                FieldFreshness { source_step: 2, source_time_seconds: None, source_revision: 2,
+                    materialized_at_unix_ms: 1, stale_by_steps: 0, materialization_wall_time_ns: 1,
+                    state: FieldMaterializationState::Complete, materialization_reason_code: None,
+                    materialization_error: None }, true);
+            if quantity == "spin_current_tensor" {
+                assert_eq!(resolved.render, fullmag_runner::QuantityRenderCapability::UnsupportedShape);
+                assert_eq!(resolved.publication, fullmag_runner::QuantityPublicationCapability::ExportOnly);
+            } else if spec.supports_preview_3d {
+                let availability = resolve_target_field_availability(&snapshot, quantity,
+                    &TargetFieldAvailabilityQuery { scope_kind: Some("full".into()), ..Default::default() })
+                    .expect("stored availability");
+                assert!(availability.supported && availability.materialized, "{quantity}");
+            }
+            let mut missing_payload: super::FieldDescriptor = serde_json::from_value(
+                serde_json::to_value(&descriptors[0]).expect("descriptor JSON"),
+            ).expect("descriptor round trip");
+            missing_payload.available = false;
+            super::apply_field_descriptor_capability(&mut missing_payload, resolved.clone());
+            assert!(!missing_payload.available, "A provider alone cannot invent payload presence");
+            super::apply_field_descriptor_capability(&mut descriptors[0], resolved);
+            assert!(descriptors[0].available, "Read availability must not depend on renderability");
+            snapshot.preview_cache.clear_fields();
+            assert_eq!(super::capability_supports_quantity(&snapshot, quantity), Some(false),
+                "Removing the actual descriptor removes the read provider");
+        }
+        assert!(snapshot.capabilities.is_none(), "Read providers never invent solver capabilities");
+    }
+
+    #[test]
     fn field_catalog_descriptors_transport_canonical_quantity_domains() {
         let freshness = FieldFreshness {
             source_step: 0,
@@ -9923,6 +10172,15 @@ mod tests {
         assert_eq!(quantities[0].location, "node");
         assert_eq!(quantities[1].location, "node");
         assert_eq!(quantities[0].source_time_seconds, Some(2.5e-12));
+        let mut snapshot = snapshot_with_field_provider("m");
+        snapshot.metadata = Some(serde_json::json!({"magnetic_state_present": false}).into());
+        let resolved = super::resolved_quantity_capability_for_snapshot(&snapshot,
+            fullmag_quantities::quantity_spec("m").unwrap(),
+            fullmag_runner::QuantityMaterializationCapability::Materialized, Vec::new(), "full");
+        super::apply_field_descriptor_capability(&mut quantities[1], resolved);
+        assert!(!quantities[1].available, "Inherited magnetic payload presence is not provider truth");
+        assert_eq!(quantities[1].resolved_capability.as_ref().unwrap().provider,
+            crate::schemas::quantities::QuantityProviderCapability::Unavailable);
     }
 
     #[test]

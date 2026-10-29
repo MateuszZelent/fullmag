@@ -11,6 +11,7 @@ mod accepted_observation_spool;
 mod error;
 #[path = "accepted_study_worker.rs"]
 mod accepted_study_worker;
+use accepted_study_worker::accepted_solver_profile;
 mod accepted_project_storage;
 
 mod worker_startup_gate;
@@ -33,6 +34,10 @@ fn main() {
 }
 
 fn run() -> Result<()> {
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--recover-inspection-publication")) {
+        worker_startup_gate::verify_runtime_owner_build()?;
+        return accepted_study_worker::completed_inspection_recovery::run();
+    }
     let args = parse_args()?;
     worker_startup_gate::verify_runtime_owner_build()?;
     if args.startup_gate {

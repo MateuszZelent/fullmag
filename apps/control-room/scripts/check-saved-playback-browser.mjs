@@ -1095,6 +1095,12 @@ try {
   result={...result,schema:"fullmag.docker-dev-saved-playback-result.v1",state:"failed",scenario:"saved-playback",
     item_id:itemId,session_mutations:solverRequests,visualization_trace:visualizationTrace,startup_camera_initialization:startupCameraInitialization,errors:[...errors,error?.stack??String(error)],network_trace:networkTrace.slice(-24),screenshot_base64:evidenceScreenshot?.toString("base64")};
   process.exitCode=1;
+  // The managed failure receipt keeps only bounded stdout/stderr tails. Keep
+  // the diagnostic outside the potentially large screenshot JSON payload.
+  process.stderr.write(JSON.stringify({
+    schema:"fullmag.saved-playback.failure-summary.v1",
+    error:String(error?.stack??error).slice(0,3000),
+  })+"\n");
 } finally {
   await context?.close();await browser?.close();await proxy?.close();
 }

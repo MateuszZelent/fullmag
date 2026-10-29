@@ -4,7 +4,7 @@ use anyhow::{bail, Context, Result};
 pub mod accepted_store;
 pub mod study_inspection;
 mod study_inspection_integrity;
-pub use study_inspection_integrity::{load_saved_inspection, verify_saved_inspection};
+pub use study_inspection_integrity::{load_imported_study_evidence, load_imported_inspection, ImportedStudyEvidence, load_saved_inspection, verify_saved_inspection};
 pub mod application_attach;
 pub mod application_service_status;
 pub mod compute_node_probe;
@@ -448,8 +448,27 @@ pub fn recover_coordinator(
     recover_coordinator_locked(store, claim)
 }
 
+/// Replay an exact coordinator under an existing shared store fence without repairs.
+pub fn recover_coordinator_readonly(
+    store: &SessionStore,
+    claim: &fullmag_application::TaskClaim,
+    transaction: &fullmag_session::ReadTransaction,
+) -> Result<RecoveredCoordinator> {
+    recover_coordinator_with_journal(store, claim, ||
+        store.read_coordinator_journal_readonly(claim.run_id.as_str(), transaction))
+}
+
 /// Caller already holds this store handle's native writer.
 pub(crate) fn recover_coordinator_locked(store: &SessionStore, claim: &fullmag_application::TaskClaim) -> Result<RecoveredCoordinator> {
+    recover_coordinator_with_journal(store, claim, || store.read_coordinator_journal(claim.run_id.as_str()))
+}
+
+// Both writer recovery and shared cold reads replay the same validated causal chain.
+fn recover_coordinator_with_journal(
+    store: &SessionStore,
+    claim: &fullmag_application::TaskClaim,
+    read_journal: impl FnOnce() -> Result<Vec<fullmag_session::FmsCoordinatorJournalEntry>>,
+) -> Result<RecoveredCoordinator> {
     let catalog = store
         .read_run_catalog(claim.run_id.as_str())?
         .context("coordinator recovery requires a run catalog")?;
@@ -490,7 +509,7 @@ pub(crate) fn recover_coordinator_locked(store: &SessionStore, claim: &fullmag_a
         None
     };
     let mut transitions = Vec::new();
-    for entry in store.read_coordinator_journal(claim.run_id.as_str())? {
+    for entry in read_journal()? {
         if entry.task_id != claim.task_id.as_str()
             || entry.attempt_id != claim.attempt_id.as_str()
             || entry.ownership_epoch != claim.ownership_epoch.value()
@@ -598,6 +617,21 @@ pub(crate) fn request_cancelled_admission_stop(
         &intent.reason,
     )?;
     request_accepted_task_stop_inner(store, run_id, task_id, &intent.reason, false)
+}
+
+/// Request Stop after the runtime-service failed/no-spawn recovery checks.
+///
+/// The caller must hold the startup, launch and owner locks and authenticate the
+/// failed terminal owner, config, exact claim and lease, Pending/Closed launch
+/// gate, and absence of both Started events and worker exit receipts. This is
+/// only for that recovery path; ordinary Stop still requires a durable Start.
+pub fn request_failed_no_spawn_task_stop(
+    store: &SessionStore,
+    run_id: &fullmag_application::RunId,
+    task_id: &str,
+    reason: &str,
+) -> Result<AcceptedTaskStop> {
+    request_accepted_task_stop_inner(store, run_id, task_id, reason, false)
 }
 
 fn request_accepted_task_stop_inner(
@@ -710,6 +744,10 @@ pub struct AcceptedRunSnapshot {
     pub definition_bytes: Vec<u8>,
 }
 
+/// Model-bearing documents can contain an inline FEM mesh. Their bounded
+/// decode budget is separate from the small control-plane metadata budget.
+pub const MAX_ACCEPTED_MODEL_DOCUMENT_BYTES: u64 = 256 * 1024 * 1024;
+
 /// Resolve the pinned definition; a missing CAS object never falls back to current.
 pub fn load_accepted_run_snapshot(
     store: &SessionStore,
@@ -719,6 +757,18 @@ pub fn load_accepted_run_snapshot(
     let intent = store
         .read_run_intent(run_id.as_str())?
         .context("accepted run intent is missing")?;
+    load_accepted_run_snapshot_from_intent(store.cas(), intent, run_id, project_id)
+}
+
+/// Validate the same immutable intent against a read-only imported CAS.
+/// This returns data only; it never grants scheduler or worker authority.
+pub fn load_accepted_run_snapshot_from_intent(
+    cas: &fullmag_session::CasStore,
+    intent: fullmag_session::FmsRunIntent,
+    run_id: &fullmag_application::RunId,
+    project_id: &fullmag_application::ProjectId,
+) -> Result<AcceptedRunSnapshot> {
+    intent.validate()?;
     let specification: fullmag_application::RunSpecification =
         serde_json::from_value(intent.specification.clone())
             .context("accepted run specification is not typed")?;
@@ -735,9 +785,8 @@ pub fn load_accepted_run_snapshot(
     if definition_ref != specification.snapshot.definition_sha256 {
         bail!("accepted run definition reference differs from snapshot");
     }
-    let definition_bytes = store
-        .cas()
-        .get(definition_ref)?
+    let definition_bytes = cas
+        .get_bounded(definition_ref, MAX_ACCEPTED_MODEL_DOCUMENT_BYTES)?
         .context("accepted run definition object is missing")?;
     Ok(AcceptedRunSnapshot {
         intent,
@@ -766,20 +815,28 @@ pub use scheduler::{
 };
 
 mod solution_set;
+pub use solution_set::publish_recovered_inspection_solution;
 mod study_field_tensor;
 pub use study_field_tensor::{
     read_pinned_study_tensor_snapshot, verify_pinned_native_fem_snapshot,
 };
+mod study_inspection_tensor;
+mod study_inspection_sample_geometry;
 mod study_dataset;
 
+pub mod frozen_stage_lifecycle;
+mod study_output_history;
+pub use study_output_history::read_manifest_projection as read_study_output_manifest_projection;
+pub use study_output_history::{load_study_observation_runtime_v2, LoadedStudyObservationRuntimeV2, ObservationSourcePayloadV2, PreparedTerminalPublicationV4, prepare_terminal_study_publication, validate_prepared_terminal_publication};
 mod study;
 mod study_snapshot_cache;
 mod study_completion;
 pub use study::{
-    load_accepted_study_snapshot, load_accepted_worker_step, load_accepted_worker_step_for_start,
-    load_accepted_worker_step_for_start_from_snapshot,
+    materialize_accepted_worker_execution_plan,
+    load_accepted_study_snapshot, load_accepted_study_snapshot_from_run, load_accepted_worker_step,
+    load_accepted_worker_step_for_start, load_accepted_worker_step_for_start_from_snapshot,
     load_study_observation_runtime, publish_accepted_task_prepare, publish_accepted_task_start,
-    publish_study_outputs, queue_accepted_study_task, resolve_accepted_study_inputs,
+    publish_study_outputs, publish_terminal_study_outputs, queue_accepted_study_task, resolve_accepted_study_inputs,
     validate_requested_execution, validate_study_task_completion, AcceptedStudySnapshot,
     AcceptedWorkerStep, LoadedStudyObservationRuntime, ObservationSourcePayload,
     QueuedAcceptedStudyTask, StudyOutputPayload, ACCEPTED_TASK_AWAITING_DEPENDENCY_RESOLUTION,
@@ -841,6 +898,15 @@ mod tests {
 
     #[test]
     fn accepted_task_stop_is_durable_idempotent_and_terminal_after_stopped_event() {
+        assert_task_stop_recovery(false);
+    }
+
+    #[test]
+    fn failed_no_spawn_stop_without_start_preserves_public_stop_fence_and_replays() {
+        assert_task_stop_recovery(true);
+    }
+
+    fn assert_task_stop_recovery(no_spawn: bool) {
         let directory = tempfile::tempdir().unwrap();
         let store = SessionStore::open(directory.path().join("store")).unwrap();
         let mut task =
@@ -911,31 +977,90 @@ mod tests {
         let mut coordinator =
             DurableWorkerCoordinator::new(WorkerCoordinator::new(task, claim.clone()).unwrap());
         commit_coordinator_genesis(&store, &coordinator.checkpoint()).unwrap();
-        coordinator
-            .commit_command(WorkerCommand::Start, None, |transition| {
-                commit_transition(&store, transition)
-                    .map(|_| ())
-                    .map_err(|error| CoordinatorError::Invalid(format!("{error:#}")))
-            })
-            .unwrap();
-        coordinator
-            .commit_event(
-                WorkerEventEnvelope {
-                    schema_version: WORKER_PROTOCOL_SCHEMA.into(),
-                    message_id: "event-started-operator-stop".into(),
-                    sequence: 1,
-                    claim: claim.identity(),
-                    event: WorkerEvent::Started,
-                },
-                |transition| {
+        if !no_spawn {
+            coordinator
+                .commit_command(WorkerCommand::Start, None, |transition| {
                     commit_transition(&store, transition)
                         .map(|_| ())
                         .map_err(|error| CoordinatorError::Invalid(format!("{error:#}")))
-                },
+                })
+                .unwrap();
+            coordinator
+                .commit_event(
+                    WorkerEventEnvelope {
+                        schema_version: WORKER_PROTOCOL_SCHEMA.into(),
+                        message_id: "event-started-operator-stop".into(),
+                        sequence: 1,
+                        claim: claim.identity(),
+                        event: WorkerEvent::Started,
+                    },
+                    |transition| {
+                        commit_transition(&store, transition)
+                            .map(|_| ())
+                            .map_err(|error| CoordinatorError::Invalid(format!("{error:#}")))
+                    },
+                )
+                .unwrap();
+        } else {
+            let receipt = fullmag_application::materialize_fdm_preparation_from_problem(
+                "prep-failed-no-spawn",
+                1,
+                &fullmag_ir::ProblemIR::bootstrap_example(),
+                &serde_json::json!({}),
             )
             .unwrap();
+            let binding = fullmag_application::PreparationBinding::from_receipt(&receipt).unwrap();
+            let resolved = fullmag_application::ResolvedTaskInput {
+                schema_version: fullmag_application::RESOLVED_TASK_INPUT_SCHEMA.into(),
+                run_id: claim.run_id.clone(),
+                task_id: claim.task_id.clone(),
+                attempt_id: claim.attempt_id.clone(),
+                ownership_epoch: claim.ownership_epoch,
+                specification_fingerprint: "a".repeat(64),
+                plan_fingerprint: binding.plan_fingerprint.trim_start_matches("sha256:").into(),
+                requested_execution: fullmag_application::RequestedExecution {
+                    backend: "fdm".into(),
+                    device: "cpu".into(),
+                    precision: "double".into(),
+                    mode: "strict".into(),
+                    minimum_resources: None,
+                },
+                preparation: binding,
+                inputs: Default::default(),
+                frozen_stage_context: None,
+            };
+            let prepare = coordinator
+                .commit_command(
+                    WorkerCommand::Prepare { resolved_input: resolved },
+                    Some(&receipt),
+                    |transition| {
+                        commit_transition(&store, transition)
+                            .map(|_| ())
+                            .map_err(|error| CoordinatorError::Invalid(format!("{error:#}")))
+                    },
+                )
+                .unwrap();
+            assert_eq!(prepare.sequence, 1);
+            let error = request_accepted_task_stop(
+                &store,
+                &claim.run_id,
+                claim.task_id.as_str(),
+                "operator requested cancellation",
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("requires a durable Start"));
+            assert_eq!(
+                recover_coordinator(&store, &claim).unwrap().commands,
+                vec![prepare]
+            );
+        }
+        let request_stop = if no_spawn {
+            request_failed_no_spawn_task_stop
+        } else {
+            request_accepted_task_stop
+        };
 
-        let accepted = request_accepted_task_stop(
+        let accepted = request_stop(
             &store,
             &claim.run_id,
             claim.task_id.as_str(),
@@ -943,12 +1068,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(accepted.disposition, AcceptedTaskStopDisposition::Accepted);
-        assert_eq!(accepted.catalog_revision, 5);
+        assert_eq!(accepted.catalog_revision, if no_spawn { 4 } else { 5 });
+        assert_eq!(accepted.command.sequence, 2);
         assert!(matches!(
             accepted.command.command,
             WorkerCommand::Stop { .. }
         ));
-        let replayed = request_accepted_task_stop(
+        let replayed = request_stop(
             &store,
             &claim.run_id,
             claim.task_id.as_str(),
@@ -958,7 +1084,7 @@ mod tests {
         assert_eq!(replayed.disposition, AcceptedTaskStopDisposition::Replayed);
         assert_eq!(replayed.catalog_revision, accepted.catalog_revision);
         assert_eq!(replayed.command, accepted.command);
-        assert!(request_accepted_task_stop(
+        assert!(request_stop(
             &store,
             &claim.run_id,
             claim.task_id.as_str(),
@@ -976,7 +1102,7 @@ mod tests {
                 WorkerEventEnvelope {
                     schema_version: WORKER_PROTOCOL_SCHEMA.into(),
                     message_id: "event-stopped-operator-stop".into(),
-                    sequence: 2,
+                    sequence: if no_spawn { 1 } else { 2 },
                     claim: claim.identity(),
                     event: WorkerEvent::Stopped,
                 },
@@ -998,5 +1124,16 @@ mod tests {
             .unwrap();
         assert_eq!(catalog.tasks[0].lifecycle, FmsTaskLifecycle::Cancelled);
         store.release_resource_lease(&durable_lease).unwrap();
+        let owner_before = std::fs::read(store.root().join("WRITER.owner.json")).unwrap();
+        let catalog_before = std::fs::read(store.root().join(format!("runs/{}/run_catalog.json", claim.run_id.as_str()))).unwrap();
+        let transaction = store.read_transaction().unwrap();
+        // The writer getter conflicts with this shared snapshot: cold replay must use the guarded reader.
+        assert!(store.read_coordinator_journal(claim.run_id.as_str()).is_err());
+        let shared = recover_coordinator_with_journal(&store, &current_claim, ||
+            store.read_coordinator_journal_readonly(claim.run_id.as_str(), &transaction)).unwrap();
+        assert_eq!(shared.coordinator.task().lifecycle, TaskLifecycle::Cancelled);
+        assert_eq!(shared.coordinator.checkpoint(), stopping.checkpoint());
+        assert_eq!(std::fs::read(store.root().join("WRITER.owner.json")).unwrap(), owner_before);
+        assert_eq!(std::fs::read(store.root().join(format!("runs/{}/run_catalog.json", claim.run_id.as_str()))).unwrap(), catalog_before);
     }
 }

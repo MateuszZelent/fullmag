@@ -213,9 +213,13 @@ if root.exists():
 class CodegenError(RuntimeError):
     """The existing DEV services did not satisfy the codegen contract."""
 
-    def __init__(self, message: str, *, reconciliation_required: bool = False) -> None:
+    def __init__(self, message: str, *, reconciliation_required: bool = False,
+                 stdout: bytes = b"", stderr: bytes = b"", exit_code: int | None = None) -> None:
         super().__init__(message)
         self.reconciliation_required = reconciliation_required
+        self.stdout = stdout
+        self.stderr = stderr
+        self.exit_code = exit_code
 
 
 def _sha256(data: bytes) -> str:
@@ -415,7 +419,8 @@ def _capture(arguments: Sequence[object], *, timeout: int = 120,
     stderr = bytes(output["stderr"])
     if process.returncode:
         message = stderr.decode("utf-8", "replace").strip() or stdout.decode("utf-8", "replace").strip()
-        raise CodegenError(message or f"Docker command failed ({process.returncode})")
+        raise CodegenError(message or f"Docker command failed ({process.returncode})",
+                           stdout=stdout, stderr=stderr, exit_code=process.returncode)
     return stdout, stderr
 
 
@@ -989,16 +994,15 @@ def _publish_outputs(source: Path, outputs: Mapping[str, bytes], before: Mapping
         for name, data in outputs.items():
             destination = target_root / name
             handle, temporary_name = tempfile.mkstemp(prefix=f".{name}.", dir=target_root)
-            # Generated public source must remain readable by the source group
-            # mounted into the unprivileged frontend (mkstemp defaults to 0600).
-            if os.name == "posix":
-                source_mode = stat.S_IMODE(destination.stat().st_mode) if destination.exists() else 0o644
-                os.fchmod(handle, source_mode | stat.S_IRGRP)
+            temporary.append((Path(temporary_name), destination))
             with os.fdopen(handle, "wb", closefd=True) as stream:
+                # Preserve source permissions while making the temp file group-readable.
+                if os.name == "posix":
+                    source_mode = stat.S_IMODE(destination.stat().st_mode) if destination.exists() else 0o644
+                    os.fchmod(stream.fileno(), source_mode | stat.S_IRGRP)
                 stream.write(data)
                 stream.flush()
                 os.fsync(stream.fileno())
-            temporary.append((Path(temporary_name), destination))
         published: dict[str, str] = {}
         for temporary_name, destination in temporary:
             os.replace(temporary_name, destination)

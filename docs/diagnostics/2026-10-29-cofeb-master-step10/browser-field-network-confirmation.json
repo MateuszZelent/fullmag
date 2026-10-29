@@ -1,0 +1,20 @@
+[
+  {
+    "url": "sessions/current/data/fields/H_demag/samples/vector?component=full&max_samples=9600&scope_id=airbox&scope_kind=airbox",
+    "payload_sha256": "1fdb2b5a2b1ff5a2adeb5b66873143a0be8d9a718f24f6668cd683056e41d4ef",
+    "matches_browser_response": true,
+    "value_count": 28800
+  },
+  {
+    "url": "sessions/current/data/fields/H_demag/samples/vector?component=full&max_samples=1200&scope_id=part%3A__air__&scope_kind=airbox",
+    "payload_sha256": "db2da45ebf245fca1a090398b526694f2da1c5ee9c532647162cadc98fd14072",
+    "matches_browser_response": true,
+    "value_count": 3600
+  },
+  {
+    "url": "sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full",
+    "payload_sha256": "f87c4d4ea756c9a9f287c12d0465c07981cd9d3dd3296207e0cabfed44392f26",
+    "matches_browser_response": true,
+    "value_count": 551292
+  }
+]

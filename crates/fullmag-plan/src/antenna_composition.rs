@@ -142,6 +142,7 @@ fn bind_resolved_antenna_field_solve(
         AntennaOerstedRealizationIR::DirectTetraQuadrature => {
             OerstedRealization::BiotSavartMidpoint
         }
+        AntennaOerstedRealizationIR::AnalyticRt0Surface => return Err(PlanError {reasons: vec!["analytic RT0 surface requires prepared closed-loop inspection; no general drive binding".into()]}),
         AntennaOerstedRealizationIR::VectorPotentialSolver => {
             OerstedRealization::FemVectorPotential
         }

@@ -36,10 +36,12 @@ pub use antenna_external_lead_solution::{
     ANTENNA_EXTERNAL_LEAD_CURRENT_DISPLAY_SOLUTION_SCHEMA,
 };
 mod antenna_field_solution;
+mod antenna_operation_progress;
+pub use antenna_operation_progress::{AntennaOperationPhase, AntennaOperationProgress, AntennaOperationProgressObserver};
 mod antenna_spectrum;
 mod antenna_stage;
 pub use antenna_field_solution::{
-    execute_antenna_closed_loop_inspection, verify_antenna_closed_loop_inspection_bytes,
+    execute_antenna_closed_loop_inspection, execute_antenna_closed_loop_inspection_typed, execute_antenna_closed_loop_inspection_profiled_typed, execute_antenna_closed_loop_inspection_observed_typed, ClosedLoopExecutionError, KnownNativeCallFailure, verify_antenna_closed_loop_inspection_bytes,
     load_antenna_closed_loop_inspection_bytes,
     load_published_antenna_closed_loop_inspection, LoadedAntennaClosedLoopInspection,
     load_antenna_field_solution_samples, load_antenna_field_solution_samples_for_spectrum,
@@ -173,6 +175,8 @@ pub use observation::{
     AcceptedStateDigests, AcceptedStateGeneration, AcceptedStateId, AcceptedStateIdentityError,
     AcceptedStateRef, FdmCpuAcceptedStateSnapshotV1, FdmGpuAcceptedStateSnapshotV1,
     FdmMultilayerObservationLane, FdmMultilayerObservationSnapshotV1,
+    FdmCpuAcceptedStateSnapshotV2, SemanticCarrierV2, TerminalPrimaryPreimage,
+    FDM_CPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA_V2, FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE_V2, TERMINAL_PRIMARY_ROLES,
     ObservationClock, ObservationLane, ObservationProviderPolicy, ObservationProviderResolver,
     FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE, FDM_CPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA,
     FDM_GPU_ACCEPTED_STATE_SNAPSHOT_FILE, FDM_GPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA,
@@ -182,6 +186,7 @@ pub use observation_runtime::{
     ObservationFrame, ObservationPrimaryCarrier, ObservationQuantityBatch, ObservationRuntime,
     ObservationRuntimeError,
 };
+pub use fdm::cpu::reference::validate_terminal_primary_package;
 mod regional_field_drive_artifacts;
 mod relaxation;
 pub mod runtime_registry;
@@ -512,6 +517,27 @@ pub fn timestep_qualification_for_plan_with_binding(
     .ok()
 }
 
+/// Temporary refusal shared by runner and public checkpoint admission.
+pub const FDM_CPU_TRANSPORT_EXACT_RESUME_UNSUPPORTED: &str = "transport ExactResume is temporarily unsupported: legacy checkpoints do not jointly preserve original grid/output clocks, accepted spin history, and frozen reference/epochs; a complete versioned composite checkpoint is required";
+
+/// Reject checkpoint continuation for a resolved CPU spin-transport workflow.
+/// Success only means this temporary refusal does not apply; schema, original
+/// stage identity, and state validation remain mandatory in the restoring owner.
+pub fn validate_fdm_transport_checkpoint_resume_support(plan: &FdmPlanIR) -> Result<(), RunError> {
+    let cpu_workflow = plan.spin_transport_plans.iter().any(|transport| {
+        transport.resolved_device == fullmag_ir::ExecutionDevice::Cpu
+            || transport.fdm_cpu_double.is_some()
+            || transport.fdm_cpu_double_reciprocal.is_some()
+            || transport.fdm_cpu_double_transient.is_some()
+    });
+    if cpu_workflow {
+        return Err(RunError {
+            message: FDM_CPU_TRANSPORT_EXACT_RESUME_UNSUPPORTED.into(),
+        });
+    }
+    Ok(())
+}
+
 /// Validate the complete public coupled-M3 checkpoint envelope before any
 /// runner or session state is restored.
 pub fn validate_coupled_m3_checkpoint_value(
@@ -594,10 +620,10 @@ pub fn frozen_spins_runtime_status_for_backend_plan(
 
 // Public re-exports (unchanged API surface).
 pub use capabilities::{
-    resolve_quantity_capability, scratch_authoring_capabilities, BackendCapabilities,
+    resolve_quantity_capability, resolve_quantity_projection_capabilities, scratch_authoring_capabilities, BackendCapabilities,
     FeatureCapability, FeatureCapabilityStatus, FieldCarrierDescriptor, FieldPayloadState,
     QuantityMaterializationCapability, QuantityProviderCapability, QuantityProviderRegistrySource,
-    QuantityPublicationCapability, QuantityRenderCapability, QuantityRequestCapability,
+    QuantityProjectionCapability, QuantityPublicationCapability, QuantityRenderCapability, QuantityRequestCapability,
     ResolvedQuantityCapability, ResolvedQuantityCapabilityContext,
     ResolvedQuantityProviderRegistry, RuntimeEngineId, MIXED_P1_FEATURE_CAPABILITY_IDS,
     MIXED_P1_MESH_FEATURE_CAPABILITY_IDS,
@@ -633,6 +659,7 @@ pub use runtime_registry::{
 pub use solver_profile::{
     current_thread_cpu_time_ns, elapsed_current_thread_cpu_ns, LivePublisherDiagnostics,
     RateMetric, SolverProfileAggregates, SolverProfileConfig, SolverProfileOverheadDiagnostics,
+    SolverProfileOperationSample, SolverProfileOperationOutcome,
     SolverProfilePhaseSample, SolverProfileSnapshot, SolverProfileState, SolverProfileStepSample,
     SolverProfileThreading, SolverProfileTimingSemantic, SolverProfileTimingSemanticKind,
     SolverRateDiagnostics,
@@ -646,6 +673,7 @@ pub use timestep_qualification::{
     validation_state_for, TimestepExecutionIdentityKey, TimestepPolicyKind,
     QUALIFICATION_REGISTRY_VERSION,
 };
+pub use types::TerminalOutputScheduleBinding;
 pub use types::{
     fem_eigen_mesh_generation_id, fem_frequency_response_mesh_generation_id,
     fem_mesh_topology_fingerprint, fem_plan_mesh_generation_id, live_preview_values_sha256,
@@ -2657,6 +2685,100 @@ pub(crate) fn require_resolved_runtime_sampling(
     Ok(())
 }
 
+/// The terminal publisher consumes the existing resolved runtime-output owner.
+/// Reuse the actual field writer layout and quantity-unit policy for cold decoding.
+pub fn terminal_output_field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Value {
+    artifacts::field_layout(plan)
+}
+
+/// Reuse catalog tensor rank/shape rather than deriving physics from payload width.
+pub fn terminal_output_field_component_count(quantity: &str) -> Result<u8, RunError> {
+    let base = quantity.split_once('.').map_or(quantity, |(base, _)| base);
+    let spec = fullmag_quantities::quantity_spec(base).ok_or_else(|| RunError {
+        message: format!("history field {quantity} has no canonical quantity descriptor"),
+    })?;
+    match spec.shape {
+        fullmag_quantities::QuantityShape::VectorField => Ok(3),
+        fullmag_quantities::QuantityShape::SpatialScalar => Err(RunError {
+            message: format!("history scalar field {quantity} has no existing CPU field-recorder realization; a terminal publication cannot invent a scalar payload layout"),
+        }),
+        fullmag_quantities::QuantityShape::TensorField => Err(RunError {
+            message: format!("history tensor {quantity} requires explicit canonical axes/layout in the existing frame producer; component width alone is insufficient"),
+        }),
+        _ => Err(RunError { message: format!("quantity {quantity} is not a spatial history field") }),
+    }
+}
+
+pub fn terminal_output_quantity_unit(quantity: &str) -> &'static str {
+    artifacts::field_unit(quantity)
+}
+
+/// Preserve the existing output coalescing predicate without rewriting clocks.
+pub fn terminal_output_times_coalesce(left: f64, right: f64) -> bool {
+    schedules::same_time(left, right)
+}
+
+pub fn terminal_output_scalar_unit(name: &str) -> Result<String, RunError> {
+    if let Some(quantity) = fullmag_quantities::quantity_spec(name) { return Ok(quantity.unit.into()); }
+    table_autosave::table_column_meta(name).map(|column| column.unit).ok_or_else(|| RunError {
+        message: format!("scalar history quantity {name} has no existing unit owner"),
+    })
+}
+
+
+/// Bounded cold replay of the existing OutputSchedule transition. This does
+/// not introduce a second runtime timer or alter accepted output scheduling.
+pub fn terminal_output_advance_existing_cursor(name: &str, every_seconds: f64,
+    next_time: f64, last_sampled_time: Option<f64>, sample_time: f64, max_advances: u64)
+    -> Result<(f64,Option<f64>),RunError> {
+    let invalid = || RunError {message:"committed output cursor exceeds existing-owner replay budget or is not due".into()};
+    let due_end=sample_time+schedules::OUTPUT_TIME_TOLERANCE;
+    let advances=(due_end-next_time)/every_seconds;
+    if !every_seconds.is_finite() || every_seconds<=0.0 || !sample_time.is_finite() || !next_time.is_finite()
+        || !due_end.is_finite() || !advances.is_finite() || advances<0.0 || max_advances==0
+        || advances>max_advances.saturating_sub(2) as f64 || due_end+every_seconds<=due_end
+        || last_sampled_time.is_some_and(|last|!last.is_finite() || sample_time<=last)
+        || !schedules::is_due(sample_time,next_time) {return Err(invalid());}
+    let mut schedule=schedules::OutputSchedule {name:name.into(),every_seconds,next_time,last_sampled_time};
+    schedules::advance_due_schedules(std::slice::from_mut(&mut schedule),sample_time);
+    Ok((schedule.next_time,schedule.last_sampled_time))
+}
+
+/// Metadata mapping only; execution decisions remain with the existing OutputSchedule.
+pub fn terminal_output_schedule_bindings(outputs: &[fullmag_ir::OutputIR])
+    -> Result<(Vec<types::TerminalOutputScheduleBinding>, Vec<types::TerminalOutputScheduleBinding>), RunError>
+{
+    let scalar = schedules::collect_scalar_schedules(outputs)?;
+    let field = schedules::collect_field_schedules(outputs)?;
+    let mut scalar_bindings = Vec::new();
+    let mut field_bindings = Vec::new();
+    for (output_index, output) in outputs.iter().enumerate() {
+        let (destination, schedule) = match output {
+            fullmag_ir::OutputIR::Scalar { .. } | fullmag_ir::OutputIR::ScalarResolvedAuto { .. } => {
+                let index = scalar_bindings.len();
+                (&mut scalar_bindings, &scalar[index])
+            }
+            fullmag_ir::OutputIR::Field { .. } | fullmag_ir::OutputIR::FieldResolvedAuto { .. }
+                | fullmag_ir::OutputIR::Snapshot { .. } => {
+                let index = field_bindings.len();
+                (&mut field_bindings, &field[index])
+            }
+            _ => continue,
+        };
+        destination.push(types::TerminalOutputScheduleBinding { output_index: output_index as u64,
+            schedule_index: destination.len() as u64, name: schedule.name.clone(),
+            every_seconds: schedule.every_seconds });
+    }
+    if scalar_bindings.len() != scalar.len() || field_bindings.len() != field.len() {
+        return Err(RunError { message: "terminal metadata differs from existing output schedule mapping".into() });
+    }
+    Ok((scalar_bindings, field_bindings))
+}
+
+pub fn terminal_output_configuration(problem: &ProblemIR, plan: &fullmag_ir::ExecutionPlanIR) -> Vec<fullmag_ir::OutputIR> {
+    runtime_outputs_with_table_autosave(problem, plan)
+}
+
 pub(crate) fn runtime_outputs_with_table_autosave(
     problem: &ProblemIR,
     plan: &fullmag_ir::ExecutionPlanIR,
@@ -3351,7 +3473,7 @@ pub fn run_planned_problem(
     until_seconds: f64,
     output_dir: &Path,
 ) -> Result<RunResult, RunError> {
-    run_planned_problem_with_artifact_context(problem, plan, until_seconds, output_dir, None)
+    run_planned_problem_with_artifact_context(problem, plan, until_seconds, output_dir, None, None)
 }
 
 /// Execute an FMR plan with exact artifact ownership.
@@ -3370,6 +3492,7 @@ pub fn run_planned_problem_with_artifact_identity(
         until_seconds,
         output_dir,
         Some(artifact_identity),
+        None,
     )
 }
 
@@ -3395,7 +3518,14 @@ fn run_planned_problem_with_artifact_context(
     until_seconds: f64,
     output_dir: &Path,
     artifact_identity: Option<&eigen::FrequencyDomainArtifactIdentity>,
+    frozen_stage: Option<(&constraints::FrozenStageContextV1, Option<&fullmag_ir::ResolvedFrozenSpinsPlanIR>)>,
 ) -> Result<RunResult, RunError> {
+    if frozen_stage.is_some() && !matches!(plan.backend_plan, BackendPlanIR::Fdm(_)) {
+        return Err(RunError { message: "frozen stage context requires an accepted FDM CPU plan".into() });
+    }
+    if frozen_stage.is_some() && matches!(problem.study, fullmag_ir::StudyIR::Hysteresis { .. }) {
+        return Err(RunError { message: "full-history frozen context is not implemented by the hysteresis workflow; legacy calls remain separate".into() });
+    }
     require_magnetic_execution_plan(plan)?;
     require_frequency_response_artifact_identity(plan, artifact_identity)?;
     let execution_problem = bind_fem_execution_stage_identity(problem, plan)?;
@@ -3417,11 +3547,16 @@ fn run_planned_problem_with_artifact_context(
     let runtime_outputs = runtime_outputs_with_table_autosave(problem, plan);
 
     let cpu_threads = configured_control_pool_threads(problem, plan);
+    let mut terminal_pipeline_summary = None;
+    let mut drain_writer = || {
+        terminal_pipeline_summary = Some(artifact_pipeline.finish()?);
+        Ok(())
+    };
     let executed_result = with_cpu_parallelism(cpu_threads, || match &plan.backend_plan {
         BackendPlanIR::AntennaFieldOnly(_) => Err(crate::field_only_plan_not_executable_as_llg()),
         BackendPlanIR::Fdm(fdm) => {
             let resolution = dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?;
-            let mut executed = dispatch::execute_fdm_in_mode(
+            let mut executed = crate::solvers::fdm::execute::execute_fdm_in_mode_with_terminal_context(
                 resolution.engine,
                 plan.common.requested_backend,
                 &solver_runtime::selection::requested_registry_device_for_fdm(problem),
@@ -3431,6 +3566,9 @@ fn run_planned_problem_with_artifact_context(
                 &runtime_outputs,
                 None,
                 artifact_writer.clone(),
+                frozen_stage.map(|(frozen, source_frozen_plan)| cpu_reference::FdmTerminalContext {
+                    frozen, source_frozen_plan, drain_writer: &mut drain_writer,
+                }),
             )?;
             attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
             Ok(executed)
@@ -3519,7 +3657,11 @@ fn run_planned_problem_with_artifact_context(
             )
         }
     });
-    let pipeline_summary = artifact_pipeline.finish();
+    drop(drain_writer);
+    let pipeline_summary = match terminal_pipeline_summary {
+        Some(summary) => Ok(summary),
+        None => artifact_pipeline.finish(),
+    };
     let mut executed = match executed_result {
         Ok(executed) => executed,
         Err(error) => {
@@ -3915,6 +4057,7 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity_and_relax_handoff
         relax_handoff,
         on_step,
         None,
+        None,
     )
 }
 
@@ -3942,6 +4085,7 @@ pub fn run_planned_problem_with_callback_and_artifact_identity(
         relax_handoff,
         on_step,
         Some(artifact_identity),
+        None,
     )
 }
 
@@ -3955,9 +4099,16 @@ fn run_planned_problem_with_callback_artifact_context(
     relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
     on_step: impl FnMut(StepUpdate) -> StepAction + Send,
     artifact_identity: Option<&eigen::FrequencyDomainArtifactIdentity>,
+    frozen_stage: Option<(&constraints::FrozenStageContextV1, Option<&fullmag_ir::ResolvedFrozenSpinsPlanIR>)>,
 ) -> Result<RunResult, RunError> {
     let mut on_step = bind_live_magnetization_layout(plan, on_step);
     let live_layout = study_magnetization_layout_for_plan(plan).ok();
+    if frozen_stage.is_some() && !matches!(plan.backend_plan, BackendPlanIR::Fdm(_)) {
+        return Err(RunError { message: "frozen stage context requires an accepted FDM CPU plan".into() });
+    }
+    if frozen_stage.is_some() && matches!(problem.study, fullmag_ir::StudyIR::Hysteresis { .. }) {
+        return Err(RunError { message: "full-history frozen context is not implemented by the hysteresis workflow; legacy calls remain separate".into() });
+    }
     require_magnetic_execution_plan(plan)?;
     require_frequency_response_artifact_identity(plan, artifact_identity)?;
     let execution_problem = bind_fem_execution_stage_identity(problem, plan)?;
@@ -3996,12 +4147,17 @@ fn run_planned_problem_with_callback_artifact_context(
     let runtime_outputs = runtime_outputs_with_table_autosave(problem, plan);
 
     let cpu_threads = configured_control_pool_threads(problem, plan);
+    let mut terminal_pipeline_summary = None;
+    let mut drain_writer = || {
+        terminal_pipeline_summary = Some(artifact_pipeline.finish()?);
+        Ok(())
+    };
     let executed_result = with_cpu_parallelism(cpu_threads, || match &plan.backend_plan {
         BackendPlanIR::AntennaFieldOnly(_) => Err(crate::field_only_plan_not_executable_as_llg()),
         BackendPlanIR::Fdm(fdm) => {
             let grid = fdm.grid.cells;
             let resolution = dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?;
-            let mut executed = dispatch::execute_fdm_in_mode(
+            let mut executed = crate::solvers::fdm::execute::execute_fdm_in_mode_with_terminal_context(
                 resolution.engine,
                 plan.common.requested_backend,
                 &solver_runtime::selection::requested_registry_device_for_fdm(problem),
@@ -4018,6 +4174,9 @@ fn run_planned_problem_with_callback_artifact_context(
                     on_step: &mut on_step,
                 }),
                 artifact_writer.clone(),
+                frozen_stage.map(|(frozen, source_frozen_plan)| cpu_reference::FdmTerminalContext {
+                    frozen, source_frozen_plan, drain_writer: &mut drain_writer,
+                }),
             )?;
             attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
             Ok(executed)
@@ -4138,7 +4297,11 @@ fn run_planned_problem_with_callback_artifact_context(
             )
         }
     });
-    let pipeline_summary = artifact_pipeline.finish();
+    drop(drain_writer);
+    let pipeline_summary = match terminal_pipeline_summary {
+        Some(summary) => Ok(summary),
+        None => artifact_pipeline.finish(),
+    };
     let mut executed = match executed_result {
         Ok(executed) => executed,
         Err(error) => {
@@ -4466,6 +4629,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         initial_snapshot,
         on_step,
         None,
+        None,
     )
 }
 
@@ -4499,7 +4663,46 @@ pub fn run_planned_problem_with_live_preview_and_artifact_identity(
         initial_snapshot,
         on_step,
         Some(artifact_identity),
+        None,
     )
+}
+
+/// Run one accepted stage with its durably admitted complete frozen lineage.
+/// The same artifact writer drains before the single terminal primary snapshot.
+pub fn run_planned_problem_with_live_preview_and_frozen_stage_context(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    until_seconds: f64,
+    output_dir: &Path,
+    autosave_root: &Path,
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    frozen: &constraints::FrozenStageContextV1,
+    source_frozen_plan: Option<&fullmag_ir::ResolvedFrozenSpinsPlanIR>,
+) -> Result<RunResult, RunError> {
+    run_planned_problem_with_live_preview_and_frozen_stage_context_and_observer(
+        problem, plan, until_seconds, output_dir, autosave_root, interrupt_requested,
+        frozen, source_frozen_plan, u64::MAX, |_| StepAction::Continue,
+    )
+}
+
+/// Preserve accepted live observations while using the same admitted frozen lineage.
+#[allow(clippy::too_many_arguments)]
+pub fn run_planned_problem_with_live_preview_and_frozen_stage_context_and_observer(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    until_seconds: f64,
+    output_dir: &Path,
+    autosave_root: &Path,
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    frozen: &constraints::FrozenStageContextV1,
+    source_frozen_plan: Option<&fullmag_ir::ResolvedFrozenSpinsPlanIR>,
+    field_every_n: u64,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    let display_selection = DisplaySelectionState::default;
+    run_planned_problem_with_live_preview_artifact_context(problem, plan, None, until_seconds,
+        output_dir, autosave_root, field_every_n, &display_selection, interrupt_requested,
+        false, on_step, None, Some((frozen, source_frozen_plan)))
 }
 
 fn run_planned_problem_with_live_preview_artifact_context(
@@ -4515,9 +4718,16 @@ fn run_planned_problem_with_live_preview_artifact_context(
     initial_snapshot: bool,
     on_step: impl FnMut(StepUpdate) -> StepAction + Send,
     artifact_identity: Option<&eigen::FrequencyDomainArtifactIdentity>,
+    frozen_stage: Option<(&constraints::FrozenStageContextV1, Option<&fullmag_ir::ResolvedFrozenSpinsPlanIR>)>,
 ) -> Result<RunResult, RunError> {
     let mut on_step = bind_live_magnetization_layout(plan, on_step);
     let live_layout = study_magnetization_layout_for_plan(plan).ok();
+    if frozen_stage.is_some() && !matches!(plan.backend_plan, BackendPlanIR::Fdm(_)) {
+        return Err(RunError { message: "frozen stage context requires an accepted FDM CPU plan".into() });
+    }
+    if frozen_stage.is_some() && matches!(problem.study, fullmag_ir::StudyIR::Hysteresis { .. }) {
+        return Err(RunError { message: "full-history frozen context is not implemented by the hysteresis workflow; legacy calls remain separate".into() });
+    }
     require_magnetic_execution_plan(plan)?;
     require_frequency_response_artifact_identity(plan, artifact_identity)?;
     let execution_problem = bind_fem_execution_stage_identity(problem, plan)?;
@@ -4562,6 +4772,11 @@ fn run_planned_problem_with_live_preview_artifact_context(
     let cpu_threads = configured_control_pool_threads(problem, plan);
     let live_display_selection = (field_every_n != u64::MAX).then_some(display_selection);
     let mut terminal_fdm_fields = None;
+    let mut terminal_pipeline_summary = None;
+    let mut drain_writer = || {
+        terminal_pipeline_summary = Some(artifact_pipeline.finish()?);
+        Ok(())
+    };
     let executed_result = with_cpu_parallelism(cpu_threads, || match &plan.backend_plan {
         BackendPlanIR::AntennaFieldOnly(_) => Err(crate::field_only_plan_not_executable_as_llg()),
         BackendPlanIR::Fdm(fdm) => {
@@ -4573,7 +4788,7 @@ fn run_planned_problem_with_live_preview_artifact_context(
                 }
                 on_step(update)
             };
-            let mut executed = dispatch::execute_fdm_in_mode(
+            let mut executed = crate::solvers::fdm::execute::execute_fdm_in_mode_with_terminal_context(
                 resolution.engine,
                 plan.common.requested_backend,
                 &solver_runtime::selection::requested_registry_device_for_fdm(problem),
@@ -4590,6 +4805,9 @@ fn run_planned_problem_with_live_preview_artifact_context(
                     on_step: &mut capture_terminal_fields,
                 }),
                 artifact_writer.clone(),
+                frozen_stage.map(|(frozen, source_frozen_plan)| cpu_reference::FdmTerminalContext {
+                    frozen, source_frozen_plan, drain_writer: &mut drain_writer,
+                }),
             )?;
             attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
             Ok(executed)
@@ -4703,7 +4921,11 @@ fn run_planned_problem_with_live_preview_artifact_context(
             )
         }
     });
-    let pipeline_summary = artifact_pipeline.finish();
+    drop(drain_writer);
+    let pipeline_summary = match terminal_pipeline_summary {
+        Some(summary) => Ok(summary),
+        None => artifact_pipeline.finish(),
+    };
     let mut executed = match executed_result {
         Ok(executed) => executed,
         Err(error) => {
@@ -4927,6 +5149,32 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         initial_snapshot,
         on_step,
     )
+}
+
+/// Headless full-history stage entry with the existing preview callback owner.
+pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id_and_fem_mesh_identity_and_autosave_root_and_frozen_stage_context(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    autosave_root: &Path,
+    field_every_n: u64,
+    display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    initial_snapshot: bool,
+    hysteresis_stage_id: Option<&str>,
+    frozen_stage: Option<(&constraints::FrozenStageContextV1, Option<&fullmag_ir::ResolvedFrozenSpinsPlanIR>)>,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    if frozen_stage.is_none() {
+        return run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id_and_fem_mesh_identity_and_autosave_root(
+            problem, plan, fem_mesh_identity, until_seconds, output_dir, autosave_root,
+            field_every_n, display_selection, interrupt_requested, initial_snapshot, hysteresis_stage_id, on_step);
+    }
+    run_planned_problem_with_live_preview_artifact_context(problem, plan, fem_mesh_identity,
+        until_seconds, output_dir, autosave_root, field_every_n, display_selection,
+        interrupt_requested, initial_snapshot, on_step, None, frozen_stage)
 }
 
 /// Run an FDM problem using a persistent interactive runtime for low-latency
@@ -6575,8 +6823,10 @@ pub fn run_reference_fem(
     Ok(fem_baseline::execute_reference_fem(plan, until_seconds, outputs, None, None)?.result)
 }
 
-/// Resume the CPU-double coupled M3 reference runtime from the exact backend
-/// state captured in a session checkpoint.
+/// Continue the non-frozen CPU-double M3 solver state from a complete V1 payload.
+/// The caller supplies the unchanged original FDM plan and execution endpoint.
+/// This restores solver state, not the committed output prefix or output cursors,
+/// and does not qualify public checkpoint ExactResume admission.
 pub fn resume_reference_fdm_from_coupled_checkpoint(
     plan: &FdmPlanIR,
     checkpoint: serde_json::Value,
@@ -6640,8 +6890,8 @@ pub fn resume_reference_fdm_from_frozen_spins_checkpoint(
     )
 }
 
-/// Resume the CPU-double coupled M3 reference runtime and return the public
-/// qualification evidence emitted by the accepted backend execution.
+/// Numerical evidence from limited non-frozen CPU-double M3 V1 continuation.
+/// This is not qualification of checkpoint/output ExactResume.
 #[derive(serde::Serialize)]
 pub struct CoupledM3ResumeEvidence {
     status: RunStatus,
@@ -6652,6 +6902,9 @@ pub struct CoupledM3ResumeEvidence {
     coupled_checkpoint: Box<serde_json::value::RawValue>,
 }
 
+/// Continue complete M3 V1 solver state with the unchanged original FDM plan
+/// and execution endpoint, returning its final accepted numerical artifacts.
+/// Committed output prefixes/cursors and public ExactResume remain unsupported.
 pub fn resume_reference_fdm_from_coupled_checkpoint_evidence(
     plan: &FdmPlanIR,
     checkpoint: serde_json::Value,

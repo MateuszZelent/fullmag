@@ -20,10 +20,21 @@ import {
 } from "./planarInteraction";
 import { usePlanarSurfaceRenderer } from "./usePlanarSurfaceRenderer";
 
+/** Line-profile segment in frame coordinates (metres). */
+export interface PlanarProfileSegment {
+  u0: number;
+  v0: number;
+  u1: number;
+  v1: number;
+}
+
 interface PlanarSurfaceProps {
   model: FieldMapRenderModel;
   onInteraction?: (interaction: PlanarInteraction) => void;
   onPin?: (u: number, v: number) => void;
+  /** Shift + drag draws a line-profile segment; Escape clears it (F6 B1). */
+  onProfileSegment?: (segment: PlanarProfileSegment | null) => void;
+  profileSegment?: PlanarProfileSegment | null;
   onRenderEvidence?: (evidence: PlanarRenderEvidence) => void;
   probeOverlay?: ReactNode;
 }
@@ -32,9 +43,14 @@ export function PlanarSurface({
   model,
   onInteraction,
   onPin,
+  onProfileSegment,
   onRenderEvidence,
   probeOverlay,
+  profileSegment = null,
 }: PlanarSurfaceProps) {
+  const segmentDragRef = useRef<{ pointerId: number; u0: number; v0: number } | null>(null);
+  const [draftSegment, setDraftSegment] = useState<PlanarProfileSegment | null>(null);
+  const shownSegment = draftSegment ?? profileSegment;
   const hoverFrameRef = useRef<number | null>(null);
   const hoverPointerRef = useRef<readonly [number, number] | null>(null);
   const interactionRef = useRef<PlanarInteraction>(model.interaction);
@@ -116,7 +132,7 @@ export function PlanarSurface({
       : model.range
         ? `colour range ${formatValueWithUnit(model.range.min * model.display.probeScale, model.display.legendUnit)} to ${formatValueWithUnit(model.range.max * model.display.probeScale, model.display.legendUnit)}`
         : "colour range unavailable",
-    "Arrow keys pan, plus and minus zoom, 0 fits, Enter pins a probe.",
+    "Arrow keys pan, plus and minus zoom, 0 fits, Enter pins a probe, Shift and drag draws a line profile, Escape clears it.",
   ].join("; ");
   return (
     <div className="fm-field-map__plot-area">
@@ -149,6 +165,11 @@ export function PlanarSurface({
             onPin?.(u, v);
           }}
           onKeyDown={(event) => {
+            if (event.key === "Escape" && profileSegment) {
+              event.preventDefault();
+              onProfileSegment?.(null);
+              return;
+            }
             if (event.key === "0") {
               event.preventDefault();
               interactionRef.current = fitPlanarInteraction();
@@ -196,7 +217,11 @@ export function PlanarSurface({
               clientY: event.clientY,
             });
             const [u, v] = pointerUv(event.currentTarget, event.clientX, event.clientY, model.viewport);
-            if (pointersRef.current.size === 1) {
+            if (pointersRef.current.size === 1 && event.shiftKey && onProfileSegment) {
+              gestureMovedRef.current = true;
+              segmentDragRef.current = { pointerId: event.pointerId, u0: u, v0: v };
+              setDraftSegment({ u0: u, u1: u, v0: v, v1: v });
+            } else if (pointersRef.current.size === 1) {
               gestureMovedRef.current = false;
               dragRef.current = { pointerId: event.pointerId, u, v };
             } else if (pointersRef.current.size === 2) {
@@ -224,11 +249,22 @@ export function PlanarSurface({
             releasePlanarPointer(event.currentTarget, event.pointerId, pointersRef.current);
             pinchRef.current = null;
             if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
+            const segmentDrag = segmentDragRef.current;
+            if (segmentDrag && segmentDrag.pointerId === event.pointerId) {
+              segmentDragRef.current = null;
+              const [u, v] = pointerUv(event.currentTarget, event.clientX, event.clientY, model.viewport);
+              setDraftSegment(null);
+              if (u !== segmentDrag.u0 || v !== segmentDrag.v0) {
+                onProfileSegment?.({ u0: segmentDrag.u0, u1: u, v0: segmentDrag.v0, v1: v });
+              }
+            }
           }}
           onPointerCancel={(event) => {
             releasePlanarPointer(event.currentTarget, event.pointerId, pointersRef.current);
             pinchRef.current = null;
             dragRef.current = null;
+            segmentDragRef.current = null;
+            setDraftSegment(null);
           }}
           onWheel={(event) => {
             event.preventDefault();
@@ -250,6 +286,11 @@ export function PlanarSurface({
               });
             }
             const [u, v] = pointerUv(event.currentTarget, event.clientX, event.clientY, model.viewport);
+            const segmentDrag = segmentDragRef.current;
+            if (segmentDrag && segmentDrag.pointerId === event.pointerId) {
+              setDraftSegment({ u0: segmentDrag.u0, u1: u, v0: segmentDrag.v0, v1: v });
+              return;
+            }
             const pinch = pinchRef.current;
             if (pinch && pointersRef.current.size >= 2) {
               const [first, second] = [...pointersRef.current.values()];
@@ -314,6 +355,22 @@ export function PlanarSurface({
           aria-hidden="true"
           className="fm-field-map__canvas fm-field-map__canvas--overlay"
         />
+        {shownSegment ? (
+          <svg
+            aria-hidden="true"
+            className="fm-field-map__profile-segment"
+            preserveAspectRatio="none"
+            viewBox="0 0 100 100"
+          >
+            <line
+              vectorEffect="non-scaling-stroke"
+              x1={viewportX(shownSegment.u0, model.viewport)}
+              x2={viewportX(shownSegment.u1, model.viewport)}
+              y1={viewportY(shownSegment.v0, model.viewport)}
+              y2={viewportY(shownSegment.v1, model.viewport)}
+            />
+          </svg>
+        ) : null}
         <p className="fm-visually-hidden" id={summaryId}>{summary}</p>
         {probeOverlay}
         <output className="fm-field-map__probe" aria-live="polite">
@@ -352,6 +409,15 @@ function pointerUv(
     bounds[0] + tx * (bounds[1] - bounds[0]),
     bounds[3] - ty * (bounds[3] - bounds[2]),
   ];
+}
+
+/** Inverse of `pointerUv` in percent of the canvas box. */
+function viewportX(u: number, viewport: readonly [number, number, number, number]): number {
+  return ((u - viewport[0]) / (viewport[1] - viewport[0])) * 100;
+}
+
+function viewportY(v: number, viewport: readonly [number, number, number, number]): number {
+  return ((viewport[3] - v) / (viewport[3] - viewport[2])) * 100;
 }
 
 function resetHoverProbe(

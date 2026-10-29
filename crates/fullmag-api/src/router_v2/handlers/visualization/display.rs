@@ -674,6 +674,17 @@ fn validate_planar_visualization_patch(patch: &PlanarVisualizationPatch) -> Resu
             ));
         }
     }
+    if let Some(crate::schemas::visualization_state::PlanarViewScopeState::Region {
+        scope_id,
+        region_id,
+    }) = &patch.view_scope
+    {
+        if scope_id.trim().is_empty() || region_id.trim().is_empty() {
+            return Err(ApiError::bad_request(
+                "planar.view_scope region requires non-empty scope_id and region_id",
+            ));
+        }
+    }
     if let Some(source) = &patch.source {
         if let crate::schemas::visualization_state::PlanarSourceSelectionState::Monitor {
             monitor_id,
@@ -779,6 +790,21 @@ fn validate_planar_visualization_patch(patch: &PlanarVisualizationPatch) -> Resu
         return Err(ApiError::bad_request(
             "planar interaction must contain finite values and positive zoom",
         ));
+    }
+    if let Some(multislice) = patch.multislice.as_ref() {
+        let count = multislice.position_fractions.len();
+        if !(crate::schemas::visualization_state::PLANAR_MULTISLICE_MIN_PANELS
+            ..=crate::schemas::visualization_state::PLANAR_MULTISLICE_MAX_PANELS)
+            .contains(&count)
+            || multislice
+                .position_fractions
+                .iter()
+                .any(|fraction| !fraction.is_finite() || !(0.0..=1.0).contains(fraction))
+        {
+            return Err(ApiError::bad_request(
+                "planar.multislice requires 2 to 4 finite position fractions between 0 and 1",
+            ));
+        }
     }
     Ok(())
 }
@@ -897,6 +923,7 @@ fn validate_planar_visualization_state(state: &PlanarVisualizationState) -> Resu
         target_overrides: Some(state.target_overrides.clone()),
         point_style: Some(state.point_style.clone()),
         vector_style: Some(state.vector_style.clone()),
+        multislice: Some(state.multislice.clone()),
         ..PlanarVisualizationPatch::default()
     })
 }
@@ -1020,6 +1047,9 @@ fn apply_planar_visualization_patch(
     }
     if let Some(interaction) = &patch.interaction {
         state.interaction = interaction.clone();
+    }
+    if let Some(multislice) = &patch.multislice {
+        state.multislice = multislice.clone();
     }
 }
 
@@ -2454,7 +2484,10 @@ fn target_requests_spatial_observation(settings: &VisualizationResolvedTargetSet
 fn planar_requests_spatial_observation(planar: &PlanarVisualizationState) -> bool {
     planar.visible
         && !planar.quantity_id.trim().is_empty()
-        && (planar.layers.raster || planar.layers.contours || planar.layers.vectors)
+        && (planar.layers.raster
+            || planar.layers.contours
+            || planar.layers.vectors
+            || planar.layers.streamlines)
 }
 
 const MAX_VISUALIZATION_RESTORE_WARNINGS: usize = 16;

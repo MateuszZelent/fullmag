@@ -124,6 +124,157 @@ impl FdmCpuAcceptedStateSnapshotV1 {
     }
 }
 
+
+pub const FDM_CPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA_V2: &str = "fullmag.fdm.cpu.accepted-state-snapshot.v2";
+pub const FDM_CPU_ACCEPTED_STATE_SNAPSHOT_FILE_V2: &str = "solver/fdm_cpu_accepted_state_snapshot.v2.json";
+pub const TERMINAL_PRIMARY_ROLES: [(&str, &str, &str); 4] = [
+    ("fdm.cpu.transactional-state-digest.v1", "fullmag.fdm.engine_accepted_preimage", "solver/accepted-primary/v2/engine.json"),
+    ("fdm.cpu.coupled-m3-checkpoint-digest.v1", "fullmag.fdm.coupled_checkpoint", "solver/accepted-primary/v2/coupled.json"),
+    ("fdm.cpu.frozen-constraint-state-digest.v1", "fullmag.fdm.frozen_primary_preimage", "solver/accepted-primary/v2/frozen.json"),
+    ("fdm.cpu.frozen-activation-set-digest.v1", "fullmag.fdm.frozen_activation_set", "solver/accepted-primary/v2/activation.json"),
+];
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SemanticCarrierV2 {
+    pub carrier_id: String,
+    pub value_digest: String,
+    pub codec_id: String,
+    pub codec_version: String,
+    pub preimage_sha256: String,
+    pub byte_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FdmCpuAcceptedStateSnapshotV2 {
+    pub schema_version: String,
+    pub clock: ObservationClock,
+    pub clock_digest: String,
+    pub state_digest: String,
+    pub magnetization_digest: String,
+    pub primary_carriers: Vec<SemanticCarrierV2>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TerminalPrimaryPreimage {
+    pub carrier_id: String,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EngineAcceptedPreimageV1 {
+    pub schema_version: String,
+    pub solver: fullmag_engine::FdmCpuSolverCheckpointV1,
+    pub thermal_seed: u64,
+    pub thermal_step: u64,
+    pub thermal_dt_s: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FrozenPrimaryPreimageV1 {
+    pub schema_version: String,
+    #[serde(deserialize_with = "required_frozen_primary_option")]
+    pub frozen_spins: Option<crate::constraints::FrozenSpinsCheckpointV1>,
+}
+
+fn required_frozen_primary_option<'de, D>(deserializer: D)
+    -> Result<Option<crate::constraints::FrozenSpinsCheckpointV1>, D::Error>
+where D: serde::Deserializer<'de> {
+    Option::deserialize(deserializer)
+}
+
+fn terminal_identity_error(message: impl Into<String>) -> crate::types::RunError {
+    crate::types::RunError { message: message.into() }
+}
+
+impl FdmCpuAcceptedStateSnapshotV2 {
+    pub(crate) fn from_terminal_preimages(
+        clock: ObservationClock,
+        magnetization: &[[f64; 3]],
+        preimages: &[TerminalPrimaryPreimage],
+        value_digests: &[String; 4],
+    ) -> Result<Self, crate::types::RunError> {
+        if preimages.len() != TERMINAL_PRIMARY_ROLES.len() {
+            return Err(terminal_identity_error("terminal primary package requires four preimages"));
+        }
+        let mut primary_carriers = Vec::with_capacity(4);
+        for ((id, codec, _), value_digest) in TERMINAL_PRIMARY_ROLES.iter().zip(value_digests) {
+            let raw = preimages.iter().find(|raw| raw.carrier_id == *id)
+                .ok_or_else(|| terminal_identity_error("terminal primary preimage is missing"))?;
+            primary_carriers.push(SemanticCarrierV2 {
+                carrier_id: (*id).into(), value_digest: value_digest.clone(),
+                codec_id: (*codec).into(), codec_version: "v1".into(),
+                preimage_sha256: format!("{:x}", Sha256::digest(&raw.bytes)),
+                byte_count: raw.bytes.len() as u64,
+            });
+        }
+        primary_carriers.sort_by(|left, right| left.carrier_id.cmp(&right.carrier_id));
+        let carriers: Vec<_> = primary_carriers.iter().map(|carrier| AcceptedPrimaryCarrier {
+            carrier_id: &carrier.carrier_id, canonical_bytes: carrier.value_digest.as_bytes(),
+        }).collect();
+        let digest = accepted_state_digests(clock, &carriers)
+            .map_err(|error| terminal_identity_error(error.to_string()))?;
+        let snapshot = Self {
+            schema_version: FDM_CPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA_V2.into(), clock,
+            clock_digest: digest.clock_digest, state_digest: digest.state_digest,
+            magnetization_digest: magnetization_digest_f64be(magnetization)
+                .map_err(|error| terminal_identity_error(error.to_string()))?,
+            primary_carriers,
+        };
+        snapshot.validate_metadata()?;
+        Ok(snapshot)
+    }
+
+    /// Metadata integrity is not validation of the four numerical preimages.
+    pub fn validate_metadata(&self) -> Result<(), crate::types::RunError> {
+        if self.schema_version != FDM_CPU_ACCEPTED_STATE_SNAPSHOT_SCHEMA_V2
+            || self.primary_carriers.len() != 4
+            || !fullmag_quantities::is_canonical_sha256(&self.magnetization_digest)
+        {
+            return Err(terminal_identity_error("invalid terminal accepted snapshot v2"));
+        }
+        let mut previous: Option<&str> = None;
+        for carrier in &self.primary_carriers {
+            let role = TERMINAL_PRIMARY_ROLES.iter().find(|role| role.0 == carrier.carrier_id)
+                .ok_or_else(|| terminal_identity_error("unknown terminal primary carrier"))?;
+            if previous.is_some_and(|id| id >= carrier.carrier_id.as_str())
+                || carrier.codec_id != role.1 || carrier.codec_version != "v1"
+                || carrier.byte_count == 0
+                || carrier.preimage_sha256.len() != 64
+                || !carrier.preimage_sha256.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                || !fullmag_quantities::is_canonical_sha256(&carrier.value_digest)
+            {
+                return Err(terminal_identity_error("invalid terminal carrier metadata"));
+            }
+            previous = Some(&carrier.carrier_id);
+        }
+        let carriers: Vec<_> = self.primary_carriers.iter().map(|carrier| AcceptedPrimaryCarrier {
+            carrier_id: &carrier.carrier_id, canonical_bytes: carrier.value_digest.as_bytes(),
+        }).collect();
+        let actual = accepted_state_digests(self.clock, &carriers)
+            .map_err(|error| terminal_identity_error(error.to_string()))?;
+        if actual.clock_digest != self.clock_digest || actual.state_digest != self.state_digest {
+            return Err(terminal_identity_error("terminal accepted snapshot identity differs"));
+        }
+        Ok(())
+    }
+
+    pub fn decode_metadata(bytes: &[u8]) -> Result<Self, crate::types::RunError> {
+        if bytes.len() > 64 * 1024 {
+            return Err(terminal_identity_error("terminal accepted metadata exceeds 64KiB"));
+        }
+        let crate::artifact_json::UnambiguousJson(value) = serde_json::from_slice(bytes)
+            .map_err(|error| terminal_identity_error(error.to_string()))?;
+        let metadata: Self = serde_json::from_value(value)
+            .map_err(|error| terminal_identity_error(error.to_string()))?;
+        metadata.validate_metadata()?;
+        Ok(metadata)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FdmGpuAcceptedStateSnapshotV1 {

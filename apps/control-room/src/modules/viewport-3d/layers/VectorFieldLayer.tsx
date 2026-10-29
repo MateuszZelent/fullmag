@@ -31,6 +31,7 @@ import { createViewport3DGpuUploadManager } from "../build-engine/gpu/viewport3d
 import type { Viewport3DGpuUploadChunk } from "../build-engine/gpu/viewport3dGpuUploadTypes";
 import type { Viewport3DVectorBuildReference } from "../viewport3dRenderModel";
 import type { Viewport3DColors } from "../viewport3dTypes";
+import type { Viewport3DVisibleColorScale, Viewport3DVisibleColorScaleReport } from "../model/viewport3DVisibleColorScale";
 import type { VectorGlyphTransforms } from "./vectorGlyphGeometry";
 import {
   buildViewport3DVectorGlyphsOffMainThread,
@@ -332,21 +333,41 @@ export function createVectorGlyphUploadKeys({
   };
 }
 
+// Local immutable buffer identity; physics provenance remains in buildReference.
+const glyphColorBufferKeys = new WeakMap<Float32Array, number>();
+let nextGlyphColorBufferKey = 0;
+
+function glyphColorBufferKey(buffer: Float32Array | null | undefined): number | null {
+  if (!buffer) return null;
+  let key = glyphColorBufferKeys.get(buffer);
+  if (key === undefined) {
+    key = ++nextGlyphColorBufferKey;
+    glyphColorBufferKeys.set(buffer, key);
+  }
+  return key;
+}
+
 function createVectorGlyphSemanticBuildKey({
   buildReference,
   colorMode,
+  colorScale,
+  colorsOverride,
   headRadiusRatio,
   shaftRadiusRatio,
 }: {
   buildReference?: Viewport3DVectorBuildReference | null;
   colorMode: string;
+  colorScale?: Viewport3DVisibleColorScale | null;
+  colorsOverride?: Float32Array | null;
   headRadiusRatio: number;
   shaftRadiusRatio: number;
 }): string | undefined {
   if (!buildReference) return undefined;
   return [
     buildReference.buildKey,
+    "colorBuffer=" + (glyphColorBufferKey(colorsOverride) ?? "derived"),
     `color=${colorMode}`,
+    ...(colorScale === undefined ? [] : [`colorScale=${JSON.stringify(colorScale)}`]),
     `head=${headRadiusRatio}`,
     `shaft=${shaftRadiusRatio}`,
   ].join(":");
@@ -589,6 +610,8 @@ function useVectorGlyphBuild({
   buildKey,
   buildReference,
   colorMode,
+  colorScale,
+  colorsOverride,
   headRadiusRatio,
   invalidate,
   segments,
@@ -598,6 +621,8 @@ function useVectorGlyphBuild({
   buildKey?: string;
   buildReference?: Viewport3DVectorBuildReference | null;
   colorMode: string;
+  colorScale?: Viewport3DVisibleColorScale | null;
+  colorsOverride?: Float32Array | null;
   headRadiusRatio: number;
   invalidate: () => void;
   segments: Float32Array | null;
@@ -619,12 +644,14 @@ function useVectorGlyphBuild({
       segments
         ? {
             colorMode,
+            colorScale,
+            colorsOverride,
             headRadiusRatio,
             segments,
             shaftRadiusRatio,
           }
         : null,
-    [colorMode, headRadiusRatio, segments, shaftRadiusRatio],
+    [colorMode, colorScale, colorsOverride, headRadiusRatio, segments, shaftRadiusRatio],
   );
   const snapshot = useSyncExternalStore(
     store.subscribe,
@@ -808,7 +835,6 @@ function isAbortError(error: unknown): boolean {
 function useVectorGlyphUpload({
   buildKey,
   glyphColors,
-  glyphCount,
   glyphTransforms,
   headRef,
   instanceColorAttr,
@@ -823,7 +849,6 @@ function useVectorGlyphUpload({
 }: {
   buildKey?: string | null;
   glyphColors: Float32Array | null;
-  glyphCount: number;
   glyphTransforms: VectorGlyphTransforms | null;
   headRef: RefObject<InstancedMesh | null>;
   instanceColorAttr: InstancedBufferAttribute | null;
@@ -851,100 +876,6 @@ function useVectorGlyphUpload({
   useEffect(() => {
     const shaft = shaftRef.current;
     const head = headRef.current;
-    if (!shaft || !head || !instanceColorAttr) return;
-
-    if (!glyphColors) {
-      syncVectorGlyphColorState({
-        hasInstanceColors: false,
-        head,
-        instanceColorAttr,
-        material,
-        materialColor,
-        shaft,
-      });
-      tracker.recordDirtyFrame("vector-glyph-colors");
-      invalidate();
-      return;
-    }
-
-    const colorArray = instanceColorAttr.array as Float32Array;
-    const batches = buildVectorGlyphUploadBatches(glyphCount);
-    const uploadKeys = buildKey
-      ? createVectorGlyphUploadKeys({
-          buildKey,
-          colorByteLength: glyphColors.byteLength,
-          glyphCount,
-          targetRevision: targetRevision ?? null,
-          transformByteLength: 0,
-        })
-      : null;
-    const abortController = new AbortController();
-    const startMark = markVectorGlyphWork(VECTOR_GLYPH_COLOR_UPLOAD_MEASURE);
-    let measured = false;
-    const rollbacks = batches.map((batch) =>
-      createVectorGlyphColorUploadRollback({
-        attribute: instanceColorAttr,
-        count: batch.end - batch.start,
-        head,
-        material,
-        shaft,
-        start: batch.start,
-      }),
-    );
-    instanceColorAttr.clearUpdateRanges();
-
-    const chunks: Viewport3DGpuUploadChunk[] = batches.map((batch, index) => ({
-      estimatedBytes:
-        (batch.end - batch.start) * 3 * Float32Array.BYTES_PER_ELEMENT,
-      itemCount: batch.end - batch.start,
-      upload: () => {
-        colorArray.set(
-          glyphColors.subarray(batch.start * 3, batch.end * 3),
-          batch.start * 3,
-        );
-      },
-      rollback: rollbacks[index],
-    }));
-
-    uploadManager.enqueue({
-      chunks,
-      estimatedBytes: glyphColors.byteLength,
-      key:
-        uploadKeys?.colorKey ??
-        `vector-glyph-colors:${glyphCount}:${glyphColors.byteLength}`,
-      lane: "vector-glyph",
-      onVisible: () => {
-        measureVectorGlyphWork(VECTOR_GLYPH_COLOR_UPLOAD_MEASURE, startMark);
-        measured = true;
-      },
-      signal: abortController.signal,
-      targetRevision: uploadKeys?.targetRevision ?? null,
-    });
-
-    return () => {
-      abortController.abort();
-      if (!measured) {
-        clearVectorGlyphWorkMark(startMark);
-      }
-    };
-  }, [
-    buildKey,
-    glyphColors,
-    glyphCount,
-    headRef,
-    instanceColorAttr,
-    invalidate,
-    material,
-    materialColor,
-    shaftRef,
-    targetRevision,
-    tracker,
-    uploadManager,
-  ]);
-
-  useEffect(() => {
-    const shaft = shaftRef.current;
-    const head = headRef.current;
     if (!glyphTransforms || !shaft || !head || !instanceColorAttr) return;
 
     const activeGlyphs = glyphTransforms;
@@ -957,16 +888,27 @@ function useVectorGlyphUpload({
     const batches = buildVectorGlyphUploadBatches(activeGlyphs.count);
     const { direction, matrix, position, quaternion, scale } = transformScratch;
     const startMark = markVectorGlyphWork(VECTOR_GLYPH_MATRIX_UPLOAD_MEASURE);
+    const colorStartMark = glyphColors ? markVectorGlyphWork(VECTOR_GLYPH_COLOR_UPLOAD_MEASURE) : null;
     let measured = false;
     const abortController = new AbortController();
-    const rollbacks = batches.map((batch) =>
-      createVectorGlyphMatrixUploadRollback({
+    const rollbacks = batches.map((batch) => {
+      const rollbackMatrices = createVectorGlyphMatrixUploadRollback({
         count: batch.end - batch.start,
         head: activeHead,
         shaft: activeShaft,
         start: batch.start,
-      }),
-    );
+      });
+      const rollbackColors = createVectorGlyphColorUploadRollback({
+        attribute: instanceColorAttr,
+        count: batch.end - batch.start,
+        head: activeHead,
+        material,
+        shaft: activeShaft,
+        start: batch.start,
+      });
+      return () => { rollbackMatrices(); rollbackColors(); };
+    });
+    instanceColorAttr.clearUpdateRanges();
     activeShaft.instanceMatrix.clearUpdateRanges();
     activeHead.instanceMatrix.clearUpdateRanges();
     const transformByteLength = estimateVectorGlyphTransformBytes(activeGlyphs);
@@ -984,9 +926,14 @@ function useVectorGlyphUpload({
       const batchCount = batch.end - batch.start;
       return {
         estimatedBytes:
-          batchCount * 16 * Float32Array.BYTES_PER_ELEMENT * 2,
+          batchCount * Float32Array.BYTES_PER_ELEMENT * (32 + (glyphColors ? 3 : 0)),
         itemCount: batchCount,
         upload: () => {
+          if (glyphColors) {
+            (instanceColorAttr.array as Float32Array).set(
+              glyphColors.subarray(batch.start * 3, batch.end * 3), batch.start * 3,
+            );
+          }
           for (let index = batch.start; index < batch.end; index += 1) {
             const offset = index * 3;
             direction.set(
@@ -1029,8 +976,7 @@ function useVectorGlyphUpload({
 
     uploadManager.enqueue({
       chunks,
-      estimatedBytes:
-        activeGlyphs.count * 16 * Float32Array.BYTES_PER_ELEMENT * 2,
+      estimatedBytes: activeGlyphs.count * 32 * Float32Array.BYTES_PER_ELEMENT + (glyphColors?.byteLength ?? 0),
       key:
         uploadKeys?.matrixKey ??
         `vector-glyph-matrices:${activeGlyphs.count}:${activeGlyphs.directions.byteLength}`,
@@ -1066,6 +1012,7 @@ function useVectorGlyphUpload({
           activeGlyphs.count,
           16,
         );
+        if (colorStartMark) measureVectorGlyphWork(VECTOR_GLYPH_COLOR_UPLOAD_MEASURE, colorStartMark);
         measureVectorGlyphWork(VECTOR_GLYPH_MATRIX_UPLOAD_MEASURE, startMark);
         measured = true;
         tracker.recordDirtyFrame("vector-glyphs");
@@ -1081,6 +1028,9 @@ function useVectorGlyphUpload({
     return () => {
       abortController.abort();
       if (!measured) {
+        // Aborted upload tickets do not roll back their CPU buffers.
+        for (const rollback of rollbacks) rollback();
+        if (colorStartMark) clearVectorGlyphWorkMark(colorStartMark);
         clearVectorGlyphWorkMark(startMark);
       }
     };
@@ -1108,6 +1058,9 @@ export function VectorFieldLayer({
   carrierId,
   colors,
   colorMode = "orientation",
+  colorScale,
+  colorScopeKey,
+  onVisibleColorScale,
   glyphColorsOverride,
   opacity = 1,
   segments,
@@ -1123,6 +1076,9 @@ export function VectorFieldLayer({
   carrierId?: string;
   colors: Viewport3DColors;
   colorMode?: string;
+  colorScale?: Viewport3DVisibleColorScale | null;
+  colorScopeKey?: string | null;
+  onVisibleColorScale?: (report: Viewport3DVisibleColorScaleReport) => void;
   /** Optional field-derived RGB values, one triplet per glyph. */
   glyphColorsOverride?: Float32Array | null;
   materialProfile?: Viewport3DMaterialProfile["glyphs"];
@@ -1148,12 +1104,16 @@ export function VectorFieldLayer({
       createVectorGlyphSemanticBuildKey({
         buildReference,
         colorMode,
+        colorScale,
+        colorsOverride: glyphColorsOverride,
         headRadiusRatio: resolvedStyle.headRadiusRatio,
         shaftRadiusRatio: resolvedStyle.shaftRadiusRatio,
       }),
     [
       buildReference,
       colorMode,
+      colorScale,
+      glyphColorsOverride,
       resolvedStyle.headRadiusRatio,
       resolvedStyle.shaftRadiusRatio,
     ],
@@ -1162,6 +1122,8 @@ export function VectorFieldLayer({
     buildKey: vectorGlyphBuildKey,
     buildReference,
     colorMode,
+    colorScale,
+    colorsOverride: glyphColorsOverride,
     headRadiusRatio: resolvedStyle.headRadiusRatio,
     invalidate,
     segments,
@@ -1170,8 +1132,7 @@ export function VectorFieldLayer({
   });
   const glyphBuild = visibleGlyphBuild?.result ?? null;
   const glyphTransforms = glyphBuild?.transforms ?? null;
-  const glyphColors = glyphColorsOverride ?? glyphBuild?.colors ?? null;
-  const useInstanceColors = Boolean(glyphColors);
+  const glyphColors = glyphBuild?.colors ?? null;
   const glyphCount = glyphTransforms?.count ?? 0;
   const transformScratch = useMemo(
     () => createVectorGlyphTransformScratch(),
@@ -1196,6 +1157,8 @@ export function VectorFieldLayer({
   const adoptionOwnerId = `vector-field:${useId()}`;
   const recordAdoption = useCallback(
     (byteLength: number) => {
+      if (colorScopeKey) onVisibleColorScale?.({ scopeKey: colorScopeKey,
+        ownerId: adoptionOwnerId, pass: "vectors", scale: glyphBuild?.colorScale ?? null });
       const sourceVectorBuildKey = resolveVectorFieldAdoptionBuildKey(glyphBuild);
       if (!adoptionRegistry || !carrierId || !sourceVectorBuildKey) return;
       lastAdoptionRef.current = {
@@ -1221,8 +1184,17 @@ export function VectorFieldLayer({
         sessionIdentity,
       });
     },
-    [adoptionOwnerId, adoptionRegistry, carrierId, fieldBufferId, glyphBuild, glyphCount, sessionIdentity],
+    [adoptionOwnerId, adoptionRegistry, carrierId, colorScopeKey, fieldBufferId, glyphBuild, glyphCount, onVisibleColorScale, sessionIdentity],
   );
+  useEffect(() => () => {
+    if (colorScopeKey) onVisibleColorScale?.({ scopeKey: colorScopeKey,
+      ownerId: adoptionOwnerId, pass: "vectors", scale: null, removed: true });
+  }, [adoptionOwnerId, colorScopeKey, onVisibleColorScale]);
+  useEffect(() => {
+    if (glyphBuild && glyphCount > 0 || !colorScopeKey) return;
+    onVisibleColorScale?.({ scopeKey: colorScopeKey, ownerId: adoptionOwnerId,
+      pass: "vectors", scale: null, removed: true });
+  }, [adoptionOwnerId, colorScopeKey, glyphBuild, glyphCount, onVisibleColorScale]);
   useEffect(() => {
     if (!adoptionRegistry || !carrierId) return;
     const unregister = adoptionRegistry.registerCarrierAdoptionReplay(carrierId, () => {
@@ -1247,7 +1219,7 @@ export function VectorFieldLayer({
     };
   }, [adoptionOwnerId, adoptionRegistry, carrierId]);
   useEffect(() => {
-    if (glyphBuild || !adoptionRegistry || !carrierId) return;
+    if (glyphBuild && glyphCount > 0 || !adoptionRegistry || !carrierId) return;
     const adoption = lastAdoptionRef.current;
     if (!adoption) return;
     adoptionRegistry.clearAdoption(
@@ -1255,7 +1227,7 @@ export function VectorFieldLayer({
       vectorFieldAdoptionIdentity({ ...adoption, carrierId }),
     );
     lastAdoptionRef.current = null;
-  }, [adoptionOwnerId, adoptionRegistry, carrierId, glyphBuild]);
+  }, [adoptionOwnerId, adoptionRegistry, carrierId, glyphBuild, glyphCount]);
 
   useVectorGlyphMaterialSync({
     glyphPolicy,
@@ -1265,12 +1237,11 @@ export function VectorFieldLayer({
     materialOpacity: resolvedStyle.materialOpacity,
     materialProfile,
     tracker,
-    useInstanceColors,
+    useInstanceColors: material.vertexColors,
   });
   useVectorGlyphUpload({
     buildKey: visibleGlyphBuild?.buildKey ?? null,
     glyphColors,
-    glyphCount,
     glyphTransforms,
     headRef,
     instanceColorAttr,

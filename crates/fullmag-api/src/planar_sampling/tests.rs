@@ -1031,3 +1031,29 @@ fn planar_sampling_hex8_slab_integrates_the_trilinear_interpolant() {
     .unwrap();
     assert!((result.scalar_values[0] - 0.125).abs() < 1.0e-12, "{}", result.scalar_values[0]);
 }
+
+#[test]
+fn planar_fem_navigation_step_is_the_median_cut_extent() {
+    let extent = super::fem::section_extent(vec![4.0e-9, 1.0e-9, 0.0, 2.0e-9, f64::NAN]).unwrap();
+    // Degenerate and non-finite extents are not counted.
+    assert_eq!(extent.cut_element_count, 3);
+    assert_eq!(extent.normal_extent_median_m, 2.0e-9);
+    let even = super::fem::section_extent(vec![1.0, 3.0, 2.0, 10.0]).unwrap();
+    assert_eq!(even.normal_extent_median_m, 2.5);
+    assert!(super::fem::section_extent(Vec::new()).is_none());
+}
+
+#[test]
+fn planar_fem_plane_operator_publishes_cut_elements() {
+    let field = skew_tetra_field();
+    let frame = explicit_frame([0.25, 0.25, 0.3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+    let result = PlanarSamplingEngine::sample_fem(
+        &field,
+        &request(frame, PlanarOperatorIR::PlaneSample, [8, 8]),
+    )
+    .unwrap();
+    // One tetrahedron spanning z in [0, 3] is cut by the plane z = 0.3.
+    let extent = result.section_extent.expect("a cutting plane publishes its extent");
+    assert_eq!(extent.cut_element_count, 1);
+    assert!((extent.normal_extent_median_m - 3.0).abs() < 1.0e-12);
+}

@@ -181,6 +181,7 @@ describe("SHELL_COMMANDS", () => {
     const save = vi.fn();
     const projectDocument = {
       canSave: () => true,
+      getSnapshot: () => ({ state: "empty", resource: null }),
       create,
       open,
       save,
@@ -225,7 +226,11 @@ describe("SHELL_COMMANDS", () => {
       closeProject?.run({ projectDocument: closeDocument, source: "test", input: { discardChanges: true } }),
     ).toEqual({ message: "Project closed.", status: "completed" });
     expect(create).toHaveBeenCalledWith("Demo project");
-    expect(open).toHaveBeenCalledWith({ bytes: new Uint8Array([1]), fileName: "demo.fms" });
+    expect(open).toHaveBeenCalledWith(
+      { bytes: new Uint8Array([1]), fileName: "demo.fms" },
+      expect.any(Function),
+      expect.objectContaining({ assertCurrent: expect.any(Function), finalize: expect.any(Function) }),
+    );
     expect(save).toHaveBeenCalledOnce();
     expect(close).toHaveBeenCalledWith(true);
   });

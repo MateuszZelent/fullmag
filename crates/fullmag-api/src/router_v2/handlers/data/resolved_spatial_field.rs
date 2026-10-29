@@ -279,6 +279,9 @@ impl ResolvedSpatialField<'static> {
         quantity_revision: u64,
     ) -> Result<Self, ApiError> {
         let spec = quantity_spec(quantity_id).ok_or_else(|| ApiError::not_found("unknown artifact quantity"))?;
+        if carrier.sample_carrier.is_some() && quantity_id != "H_ant" {
+            return Err(ApiError::conflict("verified H sampling descriptor cannot describe a conductor field"));
+        }
         carrier.validate(values.len(), spec.n_comp as usize)?;
         if values.iter().any(|value| !value.is_finite()) {return Err(ApiError::conflict("nonfinite artifact field payload"));}
         let field = Self {

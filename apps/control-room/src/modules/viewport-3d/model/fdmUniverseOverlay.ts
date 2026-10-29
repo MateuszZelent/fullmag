@@ -49,7 +49,13 @@ export function resolveFdmUniverseOutsideSupportOverlayModel({
     semanticRole !== "universe-outside-magnetic-support" ||
     !magneticSupportBounds ||
     !universeBounds ||
-    !boundsStrictlyContain(universeBounds, magneticSupportBounds)
+    // Realized membership with inactive cells proves the outside support
+    // even when the magnetic AABB equals the grid AABB (a disk inscribed in
+    // its grid has inactive corner cells). Without that proof, the universe
+    // must extend beyond the support on some axis.
+    !boundsContain(universeBounds, magneticSupportBounds, {
+      strict: !(inactiveCellCount !== null && inactiveCellCount > 0),
+    })
   ) {
     return null;
   }
@@ -164,9 +170,10 @@ function toViewportBounds(bounds: {
   };
 }
 
-function boundsStrictlyContain(
+function boundsContain(
   outer: Viewport3DBounds,
   inner: Viewport3DBounds,
+  { strict }: { strict: boolean },
 ): boolean {
   const epsilon = Math.max(outer.radius, inner.radius, 1e-12) * 1e-12;
   let hasStrictExtension = false;
@@ -182,5 +189,5 @@ function boundsStrictlyContain(
       hasStrictExtension = true;
     }
   }
-  return hasStrictExtension;
+  return !strict || hasStrictExtension;
 }

@@ -20,6 +20,7 @@ from fullmag.model.geometry import (
     Union,
 )
 from ._gmsh_types import MeshData, SharedDomainMeshResult
+from ._gmsh_infra import _quality_volumes_in_si
 from ._airbox_grading import (
     _add_airbox_grading_field,
     _airbox_boundary_distance_from_bbox,
@@ -1002,6 +1003,12 @@ def generate_shared_domain_mesh_via_occ(
         scaled_mesh = _dc_replace(
             mesh,
             nodes=mesh.nodes / SCALE,
+            quality=_quality_volumes_in_si(mesh.quality, SCALE),
+            per_domain_quality=(
+                {marker: _quality_volumes_in_si(report, SCALE)
+                 for marker, report in mesh.per_domain_quality.items()}
+                if mesh.per_domain_quality is not None else None
+            ),
             periodic_boundary_pairs=_scale_periodic_boundary_pairs(
                 mesh.periodic_boundary_pairs,
                 scale=SCALE,

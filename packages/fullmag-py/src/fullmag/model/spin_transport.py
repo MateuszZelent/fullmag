@@ -302,6 +302,13 @@ class SpinInsulating(_SurfaceBoundary):
         super().__init__(id, surfaces, kind="spin_insulating")
 
 
+class HomogeneousSpinPotentialGradient(_SurfaceBoundary):
+    """Zero normal spin-potential gradient; total constitutive flux may be nonzero."""
+
+    def __init__(self, id: str, surfaces: Sequence[SurfaceRef]) -> None:
+        super().__init__(id, surfaces, kind="homogeneous_spin_potential_gradient")
+
+
 class SpinSink(_SurfaceBoundary):
     def __init__(self, id: str, surfaces: Sequence[SurfaceRef]) -> None:
         super().__init__(id, surfaces, kind="spin_sink")

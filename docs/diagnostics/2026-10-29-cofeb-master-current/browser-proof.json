@@ -1,0 +1,543 @@
+{
+  "ambiguous_command_submission": null,
+  "browser_gpu_mode": "swiftshader-webgl-requested",
+  "browser_route": {
+    "document_origin": "http://127.0.0.1:3198",
+    "private_upstream": "http://frontend:8080",
+    "proxy_failures": [],
+    "published_ports": 0
+  },
+  "canvas_after": {
+    "context_lost": false,
+    "context_type": "WebGL2RenderingContext",
+    "depth_bits": 24,
+    "drawing_buffer_height": 495,
+    "drawing_buffer_width": 617,
+    "height": 495,
+    "preserve_drawing_buffer": false,
+    "rect": {
+      "height": 495.59375,
+      "width": 617.234375
+    },
+    "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+    "topology_transfers": [
+      {
+        "duration_ms": 9.5,
+        "encoded_bytes": 64,
+        "start_ms": 6578.800000000745,
+        "transfer_bytes": 364
+      },
+      {
+        "duration_ms": 1115.300000000745,
+        "encoded_bytes": 4410336,
+        "start_ms": 8993.89999999851,
+        "transfer_bytes": 4410636
+      },
+      {
+        "duration_ms": 605.5,
+        "encoded_bytes": 8388608,
+        "start_ms": 10519.10000000149,
+        "transfer_bytes": 8388908
+      },
+      {
+        "duration_ms": 500.69999999925494,
+        "encoded_bytes": 8388608,
+        "start_ms": 11516.699999999255,
+        "transfer_bytes": 8388908
+      },
+      {
+        "duration_ms": 36.099999997764826,
+        "encoded_bytes": 809352,
+        "start_ms": 12049.300000000745,
+        "transfer_bytes": 809652
+      },
+      {
+        "duration_ms": 8.600000001490116,
+        "encoded_bytes": 631376,
+        "start_ms": 12091.199999999255,
+        "transfer_bytes": 631676
+      },
+      {
+        "duration_ms": 23.100000001490116,
+        "encoded_bytes": 4349000,
+        "start_ms": 12104,
+        "transfer_bytes": 4349300
+      },
+      {
+        "duration_ms": 10,
+        "encoded_bytes": 209816,
+        "start_ms": 12143.5,
+        "transfer_bytes": 210116
+      },
+      {
+        "duration_ms": 52.19999999925494,
+        "encoded_bytes": 8388608,
+        "start_ms": 12156.300000000745,
+        "transfer_bytes": 8388908
+      },
+      {
+        "duration_ms": 10.300000000745058,
+        "encoded_bytes": 309392,
+        "start_ms": 12238.89999999851,
+        "transfer_bytes": 309692
+      },
+      {
+        "duration_ms": 8.699999999254942,
+        "encoded_bytes": 419632,
+        "start_ms": 12298.60000000149,
+        "transfer_bytes": 419932
+      },
+      {
+        "duration_ms": 18.399999998509884,
+        "encoded_bytes": 4349000,
+        "start_ms": 12311,
+        "transfer_bytes": 4349300
+      },
+      {
+        "duration_ms": 15.099999997764826,
+        "encoded_bytes": 4349004,
+        "start_ms": 12345.10000000149,
+        "transfer_bytes": 4349304
+      },
+      {
+        "duration_ms": 8.800000000745058,
+        "encoded_bytes": 209816,
+        "start_ms": 12398.89999999851,
+        "transfer_bytes": 210116
+      },
+      {
+        "duration_ms": 10,
+        "encoded_bytes": 209816,
+        "start_ms": 12410.199999999255,
+        "transfer_bytes": 210116
+      },
+      {
+        "duration_ms": 9.199999999254942,
+        "encoded_bytes": 209820,
+        "start_ms": 12423,
+        "transfer_bytes": 210120
+      }
+    ],
+    "vendor": "Google Inc. (Google)",
+    "width": 617
+  },
+  "canvas_before": {
+    "context_lost": false,
+    "context_type": "WebGL2RenderingContext",
+    "depth_bits": 24,
+    "drawing_buffer_height": 495,
+    "drawing_buffer_width": 617,
+    "height": 495,
+    "preserve_drawing_buffer": false,
+    "rect": {
+      "height": 495.59375,
+      "width": 617.234375
+    },
+    "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+    "topology_transfers": [
+      {
+        "duration_ms": 9.5,
+        "encoded_bytes": 64,
+        "start_ms": 6578.800000000745,
+        "transfer_bytes": 364
+      },
+      {
+        "duration_ms": 1115.300000000745,
+        "encoded_bytes": 4410336,
+        "start_ms": 8993.89999999851,
+        "transfer_bytes": 4410636
+      }
+    ],
+    "vendor": "Google Inc. (Google)",
+    "width": 617
+  },
+  "canvas_only": true,
+  "canvas_screenshot": {
+    "byte_length": 67122,
+    "height": 496,
+    "image_proof": true,
+    "media_type": "image/png",
+    "state": "captured",
+    "width": 618,
+    "sha256": "83c55cfadc91010394a00cf47242ea79c889c3d8c4cd5b2aa2ce62863797761c"
+  },
+  "console_errors": 0,
+  "expect_airbox_vectors": false,
+  "expect_ambiguous_compute_fields": false,
+  "expect_live_field": "m",
+  "expected_console_errors": [],
+  "expected_response_drops": [],
+  "final_url": "http://127.0.0.1:3198/session/permalloy_layer_cofeb_rings_relax_300nm",
+  "harness_source_sha256": {
+    "algorithm": "sha256",
+    "appearance_helper_after": "32c49b926cc9a63cac53b37c9f1e8f1c0a04ee5f6df21006b463cd5aa6843583",
+    "appearance_helper_before": "32c49b926cc9a63cac53b37c9f1e8f1c0a04ee5f6df21006b463cd5aa6843583",
+    "camera_helper_after": "a3301e81055d147a214ffa59b2598cac7d3ad9ae93ecd6418956285019aca4cf",
+    "camera_helper_before": "a3301e81055d147a214ffa59b2598cac7d3ad9ae93ecd6418956285019aca4cf",
+    "export_helper_after": "0045c4fc94b779e6d375e68e89aac92ab9e9fe8c2942c994fa006bdd262ca7a4",
+    "export_helper_before": "0045c4fc94b779e6d375e68e89aac92ab9e9fe8c2942c994fa006bdd262ca7a4",
+    "fixture_builders_after": "0bac81566ebab86708a878f10ef47b6bb0618e9357183ab5f5b69f5738ef5893",
+    "fixture_builders_before": "0bac81566ebab86708a878f10ef47b6bb0618e9357183ab5f5b69f5738ef5893",
+    "fixture_data_after": "13c75605703a21ff563235af8a27ac505279d45ecbca57b77edfe32095615774",
+    "fixture_data_before": "13c75605703a21ff563235af8a27ac505279d45ecbca57b77edfe32095615774",
+    "fixture_helper_after": "eaad2ec84048d7014a8846e8405a8b8903049c90fbf01ae616aaf6760ca9aeff",
+    "fixture_helper_before": "eaad2ec84048d7014a8846e8405a8b8903049c90fbf01ae616aaf6760ca9aeff",
+    "layout_helper_after": "df39cfb03681a5330e9451d56d1b8db3e7e6384178f65b94a55127a70b6663cc",
+    "layout_helper_before": "df39cfb03681a5330e9451d56d1b8db3e7e6384178f65b94a55127a70b6663cc",
+    "lifecycle_helper_after": "cf9a1486b23b0cb86357c373cf9e38ca7cd7372d5245648a19156bbdb88c3b44",
+    "lifecycle_helper_before": "cf9a1486b23b0cb86357c373cf9e38ca7cd7372d5245648a19156bbdb88c3b44",
+    "loopback_proxy_after": "6436e17c79b299542ecf02ea23afa4f6e5bb230233b7db1a6b32fbad3da38db4",
+    "loopback_proxy_before": "6436e17c79b299542ecf02ea23afa4f6e5bb230233b7db1a6b32fbad3da38db4",
+    "performance_helper_after": "c2885cf333ef35b994ee2996d5f16763ab1ac4f910f36e7c3d9aea1f084f7232",
+    "performance_helper_before": "c2885cf333ef35b994ee2996d5f16763ab1ac4f910f36e7c3d9aea1f084f7232",
+    "runner_after": "4d171a5c6ca2c10444240ed00e12739a56f4469bf80f4da3ddbfc234e52d1aec",
+    "runner_before": "4d171a5c6ca2c10444240ed00e12739a56f4469bf80f4da3ddbfc234e52d1aec",
+    "unchanged": true
+  },
+  "home": {
+    "section": "home",
+    "session_label": "Simulation open: permalloy_layer_cofeb_rings_relax_300nm",
+    "visible": true
+  },
+  "home_round_trip": true,
+  "http_errors": [],
+  "live_field_observation": {
+    "after_home": {
+      "dataset": {
+        "fdm_airbox_model_count": 0,
+        "fdm_airbox_vector_segment_count": 0,
+        "fdm_airbox_vectors_visible": false,
+        "fdm_domain_bounds": "",
+        "fdm_model_count": 0,
+        "fdm_vector_segment_count": 0
+      },
+      "field_state": "data-ready",
+      "label_visible": true,
+      "quantity_id": "m",
+      "readiness_signal": "visible quantity label data-field-state=data-ready",
+      "solver_family": "fem"
+    },
+    "airbox_vectors_expected": false,
+    "before_home": {
+      "dataset": {
+        "fdm_airbox_model_count": 0,
+        "fdm_airbox_vector_segment_count": 0,
+        "fdm_airbox_vectors_visible": false,
+        "fdm_domain_bounds": "",
+        "fdm_model_count": 0,
+        "fdm_vector_segment_count": 0
+      },
+      "field_state": "data-ready",
+      "label_visible": true,
+      "quantity_id": "m",
+      "readiness_signal": "visible quantity label data-field-state=data-ready",
+      "solver_family": "fem"
+    },
+    "expected_quantity_id": "m",
+    "field_data_proven": false,
+    "note": "Quantity label data-ready and viewport datasets are DOM readiness observations only; they do not prove field payload presence or values."
+  },
+  "page_errors": 0,
+  "playwright_version": "1.62.1",
+  "probe_url": "http://frontend:8080",
+  "public_url": "http://127.0.0.1:3198",
+  "qa_scope": "canvas-home-live-field",
+  "request_cancellations": [
+    "GET http://127.0.0.1:3198/v2/platform/health net::ERR_ABORTED",
+    "GET http://127.0.0.1:3198/v2/sessions/current/model/planar-monitors net::ERR_ABORTED"
+  ],
+  "request_failures": 0,
+  "resource_responses": [
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/platform/instances"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/platform/health"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/status"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/model/readiness"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/simulation/commands"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/model/geometry/validation"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/meshing/builds/current"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/meshing/meshes/shared-domain/manifest"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/simulation/solver/status"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/simulation/stages/execution"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/visualization/state"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/simulation/preparation"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/platform/health"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/simulation/runs/current"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/model/geometry/capabilities"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/meshing/builds/latest-successful"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/meshing/capabilities"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/meshing/summary"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/meshing/semantics"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/persistence/checkpoints"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/model/frozen-spins"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/platform/health"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/model/planar-monitors"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/model/scene"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/data/domain/meta"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/meshing/policies/universe"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/model/regions"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/model/material-fields"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/model/couplings"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/model/physics-graph"
+    },
+    {
+      "content_type": "application/json",
+      "status": 200,
+      "url": "http://127.0.0.1:3198/v2/sessions/current/model/current-transports"
+    }
+  ],
+  "schema": "fullmag.docker-dev-browser-qa-result.v1",
+  "session": {
+    "request_scope_epoch": "f6a5349e-3f07-4f4f-89bc-ba7b5deaecf6:2",
+    "session_epoch": "docker-startup-81eddad36acf3e82f40f751f18963403c1104423786cac8d1229c291c475d0f8@1793243654041",
+    "session_id": "docker-startup-81eddad36acf3e82f40f751f18963403c1104423786cac8d1229c291c475d0f8"
+  },
+  "skipped_areas": [
+    "viewport appearance and color-profile checks",
+    "camera interaction checks",
+    "viewport export checks at DPR 1 and DPR 2",
+    "layout and DPR 1/2 checks",
+    "20-cycle viewport lifecycle checks",
+    "viewport QA fixture preparation",
+    "scene/model adoption readiness endpoint",
+    "viewport performance instrumentation"
+  ],
+  "state": "passed",
+  "viewport_dom_observations": {
+    "after_home": {
+      "dataset": {
+        "cameraPosition": "0.000004850865811388599 0.0000034926233841997913 0.000004850865811388599",
+        "cameraProjection": "perspective",
+        "cameraTarget": "0 0 0",
+        "cameraUp": "0 0 1",
+        "fdmAirboxBuildError": "",
+        "fdmAirboxBuildKey": "",
+        "fdmAirboxBuildStatus": "idle",
+        "fdmAirboxDomainCellCount": "0",
+        "fdmAirboxModelCount": "0",
+        "fdmAirboxPointsVisible": "false",
+        "fdmAirboxTarget": "airbox",
+        "fdmAirboxVectorLengthMax": "0",
+        "fdmAirboxVectorLengthMin": "0",
+        "fdmAirboxVectorLengthScale": "1",
+        "fdmAirboxVectorSegmentCount": "0",
+        "fdmAirboxVectorsVisible": "false",
+        "fdmAirboxViewPresent": "false",
+        "fdmAirboxWireframeVisible": "false",
+        "fdmDomainBounds": "",
+        "fdmModelCount": "0",
+        "fdmVectorSegmentCount": "0",
+        "frozenSpinsOverlayCount": "0",
+        "frozenSpinsOverlaySource": "none",
+        "frozenSpinsOverlayVisible": "true",
+        "frozenSpinsPreviewCurrent": "false",
+        "hysteresisReplayFieldDirection": "",
+        "hysteresisReplayMeasurementAxis": "",
+        "hysteresisReplaySnapshotId": "",
+        "hysteresisReplayStageId": "",
+        "inspectEnabled": "false",
+        "primitiveObjectCount": "2",
+        "primitiveObjectGeometryDescriptors": "permalloy_layer:Box:{\"size\":[0.0000020000000000000003,6.000000000000001e-7,1.6000000000000003e-9]}:{\"pivot\":[0,0,0],\"rot cofeb_top_ring:Difference:{\"base\":{\"geometry_kind\":\"Cylinder\",\"geometry_params\":{\"axis\":[1,0,0],\"height\":5.0000000000000",
+        "primitiveObjectIds": "permalloy_layer cofeb_top_ring",
+        "primitiveObjectKinds": "permalloy_layer:box cofeb_top_ring:cylinder-cylinder-difference",
+        "topologyFreshness": "current",
+        "viewSource": "current",
+        "viewportBounds": "{\"center\":[0,0,0],\"radius\":0.0000018499999999999999,\"size\":[0.0000028,0.0000021,0.0000012]}",
+        "visualProfileId": "interactive"
+      },
+      "dataset_entry_count": 38,
+      "dataset_truncated": false,
+      "quantity_label_count": 1,
+      "quantity_labels": [
+        {
+          "field_state": "data-ready",
+          "quantity_id": "m",
+          "tag_name": "span"
+        }
+      ],
+      "quantity_labels_truncated": false
+    },
+    "before_home": {
+      "dataset": {
+        "cameraPosition": "0.000004850865811388599 0.0000034926233841997913 0.000004850865811388599",
+        "cameraProjection": "perspective",
+        "cameraTarget": "0 0 0",
+        "cameraUp": "0 0 1",
+        "fdmAirboxBuildError": "",
+        "fdmAirboxBuildKey": "",
+        "fdmAirboxBuildStatus": "idle",
+        "fdmAirboxDomainCellCount": "0",
+        "fdmAirboxModelCount": "0",
+        "fdmAirboxPointsVisible": "false",
+        "fdmAirboxTarget": "airbox",
+        "fdmAirboxVectorLengthMax": "0",
+        "fdmAirboxVectorLengthMin": "0",
+        "fdmAirboxVectorLengthScale": "1",
+        "fdmAirboxVectorSegmentCount": "0",
+        "fdmAirboxVectorsVisible": "false",
+        "fdmAirboxViewPresent": "false",
+        "fdmAirboxWireframeVisible": "false",
+        "fdmDomainBounds": "",
+        "fdmModelCount": "0",
+        "fdmVectorSegmentCount": "0",
+        "frozenSpinsOverlayCount": "0",
+        "frozenSpinsOverlaySource": "none",
+        "frozenSpinsOverlayVisible": "true",
+        "frozenSpinsPreviewCurrent": "false",
+        "hysteresisReplayFieldDirection": "",
+        "hysteresisReplayMeasurementAxis": "",
+        "hysteresisReplaySnapshotId": "",
+        "hysteresisReplayStageId": "",
+        "inspectEnabled": "false",
+        "primitiveObjectCount": "2",
+        "primitiveObjectGeometryDescriptors": "permalloy_layer:Box:{\"size\":[0.0000020000000000000003,6.000000000000001e-7,1.6000000000000003e-9]}:{\"pivot\":[0,0,0],\"rot cofeb_top_ring:Difference:{\"base\":{\"geometry_kind\":\"Cylinder\",\"geometry_params\":{\"axis\":[1,0,0],\"height\":5.0000000000000",
+        "primitiveObjectIds": "permalloy_layer cofeb_top_ring",
+        "primitiveObjectKinds": "permalloy_layer:box cofeb_top_ring:cylinder-cylinder-difference",
+        "topologyFreshness": "current",
+        "viewSource": "current",
+        "viewportBounds": "{\"center\":[0,0,0],\"radius\":0.0000018499999999999999,\"size\":[0.0000028,0.0000021,0.0000012]}",
+        "visualProfileId": "interactive"
+      },
+      "dataset_entry_count": 38,
+      "dataset_truncated": false,
+      "quantity_label_count": 1,
+      "quantity_labels": [
+        {
+          "field_state": "no-data",
+          "quantity_id": "m",
+          "tag_name": "span"
+        }
+      ],
+      "quantity_labels_truncated": false
+    },
+    "field_data_proven": false,
+    "note": "Viewport dataset and quantity label attributes are DOM observations only; they do not prove field payload presence or values."
+  },
+  "workspace": {
+    "canvas_dom_stable": true,
+    "visible": true
+  }
+}

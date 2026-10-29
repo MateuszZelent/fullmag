@@ -1072,6 +1072,852 @@
       "latex": "$\\widetilde h_{\\perp,b},W_{\\perp},b$",
       "meaning": "zespolona amplituda integral_si, suma jej mocy oraz indeks $b=x,y,z$",
       "si_unit": "odpowiednio $\\mathrm m$, $\\mathrm{m^2}$ i $1$"
+    },
+    {
+      "id": "gm_points",
+      "latex": "$\\mathbf a,\\mathbf b,\\mathbf c,\\mathbf r$",
+      "meaning": "Uporządkowane punkty panelu i punkt obserwacji",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "gm_vectors",
+      "latex": "$\\mathbf e_1,\\mathbf e_2,\\mathbf p,\\mathbf d$",
+      "meaning": "Krawędzie i wektory Duffy",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "gm_J",
+      "latex": "$J$",
+      "meaning": "Dwukrotne dodatnie pole panelu",
+      "si_unit": "$\\mathrm{m^2}$"
+    },
+    {
+      "id": "gm_AB",
+      "latex": "$A,B$",
+      "meaning": "Norma promienia do kwadratu i iloczyn p z promieniem",
+      "si_unit": "$\\mathrm{m^2}$"
+    },
+    {
+      "id": "gm_C",
+      "latex": "$C,c_0,c_1,c_2,C_{\\min}$",
+      "meaning": "Kwadrat normy iloczynu wektorowego, jego dokładne współczynniki i minimum",
+      "si_unit": "$\\mathrm{m^4}$"
+    },
+    {
+      "id": "gm_parameters",
+      "latex": "$u,v,w,z$",
+      "meaning": "Parametry starych i nowych całek na odcinku jednostkowym",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gm_vmin",
+      "latex": "$v_*,v_0$",
+      "meaning": "Minimum parametru bez ograniczeń i minimum w dziedzinie",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gm_grade",
+      "latex": "$\\varepsilon,L_j,K_j,\\sigma_j$",
+      "meaning": "Skala parametryczna, długość przedziału, parametr zagęszczenia i znak",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gm_slope",
+      "latex": "$\\lambda_j$",
+      "meaning": "Nieujemna pochodna C od minimum w kierunku spanu",
+      "si_unit": "$\\mathrm{m^4}$"
+    },
+    {
+      "id": "gm_distance",
+      "latex": "$s,\\beta,\\delta,R,R_0,R_1,R_a,R_b$",
+      "meaning": "Długości w radialnej zmianie zmiennych",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "gm_radial",
+      "latex": "$\\tau_0,\\tau_1,L,x$",
+      "meaning": "Granice hiperboliczne, dodatnia długość radialna i połowa argumentu",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gm_positive",
+      "latex": "$t_0,D_+,D_-,a,b$",
+      "meaning": "Podpisana odległość radialna i dodatnie składniki stabilnych wzorów",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "gm_jac",
+      "latex": "$j_u,j_v$",
+      "meaning": "Bezwymiarowe Jacobiany obu zmian współrzędnych",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gm_potential",
+      "latex": "$I,I_i,F,\\widetilde F_j,g$",
+      "meaning": "Całka całkowita i panelu, skalarny integrand oraz istniejąca bramka naukowa",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "gm_scale",
+      "latex": "$\\ell$",
+      "meaning": "Dokładna skala długości z reference_scale",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "gm_offset",
+      "latex": "$\\epsilon_z$",
+      "meaning": "Pionowe przesunięcie zadane w rzeczywistym M16/shear",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "gm_index",
+      "latex": "$i,j,k,m,n,N_p,P,S_m,n_m$",
+      "meaning": "Indeksy, stopnie i liczby paneli, części oraz węzłów",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gm_error",
+      "latex": "$E_{\\mathrm{outer}},E_{\\mathrm{inner}}$",
+      "meaning": "Błędy kątowy i radialny wymagające osobnego oszacowania",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "gm_weight",
+      "latex": "$W_j,Q_z,Q_w$",
+      "meaning": "Dodatnia waga oraz operatory numerycznej kwadratury",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gm_work",
+      "latex": "$W$",
+      "meaning": "Liczba prób ocen numerycznego integranda",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gm_ops",
+      "latex": "$\\int,\\times,\\cdot,\\partial,\\operatorname{clip},\\operatorname{asinh}$",
+      "meaning": "Operatory całki, iloczynów, pochodnej, ograniczenia dziedziny i funkcji elementarnych; jednostki wynikają z operandów",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "analytic_v2_direct2d_gl_symbol_0",
+      "latex": "$\\mathbf a,\\mathbf b,\\mathbf c,\\mathbf r,\\mathbf e_1,\\mathbf e_2,\\mathbf d$",
+      "meaning": "punkty/wektory panelu",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "analytic_v2_direct2d_gl_symbol_1",
+      "latex": "$u,v,x_{m,j},w_{m,j},P_{n_m},P'_{n_m}$",
+      "meaning": "parametry, węzły, wagi, polynomial i derivative w bezwymiarowym argumencie",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "analytic_v2_direct2d_gl_symbol_2",
+      "latex": "$J$",
+      "meaning": "moduł cross krawędzi, dwukrotne pole",
+      "si_unit": "$\\mathrm{m^2}$"
+    },
+    {
+      "id": "analytic_v2_direct2d_gl_symbol_3",
+      "latex": "$R$",
+      "meaning": "odległość target od punktu Duffy",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "analytic_v2_direct2d_gl_symbol_4",
+      "latex": "$I,I_i,I_{\\mathrm D,200,12},\\Delta I,\\Delta I_i,\\ell,g$",
+      "meaning": "całki panel/total, różnice, exact scale i gate",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "analytic_v2_direct2d_gl_symbol_5",
+      "latex": "$Q_m[f],f$",
+      "meaning": "reguła i integrand; jednostka wynika z argumentu, tutaj $J/R$",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "analytic_v2_direct2d_gl_symbol_6",
+      "latex": "$m,j,n_m,S_M,M,N_p,W$",
+      "meaning": "stopień, indeks, liczba nodes/sum, maxdegree, panele i work",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "analytic_v2_direct2d_gl_symbol_7",
+      "latex": "$\\int,\\times,\\lVert\\cdot\\rVert,\\Delta$",
+      "meaning": "operator całki, cross, normy i różnicy; jednostki zgodnie z operandami",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "analytic_v2_fixed_ctypes_read",
+      "latex": "$M_{\\mathrm{read}}$",
+      "meaning": "max obu peak OS, nie bieżący working set",
+      "si_unit": "$\\mathrm{byte}$"
+    },
+    {
+      "id": "analytic_v2_fixed_ctypes_ws",
+      "latex": "$M_{\\mathrm{ws,peak}}$",
+      "meaning": "PeakWorkingSetSize bieżącego procesu",
+      "si_unit": "$\\mathrm{byte}$"
+    },
+    {
+      "id": "analytic_v2_fixed_ctypes_commit",
+      "latex": "$M_{\\mathrm{commit,peak}}$",
+      "meaning": "PeakPagefileUsage, lifetime peak commit charge",
+      "si_unit": "$\\mathrm{byte}$"
+    },
+    {
+      "id": "analytic_v2_fixed_ctypes_budget",
+      "latex": "$M_{\\mathrm{budget}}$",
+      "meaning": "monotonically retained peak jedynego Budget",
+      "si_unit": "$\\mathrm{byte}$"
+    },
+    {
+      "id": "analytic_v2_fixed_ctypes_limit",
+      "latex": "$Q_{\\mathrm{RAM}}$",
+      "meaning": "zamrożony limit 2147483648 B",
+      "si_unit": "$\\mathrm{byte}$"
+    },
+    {
+      "id": "analytic_v2_fixed_ctypes_time",
+      "latex": "$t$",
+      "meaning": "monotonic elapsed; setup/pomiar/cleanup wliczone",
+      "si_unit": "$\\mathrm{s}$"
+    },
+    {
+      "id": "analytic_v2_general_positions",
+      "latex": "$\\mathbf a_g,\\mathbf b_g,\\mathbf c_g,\\mathbf r_g,\\mathbf e_{g,1},\\mathbf e_{g,2},\\mathbf w_g,\\mathbf p_g,\\mathbf x_g$",
+      "meaning": "punkty/wektory panelu i target",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "analytic_v2_general_coords",
+      "latex": "$u_g,v_g$",
+      "meaning": "Duffy radial/angular coordinates",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "analytic_v2_general_squares",
+      "latex": "$dS_g,K_g,A_g,B_g,C_g,\\delta_g^2$",
+      "meaning": "miara/pole, iloczyny i squared distance",
+      "si_unit": "$\\mathrm{m^2}$"
+    },
+    {
+      "id": "analytic_v2_general_lengths",
+      "latex": "$s_g,\\beta_g,\\delta_g,R_g,R_{g,0},R_{g,1},D_g,E_g,t_g,t_{g,0},t_{g,1},\\ell_g$",
+      "meaning": "długości, bound denominator i gate scale",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "analytic_v2_general_radial",
+      "latex": "$F_g$",
+      "meaning": "radial primitive",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "analytic_v2_general_potential",
+      "latex": "$I_g,I_{\\mathrm{ref},g}$",
+      "meaning": "scalar panel/total reference potential",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "analytic_v2_general_log",
+      "latex": "$L_g$",
+      "meaning": "dimensionless logratio",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "analytic_v2_general_counts",
+      "latex": "$m_g,d_g,j_g,N_g,S_g,P_g,W_g,W_{\\mathrm{test},g},W_{\\mathrm{corpus},g}$",
+      "meaning": "maxdegree, currentdegree, index, count/bound",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "analytic_v2_general_memory",
+      "latex": "$M_g,M_g^{\\mathrm{estimated}},H_g,Q_g$",
+      "meaning": "estimated memory, allocated headroom, RAM cap",
+      "si_unit": "$\\mathrm{byte}$"
+    },
+    {
+      "id": "analytic_v2_general_operators",
+      "latex": "$\\partial_{u_g},\\int,\\cdot,\\times,\\lVert\\cdot\\rVert$",
+      "meaning": "pochodna, całka, dot/cross i norma",
+      "si_unit": "operator: jednostki zgodnie z argumentem; $u_g$ ma $1$"
+    },
+    {
+      "id": "analytic_v2_vertex_positions",
+      "latex": "$\\mathbf a_r,\\mathbf b_r,\\mathbf c_r,\\mathbf r_r,\\mathbf e_{r,1},\\mathbf e_{r,2},\\mathbf w_r$",
+      "meaning": "wierzchołki panelu, target, krawędzie i promień Duffy",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "analytic_v2_vertex_coordinates",
+      "latex": "$u_r,v_r$",
+      "meaning": "współrzędne radialna i kątowa kwadratu jednostkowego",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "analytic_v2_vertex_area",
+      "latex": "$A_r$",
+      "meaning": "dodatnia długość wektora podwojonego pola zachowanego panelu",
+      "si_unit": "$\\mathrm{m^2}$"
+    },
+    {
+      "id": "analytic_v2_vertex_potential",
+      "latex": "$I_r$",
+      "meaning": "potencjał skalarny zachowanego dodatniego panelu",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "analytic_v2_reference_counts_0",
+      "latex": "$C_{\\mathrm{part}},C_{\\mathrm{init}}$",
+      "meaning": "porównania jednej dodatniej partycji oraz pierwszej partycji przed sześcioma passami",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "analytic_v2_reference_counts_1",
+      "latex": "$C_{\\mathrm{vertex}}$",
+      "meaning": "dokładne coordinate equalities target–panel origin podczas jednego passu",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "analytic_v2_reference_counts_2",
+      "latex": "$C_{\\mathrm{scale}}$",
+      "meaning": "dokładne porównania wybierające gate scale z dziewięciu kandydatów",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "analytic_v2_reference_counts_3",
+      "latex": "$C_{\\mathrm{ref}},C_{\\mathrm{corpus}},N_{\\mathrm{ref}}$",
+      "meaning": "attempted comparisons jednego face–target testu, suma corpus oraz liczba testów",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "analytic_v2_symbol_0",
+      "latex": "$T,F,i,j$",
+      "meaning": "tetrahedron, physical triangle, cykliczne vertex indices",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "analytic_v2_symbol_1",
+      "latex": "$\\mathbf x,\\mathbf r,\\mathbf v_i,\\mathbf q,\\mathbf s,\\mathbf w_i,\\ell,L,R_i,h,d,x_i,x_j$",
+      "meaning": "pozycje, displacement, skala, długości, signed distances",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "analytic_v2_symbol_2",
+      "latex": "$\\mathbf n,\\mathbf t,\\mathbf m$",
+      "meaning": "unit normal/tangent/conormal",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "analytic_v2_symbol_3",
+      "latex": "$\\mathbf N,A_{ij}$",
+      "meaning": "unnormalized face normal, signed doubled fan area",
+      "si_unit": "$\\mathrm{m^2}$"
+    },
+    {
+      "id": "analytic_v2_symbol_4",
+      "latex": "$D,\\rho^2,I_F,I_{ij}$",
+      "meaning": "stable denominator; squared transverse distance; face/fan potentials",
+      "si_unit": "$\\mathrm m,\\ \\mathrm{m^2},\\ \\mathrm m,\\ \\mathrm m$"
+    },
+    {
+      "id": "analytic_v2_symbol_5",
+      "latex": "$\\Omega,\\Lambda$",
+      "meaning": "signed solid angle; edge logarithm",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "analytic_v2_symbol_6",
+      "latex": "$\\mathbf J,\\mathbf a,b,\\mathbf H$",
+      "meaning": "current density, affine intercept/slope, magnetic field",
+      "si_unit": "$\\mathrm{A\\,m^{-2}},\\ \\mathrm{A\\,m^{-2}},\\ \\mathrm{A\\,m^{-3}},\\ \\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "analytic_v2_symbol_7",
+      "latex": "$\\epsilon,\\kappa$",
+      "meaning": "binary64 machine epsilon, cancellation condition",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "analytic_v2_symbol_8",
+      "latex": "$\\sigma,V,\\Delta V,I_c,P_h,\\mathcal D_h$",
+      "meaning": "conductivity, potential/jump, signed current, dissipated power, half-power variational functional",
+      "si_unit": "$\\mathrm{S\\,m^{-1}},\\ \\mathrm V,\\ \\mathrm V,\\ \\mathrm A,\\ \\mathrm W,\\ \\mathrm W$"
+    },
+    {
+      "id": "analytic_v2_symbol_9",
+      "latex": "$dS,\\nabla_F,\\nabla_{\\mathbf x}$",
+      "meaning": "surface measure, plane and spatial gradient",
+      "si_unit": "$\\mathrm{m^2},\\ \\mathrm{m^{-1}},\\ \\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "loop_domain",
+      "latex": "$\\Omega_c$",
+      "meaning": "pełna objętość przewodzącej pętli wraz z oboma mostkami",
+      "si_unit": "$\\mathrm{m}^3$"
+    },
+    {
+      "id": "loop_edge_matrix",
+      "latex": "$A_c$",
+      "meaning": "macierz trzech krawędzi tetraedru do kontroli jakości v2",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "loop_edge_length",
+      "latex": "$\\ell_c$",
+      "meaning": "największa długość krawędzi tetraedru do kontroli jakości v2",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "loop_epsilon",
+      "latex": "$\\epsilon_c$",
+      "meaning": "maszynowe epsilon arytmetyki double",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "charge-refine-K",
+      "latex": "$\\mathsf K$",
+      "meaning": "owned oryginalny diffusion stiffness przed eliminacją",
+      "si_unit": "$\\mathrm{S}$"
+    },
+    {
+      "id": "charge-refine-T",
+      "latex": "$\\mathsf T$",
+      "meaning": "zero-one injection wolnych quotient DOF do pełnych DOF; fixed rows zero",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "charge-refine-A",
+      "latex": "$\\mathsf A$",
+      "meaning": "ten sam złożony i finalized free quotient operator",
+      "si_unit": "$\\mathrm{S}$"
+    },
+    {
+      "id": "charge-refine-V0",
+      "latex": "$\\mathbf V_0$",
+      "meaning": "istniejący lift plus fixed anchor/gauge",
+      "si_unit": "$\\mathrm{V}$"
+    },
+    {
+      "id": "charge-refine-V",
+      "latex": "$\\mathbf V$",
+      "meaning": "rzeczywisty odtworzony potencjał binary64",
+      "si_unit": "$\\mathrm{V}$"
+    },
+    {
+      "id": "charge-refine-b",
+      "latex": "$\\mathbf b$",
+      "meaning": "pierwotny RHS, niezmienny w każdej korekcji",
+      "si_unit": "$\\mathrm{A}$"
+    },
+    {
+      "id": "charge-refine-q",
+      "latex": "$\\mathbf q$",
+      "meaning": "true free quotient reactions, original K action + long-double quotient sum",
+      "si_unit": "$\\mathrm{A}$"
+    },
+    {
+      "id": "charge-refine-c",
+      "latex": "$c$",
+      "meaning": "jawny electrical component, indeks w niezmienionym partition",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "charge-refine-eta",
+      "latex": "$\\eta_c$",
+      "meaning": "niezależny per-component relative residual",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "charge-refine-floor",
+      "latex": "$f_A$",
+      "meaning": "istniejący denominator floor, dokładnie $10^{-30}\\,\\mathrm A$",
+      "si_unit": "$\\mathrm{A}$"
+    },
+    {
+      "id": "charge-refine-tau",
+      "latex": "$\\tau_H$",
+      "meaning": "istniejąca authored `algebraic_relative_tolerance`; tu $10^{-12}$",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "charge-refine-delta",
+      "latex": "$\\delta\\mathbf u$",
+      "meaning": "correction z tego samego PCG/operatora/preconditionera",
+      "si_unit": "$\\mathrm{V}$"
+    },
+    {
+      "id": "charge-refine-r",
+      "latex": "$\\mathbf r$",
+      "meaning": "wewnętrzny rekurencyjny residual PCG",
+      "si_unit": "$\\mathrm{A}$"
+    },
+    {
+      "id": "charge-refine-B",
+      "latex": "$\\mathsf B$",
+      "meaning": "symmetric Gauss-Seidel inverse preconditioner",
+      "si_unit": "$\\mathrm{\\Omega}$"
+    },
+    {
+      "id": "charge-refine-nu",
+      "latex": "$\\nu$",
+      "meaning": "wewnętrzna norma MFEM PCG; nie norma w amperach",
+      "si_unit": "$\\mathrm{W}^{1/2}$"
+    },
+    {
+      "id": "charge-refine-indices",
+      "latex": "$j,p,n_j,N_{\\max}$",
+      "meaning": "indeks wywołania, ostatnie wywołanie, actual CG iterations, wspólny budget",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg_branch",
+      "latex": "b",
+      "meaning": "indeks gałęzi",
+      "si_unit": "1"
+    },
+    {
+      "id": "gsg_current",
+      "latex": "I_b",
+      "meaning": "podpisany prąd gałęzi",
+      "si_unit": "\\mathrm A"
+    },
+    {
+      "id": "gsg_density",
+      "latex": "J_b",
+      "meaning": "gęstość prądu gałęzi",
+      "si_unit": "\\mathrm{A\\,m^{-2}}"
+    },
+    {
+      "id": "gsg_potential",
+      "latex": "V_b",
+      "meaning": "potencjał gałęzi",
+      "si_unit": "\\mathrm V"
+    },
+    {
+      "id": "gsg_sizes",
+      "latex": "w,t,L",
+      "meaning": "szerokość, grubość i pełna długość",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "gsg_conductivity",
+      "latex": "\\sigma",
+      "meaning": "jednorodna przewodność",
+      "si_unit": "\\mathrm{S\\,m^{-1}}"
+    },
+    {
+      "id": "gsg_axial",
+      "latex": "y",
+      "meaning": "współrzędna wzdłuż prądu",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "rt0-refine-mass",
+      "latex": "$M$",
+      "meaning": "oryginalna assembled weighted RT0 mass matrix w physical flux coordinates",
+      "si_unit": "$\\Omega$"
+    },
+    {
+      "id": "rt0-refine-incidence",
+      "latex": "$D,d_{ij}$",
+      "meaning": "aktywna incidence matrix i współczynniki wszystkich kontrolowanych constraints; bez nowych wierszy",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "rt0-refine-flux",
+      "latex": "$\\mathbf q,q_j,\\delta\\mathbf q$",
+      "meaning": "physical face moments i ich pełna korekcja KKT",
+      "si_unit": "$\\mathrm A$"
+    },
+    {
+      "id": "rt0-refine-constraint-rhs",
+      "latex": "$\\mathbf h,h_i$",
+      "meaning": "oryginalne constraint RHS; zero dla div/pair",
+      "si_unit": "$\\mathrm A$"
+    },
+    {
+      "id": "rt0-refine-load",
+      "latex": "$\\mathbf f,f_i$",
+      "meaning": "oryginalny weighted load z tego samego zaakceptowanego H1",
+      "si_unit": "$\\mathrm V$"
+    },
+    {
+      "id": "rt0-refine-multipliers",
+      "latex": "$\\boldsymbol\\lambda,\\lambda_k,\\delta\\boldsymbol\\lambda$",
+      "meaning": "mnożniki Lagrange'a i ich korekcja",
+      "si_unit": "$\\mathrm V$"
+    },
+    {
+      "id": "rt0-refine-stationarity",
+      "latex": "$\\mathbf r_V,r_{V,i},s_{V,i}$",
+      "meaning": "true stationarity residual i jego lokalna skala sumy modułów",
+      "si_unit": "$\\mathrm V$"
+    },
+    {
+      "id": "rt0-refine-constraint-residual",
+      "latex": "$\\mathbf r_A$",
+      "meaning": "true residual aktywnych constraints",
+      "si_unit": "$\\mathrm A$"
+    },
+    {
+      "id": "rt0-refine-absolute",
+      "latex": "$a_A$",
+      "meaning": "niezmieniony absolute physical current gate, $10^{-18}$",
+      "si_unit": "$\\mathrm A$"
+    },
+    {
+      "id": "rt0-refine-continuity",
+      "latex": "$\\tau_c$",
+      "meaning": "niezmieniony local continuity gate, $10^{-10}$",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "rt0-refine-terminal",
+      "latex": "$\\tau_t$",
+      "meaning": "niezmieniony existing terminal-current gate, $10^{-8}$",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "rt0-refine-stationarity-tolerance",
+      "latex": "$\\tau_s$",
+      "meaning": "nowy ostrzejszy stationarity backward-error gate, $10^{-12}$",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "rt0-refine-budget",
+      "latex": "$N,N_{\\max},n_\\ell,p,\\ell$",
+      "meaning": "rozmiar sparse KKT, wspólny limit, actual iteracje wywołania, ostatnie wywołanie i indeks",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "rt0-refine-indices",
+      "latex": "$i,j,k$",
+      "meaning": "indeks wiersza, flux DOF i aktywnego constraint",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "rt0-refine-operators",
+      "latex": "$\\sum,\\lvert\\cdot\\rvert,\\max,{}^T,\\delta,\\leftarrow$",
+      "meaning": "suma, moduł, maksimum, transpozycja, korekcja i aktualizacja; jednostki argumentów zachowane",
+      "si_unit": "$1$ jako operatory"
+    },
+    {
+      "id": "rt0-sample-exact-current",
+      "latex": "$J_k^{\\ast}(\\mathbf x)$",
+      "meaning": "dokładna składowa pola zamrożonego RT0",
+      "si_unit": "$\\mathrm{A\\,m^{-2}}$"
+    },
+    {
+      "id": "rt0-sample-coordinate",
+      "latex": "$\\mathbf x,x_k,x_{ik},\\mathbf v_i,v_{i,k}$",
+      "meaning": "punkt próbkowania i wierzchołki Tet4",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "rt0-sample-signed-coefficient",
+      "latex": "$c_i^{\\mathrm{signed}}$",
+      "meaning": "zamrożony signed współczynnik istniejącej bazy RT0",
+      "si_unit": "$\\mathrm A$"
+    },
+    {
+      "id": "rt0-sample-determinant",
+      "latex": "$D$",
+      "meaning": "moduł determinantu geometrii komórki",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "rt0-sample-interval",
+      "latex": "$s_{ik},e_{ik},A_k$",
+      "meaning": "retained próbka, jej budżet i offset",
+      "si_unit": "$\\mathrm{A\\,m^{-2}}$"
+    },
+    {
+      "id": "rt0-sample-common-slope",
+      "latex": "$\\beta$",
+      "meaning": "wspólne skalarne nachylenie przestrzennego RT0",
+      "si_unit": "$\\mathrm{A\\,m^{-3}}$"
+    },
+    {
+      "id": "rt0-sample-epsilon",
+      "latex": "$\\epsilon$",
+      "meaning": "binary64 machine epsilon, nie unit roundoff",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "rt0-sample-indices-operators",
+      "latex": "$i,j,k,\\sum,\\det,|\\cdot|,\\max$",
+      "meaning": "indeksy wierzchołków/osi i operatory o jednostkach argumentów",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "universe-inspection-padding",
+      "latex": "$p_x,p_y,p_z$",
+      "meaning": "nieujemne marginesy domeny obserwacji po obu stronach geometrii",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "universe-inspection-mesh-scales",
+      "latex": "$h_{\\min},h_{\\max}$",
+      "meaning": "dodatnie ograniczenia rozmiaru elementu w otoczeniu anteny",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "universe-inspection-growth",
+      "latex": "$g$",
+      "meaning": "skończony współczynnik stopniowania rozmiaru siatki większy od jeden",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "antenna-cold-rt0-c",
+      "latex": "c_{Ti}",
+      "meaning": "Współczynnik generic RT0 ze znakiem",
+      "si_unit": "\\mathrm A"
+    },
+    {
+      "id": "antenna-cold-rt0-phi",
+      "latex": "\\Phi_{F_i}",
+      "meaning": "Fizyczny strumień w orientacji rosnących stable vertex IDs",
+      "si_unit": "\\mathrm A"
+    },
+    {
+      "id": "antenna-cold-rt0-sign",
+      "latex": "s_{Ti}",
+      "meaning": "Znak przejścia od normalnej kanonicznej do outward normal komórki",
+      "si_unit": "1"
+    },
+    {
+      "id": "antenna-surface-exact-identity-index",
+      "latex": "$i$",
+      "meaning": "Cykliczny indeks wierzchołka i krawędzi",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "antenna-surface-exact-identity-positions",
+      "latex": "$\\mathbf a_i,\\mathbf t$",
+      "meaning": "Wierzchołek ściany i target",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "antenna-surface-exact-identity-vectors",
+      "latex": "$\\mathbf u_i,\\mathbf e_i,\\mathbf q$",
+      "meaning": "Wektory do targetu, krawędź i normalny rzut targetu",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "antenna-surface-exact-identity-normal",
+      "latex": "$\\mathbf N$",
+      "meaning": "Zorientowana, nieunormowana normalna ściany",
+      "si_unit": "$\\mathrm{m^2}$"
+    },
+    {
+      "id": "antenna-surface-exact-identity-normal-square",
+      "latex": "$S$",
+      "meaning": "Kwadrat normy normalnej",
+      "si_unit": "$\\mathrm{m^4}$"
+    },
+    {
+      "id": "antenna-surface-exact-identity-height",
+      "latex": "$h$",
+      "meaning": "Podpisany iloczyn normalnej i wektora do targetu, nie odległość",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "antenna-surface-exact-identity-edge",
+      "latex": "$d_i$",
+      "meaning": "Podpisany licznik współczynnika krawędzi",
+      "si_unit": "$\\mathrm{m^4}$"
+    },
+    {
+      "id": "antenna-mpfr-work-indices",
+      "latex": "$\\tau,f,i,j,p$",
+      "meaning": "Target, ściana, skierowane końce krawędzi i poziom precyzji $p=0,1,2$.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "antenna-mpfr-work-positions",
+      "latex": "$\\mathbf x,\\mathbf v_i,\\mathbf v_j$",
+      "meaning": "Target i oryginalne wierzchołki, dokładnie z zachowanych binary64.",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "antenna-mpfr-work-vectors",
+      "latex": "$\\mathbf r_i,\\mathbf r_j,\\mathbf e_i$",
+      "meaning": "Wektory target–wierzchołek oraz krawędź.",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "antenna-mpfr-work-projections",
+      "latex": "$L_i,\\xi_i,\\eta_i$",
+      "meaning": "Długość krawędzi i dwie projekcje wzdłuż niej.",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "antenna-mpfr-work-branches",
+      "latex": "$b_i^L,b_i^R$",
+      "meaning": "Matematyczne predykaty wyboru racjonalizowanej postaci; nawias oznacza wskaźnik logiczny.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "antenna-mpfr-work-active",
+      "latex": "$A_{\\tau f}$",
+      "meaning": "Liczba aktywnych fanów, z pominięciem dokładnego `d_zero`.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "antenna-mpfr-work-branch-count",
+      "latex": "$B_{\\tau f}$",
+      "meaning": "Suma $b_i^L+b_i^R$ po aktywnych fanach.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "antenna-mpfr-work-height",
+      "latex": "$h_{\\tau f}$",
+      "meaning": "Podpisana odległość od płaszczyzny ściany; zero odpowiada dokładnemu `hnum == 0`.",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "antenna-mpfr-work-conversions",
+      "latex": "$E_{\\tau f}$",
+      "meaning": "Liczba warunkowych konwersji qvector i liczników kątów.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "antenna-mpfr-work-divisions",
+      "latex": "$D_{\\tau p}$",
+      "meaning": "Przewidywana liczba jawnych `Arithmetic::divide` w targetcie i precyzji.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "antenna-mpfr-work-scale",
+      "latex": "$s_{\\tau f}$",
+      "meaning": "Dokładna dodatnia potęga dwóch wybrana z maksymalnej składowej geometrii ściany i targetu.",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "antenna-mpfr-work-rounded-vectors",
+      "latex": "$\\widehat{\\mathbf r}_i^{(p)},\\widehat{\\mathbf e}_i^{(p)}$",
+      "meaning": "Skonwertowane i znormalizowane wektory dla danego poziomu arytmetyki.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "antenna-mpfr-work-rounded-projections",
+      "latex": "$\\widehat L_i^{(p)},\\widehat\\xi_i^{(p)},\\widehat\\eta_i^{(p)}$",
+      "meaning": "Zaokrąglona długość i projekcje użyte tylko do wyboru gałęzi.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "antenna-mpfr-work-rounded-count",
+      "latex": "$B_{\\tau f}^{(p)}$",
+      "meaning": "Liczba wybranych racjonalizacji po aktywnych fanach w danej arytmetyce.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "antenna-mpfr-work-rounding",
+      "latex": "$C_p,\\operatorname{fl}_p,\\operatorname{fl}_{p,\\Sigma}$",
+      "meaning": "Konwersja, zaokrąglenie najbliższe z ties-to-even i sekwencyjny iloczyn skalarny bez FMA.",
+      "si_unit": "$1$"
     }
   ],
   "equations": [
@@ -1284,7 +2130,9 @@
       ],
       "sources": [
         "antenna-current-source-fixture-field",
-        "antenna-current-source-fixture-oracle-contract"
+        "antenna-current-source-fixture-oracle-contract",
+        "antenna-finite-prism-field",
+        "antenna-gsg-fixed-field"
       ]
     },
     {
@@ -1299,7 +2147,9 @@
       "sources": [
         "antenna-current-source-fixture-field",
         "antenna-current-source-fixture-oracle-contract",
-        "antenna-current-source-fixture-cubature"
+        "antenna-current-source-fixture-cubature",
+        "antenna-finite-prism-field",
+        "antenna-gsg-fixed-field"
       ]
     },
     {
@@ -1606,7 +2456,9 @@
         "prereg_operators"
       ],
       "sources": [
-        "antenna-loop-independent-prereg-v1"
+        "antenna-loop-independent-prereg-v1",
+        "antenna-retained-reference-fit",
+        "antenna-retained-reference-fit-tests"
       ]
     },
     {
@@ -1830,9 +2682,1078 @@
         "antenna-transverse-receipt-contract",
         "antenna-transverse-projector"
       ]
+    },
+    {
+      "id": "analytic-v2-general-map-geometry",
+      "symbols": [
+        "gm_points",
+        "gm_vectors",
+        "gm_J",
+        "gm_AB",
+        "gm_C",
+        "gm_parameters",
+        "gm_vmin",
+        "gm_grade",
+        "gm_slope",
+        "gm_distance",
+        "gm_radial",
+        "gm_positive",
+        "gm_jac",
+        "gm_potential",
+        "gm_scale",
+        "gm_offset",
+        "gm_index",
+        "gm_error",
+        "gm_weight",
+        "gm_work",
+        "gm_ops"
+      ],
+      "sources": [
+        "gm-prereg",
+        "gm-routing",
+        "gm-radial",
+        "gm-accounting",
+        "gm-implemented-plan",
+        "gm-implemented-kernel"
+      ]
+    },
+    {
+      "id": "analytic-v2-general-map-minimum",
+      "symbols": [
+        "gm_points",
+        "gm_vectors",
+        "gm_J",
+        "gm_AB",
+        "gm_C",
+        "gm_parameters",
+        "gm_vmin",
+        "gm_grade",
+        "gm_slope",
+        "gm_distance",
+        "gm_radial",
+        "gm_positive",
+        "gm_jac",
+        "gm_potential",
+        "gm_scale",
+        "gm_offset",
+        "gm_index",
+        "gm_error",
+        "gm_weight",
+        "gm_work",
+        "gm_ops"
+      ],
+      "sources": [
+        "gm-prereg",
+        "gm-routing",
+        "gm-radial",
+        "gm-accounting",
+        "gm-implemented-plan"
+      ]
+    },
+    {
+      "id": "analytic-v2-general-map-angular",
+      "symbols": [
+        "gm_points",
+        "gm_vectors",
+        "gm_J",
+        "gm_AB",
+        "gm_C",
+        "gm_parameters",
+        "gm_vmin",
+        "gm_grade",
+        "gm_slope",
+        "gm_distance",
+        "gm_radial",
+        "gm_positive",
+        "gm_jac",
+        "gm_potential",
+        "gm_scale",
+        "gm_offset",
+        "gm_index",
+        "gm_error",
+        "gm_weight",
+        "gm_work",
+        "gm_ops"
+      ],
+      "sources": [
+        "gm-prereg",
+        "gm-routing",
+        "gm-radial",
+        "gm-accounting",
+        "gm-implemented-angular"
+      ]
+    },
+    {
+      "id": "analytic-v2-general-map-radial",
+      "symbols": [
+        "gm_points",
+        "gm_vectors",
+        "gm_J",
+        "gm_AB",
+        "gm_C",
+        "gm_parameters",
+        "gm_vmin",
+        "gm_grade",
+        "gm_slope",
+        "gm_distance",
+        "gm_radial",
+        "gm_positive",
+        "gm_jac",
+        "gm_potential",
+        "gm_scale",
+        "gm_offset",
+        "gm_index",
+        "gm_error",
+        "gm_weight",
+        "gm_work",
+        "gm_ops"
+      ],
+      "sources": [
+        "gm-prereg",
+        "gm-routing",
+        "gm-radial",
+        "gm-accounting",
+        "gm-implemented-radial-parameters"
+      ]
+    },
+    {
+      "id": "analytic-v2-general-map-integrand",
+      "symbols": [
+        "gm_points",
+        "gm_vectors",
+        "gm_J",
+        "gm_AB",
+        "gm_C",
+        "gm_parameters",
+        "gm_vmin",
+        "gm_grade",
+        "gm_slope",
+        "gm_distance",
+        "gm_radial",
+        "gm_positive",
+        "gm_jac",
+        "gm_potential",
+        "gm_scale",
+        "gm_offset",
+        "gm_index",
+        "gm_error",
+        "gm_weight",
+        "gm_work",
+        "gm_ops"
+      ],
+      "sources": [
+        "gm-prereg",
+        "gm-routing",
+        "gm-radial",
+        "gm-accounting",
+        "gm-implemented-kernel",
+        "gm-implemented-direct"
+      ]
+    },
+    {
+      "id": "analytic-v2-general-map-stable-span",
+      "symbols": [
+        "gm_points",
+        "gm_vectors",
+        "gm_J",
+        "gm_AB",
+        "gm_C",
+        "gm_parameters",
+        "gm_vmin",
+        "gm_grade",
+        "gm_slope",
+        "gm_distance",
+        "gm_radial",
+        "gm_positive",
+        "gm_jac",
+        "gm_potential",
+        "gm_scale",
+        "gm_offset",
+        "gm_index",
+        "gm_error",
+        "gm_weight",
+        "gm_work",
+        "gm_ops"
+      ],
+      "sources": [
+        "gm-prereg",
+        "gm-routing",
+        "gm-radial",
+        "gm-accounting",
+        "gm-implemented-radial-parameters"
+      ]
+    },
+    {
+      "id": "analytic-v2-general-map-stable-u",
+      "symbols": [
+        "gm_points",
+        "gm_vectors",
+        "gm_J",
+        "gm_AB",
+        "gm_C",
+        "gm_parameters",
+        "gm_vmin",
+        "gm_grade",
+        "gm_slope",
+        "gm_distance",
+        "gm_radial",
+        "gm_positive",
+        "gm_jac",
+        "gm_potential",
+        "gm_scale",
+        "gm_offset",
+        "gm_index",
+        "gm_error",
+        "gm_weight",
+        "gm_work",
+        "gm_ops"
+      ],
+      "sources": [
+        "gm-prereg",
+        "gm-routing",
+        "gm-radial",
+        "gm-accounting",
+        "gm-implemented-kernel"
+      ]
+    },
+    {
+      "id": "analytic-v2-general-map-zero-limit",
+      "symbols": [
+        "gm_points",
+        "gm_vectors",
+        "gm_J",
+        "gm_AB",
+        "gm_C",
+        "gm_parameters",
+        "gm_vmin",
+        "gm_grade",
+        "gm_slope",
+        "gm_distance",
+        "gm_radial",
+        "gm_positive",
+        "gm_jac",
+        "gm_potential",
+        "gm_scale",
+        "gm_offset",
+        "gm_index",
+        "gm_error",
+        "gm_weight",
+        "gm_work",
+        "gm_ops"
+      ],
+      "sources": [
+        "gm-prereg",
+        "gm-routing",
+        "gm-radial",
+        "gm-accounting",
+        "gm-implemented-kernel"
+      ]
+    },
+    {
+      "id": "analytic-v2-general-map-conditional-work",
+      "symbols": [
+        "gm_points",
+        "gm_vectors",
+        "gm_J",
+        "gm_AB",
+        "gm_C",
+        "gm_parameters",
+        "gm_vmin",
+        "gm_grade",
+        "gm_slope",
+        "gm_distance",
+        "gm_radial",
+        "gm_positive",
+        "gm_jac",
+        "gm_potential",
+        "gm_scale",
+        "gm_offset",
+        "gm_index",
+        "gm_error",
+        "gm_weight",
+        "gm_work",
+        "gm_ops"
+      ],
+      "sources": [
+        "gm-prereg",
+        "gm-routing",
+        "gm-radial",
+        "gm-accounting"
+      ]
+    },
+    {
+      "id": "analytic-v2-general-map-error-decomposition",
+      "symbols": [
+        "gm_points",
+        "gm_vectors",
+        "gm_J",
+        "gm_AB",
+        "gm_C",
+        "gm_parameters",
+        "gm_vmin",
+        "gm_grade",
+        "gm_slope",
+        "gm_distance",
+        "gm_radial",
+        "gm_positive",
+        "gm_jac",
+        "gm_potential",
+        "gm_scale",
+        "gm_offset",
+        "gm_index",
+        "gm_error",
+        "gm_weight",
+        "gm_work",
+        "gm_ops"
+      ],
+      "sources": [
+        "gm-prereg",
+        "gm-routing",
+        "gm-radial",
+        "gm-accounting",
+        "gm-implemented-gates"
+      ]
+    },
+    {
+      "id": "analytic-v2-direct2d-gl-kernel",
+      "symbols": [
+        "analytic_v2_direct2d_gl_symbol_0",
+        "analytic_v2_direct2d_gl_symbol_1",
+        "analytic_v2_direct2d_gl_symbol_2",
+        "analytic_v2_direct2d_gl_symbol_3",
+        "analytic_v2_direct2d_gl_symbol_4",
+        "analytic_v2_direct2d_gl_symbol_5",
+        "analytic_v2_direct2d_gl_symbol_6",
+        "analytic_v2_direct2d_gl_symbol_7"
+      ],
+      "sources": [
+        "analytic-v2-direct2d-gl-planned"
+      ]
+    },
+    {
+      "id": "analytic-v2-direct2d-gl-rule",
+      "symbols": [
+        "analytic_v2_direct2d_gl_symbol_0",
+        "analytic_v2_direct2d_gl_symbol_1",
+        "analytic_v2_direct2d_gl_symbol_2",
+        "analytic_v2_direct2d_gl_symbol_3",
+        "analytic_v2_direct2d_gl_symbol_4",
+        "analytic_v2_direct2d_gl_symbol_5",
+        "analytic_v2_direct2d_gl_symbol_6",
+        "analytic_v2_direct2d_gl_symbol_7"
+      ],
+      "sources": [
+        "analytic-v2-direct2d-gl-planned"
+      ]
+    },
+    {
+      "id": "analytic-v2-direct2d-gl-gate",
+      "symbols": [
+        "analytic_v2_direct2d_gl_symbol_0",
+        "analytic_v2_direct2d_gl_symbol_1",
+        "analytic_v2_direct2d_gl_symbol_2",
+        "analytic_v2_direct2d_gl_symbol_3",
+        "analytic_v2_direct2d_gl_symbol_4",
+        "analytic_v2_direct2d_gl_symbol_5",
+        "analytic_v2_direct2d_gl_symbol_6",
+        "analytic_v2_direct2d_gl_symbol_7"
+      ],
+      "sources": [
+        "analytic-v2-direct2d-gl-planned"
+      ]
+    },
+    {
+      "id": "analytic-v2-direct2d-gl-work",
+      "symbols": [
+        "analytic_v2_direct2d_gl_symbol_0",
+        "analytic_v2_direct2d_gl_symbol_1",
+        "analytic_v2_direct2d_gl_symbol_2",
+        "analytic_v2_direct2d_gl_symbol_3",
+        "analytic_v2_direct2d_gl_symbol_4",
+        "analytic_v2_direct2d_gl_symbol_5",
+        "analytic_v2_direct2d_gl_symbol_6",
+        "analytic_v2_direct2d_gl_symbol_7"
+      ],
+      "sources": [
+        "analytic-v2-direct2d-gl-planned"
+      ]
+    },
+    {
+      "id": "analytic-v2-fixed-ctypes-peak",
+      "symbols": [
+        "analytic_v2_fixed_ctypes_read",
+        "analytic_v2_fixed_ctypes_ws",
+        "analytic_v2_fixed_ctypes_commit",
+        "analytic_v2_fixed_ctypes_budget",
+        "analytic_v2_fixed_ctypes_limit",
+        "analytic_v2_fixed_ctypes_time"
+      ],
+      "sources": [
+        "analytic-v2-fixed-ctypes-contract",
+        "analytic-v2-fixed-ctypes-source",
+        "analytic-v2-fixed-ctypes-guard",
+        "analytic-v2-fixed-ctypes-terminal-test",
+        "analytic-v2-fixed-ctypes-regression"
+      ]
+    },
+    {
+      "id": "analytic-v2-general-radial-map",
+      "symbols": [
+        "analytic_v2_general_positions",
+        "analytic_v2_general_coords",
+        "analytic_v2_general_squares",
+        "analytic_v2_general_lengths",
+        "analytic_v2_general_radial",
+        "analytic_v2_general_potential",
+        "analytic_v2_general_log",
+        "analytic_v2_general_counts",
+        "analytic_v2_general_memory",
+        "analytic_v2_general_operators"
+      ],
+      "sources": [
+        "analytic-v2-general-contract",
+        "analytic-v2-general-radial-implementation",
+        "analytic-v2-general-radial-algebra-test",
+        "analytic-v2-general-radial-zero-test"
+      ]
+    },
+    {
+      "id": "analytic-v2-general-radial-primitive",
+      "symbols": [
+        "analytic_v2_general_positions",
+        "analytic_v2_general_coords",
+        "analytic_v2_general_squares",
+        "analytic_v2_general_lengths",
+        "analytic_v2_general_radial",
+        "analytic_v2_general_potential",
+        "analytic_v2_general_log",
+        "analytic_v2_general_counts",
+        "analytic_v2_general_memory",
+        "analytic_v2_general_operators"
+      ],
+      "sources": [
+        "analytic-v2-general-contract",
+        "analytic-v2-general-radial-implementation",
+        "analytic-v2-general-radial-algebra-test",
+        "analytic-v2-general-radial-zero-test"
+      ]
+    },
+    {
+      "id": "analytic-v2-general-radial-stability",
+      "symbols": [
+        "analytic_v2_general_positions",
+        "analytic_v2_general_coords",
+        "analytic_v2_general_squares",
+        "analytic_v2_general_lengths",
+        "analytic_v2_general_radial",
+        "analytic_v2_general_potential",
+        "analytic_v2_general_log",
+        "analytic_v2_general_counts",
+        "analytic_v2_general_memory",
+        "analytic_v2_general_operators"
+      ],
+      "sources": [
+        "analytic-v2-general-contract",
+        "analytic-v2-general-radial-implementation",
+        "analytic-v2-general-radial-algebra-test",
+        "analytic-v2-general-radial-zero-test"
+      ]
+    },
+    {
+      "id": "analytic-v2-general-radial-work",
+      "symbols": [
+        "analytic_v2_general_positions",
+        "analytic_v2_general_coords",
+        "analytic_v2_general_squares",
+        "analytic_v2_general_lengths",
+        "analytic_v2_general_radial",
+        "analytic_v2_general_potential",
+        "analytic_v2_general_log",
+        "analytic_v2_general_counts",
+        "analytic_v2_general_memory",
+        "analytic_v2_general_operators"
+      ],
+      "sources": [
+        "analytic-v2-general-contract",
+        "analytic-v2-general-radial-bound-test"
+      ]
+    },
+    {
+      "id": "analytic-v2-general-radial-memory",
+      "symbols": [
+        "analytic_v2_general_positions",
+        "analytic_v2_general_coords",
+        "analytic_v2_general_squares",
+        "analytic_v2_general_lengths",
+        "analytic_v2_general_radial",
+        "analytic_v2_general_potential",
+        "analytic_v2_general_log",
+        "analytic_v2_general_counts",
+        "analytic_v2_general_memory",
+        "analytic_v2_general_operators"
+      ],
+      "sources": [
+        "analytic-v2-general-contract"
+      ]
+    },
+    {
+      "id": "analytic-v2-reference-vertex-constant",
+      "symbols": [
+        "analytic_v2_vertex_positions",
+        "analytic_v2_vertex_coordinates",
+        "analytic_v2_vertex_area",
+        "analytic_v2_vertex_potential"
+      ],
+      "sources": [
+        "analytic-v2-vertex-prereg",
+        "analytic-v2-vertex-pass",
+        "analytic-v2-vertex-kernel",
+        "analytic-v2-vertex-cleanup"
+      ]
+    },
+    {
+      "id": "analytic-v2-reference-comparison-bound",
+      "symbols": [
+        "analytic_v2_reference_counts_0",
+        "analytic_v2_reference_counts_1",
+        "analytic_v2_reference_counts_2",
+        "analytic_v2_reference_counts_3"
+      ],
+      "sources": [
+        "analytic-v2-reference-contract",
+        "analytic-v2-reference-budget-source",
+        "analytic-v2-reference-exact-source",
+        "analytic-v2-reference-schedule-test"
+      ]
+    },
+    {
+      "id": "analytic-v2-rt0-reduction",
+      "symbols": [
+        "analytic_v2_symbol_0",
+        "analytic_v2_symbol_1",
+        "analytic_v2_symbol_2",
+        "analytic_v2_symbol_3",
+        "analytic_v2_symbol_4",
+        "analytic_v2_symbol_5",
+        "analytic_v2_symbol_6",
+        "analytic_v2_symbol_7",
+        "analytic_v2_symbol_8",
+        "analytic_v2_symbol_9",
+        "prereg_operators"
+      ],
+      "sources": [
+        "analytic-v2-prereg",
+        "antenna-retained-rt0-surface-evaluation",
+        "antenna-retained-rt0-field-regressions",
+        "native-surface-rt0-current",
+        "native-surface-rt0-evaluator"
+      ]
+    },
+    {
+      "id": "analytic-v2-whole-face",
+      "symbols": [
+        "analytic_v2_symbol_0",
+        "analytic_v2_symbol_1",
+        "analytic_v2_symbol_2",
+        "analytic_v2_symbol_3",
+        "analytic_v2_symbol_4",
+        "analytic_v2_symbol_5",
+        "analytic_v2_symbol_6",
+        "analytic_v2_symbol_7",
+        "analytic_v2_symbol_8",
+        "analytic_v2_symbol_9",
+        "prereg_operators"
+      ],
+      "sources": [
+        "analytic-v2-prereg",
+        "native-surface-rt0-geometry",
+        "native-surface-rt0-faces"
+      ]
+    },
+    {
+      "id": "analytic-v2-solid-angle",
+      "symbols": [
+        "analytic_v2_symbol_0",
+        "analytic_v2_symbol_1",
+        "analytic_v2_symbol_2",
+        "analytic_v2_symbol_3",
+        "analytic_v2_symbol_4",
+        "analytic_v2_symbol_5",
+        "analytic_v2_symbol_6",
+        "analytic_v2_symbol_7",
+        "analytic_v2_symbol_8",
+        "analytic_v2_symbol_9",
+        "prereg_operators"
+      ],
+      "sources": [
+        "analytic-v2-prereg",
+        "native-surface-rt0-geometry",
+        "native-surface-rt0-faces"
+      ]
+    },
+    {
+      "id": "analytic-v2-signed-fan",
+      "symbols": [
+        "analytic_v2_symbol_0",
+        "analytic_v2_symbol_1",
+        "analytic_v2_symbol_2",
+        "analytic_v2_symbol_3",
+        "analytic_v2_symbol_4",
+        "analytic_v2_symbol_5",
+        "analytic_v2_symbol_6",
+        "analytic_v2_symbol_7",
+        "analytic_v2_symbol_8",
+        "analytic_v2_symbol_9",
+        "prereg_operators"
+      ],
+      "sources": [
+        "analytic-v2-prereg",
+        "native-surface-rt0-geometry",
+        "native-surface-rt0-faces"
+      ]
+    },
+    {
+      "id": "analytic-v2-stable-log",
+      "symbols": [
+        "analytic_v2_symbol_0",
+        "analytic_v2_symbol_1",
+        "analytic_v2_symbol_2",
+        "analytic_v2_symbol_3",
+        "analytic_v2_symbol_4",
+        "analytic_v2_symbol_5",
+        "analytic_v2_symbol_6",
+        "analytic_v2_symbol_7",
+        "analytic_v2_symbol_8",
+        "analytic_v2_symbol_9",
+        "prereg_operators"
+      ],
+      "sources": [
+        "analytic-v2-prereg",
+        "native-surface-rt0-geometry",
+        "native-surface-rt0-faces"
+      ]
+    },
+    {
+      "id": "antenna-charge-refinement-residual",
+      "symbols": [
+        "charge-refine-K",
+        "charge-refine-T",
+        "charge-refine-A",
+        "charge-refine-V0",
+        "charge-refine-V",
+        "charge-refine-b",
+        "charge-refine-q",
+        "charge-refine-c",
+        "charge-refine-eta",
+        "charge-refine-floor",
+        "charge-refine-tau"
+      ],
+      "sources": [
+        "antenna-charge-true-residual-prereg",
+        "antenna-charge-trace-owned-operator"
+      ]
+    },
+    {
+      "id": "antenna-charge-refinement-update",
+      "symbols": [
+        "charge-refine-A",
+        "charge-refine-delta",
+        "charge-refine-q",
+        "charge-refine-V",
+        "charge-refine-T",
+        "charge-refine-nu",
+        "charge-refine-r",
+        "charge-refine-B",
+        "charge-refine-indices"
+      ],
+      "sources": [
+        "antenna-charge-true-residual-prereg",
+        "antenna-charge-trace-owned-operator"
+      ]
+    },
+    {
+      "id": "antenna-gsg-uniform-reference",
+      "symbols": [
+        "gsg_branch",
+        "gsg_current",
+        "gsg_density",
+        "gsg_potential",
+        "gsg_sizes",
+        "gsg_conductivity",
+        "gsg_axial"
+      ],
+      "sources": [
+        "antenna-gsg-fixed-reference",
+        "antenna-gsg-fixed-reference-tests"
+      ]
+    },
+    {
+      "id": "antenna-rt0-refinement-kkt",
+      "symbols": [
+        "rt0-refine-mass",
+        "rt0-refine-incidence",
+        "rt0-refine-flux",
+        "rt0-refine-multipliers",
+        "rt0-refine-load",
+        "rt0-refine-constraint-rhs"
+      ],
+      "sources": [
+        "antenna-rt0-true-residual-prereg",
+        "antenna-rt0-full-kkt-owner"
+      ]
+    },
+    {
+      "id": "antenna-rt0-refinement-residual",
+      "symbols": [
+        "rt0-refine-mass",
+        "rt0-refine-incidence",
+        "rt0-refine-flux",
+        "rt0-refine-multipliers",
+        "rt0-refine-load",
+        "rt0-refine-constraint-rhs",
+        "rt0-refine-stationarity",
+        "rt0-refine-constraint-residual",
+        "rt0-refine-indices",
+        "rt0-refine-operators"
+      ],
+      "sources": [
+        "antenna-rt0-true-residual-prereg",
+        "antenna-rt0-full-kkt-owner"
+      ]
+    },
+    {
+      "id": "antenna-rt0-refinement-update",
+      "symbols": [
+        "rt0-refine-mass",
+        "rt0-refine-incidence",
+        "rt0-refine-flux",
+        "rt0-refine-multipliers",
+        "rt0-refine-stationarity",
+        "rt0-refine-constraint-residual",
+        "rt0-refine-operators"
+      ],
+      "sources": [
+        "antenna-rt0-true-residual-prereg",
+        "antenna-rt0-full-kkt-owner"
+      ]
+    },
+    {
+      "id": "antenna-rt0-refinement-local-gates",
+      "symbols": [
+        "rt0-refine-incidence",
+        "rt0-refine-flux",
+        "rt0-refine-constraint-rhs",
+        "rt0-refine-absolute",
+        "rt0-refine-continuity",
+        "rt0-refine-terminal",
+        "rt0-refine-indices",
+        "rt0-refine-operators"
+      ],
+      "sources": [
+        "antenna-rt0-true-residual-prereg",
+        "antenna-rt0-full-kkt-owner"
+      ]
+    },
+    {
+      "id": "antenna-rt0-refinement-stationarity-budget",
+      "symbols": [
+        "rt0-refine-stationarity",
+        "rt0-refine-stationarity-tolerance",
+        "rt0-refine-budget",
+        "rt0-refine-indices",
+        "rt0-refine-operators"
+      ],
+      "sources": [
+        "antenna-rt0-true-residual-prereg",
+        "antenna-rt0-full-kkt-owner"
+      ]
+    },
+    {
+      "id": "antenna-retained-rt0-exact-point-current",
+      "symbols": [
+        "rt0-sample-exact-current",
+        "rt0-sample-coordinate",
+        "rt0-sample-signed-coefficient",
+        "rt0-sample-determinant",
+        "rt0-sample-indices-operators"
+      ],
+      "sources": [
+        "antenna-retained-rt0-exact-sampling-prereg",
+        "antenna-rt0-exact-retained-point-owner",
+        "native-surface-rt0-current",
+        "native-surface-rt0-frozen-input"
+      ]
+    },
+    {
+      "id": "antenna-retained-rt0-common-slope-feasibility",
+      "symbols": [
+        "rt0-sample-coordinate",
+        "rt0-sample-interval",
+        "rt0-sample-common-slope",
+        "rt0-sample-epsilon",
+        "rt0-sample-indices-operators"
+      ],
+      "sources": [
+        "antenna-retained-rt0-exact-sampling-prereg",
+        "antenna-rt0-common-affine-admission-owner"
+      ]
+    },
+    {
+      "id": "antenna-retained-rt0-pair-rounding-budget",
+      "symbols": [
+        "rt0-sample-interval",
+        "rt0-sample-epsilon",
+        "rt0-sample-indices-operators"
+      ],
+      "sources": [
+        "antenna-retained-rt0-exact-sampling-prereg",
+        "antenna-rt0-common-affine-admission-owner"
+      ]
+    },
+    {
+      "id": "antenna-cold-rt0-moment-reconstruction",
+      "symbols": [
+        "antenna-cold-rt0-c",
+        "antenna-cold-rt0-phi",
+        "antenna-cold-rt0-sign"
+      ],
+      "sources": [
+        "antenna-cold-rt0-moments-owner",
+        "antenna-cold-rt0-certificate-owner"
+      ]
+    },
+    {
+      "id": "antenna-surface-exact-geometry-definitions",
+      "symbols": [
+        "antenna-surface-exact-identity-index",
+        "antenna-surface-exact-identity-positions",
+        "antenna-surface-exact-identity-vectors",
+        "antenna-surface-exact-identity-normal",
+        "antenna-surface-exact-identity-normal-square",
+        "antenna-surface-exact-identity-height",
+        "antenna-surface-exact-identity-edge"
+      ],
+      "sources": [
+        "antenna-surface-exact-identity-geometry",
+        "antenna-surface-exact-identity-regression"
+      ]
+    },
+    {
+      "id": "antenna-surface-exact-determinant-identities",
+      "symbols": [
+        "antenna-surface-exact-identity-index",
+        "antenna-surface-exact-identity-positions",
+        "antenna-surface-exact-identity-vectors",
+        "antenna-surface-exact-identity-normal",
+        "antenna-surface-exact-identity-normal-square",
+        "antenna-surface-exact-identity-height",
+        "antenna-surface-exact-identity-edge"
+      ],
+      "sources": [
+        "antenna-surface-exact-identity-geometry",
+        "antenna-surface-exact-identity-regression"
+      ]
+    },
+    {
+      "id": "antenna-mpfr-exact-log-signs",
+      "symbols": [
+        "antenna-mpfr-work-indices",
+        "antenna-mpfr-work-positions",
+        "antenna-mpfr-work-vectors",
+        "antenna-mpfr-work-projections",
+        "antenna-mpfr-work-branches",
+        "antenna-mpfr-work-active",
+        "antenna-mpfr-work-branch-count",
+        "antenna-mpfr-work-height",
+        "antenna-mpfr-work-conversions",
+        "antenna-mpfr-work-divisions"
+      ],
+      "sources": [
+        "antenna-mpfr-work-model",
+        "antenna-mpfr-work-face",
+        "antenna-mpfr-work-consistency"
+      ]
+    },
+    {
+      "id": "antenna-mpfr-canonical-log-divisions",
+      "symbols": [
+        "antenna-mpfr-work-indices",
+        "antenna-mpfr-work-positions",
+        "antenna-mpfr-work-vectors",
+        "antenna-mpfr-work-projections",
+        "antenna-mpfr-work-branches",
+        "antenna-mpfr-work-active",
+        "antenna-mpfr-work-branch-count",
+        "antenna-mpfr-work-height",
+        "antenna-mpfr-work-conversions",
+        "antenna-mpfr-work-divisions",
+        "antenna-mpfr-work-scale",
+        "antenna-mpfr-work-rounded-vectors",
+        "antenna-mpfr-work-rounded-projections",
+        "antenna-mpfr-work-rounded-count",
+        "antenna-mpfr-work-rounding"
+      ],
+      "sources": [
+        "antenna-mpfr-work-model",
+        "antenna-mpfr-work-face",
+        "antenna-mpfr-work-consistency",
+        "antenna-mpfr-work-rounding-model",
+        "antenna-mpfr-work-normalized-model",
+        "antenna-mpfr-work-binary-model"
+      ]
+    },
+    {
+      "id": "antenna-mpfr-rounded-log-signs",
+      "symbols": [
+        "antenna-mpfr-work-indices",
+        "antenna-mpfr-work-vectors",
+        "antenna-mpfr-work-active",
+        "antenna-mpfr-work-scale",
+        "antenna-mpfr-work-rounded-vectors",
+        "antenna-mpfr-work-rounded-projections",
+        "antenna-mpfr-work-rounded-count",
+        "antenna-mpfr-work-rounding"
+      ],
+      "sources": [
+        "antenna-mpfr-work-rounding-model",
+        "antenna-mpfr-work-normalized-model",
+        "antenna-mpfr-work-binary-model",
+        "antenna-mpfr-work-face"
+      ]
     }
   ],
   "sources": [
+    {
+      "id": "antenna-universe-volume-native-binding",
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "symbol": "solve_native_fem_prepared_closed_loop",
+      "responsibility": "Sprawdza requested/resolved policy oraz rzeczywistą liczbę par przed wywołaniem natywnym.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-universe-volume-cold-binding",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/direct_quadrature_v2.rs",
+      "symbol": "verify_policy_binding",
+      "responsibility": "Cold v2 wiąże dokładny tuple budżetu ze snapshotem i requested/resolved provenance; legacy bez nowych pól wymaga starego profilu.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-universe-volume-native-selector",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp",
+      "symbol": "DirectTetraQuadrature::ResolveWorkLimits",
+      "responsibility": "Zamknięty selektor legacy 1..1M lub dokładnie 4M; wyznacza globalne limity kernel i ledger bez zmiany ABI.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-universe-volume-whole-invocation-work",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp",
+      "symbol": "WorkBudget",
+      "responsibility": "Wspólny licznik kernel/ledger całego zapytania, obejmujący wszystkie targety i adaptację.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-universe-volume-budget-type",
+      "path": "crates/fullmag-ir/src/antenna.rs",
+      "symbol": "AntennaClosedLoopDirectBudgetIR",
+      "responsibility": "Wspólny typ dokładnego wersjonowanego zestawu limitów pętli; bez nowego modelu fizycznego.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-universe-volume-resolver",
+      "path": "crates/fullmag-ir/src/antenna.rs",
+      "symbol": "antenna_closed_loop_direct_budget",
+      "responsibility": "Dokładne mapowanie production_default i volume_inspection_v1; nieznany token odrzucony.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-universe-volume-planner",
+      "path": "crates/fullmag-plan/src/antenna_current_source.rs",
+      "symbol": "closed_loop_direct_field_policy",
+      "responsibility": "Kontrolowany dodatni iloczyn par, wybrany limit i niezmienione tolerancje.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-universe-volume-profile-test",
+      "path": "crates/fullmag-ir/src/antenna.rs",
+      "symbol": "closed_loop_direct_budget_requires_exact_opt_in_and_preserves_legacy_defaults",
+      "responsibility": "Regresja obu dokładnych profili i odmowy nieznanych tokenów; test przygotowany do CI.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-universe-volume-accuracy-test",
+      "path": "crates/fullmag-plan/src/antenna_current_source.rs",
+      "symbol": "closed_loop_volume_budget_is_explicit_and_preserves_legacy_accuracy_options",
+      "responsibility": "Regresja 2 154 518 par oraz niezmienionych opcji dokładności; test przygotowany do CI.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-universe-volume-limits-test",
+      "path": "crates/fullmag-plan/src/antenna_current_source.rs",
+      "symbol": "closed_loop_volume_budget_rejects_over_cap_overflow_empty_and_unknown_policy",
+      "responsibility": "Regresja granicy 4M, overflow, pustego wejścia i nieznanego profilu; test przygotowany do CI.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-universe-volume-external-lead-test",
+      "path": "crates/fullmag-plan/src/antenna_current_source.rs",
+      "symbol": "external_lead_does_not_inherit_closed_loop_volume_budget",
+      "responsibility": "Regresja zachowania odmowy nowego profilu dla external-lead; test przygotowany do CI.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-retained-reference-fit",
+      "path": "scripts/antenna_rt0_surface_oracle.py",
+      "symbol": "fit_retained_rt0",
+      "responsibility": "Independent centered scalar RT0 Householder reconstruction; no solver or H qualification."
+    },
+    {
+      "id": "antenna-retained-reference-fit-tests",
+      "path": "scripts/test_antenna_rt0_surface_oracle.py",
+      "symbol": "test_full_affine_non_rt0_gradients_are_rejected",
+      "responsibility": "Analytic coefficients, invalid affine fields, geometry, scale and exact-input regressions."
+    },
+    {
+      "id": "antenna-sushruth-2020-gsg-study",
+      "path": "examples/fem_antenna_sushruth_2020_gsg.py",
+      "symbol": "study",
+      "responsibility": "Jawna deklaracja GSG FEM CPU/double, źródła prądowego i niemagnetycznego nośnika pola.",
+      "evidence_status": "input_prepared_not_solved"
+    },
+    {
+      "id": "antenna-sushruth-2020-gsg-lead-layers",
+      "path": "examples/fem_antenna_sushruth_2020_gsg.py",
+      "symbol": "lead_layers",
+      "responsibility": "Jawne 20 przedziałów na doprowadzeniu długości 2 mikrometrów; brak kwalifikacji zbieżności.",
+      "evidence_status": "input_prepared_not_solved"
+    },
+    {
+      "id": "antenna-sushruth-2020-gsg-source-contract",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:antenna-sushruth-2020-gsg-source-contract",
+      "responsibility": "Prerejestrowane wejścia GSG: nominalne dane Sec IV/Fig6 oddzielone od własnego skończonego okna źródła i normalizacji; inspection only, no closure or transmission claim.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "antenna-semantic-terminal-factory",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "from_antenna_terminal",
+      "responsibility": "Keyword-only public semantic factory preserves existing marker IR and explicit direction.",
+      "evidence_status": "interpreted_checks_passed"
+    },
+    {
+      "id": "antenna-semantic-terminal-marker",
+      "path": "packages/fullmag-py/src/fullmag/model/_antenna_terminal.py",
+      "symbol": "antenna_terminal_marker",
+      "responsibility": "Single byte-identical marker owner reused by mesher and public factory.",
+      "evidence_status": "interpreted_checks_passed"
+    },
+    {
+      "id": "antenna-semantic-terminal-tests",
+      "path": "packages/fullmag-py/tests/test_antenna_terminal_authoring.py",
+      "symbol": "class AntennaTerminalAuthoringTests",
+      "responsibility": "Known marker, invalid semantics, actual cap missing-marker guard and scene/Python roundtrip regressions.",
+      "evidence_status": "interpreted_checks_passed"
+    },
     {
       "id": "finite-k-shift-helper",
       "path": "crates/fullmag-runner/src/spin_wave_sampling.rs",
@@ -5571,7 +7492,7 @@
       "id": "antenna-transverse-receipt-contract",
       "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
       "symbol": "DOC-ANCHOR:antenna-accepted-equilibrium-transverse-contract",
-      "responsibility": "Historyczny prerejestrowany E9b contract; typed Relax/P1/manifestv3 source-only implemented, runtime/native/browser/cold/science NOT VERIFIED.",
+      "responsibility": "Historyczny prerejestrowany E9b contract; typed Relax/P1/manifestv3/archive source-only implemented, runtime/native/browser/cold/science NOT VERIFIED.",
       "evidence_status": "planned_contract"
     },
     {
@@ -5636,10 +7557,1544 @@
       "symbol": "validate_antenna_equilibrium_dependencies",
       "responsibility": "Kontrola rzeczywistej akcji widma, jednoznacznego requestu, accepted_equilibrium i jednego wcześniejszego Relax; nie kwalifikuje targetu, materiałów ani eligibility backendu.",
       "evidence_status": "source_only"
+    },
+    {
+      "id": "gm-prereg",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:analytic-v2-direct2d-general-map-prereg",
+      "responsibility": "Planowany zakres general-map, zastąpienie starszego AST i harmonogramu oraz piny propozycji; brak implementacji i wykonania.",
+      "evidence_status": "planned_contract",
+      "evidence_artifact": "reviews/closed-loop-reference-general-map-proposal-20261016/proposal-pl.md",
+      "evidence_sha256": "49ffe1ce744cc3a3496269bf4317ecb060fd0565e9c9ab75eb62b7cb83266296"
+    },
+    {
+      "id": "gm-routing",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:analytic-v2-general-map-routing",
+      "responsibility": "Planowane dokładne minimum, zerowe C, dziedziny kątowe i niezmienione 24 przypadki.",
+      "evidence_status": "planned_contract",
+      "evidence_artifact": "reviews/closed-loop-reference-general-map-proposal-20261016/proposal-pl.md",
+      "evidence_sha256": "49ffe1ce744cc3a3496269bf4317ecb060fd0565e9c9ab75eb62b7cb83266296"
+    },
+    {
+      "id": "gm-radial",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:analytic-v2-general-map-radial",
+      "responsibility": "Planowana ogólna mapa radialna, Jacobian i stabilne granice; obie całki poza wierzchołkiem pozostają numeryczne.",
+      "evidence_status": "planned_contract",
+      "evidence_artifact": "reviews/closed-loop-reference-general-map-proposal-20261016/proposal-pl.md",
+      "evidence_sha256": "49ffe1ce744cc3a3496269bf4317ecb060fd0565e9c9ab75eb62b7cb83266296"
+    },
+    {
+      "id": "gm-accounting",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:analytic-v2-general-map-accounting",
+      "responsibility": "Planowany jednorazowy plan w limicie 174, jawne liczniki, agregacja oryginalnych paneli i warunkowy koszt.",
+      "evidence_status": "planned_contract",
+      "evidence_artifact": "reviews/closed-loop-reference-general-map-proposal-20261016/proposal-pl.md",
+      "evidence_sha256": "49ffe1ce744cc3a3496269bf4317ecb060fd0565e9c9ab75eb62b7cb83266296"
+    },
+    {
+      "id": "gm-validation",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:analytic-v2-general-map-validation",
+      "responsibility": "Planowane przeglądy źródeł i wykonania oraz zachowane wyniki zbieżności; brak ścisłego twierdzenia dla 24.",
+      "evidence_status": "planned_contract",
+      "evidence_artifact": "reviews/closed-loop-reference-general-map-proposal-20261016/proposal-pl.md",
+      "evidence_sha256": "49ffe1ce744cc3a3496269bf4317ecb060fd0565e9c9ab75eb62b7cb83266296"
+    },
+    {
+      "id": "gm-existing-partition",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "positive_reference_panels",
+      "responsibility": "Istniejący dokładny podział fizyczny; nowy harmonogram i plan mapy są dopiero planowane.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gm-existing-exact",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "class ReferenceExactArithmetic",
+      "responsibility": "Istniejący właściciel kontroli wartości przed i po redukcji; nowe operacje mapy wymagają przeglądu źródeł.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gm-existing-budget",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "class Budget",
+      "responsibility": "Istniejący właściciel wspólnych limitów i kontroli; nowe liczniki są planowane, bez wykonania.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gm-existing-radial-consumer",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "reference_radial_value",
+      "responsibility": "Istniejąca oddzielna referencja radialna; nowy bezpośredni kernel nie może jej wywoływać.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gm-existing-scale",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "reference_scale",
+      "responsibility": "Istniejąca dokładna skala bramki naukowej, bez zmiany.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "gm-existing-corpus",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "mathematical_corpus",
+      "responsibility": "Istniejący pełny zakres 54, którego nie zastępuje obowiązkowy eksperyment 24.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-direct2d-gl-planned",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:analytic-v2-direct2d-gl-prereg",
+      "responsibility": "Planowana jedna reguła GL direct2D24; unchanged kernel/gates/caps; bez actual.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "analytic-v2-fixed-ctypes-regression",
+      "path": "scripts/test_antenna_triangle_surface_oracle.py",
+      "symbol": "class FixedCtypesLifecycleTests",
+      "responsibility": "Actual ABI/cache128/peak/cadence/mathAST regressions; no numerical reference run.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-fixed-ctypes-contract",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:analytic-v2-fixed-ctypes-abi-prereg",
+      "responsibility": "Fixed ABI prereg; unchanged corpus/budgets/lifetime/history.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "analytic-v2-fixed-ctypes-source",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "peak_ram_bytes",
+      "responsibility": "Actual fixed Windows ABI/localbuffer peak; interpreted ABI/cache/lifetime tests only, no actual24 qualification.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-fixed-ctypes-guard",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "class Budget",
+      "responsibility": "Preserved guard cadence, lifetime cap and counters.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-fixed-ctypes-terminal-test",
+      "path": "scripts/test_antenna_triangle_surface_oracle.py",
+      "symbol": "test_main_persists_terminal_time_and_ram_refusal",
+      "responsibility": "Existing interpreted terminal RAM/time refusal check.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-general-radial-implementation",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "reference_radial_value",
+      "responsibility": "Actual radial primitive/branches/dynamic counters; limited independent reference, not 2D or H qualification.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-general-radial-algebra-test",
+      "path": "scripts/test_antenna_triangle_surface_oracle.py",
+      "symbol": "test_general_radial_matches_independent_asinh_antiderivative",
+      "responsibility": "Small independent asinh derivative checks; no quad.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-general-radial-zero-test",
+      "path": "scripts/test_antenna_triangle_surface_oracle.py",
+      "symbol": "test_radial_zero_is_geometry_certified_or_refused",
+      "responsibility": "Midpoint/offsegment/singular/unprovenzero regression.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-general-radial-bound-test",
+      "path": "scripts/test_antenna_triangle_surface_oracle.py",
+      "symbol": "test_static_node_bound_and_frozen_panel_count_without_quad",
+      "responsibility": "Static integerloop nodebound and exact partition counts, no numericalreference.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-general-contract",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:analytic-v2-general-radial-1d-prereg",
+      "responsibility": "GENERAL_RADIAL_1D immutable preimplementation contract; source implementation separate, actualfull54/independent24 NOT VERIFIED.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "analytic-v2-general-partition",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "positive_reference_panels",
+      "responsibility": "Literal positivepartition; rolecarry planned, exactpredicatecap unchanged.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-general-identity",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "reference_test_identity",
+      "responsibility": "Orderedoriginalbinary64 face-target identity; noreset.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-general-kernel",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "_reference_pass_context",
+      "responsibility": "GENERAL_RADIAL_1D onequad perpanel; new radial primitive source-only, no actualreference evidence.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-general-schedule",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "reference_triangle",
+      "responsibility": "Existing sixfresh160/200degree8/10/12 schedule and gates.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-general-budget",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "class Budget",
+      "responsibility": "Existing peak/counters/terminal guard; dynamicangular taxonomy planned.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-general-exact",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "class ReferenceExactArithmetic",
+      "responsibility": "Existing raw/reduced8192/intermediate/comparison174 guards.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-general-lifecycle",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "class Arithmetic",
+      "responsibility": "Existing privatefinallycleanup; noreset.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-general-corpus",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "mathematical_corpus",
+      "responsibility": "Existing54literalpairs;105panelbound ownproof.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-general-test",
+      "path": "scripts/test_antenna_triangle_surface_oracle.py",
+      "symbol": "test_reference_six_passes_keep_fresh_contexts_and_shared_budget",
+      "responsibility": "Existing mocked schedule; no newradialqualification.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-vertex-prereg",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:analytic-v2-reference-vertex-lifecycle",
+      "responsibility": "Exact radial constant, private lifecycle i interpreted regressions; nie full reference ani RT0 qualification.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "analytic-v2-vertex-pass",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "reference_pass",
+      "responsibility": "Exact radial constant, private lifecycle i interpreted regressions; nie full reference ani RT0 qualification.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-vertex-kernel",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "_reference_pass_context",
+      "responsibility": "Exact radial constant, private lifecycle i interpreted regressions; nie full reference ani RT0 qualification.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-vertex-cleanup",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "class Arithmetic",
+      "responsibility": "Exact radial constant, private lifecycle i interpreted regressions; nie full reference ani RT0 qualification.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-vertex-test-0",
+      "path": "scripts/test_antenna_triangle_surface_oracle.py",
+      "symbol": "test_reference_vertex_collapses_only_exact_radial_constant",
+      "responsibility": "Exact radial constant, private lifecycle i interpreted regressions; nie full reference ani RT0 qualification.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-vertex-test-1",
+      "path": "scripts/test_antenna_triangle_surface_oracle.py",
+      "symbol": "test_reference_both_branches_guard_before_third_kernel",
+      "responsibility": "Exact radial constant, private lifecycle i interpreted regressions; nie full reference ani RT0 qualification.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-vertex-test-2",
+      "path": "scripts/test_antenna_triangle_surface_oracle.py",
+      "symbol": "test_private_context_nonempty_cache_cleanup_normal_and_refusal",
+      "responsibility": "Exact radial constant, private lifecycle i interpreted regressions; nie full reference ani RT0 qualification.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-vertex-test-3",
+      "path": "scripts/test_antenna_triangle_surface_oracle.py",
+      "symbol": "test_reference_six_passes_keep_fresh_contexts_and_shared_budget",
+      "responsibility": "Exact radial constant, private lifecycle i interpreted regressions; nie full reference ani RT0 qualification.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-reference-contract",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:analytic-v2-reference-comparison-contract",
+      "responsibility": "Preregistered174/9396 exact reference taxonomy and full ordered binary64 pair identity; no field qualification",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "analytic-v2-reference-budget-source",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "class Budget",
+      "responsibility": "Actual attempted comparison guards and terminal snapshot; full runtime budget unverified",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-reference-exact-source",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "class ReferenceExactArithmetic",
+      "responsibility": "Actual raw/reduced8192-bit primitive/abs/comparison instrumentation",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-reference-identity-source",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "reference_test_identity",
+      "responsibility": "Ordered original binary64 vertex+target hash separates samexyz faces and accumulates retries",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-reference-scale-source",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "reference_scale",
+      "responsibility": "Nine exactsub/abs and eight exactmax comparisons, unchanged selected scale",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-reference-partition-source",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "positive_reference_panels",
+      "responsibility": "Literal independently computed positive partition and exact geometric comparisons",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-reference-triangle-source",
+      "path": "scripts/antenna_triangle_surface_oracle.py",
+      "symbol": "reference_triangle",
+      "responsibility": "Initial partition plus6freshpasses and exactscale; no new runtime reference evidence",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-reference-schedule-test",
+      "path": "scripts/test_antenna_triangle_surface_oracle.py",
+      "symbol": "test_literal_reference_geometry_schedule_is_174_without_quadrature",
+      "responsibility": "Executed geometry-only schedule bound174; libraryquadrature not run",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-reference-guard-test",
+      "path": "scripts/test_antenna_triangle_surface_oracle.py",
+      "symbol": "test_reference_comparison_guards_before_175_and_9397",
+      "responsibility": "Executed failure before relational operation175 and9397",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-reference-identity-test",
+      "path": "scripts/test_antenna_triangle_surface_oracle.py",
+      "symbol": "test_reference_pair_identity_separates_same_xyz_and_accumulates_retries",
+      "responsibility": "Executed exactpair scope and retry accounting regression",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-reference-scale-test",
+      "path": "scripts/test_antenna_triangle_surface_oracle.py",
+      "symbol": "test_reference_scale_is_exact_original_max_with_nine_abs_eight_comparisons",
+      "responsibility": "Executed original Fraction maximum equivalence for54subset",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-prereg",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:antenna-closed-loop-independent-qualification-prereg-v2",
+      "responsibility": "Own analytic derivation/corpus/precision/work; SOURCE PLANNED",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "analytic-v2-parameters",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:analytic-v2-parameters",
+      "responsibility": "Fixedmethod choices, no new publicAPI",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "analytic-v2-python-ir",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:analytic-v2-python-ir-mapping",
+      "responsibility": "Actual unchanged Python→IR mapping",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "analytic-v2-boundary-plan",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:analytic-v2-canonical-boundary-direction",
+      "responsibility": "Exactidentity no-op avoidance and fresh ledger planned, unqualifiedtaper",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "analytic-v2-geometry-reader",
+      "path": "scripts/preflight_antenna_closed_loop_qualification.py",
+      "symbol": "preflight",
+      "responsibility": "Geometry-only actual counts/probes v3REFUSED",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-cut-owner-check",
+      "path": "scripts/preflight_antenna_closed_loop_qualification.py",
+      "symbol": "cut_pairs",
+      "responsibility": "Exact oppositeowner/winding",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-missing-owner-gate",
+      "path": "scripts/preflight_antenna_closed_loop_qualification.py",
+      "symbol": "semantic_owner_admission",
+      "responsibility": "MissingCADledger INCONCLUSIVE",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-plane-diagnostic",
+      "path": "scripts/preflight_antenna_closed_loop_qualification.py",
+      "symbol": "check_planes",
+      "responsibility": "Diagnostic-only selectors",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-work-check",
+      "path": "scripts/preflight_antenna_closed_loop_qualification.py",
+      "symbol": "work_admission",
+      "responsibility": "Separate target/case bounds",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-cut-owner-test",
+      "path": "scripts/test_preflight_antenna_closed_loop_qualification.py",
+      "symbol": "test_same_side_cut_owners_are_refused",
+      "responsibility": "Interpretednegativegeometrytest, notHqualification",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-missing-owner-test",
+      "path": "scripts/test_preflight_antenna_closed_loop_qualification.py",
+      "symbol": "test_missing_ledger_refuses_even_when_partial_skew_evades_diagnostic",
+      "responsibility": "Partialskew diagnosticgap refused",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-lower-loader",
+      "path": "packages/fullmag-py/src/fullmag/runtime/loader.py",
+      "symbol": "load_problem_from_script",
+      "responsibility": "Canonicalstudyloader",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-lower-ir",
+      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
+      "symbol": "class Problem",
+      "responsibility": "Existing class Problem owns canonical to_ir geometryasset lowering; qualified method path in prose; source-only",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-preimages",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/closed_loop_v2.rs",
+      "symbol": "ClosedLoopAcceptedSourceInputV2",
+      "responsibility": "Retainedsource/native3preimages data",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-identity-parser",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/closed_loop_identity_v2.rs",
+      "symbol": "Fields",
+      "responsibility": "NamedBEparser",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-identity-verify",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/closed_loop_identity_v2.rs",
+      "symbol": "verify",
+      "responsibility": "Source-only completeinputverification",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "analytic-v2-cad-producer",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_waveguides.py",
+      "symbol": "add_antenna_layout_parts_to_occ",
+      "responsibility": "ExistingOCCproducer, noimplementationclaim",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-common-client-get",
+      "path": "apps/control-room/src/kernel/api/ControlRoomApi.ts",
+      "symbol": "requestFieldVectorOnDemand",
+      "responsibility": "Udany field GET wraca bez nowego materialize command; source-only.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-common-client-publisher",
+      "path": "apps/control-room/src/kernel/api/ControlRoomApi.ts",
+      "symbol": "livePublisherOwnsFieldMaterialization",
+      "responsibility": "StaleComplete jest istniejącym wynikiem publishera; source-only, bez HTTP qualification.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-common-command-boundary",
+      "path": "crates/fullmag-api/src/router_v2/handlers/simulation/commands.rs",
+      "symbol": "enqueue_session_command_impl_with_context",
+      "responsibility": "Existing durable command lifecycle pozostaje bez zmian; dodatkowy artifact journal branch odroczony.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-common-journal-boundary",
+      "path": "crates/fullmag-api/src/live_command_journal.rs",
+      "symbol": "mutate",
+      "responsibility": "Existing journal mutation bez zmian; historyczny GET nie jest nowym commandem.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-common-artifact-carrier-contract",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:antenna-common-artifact-sample-carrier-contract",
+      "responsibility": "Prerejestrowane ArtifactSamples/owner/indexing/locator i FMVPv6; proposed historical_inspection, observation counters oddzielone od immutable native strings, deterministic carrier revision z full SHA-256, exact decimal string w nowym JSON locator/query i u64 binary bez JavaScript Number, actual carrier_scope_kind/id oddzielony od source owner oraz full-hash collision guard; NOT VERIFIED.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "antenna-common-carrier-boundary",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/resolved_spatial_field.rs",
+      "symbol": "SpatialFieldCarrier",
+      "responsibility": "Istniejąca granica; ArtifactSamples i typed owner/indexing są proposed, nie istniejące deklaracje.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-common-field-boundary",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/resolved_spatial_field.rs",
+      "symbol": "ResolvedSpatialField",
+      "responsibility": "Istniejący common quantity field; planned verified artifact provider bez fake nodal J.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-common-descriptor-boundary",
+      "path": "crates/fullmag-api/src/schemas/fields.rs",
+      "symbol": "FieldDescriptor",
+      "responsibility": "Existing descriptor; planned optional ArtifactFieldLocatorResource bez arrays.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-common-meta-boundary",
+      "path": "crates/fullmag-api/src/schemas/fields.rs",
+      "symbol": "FieldMeta",
+      "responsibility": "Existing metadata; planned exact owner/carrier locator.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-common-query-boundary",
+      "path": "crates/fullmag-api/src/schemas/fields.rs",
+      "symbol": "FieldVectorQuery",
+      "responsibility": "Existing field query; planned optional carrier selector i cell-center view.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-common-vector-boundary",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/fields.rs",
+      "symbol": "get_field_vector",
+      "responsibility": "Existing vector resource; planned FMVPv6 typed u64/local mapping.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-common-meta-handler-boundary",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/fields.rs",
+      "symbol": "get_field_meta",
+      "responsibility": "Existing metadata handler; planned verified artifact availability.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-common-geometry-boundary",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/domain.rs",
+      "symbol": "get_domain_topology",
+      "responsibility": "Existing geometry resource; planned carrier/expected revision selection realxyz.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-common-fmvp-boundary",
+      "path": "crates/fullmag-api/src/field_store.rs",
+      "symbol": "FieldVectorBinaryMetadataV6",
+      "responsibility": "Oddzielne artifact/u64 metadata FMVPv6 z FMMI v4; generic FMVPv5 zachowuje własny format pełnych quantity IDs. Source-only, runtime NOT VERIFIED.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-common-fmvp-artifact-serializer",
+      "path": "crates/fullmag-api/src/field_store.rs",
+      "symbol": "serialize_field_vector_binary_v6",
+      "responsibility": "Oddzielny artifact/u64 wire FMVPv6 z typed local mapping i same-owner carrier binding; generic serialize_field_vector_binary_v5 pozostaje odrębny. Source-only, compatibility/runtime NOT VERIFIED.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-common-index-boundary",
+      "path": "crates/fullmag-api/src/field_store.rs",
+      "symbol": "FieldVectorIndexing",
+      "responsibility": "Existing indexing enum u32 node IDs; new typed u64 sample mapping proposed.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-common-fmmt-boundary",
+      "path": "crates/fullmag-api/src/field_store.rs",
+      "symbol": "serialize_fem_mesh_topology_binary_v2",
+      "responsibility": "Existing FMMTv2 geometry format; planned actual carrierxyz/local connectivity.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-common-catalog-boundary",
+      "path": "crates/fullmag-quantities/src/catalog.rs",
+      "symbol": "quantity_spec",
+      "responsibility": "Canonical V_electric/J_charge/H_ant IDs unchanged; descriptor indexing is actual carrier truth.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-common-loader-boundary",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/closed_loop_public_inspection.rs",
+      "symbol": "load_published_antenna_closed_loop_inspection",
+      "responsibility": "Existing verified owned closure loader; planned common provider admission, no runtime proof.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-e9b-cg-unit-evidence",
+      "path": "backends/fem/cpu/mfem/workflows/antenna_field_solve/charge_trace_workspace.cpp",
+      "symbol": "ChargeTraceWorkspace::Impl::solve",
+      "responsibility": "Unscaled K V/RHS in A; SetAbsTol0, independent dimensionless relative residual; nominal CG unit evidence.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-e9b-independent-baseline-2",
+      "path": "crates/fullmag-session/src/typed_documents.rs",
+      "symbol": "EquilibriumOwnedManifest",
+      "responsibility": "Strict required four-input inventory schema; no default baseline; cold archive NOT VERIFIED.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-e9b-implemented-17",
+      "path": "crates/fullmag-session/src/typed_documents.rs",
+      "symbol": "equilibrium_artifact_inventory_refs",
+      "responsibility": "Exact equilibrium inventory refs; no global allowlist.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-e9b-implemented-18",
+      "path": "crates/fullmag-session/src/typed_documents.rs",
+      "symbol": "equilibrium_owned_inputs",
+      "responsibility": "Strict four-input equilibrium inventory including accepted_fields.json SHA/count and 256 MiB budget; store/archive cold NOT VERIFIED.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-e9b-implemented-19",
+      "path": "crates/fullmag-session/src/typed_documents.rs",
+      "symbol": "antenna_source_inventory_refs",
+      "responsibility": "Exact source basis inventory owner refs; no CAS guessing.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-e9b-implemented-20",
+      "path": "crates/fullmag-session/src/typed_documents.rs",
+      "symbol": "antenna_source_owned_inputs",
+      "responsibility": "Verified source owned inputs/closure; cold NOT VERIFIED.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-e9b-implemented-21",
+      "path": "crates/fullmag-session/src/reachability.rs",
+      "symbol": "walk_store_equilibrium_inventory_refs",
+      "responsibility": "Canonical archive inventory reachability, source-only.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-e9b-implemented-22",
+      "path": "crates/fullmag-session/src/reachability.rs",
+      "symbol": "walk_archive_live_snapshot",
+      "responsibility": "Archive live-snapshot exact inventory reachability; source-only.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-e9b-implemented-23",
+      "path": "backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp",
+      "symbol": "void validate_charge_request",
+      "responsibility": "Existing pure-charge absolute_tolerance exactly0 refusal; nominal A, no tolerance change.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-resource-editors-model",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaResourceEditorModel.ts",
+      "symbol": "buildAntennaResourceTransaction",
+      "responsibility": "Canonical istniejące resources, source pins, explicit rebind, dependent refusal.",
+      "evidence_status": "interpreted_checks_passed"
+    },
+    {
+      "id": "antenna-terminal-form-contract",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:antenna-terminal-form-preparation",
+      "responsibility": "Istniejąca preparacja UI, jednostki, explicit controls i granice źródłowej weryfikacji.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "antenna-terminal-form-model",
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaTerminalPreparationModel.ts",
+      "symbol": "buildAntennaTerminalPreparationTransaction",
+      "responsibility": "Canonical transaction, jawne actuator currents i refusal obcych markerów.",
+      "evidence_status": "interpreted_checks_passed"
+    },
+    {
+      "id": "antenna-legacy-mixed-owner-refusal",
+      "path": "crates/fullmag-runner/src/native_fem/charge_transport.rs",
+      "symbol": "require_legacy_charge_only_publication",
+      "responsibility": "Batch preflight odmawia mieszanego V/J/H oraz RT0 certificate z niezależnych ownerów.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-solved-analysis-dispatch-contract",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:antenna-solved-analysis-dispatch",
+      "responsibility": "Aktualny source-only dispatch finite-k/Gamma; brak readback i kwalifikacji runtime.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "antenna-solved-analysis-activation",
+      "path": "crates/fullmag-runner/src/time_events.rs",
+      "symbol": "resolved_solved_antenna_drive_is_active",
+      "responsibility": "Jawna stage activation accepted solved basis.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-solved-analysis-finite-k",
+      "path": "crates/fullmag-runner/src/spin_wave_sampling.rs",
+      "symbol": "requested_finite_k_artifacts",
+      "responsibility": "FEM finite-k uwzględnia aktywne ordinary drives i accepted antenna bases, wymaga real m/H_drive snapshots.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-solved-analysis-gamma",
+      "path": "crates/fullmag-runner/src/spin_wave_response.rs",
+      "symbol": "append_requested_spin_wave_artifacts",
+      "responsibility": "Aktywna solved antenna odrzuca Gamma przed empty-return.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-solved-analysis-native-pack",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "pack_native_regional_field_drives",
+      "responsibility": "Istniejące pakowanie accepted solved basis do natywnego regional drive.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-solved-analysis-native-field",
+      "path": "backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp",
+      "symbol": "materialize_regional_field_drive",
+      "responsibility": "Istniejąca materializacja regional H_drive; nie total H_eff i nie automatyczny wkład per-source.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-charge-true-residual-prereg",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:antenna-charge-true-residual-refinement-v1",
+      "responsibility": "Preregistered same-operator correction, unchanged final H1 gate and total iteration budget.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "antenna-finite-prism-field",
+      "path": "scripts/antenna_current_source_oracle.py",
+      "symbol": "rectangular_prism_field",
+      "responsibility": "Niezależne całkowanie skończonego pryzmatu, bez kwalifikacji backendu."
+    },
+    {
+      "id": "antenna-gsg-fixed-reference",
+      "path": "scripts/reference_sushruth_2020_gsg_current.py",
+      "symbol": "reference",
+      "responsibility": "Jawne J, gradient V i profil H skończonego nominalnego GSG; nie wynik Fullmaga."
+    },
+    {
+      "id": "antenna-gsg-fixed-field",
+      "path": "scripts/reference_sushruth_2020_gsg_current.py",
+      "symbol": "gsg_field",
+      "responsibility": "Właściwy obrót i suma trzech modelowanych przewodników wraz z doprowadzeniami."
+    },
+    {
+      "id": "antenna-gsg-fixed-reference-tests",
+      "path": "scripts/test_reference_sushruth_2020_gsg_current.py",
+      "symbol": "test_gsg_matches_adaptive_reference_and_refines",
+      "responsibility": "Niezależna kwadratura i symetrie oraz zgodność parametrów przykładu."
+    },
+    {
+      "id": "antenna-gsg-comparison-samples",
+      "path": "scripts/compare_sushruth_2020_gsg.py",
+      "symbol": "compare_samples",
+      "responsibility": "Metryki V/J/H z progami przed solve; bez kwalifikacji naukowej."
+    },
+    {
+      "id": "antenna-gsg-comparison-http",
+      "path": "scripts/compare_sushruth_2020_gsg.py",
+      "symbol": "compare",
+      "responsibility": "Binding źródła, receiptu, session/run/stage i niezmiennych payloadów."
+    },
+    {
+      "id": "antenna-gsg-comparison-tests",
+      "path": "scripts/test_compare_sushruth_2020_gsg.py",
+      "symbol": "test_gauge_offsets_are_not_fitted_slopes",
+      "responsibility": "Regresje metryki, geometrii, znaków, gauges i odmów; sztuczne dane nie są solve."
+    },
+    {
+      "id": "antenna-rt0-true-residual-prereg",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:antenna-rt0-true-residual-kkt-refinement-v1",
+      "responsibility": "Prerejestracja pełnego sparse KKT refinement; bez implementacji i kwalifikacji runtime.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "antenna-rt0-full-kkt-owner",
+      "path": "backends/fem/cpu/mfem/transport/conservative_current_view.cpp",
+      "symbol": "solve_weighted_rt0_projection",
+      "responsibility": "Pełny same-operator sparse KKT true-residual refinement przed owned field; SOURCE_IMPLEMENTED, native build/runtime NOT VERIFIED; dense/CG i final physical gates bez zmian.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-rt0-refinement-physical-certificate",
+      "path": "backends/fem/cpu/mfem/transport/conservative_current_view.cpp",
+      "symbol": "PhysicalCertificate integrate_physical_certificate",
+      "responsibility": "Istniejący niezależny final physical certificate ma pozostać bez zmian; nie metoda korekcji.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "antenna-rt0-refinement-weak-reactions",
+      "path": "backends/fem/cpu/mfem/transport/periodic_charge_potential.cpp",
+      "symbol": "PeriodicChargePotentialSolver::Solve",
+      "responsibility": "Zachowanie original-K paired weak reactions tego samego H1; brak constraint I_RT0=I_H1.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "antenna-rt0-refinement-sparse-regression",
+      "path": "backends/fem/tests/conservative_current_view_contract.cpp",
+      "symbol": "void large_tetrahedral_projection_uses_sparse_kkt_lane",
+      "responsibility": "Istniejący punkt rozszerzenia regresji ponad4096DOF; nowe przypadki niewykonane.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "antenna-rt0-refinement-exact-witness",
+      "path": "backends/fem/tests/conservative_current_view_contract.cpp",
+      "symbol": "void global_kkt_norm_does_not_certify_a_local_current_balance",
+      "responsibility": "Exact-rational witness: global residual przechodzi przy błędnym lokalnym bilansie; pełna korekcja obu bloków. Native NOT COMPILED/NOT EXECUTED.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-rt0-refinement-si-regression",
+      "path": "backends/fem/tests/conservative_current_view_contract.cpp",
+      "symbol": "void sparse_terminal_source_preserves_local_si_balances_and_h1_reactions",
+      "responsibility": "Real sparse4410face/4018freeDOF i H1→RT0 w SI, local gates, original-K reactions, analytic J/power, immutable getters; nie gwarantuje refinement trigger. Native NOT COMPILED/NOT EXECUTED.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-retained-rt0-exact-sampling-prereg",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:antenna-retained-rt0-exact-sampling-v1",
+      "responsibility": "Prerejestrowany kontrakt dokładnych5 próbek na Tet4 i wspólnej wykonalności affine RT0 z budżetem128EPS; źródła wdrożone, kompilacja/runtime/kwalifikacja NOT VERIFIED.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "antenna-rt0-exact-retained-point-owner",
+      "path": "backends/fem/cpu/mfem/transport/affine_rt0_element.cpp",
+      "symbol": "AffineRt0Element::retained_current_at",
+      "responsibility": "Dokładny rational frozen-binary64 sampler pięciu retained punktów; jedna konwersja i finite/nonzero gate. SOURCE_IMPLEMENTED, native runtime NOT VERIFIED.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-rt0-common-affine-admission-owner",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/closed_loop_identity_v2.rs",
+      "symbol": "verify_rt0_sample_affinity",
+      "responsibility": "Dokładne18constraints jednego slope i wspólnego interceptu peraxis,64EPS per sample bez flooru; pozostałe gates niezmienione. SOURCE_IMPLEMENTED, Rust/runtime NOT VERIFIED.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-rt0-exact-retained-point-regression",
+      "path": "backends/fem/tests/conservative_current_view_contract.cpp",
+      "symbol": "void retained_rt0_sampling_is_exact_frozen_and_fail_closed",
+      "responsibility": "Native golden15Fraction bits, dyadic/translation/orientation/zero/reversal/frozen/overflow/underflow; NIE SKOMPILOWANO ani NIE WYKONANO.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-rt0-common-affine-admission-regression",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/closed_loop_identity_v2_affinity_tests.rs",
+      "symbol": "rounded_rt0_samples_survive_an_ill_conditioned_pivot",
+      "responsibility": "Old-RED witness i9przygotowanych przypadków exact feasibility;33Fraction modeli PASS, parserPASS; Rust unit NIE SKOMPILOWANO ani NIE WYKONANO.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-universe-public-facade",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyUniverseHandle",
+      "responsibility": "Publiczne rozdzielenie granic Universe i jego siatki; jawne minimum, maksimum, wzrost i grading.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-universe-authored-config",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyUniverseConfig",
+      "responsibility": "Walidacja i serializacja pierwotnej konfiguracji Universe, bez magnetycznego stanu.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-universe-explicit-mesh-request",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "_build_explicit_mesh_assets",
+      "responsibility": "Żądanie budowy wspólnej domeny; capture zachowuje odrębność deklaracji i topologii.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-universe-sampling-example",
+      "path": "examples/antenna_universe/fem_antenna_closed_loop_universe.py",
+      "symbol": "study",
+      "responsibility": "Niemagnetyczny Universe i jawny volume_inspection_v1; diagnostyczna siatka 1154 węzły/6487 Tet4; wykonanie H nadal oczekuje na weryfikację.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-retained-rt0-surface-evaluation",
+      "path": "scripts/antenna_rt0_surface_oracle.py",
+      "symbol": "evaluate_retained_rt0",
+      "responsibility": "Redukcja jednego zachowanego RT0 do H przez istniejące potencjały czterech outward faces; wspólne bramki precyzji i budżetu.",
+      "evidence_status": "interpreted_synthetic_tests"
+    },
+    {
+      "id": "antenna-retained-rt0-field-regressions",
+      "path": "scripts/test_antenna_rt0_surface_oracle.py",
+      "symbol": "class RetainedRT0FieldTests",
+      "responsibility": "Znany H, znaki i skalowanie, niezerowy target, dodatnia permutacja, bramka64epsilon i wspólny wyczerpany budżet.",
+      "evidence_status": "interpreted_synthetic_tests"
+    },
+    {
+      "id": "gm-implemented-plan",
+      "path": "scripts/antenna_triangle_general_map_reference.py",
+      "symbol": "prepare_case",
+      "responsibility": "Źródłowy właściciel general-map; interpreted tests i review, bez rzeczywistej kwadratury i kwalifikacji native.",
+      "evidence_status": "interpreted_synthetic_tests"
+    },
+    {
+      "id": "gm-implemented-angular",
+      "path": "scripts/antenna_triangle_general_map_reference.py",
+      "symbol": "angular_point",
+      "responsibility": "Źródłowy właściciel general-map; interpreted tests i review, bez rzeczywistej kwadratury i kwalifikacji native.",
+      "evidence_status": "interpreted_synthetic_tests"
+    },
+    {
+      "id": "gm-implemented-radial-parameters",
+      "path": "scripts/antenna_triangle_general_map_reference.py",
+      "symbol": "radial_parameters",
+      "responsibility": "Źródłowy właściciel general-map; interpreted tests i review, bez rzeczywistej kwadratury i kwalifikacji native.",
+      "evidence_status": "interpreted_synthetic_tests"
+    },
+    {
+      "id": "gm-implemented-kernel",
+      "path": "scripts/antenna_triangle_general_map_reference.py",
+      "symbol": "mapped_radial_sample",
+      "responsibility": "Źródłowy właściciel general-map; interpreted tests i review, bez rzeczywistej kwadratury i kwalifikacji native.",
+      "evidence_status": "interpreted_synthetic_tests"
+    },
+    {
+      "id": "gm-implemented-direct",
+      "path": "scripts/antenna_triangle_general_map_reference.py",
+      "symbol": "direct_pass",
+      "responsibility": "Źródłowy właściciel general-map; interpreted tests i review, bez rzeczywistej kwadratury i kwalifikacji native.",
+      "evidence_status": "interpreted_synthetic_tests"
+    },
+    {
+      "id": "gm-implemented-radial",
+      "path": "scripts/antenna_triangle_general_map_reference.py",
+      "symbol": "radial_pass",
+      "responsibility": "Źródłowy właściciel general-map; interpreted tests i review, bez rzeczywistej kwadratury i kwalifikacji native.",
+      "evidence_status": "interpreted_synthetic_tests"
+    },
+    {
+      "id": "gm-implemented-gates",
+      "path": "scripts/antenna_triangle_general_map_reference.py",
+      "symbol": "check_gates",
+      "responsibility": "Źródłowy właściciel general-map; interpreted tests i review, bez rzeczywistej kwadratury i kwalifikacji native.",
+      "evidence_status": "interpreted_synthetic_tests"
+    },
+    {
+      "id": "gm-implemented-pair",
+      "path": "scripts/antenna_triangle_general_map_reference.py",
+      "symbol": "reference_pair",
+      "responsibility": "Źródłowy właściciel general-map; interpreted tests i review, bez rzeczywistej kwadratury i kwalifikacji native.",
+      "evidence_status": "interpreted_synthetic_tests"
+    },
+    {
+      "id": "gm-implemented-cases",
+      "path": "scripts/antenna_triangle_general_map_reference.py",
+      "symbol": "frozen_cases24",
+      "responsibility": "Źródłowy właściciel general-map; interpreted tests i review, bez rzeczywistej kwadratury i kwalifikacji native.",
+      "evidence_status": "interpreted_synthetic_tests"
+    },
+    {
+      "id": "gm-implemented-tests",
+      "path": "scripts/test_antenna_triangle_general_map_reference.py",
+      "symbol": "class GeneralMapReferenceTests",
+      "responsibility": "14 regresji algebry, liczników i mockowanej kwadratury; brak actual quad.",
+      "evidence_status": "interpreted_synthetic_tests"
+    },
+    {
+      "id": "native-surface-rt0-contract",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/surface_rt0.hpp",
+      "symbol": "evaluate_surface_rt0",
+      "responsibility": "Prywatny C++ interfejs FrozenInput, mandatory typed limits/tolerances i callback RSS; brak publicznego Python/IR/dispatch.",
+      "evidence_status": "compiled_only"
+    },
+    {
+      "id": "native-surface-rt0-frozen-input",
+      "path": "backends/fem/cpu/mfem/transport/affine_rt0_element.cpp",
+      "symbol": "AffineRt0Element::frozen_input",
+      "responsibility": "Własna kopia geometrii i generic signed coefficients A, bez MFEM aliasu i powtórnego znaku; nie face fluxes.",
+      "evidence_status": "compiled_only"
+    },
+    {
+      "id": "native-surface-rt0-current",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp",
+      "symbol": "element",
+      "responsibility": "Dokładny J(r) ze współczynników i abs(det) tego samego FrozenInput, bez QR/nodal average/current_at lub solve.",
+      "evidence_status": "compiled_only"
+    },
+    {
+      "id": "native-surface-rt0-outward",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp",
+      "symbol": "outward_face",
+      "responsibility": "Winding outward dla obu orientacji Tet4, bez permutowania coefficients; exact opposite-apex predicate.",
+      "evidence_status": "compiled_only"
+    },
+    {
+      "id": "native-surface-rt0-geometry",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp",
+      "symbol": "geometry",
+      "responsibility": "Exact zero/sign, normalizacja power-of-two i skalowane dane scalar faces; bez przesuwania targetu.",
+      "evidence_status": "compiled_only"
+    },
+    {
+      "id": "native-surface-rt0-faces",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp",
+      "symbol": "face_pass",
+      "responsibility": "Scalar signed-fan i whole-face w binary64/80/120, local owned weights i H A/m bez mu0; nie kwalifikacja numeryczna.",
+      "evidence_status": "compiled_only"
+    },
+    {
+      "id": "native-surface-rt0-scalar-gates",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp",
+      "symbol": "evaluate_surface_rt0",
+      "responsibility": "Wywołanie scalar_agreement i obowiązkowych passów z prywatnego evaluatora; jawne scalar80/120 whole/fan i precision gates, bez rigorous error certificate.",
+      "evidence_status": "compiled_only"
+    },
+    {
+      "id": "native-surface-rt0-work",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp",
+      "symbol": "class Work",
+      "responsibility": "Mandatory total/per-target named limits, overflow/preallocation/time i caller sampled lifetimepeak RSS; nie hard allocator cap lub exhaustive heap count.",
+      "evidence_status": "compiled_only"
+    },
+    {
+      "id": "native-surface-rt0-exact",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp",
+      "symbol": "class ExactArithmetic",
+      "responsibility": "IEEEbinary64 exact input i instrumentowane Fraction/integer operations z raw/reduced bit guards; nie exhaustive Boost/gcd arithmetic.",
+      "evidence_status": "compiled_only"
+    },
+    {
+      "id": "native-surface-rt0-evaluator",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp",
+      "symbol": "evaluate_surface_rt0",
+      "responsibility": "Prywatna redukcja wszystkich ownerów i uporządkowanych targetów, local/global H gates oraz outputdouble quantization; opaque caller digest, bez runtime aktywacji.",
+      "evidence_status": "compiled_only"
+    },
+    {
+      "id": "native-surface-rt0-note",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:antenna-native-rt0-surface-core",
+      "responsibility": "Pełne parametry prywatnego operatora, zakres source-only review i oddzielny20/24 scalar terminal; native i Universe NOT VERIFIED.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "accepted-surface-rt0-boundary-contract",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:antenna-accepted-surface-boundary",
+      "responsibility": "Addytywna granica zaakceptowanego źródła RT0, osobny wynik i jawne limity bez nowych Python/IR/defaultów oraz bez publicznej kwalifikacji.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "surface-rt0-public-policy-contract",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:antenna-surface-public-policy",
+      "responsibility": "Pełny planned public policy contract bez defaults, nieprzekraczalne bramki, niezmieniony source preimage i odrębny field evidence.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "surface-public-class",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class AntennaSurfaceFieldPolicy",
+      "responsibility": "Addytywna integracja surface: jedno zaakceptowane źródło, jawna polityka i osobny dowód, bez kwalifikacji fizycznej.",
+      "evidence_status": "interpreted_checks_passed"
+    },
+    {
+      "id": "surface-script-export",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_antenna_field_solve_definition_expr",
+      "responsibility": "Addytywna integracja surface: jedno zaakceptowane źródło, jawna polityka i osobny dowód, bez kwalifikacji fizycznej.",
+      "evidence_status": "interpreted_checks_passed"
+    },
+    {
+      "id": "surface-ir-policy",
+      "path": "crates/fullmag-ir/src/antenna.rs",
+      "symbol": "AntennaSurfaceFieldPolicyIR",
+      "responsibility": "Addytywna integracja surface: jedno zaakceptowane źródło, jawna polityka i osobny dowód, bez kwalifikacji fizycznej.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "surface-resolved-oneof",
+      "path": "crates/fullmag-ir/src/antenna_current_source.rs",
+      "symbol": "validate_field_policy",
+      "responsibility": "Addytywna integracja surface: jedno zaakceptowane źródło, jawna polityka i osobny dowód, bez kwalifikacji fizycznej.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "surface-prepared-planner",
+      "path": "crates/fullmag-plan/src/antenna_current_source.rs",
+      "symbol": "materialize_antenna_closed_loop_current_input",
+      "responsibility": "Addytywna integracja surface: jedno zaakceptowane źródło, jawna polityka i osobny dowód, bez kwalifikacji fizycznej.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "surface-prepared-abi",
+      "path": "backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp",
+      "symbol": "extern \"C\" int fullmag_fem_solve_prepared_closed_loop_rt0_surface_v1",
+      "responsibility": "Addytywna integracja surface: jedno zaakceptowane źródło, jawna polityka i osobny dowód, bez kwalifikacji fizycznej.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "surface-accepted-owner",
+      "path": "backends/fem/cpu/mfem/workflows/antenna_field_solve/accepted_surface_rt0.cpp",
+      "symbol": "evaluate_accepted_surface_rt0",
+      "responsibility": "Addytywna integracja surface: jedno zaakceptowane źródło, jawna polityka i osobny dowód, bez kwalifikacji fizycznej.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "surface-snapshot-validation",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/surface_rt0_evidence_v1.rs",
+      "symbol": "SurfaceRt0Snapshot",
+      "responsibility": "Addytywna integracja surface: jedno zaakceptowane źródło, jawna polityka i osobny dowód, bez kwalifikacji fizycznej.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "surface-evidence-decoder",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/surface_rt0_evidence_v1.rs",
+      "symbol": "SurfaceRt0EvidenceV1",
+      "responsibility": "Addytywna integracja surface: jedno zaakceptowane źródło, jawna polityka i osobny dowód, bez kwalifikacji fizycznej.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "surface-evidence-sum",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/closed_loop_field_evidence.rs",
+      "symbol": "ClosedLoopFieldEvidence",
+      "responsibility": "Addytywna integracja surface: jedno zaakceptowane źródło, jawna polityka i osobny dowód, bez kwalifikacji fizycznej.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "surface-field-signature",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/closed_loop_v2.rs",
+      "symbol": "field_signature",
+      "responsibility": "Addytywna integracja surface: jedno zaakceptowane źródło, jawna polityka i osobny dowód, bez kwalifikacji fizycznej.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "surface-execution-dispatch",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/closed_loop_execution.rs",
+      "symbol": "execute_closed_loop",
+      "responsibility": "Addytywna integracja surface: jedno zaakceptowane źródło, jawna polityka i osobny dowód, bez kwalifikacji fizycznej.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "surface-thin-inspection-view",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/closed_loop_public_inspection.rs",
+      "symbol": "inspection_view",
+      "responsibility": "Po pełnej walidacji bundle cienkie API mapuje 14 znanych liczników surface na nazwane skalary; oryginalny manifest/evidence bez zmiany.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-cold-rt0-moments-owner",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/closed_loop_identity_v2.rs",
+      "symbol": "verify_rt0_sample_moments",
+      "responsibility": "Dokładna rekonstrukcja lokalnego RT0 z kanonicznych momentów i niezmieniony budżet64EPS próbek; runtime NOT VERIFIED.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-cold-rt0-certificate-owner",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/closed_loop_balance_v2.rs",
+      "symbol": "verify_balance_certificate",
+      "responsibility": "Fizyczny certyfikat względem owned canonical moments po niezależnej kontroli śladów J; niezmienione gates, runtime NOT VERIFIED.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-cold-rt0-moments-regression",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/closed_loop_identity_v2_affinity_tests.rs",
+      "symbol": "canonical_moments_bind_rounded_tangential_current",
+      "responsibility": "Golden exact Fraction, zmiana stable IDs i niezależna zmiana J/momentów; przygotowany test Rust, nie skompilowano ani nie wykonano.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "antenna-surface-prepared-face",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp",
+      "symbol": "prepare_face",
+      "responsibility": "Jednorazowe dokładne normalne, krawędzie i normalne krawędzi; bez scalenia ścian właścicieli.",
+      "evidence_status": "runtime_parity_only"
+    },
+    {
+      "id": "antenna-surface-prepared-current",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp",
+      "symbol": "current_at_target",
+      "responsibility": "Dotychczasowa kolejność sumy czterech współczynników RT0, oddzielona od niezmiennego źródła.",
+      "evidence_status": "runtime_parity_only"
+    },
+    {
+      "id": "antenna-surface-exact-identity-geometry",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp",
+      "symbol": "geometry",
+      "responsibility": "Dokładna geometria i liczniki formuł przed normalizacją.",
+      "evidence_status": "interpreted_identity_only"
+    },
+    {
+      "id": "antenna-surface-exact-identity-regression",
+      "path": "scripts/test_antenna_rt0_surface_oracle.py",
+      "symbol": "class ExactSurfaceGeometryIdentityTests",
+      "responsibility": "2160 porównań Fraction w 540 konfiguracjach, bez uruchomienia native.",
+      "evidence_status": "interpreted_identity_only"
+    },
+    {
+      "id": "antenna-surface-gmp-exact-arithmetic",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp",
+      "symbol": "class ExactArithmetic",
+      "responsibility": "GMP-backed dokładne operacje z niezmienioną instrumentacją i bitguards.",
+      "evidence_status": "not_verified"
+    },
+    {
+      "id": "antenna-surface-gmp-native-link",
+      "path": "backends/fem/CMakeLists.txt",
+      "symbol": "pkg_check_modules",
+      "responsibility": "Wymagane zależności GMP i MPFR w natywnej realizacji MFEM.",
+      "evidence_status": "not_verified"
+    },
+    {
+      "id": "antenna-surface-gmp-image-package",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:antenna-surface-gmp-dev-package",
+      "responsibility": "Jawny kontrakt obrazu GMP, wersji i wymaganych przyszłych dowodów wykonania.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "antenna-surface-face-dot-reuse",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp",
+      "symbol": "face_pass",
+      "responsibility": "Leniwe lokalne ponowne użycie identycznych iloczynów skalarnych signed-fan i whole-face, bez zmiany precyzji lub równań.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "antenna-surface-mpfr-candidate",
+      "path": "docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md",
+      "symbol": "DOC-ANCHOR:antenna-surface-mpfr-candidate",
+      "responsibility": "Preregisterowana realizacja MPFR128/160, jawna tożsamość, zachowanie polityki i obowiązkowe bramki przed promocją.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "antenna-surface-mpfr-types",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp",
+      "symbol": "evaluate_surface_rt0",
+      "responsibility": "Stałe MPFR128/160 z et_off i compile-time kontrolą pojemności względem dawnych guard limbs.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "antenna-surface-mpfr-identity",
+      "path": "backends/fem/cpu/mfem/workflows/antenna_field_solve/accepted_surface_rt0.cpp",
+      "symbol": "evaluate_accepted_surface_rt0",
+      "responsibility": "Właściciel ewaluacji i serializacji snapshotu z jawną tożsamością realizacji arytmetycznej.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "antenna-surface-mpfr-cold-reader",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/surface_rt0_evidence_v1.rs",
+      "symbol": "SurfaceRt0Snapshot",
+      "responsibility": "Ścisłe rozpoznanie aktualnego i historycznego operatora przy niezmienionych walidacjach payloadu.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "antenna-surface-mpfr-native-binding",
+      "path": "crates/fullmag-runner/src/native_fem/surface_rt0.rs",
+      "symbol": "finish",
+      "responsibility": "Świeży output wymaga dokładnie bieżącej realizacji wraz z accepted source/policy/raw H binding.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "antenna-mpfr-work-model",
+      "path": "scripts/test_antenna_surface_log_branch_model.py",
+      "symbol": "canonical_division_counts",
+      "responsibility": "Niezależny model dokładnej geometrii i liczników dla ukończonych przebiegów.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "antenna-mpfr-work-reader",
+      "path": "scripts/test_antenna_surface_log_branch_model.py",
+      "symbol": "read_bundle",
+      "responsibility": "Przypięty odczyt wejścia testowego; bez solve.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "antenna-mpfr-work-face",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp",
+      "symbol": "face_pass",
+      "responsibility": "Jawne gałęzie i dzielenia operatora.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "antenna-mpfr-work-consistency",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp",
+      "symbol": "evaluate_surface_rt0",
+      "responsibility": "Wywołania scalar_agreement i końcowe dzielenia redukcji w każdym targetcie.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "antenna-mpfr-work-rounding-model",
+      "path": "scripts/test_antenna_surface_log_branch_model.py",
+      "symbol": "class MpfrLogBranches",
+      "responsibility": "Niezależna arytmetyka samych predykatów MPFR przez ctypes.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "antenna-mpfr-work-normalized-model",
+      "path": "scripts/test_antenna_surface_log_branch_model.py",
+      "symbol": "normalized_face",
+      "responsibility": "Dokładna potęga dwóch i normalizacja geometrii oracle.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "antenna-mpfr-work-binary-model",
+      "path": "scripts/test_antenna_surface_log_branch_model.py",
+      "symbol": "rounded_dot",
+      "responsibility": "Sekwencyjny iloczyn skalarny binary64 bez FMA w oracle.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "e4-owner-source-setter",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class GeometryMeshHandle",
+      "responsibility": "Jawny owner-bound MeshData source; kandydat E4, bez nowej fizyki i bez kwalifikacji runtime.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "e4-owner-source-owner",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py",
+      "symbol": "_scope_per_geometry_entries",
+      "responsibility": "Jawny owner-bound MeshData source; kandydat E4, bez nowej fizyki i bez kwalifikacji runtime.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "e4-owner-source-import",
+      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
+      "symbol": "build_geometry_assets_for_request",
+      "responsibility": "Jawny owner-bound MeshData source; kandydat E4, bez nowej fizyki i bez kwalifikacji runtime.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "e4-owner-source-cut",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_antenna_coincident_cut.py",
+      "symbol": "prepare_antenna_coincident_loop",
+      "responsibility": "Jawny owner-bound MeshData source; kandydat E4, bez nowej fizyki i bez kwalifikacji runtime.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "e4-owner-source-export",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_object_id_mesh_workflow",
+      "responsibility": "Jawny owner-bound MeshData source; kandydat E4, bez nowej fizyki i bez kwalifikacji runtime.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "e4-owner-source-capture",
+      "path": "packages/fullmag-py/src/fullmag/runtime/accepted_source_capture.py",
+      "symbol": "inventory",
+      "responsibility": "Jawny owner-bound MeshData source; kandydat E4, bez nowej fizyki i bez kwalifikacji runtime.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "antenna-explicit-selector",
+      "path": "crates/fullmag-application/src/script_stage_materialization.rs",
+      "symbol": "parse_antenna_solve_selection",
+      "responsibility": "Zgodność jawnego etapu anteny z authored pipeline; wspólny selektor i zachowane pokrycie, bez nowej fizyki.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "antenna-explicit-coverage",
+      "path": "crates/fullmag-application/src/script_pipeline_compilation.rs",
+      "symbol": "validate_physical_snapshot_coverage",
+      "responsibility": "Zgodność jawnego etapu anteny z authored pipeline; wspólny selektor i zachowane pokrycie, bez nowej fizyki.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "antenna-explicit-acceptance",
+      "path": "crates/fullmag-application/src/script_pipeline_acceptance.rs",
+      "symbol": "compile_accepted_closed_loop_pipeline",
+      "responsibility": "Zgodność jawnego etapu anteny z authored pipeline; wspólny selektor i zachowane pokrycie, bez nowej fizyki.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "antenna-script-execution-producer",
+      "path": "crates/fullmag-cli/src/accepted_script_run.rs",
+      "symbol": "submit_script",
+      "responsibility": "Zachowanie authored execution w producerze accepted; brak zmiany fizyki i brak kwalifikacji solvera.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "antenna-authored-request",
+      "path": "crates/fullmag-application/src/task_execution.rs",
+      "symbol": "for_problem",
+      "responsibility": "Zachowanie authored execution w producerze accepted; brak zmiany fizyki i brak kwalifikacji solvera.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "antenna-legacy-script-layer",
+      "path": "crates/fullmag-application/src/legacy_live_execution.rs",
+      "symbol": "migrate_legacy_live_execution",
+      "responsibility": "Zachowanie authored execution w producerze accepted; brak zmiany fizyki i brak kwalifikacji solvera.",
+      "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "antenna-declared-script-layer",
+      "path": "crates/fullmag-application/src/declared_execution.rs",
+      "symbol": "bind_declared_execution",
+      "responsibility": "Zachowanie authored execution w producerze accepted; brak zmiany fizyki i brak kwalifikacji solvera.",
+      "evidence_status": "implementation_unqualified"
     }
   ],
   "public_api": {
     "parameters": [
+      {
+        "python": "fit_retained_rt0.vertices_m",
+        "type": "list/tuple (4×3 float)",
+        "default": "required",
+        "si_unit": "\\mathrm m",
+        "validation": "dokładnie4×3 skończone binary64; bool i niepositive Tet4 odrzucane",
+        "meaning": "retained współrzędne jednej komórki, bez scalania ID",
+        "backend_support": "referencyjny Python CPU; bez wykonania backendu",
+        "problem_ir": "bez nowej serializacji; wejście z przyjętego carriera"
+      },
+      {
+        "python": "fit_retained_rt0.vertex_current_apm2",
+        "type": "list/tuple (4×3 float)",
+        "default": "required",
+        "si_unit": "\\mathrm{A\\,m^{-2}}",
+        "validation": "dokładnie4×3 skończone binary64, w tej samej kolejności; wymagany scalar-slope residual gate",
+        "meaning": "cztery lokalne ślady J tej komórki, bez uśredniania z sąsiadami",
+        "backend_support": "referencyjny Python CPU; bez wykonania backendu",
+        "problem_ir": "bez zmiany semantyki IR"
+      },
+      {
+        "python": "TerminalLeadExtension.from_antenna_terminal.id",
+        "type": "str",
+        "default": "wymagany; tylko nazwany",
+        "si_unit": "$1$",
+        "validation": "niepusty UTF-8 bez NUL, do 4096 bajtów",
+        "meaning": "ID elektrody",
+        "backend_support": "authoring niezależny od backendu; przygotowanie FEM CPU/double; wykonanie NOT VERIFIED",
+        "problem_ir": "current_modules[].external_lead_preparation.extensions[].id"
+      },
+      {
+        "python": "TerminalLeadExtension.from_antenna_terminal.observation_id",
+        "type": "str",
+        "default": "wymagany; tylko nazwany",
+        "si_unit": "$1$",
+        "validation": "niepusty UTF-8 bez NUL, do 4096 bajtów",
+        "meaning": "ID pasywnej obserwacji",
+        "backend_support": "authoring niezależny od backendu; przygotowanie FEM CPU/double; wykonanie NOT VERIFIED",
+        "problem_ir": "current_modules[].external_lead_preparation.extensions[].observation_id"
+      },
+      {
+        "python": "TerminalLeadExtension.from_antenna_terminal.object_id",
+        "type": "str",
+        "default": "wymagany; tylko nazwany",
+        "si_unit": "$1$",
+        "validation": "niepusty UTF-8 bez NUL, do 4096 bajtów; rzeczywisty właściciel sprawdzany po siatce",
+        "meaning": "niezmienny właściciel i wejście markera",
+        "backend_support": "authoring niezależny od backendu; przygotowanie FEM CPU/double; wykonanie NOT VERIFIED",
+        "problem_ir": "current_modules[].external_lead_preparation.extensions[].object_id"
+      },
+      {
+        "python": "TerminalLeadExtension.from_antenna_terminal.conductor_part_id",
+        "type": "str",
+        "default": "wymagany; tylko nazwany",
+        "si_unit": "$1$",
+        "validation": "niepusty UTF-8 bez NUL, do 4096 bajtów; istnienie markera sprawdzane po siatce",
+        "meaning": "ID części przewodnika; bez geometrycznego fallbacku",
+        "backend_support": "authoring niezależny od backendu; przygotowanie FEM CPU/double; wykonanie NOT VERIFIED",
+        "problem_ir": "current_modules[].external_lead_preparation.extensions[].boundary_markers[0]"
+      },
+      {
+        "python": "TerminalLeadExtension.from_antenna_terminal.selector",
+        "type": "str",
+        "default": "wymagany; tylko nazwany",
+        "si_unit": "$1$",
+        "validation": "niepusty UTF-8 bez NUL, do 4096 bajtów; po strip/lower tylko local_u_min lub local_u_max",
+        "meaning": "semantyczny koniec części przewodnika",
+        "backend_support": "authoring niezależny od backendu; przygotowanie FEM CPU/double; wykonanie NOT VERIFIED",
+        "problem_ir": "current_modules[].external_lead_preparation.extensions[].boundary_markers[0]"
+      },
+      {
+        "python": "TerminalLeadExtension.from_antenna_terminal.length_m",
+        "type": "float",
+        "default": "wymagany; tylko nazwany",
+        "si_unit": "$\\mathrm m$",
+        "validation": "skończony dodatni, bez bool",
+        "meaning": "długość doprowadzenia",
+        "backend_support": "authoring niezależny od backendu; przygotowanie FEM CPU/double; wykonanie NOT VERIFIED",
+        "problem_ir": "current_modules[].external_lead_preparation.extensions[].length_m"
+      },
+      {
+        "python": "TerminalLeadExtension.from_antenna_terminal.outward_direction_xyz",
+        "type": "tuple[float,float,float]",
+        "default": "wymagany; tylko nazwany",
+        "si_unit": "$1$",
+        "validation": "trzy skończone liczby bez bool; tolerancja normy 1e-12; bez automatycznej normalizacji",
+        "meaning": "jawny jednostkowy kierunek na zewnątrz",
+        "backend_support": "authoring niezależny od backendu; przygotowanie FEM CPU/double; wykonanie NOT VERIFIED",
+        "problem_ir": "current_modules[].external_lead_preparation.extensions[].outward_direction_xyz"
+      },
+      {
+        "python": "TerminalLeadExtension.from_antenna_terminal.conductivity_spm",
+        "type": "float",
+        "default": "wymagany; tylko nazwany",
+        "si_unit": "$\\mathrm{S\\,m^{-1}}$",
+        "validation": "skończona dodatnia, bez bool",
+        "meaning": "jawna przewodność doprowadzenia",
+        "backend_support": "authoring niezależny od backendu; przygotowanie FEM CPU/double; wykonanie NOT VERIFIED",
+        "problem_ir": "current_modules[].external_lead_preparation.extensions[].conductivity_spm"
+      },
+      {
+        "python": "TerminalLeadExtension.from_antenna_terminal.layers",
+        "type": "int",
+        "default": "2; tylko nazwany",
+        "si_unit": "$1$",
+        "validation": "dokładny int bez bool, 2–1048576; budżet łączny sprawdzany po siatce",
+        "meaning": "liczba przedziałów ekstrudowania",
+        "backend_support": "authoring niezależny od backendu; przygotowanie FEM CPU/double; wykonanie NOT VERIFIED",
+        "problem_ir": "current_modules[].external_lead_preparation.extensions[].layers"
+      },
       {
         "python": "ExternalLeadPreparation.revision",
         "type": "str",
@@ -6115,9 +9570,9 @@
         "type": "str",
         "default": "production_default",
         "si_unit": "$1$",
-        "validation": "niepusty token; materializator nowego source obsługuje wyłącznie production_default, inne odrzuca",
-        "meaning": "requested policy zachowana osobno od resolved unqualified preset",
-        "backend_support": "FEM CPU/double input; public source execution niedostępne",
+        "validation": "niepusty token Python; preparowana pętla dopuszcza dokładnie production_default lub volume_inspection_v1, pozostałe odrzuca; external-lead wyłącznie production_default",
+        "meaning": "requested policy zachowana oddzielnie od resolved unqualified preset; jawny opt-in bez zmiany tolerancji",
+        "backend_support": "inspekcja preparowanej pełnej pętli FEM CPU/double/P1/strict; Universe H runtime pending",
         "problem_ir": "antenna_field_solve_stages[].solver_policy"
       },
       {
@@ -6319,6 +9774,776 @@
         "meaning": "pin zawartości assetu i receiptu",
         "backend_support": "source-only FEM CPU; other lanes unsupported",
         "problem_ir": "antenna_spectrum_requests[].equilibrium_ref.content_digest"
+      },
+      {
+        "python": "FieldOnly.outputs",
+        "type": "Sequence[TimeOutputSpec]",
+        "default": "()",
+        "si_unit": "$1$",
+        "validation": "wyłącznie pusta sekwencja, nonempty odrzucane",
+        "meaning": "brak time evolution outputs",
+        "backend_support": "backend-neutral authoring; FEM CPU/double inspection implementation unqualified; forced GPU refused",
+        "problem_ir": "study.sampling.outputs"
+      },
+      {
+        "python": "FieldOnly.constraints",
+        "type": "Sequence[FrozenSpins]",
+        "default": "()",
+        "si_unit": "$1$",
+        "validation": "wyłącznie pusta sekwencja, nonempty odrzucane",
+        "meaning": "brak magnetic frozen DOFs",
+        "backend_support": "backend-neutral authoring; FEM CPU/double inspection implementation unqualified; forced GPU refused",
+        "problem_ir": "constraints"
+      },
+      {
+        "python": "MicrostripAntennaLayout.inlet_connection_length_m",
+        "type": "float",
+        "default": "required when loop enabled",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite > 0; jawna długość poza zakresem signal/return",
+        "meaning": "długość przewodzącego mostka",
+        "backend_support": "planned FEM CPU v2; pozostałe lane niekwalifikowane",
+        "problem_ir": "geometry.antenna_layout.loop.inlet_connection_length_m"
+      },
+      {
+        "python": "MicrostripAntennaLayout.inlet_connection_width_m",
+        "type": "float",
+        "default": "required when loop enabled",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite > 0; dodatnie pole styku z signal oraz return",
+        "meaning": "szerokość mostka",
+        "backend_support": "planned FEM CPU v2; pozostałe lane niekwalifikowane",
+        "problem_ir": "geometry.antenna_layout.loop.inlet_connection_width_m"
+      },
+      {
+        "python": "MicrostripAntennaLayout.inlet_connection_offset_v_m",
+        "type": "float",
+        "default": "required when loop enabled",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite; sprawdzany overlap z oboma przewodnikami",
+        "meaning": "poprzeczne położenie środka mostka",
+        "backend_support": "planned FEM CPU v2; pozostałe lane niekwalifikowane",
+        "problem_ir": "geometry.antenna_layout.loop.inlet_connection_offset_v_m"
+      },
+      {
+        "python": "MicrostripAntennaLayout.inlet_connection_part_id",
+        "type": "str",
+        "default": "required when loop enabled",
+        "si_unit": "$1$",
+        "validation": "nonempty; unique względem wszystkich części",
+        "meaning": "stabilna semantyczna tożsamość części",
+        "backend_support": "planned FEM CPU v2; pozostałe lane niekwalifikowane",
+        "problem_ir": "geometry.antenna_layout.loop.inlet_connection_part_id"
+      },
+      {
+        "python": "MicrostripAntennaLayout.inlet_connection_conductivity_s_per_m",
+        "type": "float",
+        "default": "required when loop enabled",
+        "si_unit": "$\\mathrm{S}\\,\\mathrm{m}^{-1}$",
+        "validation": "finite > 0; bez cichego dziedziczenia",
+        "meaning": "jawna przewodność mostka",
+        "backend_support": "planned FEM CPU v2; pozostałe lane niekwalifikowane",
+        "problem_ir": "geometry.antenna_layout.loop.inlet_connection_conductivity_s_per_m"
+      },
+      {
+        "python": "MicrostripAntennaLayout.outlet_connection_length_m",
+        "type": "float",
+        "default": "required when loop enabled",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite > 0; jawna długość poza zakresem signal/return",
+        "meaning": "długość przewodzącego mostka",
+        "backend_support": "planned FEM CPU v2; pozostałe lane niekwalifikowane",
+        "problem_ir": "geometry.antenna_layout.loop.outlet_connection_length_m"
+      },
+      {
+        "python": "MicrostripAntennaLayout.outlet_connection_width_m",
+        "type": "float",
+        "default": "required when loop enabled",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite > 0; dodatnie pole styku z signal oraz return",
+        "meaning": "szerokość mostka",
+        "backend_support": "planned FEM CPU v2; pozostałe lane niekwalifikowane",
+        "problem_ir": "geometry.antenna_layout.loop.outlet_connection_width_m"
+      },
+      {
+        "python": "MicrostripAntennaLayout.outlet_connection_offset_v_m",
+        "type": "float",
+        "default": "required when loop enabled",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite; sprawdzany overlap z oboma przewodnikami",
+        "meaning": "poprzeczne położenie środka mostka",
+        "backend_support": "planned FEM CPU v2; pozostałe lane niekwalifikowane",
+        "problem_ir": "geometry.antenna_layout.loop.outlet_connection_offset_v_m"
+      },
+      {
+        "python": "MicrostripAntennaLayout.outlet_connection_part_id",
+        "type": "str",
+        "default": "required when loop enabled",
+        "si_unit": "$1$",
+        "validation": "nonempty; unique względem wszystkich części",
+        "meaning": "stabilna semantyczna tożsamość części",
+        "backend_support": "planned FEM CPU v2; pozostałe lane niekwalifikowane",
+        "problem_ir": "geometry.antenna_layout.loop.outlet_connection_part_id"
+      },
+      {
+        "python": "MicrostripAntennaLayout.outlet_connection_conductivity_s_per_m",
+        "type": "float",
+        "default": "required when loop enabled",
+        "si_unit": "$\\mathrm{S}\\,\\mathrm{m}^{-1}$",
+        "validation": "finite > 0; bez cichego dziedziczenia",
+        "meaning": "jawna przewodność mostka",
+        "backend_support": "planned FEM CPU v2; pozostałe lane niekwalifikowane",
+        "problem_ir": "geometry.antenna_layout.loop.outlet_connection_conductivity_s_per_m"
+      },
+      {
+        "python": "MicrostripAntennaLayout.closed_loop",
+        "type": "bool",
+        "default": "False",
+        "si_unit": "$1$",
+        "validation": "explicit True enables both bridges; missing bridge rejected",
+        "meaning": "jawna aktywacja fizycznej pętli",
+        "backend_support": "planned FEM CPU v2; pozostałe lane niekwalifikowane",
+        "problem_ir": "geometry.antenna_layout.loop.enabled"
+      },
+      {
+        "python": "StructuredCutPlane.coordinate_frame",
+        "type": "str",
+        "default": "world for v1; required object for loop v2",
+        "si_unit": "$1$",
+        "validation": "v2 object only; reference must resolve unique antenna transform",
+        "meaning": "układ odniesienia płaszczyzny",
+        "backend_support": "planned FEM CPU v2; pozostałe lane niekwalifikowane",
+        "problem_ir": "current_transport.structured_closure.source_cuts[].plane.coordinate_frame"
+      },
+      {
+        "python": "StructuredCurrentClosure.closure_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "nonempty",
+        "meaning": "tożsamość authored zamknięcia",
+        "backend_support": "existing authoring v1; FEM loop lowering planned",
+        "problem_ir": "current_transport.structured_closure.closure_id"
+      },
+      {
+        "python": "StructuredCurrentClosure.source_cuts",
+        "type": "tuple[StructuredCurrentSourceCut, ...]",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "exactly one for bounded microstrip loop; unique source_cut_id/circuit_id/drive_id",
+        "meaning": "lista źródeł pętli",
+        "backend_support": "existing authoring v1; FEM loop lowering planned",
+        "problem_ir": "current_transport.structured_closure.source_cuts"
+      },
+      {
+        "python": "StructuredCurrentClosure.schema_version",
+        "type": "str",
+        "default": "structured_current_closure.v1 existing; v2 planned",
+        "si_unit": "$1$",
+        "validation": "v1 unchanged; v2 explicitly selected for FEM loop",
+        "meaning": "wersja authored kontraktu",
+        "backend_support": "existing authoring v1; FEM loop lowering planned",
+        "problem_ir": "current_transport.structured_closure.schema_version"
+      },
+      {
+        "python": "StructuredCurrentClosure.kind",
+        "type": "str",
+        "default": "closed_geometry",
+        "si_unit": "$1$",
+        "validation": "closed_geometry only",
+        "meaning": "fizycznie zamknięta geometria",
+        "backend_support": "existing authoring v1; FEM loop lowering planned",
+        "problem_ir": "current_transport.structured_closure.kind"
+      },
+      {
+        "python": "StructuredCurrentSourceCut.source_cut_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "nonempty and unique",
+        "meaning": "tożsamość źródła",
+        "backend_support": "existing authoring v1; FEM loop lowering planned",
+        "problem_ir": "current_transport.structured_closure.source_cuts[].source_cut_id"
+      },
+      {
+        "python": "StructuredCurrentSourceCut.circuit_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "nonempty and unique; one connected conductive loop",
+        "meaning": "tożsamość obwodu",
+        "backend_support": "existing authoring v1; FEM loop lowering planned",
+        "problem_ir": "current_transport.structured_closure.source_cuts[].circuit_id"
+      },
+      {
+        "python": "StructuredCurrentSourceCut.region",
+        "type": "RegionRef",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "resolves inlet connection part of the same object",
+        "meaning": "zakres materializacji źródła",
+        "backend_support": "existing authoring v1; FEM loop lowering planned",
+        "problem_ir": "current_transport.structured_closure.source_cuts[].region"
+      },
+      {
+        "python": "StructuredCurrentSourceCut.plane",
+        "type": "StructuredCutPlane",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "strictly inside inlet bridge; conforming triangulated full section",
+        "meaning": "przekrój źródła",
+        "backend_support": "existing authoring v1; FEM loop lowering planned",
+        "problem_ir": "current_transport.structured_closure.source_cuts[].plane"
+      },
+      {
+        "python": "StructuredCurrentSourceCut.drive",
+        "type": "ImpressedPotentialJump",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "one finite nonzero static jump; no terminal-current actuator",
+        "meaning": "idealne wymuszenie",
+        "backend_support": "existing authoring v1; FEM loop lowering planned",
+        "problem_ir": "current_transport.structured_closure.source_cuts[].drive"
+      },
+      {
+        "python": "StructuredCutPlane.axis",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "x/y/z existing; z in object frame for bounded loop",
+        "meaning": "oś normalna przekroju",
+        "backend_support": "existing authoring v1; FEM loop lowering planned",
+        "problem_ir": "current_transport.structured_closure.source_cuts[].plane.axis"
+      },
+      {
+        "python": "StructuredCutPlane.offset_m",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite; -thickness_m/2-return_offset_m < offset_m < -thickness_m/2",
+        "meaning": "lokalne położenie przekroju między płytami",
+        "backend_support": "existing authoring v1; FEM loop lowering planned",
+        "problem_ir": "current_transport.structured_closure.source_cuts[].plane.offset_m"
+      },
+      {
+        "python": "StructuredCutPlane.normal",
+        "type": "str",
+        "default": "positive_axis",
+        "si_unit": "$1$",
+        "validation": "positive_axis/negative_axis; orientation saved explicitly",
+        "meaning": "orientacja źródła i podpisanych pomiarów",
+        "backend_support": "existing authoring v1; FEM loop lowering planned",
+        "problem_ir": "current_transport.structured_closure.source_cuts[].plane.normal"
+      },
+      {
+        "python": "ImpressedPotentialJump.drive_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "nonempty and unique",
+        "meaning": "tożsamość wymuszenia",
+        "backend_support": "existing authoring v1; FEM loop lowering planned",
+        "problem_ir": "current_transport.structured_closure.source_cuts[].drive.drive_id"
+      },
+      {
+        "python": "ImpressedPotentialJump.potential_jump_V",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{V}$",
+        "validation": "finite nonzero; V_plus minus V_minus",
+        "meaning": "podpisany idealny skok potencjału",
+        "backend_support": "existing authoring v1; FEM loop lowering planned",
+        "problem_ir": "current_transport.structured_closure.source_cuts[].drive.potential_jump_V"
+      },
+      {
+        "python": "ImpressedPotentialJump.schema_version",
+        "type": "str",
+        "default": "impressed_potential_jump.v1",
+        "si_unit": "$1$",
+        "validation": "existing v1 unchanged",
+        "meaning": "wersja istniejącego wymuszenia",
+        "backend_support": "existing authoring v1; FEM loop lowering planned",
+        "problem_ir": "current_transport.structured_closure.source_cuts[].drive.schema_version"
+      },
+      {
+        "python": "MicrostripAntennaLayout.name",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "nonempty",
+        "meaning": "nazwa authored layout",
+        "backend_support": "existing geometry authoring; full FEM loop materializer planned v2",
+        "problem_ir": "geometry.antenna_layout.name"
+      },
+      {
+        "python": "MicrostripAntennaLayout.length_m",
+        "type": "float | None",
+        "default": "None; canonical or alias required",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite > 0; conflicting alias rejected",
+        "meaning": "długość signal i return",
+        "backend_support": "existing geometry authoring; full FEM loop materializer planned v2",
+        "problem_ir": "geometry.antenna_layout.length_m"
+      },
+      {
+        "python": "MicrostripAntennaLayout.thickness_m",
+        "type": "float | None",
+        "default": "None; canonical or alias required",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite > 0; conflicting alias rejected",
+        "meaning": "wspólna grubość signal i return",
+        "backend_support": "existing geometry authoring; full FEM loop materializer planned v2",
+        "problem_ir": "geometry.antenna_layout.thickness_m"
+      },
+      {
+        "python": "MicrostripAntennaLayout.conductivity_s_per_m",
+        "type": "float | None",
+        "default": "None; canonical or alias required",
+        "si_unit": "$\\mathrm{S}\\,\\mathrm{m}^{-1}$",
+        "validation": "finite > 0; conflicting alias rejected",
+        "meaning": "przewodność istniejących części",
+        "backend_support": "existing geometry authoring; full FEM loop materializer planned v2",
+        "problem_ir": "geometry.antenna_layout.conductivity_s_per_m"
+      },
+      {
+        "python": "MicrostripAntennaLayout.stations",
+        "type": "Sequence[MicrostripWidthStation]",
+        "default": "()",
+        "si_unit": "$1$",
+        "validation": "at least two; strictly increasing s; endpoints 0 and 1; positive widths",
+        "meaning": "pełny jawny taper 3D",
+        "backend_support": "existing geometry authoring; full FEM loop materializer planned v2",
+        "problem_ir": "geometry.antenna_layout.stations"
+      },
+      {
+        "python": "MicrostripAntennaLayout.transform",
+        "type": "RigidTransform | None",
+        "default": "None resolves identity",
+        "si_unit": "$1$",
+        "validation": "typed finite right-handed rigid transform",
+        "meaning": "wspólna transformacja wszystkich części",
+        "backend_support": "existing geometry authoring; full FEM loop materializer planned v2",
+        "problem_ir": "geometry.antenna_layout.transform"
+      },
+      {
+        "python": "MicrostripAntennaLayout.return_width_m",
+        "type": "float | None",
+        "default": "None; canonical or alias required",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite > 0; conflicting alias rejected",
+        "meaning": "pełna szerokość return plate",
+        "backend_support": "existing geometry authoring; full FEM loop materializer planned v2",
+        "problem_ir": "geometry.antenna_layout.return_width_m"
+      },
+      {
+        "python": "MicrostripAntennaLayout.return_offset_m",
+        "type": "float | None",
+        "default": "None resolves thickness_m",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite >= 0 existing; strictly > 0 for planned loop sourcecut",
+        "meaning": "clearance dolnej signal i górnej return",
+        "backend_support": "existing geometry authoring; full FEM loop materializer planned v2",
+        "problem_ir": "geometry.antenna_layout.return_offset_m"
+      },
+      {
+        "python": "MicrostripAntennaLayout.signal_part_id",
+        "type": "str",
+        "default": "signal",
+        "si_unit": "$1$",
+        "validation": "nonempty; differs from return_part_id",
+        "meaning": "tożsamość signal",
+        "backend_support": "existing geometry authoring; full FEM loop materializer planned v2",
+        "problem_ir": "geometry.antenna_layout.conductors[].id"
+      },
+      {
+        "python": "MicrostripAntennaLayout.return_part_id",
+        "type": "str",
+        "default": "return",
+        "si_unit": "$1$",
+        "validation": "nonempty; differs from signal_part_id",
+        "meaning": "tożsamość return",
+        "backend_support": "existing geometry authoring; full FEM loop materializer planned v2",
+        "problem_ir": "geometry.antenna_layout.conductors[].id"
+      },
+      {
+        "python": "MicrostripAntennaLayout.length",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "same validation as length_m; conflicting values rejected",
+        "meaning": "alias normalizowany do length_m",
+        "backend_support": "existing geometry authoring; full FEM loop materializer planned v2",
+        "problem_ir": "geometry.antenna_layout.length_m"
+      },
+      {
+        "python": "MicrostripAntennaLayout.thickness",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "same validation as thickness_m; conflicting values rejected",
+        "meaning": "alias normalizowany do thickness_m",
+        "backend_support": "existing geometry authoring; full FEM loop materializer planned v2",
+        "problem_ir": "geometry.antenna_layout.thickness_m"
+      },
+      {
+        "python": "MicrostripAntennaLayout.conductivity",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{S}\\,\\mathrm{m}^{-1}$",
+        "validation": "same validation as conductivity_s_per_m; conflicting values rejected",
+        "meaning": "alias normalizowany do conductivity_s_per_m",
+        "backend_support": "existing geometry authoring; full FEM loop materializer planned v2",
+        "problem_ir": "geometry.antenna_layout.conductivity_s_per_m"
+      },
+      {
+        "python": "MicrostripAntennaLayout.return_width",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "same validation as return_width_m; conflicting values rejected",
+        "meaning": "alias normalizowany do return_width_m",
+        "backend_support": "existing geometry authoring; full FEM loop materializer planned v2",
+        "problem_ir": "geometry.antenna_layout.return_width_m"
+      },
+      {
+        "python": "MicrostripWidthStation.s",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "finite in [0,1]; sequence endpoint/sort rules",
+        "meaning": "bezwymiarowe położenie u=s*length_m",
+        "backend_support": "existing geometry authoring; full FEM loop materializer planned v2",
+        "problem_ir": "geometry.antenna_layout.stations[].s"
+      },
+      {
+        "python": "MicrostripWidthStation.signal_width_m",
+        "type": "float | None",
+        "default": "None; canonical or alias required",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite > 0; conflicting alias rejected",
+        "meaning": "szerokość signal w station",
+        "backend_support": "existing geometry authoring; full FEM loop materializer planned v2",
+        "problem_ir": "geometry.antenna_layout.stations[].signal_width_m"
+      },
+      {
+        "python": "MicrostripWidthStation.signal_width",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "same validation as signal_width_m; conflicting values rejected",
+        "meaning": "alias szerokości",
+        "backend_support": "existing geometry authoring; full FEM loop materializer planned v2",
+        "problem_ir": "geometry.antenna_layout.stations[].signal_width_m"
+      },
+      {
+        "python": "RigidTransform.rotation_matrix",
+        "type": "Sequence[Sequence[float]] | None",
+        "default": "None resolves identity",
+        "si_unit": "$1$",
+        "validation": "finite 3x3; Gram and determinant +1 within 1e-9; conflicting alias rejected",
+        "meaning": "obrót obiektu, cut i normalnych",
+        "backend_support": "existing geometry authoring; full FEM loop materializer planned v2",
+        "problem_ir": "geometry.antenna_layout.transform.rotation_matrix"
+      },
+      {
+        "python": "RigidTransform.translation_m",
+        "type": "Sequence[float] | None",
+        "default": "None resolves (0,0,0)",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite vector3; conflicting alias rejected",
+        "meaning": "przesunięcie obiektu i cut; nie translation_m par v1",
+        "backend_support": "existing geometry authoring; full FEM loop materializer planned v2",
+        "problem_ir": "geometry.antenna_layout.transform.translation_m"
+      },
+      {
+        "python": "RigidTransform.rotation",
+        "type": "Sequence[Sequence[float]] | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "same validation as rotation_matrix; conflicting values rejected",
+        "meaning": "alias obrotu",
+        "backend_support": "existing geometry authoring; full FEM loop materializer planned v2",
+        "problem_ir": "geometry.antenna_layout.transform.rotation_matrix"
+      },
+      {
+        "python": "RigidTransform.translation",
+        "type": "Sequence[float] | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "same validation as translation_m; conflicting values rejected",
+        "meaning": "alias przesunięcia",
+        "backend_support": "existing geometry authoring; full FEM loop materializer planned v2",
+        "problem_ir": "geometry.antenna_layout.transform.translation_m"
+      },
+      {
+        "python": "rectangular_prism_field.position_m",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "\\mathrm m",
+        "validation": "3 skończone liczby rzeczywiste; punkt poza zamkniętą warstwą z źródła",
+        "meaning": "punkt lokalny obserwacji",
+        "backend_support": "niezależny Python CPU; bez backendu Fullmaga",
+        "problem_ir": "brak serializacji do ProblemIR"
+      },
+      {
+        "python": "rectangular_prism_field.lower_m",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "\\mathrm m",
+        "validation": "3 skończone liczby rzeczywiste; upper > lower w każdej osi",
+        "meaning": "dolne granice pryzmatu",
+        "backend_support": "niezależny Python CPU; bez backendu Fullmaga",
+        "problem_ir": "brak serializacji do ProblemIR"
+      },
+      {
+        "python": "rectangular_prism_field.upper_m",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "\\mathrm m",
+        "validation": "3 skończone liczby rzeczywiste; upper > lower w każdej osi",
+        "meaning": "górne granice pryzmatu",
+        "backend_support": "niezależny Python CPU; bez backendu Fullmaga",
+        "problem_ir": "brak serializacji do ProblemIR"
+      },
+      {
+        "python": "rectangular_prism_field.current_density_apm2",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{A\\,m^{-2}}",
+        "validation": "skończona liczba ze znakiem; bool odrzucany",
+        "meaning": "stały prąd lokalny x",
+        "backend_support": "niezależny Python CPU; bez backendu Fullmaga",
+        "problem_ir": "brak serializacji do ProblemIR"
+      },
+      {
+        "python": "rectangular_prism_field.subdivisions",
+        "type": "int",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "dokładny int: 8,16,32,64,128,256; bool odrzucany",
+        "meaning": "podziały Simpsona w obu osiach przekroju",
+        "backend_support": "niezależny Python CPU; bez backendu Fullmaga",
+        "problem_ir": "brak serializacji do ProblemIR"
+      },
+      {
+        "python": "gsg_field.position_m",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "\\mathrm m",
+        "validation": "3 skończone liczby rzeczywiste; z poza warstwą źródła; bool odrzucany",
+        "meaning": "punkt world xyz",
+        "backend_support": "niezależny Python CPU; bez backendu Fullmaga",
+        "problem_ir": "brak serializacji do ProblemIR"
+      },
+      {
+        "python": "gsg_field.subdivisions",
+        "type": "int",
+        "default": "128",
+        "si_unit": "1",
+        "validation": "dokładny int: 8,16,32,64,128,256; bool odrzucany",
+        "meaning": "podziały kwadratury każdego paska",
+        "backend_support": "niezależny Python CPU; bez backendu Fullmaga",
+        "problem_ir": "brak serializacji do ProblemIR"
+      },
+      {
+        "python": "compare.origin",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "tylko origin loopback, bez przekierowań i proxy",
+        "meaning": "istniejące API wyników",
+        "backend_support": "odczyt FEM CPU double; inne lanes niekwalifikowane",
+        "problem_ir": "bez zmiany IR"
+      },
+      {
+        "python": "compare.stage_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "dokładny runtime stage; authored stage inspect_gsg",
+        "meaning": "właściciel wyniku GSG",
+        "backend_support": "odczyt FEM CPU double",
+        "problem_ir": "istniejący stage"
+      },
+      {
+        "python": "compare.activation_receipt",
+        "type": "Path",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "bounded regular JSON, stan activated, zgodne źródło/session/run",
+        "meaning": "pochodzenie wykonanego skryptu",
+        "backend_support": "istniejący Docker DEV",
+        "problem_ir": "bez zmiany IR"
+      },
+      {
+        "python": "compare_samples.data",
+        "type": "dict[str, tuple[list[tuple[float, float, float]], list[float]]]",
+        "default": "required",
+        "si_unit": "współrzędne $\\mathrm{m}$; V $\\mathrm{V}$, J $\\mathrm{A/m^2}$, H $\\mathrm{A/m}$",
+        "validation": "V_electric/J_charge/H_ant, skończone wartości, zgodna liczba komponentów i zakres geometrii; do 4096 punktów H",
+        "meaning": "surowe próbki w układzie świata; helper metryki bez dowodu pochodzenia HTTP",
+        "backend_support": "diagnostyka nominalnego FEM CPU double; bez wykonania backendu",
+        "problem_ir": "bez zmiany IR"
+      },
+      {
+        "python": "study.universe.mode",
+        "type": "str | None",
+        "default": "None; początkowo auto",
+        "si_unit": "$1$",
+        "validation": "auto/manual; manual wymaga size",
+        "meaning": "sposób określenia granic",
+        "backend_support": "inspekcja FEM CPU/double; wykonanie H w Universe niezweryfikowane",
+        "problem_ir": "problem_meta.runtime_metadata.study_universe.mode"
+      },
+      {
+        "python": "study.universe.padding",
+        "type": "Sequence[float] | None",
+        "default": "None; początkowo (0,0,0)",
+        "si_unit": "$\\mathrm m$",
+        "validation": "trzy skończone nieujemne składowe",
+        "meaning": "dwustronny margines domeny",
+        "backend_support": "inspekcja FEM CPU/double; wykonanie H w Universe niezweryfikowane",
+        "problem_ir": "problem_meta.runtime_metadata.study_universe.padding"
+      },
+      {
+        "python": "study.universe.mesh.minimum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm m$",
+        "validation": "skończone dodatnie minimum nie większe od maksimum",
+        "meaning": "minimalny rozmiar elementu otoczenia",
+        "backend_support": "inspekcja FEM CPU/double; wykonanie H w Universe niezweryfikowane",
+        "problem_ir": "problem_meta.runtime_metadata.study_universe.airbox_hmin"
+      },
+      {
+        "python": "study.universe.mesh.maximum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm m$",
+        "validation": "skończone dodatnie maksimum nie mniejsze od minimum",
+        "meaning": "maksymalny rozmiar elementu otoczenia",
+        "backend_support": "inspekcja FEM CPU/double; wykonanie H w Universe niezweryfikowane",
+        "problem_ir": "problem_meta.runtime_metadata.study_universe.airbox_hmax"
+      },
+      {
+        "python": "study.universe.mesh.growth_rate",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "skończona wartość większa od jeden",
+        "meaning": "współczynnik stopniowania",
+        "backend_support": "inspekcja FEM CPU/double; wykonanie H w Universe niezweryfikowane",
+        "problem_ir": "problem_meta.runtime_metadata.study_universe.airbox_growth_rate"
+      },
+      {
+        "python": "study.universe.mesh.grading",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "auto/geometric/linear",
+        "meaning": "rodzaj stopniowania",
+        "backend_support": "inspekcja FEM CPU/double; wykonanie H w Universe niezweryfikowane",
+        "problem_ir": "problem_meta.runtime_metadata.study_universe.airbox_grading"
+      },
+      {
+        "python": "study.build_domain_mesh",
+        "type": "method",
+        "default": "jawne wywołanie",
+        "si_unit": "$1$",
+        "validation": "wymaga geometrii i konfiguracji siatki FEM",
+        "meaning": "jawna materializacja domeny",
+        "backend_support": "inspekcja FEM CPU/double; wykonanie H w Universe niezweryfikowane",
+        "problem_ir": "problem_meta.runtime_metadata.mesh_workflow; geometry_assets.fem_domain_mesh_asset"
+      },
+      {
+        "python": "evaluate_retained_rt0.vertices_m",
+        "type": "4×3 int/float",
+        "default": "required",
+        "si_unit": "$\\mathrm m$",
+        "validation": "Skończone binary64 bez bool; dodatni niepłaski Tet4.",
+        "meaning": "Zachowana geometria jednej komórki.",
+        "backend_support": "referencyjny Python CPU; bez wykonania lub kwalifikacji native",
+        "problem_ir": "brak nowej serializacji; research-only retained data"
+      },
+      {
+        "python": "evaluate_retained_rt0.vertex_current_apm2",
+        "type": "4×3 int/float",
+        "default": "required",
+        "si_unit": "$\\mathrm{A/m^2}$",
+        "validation": "Skończone lokalne ślady bez bool; scalar-slope RT0 residual gate.",
+        "meaning": "Retained J tej samej komórki.",
+        "backend_support": "referencyjny Python CPU; bez wykonania lub kwalifikacji native",
+        "problem_ir": "brak nowej serializacji; research-only retained data"
+      },
+      {
+        "python": "evaluate_retained_rt0.target_m",
+        "type": "3 int/float",
+        "default": "required",
+        "si_unit": "$\\mathrm m$",
+        "validation": "Trzy skończone binary64 bez bool, bez przesuwania punktu.",
+        "meaning": "Punkt odczytu H.",
+        "backend_support": "referencyjny Python CPU; bez wykonania lub kwalifikacji native",
+        "problem_ir": "brak nowej serializacji; research-only retained data"
+      },
+      {
+        "python": "evaluate_retained_rt0.budget",
+        "type": "Budget | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "Istniejące zamrożone limity; wspólny przekazany licznik nie jest resetowany.",
+        "meaning": "Czas i koszt wszystkich czterech ścian oraz redukcji pola.",
+        "backend_support": "referencyjny Python CPU; bez wykonania lub kwalifikacji native",
+        "problem_ir": "brak nowej serializacji; research-only retained data"
+      },
+      {
+        "python": "AntennaSurfaceFieldPolicy.policy_version",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "dokładnie caller_supplied_rt0_surface.inspection.v1",
+        "meaning": "jawna wersja parametrów bez ukrytych defaults",
+        "backend_support": "prepared FEM CPU double strict inspection; GPU/FDM unsupported",
+        "problem_ir": "surface_field_policy.policy_version"
+      },
+      {
+        "python": "AntennaSurfaceFieldPolicy.limits",
+        "type": "Mapping[str,object]",
+        "default": "required",
+        "si_unit": "mieszane; pełne tabele limits w sekcji private native",
+        "validation": "closed mapping; wszystkie dodatnie uint64 i finite seconds; totalpairs<=4000000",
+        "meaning": "jawny bounded koszt pracy",
+        "backend_support": "prepared FEM CPU double strict inspection; GPU/FDM unsupported",
+        "problem_ir": "surface_field_policy.limits"
+      },
+      {
+        "python": "AntennaSurfaceFieldPolicy.tolerances",
+        "type": "Mapping[str,float]",
+        "default": "required",
+        "si_unit": "mieszane; A/m i1 jak pełne tabele tolerances",
+        "validation": "closed mapping 11 pól; finite positive oraz nieprzekraczalne bramki",
+        "meaning": "jawna dokładność inspekcji",
+        "backend_support": "prepared FEM CPU double strict inspection; GPU/FDM unsupported",
+        "problem_ir": "surface_field_policy.tolerances"
+      },
+      {
+        "python": "AntennaFieldSolveStage.surface_field_policy",
+        "type": "Optional[AntennaSurfaceFieldPolicy]",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "wymagane iff analytic_rt0_surface; dla innychmetod forbidden",
+        "meaning": "polityka zaawansowanej metody wykonania",
+        "backend_support": "prepared FEM CPU double strict inspection; GPU/FDM unsupported",
+        "problem_ir": "antenna_field_solve_stages[].surface_field_policy"
+      },
+      {
+        "python": "GeometryMeshHandle.configure.source",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "niepusta ścieżka MeshData NPZ; P1/Tet4; dodatnia orientacja; istniejący owner; brak fallbacku przy błędzie odczytu",
+        "meaning": "jawny, niezmieniany plik wejściowy ownera",
+        "backend_support": "FEM CPU: kandydat authoring; FEM GPU/FDM CPU/FDM GPU: brak kwalifikacji tego przekazania",
+        "problem_ir": "problem_meta.runtime_metadata.mesh_workflow.per_geometry[].source oraz geometry_assets.fem_mesh_assets[]"
       }
     ]
   }

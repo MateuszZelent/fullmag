@@ -445,7 +445,7 @@ export function buildFdmVectorSegmentsFromAnchors(
   const { anchors, cellIndices, fieldVector, maxVectors } = request;
   if (
     !fieldVector ||
-    fieldVector.nComp < 3 ||
+    fieldVector.nComp !== 3 ||
     fieldVector.pointCount <= 0 ||
     maxVectors <= 0 ||
     anchors.length < cellIndices.length * 3
@@ -1337,7 +1337,7 @@ export function buildFdmVectorSegmentsUncached(
   if (
     !model ||
     !fieldVector ||
-    fieldVector.nComp < 3 ||
+    fieldVector.nComp !== 3 ||
     fieldVector.pointCount === 0 ||
     maxVectors <= 0
   ) {
@@ -1516,7 +1516,7 @@ function resolveFdmVectorSampledInstances(
   if (
     !model ||
     !fieldVector ||
-    fieldVector.nComp < 3 ||
+    fieldVector.nComp !== 3 ||
     fieldVector.pointCount === 0 ||
     maxVectors <= 0
   ) {

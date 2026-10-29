@@ -2,7 +2,7 @@
 //!
 //! The shared worker-orphan teardown contract continues to require an
 //! authoritative exited-container observation. This separate proof accepts
-//! exact-ID absence only for retained-run v2/v3 recovery requests.
+//! exact-ID absence only for retained-run v2/v3/v4 recovery requests.
 
 use std::collections::BTreeSet;
 

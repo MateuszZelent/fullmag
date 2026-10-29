@@ -176,10 +176,12 @@ def _container(profile, *, socket=False):
         (cache.PACKAGE_VOLUME_ROLE, cache.PACKAGE_TARGET),
         (cache.CONTROL_VOLUME_ROLE, cache.CONTROL_TARGET),
     ):
-        subpath = (
-            profile.get("shared_package_subpath", "")
-            if role == cache.PACKAGE_VOLUME_ROLE else ""
-        )
+        if role == cache.PACKAGE_VOLUME_ROLE:
+            subpath = profile.get("shared_package_subpath", "")
+        elif role == cache.CONTROL_VOLUME_ROLE:
+            subpath = profile.get("control_namespace", "")
+        else:
+            subpath = ""
         mount, host_mount = volume_mount(role, target, subpath or "")
         mounts.append(mount)
         host_mounts.append(host_mount)

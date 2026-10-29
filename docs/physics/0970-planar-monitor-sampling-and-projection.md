@@ -234,6 +234,16 @@ $\operatorname{atan2}(q_v,q_u)/(2\pi)\bmod 1$. Vectors whose norm does not
 exceed $10^{-12}$ times the maximum raster vector norm receive
 `undefined_orientation` and a non-finite scalar.
 
+Because every component is a function of the reduced vector $\bar{\mathbf q}$
+alone, `x`, `y`, `z` and `magnitude` computed from the published vector raster
+of a sample equal the backend scalar raster of that component exactly
+(component-of-average; for the linear components this also equals the average
+of the component, for `magnitude` it does not, $|\bar{\mathbf q}|\le\overline{|\mathbf q|}$).
+The Control Room therefore switches among these four components of a
+three-component, non-tensor `plane_sample` without requesting a new sample; it
+uses the backend path for every other case, including slab, depth and surface
+operators, although the identity above would also hold there.
+
 (planar-monitor-symbols-and-si-units)=
 ## Symbols and SI units
 
@@ -302,6 +312,7 @@ exceed $10^{-12}$ times the maximum raster vector norm receive
 | $k$ | FDM cell-layer index along the normal | $1$ |
 | $N_n$ | FDM cell count along the normal | $1$ |
 | $h_n$ | FDM cell edge along the normal | $\mathrm{m}$ |
+| $h_\perp$ | Navigation step of a continuous FEM section: median normal extent of the cut target elements | $\mathrm{m}$ |
 | $\pi$ | Circle constant | $1$ |
 
 `[q]` denotes the canonical SI unit of the selected source quantity. Unit
@@ -817,10 +828,48 @@ k=\min\!\left(N_n-1,\ \max\!\left(0,\lceil\phi N_n\rceil-1\right)\right),\qquad
 p_n^{\mathrm{res}}=b_{\min}+\left(k+\tfrac12\right)h_n .
 ```
 
-`stops_kind` is `fdm_cell_layers` when {eq}`eq-planar-default-layer` applies
-and `continuous` otherwise; `navigation_step_m` is $h_n$ or one hundredth of
-the normal extent. The user interface shows $p_n^{\mathrm{req}}$ and
-$p_n^{\mathrm{res}}$ together and never hides the snap.
+On a swept FEM mesh whose mixed-layer topology certificate lists the magnetic
+node-plane coordinates $z_0<\dots<z_{L}$ along the sweep axis, and when the
+section normal is that axis, the request snaps to the nearest plane
+$z_k$ only within a relative window
+$|z_k-p_n^{\mathrm{req}}|\le\max(\varepsilon_{\mathrm{cert}},10^{-9}(z_L-z_0))$.
+Outside the window the plane is sampled at $p_n^{\mathrm{req}}$ itself, which
+is legal because the Prism6 interpolant is linear along the sweep within each
+layer. A node plane is a geometric stop, not a data layer: the sampled field on
+$z_k$ is the nodal trace, and between planes it is the element interpolant.
+
+On other FEM meshes the section is continuous. Its navigation step is the
+median normal extent of the elements cut by the current plane,
+
+```{math}
+:label: eq-planar-navigation-step
+h_\perp=\operatorname{median}\{\max_a n_a-\min_a n_a : e\in\mathcal T,\ \min_a n_a\le p_n^{\mathrm{res}}\le\max_a n_a\},
+```
+
+where $\mathcal T$ is the sampled target and $n_a=(\mathbf x_a-\mathbf o)\cdot\mathbf n$ are the projected element
+vertices. $h_\perp$ is a navigation aid that depends on the current plane; it
+does not define layers and does not enter any sampled value. It is computed in
+the geometry pass of the cached `plane_sample` operator and published with the
+number of cut elements; when no operator was built (slab and depth operators,
+or no cut element) the step stays one hundredth of the normal extent.
+
+A slab-average Default slice is centred at $p_n^{\mathrm{req}}$ itself:
+neither {eq}`eq-planar-default-layer` nor the node-plane snap applies, because
+moving the centre of a slab of thickness $t$ to a cell centre would shift
+$[p_n-t/2,\,p_n+t/2]$ by up to $h_n/2$ into the neighbouring material. A named
+object layer is such a slab with $p_n$ and $t$ taken from the realized
+geometry bounds $[a,b]$ of the object along the normal, $p_n=(a+b)/2$ and
+$t=b-a$; its value is the occupied-measure mean of the slab, which also
+contains any other material inside $[a,b]$ in the sampled target. Restricting
+it to one object or region is a scope (`scope_kind=region`, or an object
+monitor target), not a different reduction.
+
+`stops_kind` is `fdm_cell_layers` when {eq}`eq-planar-default-layer` applies,
+`fem_node_planes` or `fem_node_planes_between` on a certified swept mesh, and
+`continuous` otherwise; `navigation_step_m` is $h_n$, the mean node-plane
+spacing, $h_\perp$, or one hundredth of the normal extent, and
+`navigation_step_kind` names which. The user interface shows
+$p_n^{\mathrm{req}}$ and $p_n^{\mathrm{res}}$ together and never hides the snap.
 
 (planar-monitor-probe-evaluation)=
 ### Probe evaluation
@@ -834,6 +883,111 @@ value), `empty` (inside the frame, outside the selected target; no value) or
 `stale` (the field revision advanced). The position is never clamped to the
 raster edge, and the reported position and value always refer to the same
 point.
+
+(planar-monitor-line-profile)=
+### Line profile sampling
+
+A line profile is a sequence of point evaluations along the straight segment
+from $\mathbf a=(u_0,v_0)$ to $\mathbf b=(u_1,v_1)$ in the frame of one planar
+sample. With $L=\lVert\mathbf b-\mathbf a\rVert$ and the arc length $s\in[0,L]$,
+
+```{math}
+:label: eq-planar-line-profile
+\mathbf p(s)=\mathbf o+\bigl(u_0+\tfrac{s}{L}(u_1-u_0)\bigr)\mathbf e_u+\bigl(v_0+\tfrac{s}{L}(v_1-v_0)\bigr)\mathbf e_v,\qquad
+q_h(s)=\sum_a N_a\bigl(\boldsymbol\xi_e(\mathbf p(s))\bigr)\,q_a ,
+```
+
+evaluated with the same locator, basis and component derivation as the probe
+({ref}`planar-monitor-probe-evaluation`). The sample set is $N\ge 2$ uniform
+arc lengths $s_k=kL/(N-1)$ and, on FEM carriers, every arc length at which the
+segment crosses an edge of the published section polygons, i.e. an element
+face inside the plane. Because the P1/Prism6 interpolant is linear along a
+straight segment inside one element section (and smooth for Hex8/Pyramid5),
+the profile drawn through these points is the exact trace on affine elements
+rather than a resampling. On FDM carriers the value is the cell value of the
+containing cell (piecewise constant); no smoothing or interpolation across
+cells is applied. Points outside the frame are `outside`, points outside the
+sampled target are `empty`, and neither carries a value. A profile is a derived
+resource of one sample (`sample_token`); it never resamples the raster.
+
+### Spatial index for point location
+
+Point evaluations of a FEM sample ({ref}`planar-monitor-probe-evaluation`,
+{eq}`eq-planar-line-profile`) locate the element that contains a world point.
+For a batch of points (a line profile, from 32 points on) the locator first
+builds a bounding-volume hierarchy over the axis-aligned boxes of the selected
+elements (median split on the longest centroid axis, leaves of at most 8
+elements) and tests only the elements whose box, padded by $10^{-9}$ of the
+mesh diagonal to cover the $10^{-11}$ weight tolerance of the containment
+test, contains the point. Candidates are tested in ascending element index,
+the order of the direct scan (gate PM-N28), so a point on a shared face resolves to the same
+element and the value, entity id and occupancy are identical to the direct
+traversal; the index changes cost, never results. For point batches it is built per request and discarded with it; a single
+probe keeps the direct scan, which is cheaper than building the index. The
+plane operator (gate PM-N17) uses the same hierarchy, cached by the carrier's
+topology fingerprint (nodes, connectivity, markers; four most recent
+carriers), and rasterizes only the elements whose box meets the plane, in
+ascending element order: the box test is conservative because an element's
+nodes lie in its box, and the exact node-distance test that follows is the
+direct traversal's, so pixel claims, weights and cut extents are unchanged.
+Gathering the cached operator on the device for the FEM GPU lane is not
+implemented.
+
+### In-plane streamlines (presentation)
+
+Streamlines are a presentation of the in-plane projection of one vector
+sample; they are not 3D trajectories, not field lines of $\mathbf B$, and not
+a resampling. Let $\mathbf w_{ij}=(\mathbf q_{ij}\cdot\mathbf e_u,\,
+\mathbf q_{ij}\cdot\mathbf e_v)$ be the frame components of the published
+vector raster at pixel centre $(u_i,v_j)$. The continuous direction field is
+the bilinear interpolant of $\mathbf w$ between the four surrounding pixel
+centres, and a streamline is the curve $\mathbf x(s)$ in $(u,v)$ with
+
+```{math}
+:label: eq-planar-streamlines
+\frac{\mathrm d\mathbf x}{\mathrm ds}=\frac{\tilde{\mathbf w}(\mathbf x)}{\lVert\tilde{\mathbf w}(\mathbf x)\rVert},\qquad
+\tilde{\mathbf w}(\mathbf x)=\sum_{a=1}^{4}\lambda_a(\mathbf x)\,\mathbf w_a ,
+```
+
+integrated by classical RK4 in physical length with the step
+$h=\tfrac12\min(\Delta u,\Delta v)$. Integration runs in both directions from
+a seed and stops when a corner pixel of the interpolation cell is not
+renderable (empty, outside or masked), when $\lVert\tilde{\mathbf w}\rVert<
+\varepsilon\max_{ij}\lVert\mathbf w_{ij}\rVert$ with $\varepsilon=10^{-3}$
+(out-of-plane or vanishing projection), when the curve leaves the sample
+bounds, when it comes closer than $d_\mathrm{test}=\tfrac12 d_\mathrm{sep}$
+to another accepted line, or when the per-line point budget is reached.
+Seeds follow Jobard and Lefer [4]: candidates at
+distance $d_\mathrm{sep}$ on both sides of accepted lines, then a fixed
+row-major lattice of pitch $d_\mathrm{sep}$; a seed is accepted only at
+distance $\ge d_\mathrm{sep}$ from every accepted point. The order is fixed,
+so the same sample gives the same lines. Line and point counts are bounded;
+reaching a bound marks the result truncated instead of dropping lines
+silently. The FDM raster is piecewise constant per cell; the bilinear
+interpolant is a presentation device for drawing a continuous curve and is
+not used for any value, probe or export. Streamlines live in the browser
+worker on the vector raster of the displayed sample and are recomputed for a
+new `sample_token`; they never enter the sampling query or its identity.
+
+### Multislice panels
+
+A multislice view shows $N\in\{2,3,4\}$ samples of the `Default` source that
+differ only in the position fraction $\phi_k$ along the current plane normal.
+Each panel resolves its section exactly as the single default section does
+({ref}`planar-monitor-default-section`) with $\phi_k$ in place of the session
+fraction, so the published coordinate, the FDM layer of
+{eq}`eq-planar-default-layer` and the FEM node-plane stop follow the same rules,
+and the panel carries its own `sample_token`. The override is a query
+parameter (`position_fraction`) of the sampling request, valid only for the
+`Default` source; the source hash, and with it the sample identity, is
+computed from the overridden slice, so panels never share or alias a cached
+operator or a field gather. Plane, operator, quantity, component, view scope,
+resolution and palette are common to all panels. The colour range is common
+too: in `auto` mode it is the union of the occupied extrema of all panels,
+$[\min_k q^{\min}_k,\max_k q^{\max}_k]$ of the per-panel extrema over
+renderable samples (the same reduction as the single view); `symmetric` uses
+$a=\max_k\max(|q^{\min}_k|,|q^{\max}_k|)$ and `manual` applies unchanged. Multislice is presentation: it does not alter any panel's values,
+and a panel whose sample fails shows its own error without hiding the others.
 
 (planar-monitor-implementation-mapping)=
 ## Implementation mapping
@@ -922,6 +1076,12 @@ silent clamp. New HTTP and OpenAPI payloads expose only `range` and
 | PM-N20 | Prism6/Hex8/Pyramid5 slab of the element interpolant ($q=\xi\tau$) | integral exact to quadrature tolerance; linear clipping fails this gate |
 | PM-N21 | probe on the raster edge, outside the frame and outside the target | `occupied`, `outside` and `empty` respectively; no clamped value |
 | PM-N22 | default section on even/odd FDM grids at $\phi\in\{0,0.5,1\}$ | published $k$ and $p_n^{\mathrm{res}}$ follow {eq}`eq-planar-default-layer`; requested coordinate preserved |
+| PM-N23 | continuous FEM section through a graded Tet4 film (fine film, coarse air) | published $h_\perp$ equals {eq}`eq-planar-navigation-step` over the cut elements and changes with the plane; raster bitwise unchanged by the step |
+| PM-N24 | FDM stack of two objects, object-layer slab on an even cell count; region scope on one object with two regions of opposite $\mathbf m$ | slab centre equals the object centre (no half-cell shift); the two region maps differ and each is empty outside its region |
+| PM-N25 | line profile through an affine FEM field across several elements, and through an FDM field | FEM values equal the affine field at uniform and face-crossing points within $10^{-12}$ relative; every in-plane element-face crossing is present; FDM values equal the containing cell values; outside/empty points carry no value |
+| PM-N28 | batched point location through the element AABB hierarchy (structured Tet4 with unselected elements; interior, face, edge and outside points; runtime profile on a mixed FEM carrier) | located element, value and occupancy identical to the direct scan for every point; candidate count bounded by the elements around a node |
+| PM-N26 | in-plane streamlines on a uniform field, a vortex raster and a masked raster | uniform field gives straight parallel lines along $\mathbf w$ within $10^{-9}$ of the pixel pitch; vortex lines close or stay within the disk; no point lies in a non-renderable cell; repeated runs are identical; budget overflow is reported as truncated |
+| PM-N27 | multislice of an FDM stack at $\phi\in\{0.25,0.5,0.75\}$ and of an FEM film | each panel equals the single default section at the same $\phi$ (same resolved coordinate and bitwise-equal raster); the panels' sample tokens differ; the auto range is the union of the panels' renderable extrema; a monitor source with `position_fraction` is rejected |
 | PM-D01 | default source identity | `Default` resolves from session state and domain metadata without creating a monitor, changing `ProblemIR`, or changing canonical Python |
 | PM-D02 | default position validation | `position_fraction` is finite and in $[0,1]$; resolved `position_m` is finite and inside the selected normal bounds |
 | PM-D03 | default/authored sampler parity | after source resolution, both source identities use the same interpolation and measure-weighted reduction; source provenance remains distinct |
@@ -1023,6 +1183,9 @@ Structural validation does not prove scientific correctness.
 3. I. E. Sutherland and G. W. Hodgman, “Reentrant polygon clipping,”
    *Communications of the ACM* 17(1), 1974,
    [doi:10.1145/360767.360802](https://doi.org/10.1145/360767.360802).
+4. B. Jobard and W. Lefer, “Creating evenly-spaced streamlines of arbitrary
+   density,” in *Visualization in Scientific Computing '97*, Springer, 1997,
+   pp. 43–55, [doi:10.1007/978-3-7091-6876-9_5](https://doi.org/10.1007/978-3-7091-6876-9_5).
 
 (planar-monitor-source-code-index)=
 ## Source-code index

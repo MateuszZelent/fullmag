@@ -533,6 +533,7 @@ impl StoreWalker {
         self.walk_live_command_journals_dir()?;
         self.walk_batches_dir()?;
         self.walk_runs_dir()?;
+        self.walk_store_equilibrium_inventory_refs()?;
         self.walk_solutions_dir()?;
         self.walk_objects_dir()?;
         self.finalize_run_namespace_coverage();
@@ -613,6 +614,60 @@ impl StoreWalker {
                 }
                 _ => bail!("unknown session store root `{name}`"),
             }
+        }
+        Ok(())
+    }
+
+    fn walk_store_equilibrium_inventory_refs(&mut self) -> Result<()> {
+        let snapshot = self.root.join("project/current_live_snapshot.json");
+        if !snapshot.exists() { return Ok(()); }
+        let data = self.read_file(&snapshot, "project/current_live_snapshot.json")?;
+        if crate::typed_documents::inspect_live_snapshot(&data).object_refs.is_err() { return Ok(()); }
+        let references = crate::typed_documents::equilibrium_artifact_inventory_refs(&data).map_err(anyhow::Error::msg)?;
+        for reference in references {
+            let fullmag_ir::EquilibriumReferenceIR::Artifact { asset_id, .. } = &reference else { continue; };
+            let tail = format!("/artifacts/antenna/accepted_equilibria/{asset_id}/manifest.v1.json");
+            let matches = self.namespace_files.iter().filter(|path| path.ends_with(&tail)).cloned().collect::<Vec<_>>();
+            if matches.len() != 1 { bail!("equilibrium ArtifactRef requires exactly one owned manifest in canonical inventory"); }
+            let relative = &matches[0];
+            let path = crate::repository_path::checked_path(&self.root, relative)?;
+            let manifest = self.read_file(&path, relative)?;
+            let inputs = crate::typed_documents::equilibrium_owned_inputs(&manifest, &reference, relative).map_err(anyhow::Error::msg)?;
+            let parent = relative.strip_suffix("manifest.v1.json").context("equilibrium manifest path")?;
+            for (name, digest, count) in inputs {
+                let relative = format!("{parent}{name}");
+                let path = crate::repository_path::checked_path(&self.root, &relative)?;
+                let (actual_digest, actual_count) = crate::cas::file_content_identity(&path)?;
+                if actual_digest != digest || actual_count != count { bail!("equilibrium owned payload inventory mismatch"); }
+                self.report.file_refs.insert(relative);
+            }
+            self.report.file_refs.insert(matches[0].clone());
+        }
+        for (reference, port) in crate::typed_documents::antenna_source_inventory_refs(&data).map_err(anyhow::Error::msg)? {
+            let revision_tail = format!("/artifacts/antenna/field_solutions/{}/{}/manifest.v1.json", reference.output_id, reference.asset_id);
+            let legacy_tail = format!("/artifacts/antenna/field_solutions/{}/manifest.v1.json", reference.output_id);
+            let candidates = self.namespace_files.iter().filter(|path| path.ends_with(&revision_tail) || path.ends_with(&legacy_tail)).cloned().collect::<Vec<_>>();
+            let mut matches = Vec::new();
+            for relative in candidates {
+                let path = crate::repository_path::checked_path(&self.root, &relative)?;
+                if fs::metadata(&path)?.len() > crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES { bail!("antenna basis manifest exceeds metadata budget"); }
+                let manifest = self.read_file(&path, &relative)?;
+                if crate::typed_documents::antenna_source_matches_reference(&manifest, &reference).map_err(anyhow::Error::msg)? {
+                    matches.push((relative, manifest));
+                }
+            }
+            if matches.len() != 1 { bail!("antenna solution ArtifactRef requires exactly one owned basis manifest"); }
+            let (relative, manifest) = &matches[0];
+            let inputs = crate::typed_documents::antenna_source_owned_inputs(&manifest, &reference, port.as_deref()).map_err(anyhow::Error::msg)?;
+            let parent = relative.strip_suffix("manifest.v1.json").context("antenna basis manifest path")?;
+            for (name, digest, count) in inputs {
+                let relative = format!("{parent}{name}");
+                let path = crate::repository_path::checked_path(&self.root, &relative)?;
+                let (actual_digest, actual_count) = crate::cas::file_content_identity(&path)?;
+                if actual_digest != digest || actual_count != count { bail!("antenna source owned payload inventory mismatch"); }
+                self.report.file_refs.insert(relative);
+            }
+            self.report.file_refs.insert(relative.clone());
         }
         Ok(())
     }
@@ -2208,9 +2263,37 @@ impl StoreWalker {
                 catalog.run_id
             )
         }
+        let mut terminal_bindings = std::collections::BTreeSet::new();
+        let mut frozen_bindings = std::collections::BTreeSet::new();
+        for entry in catalog.entries.iter().filter(|entry| entry.artifact_type == "study_output_manifest"
+            && entry.status == crate::types::FmsArtifactStatus::Published)
+        {
+            let reference = entry.object_ref.as_deref().context("published study manifest has no object")?;
+            let bytes = crate::repository_path::read_bounded_regular_file(&self.root,
+                &format!("objects/sha256/{reference}"), crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES as usize)?;
+            if crate::cas::hex_sha256(&bytes) != reference || entry.content_sha256 != reference {
+                bail!("published study manifest CAS hash differs");
+            }
+            terminal_bindings.extend(crate::typed_documents::inspect_terminal_publication(&bytes, entry, &catalog,
+                |reference, budget| crate::repository_path::read_bounded_regular_file(&self.root,
+                    &format!("objects/sha256/{reference}"), usize::try_from(budget)?))?);
+            frozen_bindings.extend(crate::typed_documents::inspect_published_frozen_outputs(&bytes, entry, &catalog, |reference, budget| {
+                let bytes = crate::repository_path::read_bounded_regular_file(&self.root,
+                    &format!("objects/sha256/{reference}"), usize::try_from(budget)?)?;
+                Ok(bytes)
+            })?);
+        }
         for entry in &catalog.entries {
-            if let Some(object_ref) = entry.object_ref.as_deref() {
-                self.follow_store_object_ref(object_ref, &relative, "artifact catalog")?;
+            let new_family = matches!(entry.artifact_type.as_str(), "accepted_primary_carrier"
+                | "output_history_index" | "output_history_page" | "output_history_sample");
+            if new_family && !terminal_bindings.contains(&entry.artifact_id) {
+                bail!("new terminal artifact has no complete published V4 owner");
+            }
+            if let Some(reference) = entry.object_ref.as_deref() {
+                if frozen_bindings.contains(&entry.artifact_id) || (terminal_bindings.contains(&entry.artifact_id)
+                    && (new_family || matches!(entry.artifact_type.as_str(), "study_output_manifest" | "observation_state_snapshot" | "observation_terminal_state"))) {
+                    self.add_object(reference);
+                } else { self.follow_store_object_ref(reference, &relative, "artifact catalog")?; }
             }
         }
         Ok(())
@@ -2474,7 +2557,16 @@ impl StoreWalker {
                     bail!("task admission identity does not match its path");
                 }
                 if let Some(snapshot) = &record.resolved_inputs_snapshot {
+                    let context_ref = if let Some(binding) = &snapshot.frozen_stage_context {
+                        let reference = binding.get("context_object_ref").and_then(serde_json::Value::as_str)
+                            .context("admitted frozen context has no object")?;
+                        let bytes = crate::repository_path::read_bounded_regular_file(&self.root,
+                            &format!("objects/sha256/{reference}"), crate::typed_documents::MAX_FROZEN_OUTPUT_BYTES as usize)?;
+                        crate::typed_documents::inspect_admitted_frozen_context(binding, &bytes)?;
+                        self.add_object(reference); Some(reference)
+                    } else { None };
                     for object_ref in snapshot.object_refs()? {
+                        if Some(object_ref.as_str()) == context_ref { continue; }
                         self.follow_store_object_ref(
                             &object_ref,
                             &relative,
@@ -2565,6 +2657,7 @@ impl StoreWalker {
                 self.follow_reference(reference, relative, kind)?;
             }
         }
+        self.follow_composite_checkpoint_outputs(checkpoint, relative)?;
         let restart_complete = if warning_count_after_common_state
             == warning_count_before_checkpoint
             && self.report.warnings.len() == warning_count_before_restart
@@ -2609,6 +2702,41 @@ impl StoreWalker {
                 restart: restart_complete,
             },
         );
+        Ok(())
+    }
+
+    fn follow_composite_checkpoint_outputs(&mut self, checkpoint: &FmsCheckpoint, source: &str) -> Result<()> {
+        let Some(reference) = checkpoint.backend_state_ref.as_deref() else { return Ok(()); };
+        let relative = if is_object_ref(reference) { format!("objects/sha256/{reference}") } else { reference.to_string() };
+        reject_link_chain(&self.root, &relative)?;
+        let path = self.root.join(&relative);
+        if !path.exists() { return Ok(()); } // The existing reference walker records missing state.
+        let payload: BackendStatePayload = parse_json(&fs::read(path)?, &relative)?;
+        let Some(projection) = crate::typed_documents::composite_checkpoint_storage_projection(&payload)
+            .map_err(anyhow::Error::msg)? else { return Ok(()); };
+        let Some(binding) = projection.manifest.as_ref() else { return Ok(()); };
+        let catalog_ref = format!("runs/{}/artifact_catalog.json", checkpoint.run_id);
+        let catalog_bytes = crate::repository_path::read_bounded_regular_file(
+            &self.root, &catalog_ref, crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES as usize)?;
+        self.report.file_refs.insert(catalog_ref.clone());
+        let catalog: FmsArtifactCatalog = parse_json(&catalog_bytes, &catalog_ref)?;
+        let manifest_ref = format!("objects/sha256/{}", binding.object_ref);
+        let bytes = crate::repository_path::read_bounded_regular_file(
+            &self.root, &manifest_ref, crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES as usize)?;
+        if crate::cas::hex_sha256(&bytes) != binding.object_ref { bail!("composite output manifest CAS SHA-256 mismatch"); }
+        let manifest = parse_json(&bytes, &manifest_ref)?;
+        for object_ref in crate::typed_documents::composite_manifest_object_refs(&projection, checkpoint, &catalog, &manifest)? {
+            self.add_object(&object_ref);
+            let relative = format!("objects/sha256/{object_ref}");
+            reject_link_chain(&self.root, &relative)?;
+            let path = self.root.join(&relative);
+            if !path.exists() {
+                self.missing(format!("composite output `{source}` references missing object `{object_ref}`"))?;
+            } else {
+                // Output tensors stay streamed; only the bounded manifest is decoded.
+                crate::cas::verified_file_length(&path, &object_ref)?;
+            }
+        }
         Ok(())
     }
 
@@ -2860,6 +2988,23 @@ impl<'a> ArchiveWalker<'a> {
             bail!("CAS SHA-256 mismatch for `{relative}`");
         }
         Ok(Some(u64::try_from(data.len())?))
+    }
+
+    /// Use the existing root-first archive reader policy with a bounded frame budget.
+    fn study_object_document(&self, reference: &str, budget: u64) -> Result<Vec<u8>> {
+        validate_object_ref(reference)?;
+        let relative = format!("objects/sha256/{reference}");
+        let bytes = if let Some(root) = self.cas_root {
+            crate::repository_path::read_bounded_regular_file(root, &relative, usize::try_from(budget)?)?
+        } else {
+            let identity = self.documents.identity(&relative).context("study output archive object is absent")?;
+            if identity.byte_count > budget { bail!("study output archive object exceeds decode budget"); }
+            self.documents.read(&relative)?.context("study output archive object disappeared")?.into_owned()
+        };
+        if bytes.len() as u64 > budget || crate::cas::hex_sha256(&bytes) != reference {
+            bail!("study output archive object exceeds budget or differs from its CAS hash");
+        }
+        Ok(bytes)
     }
 
     fn object_document(&self, object_ref: &str) -> Result<Vec<u8>> {
@@ -3293,6 +3438,49 @@ impl<'a> ArchiveWalker<'a> {
             Ok(object_refs) => {
                 for object_ref in object_refs {
                     self.add_archive_payload(&object_ref, NAME, None)?;
+                }
+                let references = crate::typed_documents::equilibrium_artifact_inventory_refs(&data).map_err(anyhow::Error::msg)?;
+                for reference in references {
+                    let fullmag_ir::EquilibriumReferenceIR::Artifact { asset_id, .. } = &reference else { continue; };
+                    let tail = format!("/artifacts/antenna/accepted_equilibria/{asset_id}/manifest.v1.json");
+                    let matches = self.documents.keys().filter(|path| path.ends_with(&tail)).cloned().collect::<Vec<_>>();
+                    if matches.len() != 1 { bail!("archive equilibrium ArtifactRef requires exactly one owned manifest"); }
+                    let relative = &matches[0];
+                    let manifest = self.documents.read(relative)?.context("equilibrium manifest missing")?;
+                    let inputs = crate::typed_documents::equilibrium_owned_inputs(&manifest, &reference, relative).map_err(anyhow::Error::msg)?;
+                    let parent = relative.strip_suffix("manifest.v1.json").context("equilibrium manifest path")?;
+                    for (name, digest, count) in inputs {
+                        let relative = format!("{parent}{name}");
+                        let identity = self.documents.identity(&relative).context("equilibrium owned payload missing")?;
+                        if identity.content_sha256 != digest || identity.byte_count != count { bail!("equilibrium owned payload archive inventory mismatch"); }
+                        self.report.file_refs.insert(relative);
+                    }
+                    self.report.file_refs.insert(matches[0].clone());
+                }
+                for (reference, port) in crate::typed_documents::antenna_source_inventory_refs(&data).map_err(anyhow::Error::msg)? {
+                    let revision_tail = format!("/artifacts/antenna/field_solutions/{}/{}/manifest.v1.json", reference.output_id, reference.asset_id);
+                    let legacy_tail = format!("/artifacts/antenna/field_solutions/{}/manifest.v1.json", reference.output_id);
+                    let candidates = self.documents.keys().filter(|path| path.ends_with(&revision_tail) || path.ends_with(&legacy_tail)).cloned().collect::<Vec<_>>();
+                    let mut matches = Vec::new();
+                    for relative in candidates {
+                        let identity = self.documents.identity(&relative).context("antenna basis manifest missing")?;
+                        if identity.byte_count > crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES { bail!("antenna basis manifest exceeds metadata budget"); }
+                        let manifest = self.documents.read(&relative)?.context("antenna basis manifest missing")?.into_owned();
+                        if crate::typed_documents::antenna_source_matches_reference(&manifest, &reference).map_err(anyhow::Error::msg)? {
+                            matches.push((relative, manifest));
+                        }
+                    }
+                    if matches.len() != 1 { bail!("archive antenna solution ArtifactRef requires exactly one owned basis manifest"); }
+                    let (relative, manifest) = &matches[0];
+                    let inputs = crate::typed_documents::antenna_source_owned_inputs(&manifest, &reference, port.as_deref()).map_err(anyhow::Error::msg)?;
+                    let parent = relative.strip_suffix("manifest.v1.json").context("antenna basis manifest path")?;
+                    for (name, digest, count) in inputs {
+                        let relative = format!("{parent}{name}");
+                        let identity = self.documents.identity(&relative).context("antenna source owned payload missing")?;
+                        if identity.content_sha256 != digest || identity.byte_count != count { bail!("antenna source owned payload archive inventory mismatch"); }
+                        self.report.file_refs.insert(relative);
+                    }
+                    self.report.file_refs.insert(relative.clone());
                 }
             }
             Err(reason) => self.report.mark_opaque_project_document(format!(
@@ -4170,10 +4358,26 @@ impl<'a> ArchiveWalker<'a> {
                 catalog.run_id
             )
         }
-        for entry in &catalog.entries {
-            if let Some(object_ref) = entry.object_ref.as_deref() {
-                self.add_archive_payload(object_ref, relative, None)?;
+        let mut terminal_bindings = std::collections::BTreeSet::new();
+        for entry in catalog.entries.iter().filter(|entry| entry.artifact_type == "study_output_manifest"
+            && entry.status == crate::types::FmsArtifactStatus::Published)
+        {
+            let reference = entry.object_ref.as_deref().context("published study manifest has no object")?;
+            let bytes = self.study_object_document(reference, crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES as u64)?;
+            if crate::cas::hex_sha256(&bytes) != reference || entry.content_sha256 != reference {
+                bail!("published study manifest CAS hash differs");
             }
+            terminal_bindings.extend(crate::typed_documents::inspect_terminal_publication(&bytes, entry, &catalog,
+                |reference, budget| self.study_object_document(reference, budget))?);
+            crate::typed_documents::inspect_published_frozen_outputs(&bytes, entry, &catalog,
+                |reference, budget| self.study_object_document(reference, budget))?;
+        }
+        for entry in &catalog.entries {
+            if matches!(entry.artifact_type.as_str(), "accepted_primary_carrier" | "output_history_index"
+                | "output_history_page" | "output_history_sample") && !terminal_bindings.contains(&entry.artifact_id) {
+                bail!("new terminal artifact has no complete published V4 owner");
+            }
+            if let Some(reference) = entry.object_ref.as_deref() { self.add_archive_payload(reference, relative, None)?; }
         }
         self.report.file_refs.insert(relative.to_string());
         Ok(())
@@ -4435,6 +4639,12 @@ impl<'a> ArchiveWalker<'a> {
                 bail!("task admission identity does not match archive path");
             }
             if let Some(snapshot) = &record.resolved_inputs_snapshot {
+                if let Some(binding) = &snapshot.frozen_stage_context {
+                    let reference = binding.get("context_object_ref").and_then(serde_json::Value::as_str)
+                        .context("admitted frozen context has no object")?;
+                    let bytes = self.study_object_document(reference, crate::typed_documents::MAX_FROZEN_OUTPUT_BYTES)?;
+                    crate::typed_documents::inspect_admitted_frozen_context(binding, &bytes)?;
+                }
                 for object_ref in snapshot.object_refs()? {
                     self.add_archive_payload(&object_ref, &relative, None)?;
                 }
@@ -4765,6 +4975,7 @@ impl<'a> ArchiveWalker<'a> {
                 self.follow_reference(reference, relative, kind)?;
             }
         }
+        self.follow_composite_checkpoint_outputs(&checkpoint, relative)?;
         let restart_complete = if warning_count_after_common_state
             == warning_count_before_checkpoint
             && self.report.warnings.len() == warning_count_before_restart
@@ -4830,6 +5041,45 @@ impl<'a> ArchiveWalker<'a> {
         };
         self.report.file_refs.insert(reference.to_string());
         self.follow_archive_payload(&data, reference, kind)
+    }
+
+    fn follow_composite_checkpoint_outputs(&mut self, checkpoint: &FmsCheckpoint, source: &str) -> Result<()> {
+        let Some(reference) = checkpoint.backend_state_ref.as_deref() else { return Ok(()); };
+        let data = if is_object_ref(reference) {
+            if self.object_length(reference)?.is_none() { return Ok(()); }
+            self.object_document(reference)?
+        } else {
+            let Some(bytes) = self.documents.read(reference)? else { return Ok(()); };
+            bytes.into_owned()
+        };
+        let payload: BackendStatePayload = parse_json(&data, reference)?;
+        let Some(projection) = crate::typed_documents::composite_checkpoint_storage_projection(&payload)
+            .map_err(anyhow::Error::msg)? else { return Ok(()); };
+        let Some(binding) = projection.manifest.as_ref() else { return Ok(()); };
+        let catalog_ref = format!("runs/{}/artifact_catalog.json", checkpoint.run_id);
+        let catalog_bytes = self.documents.read(&catalog_ref)?.context("composite output catalog is missing from archive")?;
+        if catalog_bytes.len() as u64 > crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES { bail!("composite artifact catalog exceeds metadata budget"); }
+        let catalog: FmsArtifactCatalog = parse_json(&catalog_bytes, &catalog_ref)?;
+        self.report.file_refs.insert(catalog_ref);
+        let manifest_ref = format!("objects/sha256/{}", binding.object_ref);
+        if self.cas_root.is_none() {
+            let identity = self.documents.identity(&manifest_ref)
+                .context("composite output manifest CAS object is missing from archive")?;
+            if identity.byte_count > crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES {
+                bail!("composite output manifest exceeds metadata budget");
+            }
+        }
+        // The existing reader uses cas_root first; without it ArchiveDocuments preserves inline priority.
+        let bytes = self.object_document(&binding.object_ref)?;
+        if bytes.len() as u64 > crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES
+            || crate::cas::hex_sha256(&bytes) != binding.object_ref {
+            bail!("composite output manifest exceeds its budget or CAS identity");
+        }
+        let manifest = parse_json(&bytes, &binding.object_ref)?;
+        for object_ref in crate::typed_documents::composite_manifest_object_refs(&projection, checkpoint, &catalog, &manifest)? {
+            self.add_archive_payload(&object_ref, source, None)?;
+        }
+        Ok(())
     }
 
     fn follow_archive_payload(
@@ -5099,8 +5349,9 @@ fn validate_restart_payload(data: &[u8], kind: ReferenceKind, source: &str) -> R
                 .as_ref()
                 .is_some_and(is_nonempty_json)
                 || is_nonempty_json(&payload.extra);
-            // A known, inline checkpoint schema is a typed payload with no
-            // hidden references; everything else stays opaque (fail closed).
+            // Known schemas declare their storage edges; composite manifest
+            // ownership/transitives are checked by the checkpoint walker before
+            // graph completeness is recorded. This is not ExactResume admission.
             Ok(carries_state
                 && !matches!(
                     crate::typed_documents::inspect_backend_state(&payload),
@@ -5610,6 +5861,128 @@ mod tests {
         ]);
         assert!(walk_archive_documents(&archive, ReachabilityMode::Export).is_err());
     }
+    fn antenna_inventory_fixture(
+        run_id: &str, stage_id: &str,
+    ) -> (fullmag_ir::AntennaFieldSolutionRefIR, HashMap<String, Vec<u8>>) {
+        let parent = format!("runs/{run_id}/artifacts/antenna/field_solutions/basis/");
+        let mut documents = HashMap::new();
+        let mut binary = |name: &str| {
+            let bytes = vec![0_u8; 8];
+            let digest = crate::cas::hex_sha256(&bytes);
+            documents.insert(format!("{parent}{name}"), bytes);
+            json!({"path":format!("antenna/field_solutions/basis/{name}"),
+                "sha256":digest, "scalar_type":"float64_le", "layout":"flat", "unit":"1", "value_count":1})
+        };
+        let mut manifest = json!({"schema_version":"antenna_field_solution.v1", "status":"ready",
+            "asset_id":"shared-asset", "solution_id":"basis", "stage_id":stage_id,
+            "conductor_positions":binary("conductor.bin"), "sample_positions":binary("sample.bin"),
+            "bases":[{"port_mode_id":"port", "electric_potential_per_ampere":binary("potential.bin"),
+                "current_density_per_ampere":binary("current.bin"), "magnetic_field_per_ampere":binary("field.bin")}]});
+        let digest = format!("sha256:{}", crate::cas::hex_sha256(&serde_json::to_vec(&manifest).unwrap()));
+        manifest["content_digest"] = json!(digest);
+        let reference = fullmag_ir::AntennaFieldSolutionRefIR {
+            stage_id: stage_id.into(), output_id: "basis".into(), asset_id: "shared-asset".into(), content_digest: digest,
+        };
+        documents.insert(format!("{parent}manifest.v1.json"), serde_json::to_vec(&manifest).unwrap());
+        (reference, documents)
+    }
+
+    fn antenna_inventory_snapshot(reference: &fullmag_ir::AntennaFieldSolutionRefIR) -> Vec<u8> {
+        let mut snapshot: serde_json::Value = serde_json::from_slice(&live_snapshot_bytes("run-spectrum", &[], false)).unwrap();
+        snapshot["scene_document"] = json!({"version":"scene.v2", "antenna_spectrum_requests":[{
+            "id":"spectrum", "solution_ref":reference, "port_mode_id":"port", "target":{"kind":"global"},
+            "transform":"spatial_fft", "sampling_plane":{"origin_m":[0.0,0.0,0.0], "axis_u":[1.0,0.0,0.0],
+                "axis_v":[0.0,1.0,0.0], "extent_u_m":1.0, "extent_v_m":1.0, "sample_count_u":2, "sample_count_v":2,
+                "interpolation":"linear", "outside_policy":"error"},
+            "window":"rectangular", "normalization":"integral_si", "component":"x", "output_id":"spectrum"
+        }]});
+        let bytes = serde_json::to_vec(&snapshot).unwrap();
+        assert!(crate::typed_documents::inspect_live_snapshot(&bytes).object_refs.is_ok());
+        bytes
+    }
+
+    fn walk_antenna_inventory_fixture(
+        documents: &HashMap<String, Vec<u8>>, archive: bool,
+    ) -> Result<ReachabilityReport> {
+        if archive {
+            let mut walker = ArchiveWalker {
+                documents: ArchiveDocuments::Memory(documents), cas_root: None, mode: ReachabilityMode::Export,
+                report: ReachabilityReport::new(), seen_checkpoints: HashSet::new(), tensor_descriptor_cache: None,
+                namespace_files: HashSet::new(), unclassified_paths: HashSet::new(),
+            };
+            walker.walk_archive_live_snapshot()?;
+            return Ok(walker.report);
+        }
+        let root = tempfile::tempdir()?;
+        for (relative, bytes) in documents {
+            let path = root.path().join(relative);
+            fs::create_dir_all(path.parent().unwrap())?;
+            fs::write(path, bytes)?;
+        }
+        let mut walker = StoreWalker {
+            root: root.path().to_path_buf(), mode: ReachabilityMode::Restore, report: ReachabilityReport::new(),
+            seen_files: HashSet::new(), seen_checkpoints: HashSet::new(), tensor_descriptor_cache: None,
+            namespace_files: documents.keys().cloned().collect(), unclassified_paths: HashSet::new(),
+        };
+        walker.walk_store_equilibrium_inventory_refs()?;
+        Ok(walker.report)
+    }
+
+    #[test]
+    fn antenna_inventory_resolves_complete_identity_across_runs_with_shared_output() {
+        let (first, mut documents) = antenna_inventory_fixture("run-first", "stage-first");
+        let (second, second_documents) = antenna_inventory_fixture("run-second", "stage-second");
+        documents.extend(second_documents);
+        for (reference, selected_run, other_run) in [(&first, "run-first", "run-second"), (&second, "run-second", "run-first")] {
+            documents.insert("project/current_live_snapshot.json".into(), antenna_inventory_snapshot(reference));
+            for archive in [false, true] {
+                let report = walk_antenna_inventory_fixture(&documents, archive).unwrap();
+                assert!(report.file_refs.contains(&format!("runs/{selected_run}/artifacts/antenna/field_solutions/basis/manifest.v1.json")));
+                // Store metadata reads retain candidate manifests; only the selected owner's payloads are followed.
+                for name in ["conductor.bin", "sample.bin", "potential.bin", "current.bin", "field.bin"] {
+                    assert!(report.file_refs.contains(&format!("runs/{selected_run}/artifacts/antenna/field_solutions/basis/{name}")));
+                    assert!(!report.file_refs.contains(&format!("runs/{other_run}/artifacts/antenna/field_solutions/basis/{name}")));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn antenna_inventory_rejects_duplicate_complete_owner_and_corrupt_selected_manifest() {
+        let (reference, mut documents) = antenna_inventory_fixture("run-first", "stage-first");
+        let (_, other) = antenna_inventory_fixture("run-second", "stage-second");
+        documents.extend(other);
+        documents.insert("project/current_live_snapshot.json".into(), antenna_inventory_snapshot(&reference));
+        let selected = "runs/run-first/artifacts/antenna/field_solutions/basis/manifest.v1.json";
+        let mut duplicate = documents.clone();
+        duplicate.insert("runs/run-duplicate/artifacts/antenna/field_solutions/basis/manifest.v1.json".into(), documents[selected].clone());
+        for archive in [false, true] {
+            let error = walk_antenna_inventory_fixture(&duplicate, archive).unwrap_err().to_string();
+            assert!(error.contains("exactly one owned basis manifest"), "{error}");
+        }
+        let mut manifest: serde_json::Value = serde_json::from_slice(&documents[selected]).unwrap();
+        manifest["status"] = json!("failed");
+        documents.insert(selected.into(), serde_json::to_vec(&manifest).unwrap());
+        for archive in [false, true] {
+            let error = walk_antenna_inventory_fixture(&documents, archive).unwrap_err().to_string();
+            assert!(error.contains("immutable owner mismatch"), "{error}");
+        }
+        // A valid owner digest must not hide malformed owned-input metadata either.
+        manifest["status"] = json!("ready");
+        manifest["bases"] = json!("invalid");
+        manifest.as_object_mut().unwrap().remove("content_digest");
+        let digest = format!("sha256:{}", crate::cas::hex_sha256(&serde_json::to_vec(&manifest).unwrap()));
+        manifest["content_digest"] = json!(digest);
+        let mut corrupt_reference = reference;
+        corrupt_reference.content_digest = digest;
+        documents.insert(selected.into(), serde_json::to_vec(&manifest).unwrap());
+        documents.insert("project/current_live_snapshot.json".into(), antenna_inventory_snapshot(&corrupt_reference));
+        for archive in [false, true] {
+            let error = walk_antenna_inventory_fixture(&documents, archive).unwrap_err().to_string();
+            assert!(error.contains("antenna basis list"), "{error}");
+        }
+    }
+
     fn digest(letter: char) -> String {
         format!("sha256:{}", letter.to_string().repeat(64))
     }

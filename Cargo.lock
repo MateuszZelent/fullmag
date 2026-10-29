@@ -1412,7 +1412,9 @@ dependencies = [
  "hdf5",
  "libc",
  "nalgebra",
+ "num-bigint",
  "num-complex",
+ "num-rational",
  "rayon",
  "rustfft",
  "serde",
@@ -1451,6 +1453,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "fullmag-authoring",
  "fullmag-ir",
  "fullmag-quantities",
  "libc",

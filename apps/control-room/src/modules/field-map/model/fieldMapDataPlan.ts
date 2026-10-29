@@ -1,17 +1,41 @@
+import { tensorProjectionOutputKind } from "@/kernel/api/tensorFieldProjection";
 import type {
   PlanarFieldProbeQuery,
+  PlanarFieldProfileQuery,
   PlanarFieldQuery,
   PlanarFieldSource,
 } from "@/kernel/api/apiTypes";
 
 import { planarScopeCapability } from "./fieldMapCapabilities";
 
-export type FieldMapViewScopeKind = "monitor_target" | "mesh_part" | "airbox" | "layer";
+export type FieldMapViewScopeKind = "monitor_target" | "mesh_part" | "airbox" | "layer" | "region";
 
 /** The planar profile is the source of truth for scope identity. */
 export interface FieldMapViewScope {
   kind: FieldMapViewScopeKind;
   scope_id?: string | null;
+  /** Region within the `scope_id` object for `region` scopes. */
+  region_id?: string | null;
+}
+
+/**
+ * Query parameters of a planar view scope. The v2 contract accepts an id only
+ * for mesh_part, layer and region (object id plus `scope_region_id`);
+ * monitor_target and airbox must not receive a guessed id.
+ */
+export function planarScopeQuery(
+  viewScope: FieldMapViewScope,
+): Pick<PlanarFieldQuery, "scope_id" | "scope_kind" | "scope_region_id"> {
+  const scopeId = viewScope.kind === "mesh_part" ||
+    viewScope.kind === "layer" ||
+    viewScope.kind === "region"
+    ? viewScope.scope_id ?? undefined
+    : undefined;
+  return {
+    scope_id: scopeId,
+    scope_kind: viewScope.kind,
+    scope_region_id: viewScope.kind === "region" ? viewScope.region_id ?? undefined : undefined,
+  };
 }
 
 export type FieldMapDataPlanAvailability =
@@ -27,6 +51,7 @@ export interface FieldMapDataPlanInput {
   source: PlanarFieldSource;
   quality: "interactive" | "export";
   quantityId: string;
+  projectionAllowed?: boolean;
   resolution: readonly [number, number];
   showVectors: boolean;
   /** The raster is coloured by vector direction, which needs the vector payload. */
@@ -58,15 +83,16 @@ export function buildFieldMapDataPlan(
     discretization: input.discretization,
     scopeKind: viewScope.kind,
   });
+  const projectionAllowed = input.projectionAllowed !== false;
   const unavailableReason = !scope.enabled
     ? scope.reasonCode === "fem_layer_scope_not_supported"
       ? "native layer scope requires an FDM multilayer carrier."
       : "structured FDM grid planar sampling does not support mesh-part scope."
-    : null;
-  const enabled =
-    input.active && scope.enabled;
-  const needsVectors = input.showVectors || input.colorByDirection === true;
-  const availability: FieldMapDataPlanAvailability = !scope.enabled
+    : !projectionAllowed ? "The selected tensor projection is not available in the canonical catalog." : null;
+  const enabled = input.active && scope.enabled && projectionAllowed;
+  const needsVectors = tensorProjectionOutputKind(input.component) !== "scalar" &&
+    (input.showVectors || input.colorByDirection === true);
+  const availability: FieldMapDataPlanAvailability = !scope.enabled || !projectionAllowed
     ? "not-applicable"
     : enabled
       ? "ready"
@@ -82,13 +108,7 @@ export function buildFieldMapDataPlan(
       quality: input.quality,
       resolution_x: input.resolution[0],
       resolution_y: input.resolution[1],
-      // The v2 contract only accepts an id for mesh_part and layer. In
-      // particular, monitor_target and airbox must not receive a guessed id.
-      scope_id:
-        viewScope.kind === "mesh_part" || viewScope.kind === "layer"
-          ? viewScope.scope_id ?? undefined
-          : undefined,
-      scope_kind: viewScope.kind,
+      ...planarScopeQuery(viewScope),
       snapshot_id: input.snapshotId ?? undefined,
       stage_id: input.stageId ?? undefined,
       vector_budget: needsVectors ? input.vectorBudget : 0,
@@ -108,4 +128,20 @@ export function buildFieldMapProbeQuery(
   vM: number,
 ): PlanarFieldProbeQuery {
   return { ...query, u_m: uM, v_m: vM } as PlanarFieldProbeQuery;
+}
+
+/** Profile segment on the raster's sample identity (F6 B1, note 0970). */
+export function buildFieldMapProfileQuery(
+  query: PlanarFieldQuery,
+  segment: { u0: number; v0: number; u1: number; v1: number },
+  samples: number,
+): PlanarFieldProfileQuery {
+  return {
+    ...query,
+    samples,
+    u0_m: segment.u0,
+    u1_m: segment.u1,
+    v0_m: segment.v0,
+    v1_m: segment.v1,
+  } as PlanarFieldProfileQuery;
 }

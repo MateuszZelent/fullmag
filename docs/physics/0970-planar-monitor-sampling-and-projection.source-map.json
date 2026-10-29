@@ -133,6 +133,21 @@
       "id": "PM-N22",
       "status": "unqualified",
       "requirement": "Default section on even/odd FDM grids at phi in {0,0.5,1} publishes k and the resolved coordinate of eq-planar-default-layer."
+    },
+    {
+      "id": "PM-N23",
+      "status": "unqualified",
+      "requirement": "Continuous FEM section through a graded Tet4 film publishes h_perp of eq-planar-navigation-step over the cut elements, changing with the plane, while the raster is unchanged by the step."
+    },
+    {
+      "id": "PM-N24",
+      "status": "unqualified",
+      "requirement": "An object-layer slab on an even FDM cell count stays centred on the object, and region scope on two regions of opposite m yields two different maps, each empty outside its region."
+    },
+    {
+      "id": "PM-N25",
+      "status": "unqualified",
+      "requirement": "A line profile reproduces an affine FEM field at uniform and element-face crossing points, includes every in-plane face crossing, equals FDM cell values, and leaves outside/empty points without values."
     }
   ],
   "equations": [
@@ -267,6 +282,37 @@
       ],
       "sources": [
         "default-section"
+      ]
+    },
+    {
+      "id": "eq-planar-navigation-step",
+      "symbols": [
+        "h_perp",
+        "pn_res"
+      ],
+      "sources": [
+        "fem-navigation-step",
+        "default-section"
+      ]
+    },
+    {
+      "id": "eq-planar-line-profile",
+      "symbols": [
+        "pn_res"
+      ],
+      "sources": [
+        "line-profile"
+      ]
+    },
+    {
+      "id": "eq-planar-streamlines",
+      "symbols": [
+        "eu",
+        "ev",
+        "uvs"
+      ],
+      "sources": [
+        "planar-streamlines"
       ]
     }
   ],
@@ -407,6 +453,12 @@
       "id": "h_n",
       "latex": "h_n",
       "meaning": "FDM cell edge along the normal",
+      "si_unit": "m"
+    },
+    {
+      "id": "h_perp",
+      "latex": "h_\\perp",
+      "meaning": "Navigation step of a continuous FEM section: median normal extent of the cut target elements",
       "si_unit": "m"
     }
   ],
@@ -715,6 +767,34 @@
       "path": "crates/fullmag-api/src/planar_sampling/target.rs",
       "symbol": "evaluate_point",
       "responsibility": "Point evaluation of the probe with the raster locator and basis.",
+      "evidence_status": "implemented-compiled-unit-tests-not-run"
+    },
+    {
+      "id": "fem-navigation-step",
+      "path": "crates/fullmag-api/src/planar_sampling/fem.rs",
+      "symbol": "section_extent",
+      "responsibility": "Median normal extent and count of the target elements cut by a FEM sampling plane, from the plane-operator geometry pass; published as the continuous navigation step.",
+      "evidence_status": "implemented-compiled-unit-tests-not-run"
+    },
+    {
+      "id": "line-profile",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/planar_profile.rs",
+      "symbol": "planar_profile_response",
+      "responsibility": "Line profile of one planar sample: uniform and FEM face-crossing arc lengths, point evaluation with the probe locator and basis.",
+      "evidence_status": "implemented-compiled-unit-tests-not-run"
+    },
+    {
+      "id": "planar-streamlines",
+      "path": "apps/control-room/src/modules/field-map/renderer/planarStreamlines.ts",
+      "symbol": "tracePlanarStreamlines",
+      "responsibility": "In-plane streamline presentation: bilinear direction field, RK4 in physical length, Jobard-Lefer seeding, deterministic order and bounded budgets.",
+      "evidence_status": "implemented-unit-tests-not-run"
+    },
+    {
+      "id": "planar-element-index",
+      "path": "crates/fullmag-api/src/planar_sampling/element_index.rs",
+      "symbol": "ElementBvh",
+      "responsibility": "AABB hierarchy over selected FEM elements for batched point location (profiles); candidates in ascending element order so results equal the direct scan.",
       "evidence_status": "implemented-compiled-unit-tests-not-run"
     }
   ],

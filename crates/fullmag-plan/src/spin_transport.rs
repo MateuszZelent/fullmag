@@ -298,6 +298,26 @@ pub(crate) fn resolve_spin_transport_with_active_graph(
             continue;
         };
         let reciprocal = coupling == fullmag_ir::TransportCouplingIR::Bidirectional;
+        if module.boundaries.iter().any(|boundary| {
+            matches!(boundary, SpinBoundaryIR::HomogeneousSpinPotentialGradient { .. })
+        }) && (transient
+            || native_m1
+            || !reciprocal
+            || public_gpu_m1_candidate
+            || resolved_backend != BackendTarget::Fdm
+            || requested.discretization != BackendTarget::Fdm
+            || requested.device != ExecutionDevice::Cpu
+            || requested.precision != ExecutionPrecision::Double
+            || problem.backend_policy.execution_precision != ExecutionPrecision::Double
+            || requested.execution_mode != fullmag_ir::ExecutionMode::Strict
+            || problem.validation_profile.execution_mode != fullmag_ir::ExecutionMode::Strict)
+        {
+            errors.push(format!(
+                "spin transport '{}' homogeneous spin-potential gradient requires steady reciprocal M2 FDM/CPU/double/strict; fallback=none",
+                module.id
+            ));
+            continue;
+        }
         if public_gpu_m1_candidate {
             let scope_reasons = bounded_public_fdm_gpu_m1_scope_reasons(
                 problem,
@@ -715,6 +735,19 @@ fn materialize_m2_descriptor(
             module.id
         )]);
     }
+    for boundary in &base.spin_boundaries {
+        if boundary.condition == ResolvedSpinBoundaryConditionIR::HomogeneousSpinPotentialGradient
+            && !base.charge_boundaries.iter().any(|charge_boundary| {
+                charge_boundary.face == boundary.face
+                    && matches!(charge_boundary.condition, ResolvedChargeBoundaryConditionIR::Voltage { .. })
+            })
+        {
+            return Err(vec![format!(
+                "spin transport '{}' homogeneous spin-potential gradient requires a voltage boundary on the same face; fallback=none",
+                module.id
+            )]);
+        }
+    }
     if charge.gauge != fullmag_ir::ChargePotentialGaugeIR::DirichletReference {
         return Err(vec![format!(
             "spin transport '{}' M2 CPU v1 requires a Dirichlet voltage reference",
@@ -788,7 +821,7 @@ fn materialize_m2_descriptor(
         }
     }
     require_complete_assignment(&base.charge_active_cells, &assigned, "M2 charge material")?;
-    let reciprocal_materials = (0..count)
+    let reciprocal_materials: Vec<ResolvedReciprocalMaterialIR> = (0..count)
         .map(|cell| ResolvedReciprocalMaterialIR {
             sigma_spm: base.charge_conductivity_spm[cell],
             sigma_spin_spm: base.spin_conductivity_spm[cell],
@@ -799,8 +832,31 @@ fn materialize_m2_descriptor(
             theta_sh: base.theta_sh[cell],
         })
         .collect();
+    if base.magnetic_active_mask.len() != count {
+        return Err(vec![format!("spin transport '{}' M2 magnetic mask does not match the common grid", module.id)]);
+    }
+    for cell in 0..count {
+        let magnetic = base.magnetic_active_mask[cell];
+        if magnetic && !base.charge_active_cells[cell] {
+            return Err(vec![format!("spin transport '{}' M2 magnetic domain is outside transport at cell {cell}", module.id)]);
+        }
+        if !magnetic && base.charge_active_cells[cell] {
+            let material = &reciprocal_materials[cell];
+            let reaction = &base.reactions[cell];
+            if material.polarization_p != 0.0
+                || material.sigma_parallel_spm != material.sigma_perpendicular_spm
+                || material.sigma_ahe_spm != 0.0
+                || reaction.exchange_m.is_some()
+                || reaction.dephasing_m.is_some()
+                || base.torque_target_cells[cell]
+            {
+                return Err(vec![format!("spin transport '{}' M2 nonmagnetic cell {cell} has magnetic coefficients or torque target", module.id)]);
+            }
+        }
+    }
     Ok(ResolvedFdmCoupledSpinTransportIR {
-        descriptor_schema: "fullmag.fdm.coupled_spin_transport_descriptor.v1".to_string(),
+        descriptor_schema: "fullmag.fdm.coupled_spin_transport_descriptor.v2".to_string(),
+        magnetic_active_mask: base.magnetic_active_mask,
         time_envelope: base.time_envelope,
         active_cells: base.charge_active_cells,
         reciprocal_materials,
@@ -1044,6 +1100,14 @@ pub(crate) fn resolve_m1_fem_spin_transport(
     let mut errors = Vec::new();
     for module in &problem.spin_transport_modules {
         let prefix = format!("FEM spin transport '{}'", module.id);
+        if module.boundaries.iter().any(|boundary| {
+            matches!(boundary, SpinBoundaryIR::HomogeneousSpinPotentialGradient { .. })
+        }) {
+            errors.push(format!(
+                "{prefix} homogeneous spin-potential gradient is unsupported; requires steady reciprocal M2 FDM/CPU/double/strict; fallback=none"
+            ));
+            continue;
+        }
         let requested = &module.requested_execution;
         if !matches!(
             requested.discretization,
@@ -2212,6 +2276,10 @@ fn validate_spin_face_exact_boundary_ownership(
                 format!("spin_insulating:{id}"),
                 surfaces.iter().collect::<Vec<_>>(),
             ),
+            SpinBoundaryIR::HomogeneousSpinPotentialGradient { id, surfaces } => (
+                format!("homogeneous_spin_potential_gradient:{id}"),
+                surfaces.iter().collect::<Vec<_>>(),
+            ),
             SpinBoundaryIR::SpecifiedSpinFlux { id, surfaces, .. } => (
                 format!("specified_spin_flux:{id}"),
                 surfaces.iter().collect::<Vec<_>>(),
@@ -2456,6 +2524,11 @@ fn resolve_spin_dirichlet(
                 for surface in surfaces {
                     let _ = surface_markers(surface, mesh, mesh_parts)?;
                 }
+            }
+            fullmag_ir::SpinBoundaryIR::HomogeneousSpinPotentialGradient { .. } => {
+                return Err(vec![
+                    "homogeneous spin-potential gradient is unsupported by FEM; fallback=none".into(),
+                ]);
             }
             fullmag_ir::SpinBoundaryIR::SpecifiedSpinFlux { .. } => {
                 return Err(vec![
@@ -3830,6 +3903,7 @@ fn spin_condition_is_neutral(condition: &ResolvedSpinBoundaryConditionIR) -> boo
             *value_apm2 == [0.0; 3]
         }
         ResolvedSpinBoundaryConditionIR::SpinSink
+        | ResolvedSpinBoundaryConditionIR::HomogeneousSpinPotentialGradient
         | ResolvedSpinBoundaryConditionIR::PeriodicSpin => false,
     }
 }
@@ -3847,6 +3921,11 @@ fn resolve_spin_boundaries(
                 id,
                 surfaces.iter().collect(),
                 ResolvedSpinBoundaryConditionIR::SpinInsulating,
+            ),
+            SpinBoundaryIR::HomogeneousSpinPotentialGradient { id, surfaces } => (
+                id,
+                surfaces.iter().collect(),
+                ResolvedSpinBoundaryConditionIR::HomogeneousSpinPotentialGradient,
             ),
             SpinBoundaryIR::SpinSink { id, surfaces } => (
                 id,
@@ -5373,6 +5452,7 @@ mod tests {
             conservative_current_view_ref: Some("charge:rt0".into()),
             model: AntennaFieldModelIR::QuasistaticConductionBiotSavart3d,
             oersted_realization: AntennaOerstedRealizationIR::DirectTetraQuadrature,
+            surface_field_policy: None,
             conductor_mesh_policy: "authored_shared_domain".into(),
             field_sampling_domain: FieldTargetIR::Global {},
             target_refs: vec![FieldTargetIR::Object {

@@ -182,6 +182,12 @@ AffineRt0Element::AffineRt0Element(const mfem::GridFunction &field, int element)
     coefficients_frozen_ = true;
 }
 
+AffineRt0Element::FrozenInput AffineRt0Element::frozen_input() const
+{
+    require(coefficients_frozen_, "affine RT0 frozen input requires frozen field coefficients");
+    return {vertices_, signed_coefficients_};
+}
+
 AffineRt0Element::Point AffineRt0Element::basis_value_at(const Point &physical_point, int local) const
 {
     require(local >= 0 && local < 4, "affine RT0 basis index is invalid");
@@ -212,6 +218,29 @@ AffineRt0Element::Point AffineRt0Element::current_at(const Point &physical_point
         result[component] = static_cast<double>(value);
         require(std::isfinite(result[component]) && (value == 0.0L || result[component] != 0.0),
             "affine RT0 current is not representable");
+    }
+    return result;
+}
+
+AffineRt0Element::Point AffineRt0Element::retained_current_at(const Point &physical_point) const
+{
+    require(coefficients_frozen_, "affine RT0 retained current requires frozen field coefficients");
+    const auto point = exact_point(physical_point);
+    std::array<ExactPoint, 4> vertices;
+    for (int local = 0; local < 4; ++local) vertices[local] = exact_point(vertices_[local]);
+    const Exact denominator = determinant(vertices);
+    Point result;
+    for (int component = 0; component < 3; ++component) {
+        Exact sum = 0;
+        for (int local = 0; local < 4; ++local) {
+            sum += Exact(signed_coefficients_[local]) *
+                (point[component] - vertices[local][component]);
+        }
+        const Exact value = sum / denominator;
+        result[component] = value.convert_to<double>();
+        require(std::isfinite(result[component]) && (value == 0 || result[component] != 0.0),
+            "affine RT0 retained current is not representable");
+        if (result[component] == 0.0) result[component] = 0.0;
     }
     return result;
 }

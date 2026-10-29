@@ -977,6 +977,11 @@ fn materialize_spin_boundaries(
                 ffi::FULLMAG_FDM_GPU_TRANSPORT_SPIN_BOUNDARY_SPECIFIED_POTENTIAL,
                 value_v,
             ),
+            Condition::HomogeneousSpinPotentialGradient => {
+                return Err(invalid(
+                    "homogeneous spin-potential gradient requires steady reciprocal M2 FDM/CPU/double/strict; fallback=none",
+                ));
+            }
             Condition::SpecifiedOutwardFlux { .. } | Condition::PeriodicSpin => {
                 return Err(invalid(
                     "GPU M1 does not support specified spin flux or periodic spin boundaries",

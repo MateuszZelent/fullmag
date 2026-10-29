@@ -73,8 +73,22 @@ pub fn capture_checkpoint(
     let time_s = provider.time_s();
     let dt = provider.dt();
 
-    // 1. Store magnetization.
+    // 1. Materialize and validate the snapshot.
     let m = provider.magnetization()?;
+    // Materialize the complete provider snapshot before the first CAS mutation.
+    // The provider owns snapshot consistency; the writer rejects mixed frames.
+    let energies = provider.energies();
+    let compatibility = provider.compatibility();
+    let aux = provider.auxiliary_fields(request.field_policy)?;
+    let backend_state =
+        if request.profile != SaveProfile::Compact && request.profile != SaveProfile::Solved {
+            provider.backend_state_payload()?
+        } else {
+            None
+        };
+    if let Some(payload) = backend_state.as_ref() {
+        validate_capture_primary_frame(payload, step, time_s, dt, &m)?;
+    }
     let m_hash = store.store_magnetization(&m)?;
 
     // 2. Create common state.
@@ -82,13 +96,13 @@ pub fn capture_checkpoint(
         step,
         time_s,
         dt,
-        energies: provider.energies(),
+        energies,
         magnetization_ref: Some(m_hash.clone()),
     };
 
     // 3. Build checkpoint.
     let mut checkpoint = FmsCheckpoint::new(&request.run_id, step, time_s, dt);
-    checkpoint.compatibility = provider.compatibility();
+    checkpoint.compatibility = compatibility;
 
     // 4. Store primary field ref.
     let m_descriptor = TensorDescriptor::new_f64(
@@ -116,7 +130,6 @@ pub fn capture_checkpoint(
     });
 
     // 5. Auxiliary fields.
-    let aux = provider.auxiliary_fields(request.field_policy)?;
     for (name, data) in &aux {
         let hash = store.store_magnetization(data)?;
         let desc =
@@ -142,13 +155,6 @@ pub fn capture_checkpoint(
     }
 
     // 6. Backend state.
-    let backend_state =
-        if request.profile != SaveProfile::Compact && request.profile != SaveProfile::Solved {
-            provider.backend_state_payload()?
-        } else {
-            None
-        };
-
     if let Some(ref bsp) = backend_state {
         let bsp_json = serde_json::to_vec_pretty(bsp)?;
         let bsp_path = format!(
@@ -167,6 +173,76 @@ pub fn capture_checkpoint(
         common_state,
         backend_state,
     })
+}
+
+/// Storage coherence only; solver codecs and resume admission remain with their owners.
+fn validate_capture_primary_frame(
+    payload: &BackendStatePayload,
+    step: u64,
+    time_s: f64,
+    dt: f64,
+    magnetization: &[[f64; 3]],
+) -> Result<()> {
+    let Some(state) = payload.integrator_state.as_ref() else {
+        return Ok(());
+    };
+    let (clock, primary, step_key, dt_key) =
+        match state.get("schema").and_then(serde_json::Value::as_str) {
+            Some("fullmag.frozen_spins.checkpoint.v1") => (state, state, "step", "dt"),
+            Some("fullmag.fdm.coupled_m3_checkpoint.v1") => {
+                (state, state, "accepted_steps", "previous_dt_s")
+            }
+            Some("fullmag.fdm.coupled_m3_checkpoint.v2") => (
+                state.get("accepted_frame").ok_or_else(|| {
+                    anyhow::anyhow!("capture composite accepted frame is missing")
+                })?,
+                state
+                    .get("coupled")
+                    .ok_or_else(|| anyhow::anyhow!("capture composite primary state is missing"))?,
+                "step",
+                "last_dt_s",
+            ),
+            // This gate does not redefine the other codecs or expand their support.
+            _ => return Ok(()),
+        };
+    let backend_step = clock
+        .get(step_key)
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| anyhow::anyhow!("capture backend accepted step is missing"))?;
+    let backend_time = clock
+        .get("time_s")
+        .and_then(serde_json::Value::as_f64)
+        .ok_or_else(|| anyhow::anyhow!("capture backend accepted time is missing"))?;
+    let backend_dt = clock
+        .get(dt_key)
+        .and_then(serde_json::Value::as_f64)
+        .ok_or_else(|| anyhow::anyhow!("capture backend accepted dt is missing"))?;
+    let rows = primary
+        .get("magnetization")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("capture backend primary carrier is missing"))?;
+    let primary_matches = rows.len() == magnetization.len()
+        && rows.iter().zip(magnetization).all(|(row, common)| {
+            row.as_array()
+                .filter(|components| components.len() == 3)
+                .is_some_and(|components| {
+                    components.iter().zip(common).all(|(value, common)| {
+                        value.as_f64().is_some_and(|backend| {
+                            backend.is_finite()
+                                && common.is_finite()
+                                && backend.to_bits() == common.to_bits()
+                        })
+                    })
+                })
+        });
+    if backend_step != step
+        || backend_time.to_bits() != time_s.to_bits()
+        || backend_dt.to_bits() != dt.to_bits()
+        || !primary_matches
+    {
+        anyhow::bail!("capture backend and common primary frame differ");
+    }
+    Ok(())
 }
 
 /// Determine the restore class by comparing a checkpoint's compatibility

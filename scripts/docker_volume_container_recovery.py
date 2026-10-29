@@ -18,7 +18,7 @@ from collections.abc import Mapping, Sequence
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import uuid
 
@@ -49,6 +49,8 @@ _DESKTOP_HOST_PREFIXES = (
 ABRUPT_PROOF_HELD_MANUAL_SCHEMA = "fullmag.docker-abrupt-stop-proof.v2"
 TERMINAL_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v3"
 HELD_MANUAL_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v4"
+ATTEMPT_HISTORY_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v5"
+ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA = "fullmag.docker-abrupt-stop-proof.v3"
 AUTHORIZATION_SCHEMA = "fullmag.docker-container-recovery-authorization.v1"
 REQUEST_SCHEMA = "runtime_service_container_recovery_request.v1"
 RETAINED_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v2"
@@ -93,6 +95,24 @@ def _canonical(value: object) -> bytes:
         ).encode("utf-8")
     except (TypeError, ValueError) as error:
         _fail(f"recovery record is not canonical JSON: {error}")
+
+
+def _stable_container_observation(value):
+    """Docker Mounts is an unordered inventory; preserve every mount field."""
+    if not isinstance(value, Mapping) or not isinstance(value.get("Mounts"), list):
+        _fail("Docker observation has no complete mount inventory")
+    mounts = value["Mounts"]
+    destinations = []
+    for mount in mounts:
+        if not isinstance(mount, Mapping):
+            _fail("Docker observation mount is malformed")
+        destination = mount.get("Destination")
+        if not isinstance(destination, str) or not destination:
+            _fail("Docker observation mount destination is missing")
+        destinations.append(destination)
+    if len(set(destinations)) != len(destinations):
+        _fail("Docker observation has duplicate mount destinations")
+    return {**value, "Mounts": sorted(mounts, key=lambda item: item["Destination"])}
 
 
 def _sha256(data: bytes) -> str:
@@ -343,8 +363,56 @@ def _validate_container_pins(pins: Sequence[object]) -> list[dict[str, object]]:
     return result
 
 
+def _validate_attempt_histories(histories, terminal_pins):
+    if not isinstance(histories, list) or not 1 <= len(histories) <= 128:
+        _fail("v5 requires a nonempty bounded retained-attempt history list")
+    terminal_ids = {pin["run_id"] for pin in terminal_pins}
+    runs = set()
+    total = 0
+    for history in histories:
+        if not isinstance(history, Mapping) or set(history) != {"run_id", "run_evidence_sha256", "attempts"}:
+            _fail("invalid retained-attempt history pin")
+        run_id = history.get("run_id")
+        if run_id not in terminal_ids or run_id in runs:
+            _fail("history run must be a unique retained terminal run")
+        runs.add(run_id)
+        _require_sha(history.get("run_evidence_sha256"), "run_evidence_sha256")
+        attempts = history.get("attempts")
+        if not isinstance(attempts, list) or not attempts:
+            _fail("retained-attempt history requires nonempty attempts")
+        claims = set()
+        epochs = set()
+        for claim in attempts:
+            total += 1
+            if total > 128 or not isinstance(claim, Mapping) or set(claim) != {
+                "task_id", "attempt_id", "ownership_epoch", "resource_id"}:
+                _fail("historical claim inventory is invalid or exceeds 128")
+            for key in ("task_id", "attempt_id", "resource_id"):
+                value = _require_text(claim.get(key), "historical " + key, 255 if key == "resource_id" else 128)
+                if not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*", value) or value.endswith("."):
+                    _fail("historical claim has an unsafe identity")
+            epoch = claim.get("ownership_epoch")
+            if type(epoch) is not int or epoch <= 0:
+                _fail("historical claim ownership epoch must be positive")
+            identity = (claim["task_id"], claim["attempt_id"])
+            epoch_identity = (claim["task_id"], epoch)
+            if identity in claims or epoch_identity in epochs:
+                _fail("duplicate historical attempt or task epoch")
+            claims.add(identity)
+            epochs.add(epoch_identity)
+    return histories
+
+
 def expected_recovery_outcome(request: Mapping[str, object]) -> str:
     """Bind receipt semantics to the explicit request version, never its outcome alone."""
+    if request.get("schema_version") == ATTEMPT_HISTORY_REQUEST_SCHEMA:
+        paired = {key: value for key, value in request.items() if key != "retained_attempt_histories"}
+        paired["schema_version"] = HELD_MANUAL_REQUEST_SCHEMA
+        expected_recovery_outcome(paired)
+        _validate_attempt_histories(request.get("retained_attempt_histories"), request["retained_terminal_runs"])
+        return "retained_attempt_history_recovered"
+    if "retained_attempt_histories" in request:
+        _fail("retained-attempt history pins require v5 recovery")
     if request.get("schema_version") == HELD_MANUAL_REQUEST_SCHEMA:
         if "retained_cancelled_runs" in request:
             _fail("v4 recovery cannot carry cancelled-run pins")
@@ -486,12 +554,12 @@ def validate_attestation(
                 and isinstance(request.get("retained_terminal_runs"), list)
             )
             and not (
-                request.get("schema_version") == HELD_MANUAL_REQUEST_SCHEMA
+                request.get("schema_version") in {HELD_MANUAL_REQUEST_SCHEMA, ATTEMPT_HISTORY_REQUEST_SCHEMA}
                 and isinstance(request.get("retained_terminal_runs"), list)
                 and isinstance(request.get("retained_held_manual_runs"), list)
             )
         ):
-            _fail("Docker namespace absence proof requires a retained-run v2/v3/v4 request")
+            _fail("Docker namespace absence proof requires a retained-run v2/v3/v4/v5 request")
         if set(attestation) != {
             "schema_version", "request_sha256", "docker_engine_id_sha256",
             "containers", "device_release", "manifest_sha256", "result",
@@ -829,6 +897,7 @@ def _build_request(
     retained_cancelled_runs: Sequence[Mapping[str, object]] | None = None,
     retained_terminal_runs: Sequence[Mapping[str, object]] | None = None,
     retained_held_manual_runs: Sequence[Mapping[str, object]] | None = None,
+    retained_attempt_histories: Sequence[Mapping[str, object]] | None = None,
 ) -> dict[str, object]:
     device = _require_mapping(device_release, "device release")
     _require_text(device.get("resource_id"), "device release resource_id", 255)
@@ -840,7 +909,7 @@ def _build_request(
     if retained_held_manual_runs is not None and retained_cancelled_runs is not None:
         _fail("v4 recovery cannot mix held-manual and cancelled run pins")
     request = {
-        "schema_version": HELD_MANUAL_REQUEST_SCHEMA if retained_held_manual_runs is not None else (TERMINAL_REQUEST_SCHEMA if retained_terminal_runs is not None else (RETAINED_REQUEST_SCHEMA if retained_cancelled_runs is not None else REQUEST_SCHEMA)),
+        "schema_version": ATTEMPT_HISTORY_REQUEST_SCHEMA if retained_attempt_histories is not None else (HELD_MANUAL_REQUEST_SCHEMA if retained_held_manual_runs is not None else (TERMINAL_REQUEST_SCHEMA if retained_terminal_runs is not None else (RETAINED_REQUEST_SCHEMA if retained_cancelled_runs is not None else REQUEST_SCHEMA))),
         "request_id": authorization["request_id"],
         "config_sha256": config_sha256,
         "owner_sha256": owner_sha256,
@@ -857,6 +926,8 @@ def _build_request(
         "device_release_mapping_sha256": device["mapping_sha256"],
         **({"device_release_gpu_uuid": device["gpu_uuid"]} if "gpu_uuid" in device else {}),
         "containers": [dict(item) for item in containers],
+        **({"retained_attempt_histories": [dict(item) for item in retained_attempt_histories]}
+           if retained_attempt_histories is not None else {}),
         **({"retained_terminal_runs": [dict(item) for item in retained_terminal_runs]}
            if retained_terminal_runs is not None else {}),
         **({"retained_held_manual_runs": [dict(item) for item in retained_held_manual_runs]}
@@ -985,6 +1056,7 @@ def _ledger_and_store_snapshot(
     retained_cancelled_runs: Sequence[Mapping[str, object]] | None = None,
     retained_terminal_runs: Sequence[Mapping[str, object]] | None = None,
     retained_held_manual_runs: Sequence[Mapping[str, object]] | None = None,
+    retained_attempt_histories: Sequence[Mapping[str, object]] | None = None,
 ) -> dict[str, object]:
     """Read the exact accepted store and shared ledger through an isolated helper."""
 
@@ -994,13 +1066,17 @@ def _ledger_and_store_snapshot(
         _fail("v4 held-manual pins require terminal pins and cannot mix cancelled pins")
     if retained_terminal_runs is not None and retained_cancelled_runs is not None:
         _fail("cannot mix terminal and cancelled-only retained run pins")
+    v5_mode = retained_attempt_histories is not None
+    if v5_mode and retained_held_manual_runs is None:
+        _fail("v5 history requires both retained terminal and held-manual arrays")
     v4_mode = retained_held_manual_runs is not None
     terminal_mode = retained_terminal_runs is not None
     retained_pins = [dict(pin) for pin in retained_terminal_runs] if terminal_mode else None
     held_pins = [dict(pin) for pin in retained_held_manual_runs] if v4_mode else None
     if v4_mode:
         expected_recovery_outcome({
-            "schema_version": HELD_MANUAL_REQUEST_SCHEMA,
+            "schema_version": ATTEMPT_HISTORY_REQUEST_SCHEMA if v5_mode else HELD_MANUAL_REQUEST_SCHEMA,
+            **({"retained_attempt_histories": list(retained_attempt_histories)} if v5_mode else {}),
             "retained_terminal_runs": retained_pins,
             "retained_held_manual_runs": held_pins,
         })
@@ -1031,6 +1107,10 @@ def _ledger_and_store_snapshot(
     ledger_mount, ledger_descriptor = _ledger_snapshot_mount(control, backend, compose)
     script = r'''import fcntl, hashlib, json, os, pathlib, stat, time
 MAX_ENTRIES=8192
+MAX_STORE_FILES=32768
+MAX_STORE_DIRECTORIES=4096
+MAX_STORE_RUNS=128
+STORE_WALK_SECONDS=30
 MAX_CAS_OBJECT_BYTES=128*1024*1024
 CAS_READ_CHUNK_BYTES=1024*1024
 
@@ -1100,24 +1180,89 @@ store=pathlib.Path('/state/runs/docker-all/session-store')
 if not store.is_dir() or store.is_symlink(): raise RuntimeError('accepted store root is missing')
 runs=store/'runs'
 if not runs.is_dir() or runs.is_symlink(): raise RuntimeError('accepted store runs directory is missing')
+v5=observation.get('v5_mode') is True
+history_pins=observation.get('retained_attempt_histories')
+if v5:
+    if observation.get('v4_mode') is not True or not isinstance(history_pins,list) or not 1<=len(history_pins)<=128:
+        raise RuntimeError('v5 retained attempt history mode/pins are invalid')
+else:
+    if history_pins is not None: raise RuntimeError('attempt histories require explicit v5 mode')
+history_by_run={}
+historical_count=0
+for history in history_pins or []:
+    if not isinstance(history,dict) or set(history)!={'run_id','run_evidence_sha256','attempts'}:
+        raise RuntimeError('v5 historical pin shape differs')
+    run_id=history.get('run_id'); digest=history.get('run_evidence_sha256'); attempts=history.get('attempts')
+    if not isinstance(run_id,str) or not run_id or '/' in run_id or '..' in run_id or run_id in history_by_run:
+        raise RuntimeError('v5 history run identity is invalid or repeated')
+    if not isinstance(digest,str) or len(digest)!=64 or any(c not in '0123456789abcdef' for c in digest):
+        raise RuntimeError('v5 run evidence digest is invalid')
+    if not isinstance(attempts,list) or not attempts: raise RuntimeError('v5 history attempts are missing')
+    claims=set(); epochs=set()
+    for claim in attempts:
+        historical_count+=1
+        if historical_count>128 or not isinstance(claim,dict) or set(claim)!={'task_id','attempt_id','ownership_epoch','resource_id'}:
+            raise RuntimeError('v5 historical claim inventory is invalid or exceeds 128')
+        if any(not isinstance(claim.get(key),str) or not claim[key] or '/' in claim[key] or '..' in claim[key] for key in ('task_id','attempt_id','resource_id')):
+            raise RuntimeError('v5 historical claim identity is invalid')
+        if type(claim.get('ownership_epoch')) is not int or claim['ownership_epoch']<=0:
+            raise RuntimeError('v5 historical claim epoch is invalid')
+        key=(claim['task_id'],claim['attempt_id']); epoch=(claim['task_id'],claim['ownership_epoch'])
+        if key in claims or epoch in epochs: raise RuntimeError('v5 history has duplicate attempt/epoch')
+        claims.add(key); epochs.add(epoch)
+    history_by_run[run_id]=history
+store_file_limit=MAX_STORE_FILES if v5 else MAX_ENTRIES
+store_run_limit=MAX_STORE_RUNS if v5 else MAX_ENTRIES
+walk_deadline=time.monotonic()+STORE_WALK_SECONDS if v5 else None
+run_evidence={run_id:{} for run_id in history_by_run}
+def run_file_sha(path):
+    fd=os.open(path,os.O_RDONLY|getattr(os,'O_NOFOLLOW',0)|getattr(os,'O_NONBLOCK',0))
+    try:
+        before=os.fstat(fd); identity=cas_identity(before)
+        if not stat.S_ISREG(before.st_mode) or identity!=cas_identity(os.lstat(path)):
+            raise RuntimeError('v5 run evidence is not a stable regular file')
+        digest=hashlib.sha256(); size=0
+        while True:
+            if time.monotonic()>=walk_deadline: raise RuntimeError('v5 accepted store walk exceeded its time bound')
+            chunk=os.read(fd,CAS_READ_CHUNK_BYTES)
+            if not chunk: break
+            size+=len(chunk); digest.update(chunk)
+        if size!=before.st_size or identity!=cas_identity(os.fstat(fd)) or identity!=cas_identity(os.lstat(path)):
+            raise RuntimeError('v5 run evidence metadata changed while reading')
+        return digest.hexdigest()
+    finally: os.close(fd)
 run_dirs=[]
 for entry in os.scandir(runs):
+    if v5 and time.monotonic()>=walk_deadline: raise RuntimeError('v5 accepted store walk exceeded its time bound')
     if entry.is_symlink() or not entry.is_dir(follow_symlinks=False): raise RuntimeError('accepted store runs has an invalid entry')
     run_dirs.append(entry.name)
-    if len(run_dirs)>MAX_ENTRIES: raise RuntimeError('accepted store inventory is unbounded')
-records={}; run_file_paths={}; count=0
+    if len(run_dirs)>store_run_limit: raise RuntimeError('accepted store inventory is unbounded')
+records={}; run_file_paths={}; count=0; directory_count=0
 for current, directories, files in os.walk(store, topdown=True, followlinks=False):
+    if v5 and time.monotonic()>=walk_deadline: raise RuntimeError('v5 accepted store walk exceeded its time bound')
+    directory_count+=1
+    if v5 and directory_count>MAX_STORE_DIRECTORIES: raise RuntimeError('v5 accepted store directory inventory is unbounded')
     current_path=pathlib.Path(current)
     if any((current_path/name).is_symlink() for name in directories): raise RuntimeError('accepted store contains a symlink')
     for name in files:
+        if v5 and time.monotonic()>=walk_deadline: raise RuntimeError('v5 accepted store walk exceeded its time bound')
         count+=1
-        if count>MAX_ENTRIES: raise RuntimeError('accepted store inventory is unbounded')
+        if count>store_file_limit: raise RuntimeError('accepted store inventory is unbounded')
         path=current_path/name
         if path.is_symlink() or not path.is_file(): raise RuntimeError('accepted store contains an invalid file')
-        if path.is_relative_to(runs): run_file_paths[path.relative_to(runs).as_posix()]=path
+        if path.is_relative_to(runs):
+            relative=path.relative_to(runs)
+            run_file_paths[relative.as_posix()]=path
+            if relative.parts[0] in run_evidence:
+                run_evidence[relative.parts[0]][path.relative_to(runs/relative.parts[0]).as_posix()]=run_file_sha(path)
         if name in ({'run_intent.json','run_catalog.json','artifact_catalog.json'} if observation.get('terminal_mode') else {'run_intent.json','run_catalog.json'}):
             relative=path.relative_to(store).as_posix()
             records[relative]=hashlib.sha256(regular(path,'retained run record')).hexdigest()
+if v5:
+    if time.monotonic()>=walk_deadline: raise RuntimeError('v5 accepted store walk exceeded its time bound')
+    for run_id,files in run_evidence.items():
+        if hashlib.sha256(canonical(files)).hexdigest()!=history_by_run[run_id]['run_evidence_sha256']:
+            raise RuntimeError('v5 full run evidence inventory/digest differs from history pin')
 pins=observation.get('retained_cancelled_runs')
 v4=observation.get('v4_mode') is True
 terminal_expected={}
@@ -1152,6 +1297,7 @@ if v4:
         if run_id in expected: raise RuntimeError('v4 retained run id is repeated')
         expected[run_id]=pin; held_expected[run_id]=pin
     if set(run_dirs)!=set(expected): raise RuntimeError('v4 retained run pins do not exactly match run directories')
+    if any(run_id not in terminal_expected for run_id in history_by_run): raise RuntimeError('v5 history run is not in terminal subset')
     expected_records={}
     for run_id,pin in expected.items():
         expected_records['runs/'+run_id+'/run_intent.json']=pin['run_intent_sha256']
@@ -1216,14 +1362,30 @@ if observation.get('terminal_mode') or v4:
         if pin['artifact_catalog_sha256'] is None and any(t.get('artifact_ids') for t in tasks): raise RuntimeError('terminal run outputs have no artifact catalog')
         task_by_id={t.get('task_id'):t for t in tasks if isinstance(t.get('task_id'),str)}
         if len(task_by_id)!=len(tasks): raise RuntimeError('terminal task identity inventory is invalid')
+        historical_claims={}
+        for claim in history_by_run.get(run_id,{}).get('attempts',[]):
+            task=task_by_id.get(claim['task_id'])
+            if (task is None or type(task.get('ownership_epoch')) is not int
+                    or claim['ownership_epoch']>=task['ownership_epoch'] or claim['attempt_id']==task.get('attempt_id')):
+                raise RuntimeError('v5 historical claim is not older than its current terminal task')
+            historical_claims[(claim['task_id'],claim['attempt_id'],claim['ownership_epoch'],claim['resource_id'])]=claim
+        for task_id in {key[0] for key in historical_claims}:
+            epochs=sorted(key[2] for key in historical_claims if key[0]==task_id)
+            if epochs!=list(range(1,task_by_id[task_id]['ownership_epoch'])):
+                raise RuntimeError('v5 historical admission epoch chain contains a gap')
+        def claim_key(record):
+            return (record.get('task_id'),record.get('attempt_id'),record.get('ownership_epoch'),record.get('resource_id'))
         def current_attempt(record,label):
             task=task_by_id.get(record.get('task_id'))
             attempt=record.get('attempt_id')
-            if (task is None or not isinstance(attempt,str) or not attempt
-                    or task.get('attempt_id')!=attempt or record.get('run_id',run_id)!=run_id
-                    or record.get('ownership_epoch')!=task.get('ownership_epoch')):
-                raise RuntimeError('unsupported historical retry: '+label+' differs from current terminal catalog attempt')
-            return task
+            if (task is not None and isinstance(attempt,str) and attempt
+                    and task.get('attempt_id')==attempt and record.get('run_id',run_id)==run_id
+                    and record.get('ownership_epoch')==task.get('ownership_epoch')):
+                return task
+            historical=historical_claims.get(claim_key(record)) if record.get('run_id',run_id)==run_id else None
+            if historical is not None:
+                return {**task,**historical,'lifecycle':'failed','artifact_ids':[]}
+            raise RuntimeError('unsupported historical retry: '+label+' differs from current terminal catalog attempt')
         solver_leases={}
         for folder in ('resource_leases','preparation_resource_leases'):
             root=runs/run_id/folder
@@ -1247,6 +1409,7 @@ if observation.get('terminal_mode') or v4:
                             key=(task['task_id'],attempt,epoch,resource)
                             if key in solver_leases: raise RuntimeError('duplicate retained solver lease identity')
                             solver_leases[key]=lease
+        seen_admissions=set()
         admissions=runs/run_id/'task_admissions'
         if admissions.exists():
             if admissions.is_symlink() or not admissions.is_dir(): raise RuntimeError('invalid task admission directory')
@@ -1260,6 +1423,52 @@ if observation.get('terminal_mode') or v4:
                     current_attempt(lease,'retained task admission lease')
                     parts=path.relative_to(admissions).parts
                     if len(parts)!=2 or parts[0]!=task.get('task_id') or parts[1]!=task.get('attempt_id')+'.json': raise RuntimeError('unsupported historical retry: retained task admission path differs from current terminal attempt')
+                    if run_id in history_by_run:
+                        key=claim_key(task)
+                        released=solver_leases.get(key)
+                        identity_fields=('schema_version','resource_id','kind','budget','run_id','task_id','attempt_id','ownership_epoch','lease_token','host_launch_binding')
+                        if (key!=claim_key(lease) or key in seen_admissions or released is None
+                                or any(lease.get(field)!=released.get(field) for field in identity_fields)
+                                or not isinstance(released.get('lease_token'),str) or not released['lease_token']
+                                or not isinstance(released.get('released_at'),str) or not released['released_at']):
+                            raise RuntimeError('v5 admission has no exact released lease identity')
+                        seen_admissions.add(key)
+        if run_id in history_by_run:
+            if not set(historical_claims).issubset(solver_leases) or not set(historical_claims).issubset(seen_admissions):
+                raise RuntimeError('v5 history claim lacks its released lease or admission')
+            retry_by_claim={}; exit_by_claim={}
+            for folder in ('retry_decisions','worker_process_exit_receipts'):
+                root=runs/run_id/folder
+                if not root.is_dir() or root.is_symlink(): raise RuntimeError('v5 history lacks retry/exit evidence')
+                for path in root.iterdir():
+                    record=json.loads(regular(path,'v5 historical '+folder))
+                    if record.get('run_id')!=run_id: raise RuntimeError('v5 retry/exit belongs to another run')
+                    if folder=='retry_decisions':
+                        # Retry decisions have no resource field; bind it through
+                        # the uniquely pinned task/attempt/epoch, never current task.
+                        matches=[key for key in historical_claims if key[:3]==(record.get('task_id'),record.get('attempt_id'),record.get('ownership_epoch'))]
+                        if len(matches)!=1: raise RuntimeError('v5 retry decision refers to an unpinned historical claim')
+                        key=matches[0]
+                        if (key in retry_by_claim or record.get('schema_version')!='retry_decision.v1'
+                                or record.get('trigger')!='explicit_operator_request' or record.get('action')!='retry'
+                                or path.name!=str(record.get('decision_id'))+'.json'):
+                            raise RuntimeError('v5 historical retry is missing, duplicated or not explicit')
+                        retry_by_claim[key]=record
+                    else:
+                        current_attempt(record,'v5 worker exit evidence')
+                        key=claim_key(record)
+                        if key not in historical_claims: continue
+                        lease=solver_leases[key]
+                        if (key in exit_by_claim or record.get('status_success') is not False
+                                or type(record.get('exit_code')) is not int or record['exit_code']==0
+                                or record.get('timed_out') is not False
+                                or record.get('lease_token')!=lease.get('lease_token')
+                                or record.get('lease_heartbeat_sequence')!=lease.get('heartbeat_sequence')
+                                or type(record.get('process_id')) is not int or record['process_id']<=0):
+                            raise RuntimeError('v5 historical failed exit does not bind its released lease')
+                        exit_by_claim[key]=record
+            if set(retry_by_claim)!=set(historical_claims) or set(exit_by_claim)!=set(historical_claims):
+                raise RuntimeError('v5 historical claim has no unique explicit retry and failed exit')
         artifact_path=runs/run_id/'artifact_catalog.json'
         artifact_sha=pin.get('artifact_catalog_sha256')
         if artifact_sha is None:
@@ -1476,7 +1685,7 @@ if observation.get('terminal_mode') or v4:
     for ref in sorted(referenced):
         total+=hash_cas_object(store/'objects/sha256'/ref,ref,cas_budget-total)
 
-print(json.dumps({'schema':'fullmag.container-recovery-storage-proof.v1','store_root_sha256':hashlib.sha256(b'/state/runs/docker-all/session-store').hexdigest(),'ledger_root_sha256':hashlib.sha256(b'/host-ledger/ledger').hexdigest(),'ledger_snapshot_sha256':ledger_digest,'store_file_count':count,'run_directories':sorted(run_dirs),'run_records':run_records,**({'host_ledger_volume_probe':volume_proof} if volume_proof is not None else {})},sort_keys=True))
+print(json.dumps({'schema':'fullmag.container-recovery-storage-proof.v1','store_root_sha256':hashlib.sha256(b'/state/runs/docker-all/session-store').hexdigest(),'ledger_root_sha256':hashlib.sha256(b'/host-ledger/ledger').hexdigest(),'ledger_snapshot_sha256':ledger_digest,'store_file_count':count,'run_directories':sorted(run_dirs),'run_records':run_records,**({'retained_attempt_histories':history_pins} if v5 else {}),**({'host_ledger_volume_probe':volume_proof} if volume_proof is not None else {})},sort_keys=True))
 '''
     if ledger_descriptor is not None:
         import docker_host_ledger as ledger
@@ -1520,6 +1729,8 @@ print(json.dumps({'schema':'fullmag.container-recovery-storage-proof.v1','store_
         "retained_terminal_runs": [dict(pin) for pin in retained_terminal_runs] if retained_terminal_runs is not None else None,
         "retained_held_manual_runs": held_pins,
         "v4_mode": v4_mode,
+        "v5_mode": v5_mode,
+        "retained_attempt_histories": list(retained_attempt_histories) if v5_mode else None,
     }).decode("utf-8"))
     result = bounded_capture(args, data=b"", timeout=90)
     if result.returncode:
@@ -1537,6 +1748,8 @@ print(json.dumps({'schema':'fullmag.container-recovery-storage-proof.v1','store_
         expected_records = [dict(pin) for pin in sorted(retained_pins, key=lambda item: item["run_id"])]
     if value.get("run_records") != expected_records:
         _fail("accepted store/ledger proof run records differ from retained pins")
+    if v5_mode and value.get("retained_attempt_histories") != list(retained_attempt_histories):
+        _fail("accepted-store history evidence differs from v5 pins")
     return dict(value)
 
 
@@ -1549,13 +1762,18 @@ def _assert_request_matches_abrupt_retained_pins(
 ) -> None:
     if request.get("retained_terminal_runs") != proof.get("retained_terminal_runs"):
         _fail("prepared request terminal pins differ from abrupt proof")
-    if proof.get("schema") == ABRUPT_PROOF_HELD_MANUAL_SCHEMA:
-        if request.get("schema_version") != HELD_MANUAL_REQUEST_SCHEMA:
-            _fail("v4 abrupt proof requires a v4 recovery request")
+    if proof.get("schema") in {ABRUPT_PROOF_HELD_MANUAL_SCHEMA, ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA}:
+        expected_schema = ATTEMPT_HISTORY_REQUEST_SCHEMA if proof.get("schema") == ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA else HELD_MANUAL_REQUEST_SCHEMA
+        if request.get("schema_version") != expected_schema:
+            _fail("abrupt proof requires its matching retained recovery request version")
         if request.get("retained_held_manual_runs") != proof.get("retained_held_manual_runs"):
             _fail("prepared request held-manual pins differ from abrupt proof")
     elif "retained_held_manual_runs" in request:
         _fail("held-manual pins have no matching v4 abrupt proof")
+    if request.get("retained_attempt_histories") != proof.get("retained_attempt_histories"):
+        _fail("prepared request attempt-history pins differ from abrupt proof")
+    if "retained_attempt_histories" in request and proof.get("schema") != ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA:
+        _fail("attempt-history pins have no matching v5 abrupt proof")
 
 
 def _abrupt_pins(value: Mapping[str, object]) -> dict[str, object]:
@@ -1619,9 +1837,11 @@ def _abrupt_network(backend, frontend, project):
         _fail(str(error))
 
 
-def _retained_compose_state_root(backend, compose):
-    if not isinstance(compose, Mapping) or compose.get("name") != "fullmag-master":
-        _fail("foreign alias proof has no retained master Compose identity")
+def _retained_compose_state_root(backend, compose, *, project="fullmag-master"):
+    if (not isinstance(project, str) or PROJECT_RE.fullmatch(project) is None
+            or not isinstance(compose, Mapping) or compose.get("name") != project
+            or backend.get("Config", {}).get("Labels", {}).get("com.docker.compose.project") != project):
+        _fail("foreign alias proof has no retained selected Compose identity")
     service = compose.get("services", {}).get("backend", {})
     volumes = service.get("volumes") if isinstance(service, Mapping) else None
     candidates = [item for item in volumes if isinstance(item, Mapping)
@@ -1668,6 +1888,12 @@ def _prove_foreign_alias_for_abrupt(control, backend, container, alias, compose)
     from docker_bind_overlap_probe import prove_foreign_alias_disjoint
     state_root = _retained_compose_state_root(backend, compose)
     return prove_foreign_alias_disjoint(control, backend, container, alias, state_root)
+
+
+def _posix_paths_overlap(left, right):
+    # Keep host preflight compatible with Python 3.8 hosts.
+    left, right = PurePosixPath(left), PurePosixPath(right)
+    return left == right or left in right.parents or right in left.parents
 
 
 def _assert_no_foreign_storage_consumers(control, backend, frontend, compose=None, *,
@@ -1723,6 +1949,24 @@ def _assert_no_foreign_storage_consumers(control, backend, frontend, compose=Non
             kind = mount.get("Type")
             if kind == "bind":
                 source = mount.get("Source")
+                if isinstance(source, str) and re.fullmatch(r"[A-Za-z]:[\\/].+", source):
+                    windows_source = PureWindowsPath(source)
+                    if any(kind == "bind" and isinstance(path, str)
+                            and re.fullmatch(r"[A-Za-z]:[\\/].+", path)
+                            and (windows_source == PureWindowsPath(path)
+                                 or windows_source in PureWindowsPath(path).parents
+                                 or PureWindowsPath(path) in windows_source.parents)
+                            for kind, path in protected):
+                        _fail("a foreign Docker container references the recovery store/control/ledger")
+                    try:
+                        from docker_windows_bind_isolation import (
+                            prove_windows_bind_disjoint, validate_windows_bind_disjoint_proof)
+                        state_root = _retained_compose_state_root(backend, compose, project=control.project)
+                        proof = prove_windows_bind_disjoint(control, backend, item, source, state_root)
+                        validate_windows_bind_disjoint_proof(proof, source=source, container_id=item.get("Id"))
+                    except Exception as error:
+                        _fail("foreign Windows bind has unresolved storage identity: " + str(error))
+                    continue
                 if (not isinstance(source, str) or not source.startswith("/") or source.startswith("//")
                         or ".." in PurePosixPath(source).parts
                         or str(PurePosixPath(source)) != source):
@@ -1746,8 +1990,7 @@ def _assert_no_foreign_storage_consumers(control, backend, frontend, compose=Non
             if raw_key[0] == "bind":
                 raw_source = PurePosixPath(raw_key[1])
                 raw_overlap = raw_overlap or any(kind == "bind" and isinstance(path, str)
-                    and (raw_source.is_relative_to(PurePosixPath(path))
-                         or PurePosixPath(path).is_relative_to(raw_source))
+                    and _posix_paths_overlap(raw_source, path)
                     for kind, path in protected)
             if raw_overlap:
                 _fail("a foreign Docker container references the recovery store/control/ledger")
@@ -1798,7 +2041,7 @@ def _assert_no_foreign_storage_consumers(control, backend, frontend, compose=Non
             if key[0] == "bind" and isinstance(key[1], str):
                 source = PurePosixPath(key[1])
                 overlap = overlap or any(kind == "bind" and isinstance(path, str)
-                    and (source.is_relative_to(PurePosixPath(path)) or PurePosixPath(path).is_relative_to(source))
+                    and _posix_paths_overlap(source, path)
                     for kind, path in protected)
             if overlap:
                 _fail("a foreign Docker container references the recovery store/control/ledger")
@@ -1806,7 +2049,7 @@ def _assert_no_foreign_storage_consumers(control, backend, frontend, compose=Non
 
 def prepare_abrupt_stop_proof(
     control, authorization_pins, compose, *,
-    retained_terminal_runs=None, retained_held_manual_runs=None
+    retained_terminal_runs=None, retained_held_manual_runs=None, retained_attempt_histories=None
 ):
     """Observe without writes. Publish the returned immutable JSON in a control operation.
 
@@ -1823,10 +2066,13 @@ def prepare_abrupt_stop_proof(
         if retained_terminal_runs is None:
             _fail("v4 abrupt proof requires the paired terminal pin array")
         expected_recovery_outcome({
-            "schema_version": HELD_MANUAL_REQUEST_SCHEMA,
+            "schema_version": ATTEMPT_HISTORY_REQUEST_SCHEMA if retained_attempt_histories is not None else HELD_MANUAL_REQUEST_SCHEMA,
+            **({"retained_attempt_histories": retained_attempt_histories} if retained_attempt_histories is not None else {}),
             "retained_terminal_runs": retained_terminal_runs,
             "retained_held_manual_runs": retained_held_manual_runs,
         })
+    if retained_attempt_histories is not None and retained_held_manual_runs is None:
+        _fail("v5 abrupt history proof requires the paired held-manual pin array")
     if pins["compose_project"] != control.project or compose.get("name") != control.project:
         _fail("abrupt proof belongs to another Compose project")
     if _sha256(_canonical(compose)) != pins["compose_config_sha256"]:
@@ -1853,18 +2099,22 @@ def prepare_abrupt_stop_proof(
     _assert_no_foreign_storage_consumers(control, backend, frontend, compose)
     storage_proof = _ledger_and_store_snapshot(control, backend, compose=compose,
                                               retained_terminal_runs=retained_terminal_runs,
-                                              retained_held_manual_runs=retained_held_manual_runs)
+                                              retained_held_manual_runs=retained_held_manual_runs,
+                                              retained_attempt_histories=retained_attempt_histories)
     if _docker_engine_sha() != engine_sha:
         _fail("Docker engine changed during abrupt proof preparation")
-    proof = {"schema": ABRUPT_PROOF_HELD_MANUAL_SCHEMA if retained_held_manual_runs is not None else ABRUPT_PROOF_SCHEMA,
+    proof = {"schema": ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA if retained_attempt_histories is not None else (ABRUPT_PROOF_HELD_MANUAL_SCHEMA if retained_held_manual_runs is not None else ABRUPT_PROOF_SCHEMA),
              "authorization_pins": pins,
              "docker_engine_id_sha256": engine_sha, "raw_records": raw_records,
-             "containers": {"backend": backend, "frontend": frontend},
+             "containers": {"backend": _stable_container_observation(backend),
+                            "frontend": _stable_container_observation(frontend)},
              "network": _abrupt_network(backend, frontend, control.project),
              "storage_proof": storage_proof,
              "retained_terminal_runs": copy.deepcopy(retained_terminal_runs)}
     if retained_held_manual_runs is not None:
         proof["retained_held_manual_runs"] = copy.deepcopy(retained_held_manual_runs)
+    if retained_attempt_histories is not None:
+        proof["retained_attempt_histories"] = copy.deepcopy(retained_attempt_histories)
     return proof
 
 
@@ -1878,20 +2128,24 @@ def validate_abrupt_stop_proof(proof, authorization, *, control=None, compose=No
     proof_schema = proof.get("schema")
     legacy_fields = {"schema", "authorization_pins", "docker_engine_id_sha256", "raw_records", "containers", "network", "storage_proof", "retained_terminal_runs"}
     held_fields = legacy_fields | {"retained_held_manual_runs"}
+    history_fields = held_fields | {"retained_attempt_histories"}
     if ((proof_schema == ABRUPT_PROOF_SCHEMA and set(proof) != legacy_fields)
             or (proof_schema == ABRUPT_PROOF_HELD_MANUAL_SCHEMA and set(proof) != held_fields)
-            or proof_schema not in {ABRUPT_PROOF_SCHEMA, ABRUPT_PROOF_HELD_MANUAL_SCHEMA}):
+            or (proof_schema == ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA and set(proof) != history_fields)
+            or proof_schema not in {ABRUPT_PROOF_SCHEMA, ABRUPT_PROOF_HELD_MANUAL_SCHEMA, ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA}):
         _fail("abrupt stop proof does not match its frozen schema")
     if proof["authorization_pins"] != _abrupt_authorization_pins(authorization):
         _fail("abrupt proof operator pins differ")
     _require_sha(proof["docker_engine_id_sha256"], "abrupt engine digest")
     terminal_pins = proof["retained_terminal_runs"]
     held_pins = proof.get("retained_held_manual_runs")
-    if proof_schema == ABRUPT_PROOF_HELD_MANUAL_SCHEMA:
+    history_pins = proof.get("retained_attempt_histories")
+    if proof_schema in {ABRUPT_PROOF_HELD_MANUAL_SCHEMA, ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA}:
         if terminal_pins is None or held_pins is None:
             _fail("v2 abrupt proof must carry both v4 retained pin arrays")
         expected_recovery_outcome({
-            "schema_version": HELD_MANUAL_REQUEST_SCHEMA,
+            "schema_version": ATTEMPT_HISTORY_REQUEST_SCHEMA if proof_schema == ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA else HELD_MANUAL_REQUEST_SCHEMA,
+            **({"retained_attempt_histories": history_pins} if proof_schema == ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA else {}),
             "retained_terminal_runs": terminal_pins,
             "retained_held_manual_runs": held_pins,
         })
@@ -1900,6 +2154,8 @@ def validate_abrupt_stop_proof(proof, authorization, *, control=None, compose=No
             [dict(pin) for pin in terminal_pins + held_pins],
             key=lambda item: item["run_id"],
         )
+        if history_pins is not None and storage.get("retained_attempt_histories") != history_pins:
+            _fail("v5 abrupt storage proof does not match historical evidence pins")
         if storage.get("run_records") != expected_records:
             _fail("v4 abrupt storage proof does not cover both retained pin arrays")
     elif terminal_pins is not None:
@@ -1931,22 +2187,25 @@ def validate_abrupt_stop_proof(proof, authorization, *, control=None, compose=No
         pin = _container_pin(item, service, authorization["compose_project"])
         if pin["container_id"] != authorization[service + "_container_id"] or pin["image_id"] != authorization["old_image_id"]:
             _fail("abrupt archived container differs from authorization")
+    containers = {service: _stable_container_observation(item) for service, item in containers.items()}
     _validate_owner_host(owner, containers["backend"])
     if control is not None:
         if _docker_engine_sha() != proof["docker_engine_id_sha256"]:
             _fail("abrupt Docker engine changed")
         if transition is None:
             current = _inspect_pair(authorization, control.project, compose)
-            if {"backend": current[0], "frontend": current[1]} != containers:
+            if {"backend": _stable_container_observation(current[0]),
+                    "frontend": _stable_container_observation(current[1])} != containers:
                 _fail("abrupt Docker observations changed")
             if _abrupt_network(*current, control.project) != proof["network"]:
                 _fail("abrupt private network observations changed")
         else:
-            if {"backend": transition["backend"], "frontend": transition["frontend"]} != containers:
+            if {service: _stable_container_observation(transition[service])
+                    for service in ("backend", "frontend")} != containers:
                 _fail("prepared retry differs from original abrupt observations")
             for service, item in transition["present"].items():
                 _strict_stopped(item)
-                if item != containers[service]:
+                if _stable_container_observation(item) != containers[service]:
                     _fail("prepared retry Docker observations changed")
             # Old containers may now be absent; network can only be absent or
             # the exact owned bridge without consumers other than the old pair.
@@ -1956,6 +2215,7 @@ def validate_abrupt_stop_proof(proof, authorization, *, control=None, compose=No
             control, containers["backend"], compose=compose,
             retained_terminal_runs=terminal_pins,
             retained_held_manual_runs=held_pins,
+            retained_attempt_histories=history_pins,
         )
         if observed != proof["storage_proof"]:
             _fail("abrupt store/ledger snapshot changed")
@@ -2565,12 +2825,14 @@ def _revalidate_recovery_boundary(
         _fail("Docker inspection identities changed before the destructive boundary")
     terminal_pins = journal.get("retained_terminal_runs") if _is_abrupt(authorization) else None
     held_pins = journal.get("retained_held_manual_runs") if _is_abrupt(authorization) else None
+    history_pins = journal.get("retained_attempt_histories") if _is_abrupt(authorization) else None
     if _is_abrupt(authorization):
         validate_abrupt_stop_proof(journal, authorization, control=control, compose=current_compose, transition=current_transition)
     storage_proof = _ledger_and_store_snapshot(
         control, pinned_backend, compose=compose,
         retained_terminal_runs=terminal_pins,
         retained_held_manual_runs=held_pins,
+        retained_attempt_histories=history_pins,
     )
     for key in (set(storage_proof) | set(expected_storage)):
         if storage_proof.get(key) != expected_storage.get(key):
@@ -2820,12 +3082,14 @@ def recover(args: argparse.Namespace) -> None:
         _fail("Docker container pins changed since authorization")
     terminal_pins = journal.get("retained_terminal_runs") if _is_abrupt(authorization) else None
     held_pins = journal.get("retained_held_manual_runs") if _is_abrupt(authorization) else None
+    history_pins = journal.get("retained_attempt_histories") if _is_abrupt(authorization) else None
     if _is_abrupt(authorization):
         validate_abrupt_stop_proof(journal, authorization, control=control, compose=compose, transition=transition)
     storage_proof = _ledger_and_store_snapshot(
         control, backend, compose=compose,
         retained_terminal_runs=terminal_pins,
         retained_held_manual_runs=held_pins,
+        retained_attempt_histories=history_pins,
     )
     manifest = transition["manifest"] if transition is not None else _manifest(
         authorization, engine_sha, backend, frontend, pins, device_release, device_mapping
@@ -2942,6 +3206,7 @@ def recover(args: argparse.Namespace) -> None:
                 containers=pins,
                 retained_terminal_runs=terminal_pins,
                 retained_held_manual_runs=held_pins,
+                retained_attempt_histories=history_pins,
             )
             request_raw = _canonical(request)
             request_sha = _sha256(request_raw)

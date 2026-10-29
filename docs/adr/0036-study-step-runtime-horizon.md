@@ -335,13 +335,53 @@ jawnej operacji. Historyczny strukturalny scene/pipeline adapter pozostaje
 legacy i nie deklaruje expanded execution inventory.
 
 Pierwszy capture obsluguje zaufany DSL, ktory tylko odczytuje dane:
-`trusted_readonly_dsl_observed_io.v1`. Przechwytuje entry script, faktycznie
+`trusted_readonly_dsl_observed_io.v2`; czytnik zachowuje przyjmowanie historycznego
+`trusted_readonly_dsl_observed_io.v1` bez zmiany jego manifestów. Przechwytuje entry script, faktycznie
 zaobserwowane lokalne importy/odczyty oraz pinned runtime closure CPython,
 Fullmag i NumPy. Zaobserwowany odczyt poza inwentarzem, symlink/junction,
 zmiana bajtow i przekroczenie limitow blokuja Submit. CPython audit nie
 potwierdza kompletnosci arbitralnego natywnego IO:
 `native_io_completeness=NOT_VERIFIED`. To nie jest sandboxing.
 Fullmag ma identity `source_tree_only`, bez kwalifikowanego build binding.
+Polityka v2 inicjalizuje `ctypes` przed Fullmag/NumPy i authored DSL, przy
+aktywnym audicie oraz loaderze kompilującym przypięte bajty `.py`. W tej
+fazie `sys.path` zawiera wyłącznie stdlib i jego natywne moduły, bez cwd,
+źródeł użytkownika, site-packages i Fullmaga; istniejący wcześniej moduł
+`ctypes`/`_ctypes` jest odrzucany, a pochodzenie nowych modułów musi zgadzać
+się z przypiętym runtime. Jedyny wyjątek `ctypes.dlopen(None)` dotyczy tego
+bootstrapu i jest zamykany przez `finally` przed importem Fullmag/NumPy.
+Nie dowodzi to kompletności przestrzeni symboli procesu ani natywnego IO.
+Producent ustawia stałe `OPENBLAS_MAIN_FREE=1` i `GOTOBLAS_MAIN_FREE=1`
+przed auditem, aby NumPy nie mutowało tych flag przy imporcie. Po inicjalizacji
+wywołania authored `CDLL/PyDLL(None)`, pustych/obcych bibliotek oraz mutacje
+środowiska pozostają odrzucane, także gdy skrypt łapie wyjątek. Inwentarz,
+obserwowane odczyty, kontrola zmian i limity zachowują dotychczasowe bramki.
+Loader kompiluje dokładne bajty `.py` zachowane z tego samego sprawdzonego
+odczytu, który utworzył rekord inwentarza; nie korzysta z istniejących `.pyc`.
+Import zapisuje obserwowany rekord i odrzuca brak przypiętych bajtów. Po eksporcie
+nadal wykonuje się pełny post-inwentarz oraz oddzielną końcową rewalidację
+wszystkich plików. Równoległość odczytów ma ograniczoną kolejkę partii ośmiu
+plików; zakończenie wszystkich zadań poprzedza zamknięcie wewnętrznej fazy
+weryfikacji. Limity rozmiaru danych nie są deklaracją maksymalnego RAM procesu.
+Inwentarz wykonania pomija wyłącznie statyczne archiwum linkera CPython
+wskazane przez `LIBPL/LIBRARY`, gdy `LIBRARY` jest pojedynczą nazwą `.a`,
+a `LIBPL` jest kanonicznym katalogiem pod bieżącym stdlib. Plik przed
+pominięciem nadal przechodzi kontrolę aliasów i zwykłego pliku. Pozostałe
+pliki konfiguracji, moduły `.py`/`.so` oraz NumPy/OpenBLAS pozostają przypięte.
+Odczyt pominiętego archiwum przez authored script jest odrzucany jako odczyt
+spoza zatwierdzonego closure; ta granica nie podnosi limitów ani nie zmienia
+wcześniej zaakceptowanych manifestów.
+API przeznacza na każdą fazę pełnego source capture stały budżet 90 s.
+Obejmuje on odczyt i hashowanie całego bounded runtime, audytowany eksport,
+post-inwentarz i odrębną końcową rewalidację każdego pliku. Zmierzone pełne
+przejście 3390 rekordów na Windows/Docker trwało około 41 s, a wariant z
+rozbudowaną obsługą deskryptorów nadal około 32 s. Budżet 30 s zwykłych
+helperów renderujących pozostaje osobny. Przekroczenie budżetu source capture
+nadal zatrzymuje i reapuje proces przez istniejącą obsługę błędu; nie ma
+częściowego Submit ani zwalniania niepotwierdzonego ownera. Ta zmiana budżetu
+operacyjnego nie pomija sprawdzeń, nie zwiększa limitów bajtów/plików i nie
+zmienia kwalifikacji naukowej ani istniejących manifestów. Rzeczywisty API
+musi zostać przebudowany i osobno zweryfikowany po zmianie źródeł.
 Limity: source 8 MiB, runtime 128 MiB, plik 32 MiB, 8192 rekordow;
 16 MiB dotyczy metadanych pipeline. Profil id/version jest wiazany raz,
 a materialized identity pozostaje w `study_problem_catalog.v3`.

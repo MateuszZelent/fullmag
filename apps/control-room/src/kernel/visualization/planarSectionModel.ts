@@ -52,16 +52,32 @@ export interface PlanarSectionGeometry {
    * (from the sample metadata section); null when the section is continuous.
    */
   stops?: readonly number[] | null;
+  /**
+   * Navigation step of a continuous FEM section: the median normal extent of
+   * the elements cut by the current plane (`eq-planar-navigation-step`). A
+   * navigation aid, not a data layer.
+   */
+  navigationStepM?: number | null;
 }
 
-/** Attach FEM node-plane stops published by the backend section. */
+/** Attach FEM node-plane stops or the continuous navigation step published by the backend section. */
 export function withSectionStops(
   geometry: PlanarSectionGeometry | null,
-  section: { plane: string; layer_stops_m?: number[] | null } | null | undefined,
+  section: {
+    layer_stops_m?: number[] | null;
+    navigation_step_kind?: string | null;
+    navigation_step_m?: number | null;
+    plane: string;
+  } | null | undefined,
 ): PlanarSectionGeometry | null {
-  if (!geometry || geometry.layerCount !== null) return geometry;
-  const stops = section?.plane === geometry.plane ? section.layer_stops_m ?? [] : [];
-  return stops.length >= 2 ? { ...geometry, stops } : geometry;
+  if (!geometry || geometry.layerCount !== null || section?.plane !== geometry.plane) return geometry;
+  const stops = section.layer_stops_m ?? [];
+  if (stops.length >= 2) return { ...geometry, stops };
+  const step = section.navigation_step_m;
+  return section.navigation_step_kind === "median_element_height" &&
+    typeof step === "number" && Number.isFinite(step) && step > 0
+    ? { ...geometry, navigationStepM: step }
+    : geometry;
 }
 
 /** Number of discrete layers (FDM cells or FEM node planes), or null if continuous. */
@@ -304,5 +320,72 @@ export function stepSectionFraction(
     const index = sectionLayerIndex(geometry, fraction) ?? 0;
     return sectionLayerFraction(geometry, index + steps);
   }
-  return clampFraction(clampFraction(fraction) + delta * CONTINUOUS_SECTION_STEP);
+  const step = geometry?.navigationStepM && geometry.normalExtent > 0
+    ? geometry.navigationStepM / geometry.normalExtent
+    : CONTINUOUS_SECTION_STEP;
+  return clampFraction(clampFraction(fraction) + delta * step);
+}
+
+/** Extent of one realized object along the section normal (a named layer). */
+export interface ObjectSectionLayer {
+  objectId: string;
+  name: string;
+  min: number;
+  max: number;
+}
+
+interface RealizedBodyBounds {
+  bounds_max: number[];
+  bounds_min: number[];
+  object_id: string;
+  object_name: string;
+}
+
+/**
+ * Named layers along `axis` from the realized geometry bodies, merged per
+ * object and ordered along the normal (note 0970, object layers).
+ */
+export function objectSectionLayers(
+  bodies: readonly RealizedBodyBounds[] | null | undefined,
+  axis: PlanarSectionAxis,
+): ObjectSectionLayer[] {
+  const index = AXIS_INDEX[axis];
+  const layers = new Map<string, ObjectSectionLayer>();
+  for (const body of bodies ?? []) {
+    const min = body.bounds_min[index];
+    const max = body.bounds_max[index];
+    if (typeof min !== "number" || typeof max !== "number" ||
+      !Number.isFinite(min) || !Number.isFinite(max) || max <= min) continue;
+    const previous = layers.get(body.object_id);
+    layers.set(body.object_id, previous
+      ? { ...previous, max: Math.max(previous.max, max), min: Math.min(previous.min, min) }
+      : { max, min, name: body.object_name || body.object_id, objectId: body.object_id });
+  }
+  return [...layers.values()].sort((left, right) => left.min - right.min || left.max - right.max);
+}
+
+/** Default slice of a named layer: a slab of the object's thickness centred on it. */
+export function objectLayerSlice(
+  geometry: PlanarSectionGeometry,
+  layer: ObjectSectionLayer,
+): { operator: Extract<DefaultOperator, { kind: "slab_average" }>; position_fraction: number } {
+  return {
+    operator: { kind: "slab_average", thickness_m: layer.max - layer.min },
+    position_fraction: clampFraction(((layer.min + layer.max) / 2 - geometry.normalMin) / geometry.normalExtent),
+  };
+}
+
+/** The named layer the current default slice selects, if any. */
+export function matchObjectLayer(
+  slice: { operator: DefaultOperator; position_fraction: number },
+  geometry: PlanarSectionGeometry | null,
+  layers: readonly ObjectSectionLayer[],
+): ObjectSectionLayer | null {
+  if (!geometry || slice.operator.kind !== "slab_average") return null;
+  const tolerance = STOP_SNAP_RELATIVE_WINDOW * geometry.normalExtent;
+  const thickness = slice.operator.thickness_m;
+  const centre = geometry.normalMin + clampFraction(slice.position_fraction) * geometry.normalExtent;
+  return layers.find((layer) =>
+    Math.abs(layer.max - layer.min - thickness) <= tolerance &&
+    Math.abs((layer.min + layer.max) / 2 - centre) <= tolerance) ?? null;
 }

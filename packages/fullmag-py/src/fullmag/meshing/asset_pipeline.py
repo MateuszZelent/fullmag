@@ -2196,6 +2196,50 @@ def _shared_domain_size_field_default_hmax(hints: FEM, airbox: AirboxOptions | N
     return default_hmax
 
 
+def _study_default_body_clamp_fields(
+    geometries: list[Geometry],
+    hints: FEM,
+    *,
+    size_field_default_hmax: float,
+    per_object_recipes: Mapping[str, object] | None,
+    existing_fields: Sequence[object],
+) -> list[dict[str, object]]:
+    """Keep bodies on the study target when the air policy raised the background.
+
+    The background size equals ``max(hints.hmax, airbox_hmax)`` so that air
+    is not refined to the magnetic target. Bodies with an explicit per-object
+    recipe or a workflow body field already carry their own clamp; every other
+    body would otherwise be meshed at the air size although the build report
+    records the study default as its target (docs/physics/0102: the air policy
+    is never a magnetic clamp).
+    """
+    body_hmax = float(hints.hmax)
+    if not body_hmax < float(size_field_default_hmax):
+        return []
+    clamped_names = {
+        str(field["params"].get("GeometryName"))
+        for field in existing_fields
+        if isinstance(field, Mapping)
+        and field.get("kind") == "ComponentVolumeConstant"
+        and isinstance(field.get("params"), Mapping)
+    }
+    recipe_names = set(per_object_recipes or ())
+    return [
+        {
+            "kind": "ComponentVolumeConstant",
+            "params": {
+                "GeometryName": geometry.geometry_name,
+                "VIn": body_hmax,
+                "VOut": float(_NO_OP_FIELD_SIZE),
+                "Source": "StudyDefaultBodyTarget",
+            },
+        }
+        for geometry in geometries
+        if geometry.geometry_name not in recipe_names
+        and geometry.geometry_name not in clamped_names
+    ]
+
+
 def _emit_shared_domain_mesh_summary(
     mesh: MeshData,
     region_markers: list[dict[str, object]],
@@ -3151,6 +3195,20 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             planned_build_mode = "concatenated_stl_fallback"
         else:
             planned_build_mode = "component_aware"
+        if planned_build_mode in {"conformal_occ", "single_geometry_occ"} and component_aware_mesh_options:
+            body_clamp_fields = _study_default_body_clamp_fields(
+                geometries,
+                hints,
+                size_field_default_hmax=size_field_default_hmax,
+                per_object_recipes=per_object_recipes,
+                existing_fields=mesh_options.size_fields,
+            )
+            if body_clamp_fields:
+                mesh_options = _dc_replace(
+                    mesh_options,
+                    size_fields=body_clamp_fields + list(mesh_options.size_fields),
+                )
+                used_size_field_kinds = _unique_size_field_kinds(list(mesh_options.size_fields))
         planned_operation_statuses = _build_mesh_operation_statuses(
             geometries,
             mesh_options,

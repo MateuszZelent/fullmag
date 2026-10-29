@@ -33,6 +33,8 @@ export class ObjectEditSessionController<TDraft> {
     return target.objectId ? `${scope}:${target.objectId}` : scope;
   }
   private snapshot: ObjectEditSessionSnapshot<TDraft> = EMPTY_SNAPSHOT;
+  /** Last canonical draft seen by the active draft, keyed by draft id. */
+  private canonicalDrafts = new Map<string, TDraft>();
 
   readonly getSnapshot = (): ObjectEditSessionSnapshot<TDraft> => this.snapshot;
   readonly getServerSnapshot = (): ObjectEditSessionSnapshot<TDraft> =>
@@ -62,6 +64,9 @@ export class ObjectEditSessionController<TDraft> {
       draftId: "object-edit-" + String(++this.draftSequence),
       epoch: ++this.epochSequence,
     });
+    // Only the active draft can be refreshed, so one canonical baseline is kept.
+    this.canonicalDrafts.clear();
+    this.canonicalDrafts.set(identity.draftId, initialDraft);
     this.publish({
       applyOperationId: this.pendingOperations.get(this.pendingOperationKey(target))?.id ?? null,
       dirty: false,
@@ -88,14 +93,34 @@ export class ObjectEditSessionController<TDraft> {
     return true;
   }
 
-  refreshCanonical(identity: ObjectEditSessionIdentity, canonicalDraft: TDraft): boolean {
+  /**
+   * Replaces a clean draft with the canonical one. A dirty draft is kept; when
+   * `rebaseDirty` is given it may move the draft onto the new canonical base,
+   * e.g. when only an unrelated part of the scene changed revision.
+   */
+  refreshCanonical(
+    identity: ObjectEditSessionIdentity,
+    canonicalDraft: TDraft,
+    rebaseDirty?: (draft: TDraft, previousCanonical: TDraft, canonical: TDraft) => TDraft | null,
+  ): boolean {
+    if (!this.matches(identity)) return false;
+    const previousCanonical = this.canonicalDrafts.get(identity.draftId) ?? null;
+    this.canonicalDrafts.set(identity.draftId, canonicalDraft);
     if (
-      !this.matches(identity) ||
-      this.snapshot.dirty ||
       this.pendingOperations.has(this.pendingOperationKey(identity)) ||
       Object.is(this.snapshot.draft, canonicalDraft)
     ) {
-      return this.matches(identity);
+      return true;
+    }
+    if (this.snapshot.dirty) {
+      const draft = this.snapshot.draft;
+      const rebased = draft !== null && previousCanonical !== null && rebaseDirty
+        ? rebaseDirty(draft, previousCanonical, canonicalDraft)
+        : null;
+      if (rebased !== null && !Object.is(rebased, draft)) {
+        this.publish({ ...this.snapshot, draft: rebased });
+      }
+      return true;
     }
     this.publish({ ...this.snapshot, draft: canonicalDraft });
     return true;

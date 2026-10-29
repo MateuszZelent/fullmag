@@ -94,6 +94,8 @@ fn prepare_identity(
         &request.asset_paths,
     )
     .map_err(|error| ApiError::bad_request(format!("invalid_run_preparation: {error:#}")))?;
+    crate::accepted_solver_profile::validate_study_profile(&intent.specification.parameters, &study)
+        .map_err(|error| ApiError::bad_request(format!("invalid_solver_profile: {error:#}")))?;
     let plan = fullmag_plan::lower_study_plan_with_catalog(&study, &catalog)
         .map_err(|error| ApiError::bad_request(format!("invalid_study_plan: {error:#}")))?;
     fullmag_runtime_control::validate_requested_execution(&intent.specification, &catalog, &plan)

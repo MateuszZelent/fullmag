@@ -49,6 +49,7 @@ function sameGeometry(
     left.normalMax === right.normalMax &&
     left.layerCount === right.layerCount &&
     left.layerSpacing === right.layerSpacing &&
+    (left.navigationStepM ?? null) === (right.navigationStepM ?? null) &&
     left.nativeResolution?.[0] === right.nativeResolution?.[0] &&
     left.nativeResolution?.[1] === right.nativeResolution?.[1] &&
     (left.stops?.length ?? 0) === (right.stops?.length ?? 0) &&

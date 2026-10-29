@@ -10,6 +10,10 @@ ENV FULLMAG_TOOLCHAIN_IMAGE_ID=${FULLMAG_TOOLCHAIN_IMAGE_ID}
 
 USER root
 
+# The frontend API hygiene gate invokes ripgrep inside its own service.
+RUN apt-get update && apt-get install -y --no-install-recommends ripgrep && \
+    rm -rf /var/lib/apt/lists/*
+
 # Empty prefixes preserve the frozen release context; DEV reads an allowlisted checkout.
 ARG FULLMAG_DOCKER_HELPERS=""
 ARG FULLMAG_SCRIPT_HELPERS=""
@@ -24,6 +28,7 @@ COPY ${FULLMAG_DOCKER_HELPERS}backend_auto_maintenance.py /opt/fullmag/backend_a
 COPY ${FULLMAG_DOCKER_HELPERS}windows_folder_probe.py /opt/fullmag/windows_folder_probe.py
 COPY ${FULLMAG_DOCKER_HELPERS}linux_native_probe.py /opt/fullmag/linux_native_probe.py
 COPY ${FULLMAG_DOCKER_HELPERS}runtime_service.py /opt/fullmag/runtime_service.py
+COPY ${FULLMAG_DOCKER_HELPERS}runtime_service_snapshot.py /opt/fullmag/runtime_service_snapshot.py
 COPY ${FULLMAG_DOCKER_HELPERS}runtime_service_unclaimed_cancellation.py /opt/fullmag/runtime_service_unclaimed_cancellation.py
 COPY ${FULLMAG_DOCKER_HELPERS}frontend_dev.py /opt/fullmag/frontend_dev.py
 COPY ${FULLMAG_DOCKER_HELPERS}healthcheck.py /opt/fullmag/healthcheck.py

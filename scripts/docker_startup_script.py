@@ -74,7 +74,9 @@ SCRIPT_REJECTION_CODES = frozenset({
     "accepted_execution_stage_missing", "accepted_gpu_scope_unsupported",
     "accepted_execution_plan_invalid", "accepted_backend_unsupported",
     "accepted_study_step_unsupported", "accepted_study_step_ambiguous",
-    # Output alias validation happens while loading the source, before RunIntent admission.
+    "accepted_script_capture_invalid", "accepted_script_capture_required",
+    "accepted_script_compilation_failed",
+    # Output mapping validation is pure and precedes durable run admission.
     "docker_startup_output_mapping_required", "docker_startup_output_mapping_invalid",
 })
 
@@ -809,6 +811,33 @@ def _retirement_context(api_base: str, token: str, *, timeout: float) -> dict[st
     return value
 
 
+def _validate_observation_retirement(value: Mapping[str, Any]) -> None:
+    """Validate detached history without granting native completion semantics."""
+    evidence = value.get("imported_observation")
+    fields = {"import_id", "session_id", "run_id", "snapshot_sha256", "closure_sha256",
+              "historical_terminal_outcome", "historical_catalog_revision"}
+    if not isinstance(evidence, dict) or set(evidence) != fields:
+        raise StartupScriptError("imported observation retirement evidence is invalid")
+    _validate_request_id(evidence["import_id"])
+    if (evidence["session_id"] != value.get("session_id")
+            or evidence["run_id"] != value.get("run_id")
+            or value.get("terminal_outcome") != "observation_closed"
+            or not isinstance(evidence["historical_terminal_outcome"], str)
+            or evidence["historical_terminal_outcome"] not in {"completed", "failed", "cancelled", "interrupted"}
+            or type(evidence["historical_catalog_revision"]) is not int
+            or evidence["historical_catalog_revision"] <= 0):
+        raise StartupScriptError("imported observation retirement binding differs")
+    snapshot, closure = evidence["snapshot_sha256"], evidence["closure_sha256"]
+    if (not isinstance(snapshot, str) or not SHA256_RE.fullmatch(snapshot)
+            or not isinstance(closure, str) or not closure.startswith("sha256:")
+            or not SHA256_RE.fullmatch(closure[7:])):
+        raise StartupScriptError("imported observation retirement digest is invalid")
+    digest = hashlib.sha256(json.dumps(evidence, sort_keys=True, separators=(",", ":"),
+                                      ensure_ascii=False).encode("utf-8")).hexdigest()
+    if value.get("terminal_evidence_sha256") != digest:
+        raise StartupScriptError("imported observation retirement evidence digest differs")
+
+
 def _validate_retirement_response(
     response: Mapping[str, Any],
     *,
@@ -818,8 +847,13 @@ def _validate_retirement_response(
     request_scope_epoch: str,
     api_request_scope_epoch: str,
 ) -> dict[str, Any]:
-    if response.get("schema") != RETIREMENT_RESPONSE_SCHEMA:
+    observation = response.get("schema") == "fullmag.live-workspace-retirement-response.v2"
+    if not observation and response.get("schema") != RETIREMENT_RESPONSE_SCHEMA:
         raise StartupScriptError("workspace retirement response schema mismatch")
+    if observation:
+        _validate_observation_retirement(response)
+    elif response.get("imported_observation") is not None:
+        raise StartupScriptError("native retirement response contains observation evidence")
     if response.get("state") not in {"retired", "replayed"}:
         raise StartupScriptError("workspace retirement response state is invalid")
     for field, expected in (
@@ -835,7 +869,7 @@ def _validate_retirement_response(
         if type(response.get(field)) is not int or response[field] < 0:
             raise StartupScriptError(f"workspace retirement response {field} is invalid")
     # `startup_failed` retires a workspace whose script never admitted a RunIntent.
-    if response.get("terminal_outcome") not in {"completed", "failed", "cancelled", "startup_failed"}:
+    if not observation and response.get("terminal_outcome") not in {"completed", "failed", "cancelled", "startup_failed"}:
         raise StartupScriptError("workspace retirement response outcome is invalid")
     if response.get("ui_state_scope") != "backend_typed_workspace":
         raise StartupScriptError("workspace retirement response UI scope is invalid")
@@ -927,13 +961,22 @@ def _retirement_archive_receipt(
         raise StartupScriptError("retirement archive manifest is not valid JSON") from error
     if (
         not isinstance(proof, dict)
-        or proof.get("schema") != "fullmag.live-workspace-retirement-proof.v2"
+        or proof.get("schema") not in {"fullmag.live-workspace-retirement-proof.v2",
+                                       "fullmag.live-workspace-retirement-proof.v3"}
         or proof.get("state") != "retired"
         or proof.get("operation_id") != operation_id
         or proof.get("session_id") != session_id
         or proof.get("run_id") != run_id
     ):
         raise StartupScriptError("retirement archive manifest identity differs")
+    if proof["schema"] == "fullmag.live-workspace-retirement-proof.v3":
+        _validate_observation_retirement(proof)
+        if (proof.get("host_released_reservations") != []
+                or proof.get("accepted_proof_sha256") is not None
+                or proof.get("terminal_catalog_revision") != proof["imported_observation"]["historical_catalog_revision"]):
+            raise StartupScriptError("imported retirement archive claims native execution authority")
+    elif proof.get("imported_observation") is not None:
+        raise StartupScriptError("native retirement archive contains observation evidence")
     proof_scope = proof.get("request_scope_epoch")
     if not isinstance(proof_scope, str) or not proof_scope.strip() or ":" not in proof_scope:
         raise StartupScriptError("retirement archive manifest scope is invalid")

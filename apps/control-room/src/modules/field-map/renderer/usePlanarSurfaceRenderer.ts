@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   planarRasterChecksum,
+  type PlanarRasterEvidence,
   type PlanarRenderEvidence,
 } from "../model/fieldMapEvidence";
 import type { FieldMapRenderModel } from "../model/fieldMapRenderModel";
@@ -14,6 +15,8 @@ import {
   partitionPlanarMeshSegments,
   type PlanarRenderer,
 } from "./planarRenderer";
+import type { PlanarStreamlines } from "./planarStreamlines";
+import { usePlanarStreamlines } from "./usePlanarStreamlines";
 
 export function usePlanarSurfaceRenderer(
   model: FieldMapRenderModel,
@@ -27,6 +30,13 @@ export function usePlanarSurfaceRenderer(
   const overlayContextRef = useRef<CanvasRenderingContext2D | null>(null);
   const observedSizeRef = useRef({ height: -1, width: -1 });
   const colorizerRef = useRef<ReturnType<typeof createPlanarColorizer> | null>(null);
+  // Inputs and raster evidence of the last colorization. Presentation-only
+  // re-renders (pending patches, overlay styles) rebuild the model with equal
+  // values; they must not post the same raster to the worker again (D2D-12).
+  const lastColorizeRef = useRef<{
+    inputs: readonly unknown[];
+    raster: PlanarRasterEvidence | null;
+  } | null>(null);
   const drawOverlayRef = useRef<(contours?: readonly ContourSegment[]) => void>(() => undefined);
   const modelRef = useRef(model);
   const renderStateRef = useRef<{
@@ -35,6 +45,7 @@ export function usePlanarSurfaceRenderer(
     glyphCount: number;
     mesh: ReturnType<typeof decodePlanarMeshOverlayForDescriptor> | null;
   }>({ axisPointer: null, contours: [], glyphCount: 0, mesh: null });
+  const streamlinesRef = useRef<PlanarStreamlines | null>(null);
   const [plotSize, setPlotSize] = useState({ height: 0, width: 0 });
   const rangeMin = model.range?.min;
   const rangeMax = model.range?.max;
@@ -42,6 +53,17 @@ export function usePlanarSurfaceRenderer(
   useEffect(() => {
     modelRef.current = model;
   }, [model]);
+
+  usePlanarStreamlines(model, useCallback((result: PlanarStreamlines | null) => {
+    streamlinesRef.current = result;
+    const overlayCanvas = overlayRef.current;
+    if (overlayCanvas) {
+      // Smoke evidence: how many lines the overlay holds and whether a budget cut them.
+      overlayCanvas.dataset.streamlineCount = String(result?.lineCount ?? 0);
+      overlayCanvas.dataset.streamlineTruncated = String(result?.truncated ?? false);
+    }
+    drawOverlayRef.current();
+  }, []));
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -129,6 +151,7 @@ export function usePlanarSurfaceRenderer(
         meshViewport: current.viewport,
         samplePoints: current.samplePoints,
         pointStyle: current.pointStyle,
+        streamlines: current.layers.streamlines ? streamlinesRef.current : null,
         // Over a direction-coloured raster, orientation-coloured arrows would
         // repeat the raster colour; draw them dark instead, as mumax3 does.
         vectorColorMode: current.directionVectors && current.vectorStyle.colorMode === "orientation"
@@ -150,6 +173,37 @@ export function usePlanarSurfaceRenderer(
       : { min: rangeMin, max: rangeMax };
     const needsColorizer = range !== null && (model.layers.raster || model.layers.contours);
     if (!model.layers.raster || !needsColorizer) renderer.clearBase();
+    const colorizeInputs = needsColorizer
+      ? [
+          model.scalar, model.mask, model.directionVectors, range.min, range.max,
+          model.colormap, model.layers.contours, model.layers.raster,
+          model.rasterOpacity ?? 1, model.resolution[0], model.resolution[1],
+        ]
+      : null;
+    const lastColorize = lastColorizeRef.current;
+    if (
+      colorizeInputs &&
+      colorizerRef.current &&
+      lastColorize?.raster &&
+      sameColorizeInputs(colorizeInputs, lastColorize.inputs)
+    ) {
+      // Same raster: redraw overlays only and keep the evidence current.
+      drawOverlayRef.current();
+      const current = modelRef.current;
+      const state = renderStateRef.current;
+      onRenderEvidence?.({
+        glyphCount: state.glyphCount,
+        overlayCounts: {
+          boundsSegments: current.layers.bounds ? 4 : 0,
+          contours: state.contours.length,
+          meshSegments: state.mesh?.segmentCount ?? 0,
+          pointMarkers: current.samplePoints.length,
+        },
+        raster: lastColorize.raster,
+        sampleIdentity: current.sampleIdentity,
+      });
+      return;
+    }
     if (needsColorizer) {
       colorizerRef.current ??= createPlanarColorizer(
         new Worker(new URL("./planarRendererWorker.ts", import.meta.url), { type: "module" }),
@@ -161,6 +215,13 @@ export function usePlanarSurfaceRenderer(
           }
           drawOverlayRef.current(contours);
           if (!current.layers.raster || !current.range) return;
+          const rasterEvidence: PlanarRasterEvidence = {
+            checksum: planarRasterChecksum(pixels),
+            max: current.range.max,
+            min: current.range.min,
+            sampleCount: current.scalar.length,
+          };
+          if (lastColorizeRef.current) lastColorizeRef.current.raster = rasterEvidence;
           onRenderEvidence?.({
             glyphCount: state.glyphCount,
             overlayCounts: {
@@ -169,16 +230,12 @@ export function usePlanarSurfaceRenderer(
               meshSegments: state.mesh?.segmentCount ?? 0,
               pointMarkers: current.samplePoints.length,
             },
-            raster: {
-              checksum: planarRasterChecksum(pixels),
-              max: current.range.max,
-              min: current.range.min,
-              sampleCount: current.scalar.length,
-            },
+            raster: rasterEvidence,
             sampleIdentity: current.sampleIdentity,
           });
         },
       );
+      lastColorizeRef.current = { inputs: colorizeInputs!, raster: null };
       colorizerRef.current.colorize(model.scalar, range, model.mask ?? undefined, {
         colormap: model.colormap,
         contours: model.layers.contours,
@@ -191,6 +248,7 @@ export function usePlanarSurfaceRenderer(
     } else {
       colorizerRef.current?.dispose();
       colorizerRef.current = null;
+      lastColorizeRef.current = null;
       drawOverlayRef.current();
       const current = modelRef.current;
       const state = renderStateRef.current;
@@ -258,4 +316,8 @@ export function usePlanarSurfaceRenderer(
     renderStateRef,
     valuesRef,
   };
+}
+
+function sameColorizeInputs(next: readonly unknown[], previous: readonly unknown[]): boolean {
+  return next.length === previous.length && next.every((value, index) => Object.is(value, previous[index]));
 }

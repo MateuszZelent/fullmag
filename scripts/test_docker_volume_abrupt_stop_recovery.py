@@ -1,6 +1,8 @@
 """Docker-free checks for original-evidence abrupt stop recovery."""
 from __future__ import annotations
+import ast
 import copy
+import inspect
 import hashlib
 import json
 from pathlib import Path
@@ -335,6 +337,115 @@ class AbruptStopTests(unittest.TestCase):
         with patch.object(r,'_control_bytes',side_effect=lambda c,p: records[p]), patch.object(r,'_docker_engine_sha',return_value='f'*64), patch.object(r,'_inspect_pair',return_value=tuple(drift.values())):
             with self.assertRaisesRegex(r.ContainerRecoveryError,'observations'): r.validate_abrupt_stop_proof(proof,auth,control=SimpleNamespace(project=compose['name']),compose=compose)
 
+    def test_mount_order_is_not_drift_but_every_mount_field_is_pinned(self):
+        proof, auth, compose = self.fixture()
+        records = {item['path']: item['raw_utf8'].encode() for item in proof['raw_records'].values()}
+        for item in proof['containers'].values():
+            item['Mounts'].append({'Type': 'volume', 'Name': 'cache', 'Destination': '/build',
+                                  'RW': True, 'Options': {'subpath': 'private'}})
+        current = copy.deepcopy(proof['containers'])
+        for item in current.values():
+            item['Mounts'].reverse()
+        original = copy.deepcopy(proof)
+        control = SimpleNamespace(project=compose['name'])
+        with patch.object(r, '_control_bytes', side_effect=lambda c, p: records[p]), \
+             patch.object(r, '_docker_engine_sha', return_value='f'*64), \
+             patch.object(r, '_inspect_pair', return_value=tuple(current.values())), \
+             patch.object(r, '_abrupt_network', return_value=proof['network']), \
+             patch.object(r, '_assert_no_foreign_storage_consumers'), \
+             patch.object(r, '_ledger_and_store_snapshot', return_value=proof['storage_proof']):
+            r.validate_abrupt_stop_proof(proof, auth, control=control, compose=compose)
+            transition = {**current, 'present': current}
+            r.validate_abrupt_stop_proof(proof, auth, control=control, compose=compose, transition=transition)
+            self.assertEqual(proof, original)  # Never rewrite archived evidence.
+            for key, changed in [('Name', 'other-cache'), ('RW', False), ('Options', {'subpath': 'foreign'})]:
+                mount = current['backend']['Mounts'][0]
+                old = mount[key]
+                mount[key] = changed
+                with self.subTest(key=key), self.assertRaisesRegex(r.ContainerRecoveryError, 'observations'):
+                    r.validate_abrupt_stop_proof(proof, auth, control=control, compose=compose)
+                mount[key] = old
+            current['backend']['Mounts'][1]['Source'] = '/other/store'
+            with self.assertRaisesRegex(r.ContainerRecoveryError, 'observations'):
+                r.validate_abrupt_stop_proof(proof, auth, control=control, compose=compose)
+
+    def test_mount_inventory_must_have_unique_nonempty_destinations(self):
+        proof, _, _ = self.fixture()
+        original = proof['containers']['backend']
+        for extra in [dict(original['Mounts'][0]), {}, {'Destination': ''}, {'Destination': 3}, None]:
+            value = copy.deepcopy(original)
+            value['Mounts'].append(extra)
+            with self.subTest(extra=extra), self.assertRaises(r.ContainerRecoveryError):
+                r._stable_container_observation(value)
+
+    def test_retained_state_root_accepts_only_explicit_matching_worktree(self):
+        proof, _, _ = self.fixture()
+        backend = copy.deepcopy(proof['containers']['backend'])
+        project = 'fullmag-worktree-selected'
+        backend['Config']['Labels']['com.docker.compose.project'] = project
+        with tempfile.TemporaryDirectory() as directory:
+            state = str(Path(directory).resolve())
+            backend['Mounts'][0]['Source'] = '/daemon/state-alias'
+            compose = {'name': project, 'services': {'backend': {
+                'volumes': [{'type': 'bind', 'source': state, 'target': '/state'}],
+                'x-fullmag-daemon-binds': {'/state': '/daemon/state-alias'}}}}
+            image = {'Id': backend['Image'], 'Config': {}}
+            with patch.object(r, 'docker_capture', return_value=SimpleNamespace(stdout=json.dumps([image]).encode())), \
+                 patch('docker_volume_dev._validate_retained_service') as validate:
+                self.assertEqual(r._retained_compose_state_root(backend, compose, project=project), Path(state))
+                validate.assert_called_once()
+                with self.assertRaisesRegex(r.ContainerRecoveryError, 'selected Compose identity'):
+                    r._retained_compose_state_root(backend, compose)
+                backend['Config']['Labels']['com.docker.compose.project'] = 'foreign'
+                with self.assertRaisesRegex(r.ContainerRecoveryError, 'selected Compose identity'):
+                    r._retained_compose_state_root(backend, compose, project=project)
+                self.assertEqual(validate.call_count, 1)
+
+    def test_windows_raw_protected_overlap_precedes_qualified_proof(self):
+        proof, _, compose = self.fixture()
+        backend, frontend = proof['containers'].values()
+        backend['Mounts'][0]['Source'] = r'D:\retained\state'
+        for source in (r'd:\RETAINED\state', r'D:\retained\state\runs', r'D:\retained'):
+            foreign = {'Id': 'a'*64, 'Mounts': [
+                {'Type': 'bind', 'Source': source, 'Destination': '/data', 'RW': True}]}
+            with self.subTest(source=source), patch.object(r, 'docker_capture', side_effect=[
+                    SimpleNamespace(stdout=foreign['Id'].encode()),
+                    SimpleNamespace(stdout=json.dumps([foreign]).encode())]), \
+                 patch('docker_windows_bind_isolation.prove_windows_bind_disjoint') as prove:
+                with self.assertRaisesRegex(r.ContainerRecoveryError, 'control/ledger'):
+                    r._assert_no_foreign_storage_consumers(
+                        SimpleNamespace(project=compose['name']), backend, frontend, compose)
+                prove.assert_not_called()
+
+    def test_windows_bind_dispatch_requires_qualified_proof_and_keeps_volume_guard(self):
+        proof, _, compose = self.fixture()
+        backend, frontend = proof['containers'].values()
+        foreign = {'Id': 'a'*64, 'Mounts': [
+            {'Type': 'bind', 'Source': r'D:\foreign\storage', 'Destination': '/storage', 'RW': True}]}
+        def responses():
+            return [SimpleNamespace(stdout=foreign['Id'].encode()),
+                    SimpleNamespace(stdout=json.dumps([foreign]).encode())]
+        with patch.object(r, 'docker_capture', side_effect=responses()), \
+             patch.object(r, '_retained_compose_state_root', return_value=Path('/retained/state')), \
+             patch('docker_windows_bind_isolation.prove_windows_bind_disjoint', return_value={'typed': 'proof'}) as prove, \
+             patch('docker_windows_bind_isolation.validate_windows_bind_disjoint_proof') as validate:
+            r._assert_no_foreign_storage_consumers(SimpleNamespace(project=compose['name']), backend, frontend, compose)
+            self.assertEqual(prove.call_args.args[3:], (r'D:\foreign\storage', Path('/retained/state')))
+            validate.assert_called_once_with({'typed': 'proof'}, source=r'D:\foreign\storage', container_id=foreign['Id'])
+        with patch.object(r, 'docker_capture', side_effect=responses()), \
+             patch.object(r, '_retained_compose_state_root', return_value=Path('/retained/state')), \
+             patch('docker_windows_bind_isolation.prove_windows_bind_disjoint', side_effect=ValueError('physical overlap')):
+            with self.assertRaisesRegex(r.ContainerRecoveryError, 'unresolved storage identity.*physical overlap'):
+                r._assert_no_foreign_storage_consumers(SimpleNamespace(project=compose['name']), backend, frontend, compose)
+        backend['Mounts'].append({'Type': 'volume', 'Name': 'control-vol', 'Destination': r.CONTROL_ROOT})
+        foreign['Mounts'].append({'Type': 'volume', 'Name': 'control-vol', 'Destination': '/foreign-control'})
+        with patch.object(r, 'docker_capture', side_effect=responses()), \
+             patch.object(r, '_retained_compose_state_root', return_value=Path('/retained/state')), \
+             patch('docker_windows_bind_isolation.prove_windows_bind_disjoint', return_value={'typed': 'proof'}), \
+             patch('docker_windows_bind_isolation.validate_windows_bind_disjoint_proof'):
+            with self.assertRaisesRegex(r.ContainerRecoveryError, 'control/ledger'):
+                r._assert_no_foreign_storage_consumers(SimpleNamespace(project=compose['name']), backend, frontend, compose)
+
     def test_owner_host_and_identity_cannot_be_fabricated(self):
         proof,auth,_=self.fixture()
         for key in ('host','owner_token'):
@@ -559,6 +670,224 @@ class AbruptStopTests(unittest.TestCase):
             with object_path.open('wb') as output: output.truncate(128*1024*1024+1)
             with self.assertRaisesRegex(r.ContainerRecoveryError,'exceeds its size/aggregate bound'):
                 invoke()
+
+    def _run_embedded_v5_inventory(self, *, v5, files=0, directories=1, runs=0,
+                                   bad_file=None, symlink_directory=False, ticks=None):
+        # Exercise the real embedded inventory, not copied cap logic or a large
+        # on-disk fixture. Other tests execute the complete helper on real files.
+        function=ast.parse(inspect.getsource(r._ledger_and_store_snapshot))
+        script=next(node.value.value for node in ast.walk(function)
+                    if isinstance(node,ast.Assign) and isinstance(node.value,ast.Constant)
+                    and isinstance(node.value.value,str)
+                    and any(isinstance(target,ast.Name) and target.id=='script' for target in node.targets))
+        start=script.index("v5=observation.get('v5_mode') is True\n")
+        finish=script.index("pins=observation.get('retained_cancelled_runs')",start)
+        class MetadataPath(type(Path())):
+            def is_symlink(self):return self.name=='symlink'
+            def is_file(self):return self.name!='not-a-file'
+        def entries(_):
+            for index in range(runs):
+                yield SimpleNamespace(name='run-'+str(index),is_symlink=lambda:False,is_dir=lambda **kwargs:True)
+        def walk(*args,**kwargs):
+            names=[bad_file] if bad_file else ['payload-'+str(index) for index in range(files)]
+            yield '/store',['symlink'] if symlink_directory else [],names
+            for index in range(1,directories):yield '/store/dir-'+str(index),[],[]
+        def clock():
+            if not v5:raise AssertionError('v4 inventory acquired a v5 time policy')
+            return next(ticks) if ticks is not None else 0
+        history={'run_id':'history','run_evidence_sha256':r._sha256(r._canonical({})),
+                 'attempts':[{'task_id':'task','attempt_id':'old','ownership_epoch':1,'resource_id':'cpu'}]}
+        namespace={'observation':{'v4_mode':True,'v5_mode':v5,'retained_attempt_histories':[history] if v5 else None},
+                   'store':MetadataPath('/store'),'runs':MetadataPath('/store/runs'),
+                   'pathlib':SimpleNamespace(Path=MetadataPath),'os':SimpleNamespace(scandir=entries,walk=walk),
+                   'time':SimpleNamespace(monotonic=clock),'hashlib':hashlib,'canonical':r._canonical}
+        constants=ast.parse(script[:script.index('def cas_identity(')])
+        constants.body=[node for node in constants.body if isinstance(node,ast.Assign)]
+        exec(compile(constants,'<actual-embedded-store-constants>','exec'),namespace)
+        exec(compile(script[start:finish],'<actual-embedded-v5-inventory>','exec'),namespace)
+        return namespace
+
+    def test_v5_inventory_file_boundaries_do_not_increase_v4_limit(self):
+        for v5,limit in ((False,8192),(True,32768)):
+            with self.subTest(v5=v5):
+                self.assertEqual(self._run_embedded_v5_inventory(v5=v5,files=limit)['count'],limit)
+                with self.assertRaisesRegex(RuntimeError,'inventory is unbounded'):
+                    self._run_embedded_v5_inventory(v5=v5,files=limit+1)
+        self.assertEqual(self._run_embedded_v5_inventory(v5=True,files=8193)['count'],8193)
+
+    def test_v5_inventory_directory_and_run_boundaries_preserve_v4(self):
+        self.assertEqual(self._run_embedded_v5_inventory(v5=True,directories=4096)['directory_count'],4096)
+        with self.assertRaisesRegex(RuntimeError,'directory inventory'):
+            self._run_embedded_v5_inventory(v5=True,directories=4097)
+        self.assertEqual(self._run_embedded_v5_inventory(v5=False,directories=4097)['directory_count'],4097)
+        self.assertEqual(len(self._run_embedded_v5_inventory(v5=True,runs=128)['run_dirs']),128)
+        with self.assertRaisesRegex(RuntimeError,'inventory is unbounded'):
+            self._run_embedded_v5_inventory(v5=True,runs=129)
+
+    def test_v5_inventory_timeout_and_invalid_entry_guards_are_executed(self):
+        for arguments,ticks in (({'runs':1},[0,30]),({},[0,30]),({'files':1},[0,0,30]),({},[0,0,30])):
+            with self.subTest(arguments=arguments),self.assertRaisesRegex(RuntimeError,'time bound'):
+                self._run_embedded_v5_inventory(v5=True,ticks=iter(ticks),**arguments)
+        for v5 in (False,True):
+            with self.subTest(v5=v5),self.assertRaisesRegex(RuntimeError,'contains a symlink'):
+                self._run_embedded_v5_inventory(v5=v5,symlink_directory=True)
+            for bad in ('symlink','not-a-file'):
+                with self.subTest(v5=v5,bad=bad),self.assertRaisesRegex(RuntimeError,'invalid file'):
+                    self._run_embedded_v5_inventory(v5=v5,bad_file=bad)
+
+    def _v5_fixture(self, root):
+        state=root/'state'; ledger=root/'ledger'; ledger.mkdir()
+        (ledger/'WRITER.lock').touch()
+        (ledger/'HOST_RESOURCE_LEDGER.json').write_text(json.dumps({'policy':{},'reservations':[]}))
+        store=state/'runs/docker-all/session-store'
+        payload=b'accepted v5 input'; ref=hashlib.sha256(payload).hexdigest()
+        (store/'objects/sha256').mkdir(parents=True); (store/'objects/pins').mkdir()
+        (store/'objects/sha256'/ref).write_bytes(payload)
+        (store/'objects/pins'/(ref+'.json')).write_text(json.dumps({'schema':'fullmag.cas-pin.v1','object_ref':ref}))
+        terminal=[]; held=[]; histories=[]
+        def write(path,value):
+            path.parent.mkdir(parents=True,exist_ok=True)
+            path.write_bytes(r._canonical(value))
+        for run_id in ('run-history-a','run-history-b','run-held'):
+            run=store/'runs'/run_id; run.mkdir(parents=True)
+            intent={'schema_version':'run_intent.v1','run_id':run_id,'idempotency_key':run_id,
+                    'payload_sha256':'e'*64,'definition_object_ref':ref,'specification':{'parameters':{}}}
+            task={'task_id':'task-1','input_fingerprint':'a'*64,'artifact_ids':[]}
+            if run_id=='run-held':
+                intent['specification']['parameters']['fullmag.accepted_run_start']={'schema_version':'accepted_run_start_policy.v1','mode':'manual'}
+                task.update(lifecycle='accepted',readiness={'state':'blocked','reason':'awaiting preparation'})
+            else:
+                task.update(lifecycle='succeeded',attempt_id='attempt-new',ownership_epoch=2,resource_id='cpu',readiness={'state':'ready'})
+            catalog={'schema_version':'run_catalog.v1','run_id':run_id,'revision':2,
+                     'updated_at':'2026-10-28T12:00:00Z','tasks':[task]}
+            write(run/'run_intent.json',intent); write(run/'run_catalog.json',catalog)
+            pin={'run_id':run_id,'run_intent_sha256':r._sha256((run/'run_intent.json').read_bytes()),
+                 'run_catalog_sha256':r._sha256((run/'run_catalog.json').read_bytes())}
+            if run_id=='run-held':
+                held.append({**pin,'start_release':'absent'}); continue
+            terminal.append({**pin,'artifact_catalog_sha256':None})
+            old={'task_id':'task-1','attempt_id':'attempt-old','ownership_epoch':1,'resource_id':'cpu'}
+            for attempt,epoch in (('attempt-old',1),('attempt-new',2)):
+                lease={'schema_version':'resource_lease.v1','resource_id':'cpu','kind':'cpu',
+                       'budget':{'cpu_millis':1,'memory_bytes':0,'gpu_memory_bytes':0,'storage_bytes':0},
+                       'run_id':run_id,'task_id':'task-1','attempt_id':attempt,'ownership_epoch':epoch,
+                       'lease_token':'private-fixture-'+attempt,'state':'released','heartbeat_sequence':0,
+                       'acquired_at':'2026-10-28T12:00:00Z','heartbeat_at':'2026-10-28T12:00:01Z',
+                       'released_at':'2026-10-28T12:00:02Z'}
+                write(run/'resource_leases/cpu'/(attempt+'.json'),lease)
+                admitted={**task,'attempt_id':attempt,'ownership_epoch':epoch,'lifecycle':'preparing'}
+                write(run/'task_admissions/task-1'/(attempt+'.json'),{'task':admitted,'lease':{**lease,'state':'active'}})
+            write(run/'retry_decisions/retry-1.json',{'schema_version':'retry_decision.v1','decision_id':'retry-1',
+                  'run_id':run_id,**{key:old[key] for key in ('task_id','attempt_id','ownership_epoch')},
+                  'trigger':'explicit_operator_request','action':'retry','reason':'operator retry',
+                  'created_at':'2026-10-28T12:00:03Z'})
+            write(run/'worker_process_exit_receipts/exit-old.json',{
+                'schema_version':'worker_process_exit_receipt.v1','receipt_id':'exit-old','run_id':run_id,**old,
+                'lease_token':'private-fixture-attempt-old','lease_heartbeat_sequence':0,'process_id':123,
+                'status_success':False,'exit_code':1,'timed_out':False,'stop_requested':False,
+                'observed_at':'2026-10-28T12:00:02Z'})
+            # Raw stream content is pinned here; deep typed journal/heartbeat
+            # qualification belongs to the mandatory native preview tests.
+            write(run/'worker_inboxes/old.json',{'pending':None,'applied_count':2,'commands_count':3})
+            histories.append({'run_id':run_id,'run_evidence_sha256':'0'*64,'attempts':[old]})
+        backend={'Image':'sha256:'+'d'*64,'Mounts':[
+            {'Type':'bind','Source':str(state),'Destination':'/state','RW':True},
+            {'Type':'bind','Source':str(root),'Destination':'/host-ledger','RW':True}]}
+        def repin():
+            for history in histories:
+                run=store/'runs'/history['run_id']
+                raw={path.relative_to(run).as_posix():r._sha256(path.read_bytes())
+                     for path in run.rglob('*') if path.is_file()}
+                history['run_evidence_sha256']=r._sha256(r._canonical(raw))
+        repin()
+        def invoke(v5=True):
+            def execute(argv,**kwargs):
+                script=argv[-2].replace("pathlib.Path('/state/runs/docker-all/session-store')",'pathlib.Path('+repr(str(store))+')').replace("pathlib.Path('/host-ledger/ledger')",'pathlib.Path('+repr(str(ledger))+')')
+                return subprocess.run([sys.executable,'-B','-c',script,argv[-1]],capture_output=True)
+            with patch.object(r,'bounded_capture',side_effect=execute):
+                return r._ledger_and_store_snapshot(SimpleNamespace(project='fullmag-master'),backend,
+                    retained_terminal_runs=terminal,retained_held_manual_runs=held,
+                    **({'retained_attempt_histories':histories} if v5 else {}))
+        return store,terminal,held,histories,repin,invoke
+
+    def test_v5_preflight_reads_two_failed_retry_histories_and_v4_still_refuses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store,terminal,held,histories,repin,invoke=self._v5_fixture(Path(directory))
+            observed=invoke()
+            self.assertEqual(observed['retained_attempt_histories'],histories)
+            self.assertEqual(observed['run_records'],sorted(terminal+held,key=lambda item:item['run_id']))
+            with self.assertRaisesRegex(r.ContainerRecoveryError,'unsupported historical retry'):
+                invoke(v5=False)
+
+    def test_v5_full_run_digest_rejects_changed_or_additional_stream_evidence(self):
+        for change in ('changed','additional'):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                store,_,_,histories,_,invoke=self._v5_fixture(Path(directory))
+                run=store/'runs'/histories[0]['run_id']
+                path=run/('worker_inboxes/old.json' if change=='changed' else 'unexpected.json')
+                path.write_bytes(b'{"changed":true}')
+                with self.assertRaisesRegex(r.ContainerRecoveryError,'full run evidence inventory/digest'):
+                    invoke()
+
+    def test_v5_history_identity_guards_refuse_even_after_explicit_digest_repin(self):
+        for change in ('active','token','resource','missing_admission','missing_exit','missing_retry','wrong_exit','epoch_gap','unknown_lease'):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                store,terminal,held,histories,repin,invoke=self._v5_fixture(Path(directory))
+                run=store/'runs'/histories[0]['run_id']
+                lease_path=run/'resource_leases/cpu/attempt-old.json'
+                if change in ('active','token','resource','unknown_lease'):
+                    lease=json.loads(lease_path.read_bytes())
+                    if change=='active':lease['state']='active'
+                    elif change=='token':lease['lease_token']='foreign'
+                    elif change=='resource':lease['resource_id']='foreign'
+                    else:lease['attempt_id']='unknown'
+                    lease_path.write_bytes(r._canonical(lease))
+                elif change=='missing_admission':(run/'task_admissions/task-1/attempt-old.json').unlink()
+                elif change=='missing_exit':(run/'worker_process_exit_receipts/exit-old.json').unlink()
+                elif change=='missing_retry':(run/'retry_decisions/retry-1.json').unlink()
+                elif change=='wrong_exit':
+                    path=run/'worker_process_exit_receipts/exit-old.json'; record=json.loads(path.read_bytes())
+                    record['lease_heartbeat_sequence']=1;path.write_bytes(r._canonical(record))
+                else:
+                    path=run/'run_catalog.json'; catalog=json.loads(path.read_bytes());catalog['tasks'][0]['ownership_epoch']=3
+                    path.write_bytes(r._canonical(catalog));terminal[0]['run_catalog_sha256']=r._sha256(path.read_bytes())
+                repin()
+                with self.assertRaises(r.ContainerRecoveryError):invoke()
+
+    def test_v5_request_history_shape_subset_bounds_and_legacy_refusals(self):
+        terminal={'run_id':'terminal','run_intent_sha256':'1'*64,'run_catalog_sha256':'2'*64,'artifact_catalog_sha256':None}
+        held={'run_id':'held','run_intent_sha256':'3'*64,'run_catalog_sha256':'4'*64,'start_release':'absent'}
+        claim={'task_id':'task','attempt_id':'old','ownership_epoch':1,'resource_id':'cpu'}
+        history={'run_id':'terminal','run_evidence_sha256':'5'*64,'attempts':[claim]}
+        request={'schema_version':r.ATTEMPT_HISTORY_REQUEST_SCHEMA,'retained_terminal_runs':[terminal],
+                 'retained_held_manual_runs':[held],'retained_attempt_histories':[history]}
+        self.assertEqual(r.expected_recovery_outcome(request),'retained_attempt_history_recovered')
+        for schema in (r.REQUEST_SCHEMA,r.RETAINED_REQUEST_SCHEMA,r.TERMINAL_REQUEST_SCHEMA,r.HELD_MANUAL_REQUEST_SCHEMA):
+            with self.subTest(schema=schema), self.assertRaisesRegex(r.ContainerRecoveryError,'require v5'):
+                r.expected_recovery_outcome({**request,'schema_version':schema})
+        for bad in ([],[{**history,'run_id':'held'}],[{**history,'run_evidence_sha256':'bad'}],
+                    [{**history,'attempts':[]}],[{**history,'attempts':[claim,claim]}],
+                    [{**history,'attempts':[{**claim,'ownership_epoch':True}]}]):
+            with self.subTest(bad=bad), self.assertRaises(r.ContainerRecoveryError):
+                r.expected_recovery_outcome({**request,'retained_attempt_histories':bad})
+        claims=[{**claim,'task_id':'task-'+str(i),'attempt_id':'attempt-'+str(i)} for i in range(128)]
+        r.expected_recovery_outcome({**request,'retained_attempt_histories':[{**history,'attempts':claims}]})
+        with self.assertRaisesRegex(r.ContainerRecoveryError,'exceeds 128'):
+            r.expected_recovery_outcome({**request,'retained_attempt_histories':[{**history,'attempts':claims+[dict(claim)]}]})
+
+    def test_v5_abrupt_request_history_cas_requires_matching_proof_version_and_pins(self):
+        terminal={'run_id':'terminal','run_intent_sha256':'1'*64,'run_catalog_sha256':'2'*64,'artifact_catalog_sha256':None}
+        held={'run_id':'held','run_intent_sha256':'3'*64,'run_catalog_sha256':'4'*64,'start_release':'absent'}
+        history={'run_id':'terminal','run_evidence_sha256':'5'*64,'attempts':[{
+            'task_id':'task','attempt_id':'old','ownership_epoch':1,'resource_id':'cpu'}]}
+        request={'schema_version':r.ATTEMPT_HISTORY_REQUEST_SCHEMA,'retained_terminal_runs':[terminal],
+                 'retained_held_manual_runs':[held],'retained_attempt_histories':[history]}
+        proof={'schema':r.ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA,**{key:value for key,value in request.items() if key!='schema_version'}}
+        r._assert_request_matches_abrupt_retained_pins(request,proof)
+        with self.assertRaises(r.ContainerRecoveryError):
+            r._assert_request_matches_abrupt_retained_pins({**request,'retained_attempt_histories':[]},proof)
+        with self.assertRaises(r.ContainerRecoveryError):
+            r._assert_request_matches_abrupt_retained_pins(request,{**proof,'schema':r.ABRUPT_PROOF_HELD_MANUAL_SCHEMA})
 
     def test_v4_snapshot_accepts_exact_held_manual_inventory_and_rejects_release_or_unknown_evidence(self):
         def make_state(root):

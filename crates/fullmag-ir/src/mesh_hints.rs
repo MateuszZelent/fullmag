@@ -1738,7 +1738,11 @@ pub struct MeshIR {
     pub periodic_boundary_pairs: Vec<MeshPeriodicBoundaryPairIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub periodic_node_pairs: Vec<MeshPeriodicNodePairIR>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "HashMap::is_empty",
+        serialize_with = "serialize_ordered_mesh_quality"
+    )]
     pub per_domain_quality: HashMap<u32, MeshQualityIR>,
 }
 
@@ -1759,6 +1763,18 @@ impl Default for MeshIR {
             per_domain_quality: HashMap::new(),
         }
     }
+}
+
+// Mesh bytes are used by sampling topology digests. HashMap iteration order
+// must not change the identity when the same accepted mesh is read again.
+fn serialize_ordered_mesh_quality<S>(
+    values: &HashMap<u32, MeshQualityIR>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    values.iter().collect::<BTreeMap<_, _>>().serialize(serializer)
 }
 
 fn deserialize_canonical_u32_keyed_mesh_quality<'de, D>(
@@ -5132,6 +5148,59 @@ mod mesh_validation_tests {
             },
             provenance: crate::ProvenancePlanIR::default(),
         }
+    }
+
+    #[test]
+    fn mesh_quality_serialization_is_numeric_ordered_and_repeatable() {
+        let base = MeshIR::default();
+        let base_json = serde_json::to_string(&base).unwrap();
+        let quality = mesh_quality_fixture(208);
+        let quality_json = serde_json::to_string(&quality).unwrap();
+        let expected = format!(
+            "{},\"per_domain_quality\":{{\"1\":{},\"2\":{},\"10\":{}}}}}",
+            &base_json[..base_json.len() - 1], quality_json, quality_json, quality_json,
+        );
+        for keys in [[10, 2, 1], [1, 2, 10]] {
+            for _ in 0..64 {
+                let mut mesh = base.clone();
+                for key in keys {
+                    mesh.per_domain_quality.insert(key, quality.clone());
+                }
+                let bytes = serde_json::to_vec(&mesh).unwrap();
+                assert_eq!(bytes, expected.as_bytes());
+                let decoded: MeshIR = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(serde_json::to_vec(&decoded).unwrap(), bytes);
+                assert_eq!(decoded, mesh);
+            }
+        }
+    }
+
+    #[test]
+    fn mesh_quality_serialization_preserves_empty_and_single_domain_bytes() {
+        let mut mesh = MeshIR::default();
+        let empty = serde_json::to_string(&mesh).unwrap();
+        assert!(!empty.contains("per_domain_quality"));
+        let quality = mesh_quality_fixture(208);
+        let expected = format!(
+            "{},\"per_domain_quality\":{{\"0\":{}}}}}",
+            &empty[..empty.len() - 1], serde_json::to_string(&quality).unwrap(),
+        );
+        mesh.per_domain_quality.insert(0, quality);
+        assert_eq!(serde_json::to_string(&mesh).unwrap(), expected);
+    }
+
+    #[test]
+    fn mesh_quality_serialization_retains_topology_and_quality_changes() {
+        let mut mesh = base_mesh(vec![[0, 1, 2, 3]]);
+        mesh.per_domain_quality.insert(0, mesh_quality_fixture(208));
+        mesh.per_domain_quality.insert(1, mesh_quality_fixture(86));
+        let original = serde_json::to_vec(&mesh).unwrap();
+        let mut moved = mesh.clone();
+        moved.nodes[0][0] += 1.0;
+        assert_ne!(serde_json::to_vec(&moved).unwrap(), original);
+        let mut changed_quality = mesh;
+        changed_quality.per_domain_quality.get_mut(&1).unwrap().n_elements += 1;
+        assert_ne!(serde_json::to_vec(&changed_quality).unwrap(), original);
     }
 
     #[test]

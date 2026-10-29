@@ -361,3 +361,102 @@
     border-top-width: 1px;
   }
 }
+
+/* Field samples describe only numerical field evaluation, not publication. */
+.fm-footer-telemetry__antenna-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--fm-space-2);
+  flex: 1 1 280px;
+  min-width: 0;
+  max-width: 720px;
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-footer-telemetry__antenna-progress-label,
+.fm-footer-telemetry__antenna-progress-count {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.fm-footer-telemetry__antenna-progress .fm-progress {
+  flex: 1 1 80px;
+  min-width: 32px;
+}
+
+.fm-footer-telemetry__antenna-progress .fm-progress[data-state="indeterminate"] .fm-progress__indicator {
+  width: 35%;
+  background: var(--fm-text-muted);
+}
+
+.fm-footer-telemetry__antenna-progress[data-active="true"] .fm-progress[data-state="indeterminate"] .fm-progress__indicator {
+  animation: fm-antenna-field-indeterminate 1.4s ease-in-out infinite;
+}
+
+.fm-footer-telemetry__antenna-progress[data-active="false"] .fm-progress[data-state="indeterminate"] .fm-progress__indicator {
+  transform: none !important;
+}
+
+.fm-footer-telemetry__antenna-progress[data-active="false"] .fm-progress__indicator {
+  transition: none;
+}
+
+@keyframes fm-antenna-field-indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(380%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fm-footer-telemetry__antenna-progress .fm-progress__indicator {
+    animation: none !important;
+    transition: none;
+  }
+}
+
+.fm-footer-telemetry-tabs {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.fm-footer-telemetry-tabs__list {
+  flex: 0 0 auto;
+  min-height: 24px;
+  padding-inline: var(--fm-space-2);
+  border-bottom: 1px solid var(--fm-border-subtle);
+}
+
+.fm-footer-telemetry-tabs__content {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+}
+
+.fm-footer-telemetry-tabs__content > .fm-footer-telemetry {
+  height: 100%;
+}
+
+.fm-footer-telemetry__empty {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fm-space-2);
+  padding: var(--fm-space-3);
+  font-size: var(--fm-font-size-xs);
+  color: var(--fm-text-secondary);
+}
+
+.fm-footer-telemetry__antenna-eta {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fm-text-tertiary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

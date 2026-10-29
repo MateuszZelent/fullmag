@@ -69,6 +69,7 @@ class _Control:
     volume = project + "-control"
     namespace = ""
     namespace_registry_sha256 = None
+    namespace_registry = None
     image = TOOLCHAIN_IMAGE
 
     def __init__(self, events: list[object]) -> None:

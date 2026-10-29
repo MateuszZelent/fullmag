@@ -1,6 +1,8 @@
+import { isTensorFrobeniusSurfaceField } from "@/kernel/api/tensorFieldProjection";
 import { srgbToLinearChannel } from "../viewport3dColorSpace";
 import {
   buildSurfaceFaceScalarColors,
+  buildTensorSurfaceColorBufferChunked,
   buildThicknessAverageZScalarColors,
   buildVertexScalarColorsChunked,
   fieldVectorSupportsScalarColorMode,
@@ -66,6 +68,7 @@ export async function buildViewport3DFieldColorBuffer({
   ...options
 }: Viewport3DFieldColorBuildModelInput): Promise<ScalarColorBuffer | null> {
   if (fieldVector.pointCount === 0) return null;
+  if (isTensorFrobeniusSurfaceField(fieldVector)) return buildTensorSurfaceColorBufferChunked(fieldVector, target, options);
 
   switch (target.kind) {
     case "full-domain":
@@ -137,6 +140,7 @@ export function estimateViewport3DFieldColorBuildOutputBytes({
   shaderOnly,
   target,
 }: Viewport3DFieldColorBuildByteEstimateInput): number {
+  if (isTensorFrobeniusSurfaceField(fieldVector)) return (target.kind === "full-domain" ? target.vertexCount : resolveTargetVertexCount(fieldVector, target)) * 9 * Float32Array.BYTES_PER_ELEMENT;
   const resolvedColorMode = normalizeViewport3DVectorColorMode(
     colorMode,
     "magnitude",
@@ -545,7 +549,7 @@ function shaderVectorModeSupports(
   mode: Viewport3DVectorColorMode,
   fieldVector: Viewport3DFieldVector,
 ): boolean {
-  return mode === "orientation" && fieldVector.nComp >= 3;
+  return mode === "orientation" && fieldVector.nComp === 3;
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {

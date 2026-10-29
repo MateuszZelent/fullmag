@@ -1735,6 +1735,12 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
     )
     parallel_execution = parallel_execution_policy.to_ir()
 
+    solver = copy.deepcopy(builder.get("solver") or {})
+    # SceneDocument represents an unauthored integrator as an empty string.
+    # Field-only studies must not acquire a default magnetic integrator.
+    if "integrator" in solver and solver["integrator"] is None:
+        solver["integrator"] = ""
+
     document = {
         "version": "scene.v2",
         "revision": int(builder.get("revision", 0)),
@@ -1770,7 +1776,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "demag_realization": builder.get("demag_realization"),
             "external_field": builder.get("external_field"),
             "rotated_interfacial_dmi": builder.get("rotated_interfacial_dmi"),
-            "solver": builder.get("solver") or {},
+            "solver": solver,
             "universe_mesh": builder.get("universe"),
             "shared_domain_mesh": builder.get("mesh") or {},
             "mesh_defaults": builder.get("mesh") or {},

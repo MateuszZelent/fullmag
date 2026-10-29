@@ -120,7 +120,7 @@ pub struct AntennaFieldSolutionResource {
     pub bases: Vec<AntennaFieldBasisResource>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct AntennaSampleCarrierResource {
     pub domain: AntennaFieldTargetResource,
@@ -167,7 +167,7 @@ pub struct AntennaStageOutputCatalogResource {
     pub content_digest: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AntennaFieldTargetResource {
     Global,

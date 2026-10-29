@@ -101,7 +101,10 @@ export function committedAntennaPortScene(
   if (!expectedSceneId.trim() || !scene || scene.scene?.id !== expectedSceneId || scene.revision !== response.scene_revision ||
       (scene.scene_revision !== undefined && scene.scene_revision !== response.scene_revision) || matches.length !== 1 ||
       mode.source_object_id !== objectId || mode.schema_version !== expectedPort.schema_version ||
-      mode.normalization_current_a !== expectedPort.normalization_current_a || !antennaPortDraftMatches(mode, submitted) ||
+      mode.normalization_current_a !== expectedPort.normalization_current_a ||
+      mode.normalization?.kind !== expectedPort.normalization?.kind ||
+      mode.normalization?.source_cut_ref !== expectedPort.normalization?.source_cut_ref ||
+      mode.normalization?.orientation !== expectedPort.normalization?.orientation || !antennaPortDraftMatches(mode, submitted) ||
       antennaPortValidationMessages(mode, scene).length > 0) {
     throw new Error("Port ACK omitted or changed the submitted scene. Refresh and explicitly rebase or revert before applying again.");
   }

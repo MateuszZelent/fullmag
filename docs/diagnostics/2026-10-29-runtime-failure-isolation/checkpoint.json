@@ -1,0 +1,199 @@
+{
+  "schema": "fullmag.runtime-failure-isolation-checkpoint.v1",
+  "baseline_head": "b2b159c58fb921efbf278c120d12d268d958d03b",
+  "new_backend_deployed": true,
+  "tests_run": false,
+  "source_sha256": {
+    "apps/control-room/src/kernel/layout/WorkspaceShellClient.tsx": "6ffbf078375174c169531850a057bf78ec21bfe85d0511319e7104401e4d7691",
+    "crates/fullmag-api/src/accepted_scheduler_main.rs": "70c5bf29967a1b22eab9e9ab4415af7eb2fd332a4633ee5c2219fae10c30c2ce",
+    "crates/fullmag-api/src/development_accepted_restore/terminal_observation.rs": "8f4d5276da932782648bca8b1ab1567df3c7c0c05adc9ad9cef3da981eb8b7cc",
+    "crates/fullmag-api/src/router_v2/handlers/platform/development_restart.rs": "0a60d54d8fd2b2b2199b204baaf0c025fbb49d822aee3f6a4aaaee9140937a49",
+    "crates/fullmag-api/src/router_v2/middleware/development_admission.rs": "9926609e511eac9ff470df6c013f9eca22116d5bd745d54aa6b41aecfcdd65c2",
+    "crates/fullmag-api/src/run_intent_persistence.rs": "d1aabe0e47f05f742788a9a32733680aef6944caba581b9ed2c294ec3253d55c",
+    "crates/fullmag-authoring/src/geometry.rs": "e111d1cc3badd27860f2a9d5b7c619e20a23bb86106800f7ceb98350a64c46c9",
+    "crates/fullmag-runtime-control/src/application_service_status.rs": "6811696029747c35994f38027aaa53deb4c1db2609a12b5362d198272eda4155",
+    "crates/fullmag-runtime-control/src/lib.rs": "79a27eb0f0a749985c1d05e76c59f88ff76f98b57e674987d6c9dc8a819d0a3e",
+    "crates/fullmag-runtime-control/src/study.rs": "ca0c12c94a93ec46e87e5c24a3c9741948272474e663c1c833783f828326b89b",
+    "docker/all-in-one/runtime_service.py": "6518f5311bcf8870016e25fecbd31bade6653228a37a7695e67668e7db0ac8e0",
+    "scripts/docker_dev.py": "a8133c6faaa8781570fbb35ca51caf3930fd9d8e87e40df49afb3ffe0288d775",
+    "scripts/docker_dev_browser_qa.py": "3be47386fe125ea5e3e0fac4abc8490b8a18116db763e55c7ea5ca542d1cddbf",
+    "scripts/docker_volume_catalog_failure.py": "fef16e04807d7963314d82354bd7466d1ff840eb97fe8f4d5e64341cff0e717e",
+    "scripts/docker_volume_dev.py": "a5f77398471ffb7a419026a1836afb1ba660ae54dd9958dc547d18c2f3d96bef",
+    "scripts/docker_volume_fresh_runtime.py": "7c4aa49405f4354e864773e5f43a3f463ea2f0276b45939bbf7596cb75082b99",
+    "scripts/docker_volume_preowner_drained.py": "a4ecff65a7cd8482fdb916c5b4a0d64a8a9885bf75cac2a2fd4960ea9cf07a73",
+    "scripts/docker_volume_preparation_abort.py": "f5837319300201ef3efed8a7a575753cf7117dd479f34bb167487d0327c65bcc",
+    "scripts/docker_volume_stop_diagnostic.py": "3be63c911334bac0a4856a35b61293c626d7d4410ea98496672654346f926c37",
+    "scripts/docker_volume_stop_preowner_policy.py": "2ed64ec47df05ee10a38d53402113c6d8d61ac4e30ac073db760582a47532b51",
+    "scripts/docker_volume_terminal_observation.py": "73a90f2bc9b0f078a24efecfb1e2d3e493f731371ac5d215af554572c206aef4"
+  },
+  "frontend_source_checks": {
+    "schema": "fullmag.runtime-feedback-source-check.v1",
+    "project": "fullmag-master",
+    "backend": "a774324c4df8",
+    "frontend": "0463d3925bae",
+    "source_head": "b2b159c58fb921efbf278c120d12d268d958d03b",
+    "source_sha256": "6ffbf078375174c169531850a057bf78ec21bfe85d0511319e7104401e4d7691",
+    "commands": [
+      {
+        "name": "typecheck",
+        "state": "succeeded",
+        "stdout": {
+          "path": "verification/runtime-feedback-20261029-r6/typecheck.stdout.log",
+          "sha256": "cf9de4c3ae46843b6648e07da6c5166871daa9af7176398ee19675dbda793197",
+          "bytes": 190
+        },
+        "stderr": {
+          "path": "verification/runtime-feedback-20261029-r6/typecheck.stderr.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        "exit_code": 0,
+        "duration_ms": 4717
+      },
+      {
+        "name": "eslint",
+        "state": "succeeded",
+        "stdout": {
+          "path": "verification/runtime-feedback-20261029-r6/eslint.stdout.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        "stderr": {
+          "path": "verification/runtime-feedback-20261029-r6/eslint.stderr.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        "exit_code": 0,
+        "duration_ms": 4790
+      },
+      {
+        "name": "architecture",
+        "state": "succeeded",
+        "stdout": {
+          "path": "verification/runtime-feedback-20261029-r6/architecture.stdout.log",
+          "sha256": "e9fc7f3f7fd9315350add99d4205125473266d064e98b1192b18fc8d6da0ba43",
+          "bytes": 187
+        },
+        "stderr": {
+          "path": "verification/runtime-feedback-20261029-r6/architecture.stderr.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        "exit_code": 0,
+        "duration_ms": 2830
+      }
+    ],
+    "state": "succeeded"
+  },
+  "terminal_inspection": {
+    "run_id": "run-live-f83f7552cf05f87b1eeb213f88de34fbf9202abcbf918bfa8634bb8f17db68c1",
+    "native_config_sha256": "4bfee3acb8bcec75b46cd2f1a98b913acbeb032f7bc956ed8ddcf56a4e0e0f5e",
+    "terminal_evidence_sha256": "88ffe5c5ad1dbf345bc527791779476ed07b65b736e0d392da62ebf0b45f889c",
+    "mutations_applied": false,
+    "solve_replayed": false
+  },
+  "react_doctor": {
+    "schema": "fullmag.runtime-feedback-source-check.v1",
+    "project": "fullmag-master",
+    "backend": "9c922b6b237e",
+    "frontend": "ecbe33b0833f",
+    "source_head": "b2b159c58fb921efbf278c120d12d268d958d03b",
+    "source_sha256": "897055e7bba6b4d14bcbcdda7159bb1f90427270220fbb7a8324e2d4a6a07784",
+    "commands": [
+      {
+        "name": "react-doctor",
+        "state": "failed",
+        "stdout": {
+          "path": "verification/runtime-feedback-doctor-20261029-r5/react-doctor.stdout.log",
+          "sha256": "7a20a0df8bdab6870ede6f4f16d51020985b3f7b3388a1fb8b7494d2d1e3d86b",
+          "bytes": 55396
+        },
+        "stderr": {
+          "path": "verification/runtime-feedback-doctor-20261029-r5/react-doctor.stderr.log",
+          "sha256": "aeeed97d42bbee4aa86669a0e3e9987eed354dfe9729ae5f36a13e50406af7d6",
+          "bytes": 80
+        },
+        "exit_code": 1,
+        "error": "\u001b[33mNo feature branch or uncommitted changes detected. Running full scan.\u001b[39m",
+        "duration_ms": 63818
+      }
+    ],
+    "state": "not-verified",
+    "error": "\u001b[33mNo feature branch or uncommitted changes detected. Running full scan.\u001b[39m",
+    "scope_note": "Requested scope changed; tool reported no Git changes in frontend shadow and fell back to full scan. Exit1 is not a clean changed-file result; inspect existing diagnostics separately.",
+    "changed_file_context": {
+      "requested_scope": "changed",
+      "actual_scope": "full-fallback-no-git-shadow",
+      "changed_file_contexts": []
+    }
+  },
+  "development": {
+    "attempt": "7e0b39179f574e778e8cd7aebf5f70a3",
+    "make_exit_code": 0,
+    "make_duration_ms": 215979,
+    "snapshot": "dbe0b3f2e6ae4a5bca5a648cacc00a09501598fb71e98d69c16961b3e644b36e",
+    "native_startup": "budget-policy-refused",
+    "diagnostic_health_http": 200,
+    "active_session": false,
+    "current_status_http": 503
+  },
+  "saved_budget": {
+    "memory_bytes": 137438953472,
+    "cpus": 16,
+    "receipt_sha256": "5920d03474e1a711a806eb76336b636a82a5ae26cb8aad3ffc98ab9396177cd1"
+  },
+  "preowner_stop": {
+    "attempt": "fbdb810c22074d9799f6eab2cc7c06b0",
+    "state": "succeeded",
+    "journal_sha256": "efeff7eb6848bfd7463d8860b56cb1a6406e5cbf523d1fb5849373632d68d682",
+    "native_drain_performed": false,
+    "data_preserved": true
+  },
+  "updated_at_utc": "2026-10-29T03:07:14.568445+00:00",
+  "successor_resources": {
+    "id": "a774324c4df8747fa34d060b22f1342399a557d1107ae554e605922d24b9f66c",
+    "running": true,
+    "status": "running",
+    "memory_bytes": 137438953472,
+    "nano_cpus": 16000000000,
+    "native_memory_bytes": "137438953472",
+    "native_cpu_millis": "16000",
+    "cargo_build_jobs": "16"
+  },
+  "recreate_services": {
+    "attempt": "1a4403619e49428fb69d5ccfbb6f558a",
+    "state": "succeeded"
+  },
+  "completed_observation_reader": {
+    "attempt": "f16c1cd4b19f4d7cadef35aaaeb0673f",
+    "config_sha256": "eb12c9883070fbff68b6471b90e4760ee25383111f58f82c4d2d93da29070554",
+    "state": "failed-confirmed",
+    "native_restore": "completed-installed",
+    "python_receipt_reader": "hardcoded-failed-refused",
+    "diagnostic_api_preserved": true,
+    "new_computation_replayed": false
+  },
+  "diagnostic_terminal_stop": {
+    "attempt": "14c18bb027364c53a8712dba441052e9",
+    "state": "succeeded",
+    "native_drain_authenticated": true,
+    "backend_exit_code": 1,
+    "original_error_retained": true
+  },
+  "terminal_restore_field_limit": "Terminal observation hydration constructs a shell with no latest_fields/fem_mesh; existing GET routes do not hydrate saved fields. Native Completed install alone does not qualify mesh/m/H_demag rendering.",
+  "current_runtime": {
+    "development_attempt": "80088b44d21c497199550c8857ed14c6",
+    "config_sha256": "7e370a5ec8a4ce75de76826247470820fa593ca57f0696c9b6e12db1bbc72369",
+    "backend_container": "4bad825625c0ada691a8bb2eb54536867294a4a188c1f0f87a3fbd073d042059",
+    "source_snapshot": "fd3cc159005bee251f8f876df7174c3bcef2dc183489146ed370dcb7dc2e42b1",
+    "state": "healthy-native-ready"
+  },
+  "current_simulation": {
+    "run_id": "run-live-d06087ec50780f18efb6b3bf47d774c839cae891da150dfb7a602c6d6086d7e8",
+    "completed_step_count": 10,
+    "fields_complete": true,
+    "browser_attempt": "af947a0a399c4f8b828d179839115353",
+    "browser_state": "passed",
+    "proof": "../2026-10-29-cofeb-master-current/runtime-evidence.json"
+  }
+}

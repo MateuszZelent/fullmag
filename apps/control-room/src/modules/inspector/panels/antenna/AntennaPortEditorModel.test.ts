@@ -155,4 +155,28 @@ describe("existing antenna port editor transactions", () => {
     check((value) => { value.committed_scene.antenna_port_modes![0].normalization_current_a = 2; });
     check((value) => { value.committed_scene.current_transports = []; });
   });
+
+  it("rejects an ACK that replaces the immutable v3 source-cut normalization and its scene binding", () => {
+    const { scene, port } = fixture();
+    port.schema_version = "antenna_port_mode.v3";
+    port.normalization = { kind: "source_cut_rt0", source_cut_ref: "cut", orientation: "minus_outward" };
+    Object.assign(scene.current_transports![0], { conservative_current_source: {
+      schema_version: "conservative_current_source.v2", kind: "closed_geometry_potential_jump", object_id: "signal",
+      closure: { kind: "closed_geometry", source_cuts: [{ id: "cut" }] },
+      terminal_observations: ["signal", "return"].flatMap(part => [
+        { id: `${part}-in`, part_id: part, selector: "local_u_min" },
+        { id: `${part}-out`, part_id: part, selector: "local_u_max" },
+      ]),
+    } });
+    const draft = { ...createAntennaPortDraft(port, "owner-A", 7), dirty: true };
+    const response = applyDraft(scene, draft);
+    expect(committedAntennaPortScene(response, draft, "signal", "port", "session-A", port)).toBe(response.committed_scene);
+    const changed = structuredClone(response);
+    changed.committed_scene.antenna_port_modes![0].normalization!.source_cut_ref = "changed-cut";
+    Object.assign(changed.committed_scene.current_transports![0], { conservative_current_source: {
+      ...(scene.current_transports![0].conservative_current_source as Record<string, unknown>),
+      closure: { kind: "closed_geometry", source_cuts: [{ id: "changed-cut" }] },
+    } });
+    expect(() => committedAntennaPortScene(changed, draft, "signal", "port", "session-A", port)).toThrow("Port ACK");
+  });
 });

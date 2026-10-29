@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/kernel/resources/useSessionStatus", () => ({
+  SESSION_STATUS_RESOURCE_KEY: "session:status",
   useSessionResourceIdentity: () => mocks.identity,
   useSessionStatusSelector: (selector: (value: never) => unknown) =>
     selector({ data: { domain: { discretization: "fem" } } } as never),

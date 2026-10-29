@@ -988,7 +988,15 @@ export function useViewport3DChunkedScalarColors({
           ) {
             return;
           }
-          const colors = await buildVertexScalarColorsOffMainThread(
+          const tensorCarrierKey = JSON.stringify([fieldBufferId, chunkedFieldVectorObjectId(fieldVector),
+            topologyRevision ?? topology.meshRevision, partId, target.kind,
+            "targetNodeIndices" in target && target.targetNodeIndices ? chunkedFieldVectorObjectId(target.targetNodeIndices) : 0,
+            "surfaceIndices" in target ? chunkedFieldVectorObjectId(target.surfaceIndices) : 0,
+            "positions" in target ? chunkedFieldVectorObjectId(target.positions) : 0]);
+          const previousTensor = partEntries.get(partId)?.get(mode);
+          const reusedTensor = previousTensor?.tensorRows && previousTensor.tensorCarrierKey === tensorCarrierKey
+            ? { ...previousTensor, colorPalette: palette, range: scalarRange ?? previousTensor.range } : null;
+          const colors = reusedTensor ?? await buildVertexScalarColorsOffMainThread(
             fieldVector,
             {
               buildKey: fieldColorBuildReference?.buildKey,
@@ -1004,6 +1012,7 @@ export function useViewport3DChunkedScalarColors({
               yieldToMain: yieldToViewport3DMainThread,
             },
           );
+          if (colors.tensorRows) colors.tensorCarrierKey = tensorCarrierKey;
           const entry = attachViewport3DFieldColorBuildReference(
             colors,
             fieldColorBuildReference,

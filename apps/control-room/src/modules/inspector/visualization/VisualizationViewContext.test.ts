@@ -95,4 +95,24 @@ describe("visualization view context", () => {
       }),
     ).toEqual({ kind: "layer", scope_id: "bottom" });
   });
+
+  it("maps object region selections to the region scope with their owner object", () => {
+    expect(
+      planarViewScopeForSelection({
+        kind: "object.region",
+        label: "Left half",
+        moduleSource: "inspector",
+        nodeId: "region-node",
+        objectId: "body",
+        ref: {
+          kind: "object.region",
+          nodeId: "region-node",
+          objectId: "body",
+          regionId: "left_half",
+          type: "scene-object",
+          visualizationTargetId: "region:body:left_half",
+        },
+      }),
+    ).toEqual({ kind: "region", region_id: "left_half", scope_id: "body" });
+  });
 });

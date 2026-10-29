@@ -34,7 +34,7 @@ use crate::repository_path::{
 };
 use crate::solution_set_catalog::SolutionSetCatalog;
 use crate::types::*;
-use crate::writer::{WriteTransaction, Writer};
+use crate::writer::{ReadTransaction, WriteTransaction, Writer};
 
 const MAX_TASK_ADMISSION_RECORD_BYTES: usize = 1024 * 1024;
 const MAX_PROVIDER_JOB_SUBMISSION_BYTES: usize = 64 * 1024;
@@ -87,7 +87,9 @@ fn is_not_found(error: &anyhow::Error) -> bool {
 
 #[path = "accepted_start_gate.rs"]
 mod accepted_start_gate;
-pub use accepted_start_gate::{ACCEPTED_RUN_START_POLICY_KEY, AcceptedRunStartRelease};
+pub use accepted_start_gate::{
+    ACCEPTED_RUN_START_POLICY_KEY, AcceptedRunStartRelease, accepted_run_start_policy_is_manual,
+};
 mod development_commit;
 mod development_completion;
 mod development_fence;
@@ -321,6 +323,11 @@ impl SessionStore {
     /// Bind a multi-file operation to one native writer lease.
     pub fn write_transaction(&self) -> Result<WriteTransaction> {
         self.writer.acquire()
+    }
+
+    /// Fence a consistent read without creating files or changing writer ownership.
+    pub fn read_transaction(&self) -> Result<ReadTransaction> {
+        ReadTransaction::acquire(&self.root)
     }
 
     // ── Sessions ───────────────────────────────────────────────────────
@@ -942,6 +949,44 @@ impl SessionStore {
     pub fn find_run_intent(&self, idempotency_key: &str) -> Result<Option<FmsRunIntent>> {
         validate_store_id(idempotency_key)?;
         self.find_run_intent_unlocked(idempotency_key)
+    }
+
+    /// Discover run identifiers without loading or authorizing their intents.
+    /// Every consumer that acts on a run must still read and validate its
+    /// immutable intent and current catalog at its existing authority boundary.
+    pub fn list_run_intent_ids(&self) -> Result<Vec<String>> {
+        let runs = checked_path(&self.root, "runs")?;
+        match fs::symlink_metadata(&runs) {
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => anyhow::bail!("runs path is not a directory"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error).context("reading runs directory metadata"),
+        }
+        reject_link(&runs)?;
+        let mut run_ids = Vec::new();
+        for entry in fs::read_dir(&runs)? {
+            let entry = entry?;
+            reject_link(&entry.path())?;
+            if !entry.file_type()?.is_dir() {
+                anyhow::bail!("unsupported runs entry `{}`", entry.path().display());
+            }
+            let run_id = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| anyhow::anyhow!("non-UTF8 run identifier"))?;
+            validate_store_id(&run_id)?;
+            let path = checked_path(&self.root, &format!("runs/{run_id}/run_intent.json"))?;
+            match fs::symlink_metadata(&path) {
+                Ok(metadata) if metadata.is_file() => {}
+                Ok(_) => anyhow::bail!("run intent path is not a file"),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error).context("reading run intent metadata"),
+            }
+            reject_link(&path)?;
+            run_ids.push(run_id);
+        }
+        run_ids.sort();
+        Ok(run_ids)
     }
 
     /// Enumerate accepted intents from the durable store without reading a
@@ -3296,6 +3341,16 @@ impl SessionStore {
         self.read_coordinator_journal_unlocked(run_id)
     }
 
+    /// Read under the caller's shared fence, including nested cold integrity checks.
+    pub fn read_coordinator_journal_readonly(
+        &self,
+        run_id: &str,
+        transaction: &ReadTransaction,
+    ) -> Result<Vec<FmsCoordinatorJournalEntry>> {
+        transaction.require_root(&self.root)?;
+        self.read_coordinator_journal_unlocked(run_id)
+    }
+
     fn read_coordinator_journal_unlocked(
         &self,
         run_id: &str,
@@ -3663,6 +3718,10 @@ impl SessionStore {
                             | "accepted_quantity_bundle"
                             | FMS_OBSERVATION_SNAPSHOT_ARTIFACT_TYPE
                             | FMS_OBSERVATION_STATE_ARTIFACT_TYPE
+                            | "accepted_primary_carrier"
+                            | "output_history_index"
+                            | "output_history_page"
+                            | "output_history_sample"
                     );
                 let exact_existing_entry = existing
                     .entries
@@ -4473,22 +4532,66 @@ impl SessionStore {
             Option<&FmsPreparationProcessExitReceipt>,
         ) -> Result<Option<&'static str>>,
     {
+        self.recovery_run_evidence_value_locked(run_id, worker_proof, preparation_proof, false)
+    }
+
+    /// Separate v4 evidence for a never-released manual run. Completed
+    /// preparation is preserved and validated by the same execution fences.
+    pub(crate) fn held_manual_run_evidence_value_locked<WF, PF>(
+        &self,
+        run_id: &str,
+        worker_proof: WF,
+        preparation_proof: PF,
+    ) -> Result<serde_json::Value>
+    where
+        WF: Fn(&FmsResourceLease, Option<&FmsWorkerProcessExitReceipt>) -> Result<Option<&'static str>>,
+        PF: Fn(
+            &FmsPreparationResourceLease,
+            Option<&FmsPreparationProcessExitReceipt>,
+        ) -> Result<Option<&'static str>>,
+    {
+        self.recovery_run_evidence_value_locked(run_id, worker_proof, preparation_proof, true)
+    }
+
+    fn recovery_run_evidence_value_locked<WF, PF>(
+        &self,
+        run_id: &str,
+        worker_proof: WF,
+        preparation_proof: PF,
+        held_manual: bool,
+    ) -> Result<serde_json::Value>
+    where
+        WF: Fn(&FmsResourceLease, Option<&FmsWorkerProcessExitReceipt>) -> Result<Option<&'static str>>,
+        PF: Fn(
+            &FmsPreparationResourceLease,
+            Option<&FmsPreparationProcessExitReceipt>,
+        ) -> Result<Option<&'static str>>,
+    {
         validate_store_id(run_id)?;
         let catalog = self
             .read_run_catalog(run_id)?
             .context("terminal evidence requires a durable run catalog")?;
         catalog.validate()?;
-        if catalog.tasks.is_empty()
-            || catalog
-                .tasks
-                .iter()
-                .any(|task| !matches!(
-                    task.lifecycle,
-                    FmsTaskLifecycle::Succeeded
-                        | FmsTaskLifecycle::Failed
-                        | FmsTaskLifecycle::Cancelled
-                        | FmsTaskLifecycle::Interrupted
-                ))
+        if held_manual {
+            // Automatic/missing/invalid policies and any existing release are
+            // refused by the canonical gate; no record is rewritten here.
+            if self.accepted_run_start_permitted(run_id)? || catalog.tasks.is_empty()
+                || catalog.tasks.iter().any(|task| {
+                    !matches!(task.lifecycle, FmsTaskLifecycle::Accepted | FmsTaskLifecycle::Queued)
+                        || task.attempt_id.is_some() || task.ownership_epoch.is_some()
+                        || task.resource_id.is_some() || task.resolved_input_fingerprint.is_some()
+                        || task.coordinator_genesis.is_some() || task.coordinator_watermark.is_some()
+                        || !task.artifact_ids.is_empty()
+                })
+            {
+                anyhow::bail!("held evidence requires an unreleased manual run without solver ownership");
+            }
+        } else if catalog.tasks.is_empty()
+            || catalog.tasks.iter().any(|task| !matches!(
+                task.lifecycle,
+                FmsTaskLifecycle::Succeeded | FmsTaskLifecycle::Failed
+                    | FmsTaskLifecycle::Cancelled | FmsTaskLifecycle::Interrupted
+            ))
         {
             anyhow::bail!("terminal evidence requires every catalog task to be terminal");
         }
@@ -4527,6 +4630,9 @@ impl SessionStore {
 
         let admissions = self.list_task_admissions_for_run_locked(run_id)?;
         let leases = self.list_resource_leases_for_run_locked(run_id)?;
+        if held_manual && (!admissions.is_empty() || !leases.is_empty()) {
+            anyhow::bail!("held manual run has historical solver admission or lease");
+        }
         if leases
             .iter()
             .any(|lease| lease.state == FmsResourceLeaseState::Active)
@@ -11547,6 +11653,134 @@ mod admission_tests {
         );
     }
 
+    #[test]
+    fn held_manual_evidence_preserves_completed_preparation_retry_and_refuses_active_lease() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("session-store")).unwrap();
+        let run_id = "run-admission";
+        let task_id = "task-terminal-historical-prep-retry";
+        let mut task = queued_task(task_id);
+        task.lifecycle = FmsTaskLifecycle::Accepted;
+        task.readiness = FmsTaskReadiness::Blocked {
+            reason: FMS_TASK_AWAITING_PREPARATION_REASON.into(),
+        };
+        seed_catalog(&store, vec![task]);
+        store.commit_run_intent(&FmsRunIntent::new(
+            run_id, "submit-held-preparation", serde_json::json!({
+                "run_id": run_id, "parameters": {"fullmag.accepted_run_start": {
+                    "schema_version": "accepted_run_start_policy.v1", "mode": "manual"
+                }}
+            }),
+        )).unwrap();
+        let now = Utc::now();
+        let lease = FmsPreparationResourceLease {
+            schema_version: FMS_PREPARATION_RESOURCE_LEASE_SCHEMA.into(),
+            resource_id: "cpu-terminal-historical-prep".into(),
+            budget: FmsResourceBudget {
+                cpu_millis: 100,
+                memory_bytes: 1024,
+                gpu_memory_bytes: 0,
+                storage_bytes: 4096,
+            },
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            preparation_attempt_id: "prep-terminal-historical-first".into(),
+            lease_token: "prep-lease-terminal-historical-first".into(),
+            state: FmsResourceLeaseState::Active,
+            acquired_at: now,
+            heartbeat_at: now,
+            heartbeat_sequence: 0,
+            released_at: None,
+            host_launch_binding: None,
+        };
+        store.commit_preparation_resource_lease(&lease).unwrap();
+        {
+            let _writer = store.write_transaction().unwrap();
+            let error = store.held_manual_run_evidence_value_locked(run_id,
+                |_lease, _exit| Ok(None), |_lease, _exit| Ok(None)).unwrap_err();
+            assert!(error.to_string().contains("active preparation lease"));
+        }
+        let launch = FmsPreparationProcessLaunch {
+            schema_version: FMS_PREPARATION_PROCESS_LAUNCH_SCHEMA.into(),
+            launch_id: "prep-launch-terminal-historical-first".into(),
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            preparation_attempt_id: lease.preparation_attempt_id.clone(),
+            resource_id: lease.resource_id.clone(),
+            lease_token: lease.lease_token.clone(),
+            lease_heartbeat_sequence: lease.heartbeat_sequence,
+            supervisor_process_id: 501,
+            supervisor_start_token: Some("historical-prep".into()),
+            created_at: now,
+        };
+        store.commit_preparation_process_launch(&launch).unwrap();
+        let exit = FmsPreparationProcessExitReceipt {
+            schema_version: FMS_PREPARATION_PROCESS_EXIT_RECEIPT_SCHEMA.into(),
+            receipt_id: "prep-exit-terminal-historical-first".into(),
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            preparation_attempt_id: lease.preparation_attempt_id.clone(),
+            resource_id: lease.resource_id.clone(),
+            lease_token: lease.lease_token.clone(),
+            lease_heartbeat_sequence: lease.heartbeat_sequence,
+            process_id: 502,
+            process_start_token: Some("historical-prep-child".into()),
+            status_success: false,
+            exit_code: Some(1),
+            timed_out: false,
+            failure_reason: Some("fixture preparation failure".into()),
+            observed_at: now,
+        };
+        store.commit_preparation_process_exit_receipt(&exit).unwrap();
+        assert_eq!(
+            store.finalize_preparation_process_exit(&exit).unwrap(),
+            PreparationProcessFinalizationDisposition::Failed
+        );
+        let decision = FmsPreparationRetryDecision {
+            schema_version: FMS_PREPARATION_RETRY_DECISION_SCHEMA.into(),
+            decision_id: "prep-retry-terminal-historical-first".into(),
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            failed_preparation_attempt_id: lease.preparation_attempt_id.clone(),
+            retry_sequence: 1,
+            max_attempts: 2,
+            reason: "fixture preparation retry".into(),
+            created_at: Utc::now(),
+        };
+        store.commit_preparation_retry_decision(&decision).unwrap();
+        let mut terminal = store.read_run_catalog(run_id).unwrap().unwrap();
+        terminal.revision += 1;
+        terminal.updated_at = Utc::now();
+        terminal.tasks[0].lifecycle = FmsTaskLifecycle::Accepted;
+        terminal.tasks[0].readiness = FmsTaskReadiness::Blocked {
+            reason: FMS_TASK_AWAITING_PREPARATION_REASON.into(),
+        };
+        store.commit_run_catalog(&terminal).unwrap();
+
+        let catalog_before = fs::read(store.root().join(format!("runs/{run_id}/run_catalog.json"))).unwrap();
+        let _writer = store.write_transaction().unwrap();
+        let evidence = store
+            .held_manual_run_evidence_value_locked(
+                run_id,
+                |_lease, exit| Ok(exit.map(|_| "worker")),
+                |_lease, exit| Ok(exit.map(|_| "preparation")),
+            )
+            .unwrap();
+        assert_eq!(
+            evidence["preparation_retry_decisions"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            evidence["preparation_evidence"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(fs::read(store.root().join(format!("runs/{run_id}/run_catalog.json"))).unwrap(), catalog_before);
+        assert!(!store.root().join(format!("runs/{run_id}/start_release.json")).exists());
+    }
+
     #[cfg(unix)]
     #[test]
     fn exact_run_lease_reader_rejects_dangling_directory_link_as_missing_state() {
@@ -11579,4 +11813,50 @@ mod admission_tests {
             .is_err());
     }
 
+}
+
+#[cfg(test)]
+mod read_transaction_tests {
+    use super::*;
+
+    #[test]
+    fn read_transaction_reuses_shared_fence_without_owner_writes() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        store.commit_run_catalog(&FmsRunCatalog {
+            schema_version: FMS_RUN_CATALOG_SCHEMA.into(),
+            run_id: "run-read".into(), revision: 1,
+            updated_at: chrono::Utc::now(), tasks: Vec::new(),
+        }).unwrap();
+        let lock_before = fs::read(store.root().join("WRITER.lock")).unwrap();
+        let owner_before = fs::read(store.root().join("WRITER.owner.json")).unwrap();
+        let other = SessionStore::open_existing(store.root()).unwrap();
+        let first = store.read_transaction().unwrap();
+        let second = other.read_transaction().unwrap();
+        for _ in 0..2 {
+            assert!(store.read_coordinator_journal_readonly("run-read", &first).unwrap().is_empty());
+            assert!(other.read_coordinator_journal_readonly("run-read", &second).unwrap().is_empty());
+        }
+        assert!(other.write_transaction().err().unwrap().is::<crate::StoreWriterBusy>());
+        assert_eq!(fs::read(store.root().join("WRITER.lock")).unwrap(), lock_before);
+        assert_eq!(fs::read(store.root().join("WRITER.owner.json")).unwrap(), owner_before);
+        drop(first);
+        assert!(other.write_transaction().is_err());
+        drop(second);
+        assert_eq!(fs::read(store.root().join("WRITER.owner.json")).unwrap(), owner_before);
+        let writer = other.write_transaction().unwrap();
+        assert!(store.read_transaction().is_err());
+        drop(writer);
+        assert!(store.read_transaction().is_ok());
+    }
+
+    #[test]
+    fn read_transaction_rejects_another_store_guard() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = SessionStore::open(directory.path().join("first")).unwrap();
+        let second = SessionStore::open(directory.path().join("second")).unwrap();
+        let transaction = first.read_transaction().unwrap();
+        let error = second.read_coordinator_journal_readonly("run-read", &transaction).unwrap_err();
+        assert!(error.to_string().contains("another store"));
+    }
 }

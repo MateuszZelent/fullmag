@@ -62,5 +62,17 @@ export function planarViewScopeForSelection(
   ) {
     return { kind: "airbox" };
   }
+  // P1-03: an object region (scene object or FDM region node) scopes the 2D
+  // view to that region; region ids are scoped by their owner object.
+  const ref = selection.ref;
+  if (
+    ref &&
+    ((ref.type === "scene-object") ||
+      (ref.type === "fdm-domain" && ref.scope === "region")) &&
+    ref.objectId &&
+    ref.regionId
+  ) {
+    return { kind: "region", scope_id: ref.objectId, region_id: ref.regionId };
+  }
   return { kind: "monitor_target" };
 }

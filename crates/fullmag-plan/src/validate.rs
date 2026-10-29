@@ -580,6 +580,19 @@ fn validate_conservative_relaxation(problem: &ProblemIR, errors: &mut Vec<String
     if !matches!(problem.study, fullmag_ir::StudyIR::Relaxation { .. }) {
         return;
     }
+    for module in &problem.spin_transport_modules {
+        if module.mode != fullmag_ir::SpinTransportModeIR::Transient {
+            continue;
+        }
+        match crate::physics_graph::physics_module_execution_enabled(problem, "spin_transport", &module.id) {
+            Ok(Some(false)) => {}
+            Ok(Some(true) | None) => errors.push(format!(
+                "relaxation rejects active transient M3 spin transport '{}': no transport-convergence contract exists, including with disabled torque",
+                module.id
+            )),
+            Err(reasons) => errors.extend(reasons),
+        }
+    }
     let active_torque_modules = match crate::spin_torque::executable_spin_torque_modules(problem) {
         Ok(modules) => modules,
         Err(error) => {

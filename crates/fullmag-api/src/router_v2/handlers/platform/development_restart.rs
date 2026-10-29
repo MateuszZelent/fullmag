@@ -119,8 +119,9 @@ pub(crate) async fn acquire_workspace_for_restart(
 
 /// Acquire the same restart-safe workspace guards for the private terminal
 /// retirement route. Accepted-run restore can legitimately have no display
-/// completion timestamp after a process restart; its durable terminal store
-/// and runtime projection remain authoritative for this narrowly scoped path.
+/// completion timestamp after a process restart. An importer-owned observation
+/// instead requires its detached accepted closure, never native completion.
+/// Neither case changes the normal owner restart/drain contract.
 #[allow(dead_code)]
 pub(crate) async fn acquire_workspace_for_live_retirement(
     state: &AppState,
@@ -190,7 +191,18 @@ async fn acquire_workspace_for_restart_inner(
             }
         }
         Some(snapshot) => {
-            let kind = validate_runtime_status(snapshot)?;
+            // An imported observation owns no native execution. Only retirement
+            // may acquire it, after revalidating the private importer evidence.
+            // Normal owner restart/drain keeps its original terminal-run guard.
+            let imported_observation = allow_restored_terminal_without_display_timestamp
+                && snapshot.runtime_status.code == "imported_read_only";
+            let kind = if imported_observation {
+                crate::imported_observation_retirement::collect(state, snapshot)
+                    .map_err(|error| not_restartable(format!("imported observation evidence is invalid: {error:#}")))?;
+                RuntimeStatus::Completed
+            } else {
+                validate_runtime_status(snapshot)?
+            };
             validate_preparation(snapshot)?;
             validate_current_mesh_workspace(snapshot)?;
             let scene_document = snapshot
@@ -244,7 +256,8 @@ async fn acquire_workspace_for_restart_inner(
                 Some(validate_terminal_run(
                     snapshot,
                     kind,
-                    allow_restored_terminal_without_display_timestamp && trusted_terminal_restore,
+                    allow_restored_terminal_without_display_timestamp
+                        && (trusted_terminal_restore || imported_observation),
                 )?)
             };
             validate_connectivity(state, is_scratch).await?;
@@ -491,7 +504,8 @@ fn validate_current_mesh_workspace(snapshot: &SessionStateResponse) -> Result<()
         stages.len() == 1 && stages[0].get("status").and_then(Value::as_str) == Some("completed")
             && matches!(stages[0].get("id").and_then(Value::as_str),
                 Some("startup" | "solve" | "run" | "relax" | "resume" | "mesh_build" | "fdm_grid_refresh"
-                    | "accepted_run_reattach" | "accepted_projection_stage_preparation" | "remesh"))
+                    | "accepted_run_reattach" | "isolated_snapshot_restore"
+                    | "accepted_projection_stage_preparation" | "remesh"))
     });
     let fingerprint = workspace.get("plan_fingerprint").and_then(Value::as_str)
         .and_then(|value| value.strip_prefix("sha256:"));

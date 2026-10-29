@@ -224,25 +224,27 @@ pub fn geometry_capabilities(revision: u64) -> GeometryCapabilitiesResource {
                 true,
                 GeometrySupportStatus::Production,
             ),
+            // FEM meshes spheres and ellipsoids through OCC (ADR 0074); the
+            // FDM flag stays false until that lane has its own evidence.
             primitive(
                 "sphere",
                 "Sphere",
                 "mumax",
-                false,
-                false,
+                true,
                 false,
                 true,
-                GeometrySupportStatus::Preview,
+                true,
+                GeometrySupportStatus::Production,
             ),
             primitive(
                 "ellipsoid",
                 "Ellipsoid",
                 "mumax",
-                false,
-                false,
+                true,
                 false,
                 true,
-                GeometrySupportStatus::Preview,
+                true,
+                GeometrySupportStatus::Production,
             ),
             primitive(
                 "disk",
@@ -636,6 +638,9 @@ fn validate_object_geometry(
             &["realize_geometry", "build_mesh", "run_solver"],
         ));
     }
+    // Material and initial state are physics inputs: a mesh is realized from
+    // geometry, universe and mesh policies alone (ADR 0074), so these
+    // references gate Compute only.
     let requires_magnetic_refs = object.role == "magnet";
     if (requires_magnetic_refs || !object.material_ref.trim().is_empty())
         && (object.material_ref.trim().is_empty()
@@ -649,7 +654,7 @@ fn validate_object_geometry(
             format!("Object '{}' references a missing material.", object.id),
             Some(object.id.clone()),
             Some(object_path.clone()),
-            &["realize_geometry", "build_mesh", "run_solver"],
+            &["run_solver"],
         ));
     }
     if requires_magnetic_refs || object.magnetization_ref.is_some() {
@@ -666,12 +671,12 @@ fn validate_object_geometry(
             _ => diagnostics.push(error(
                 "GEOMETRY_OBJECT_MAGNETIZATION_MISSING",
                 format!(
-                    "Object '{}' must reference a magnetization asset before mesh/compute.",
+                    "Object '{}' must reference a magnetization asset before compute.",
                     object.id
                 ),
                 Some(object.id.clone()),
                 Some(object_path.clone()),
-                &["build_mesh", "run_solver"],
+                &["run_solver"],
             )),
         }
     }
@@ -959,6 +964,36 @@ fn validate_geometry_node(
             path,
             diagnostics,
         ),
+        // The FEM mesher realizes spheres and ellipsoids through OCC (ADR 0074);
+        // the FDM lane keeps them preview-only until it has its own evidence.
+        "Sphere" if *backend_target == GeometryBackendTarget::Fem => validate_positive_number_param(
+            &geometry.geometry_params,
+            "radius",
+            object_id,
+            path,
+            diagnostics,
+        ),
+        "Ellipsoid" if *backend_target == GeometryBackendTarget::Fem => {
+            if geometry.geometry_params.get("radii").is_some() {
+                validate_positive_vec3_param(
+                    &geometry.geometry_params,
+                    "radii",
+                    object_id,
+                    path,
+                    diagnostics,
+                );
+            } else {
+                for key in ["rx", "ry", "rz"] {
+                    validate_positive_number_param(
+                        &geometry.geometry_params,
+                        key,
+                        object_id,
+                        path,
+                        diagnostics,
+                    );
+                }
+            }
+        }
         "Ellipsoid" | "Sphere" | "Ellipse" => diagnostics.push(error(
             "GEOMETRY_KIND_PREVIEW_ONLY",
             format!(
@@ -1446,10 +1481,35 @@ fn derive_geometry_bounds(geometry: &SceneGeometry) -> Option<([f64; 3], [f64; 3
             if !(radius.is_finite() && radius > 0.0 && height.is_finite() && height > 0.0) {
                 return None;
             }
-            Some((
-                [-radius, -radius, -height / 2.0],
-                [radius, radius, height / 2.0],
-            ))
+            let axis = match geometry.geometry_params.get("axis") {
+                Some(_) => vec3_param(&geometry.geometry_params, "axis")?,
+                None => [0.0, 0.0, 1.0],
+            };
+            if !finite_vec3(axis) {
+                return None;
+            }
+            let axis_scale = axis.iter().map(|component| component.abs()).fold(0.0, f64::max);
+            if axis_scale <= 0.0 {
+                return None;
+            }
+            let scaled_axis = axis.map(|component| component / axis_scale);
+            let scaled_norm = scaled_axis[0].hypot(scaled_axis[1]).hypot(scaled_axis[2]);
+            if !scaled_norm.is_finite() || scaled_norm <= 0.0 {
+                return None;
+            }
+            let unit_axis = scaled_axis.map(|component| component / scaled_norm);
+            let half_height = height / 2.0;
+            let extent = std::array::from_fn(|index| {
+                let axial_component = unit_axis[index].abs();
+                let radial_component = (1.0 - unit_axis[index] * unit_axis[index])
+                    .max(0.0)
+                    .sqrt();
+                radius * radial_component + half_height * axial_component
+            });
+            if !finite_vec3(extent) {
+                return None;
+            }
+            Some((extent.map(|value| -value), extent))
         }
         "ArchWaveguide" => {
             let length = number_param(&geometry.geometry_params, "length")?;
@@ -1478,10 +1538,22 @@ fn derive_geometry_bounds(geometry: &SceneGeometry) -> Option<([f64; 3], [f64; 3
                 [half_length, half_width, z_max],
             ))
         }
+        "Sphere" => {
+            let radius = number_param(&geometry.geometry_params, "radius")?;
+            if !radius.is_finite() || radius <= 0.0 {
+                return None;
+            }
+            Some(([-radius; 3], [radius; 3]))
+        }
         "Ellipsoid" => {
-            let rx = number_param(&geometry.geometry_params, "rx")?;
-            let ry = number_param(&geometry.geometry_params, "ry")?;
-            let rz = number_param(&geometry.geometry_params, "rz")?;
+            let [rx, ry, rz] = match vec3_param(&geometry.geometry_params, "radii") {
+                Some(radii) => radii,
+                None => [
+                    number_param(&geometry.geometry_params, "rx")?,
+                    number_param(&geometry.geometry_params, "ry")?,
+                    number_param(&geometry.geometry_params, "rz")?,
+                ],
+            };
             if [rx, ry, rz]
                 .iter()
                 .any(|value| !value.is_finite() || *value <= 0.0)
@@ -1876,6 +1948,7 @@ mod tests {
                 allocated_region_ids: Vec::new(),
                 material_parameter_fields: Vec::new(),
                 absorbing_boundary: None,
+                visualization_hint: Default::default(),
                 notes: None,
                 visible: true,
                 locked: false,

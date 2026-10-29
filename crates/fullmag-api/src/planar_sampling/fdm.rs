@@ -319,6 +319,7 @@ fn sample_plane(
         occupancy,
         source_entity_ids,
         overlay: None,
+        section_extent: None,
     })
 }
 
@@ -528,6 +529,7 @@ pub(super) fn finish_reduction(
         source_entity_ids: vec![None; occupancy.len()],
         occupancy,
         overlay: None,
+        section_extent: None,
     })
 }
 

@@ -4,6 +4,9 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 
 import { useKernel } from "@/kernel/KernelContext";
 import { decodeFieldVector } from "@/kernel/api/codecs";
+import { normalizeTensorProjection } from "@/kernel/api/tensorFieldProjection";
+import { quantityCatalogEntrySpatialProjections, quantityCatalogEntrySupportsSpatialVisualization } from "@/kernel/api/quantityIds";
+import { useQuantityCatalogResource } from "@/kernel/resources/studyRuntimeResources";
 import type {
   PlanarFieldSource,
   VisualizationStateResource,
@@ -14,11 +17,13 @@ import {
   usePlanarMaskResource,
   usePlanarMeshOverlayResource,
   usePlanarProbeResource,
+  usePlanarProfileResource,
   usePlanarScalarResource,
   usePlanarVectorResource,
 } from "@/kernel/resources/planarFieldResources";
 import { useDomainMetaResource } from "@/kernel/resources/geometryLifecycleResources";
 import { useFieldCatalogResource } from "@/kernel/resources/studyRuntimeResources";
+import { useGeometryRealizationResource } from "@/kernel/resources/useGeometryRealizationResource";
 import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSessionScopedResourceKey } from "@/kernel/resources/useSessionScopedResourceKey";
@@ -31,24 +36,37 @@ import {
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { projectPlanarPresentationState } from "@/kernel/visualization/planarPresentationProjection";
 import {
+  PLANAR_VECTOR_CARRIER_COMPONENT,
+  derivePlanarComponentScalar,
+  isClientDerivablePlanarComponent,
+  resolvePlanarComponentDerivation,
+} from "./model/planarComponentDerivation";
+import {
+  objectSectionLayers,
+  planarSectionAxes,
   resolvePlanarSectionGeometry,
   withSectionStops,
 } from "@/kernel/visualization/planarSectionModel";
 import { isDirectionColormap } from "@/shared/visualization/directionColor";
 import { FieldMapToolbar, type FieldMapToolbarQuantity } from "./components/FieldMapToolbar";
+import { FieldMapAuxiliaryDiagnostics } from "./components/FieldMapAuxiliaryDiagnostics";
 import { PlanarColorLegend } from "./components/PlanarColorLegend";
+import { PlanarMultisliceGrid } from "./components/PlanarMultisliceGrid";
+import { PlanarSnapshotNavigator } from "./components/PlanarSnapshotNavigator";
 import { PlanarPinnedProbe } from "./components/PlanarPinnedProbe";
+import { PlanarProfileChart } from "./components/PlanarProfileChart";
+import { quantityDisplayName } from "@/kernel/api/quantityIds";
 import { PlanarSectionStrip } from "./components/PlanarSectionStrip";
 
 import {
   buildFieldMapDataPlan,
   buildFieldMapProbeQuery,
+  buildFieldMapProfileQuery,
 } from "./model/fieldMapDataPlan";
 import {
   buildFieldMapRenderModel,
   normalizePlanarColorRange,
   projectPlanarVectors,
-  resolveFieldMapAuxiliaryDiagnostics,
   surfaceProjectionStatus,
 } from "./model/fieldMapRenderModel";
 import {
@@ -57,17 +75,22 @@ import {
 } from "./model/planarAxisModel";
 import {
   createPlanarEvidence,
+  planarRenderIdentity,
+  planarRenderScalarIdentity,
   resolvePlanarEvidenceStatus,
   type PlanarEvidenceStatus,
   type PlanarRenderEvidence,
 } from "./model/fieldMapEvidence";
-import { PlanarSurface } from "./renderer/PlanarSurface";
+import { PlanarSurface, type PlanarProfileSegment } from "./renderer/PlanarSurface";
 import { createCoalescedFramePublisher } from "./renderer/planarFrameScheduler";
 import { useRetainedPlanarFrame } from "./hooks/useRetainedPlanarFrame";
 import { fieldMapSurfaceStore as fieldMapStore } from "@/kernel/visualization/fieldMapSurfaceStore";
 
 type SectionDefaultSlice = NonNullable<VisualizationStateResource["planar"]>["default_slice"];
 type PlanarPatch = NonNullable<Parameters<ReturnType<typeof useKernel>["visualizationSync"]["queuePatch"]>[0]["planar"]>;
+
+/** Uniform samples per line profile; FEM adds the element-face crossings. */
+const PROFILE_SAMPLES = 512;
 
 function useFieldMapModuleController() {
   const { layout, visualizationSync } = useKernel();
@@ -78,7 +101,7 @@ function useFieldMapModuleController() {
   const active = layout.get().activeViewportMainModuleId === "field-map";
   const visualization = useVisualizationStateResource({ enabled: active });
   const canonicalPlanar = visualization.data?.planar;
-  const presentationPlanar = useMemo(
+  const presentationBase = useMemo(
     () => projectPlanarPresentationState(
       visualization.data,
       visualization.optimisticData,
@@ -86,7 +109,7 @@ function useFieldMapModuleController() {
     [visualization.data, visualization.optimisticData],
   );
   const activePinned = canonicalPlanar?.visible !== false && canonicalPlanar?.layers.probes ? pinned : null;
-  const activeRenderEvidence = presentationPlanar?.visible !== false && presentationPlanar?.layers.raster ? renderEvidence : null;
+  const activeRenderEvidence = presentationBase?.visible !== false && presentationBase?.layers.raster ? renderEvidence : null;
   const canonicalSourceKind = canonicalPlanar?.source.kind;
   const canonicalSourceMonitorId = canonicalSourceKind === "monitor"
     ? canonicalPlanar?.source.monitor_id
@@ -105,17 +128,6 @@ function useFieldMapModuleController() {
   }, [canonicalSliceKey, canonicalSourceKind, canonicalSourceMonitorId]);
   const domain = useDomainMetaResource({ enabled: active });
   const fieldCatalog = useFieldCatalogResource({ enabled: active });
-  const toolbarQuantities = useMemo<FieldMapToolbarQuantity[]>(
-    () => (fieldCatalog.data?.quantities ?? [])
-      .filter((quantity) => quantity.available)
-      .map((quantity) => ({
-        components: quantity.components ?? 3,
-        label: quantity.label,
-        quantityId: quantity.quantity_id,
-        unit: quantity.unit,
-      })),
-    [fieldCatalog.data],
-  );
   const runtime = useSessionStatusSelector(
     (status) => resolveSessionDiscretization(status.data),
     { enabled: active },
@@ -144,7 +156,7 @@ function useFieldMapModuleController() {
       left.target?.kind === right.target?.kind,
   });
   const effectiveWireframeStyle = useMemo(() => {
-    if (!presentationPlanar) return undefined;
+    if (!presentationBase) return undefined;
     const target = selectedFieldContext.target;
     if (
       !target ||
@@ -153,35 +165,90 @@ function useFieldMapModuleController() {
         visualization.data?.targets,
       ) !== undefined
     ) {
-      return presentationPlanar.wireframe_style;
+      return presentationBase.wireframe_style;
     }
     return resolvePlanarTargetWireframeStyle(
-      presentationPlanar.wireframe_style,
-      presentationPlanar.target_overrides,
+      presentationBase.wireframe_style,
+      presentationBase.target_overrides,
       target,
     );
   }, [
-    presentationPlanar,
+    presentationBase,
     selectedFieldContext.target,
     visualization.data?.targets,
   ]);
 
+  const quantityCatalog = useQuantityCatalogResource({
+    enabled: active,
+    stageId: selectedFieldContext.stageId,
+  });
+  const toolbarQuantities = useMemo<FieldMapToolbarQuantity[]>(
+    () => (fieldCatalog.data?.quantities ?? [])
+      .filter((quantity) => quantity.available)
+      .map((quantity) => {
+        const entry = quantityCatalog.data?.quantities.find((candidate) => candidate.id === quantity.quantity_id);
+        return {
+          components: quantity.components ?? 3,
+          label: quantity.label,
+          quantityId: quantity.quantity_id,
+          unit: quantity.unit,
+          tensor: entry?.tensor != null || entry?.shape === "tensor_field" || quantity.components === 9,
+          projections: quantityCatalogEntrySpatialProjections(entry),
+        };
+      }),
+    [fieldCatalog.data, quantityCatalog.data],
+  );
+  const selectedQuantity = quantityCatalog.data?.quantities.find(
+    (entry) => entry.id === canonicalPlanar?.quantity_id,
+  );
+  // D2D-12: x/y/z/|v| of a vector plane sample are derived from its vectors,
+  // so a component switch is presentation (no new sample, 0 requests).
+  const componentDerivation = resolvePlanarComponentDerivation({
+    component: canonicalPlanar?.component,
+    operatorKind: canonicalSourceKind === "default" ? canonicalPlanar?.default_slice.operator.kind : null,
+    quantity: selectedQuantity,
+  });
+  const clientComponents = componentDerivation === "client";
+  const presentationPlanar = useMemo(
+    () => projectPlanarPresentationState(
+      visualization.data,
+      visualization.optimisticData,
+      {
+        clientComponent: (authoritative, optimistic) => clientComponents &&
+          isClientDerivablePlanarComponent(authoritative) &&
+          isClientDerivablePlanarComponent(optimistic),
+      },
+    ),
+    [clientComponents, visualization.data, visualization.optimisticData],
+  );
+  const displayComponent = presentationPlanar?.component ?? "";
+  // One carrier sample feeds every client-side component raster, so the
+  // rendered frame identity must name the component it shows.
+  const componentPresentationKey = clientComponents ? `component=${displayComponent}` : null;
+  const requiresTensorProjection = selectedQuantity?.tensor != null ||
+    selectedQuantity?.shape === "tensor_field" ||
+    normalizeTensorProjection(canonicalPlanar?.component) !== null;
+  const projectionAllowed = !requiresTensorProjection || Boolean(
+    selectedQuantity && quantityCatalogEntrySupportsSpatialVisualization(selectedQuantity, canonicalPlanar?.component),
+  );
   const plan = useMemo(
     () => buildFieldMapDataPlan({
       active: active && canonicalPlanar !== undefined && canonicalPlanar.visible !== false,
-      component: canonicalPlanar?.component ?? "",
+      component: clientComponents ? PLANAR_VECTOR_CARRIER_COMPONENT : canonicalPlanar?.component ?? "",
       discretization:
         domain.data?.discretization ?? runtime ?? null,
       includeMesh: (canonicalPlanar?.layers.mesh ?? false) || (canonicalPlanar?.layers.boundaries ?? false),
       source,
       quality: canonicalPlanar?.quality ?? "interactive",
       quantityId: canonicalPlanar?.quantity_id ?? "",
+      projectionAllowed,
       resolution: [
         canonicalPlanar?.resolution.width ?? 0,
         canonicalPlanar?.resolution.height ?? 0,
       ],
-      showVectors: canonicalPlanar?.layers.vectors ?? false,
-      colorByDirection: isDirectionColormap(canonicalPlanar?.colormap),
+      // Streamlines trace the same frame-vector raster as the quiver.
+      showVectors: (canonicalPlanar?.layers.vectors ?? false) || (canonicalPlanar?.layers.streamlines ?? false),
+      colorByDirection: isDirectionColormap(canonicalPlanar?.colormap) || clientComponents,
       snapshotId: selectedFieldContext.snapshotId,
       stageId: selectedFieldContext.stageId,
       viewScope: canonicalPlanar?.view_scope,
@@ -189,8 +256,10 @@ function useFieldMapModuleController() {
     }),
     [
       active,
+      clientComponents,
       domain.data?.discretization,
       canonicalPlanar,
+      projectionAllowed,
       runtime,
       source,
       selectedFieldContext.snapshotId,
@@ -263,7 +332,7 @@ function useFieldMapModuleController() {
         : null,
     [meta.data],
   );
-  const component = canonicalPlanar?.component ?? "";
+  const component = clientComponents ? displayComponent : canonicalPlanar?.component ?? "";
   const quantityId = canonicalPlanar?.quantity_id ?? "";
   const onRenderEvidence = useCallback(
     (next: PlanarRenderEvidence) => setRenderEvidence(next),
@@ -294,24 +363,41 @@ function useFieldMapModuleController() {
   }, [interactionPublisher]);
   const onPlanarPatch = useCallback((patch: PlanarPatch) => {
     visualizationSync.queuePatch({ planar: patch });
+    // Quantity, component and section are sample identity: send them now
+    // instead of after the debounce window (D2D-12).
+    if (patch.quantity_id !== undefined || patch.component !== undefined || patch.default_slice !== undefined) {
+      void visualizationSync.flushNow?.();
+    }
   }, [visualizationSync]);
   const onSectionChange = useCallback((defaultSlice: SectionDefaultSlice) => {
     visualizationSync.queuePatch({ planar: { default_slice: defaultSlice } });
+    void visualizationSync.flushNow?.();
   }, [visualizationSync]);
   const sectionDefaultSlice =
     canonicalPlanar?.source.kind === "default"
       ? visualization.optimisticData?.planar?.default_slice ?? canonicalPlanar.default_slice
       : null;
+  // Named layers: realized objects along the section normal (note 0970).
+  const realization = useGeometryRealizationResource(active && sectionDefaultSlice !== null);
+  const sectionPlane = sectionDefaultSlice?.plane ?? null;
+  const objectLayers = useMemo(
+    () => sectionPlane
+      ? objectSectionLayers(realization.data?.bodies, planarSectionAxes(sectionPlane).normal)
+      : [],
+    [realization.data?.bodies, sectionPlane],
+  );
   // Decode binary payloads once per resource revision. Presentation-only
   // updates (pan, zoom, styles) must reuse the same typed arrays so the worker
   // does not recolour the raster on every pointer event.
-  const scalarValues = useMemo(
-    () => (scalar.data ? decodeFieldVector(scalar.data.data).values : null),
-    [scalar.data],
-  );
   const worldVectorValues = useMemo(
     () => (vectors.data ? decodeFieldVector(vectors.data).values : null),
     [vectors.data],
+  );
+  const scalarValues = useMemo(
+    () => clientComponents && worldVectorValues && isClientDerivablePlanarComponent(displayComponent)
+      ? derivePlanarComponentScalar(worldVectorValues, displayComponent)
+      : scalar.data ? decodeFieldVector(scalar.data.data).values : null,
+    [clientComponents, displayComponent, scalar.data, worldVectorValues],
   );
   const frameVectorValues = useMemo(
     () => (worldVectorValues && frame ? projectPlanarVectors(worldVectorValues, frame) : null),
@@ -343,6 +429,7 @@ function useFieldMapModuleController() {
         points: presentationPlanar.layers.points,
         probes: presentationPlanar.layers.probes,
         raster: presentationPlanar.layers.raster,
+        streamlines: presentationPlanar.layers.streamlines ?? false,
         vectors: presentationPlanar.layers.vectors,
       },
       mask: maskValues,
@@ -359,7 +446,7 @@ function useFieldMapModuleController() {
       wireframeStyle: effectiveWireframeStyle,
       pointStyle: presentationPlanar.point_style,
       resolution: meta.data.resolution as [number, number],
-      sampleIdentity: scalar.data.etag ?? "",
+      sampleIdentity: planarRenderIdentity(scalar.data.etag, componentPresentationKey),
       scalar: scalarValues,
       vectorBudget: canonicalPlanar?.resolution.vector_budget ?? 0,
       vectorScale: presentationPlanar.vector_style.scale,
@@ -373,7 +460,7 @@ function useFieldMapModuleController() {
       vectors: frameVectorValues,
       worldVectors: worldVectorValues,
     });
-  }, [canonicalPlanar?.resolution.vector_budget, effectiveWireframeStyle, frame, frameVectorValues, maskValues, meshOverlay.data, meta.data, presentationPlanar, scalar.data, scalarValues, worldVectorValues]);
+  }, [canonicalPlanar?.resolution.vector_budget, componentPresentationKey, effectiveWireframeStyle, frame, frameVectorValues, maskValues, meshOverlay.data, meta.data, presentationPlanar, scalar.data, scalarValues, worldVectorValues]);
   // LR-10: rewizja próbki jest częścią klucza zasobu, więc każda nowa rewizja
   // tworzy świeży wpis store bez danych. Bez retencji rodzic renderował wtedy
   // FieldMapStatus zamiast PlanarSurface, a cleanup zwalniał renderer i worker
@@ -451,11 +538,53 @@ function useFieldMapModuleController() {
       ),
     };
   }, [probe.data, renderModel]);
+  // F6 B1: a line profile is a derived resource of the current sample. The
+  // segment belongs to one view identity, so a new source, plane or quantity
+  // drops it, while a layer step re-evaluates it on the new sample.
+  const [profileSegment, setProfileSegment] = useState<{
+    key: string | null;
+    segment: PlanarProfileSegment;
+  } | null>(null);
+  const activeProfileSegment = profileSegment?.key === planarViewIdentityKey
+    ? profileSegment.segment
+    : null;
+  const onProfileSegment = useCallback(
+    (segment: PlanarProfileSegment | null) =>
+      setProfileSegment(segment ? { key: planarViewIdentityKey, segment } : null),
+    [planarViewIdentityKey],
+  );
+  const profile = usePlanarProfileResource(
+    plan.quantityId,
+    plan.source,
+    activeProfileSegment && canonicalSampleReady
+      ? buildFieldMapProfileQuery(dataQuery, activeProfileSegment, PROFILE_SAMPLES)
+      : null,
+    { enabled: plan.enabled },
+  );
+  // Multislice panels (F6 B2) replace the single surface for the Default source.
+  const multislice = plan.source.kind === "default" && presentationPlanar?.multislice?.enabled
+    ? presentationPlanar.multislice
+    : null;
+  const profileLengthUnit = useMemo(() => activeProfileSegment && renderModel?.frame
+    ? resolvePlanarAxes(
+        {
+          normal: renderModel.frame.normal,
+          origin: renderModel.frame.origin,
+          uAxis: renderModel.frame.uAxis,
+          vAxis: renderModel.frame.vAxis,
+        },
+        renderModel.bounds,
+        renderModel.viewport,
+        1,
+        1,
+      ).displayLengthUnit
+    : null, [activeProfileSegment, renderModel]);
 
 
   const evidenceStatus: PlanarEvidenceStatus = resolvePlanarEvidenceStatus({
     metaIdentity: meta.data?.etag,
     metaStatus: meta.status,
+    presentationKey: componentPresentationKey,
     renderEvidence: activeRenderEvidence,
     scalarIdentity: scalar.data?.etag,
     scalarStatus: scalar.status,
@@ -539,7 +668,7 @@ function useFieldMapModuleController() {
     },
     quantityId,
     raster: activeRenderEvidence?.raster ?? null,
-    scalarIdentity: activeRenderEvidence?.sampleIdentity ?? null,
+    scalarIdentity: planarRenderScalarIdentity(activeRenderEvidence?.sampleIdentity),
     status: evidenceStatus,
   });
 
@@ -556,19 +685,26 @@ function useFieldMapModuleController() {
     onPlanarPatch,
     onRenderEvidence,
     onSectionChange,
+    activeProfileSegment,
+    onProfileSegment,
     pinnedAxisState,
     plan,
     presentationPlanar,
     probe,
+    profile,
+    profileLengthUnit,
     renderModel,
     scalar,
     metaSection,
+    objectLayers,
     sectionDefaultSlice,
     setPinned,
     shownCoordinateM,
     toolbarQuantities,
     vectors,
     visualization,
+    multislice,
+    multisliceClientComponent: clientComponents ? displayComponent : null,
   };
 }
 
@@ -578,7 +714,6 @@ export default function FieldMapModule() {
     canonicalSampleError,
     domainMeta,
     evidence,
-    evidenceStatus,
     mask,
     meshOverlay,
     meta,
@@ -586,24 +721,32 @@ export default function FieldMapModule() {
     onPlanarPatch,
     onRenderEvidence,
     onSectionChange,
+    activeProfileSegment,
+    onProfileSegment,
     pinnedAxisState,
     plan,
     presentationPlanar,
     probe,
+    profile,
+    profileLengthUnit,
     renderModel,
     scalar,
     metaSection,
+    objectLayers,
     sectionDefaultSlice,
     setPinned,
     shownCoordinateM,
     toolbarQuantities,
     vectors,
     visualization,
+    multislice,
+    multisliceClientComponent,
   } = useFieldMapModuleController();
   const sectionStrip = sectionDefaultSlice ? (
     <PlanarSectionStrip
       defaultSlice={sectionDefaultSlice}
       domain={domainMeta}
+      objectLayers={objectLayers}
       section={metaSection}
       shownCoordinate={shownCoordinateM}
       onChange={onSectionChange}
@@ -677,7 +820,7 @@ export default function FieldMapModule() {
     : null;
 
   return (
-    <section className="fm-field-map">
+    <section className={activeProfileSegment ? "fm-field-map fm-field-map--with-profile" : "fm-field-map"}>
       <output
         aria-label="Planar field evidence"
         data-planar-component={evidence.component}
@@ -720,6 +863,7 @@ export default function FieldMapModule() {
       />
       <header className="fm-field-map__toolbar">
         {toolbar}
+        <PlanarSnapshotNavigator status={evidence.status} />
         {ambiguousSurfaceMeta ? (
           <span className="fm-field-map__diagnostic" role="status">
             Ambiguous surface: {ambiguousSurfaceMeta.overlap_count} overlaps,{" "}
@@ -728,11 +872,30 @@ export default function FieldMapModule() {
         ) : null}
       </header>
       <div className="fm-field-map__stage">
+        {multislice ? (
+          <PlanarMultisliceGrid
+            baseQuery={plan.query}
+            clientComponent={multisliceClientComponent}
+            colorByDirection={renderModel.directionVectors !== null}
+            colormap={renderModel.colormap ?? presentationPlanar.colormap}
+            positionFractions={multislice.position_fractions}
+            quantityId={plan.quantityId}
+            range={normalizePlanarColorRange(presentationPlanar.range)}
+            rasterOpacity={presentationPlanar.raster_opacity ?? 1}
+            renderLegend={(range) => presentationPlanar.viewport_colorbar_visible !== false ? (
+              <PlanarColorLegend colormap={renderModel.colormap ?? presentationPlanar.colormap} component={presentationPlanar.component} legendUnit={renderModel.display.legendUnit} probeScale={renderModel.display.probeScale} quantityId={plan.quantityId} range={range} rangeState={range ? "current" : "pending"} />
+            ) : null}
+            requestVectors={plan.requestVectors}
+            source={plan.source}
+          />
+        ) : (
         <PlanarSurface
           model={renderModel}
           onInteraction={onInteraction}
           onPin={(u, v) => setPinned([u, v])}
+          onProfileSegment={onProfileSegment}
           onRenderEvidence={onRenderEvidence}
+          profileSegment={activeProfileSegment}
           probeOverlay={presentationPlanar.layers.probes && probe.data ? (
             <PlanarPinnedProbe
               axisState={pinnedAxisState}
@@ -742,7 +905,8 @@ export default function FieldMapModule() {
             />
           ) : null}
         />
-        {presentationPlanar.viewport_colorbar_visible !== false ? (
+        )}
+        {presentationPlanar.viewport_colorbar_visible !== false && !multislice ? (
           <PlanarColorLegend
             colormap={renderModel.colormap ?? presentationPlanar.colormap}
             component={presentationPlanar.component}
@@ -752,16 +916,30 @@ export default function FieldMapModule() {
             range={renderModel.range}
             rangeState={
               renderModel.range
-                ? evidenceStatus === "ready"
+                ? evidence.status === "ready"
                   ? "current"
                   : "stale-compatible"
-                : evidenceStatus === "loading"
+                : evidence.status === "loading"
                   ? "pending"
                   : "unavailable"
             }
           />
         ) : null}
       </div>
+      {activeProfileSegment ? (
+        <PlanarProfileChart
+          display={{
+            lengthScale: profileLengthUnit?.scale ?? 1,
+            lengthUnit: profileLengthUnit?.symbol ?? "m",
+            legendUnit: renderModel.display.legendUnit,
+            probeScale: renderModel.display.probeScale,
+          }}
+          onClear={() => onProfileSegment(null)}
+          profile={profile.data ?? null}
+          quantityLabel={quantityDisplayName(plan.quantityId)}
+          status={profile.status === "error" ? `unavailable: ${String((profile.error as Error | null)?.message ?? "error")}` : "loading"}
+        />
+      ) : null}
       {renderModel.diagnostics.length ? (
         <div className="fm-field-map__diagnostics" role="status" aria-label="Planar presentation diagnostics">
           {renderModel.diagnostics.map((message) => <p key={message}>{message}</p>)}
@@ -775,32 +953,6 @@ export default function FieldMapModule() {
         ]}
       />
     </section>
-  );
-}
-
-function FieldMapAuxiliaryDiagnostics({
-  layers,
-}: {
-  layers: readonly {
-    label: string;
-    requested: boolean;
-    resource: { data: ArrayBuffer | null; error: Error | null; status: "error" | "idle" | "loading" | "ready" | "stale" };
-  }[];
-}) {
-  const diagnostics = resolveFieldMapAuxiliaryDiagnostics(
-    layers.map(({ label, requested, resource }) => ({
-      errorMessage: resource.error?.message ?? null,
-      hasData: resource.data !== null,
-      label,
-      requested,
-      status: resource.status,
-    })),
-  );
-  if (diagnostics.length === 0) return null;
-  return (
-    <div className="fm-field-map__diagnostics" role="status" aria-label="Planar layer diagnostics">
-      {diagnostics.map((message) => <p key={message}>{message}</p>)}
-    </div>
   );
 }
 

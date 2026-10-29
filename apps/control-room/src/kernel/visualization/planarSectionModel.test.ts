@@ -174,3 +174,69 @@ describe("FEM node-plane stops", () => {
     expect(stepSectionFraction(fractionOf(20e-9), geometry, 1)).toBeCloseTo(fractionOf(20e-9), 12);
   });
 });
+
+describe("continuous FEM navigation step", () => {
+  it("steps by the published median element height and ignores other step kinds", async () => {
+    const { stepSectionFraction, withSectionStops } = await import("./planarSectionModel");
+    const continuous = {
+      layerCount: null,
+      layerSpacing: null,
+      nativeResolution: null,
+      normal: "z" as const,
+      normalExtent: 80e-9,
+      normalMax: 40e-9,
+      normalMin: -40e-9,
+      plane: "xy" as const,
+      u: "x" as const,
+      v: "y" as const,
+    };
+    const geometry = withSectionStops(continuous, {
+      navigation_step_kind: "median_element_height",
+      navigation_step_m: 4e-9,
+      plane: "xy",
+    })!;
+    expect(geometry.navigationStepM).toBe(4e-9);
+    expect(stepSectionFraction(0.5, geometry, 1)).toBeCloseTo(0.55, 12);
+    expect(stepSectionFraction(0.5, geometry, -2)).toBeCloseTo(0.4, 12);
+    const fallback = withSectionStops(continuous, {
+      navigation_step_kind: "extent_fraction",
+      navigation_step_m: 0.8e-9,
+      plane: "xy",
+    })!;
+    expect(fallback.navigationStepM).toBeUndefined();
+    expect(stepSectionFraction(0.5, fallback, 1)).toBeCloseTo(0.51, 12);
+  });
+});
+
+describe("named object layers", () => {
+  it("merges realized bodies per object and maps a layer to a centred slab", async () => {
+    const { matchObjectLayer, objectLayerSlice, objectSectionLayers } = await import("./planarSectionModel");
+    const layers = objectSectionLayers([
+      { bounds_max: [1, 1, 5e-9], bounds_min: [0, 0, 0], object_id: "free", object_name: "free_layer" },
+      { bounds_max: [1, 1, 12e-9], bounds_min: [0, 0, 7e-9], object_id: "ref", object_name: "reference" },
+      { bounds_max: [2, 1, 6e-9], bounds_min: [1, 0, 1e-9], object_id: "free", object_name: "free_layer" },
+      { bounds_max: [1, 1, 3e-9], bounds_min: [0, 0, 3e-9], object_id: "flat", object_name: "flat" },
+    ], "z");
+    expect(layers).toEqual([
+      { max: 6e-9, min: 0, name: "free_layer", objectId: "free" },
+      { max: 12e-9, min: 7e-9, name: "reference", objectId: "ref" },
+    ]);
+    const geometry = {
+      layerCount: null,
+      layerSpacing: null,
+      nativeResolution: null,
+      normal: "z" as const,
+      normalExtent: 20e-9,
+      normalMax: 20e-9,
+      normalMin: 0,
+      plane: "xy" as const,
+      u: "x" as const,
+      v: "y" as const,
+    };
+    const slice = objectLayerSlice(geometry, layers[1]!);
+    expect(slice.operator).toEqual({ kind: "slab_average", thickness_m: 5e-9 });
+    expect(slice.position_fraction).toBeCloseTo(0.475, 12);
+    expect(matchObjectLayer(slice, geometry, layers)?.objectId).toBe("ref");
+    expect(matchObjectLayer({ ...slice, operator: { kind: "plane_sample" } }, geometry, layers)).toBeNull();
+  });
+});

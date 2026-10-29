@@ -22,6 +22,8 @@ pub(crate) enum ResolvedSpatialScope {
     MeshPart { scope_id: String },
     Airbox { scope_id: Option<String> },
     FdmNativeLayer { layer_id: String },
+    /// One region of a ferromagnetic object, intersected with the target.
+    Region { object_id: String, region_id: String },
 }
 
 #[derive(Debug, Clone)]
@@ -43,6 +45,28 @@ pub(crate) struct ResolvedSpatialTarget {
     source_entity_kind: &'static str,
 }
 
+/// Point count from which a FEM locator builds the element index.
+const POINT_LOCATOR_INDEX_THRESHOLD: usize = 32;
+
+/// Point evaluation with an optional element index; results equal
+/// `ResolvedSpatialTarget::evaluate_point`.
+pub(crate) struct PointLocator<'a> {
+    target: &'a ResolvedSpatialTarget,
+    index: Option<super::element_index::ElementBvh>,
+    candidates: Vec<u32>,
+}
+
+impl PointLocator<'_> {
+    pub(crate) fn evaluate(&mut self, point: [f64; 3]) -> Option<(u32, Vec<f64>)> {
+        match (&self.target.field, &self.index) {
+            (TargetField::Fem(field), Some(index)) => {
+                super::fem::interpolate_at_indexed(field, index, &mut self.candidates, point)
+            }
+            _ => self.target.evaluate_point(point),
+        }
+    }
+}
+
 impl ResolvedSpatialTarget {
     /// Raw carrier value at a world point with the raster's own locator and
     /// basis: containing FDM cell or FEM shape functions. `None` when the point
@@ -54,6 +78,19 @@ impl ResolvedSpatialTarget {
             }
             TargetField::Fem(field) => super::fem::interpolate_at(field, point),
         }
+    }
+
+    /// Locator for `expected_points` evaluations. FEM targets with many points
+    /// build an element AABB hierarchy once (PM-N28); a few points keep the
+    /// direct scan, which is cheaper than building the index.
+    pub(crate) fn point_locator(&self, expected_points: usize) -> PointLocator<'_> {
+        let index = match &self.field {
+            TargetField::Fem(field) if expected_points >= POINT_LOCATOR_INDEX_THRESHOLD => {
+                Some(super::fem::element_index(field))
+            }
+            _ => None,
+        };
+        PointLocator { target: self, index, candidates: Vec::new() }
     }
 
     pub(crate) fn selected_entity_ids(&self) -> &[u32] {
@@ -180,6 +217,10 @@ pub(crate) struct PlanarSampleIdentity {
     pub target_entity_count: usize,
     pub scope_kind: String,
     pub scope_id: Option<String>,
+    /// Region within the `scope_id` object for `region` scopes; omitted from
+    /// the token otherwise so existing sample identities are unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope_region_id: Option<String>,
     pub quantity_id: String,
     pub component: String,
     pub quantity_revision: u64,
@@ -253,9 +294,12 @@ pub(crate) fn resolve_spatial_target(
                     "unsupported_planar_surface: FDM boundary topology is not published",
                 ));
             }
-            if !matches!(scope, ResolvedSpatialScope::MonitorTarget) {
+            if !matches!(
+                scope,
+                ResolvedSpatialScope::MonitorTarget | ResolvedSpatialScope::Region { .. }
+            ) {
                 return Err(ApiError::unprocessable(
-                    "target_unsupported: FDM cell fields are not an airbox carrier and support monitor_target only",
+                    "target_unsupported: FDM cell fields are not an airbox carrier and support monitor_target or region only",
                 ));
             }
             let origin = origin_m.ok_or_else(|| {
@@ -264,12 +308,28 @@ pub(crate) fn resolve_spatial_target(
             let spacing = cell_size_m.ok_or_else(|| {
                 ApiError::conflict("missing_fdm_geometry: exact cell size is unavailable")
             })?;
-            let selected = select_fdm_target(
+            let mut selected = select_fdm_target(
                 *cells,
                 membership.as_ref(),
                 membership_error.as_deref(),
                 target,
             )?;
+            if let ResolvedSpatialScope::Region {
+                object_id,
+                region_id,
+            } = scope
+            {
+                let region = select_fdm_target(
+                    *cells,
+                    membership.as_ref(),
+                    membership_error.as_deref(),
+                    &MonitorTargetIR::Region {
+                        object_id: object_id.clone(),
+                        region_id: region_id.clone(),
+                    },
+                )?;
+                intersect_masks(&mut selected, &region);
+            }
             let carrier_identity = grid_fingerprint
                 .clone()
                 .unwrap_or_else(|| format!("fdm:{cells:?}:{origin:?}:{spacing:?}"));
@@ -555,6 +615,25 @@ fn build_fem_target(
             return Err(ApiError::unprocessable(
                 "target_unsupported: native FDM layer scope is not valid for FEM topology",
             ));
+        }
+        ResolvedSpatialScope::Region {
+            object_id,
+            region_id,
+        } => {
+            let region = select_fem_monitor_target(
+                mesh,
+                &elements,
+                &MonitorTargetIR::Region {
+                    object_id: object_id.clone(),
+                    region_id: region_id.clone(),
+                },
+            );
+            if !region.iter().any(|selected| *selected) {
+                return Err(ApiError::unprocessable(format!(
+                    "empty_target: FEM region scope not found: {object_id}/{region_id}"
+                )));
+            }
+            region
         }
     };
     let mut selected = select_fem_monitor_target(mesh, &elements, target);

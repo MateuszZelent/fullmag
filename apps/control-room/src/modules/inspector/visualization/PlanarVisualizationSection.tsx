@@ -7,6 +7,7 @@ import type {
   PlanarFieldSource,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
+import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   planarFieldQueryFromMeta,
@@ -15,11 +16,13 @@ import {
 } from "@/kernel/resources/planarFieldResources";
 import { usePlanarMonitorsResource } from "@/kernel/resources/planarMonitorResources";
 import { useDomainMetaResource } from "@/kernel/resources/geometryLifecycleResources";
+import { isFlowMajorTensorDescriptor, tensorProjectionOutputKind } from "@/kernel/api/tensorFieldProjection";
+import { quantityCatalogEntrySpatialProjections, quantityCatalogEntrySupportsAnySpatialVisualization } from "@/kernel/api/quantityIds";
+import { useFieldCatalogResource, useQuantityCatalogResource } from "@/kernel/resources/studyRuntimeResources";
 import {
   planarGridResolutionPresets,
   resolvePlanarSectionGeometry,
 } from "@/kernel/visualization/planarSectionModel";
-import { useFieldCatalogResource } from "@/kernel/resources/studyRuntimeResources";
 import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { resolveVisualizationTargetFromSelection } from "@/kernel/visualization/ObjectVisualizationController";
@@ -105,8 +108,12 @@ function capabilityReason(capability: FieldMapCapability): string | undefined {
       return "The selected scalar quantity has no vector components.";
     case "quantity_not_spatial":
       return "The selected quantity is not spatially sampleable.";
+    case "airbox_carrier_unresolved":
+      return "Waiting for the backend to resolve the Airbox carrier.";
     default:
-      return "This control is unavailable for the selected planar sample.";
+      return capability.reasonCode
+        ? `Unavailable for the selected planar sample: ${capability.reasonCode}`
+        : "This control is unavailable for the selected planar sample.";
   }
 }
 
@@ -129,6 +136,7 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
   const monitors = usePlanarMonitorsResource({ enabled: coverage.supported });
   const domain = useDomainMetaResource({ enabled: coverage.supported });
   const fieldCatalog = useFieldCatalogResource({ enabled: coverage.supported });
+  const quantityCatalog = useQuantityCatalogResource({ enabled: coverage.supported });
   const discretization = useSessionStatusSelector(
     (status) => resolveSessionDiscretization(status.data),
     { enabled: coverage.supported },
@@ -184,11 +192,18 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
   );
   const patch = (next: PlanarPatch) => visualizationSync.queuePatch({ planar: next });
   const selectedDescriptor = fieldCatalog.data?.quantities.find((quantity) => quantity.quantity_id === quantityId);
-  const componentItems = (selectedDescriptor?.components ?? 3) > 1 ? PLANAR_COMPONENTS : ["magnitude"];
+  const catalogQuantity = quantityCatalog.data?.quantities.find((entry) => entry.id === quantityId);
+  const tensor = catalogQuantity?.tensor;
+  const tensorOptions = quantityCatalogEntrySpatialProjections(catalogQuantity);
+  const componentItems = tensorOptions.length > 0 ? tensorOptions
+    : tensor != null || (selectedDescriptor && ![1, 2, 3].includes(selectedDescriptor.components)) ? []
+    : ((selectedDescriptor?.components ?? 3) > 1 ? PLANAR_COMPONENTS : ["magnitude"]).map((value) => ({ value, label: value.replaceAll("_", " ") }));
   const canonicalUnit = meta.data?.canonical_unit ?? selectedDescriptor?.unit ?? "";
   const displayUnitItems = scalarColorbarDisplayUnitItems(canonicalUnit);
   const availableQuantities = (fieldCatalog.data?.quantities ?? []).filter(
-    (quantity) => quantity.available,
+    (quantity) => quantity.available && (!quantityCatalog.data ||
+      Boolean(quantityCatalog.data.quantities.find((entry) => entry.id === quantity.quantity_id &&
+        quantityCatalogEntrySupportsAnySpatialVisualization(entry)))),
   );
   const vectorQuantity = (selectedDescriptor?.components ?? 3) > 1;
   const paletteItems = vectorQuantity
@@ -265,8 +280,12 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
       : null,
     discretization,
     metaAvailable: meta.status === "ready" && meta.data !== null,
+    metaErrorCode: meta.error instanceof ControlRoomApiError ? meta.error.code : null,
     occupancyAvailable: mask.status === "ready" && mask.data !== null,
+    component: planar.component,
     quantity: selectedDescriptor,
+    tensor,
+    catalogQuantity,
     scopeKind: planar.view_scope.kind,
   });
   const scalarReason = capabilityReason(capabilities.raster);
@@ -336,7 +355,7 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
         clipping={<p className="m-0 text-fm-help leading-snug text-fm-muted">The active plane and slice position are controlled in Source &amp; Slice.</p>}
         context={sourceAndSlice}
         dataState={dataState}
-        display={<><PlanarDisplayPassesSection capabilities={capabilities} layers={planar.layers} patch={patch} visible={planar.visible} /><VisualizationRenderModeControl disabled={!planar.visible} options={renderModeOptions} value={resolvePlanarDisplayMode(planar.layers)} onValueChange={(mode) => patch(planarDisplayModePatch(mode, planar.layers))} /><FormField label="Quantity" type="select" value={quantityId} onChange={(event) => patch({ component: "magnitude", quantity_id: event.currentTarget.value })}>{availableQuantities.map((quantity) => <option key={quantity.quantity_id} value={quantity.quantity_id}>{quantity.label} ({quantity.unit || "1"})</option>)}</FormField><FormField label="Component" type="select" value={planar.component} onChange={(event) => patch({ component: event.currentTarget.value as PlanarState["component"] })}>{componentItems.map((component) => <option key={component} value={component}>{component.replaceAll("_", " ")}</option>)}</FormField></>}
+        display={<><PlanarDisplayPassesSection capabilities={capabilities} layers={planar.layers} patch={patch} visible={planar.visible} /><VisualizationRenderModeControl disabled={!planar.visible} options={renderModeOptions} value={resolvePlanarDisplayMode(planar.layers)} onValueChange={(mode) => patch(planarDisplayModePatch(mode, planar.layers))} /><FormField label="Quantity" type="select" value={quantityId} onChange={(event) => { const next = event.currentTarget.value; const entry = quantityCatalog.data?.quantities.find((entry) => entry.id === next); const options = quantityCatalogEntrySpatialProjections(entry); if (isFlowMajorTensorDescriptor(entry?.tensor) && options.length === 0) return; patch({ component: options.find((option) => option.value === "frobenius")?.value ?? options[0]?.value ?? "magnitude", quantity_id: next, ...(isFlowMajorTensorDescriptor(entry?.tensor) ? { layers: { ...planar.layers, vectors: false } } : {}) }); }}>{availableQuantities.map((quantity) => <option key={quantity.quantity_id} value={quantity.quantity_id}>{quantity.label} ({quantity.unit || "1"})</option>)}</FormField><FormField label="Component" type="select" value={planar.component} onChange={(event) => { const component = event.currentTarget.value as PlanarState["component"]; if (tensor != null && !tensorOptions.some((option) => option.value === component)) return; patch({ component, ...(isFlowMajorTensorDescriptor(tensor) && tensorProjectionOutputKind(component) !== "vector" ? { layers: { ...planar.layers, vectors: false } } : {}) }); }}>{componentItems.map((component) => <option key={component.value} value={component.value}>{component.label}</option>)}</FormField></>}
         enabledPassCount={enabledPassCount}
         meshState={capabilities.mesh.enabled ? "Ready" : "Degraded"}
         quantitySource={quantityId || "Not available"}

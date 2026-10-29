@@ -227,7 +227,7 @@ const visualizationDebugPanelModelPath = path.join(
 const broadSessionStatusConsumerPaths = [
   "src/modules/explorer/ExplorerModule.tsx",
   "src/modules/ribbon/RibbonModule.tsx",
-  "src/modules/footer/FooterTelemetry.tsx",
+  "src/modules/footer/FooterModule.tsx",
   "src/modules/status-bar/StatusBarModule.tsx",
 ].map((relativePath) => path.join(appRoot, relativePath));
 const shellSelectorConsumerContracts = [
@@ -253,7 +253,12 @@ const shellSelectorConsumerContracts = [
   {
     forbid: ["useSelection(", "useSessionStatus("],
     path: "src/modules/footer/FooterTelemetry.tsx",
-    require: ["useSelectionSelector", "useSessionStatusSelector"],
+    require: ["useSelectionSelector"],
+  },
+  {
+    forbid: ["useSessionStatus("],
+    path: "src/modules/footer/FooterModule.tsx",
+    require: ["useSessionStatusSelector"],
   },
   {
     forbid: ["useSelection("],
@@ -1752,21 +1757,33 @@ function checkFooterTelemetryIsOptIn() {
   requireTokens(source, "Footer telemetry opt-in", [
     "useLayoutSelector((layout) => layout.activeBottomPanelTab)",
     'activeTab === "telemetry" ?',
-    '<FooterTelemetry bus={kernel.bus} />',
+    '<FooterTelemetry',
+    'bus={kernel.bus}',
+    'status={status}',
+    'stageExecution={stageExecution}',
+    'view={telemetryTab}',
   ]);
   forbidTokens(source, "Footer telemetry opt-in", [
     'useState<FooterTabId>("logs")',
   ]);
 
   const telemetrySource = readFileSync(footerTelemetryPath, "utf8");
-  requireTokens(telemetrySource, "FooterTelemetry selective session status", [
+  requireTokens(source, "FooterModule selective session status", [
     "selectFooterTelemetryStatus",
     "footerTelemetryStatusEquals",
     "useSessionStatusSelector(selectFooterTelemetryStatus",
     "isEqual: footerTelemetryStatusEquals",
   ]);
-  forbidTokens(telemetrySource, "FooterTelemetry selective session status", [
+  forbidTokens(source, "FooterModule selective session status", [
     "(sessionStatus) => sessionStatus.data",
+  ]);
+  requireTokens(telemetrySource, "FooterTelemetry status projection", [
+    "export function selectFooterTelemetryStatus",
+    "export function footerTelemetryStatusEquals",
+  ]);
+  forbidTokens(telemetrySource, "FooterTelemetry receives shared subscriptions", [
+    "useSessionStatusSelector(",
+    "useStageExecutionResource(",
   ]);
 }
 

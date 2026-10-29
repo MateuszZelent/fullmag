@@ -719,6 +719,7 @@ mod tests {
             occupancy: vec![Occupancy::Occupied; value_count],
             source_entity_ids: vec![Some(0); value_count],
             overlay: None,
+            section_extent: None,
         })
     }
 

@@ -11,6 +11,8 @@ use crate::schemas::visualization_state::{
     DefaultPlanarOperatorState, DefaultPlanarSliceState, PlanarAxisPlane,
 };
 
+use super::FemSectionExtent;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct ResolvedPlanarSourceIdentity {
     pub source_kind: String,
@@ -105,7 +107,7 @@ pub(crate) struct ResolvedPlanarSection {
     pub requested_fraction: f64,
     pub requested_coordinate_m: f64,
     pub resolved_coordinate_m: f64,
-    /// `fdm_cell_layers` when the coordinate snaps to cell centres, else `continuous`.
+    /// `fdm_cell_layers`, `fem_node_planes`, `fem_node_planes_between` or `continuous`.
     pub stops_kind: &'static str,
     pub layer_index: Option<u32>,
     pub layer_count: Option<u32>,
@@ -114,8 +116,33 @@ pub(crate) struct ResolvedPlanarSection {
     pub normal_max_m: f64,
     /// Distance moved by one layer step (FDM cell) or navigation step (continuous).
     pub navigation_step_m: f64,
+    /// `fdm_cell`, `fem_node_plane_spacing`, `median_element_height`
+    /// (`eq-planar-navigation-step`) or `extent_fraction`.
+    pub navigation_step_kind: &'static str,
+    /// Target elements cut by the sampled FEM plane, when known.
+    pub cut_element_count: Option<u32>,
     /// Discrete stops along the normal (FEM certificate node planes).
     pub layer_stops_m: Vec<f64>,
+}
+
+impl ResolvedPlanarSection {
+    /// A continuous FEM section navigates by the median normal extent of the
+    /// elements its plane cuts; discrete FDM layers and node planes keep their
+    /// own spacing.
+    pub(crate) fn with_fem_section_extent(mut self, extent: Option<FemSectionExtent>) -> Self {
+        let Some(extent) = extent else {
+            return self;
+        };
+        self.cut_element_count = Some(extent.cut_element_count);
+        if self.stops_kind == "continuous"
+            && extent.normal_extent_median_m.is_finite()
+            && extent.normal_extent_median_m > 0.0
+        {
+            self.navigation_step_m = extent.normal_extent_median_m;
+            self.navigation_step_kind = "median_element_height";
+        }
+        self
+    }
 }
 
 struct SliceCoordinate {
@@ -263,6 +290,8 @@ fn resolved_section(
             normal_min_m,
             normal_max_m,
             navigation_step_m: spacing,
+            navigation_step_kind: "fem_node_plane_spacing",
+            cut_element_count: None,
             layer_stops_m: stops.coordinates_m.clone(),
         };
     }
@@ -288,6 +317,12 @@ fn resolved_section(
         normal_max_m,
         navigation_step_m: layer_spacing_m
             .unwrap_or((normal_max_m - normal_min_m) * CONTINUOUS_SECTION_STEP_FRACTION),
+        navigation_step_kind: if layer_spacing_m.is_some() {
+            "fdm_cell"
+        } else {
+            "extent_fraction"
+        },
+        cut_element_count: None,
         layer_stops_m: Vec::new(),
     }
 }
@@ -342,8 +377,18 @@ pub(crate) fn resolve_default_planar_source_with_stops(
         PlanarAxisPlane::Yz => ("yz", 0),
     };
     let mut coordinate = default_slice_coordinate(domain, normal_axis, q)?;
+    // A slab is centred where it was requested: snapping its centre to a cell
+    // or node plane would shift an object-thickness slab into its neighbours.
+    let slab = matches!(
+        default_slice.operator,
+        DefaultPlanarOperatorState::SlabAverage { .. }
+    );
+    if slab {
+        coordinate.resolved = coordinate.requested;
+        coordinate.layer = None;
+    }
     let node_planes = match fem_stops {
-        Some(stops) if stops.axis == normal_axis && coordinate.layer.is_none() => {
+        Some(stops) if !slab && stops.axis == normal_axis && coordinate.layer.is_none() => {
             let (snapped, layer) = snap_to_node_plane(coordinate, stops);
             coordinate = snapped;
             Some((stops, layer))
@@ -509,7 +554,7 @@ mod tests {
 
     use super::{
         resolve_authored_planar_source, resolve_default_planar_source,
-        resolve_default_planar_source_with_stops, FemNodePlaneStops,
+        resolve_default_planar_source_with_stops, FemNodePlaneStops, FemSectionExtent,
     };
 
     fn domain(min: [f64; 3], max: [f64; 3], generation_id: &str) -> DomainMeta {
@@ -643,6 +688,17 @@ mod tests {
         assert_eq!(section.layer_index, None);
         assert_eq!(section.requested_coordinate_m, section.resolved_coordinate_m);
         assert!((section.navigation_step_m - 0.2e-9).abs() < 1e-24);
+        assert_eq!(section.navigation_step_kind, "extent_fraction");
+
+        // A sampled continuous FEM plane navigates by the median cut extent.
+        let navigated = section.clone().with_fem_section_extent(Some(FemSectionExtent {
+            cut_element_count: 12,
+            normal_extent_median_m: 3.0e-9,
+        }));
+        assert_eq!(navigated.navigation_step_m, 3.0e-9);
+        assert_eq!(navigated.navigation_step_kind, "median_element_height");
+        assert_eq!(navigated.cut_element_count, Some(12));
+        assert_eq!(section.clone().with_fem_section_extent(None), section);
     }
 
     #[test]
@@ -785,6 +841,31 @@ mod tests {
                 v_max_m: 6.0,
             }
         );
+    }
+
+    #[test]
+    fn default_fdm_slab_is_centred_at_the_requested_coordinate() {
+        let mut d = domain([0.0; 3], [1.0, 1.0, 8.0], "generation-a");
+        d.grid = Some(StructuredGridDescriptor {
+            shape: [1, 1, 8],
+            origin: [0.0; 3],
+            spacing: [1.0; 3],
+        });
+        // z = 2.0 is a cell boundary; a plane sample snaps to the cell centre
+        // 1.5, a two-cell object slab must stay centred on 2.0.
+        let resolved = resolve_default_planar_source(
+            &d,
+            &slice(
+                PlanarAxisPlane::Xy,
+                0.25,
+                DefaultPlanarOperatorState::SlabAverage { thickness_m: 2.0 },
+            ),
+        )
+        .unwrap();
+        assert_eq!(resolved.frame.origin_m[2], 2.0);
+        let section = resolved.section.expect("section");
+        assert_eq!(section.layer_index, None);
+        assert_eq!(section.resolved_coordinate_m, 2.0);
     }
 
     #[test]

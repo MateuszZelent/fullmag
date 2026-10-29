@@ -14,6 +14,7 @@ use uuid::Uuid;
 pub const LEGACY_RESOLVED_TASK_INPUT_SCHEMA: &str = "resolved_task_input.v2";
 pub const RESOLVED_TASK_INPUT_SCHEMA: &str = "resolved_task_input.v3";
 pub const CLOSED_LOOP_RESOLVED_TASK_INPUT_SCHEMA: &str = "resolved_task_input.v4";
+pub const TERMINAL_RESOLVED_TASK_INPUT_SCHEMA: &str = "resolved_task_input.v5";
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -299,6 +300,7 @@ impl ClaimIdentity {
 
 pub const WORKER_PROTOCOL_SCHEMA: &str = "worker_protocol.v3";
 pub const CLOSED_LOOP_WORKER_PROTOCOL_SCHEMA: &str = "worker_protocol.v4";
+pub const TERMINAL_WORKER_PROTOCOL_SCHEMA: &str = "worker_protocol.v5";
 
 /// Commands are at-least-once transport messages.  The ledger below makes a
 /// repeated message idempotent, while a new command must advance its sequence.
@@ -335,6 +337,11 @@ impl WorkerCommandEnvelope {
                     != (resolved_input.schema_version == CLOSED_LOOP_RESOLVED_TASK_INPUT_SCHEMA)
                 {
                     return Err(ExecutionError::Invalid("worker protocol and operation input versions differ".into()));
+                }
+                if (self.schema_version == TERMINAL_WORKER_PROTOCOL_SCHEMA)
+                    != (resolved_input.schema_version == TERMINAL_RESOLVED_TASK_INPUT_SCHEMA)
+                {
+                    return Err(ExecutionError::Invalid("terminal worker/input versions differ".into()));
                 }
                 if resolved_input.run_id != self.claim.run_id
                     || resolved_input.task_id != self.claim.task_id
@@ -1223,6 +1230,7 @@ impl TaskRecord {
             requested_execution: specification.requested_execution.clone(),
             preparation,
             inputs,
+            frozen_stage_context: None,
         })
     }
 
@@ -1290,6 +1298,9 @@ fn is_supported_study_artifact_codec(data_kind: &str, codec_id: &str, version: &
     (matches!(data_kind, "state" | "initial_state")
         && codec_id == crate::study_artifact::STUDY_MAGNETIZATION_CODEC_ID
         && version == crate::study_artifact::STUDY_MAGNETIZATION_CODEC_VERSION)
+        || (matches!(data_kind, "state" | "initial_state")
+            && codec_id == crate::study_artifact::STUDY_FROZEN_STATE_CODEC_ID
+            && version == crate::study_artifact::STUDY_FROZEN_STATE_CODEC_VERSION)
         || (data_kind == "scalar"
             && codec_id == crate::study_artifact::STUDY_SCALAR_CODEC_ID
             && version == crate::study_artifact::STUDY_SCALAR_CODEC_VERSION)
@@ -1326,6 +1337,72 @@ impl ResolvedInput {
     }
 }
 
+
+/// A prepared lifecycle input is separate from authored study input ports.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenStageContextRefV1 {
+    pub schema_version: String,
+    pub run_id: String,
+    pub stage_id: String,
+    pub case_id: String,
+    pub entry_kind: String,
+    pub context_object_ref: String,
+    pub context_sha256: String,
+    pub context_byte_count: u64,
+    #[serde(deserialize_with = "required_stage_source_option")]
+    pub source_manifest: Option<FrozenStageSourceManifestRef>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenStageSourceManifestRef {
+    pub catalog_revision: u64,
+    pub artifact_id: String,
+    pub object_ref: String,
+    pub content_sha256: String,
+}
+
+fn required_stage_source_option<'de, D>(deserializer: D)
+    -> Result<Option<FrozenStageSourceManifestRef>, D::Error>
+where D: serde::Deserializer<'de> {
+    Option::deserialize(deserializer)
+}
+
+impl FrozenStageContextRefV1 {
+    pub fn validate(&self) -> Result<(), ExecutionError> {
+        validate_identifier(&self.run_id, "frozen stage run_id")?;
+        validate_identifier(&self.case_id, "frozen stage case_id")?;
+        // Match the canonical study-step label contract, not a filesystem ID.
+        if self.stage_id.trim().is_empty() || self.stage_id.len() > 256
+            || self.stage_id.chars().any(|c| c.is_control() || c == '/' || c == '\\')
+        {
+            return Err(ExecutionError::Invalid("invalid frozen stage label".into()));
+        }
+        validate_sha256(&self.context_object_ref, "frozen stage context_object_ref")?;
+        validate_sha256(&self.context_sha256, "frozen stage context_sha256")?;
+        if self.schema_version != "frozen_stage_context_ref.v1"
+            || self.context_object_ref != self.context_sha256 || self.context_byte_count == 0
+        {
+            return Err(ExecutionError::Invalid("invalid frozen stage context binding".into()));
+        }
+        match self.entry_kind.as_str() {
+            "fresh_authored_root" if self.source_manifest.is_none() => {},
+            "continued_stage" if self.source_manifest.is_some() => {},
+            _ => return Err(ExecutionError::Invalid("frozen lifecycle source presence differs".into())),
+        }
+        if let Some(source) = &self.source_manifest {
+            validate_identifier(&source.artifact_id, "frozen source artifact_id")?;
+            validate_sha256(&source.object_ref, "frozen source object_ref")?;
+            validate_sha256(&source.content_sha256, "frozen source content_sha256")?;
+            if source.catalog_revision == 0 || source.object_ref != source.content_sha256 {
+                return Err(ExecutionError::Invalid("invalid frozen source manifest binding".into()));
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResolvedTaskInput {
@@ -1341,6 +1418,14 @@ pub struct ResolvedTaskInput {
     pub requested_execution: RequestedExecution,
     pub preparation: PreparationBinding,
     pub inputs: BTreeMap<String, ResolvedInput>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present_frozen_stage_context")]
+    pub frozen_stage_context: Option<FrozenStageContextRefV1>,
+}
+
+fn deserialize_present_frozen_stage_context<'de,D:serde::Deserializer<'de>>(decoder:D)
+    -> Result<Option<FrozenStageContextRefV1>,D::Error> {
+    // Missing remains legacy None; present null is never a valid V5 context.
+    FrozenStageContextRefV1::deserialize(decoder).map(Some)
 }
 
 /// Process-local admission guard for resource leases.  It prevents two task
@@ -1439,6 +1524,7 @@ impl ResolvedTaskInput {
         if self.schema_version != RESOLVED_TASK_INPUT_SCHEMA
             && self.schema_version != LEGACY_RESOLVED_TASK_INPUT_SCHEMA
             && self.schema_version != CLOSED_LOOP_RESOLVED_TASK_INPUT_SCHEMA
+            && self.schema_version != TERMINAL_RESOLVED_TASK_INPUT_SCHEMA
         {
             return Err(ExecutionError::Invalid(format!(
                 "schema_version must be {RESOLVED_TASK_INPUT_SCHEMA} or {LEGACY_RESOLVED_TASK_INPUT_SCHEMA}"
@@ -1457,6 +1543,16 @@ impl ResolvedTaskInput {
             != (self.preparation.schema_version == crate::closed_loop_preparation::CLOSED_LOOP_PREPARATION_BINDING_SCHEMA)
         {
             return Err(ExecutionError::Invalid("resolved input and preparation operation versions differ".into()));
+        }
+        match &self.frozen_stage_context {
+            Some(context) if self.schema_version == TERMINAL_RESOLVED_TASK_INPUT_SCHEMA => {
+                context.validate()?;
+                if context.run_id != self.run_id.as_str() {
+                    return Err(ExecutionError::Invalid("frozen context run differs from task".into()));
+                }
+            }
+            None if self.schema_version != TERMINAL_RESOLVED_TASK_INPUT_SCHEMA => {},
+            _ => return Err(ExecutionError::Invalid("resolved input and frozen lifecycle versions differ".into())),
         }
         for (name, input) in &self.inputs {
             validate_identifier(name, "resolved input name")?;
@@ -1536,7 +1632,7 @@ fn validate_protocol_identity(
 ) -> Result<(), ExecutionError> {
     if !matches!(
         schema_version,
-        "worker_protocol.v2" | WORKER_PROTOCOL_SCHEMA | CLOSED_LOOP_WORKER_PROTOCOL_SCHEMA
+        "worker_protocol.v2" | WORKER_PROTOCOL_SCHEMA | CLOSED_LOOP_WORKER_PROTOCOL_SCHEMA | TERMINAL_WORKER_PROTOCOL_SCHEMA
     ) {
         return Err(ExecutionError::Invalid(format!(
             "schema_version must be worker_protocol.v2 or {WORKER_PROTOCOL_SCHEMA}"

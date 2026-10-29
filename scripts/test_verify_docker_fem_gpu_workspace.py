@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import json
+import math
 import sys
 import tempfile
 import unittest
@@ -15,6 +16,30 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import verify_docker_fem_gpu_workspace as driver
+
+
+def worker_completion(schema="fullmag.accepted_worker_execution.v1"):
+    receipt = {
+        "schema_version": schema,
+        "identity": {"schema_version": "fullmag.accepted_worker_execution.v1"},
+        "status": "completed",
+        "completed_step_count": 1,
+        "accepted_state_ref": {"id": {"accepted_step": 1}},
+    }
+    if schema == "fullmag.accepted_worker_execution.v3":
+        receipt["final_step_stats"] = {
+            "step": 1,
+            "kind": "physical_observation",
+            "solver_progress": None,
+            "time": 0.0,
+        }
+    return receipt
+
+
+def embedded_worker_completion_validator():
+    namespace = {"math": math}
+    exec(driver._CONTAINER_COMPLETION_VALIDATOR, namespace)
+    return namespace["validate_worker_execution_completion"]
 
 
 class WorkspaceProofContractTests(unittest.TestCase):
@@ -30,6 +55,10 @@ class WorkspaceProofContractTests(unittest.TestCase):
             "/v2/persistence/projects/from-script",
             "/v2/persistence/projects/{project_id}/run-intent",
             "worker_execution_completed.v1.json",
+            "fullmag.accepted_worker_execution.v3",
+            "final_step_stats",
+            "physical_observation",
+            "terminal_publication",
             "fem_gpu_accepted_state_snapshot.v1.json",
             "fdm_gpu_accepted_state_snapshot.v1.json",
             "fdm_gpu_execution_receipt",
@@ -47,6 +76,61 @@ class WorkspaceProofContractTests(unittest.TestCase):
             if isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
         ))
+
+    def test_worker_completion_validator_accepts_legacy_v1_and_v3_physics(self) -> None:
+        validators = (
+            driver._validate_worker_execution_completion,
+            embedded_worker_completion_validator(),
+        )
+        for validator in validators:
+            with self.subTest(validator=validator):
+                validator(worker_completion(), "fem")
+                validator(worker_completion("fullmag.accepted_worker_execution.v3"), "fem")
+
+    def test_worker_completion_validator_rejects_missing_or_mismatched_v3_stats(self) -> None:
+        validators = (
+            driver._validate_worker_execution_completion,
+            embedded_worker_completion_validator(),
+        )
+        for validator in validators:
+            for case in (
+                "missing_stats", "wrong_kind", "solver_progress",
+                "step_mismatch", "negative_step", "boolean_step", "terminal_publication",
+            ):
+                with self.subTest(validator=validator, case=case):
+                    receipt = worker_completion("fullmag.accepted_worker_execution.v3")
+                    if case == "missing_stats":
+                        receipt.pop("final_step_stats")
+                    elif case == "wrong_kind":
+                        receipt["final_step_stats"]["kind"] = "solver_progress"
+                    elif case == "solver_progress":
+                        receipt["final_step_stats"]["solver_progress"] = {"kind": "fem_eigen"}
+                    elif case == "step_mismatch":
+                        receipt["final_step_stats"]["step"] = 2
+                    elif case == "negative_step":
+                        receipt["final_step_stats"]["step"] = -1
+                    elif case == "boolean_step":
+                        receipt["final_step_stats"]["step"] = True
+                    else:
+                        receipt["terminal_publication"] = {}
+                    with self.assertRaises(RuntimeError):
+                        validator(receipt, "fem")
+
+    def test_worker_completion_validator_rejects_unknown_completion_or_identity_schema(self) -> None:
+        validators = (
+            driver._validate_worker_execution_completion,
+            embedded_worker_completion_validator(),
+        )
+        for validator in validators:
+            for target in ("completion", "identity"):
+                with self.subTest(validator=validator, target=target):
+                    receipt = worker_completion("fullmag.accepted_worker_execution.v3")
+                    if target == "completion":
+                        receipt["schema_version"] = "fullmag.accepted_worker_execution.v99"
+                    else:
+                        receipt["identity"]["schema_version"] = "fullmag.accepted_worker_execution.v3"
+                    with self.assertRaises(RuntimeError):
+                        validator(receipt, "fem")
 
     def test_canonical_scripts_select_requested_gpu_for_each_backend(self) -> None:
         for lane_name, backend in (("fem-gpu", "fem"), ("fdm-gpu", "fdm")):

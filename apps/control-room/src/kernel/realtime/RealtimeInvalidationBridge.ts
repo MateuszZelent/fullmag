@@ -34,15 +34,18 @@ import {
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_SEMANTICS_PATH,
+  MESHING_OBJECT_POLICY_PATH,
   MESHING_OBJECT_QUALITY_PATH,
   MESHING_OBJECT_REPORT_PATH,
   MESHING_OBJECT_SIZE_FIELD_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
   MESHING_PERIODIC_PAIRS_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+  MESHING_SHARED_DOMAIN_POLICY_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
+  MESHING_UNIVERSE_POLICY_PATH,
   MESHING_UNIVERSE_QUALITY_PATH,
   MESHING_UNIVERSE_REPORT_PATH,
   MESHING_SUMMARY_PATH,
@@ -392,6 +395,8 @@ function escapeResourcePathTemplate(pathTemplate: string): string {
 }
 
 const SESSION_STATUS_RECOMMENDED_FETCHES = new Set<string>([
+  // Status carries resources.mesh_revision, the mesh-build precondition.
+  MESHING_SUMMARY_PATH,
   MODEL_SCENE_PATH,
   SIMULATION_PREPARATION_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
@@ -1000,6 +1005,15 @@ export class RealtimeInvalidationBridge {
     this.resources.invalidate(MODEL_REGION_DIAGNOSTICS_PATH, dependentRevision);
     this.resources.invalidate(MODEL_MATERIAL_FIELDS_PATH, dependentRevision);
     this.resources.invalidate(MODEL_READINESS_PATH, dependentRevision);
+    // Mesh policies are projections of the scene document; their revision is
+    // the mesh revision that the policy PUT routes check as expected_revision.
+    this.resources.invalidate(MESHING_SEMANTICS_PATH, dependentRevision);
+    this.resources.invalidate(MESHING_UNIVERSE_POLICY_PATH, dependentRevision);
+    this.resources.invalidate(MESHING_SHARED_DOMAIN_POLICY_PATH, dependentRevision);
+    this.resources.invalidatePrefix(
+      resourceFamilyPrefix(MESHING_OBJECT_POLICY_PATH),
+      dependentRevision,
+    );
     // User-created Results nodes are stored in the scene document (ADR 0054).
     this.resources.invalidate(ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH, dependentRevision);
     this.resources.invalidateMatching(

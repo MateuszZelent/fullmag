@@ -85,6 +85,14 @@ pub(crate) struct PlanarSampleMeta {
     pub integration_order: u8,
 }
 
+/// Elements of the sampled target cut by a FEM sampling plane and the median
+/// of their extents along the normal (`eq-planar-navigation-step`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct FemSectionExtent {
+    pub cut_element_count: u32,
+    pub normal_extent_median_m: f64,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct PlanarSampleResult {
     pub meta: PlanarSampleMeta,
@@ -96,6 +104,9 @@ pub(crate) struct PlanarSampleResult {
     pub occupancy: Vec<Occupancy>,
     pub source_entity_ids: Vec<Option<u32>>,
     pub overlay: Option<PlanarMeshOverlay>,
+    /// Set by the FEM `plane_sample` geometry pass; `None` for other carriers
+    /// and operators.
+    pub section_extent: Option<FemSectionExtent>,
 }
 
 #[derive(Debug, Clone)]
@@ -543,6 +554,7 @@ pub(crate) fn evaluate_point_component(
         occupancy: vec![Occupancy::Occupied],
         source_entity_ids: vec![None],
         overlay: None,
+        section_extent: None,
     };
     apply_component(&mut result, request)?;
     let scalar = result.scalar_values.first().copied().filter(|value| value.is_finite());

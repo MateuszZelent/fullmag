@@ -304,6 +304,31 @@ describe("VisualizationRegistrySyncController", () => {
     });
   });
 
+  it("sends a patch queued during an explicit in-flight flush right after it (D2D-12)", async () => {
+    let time = 0;
+    const inflight: { release?: () => void } = {};
+    const patchSpy = vi.fn((nextPatch: VisualizationStatePatch) =>
+      new Promise<VisualizationStateResource>((resolve) => {
+        inflight.release = () => resolve(visualizationState(2, nextPatch as Partial<VisualizationStateResource>));
+      }));
+    const { controller } = createController({ now: () => time, patch: patchSpy });
+
+    controller.queuePatch({ field_component: "x" } as VisualizationStatePatch);
+    const first = controller.flushNow();
+    expect(patchSpy).toHaveBeenCalledTimes(1);
+    // A second layer step while the first request is in flight.
+    controller.queuePatch({ field_component: "y" } as VisualizationStatePatch);
+    void controller.flushNow();
+    time = 10;
+    inflight.release?.();
+    await first;
+    await Promise.resolve();
+    await Promise.resolve();
+    // Sent without waiting for the 600 ms quiet window.
+    expect(patchSpy).toHaveBeenCalledTimes(2);
+    expect(patchSpy).toHaveBeenLastCalledWith(expect.objectContaining({ field_component: "y" }));
+  });
+
   it("skips optimistic overlay for camera-only patches to avoid busting rendering memos", () => {
     const time = 0;
     const { controller } = createController({ now: () => time });

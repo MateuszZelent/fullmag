@@ -2,7 +2,6 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 
-import type { JsonObject } from "@/kernel/api/apiTypes";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import {
@@ -10,11 +9,16 @@ import {
   MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY,
   MESH_SEMANTICS_RESOURCE_KEY,
   MESH_SHARED_DOMAIN_POLICY_RESOURCE_KEY,
+  SCENE_RESOURCE_KEY,
   useMeshSemanticsResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { publishCommittedMeshPolicyResource } from "@/kernel/resources/meshPolicyResourceCache";
 import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
-import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
+import { useRuntimeCommandControlResourceData } from "@/kernel/resources/studyRuntimeResources";
+import {
+  SESSION_STATUS_RESOURCE_KEY,
+  useSessionResourceIdentity,
+} from "@/kernel/resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
 
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
@@ -26,144 +30,18 @@ import {
   updateInspectorDraftState,
   type InspectorDraftState,
 } from "../inspectorDraftState";
-
-interface SharedDomainPolicyDraft {
-  authoredPresent: boolean;
-  configText: string;
-  curvatureFactor: string;
-  growthRate: string;
-  hMax: string;
-  hMin: string;
-  narrowRegionResolution: string;
-  optimize: boolean;
-}
-
-interface SharedDomainResourceLike {
-  config?: Record<string, unknown> | null;
-  effective_config?: Record<string, unknown> | null;
-  revision?: number;
-}
+import {
+  buildSharedDomainPolicyConfig,
+  draftFromEffectiveSharedDomainResource,
+  draftFromSharedDomainResource,
+  formatPolicyJson,
+  isSharedDomainDraftDirty,
+  readAuthoredText,
+  type SharedDomainPolicyDraft,
+  type SharedDomainResourceLike,
+} from "./sharedDomainMeshPolicyDraft";
 
 type Feedback = { kind: "error" | "success" | "warning"; message: string } | null;
-
-function readPositiveNumberString(value: unknown): string {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return String(value);
-  }
-  if (typeof value === "string" && value.trim()) {
-    return value.trim();
-  }
-  return "";
-}
-
-function formatPolicyJson(
-  config: Record<string, unknown> | null | undefined,
-): string {
-  if (!config || Object.keys(config).length === 0) return "{}";
-  return JSON.stringify(config, null, 2);
-}
-
-function draftFromSharedDomainResource(
-  resource: SharedDomainResourceLike | null,
-): SharedDomainPolicyDraft {
-  const config = resource?.config ?? {};
-  return {
-    authoredPresent: Boolean(
-      resource?.config && Object.keys(resource.config).length > 0,
-    ),
-    configText: formatPolicyJson(resource?.config),
-    curvatureFactor: readPositiveNumberString(config.curvature_factor),
-    growthRate: readPositiveNumberString(
-      config.growth_rate ?? config.airbox_growth_rate,
-    ),
-    hMax: readPositiveNumberString(
-      config.h_max ?? config.h_target ?? config.airbox_hmax,
-    ),
-    hMin: readPositiveNumberString(config.h_min ?? config.airbox_hmin),
-    narrowRegionResolution: readPositiveNumberString(
-      config.narrow_region_resolution,
-    ),
-    optimize: config.optimize !== false,
-  };
-}
-
-function draftFromEffectiveSharedDomainResource(
-  resource: SharedDomainResourceLike | null,
-): SharedDomainPolicyDraft {
-  const source = resource?.config ?? resource?.effective_config ?? {};
-  return {
-    ...draftFromSharedDomainResource({
-      config: source,
-      effective_config: resource?.effective_config ?? null,
-      revision: resource?.revision ?? 0,
-    }),
-    authoredPresent: true,
-  };
-}
-
-function isSharedDomainDraftDirty(
-  left: SharedDomainPolicyDraft,
-  right: SharedDomainPolicyDraft,
-): boolean {
-  return (
-    left.hMax !== right.hMax ||
-    left.hMin !== right.hMin ||
-    left.growthRate !== right.growthRate ||
-    left.curvatureFactor !== right.curvatureFactor ||
-    left.narrowRegionResolution !== right.narrowRegionResolution ||
-    left.optimize !== right.optimize ||
-    left.configText !== right.configText
-  );
-}
-
-function buildSharedDomainPolicyConfig(
-  draft: SharedDomainPolicyDraft,
-): { config: JsonObject; ok: true } | { error: string; ok: false } {
-  let base: JsonObject = {};
-  try {
-    const parsed = JSON.parse(draft.configText || "{}") as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return {
-        error: "Shared-domain mesh policy JSON must be an object.",
-        ok: false,
-      };
-    }
-    base = { ...(parsed as JsonObject) };
-  } catch {
-    return {
-      error: "Shared-domain mesh policy JSON must be valid JSON.",
-      ok: false,
-    };
-  }
-
-  const numericEntries: readonly [string, string, string][] = [
-    ["h_max", draft.hMax, "Global maximum element size (h_max)"],
-    ["h_min", draft.hMin, "Global minimum element size (h_min)"],
-    ["growth_rate", draft.growthRate, "Element growth rate"],
-    ["curvature_factor", draft.curvatureFactor, "Curvature factor"],
-    [
-      "narrow_region_resolution",
-      draft.narrowRegionResolution,
-      "Narrow region resolution",
-    ],
-  ];
-
-  for (const [key, raw, label] of numericEntries) {
-    const trimmed = raw.trim();
-    if (!trimmed) {
-      delete base[key];
-      continue;
-    }
-    const parsed = Number(trimmed);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-      return { error: `${label} must be greater than 0.`, ok: false };
-    }
-    base[key] = parsed;
-  }
-
-  base.optimize = draft.optimize;
-  return { config: base, ok: true };
-}
 
 export function SharedDomainMeshPolicySection() {
   const kernel = useKernel();
@@ -214,14 +92,21 @@ export function SharedDomainMeshPolicySection() {
   const [buildPending, setBuildPending] = useState(false);
   const operationGuard = useRef(0);
 
+  // The mesh build command resolves its FEM lane from the session status in
+  // the command context; without it the build is refused as "unknown lane".
+  const runtimeResourceData = useRuntimeCommandControlResourceData({
+    includeSharedDomainReadiness: false,
+    includeStageExecution: false,
+  });
   const commandContext = useMemo(
     () =>
       createCommandContext("inspector", kernel, {
+        resourceData: runtimeResourceData,
         sessionScopeKey,
         sourceDetail: "shared-domain-mesh-policy",
         input: { origin: "shared-domain" },
       }),
-    [kernel, sessionScopeKey],
+    [kernel, runtimeResourceData, sessionScopeKey],
   );
 
   const updateField = useCallback(
@@ -315,6 +200,11 @@ export function SharedDomainMeshPolicySection() {
         MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY,
         next.revision,
       );
+      // The policy is stored in the scene document and bumps the scene and
+      // mesh revisions without a realtime event. Refetch both, so open object
+      // drafts and the build dialog's mesh_revision precondition stay current.
+      resources.invalidate(SCENE_RESOURCE_KEY, `mesh-policy:shared-domain:${next.revision}`);
+      resources.invalidate(SESSION_STATUS_RESOURCE_KEY, `mesh-policy:shared-domain:${next.revision}`);
       if (!silent) {
         setFeedback({
           kind: "success",
@@ -372,14 +262,13 @@ export function SharedDomainMeshPolicySection() {
     }
   };
 
-  const effectiveHMax = readPositiveNumberString(
-    resource.effective_config?.h_max ?? resource.effective_config?.h_target,
-  );
-  const effectiveHMin = readPositiveNumberString(
-    resource.effective_config?.h_min,
-  );
-  const effectiveGrowthRate = readPositiveNumberString(
-    resource.effective_config?.growth_rate,
+  const effectiveConfig = resource.effective_config ?? {};
+  const effectiveHMax = readAuthoredText(effectiveConfig, "hmax", "maximum_element_size");
+  const effectiveHMin = readAuthoredText(effectiveConfig, "hmin", "minimum_element_size");
+  const effectiveGrowthRate = readAuthoredText(
+    effectiveConfig,
+    "growth_rate",
+    "maximum_element_growth_rate",
   );
 
   return (

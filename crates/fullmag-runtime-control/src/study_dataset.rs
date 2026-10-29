@@ -42,6 +42,17 @@ pub(crate) fn attach_recorded_datasets(
                     additions.push((member_index, dataset));
                     // Plans without a materializable state tensor must not
                     // acquire a new geometry-validation failure on replay.
+                    // Nonmagnetic inspection samples keep their own carrier. Do not
+                    // attach magnetization semantics to V/J/H tensor datasets.
+                    let tensor = fullmag_session::solution_tensor_source::read_solution_tensor_artifact(store.cas(), artifact)?;
+                    if tensor.field_binding.as_ref().is_some_and(|binding|
+                        binding.descriptor.quantity_id != fullmag_quantities::QuantityId::M) {
+                        if let Some(geometry) = crate::study_inspection_sample_geometry::build(
+                            store, solution, member, artifact, &tensor)? {
+                            additions.push((member_index, geometry));
+                        }
+                        continue;
+                    }
                     if semantics.is_none() {
                         semantics = Some(
                             fullmag_runner::fem_p1_magnetization_field_semantics(plan)

@@ -9,6 +9,7 @@ import {
   useFdmRegionMembershipResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { hasPublishedFemMeshEvidence } from "@/kernel/resources/studyRuntimeResources";
 import {
   buildDomainPresentation,
   deriveAuthoredFdmUniverseOutsideMagneticSupport,
@@ -62,6 +63,11 @@ function AirboxInspectorLanePanel({
   const runtimeStatus = useAirboxInspectorRuntimeStatus();
   const lane = resolveAirboxInspectorLane(selection, runtimeStatus);
   const authoringLane = resolveAirboxInspectorAuthoringLane(selection, runtimeStatus);
+  const publishedFemMesh = lane === "fem"
+    ? hasPublishedFemMeshEvidence(runtimeStatus)
+    : hasPublishedFemTopologyInspectionLane(runtimeStatus);
+  const inspectionLane = lane === "unresolved" && authoringLane === "conflict"
+    ? "conflict" : lane;
   const explicitFdm = lane === "fdm";
   const domain = useDomainMetaResource({ enabled: explicitFdm });
   const membership = useFdmRegionMembershipResource({ enabled: explicitFdm });
@@ -118,7 +124,7 @@ function AirboxInspectorLanePanel({
         selection={selection}
       />
     );
-  } else if (lane === "conflict") {
+  } else if (inspectionLane === "conflict") {
     content = (
       <AirboxLaneAvailabilityPanel
         heading="Airbox selection does not match the runtime lane"
@@ -178,11 +184,13 @@ function AirboxInspectorLanePanel({
   return (
     <AirboxInspectorIdentityFrame
       artifactLane={
-        !authoringPanel && hasPublishedFemTopologyInspectionLane(runtimeStatus)
+        !authoringPanel && inspectionLane !== "conflict" && hasPublishedFemTopologyInspectionLane(runtimeStatus)
           ? "fem"
           : null
       }
-      lane={lane}
+      executionState={runtimeStatus?.executionState}
+      lane={inspectionLane}
+      publishedFemMesh={publishedFemMesh && inspectionLane !== "conflict"}
       runtimeReason={runtimeStatus?.authoring.reason}
       selection={selection}
     >

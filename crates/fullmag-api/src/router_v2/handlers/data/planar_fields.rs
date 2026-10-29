@@ -47,6 +47,10 @@ const DEFAULT_RESOLUTION: u32 = 128;
 const MIN_RESOLUTION: u32 = 16;
 const MAX_RESOLUTION: u32 = 2048;
 
+#[path = "planar_profile.rs"]
+pub mod planar_profile;
+pub use planar_profile::*;
+
 #[derive(Debug, Clone)]
 enum PlanarDataSource {
     Default,
@@ -79,6 +83,9 @@ struct BuiltPlanarField {
     source_entity_kind: &'static str,
     scope_kind: String,
     scope_id: Option<String>,
+    scope_region_id: Option<String>,
+    /// Default-source position override (multislice panel), echoed into links.
+    position_fraction: Option<f64>,
     etag: String,
     sample_token: String,
 }
@@ -512,11 +519,17 @@ async fn build_planar_field_from_source(
                 .as_ref()
                 .and_then(|mesh| mesh.build_report.as_ref())
                 .and_then(FemNodePlaneStops::from_build_report);
-            resolve_default_planar_source_with_stops(
-                &domain,
-                &planar_state.default_slice,
-                stops.as_ref(),
-            )?
+            let mut default_slice = planar_state.default_slice.clone();
+            if let Some(position_fraction) = query.position_fraction {
+                // Multislice panel: same plane and operator, its own position.
+                default_slice.position_fraction = position_fraction;
+            }
+            resolve_default_planar_source_with_stops(&domain, &default_slice, stops.as_ref())?
+        }
+        PlanarDataSource::Monitor(_) if query.position_fraction.is_some() => {
+            return Err(ApiError::bad_request(
+                "planar_position_fraction_requires_default_source: position_fraction applies only to the default source",
+            ));
         }
         PlanarDataSource::Monitor(monitor_id) => {
             let scene = snapshot
@@ -650,6 +663,10 @@ async fn build_planar_field_from_source(
         "layer" => ResolvedSpatialScope::FdmNativeLayer {
             layer_id: query.scope_id.clone().expect("validated layer scope"),
         },
+        "region" => ResolvedSpatialScope::Region {
+            object_id: query.scope_id.clone().expect("validated region scope"),
+            region_id: query.scope_region_id.clone().expect("validated region scope"),
+        },
         _ => unreachable!("scope validated before target resolution"),
     };
     let target = resolve_spatial_target(&resolved_field, &target_definition, scope, &operator)?;
@@ -703,9 +720,10 @@ async fn build_planar_field_from_source(
     // operator additionally verifies the carrier topology fingerprint.
     let geometry_key = format!(
         "planar-operator:{session_id}:{generation_id}:{scene_revision}:{target_fingerprint}:\
-         {scope_kind}:{scope_id:?}:{carrier_revision}:{resolution:?}:{frame:?}:{operator:?}:{}",
+         {scope_kind}:{scope_id:?}:{scope_region_id:?}:{carrier_revision}:{resolution:?}:{frame:?}:{operator:?}:{}",
         crate::planar_sampling::PLANAR_SAMPLER_VERSION,
         scope_id = query.scope_id,
+        scope_region_id = query.scope_region_id,
     );
     let sample_token = PlanarSampleIdentity {
         session_id,
@@ -721,6 +739,7 @@ async fn build_planar_field_from_source(
         target_entity_count,
         scope_kind: scope_kind.clone(),
         scope_id: query.scope_id.clone(),
+        scope_region_id: query.scope_region_id.clone(),
         quantity_id: quantity_id.to_string(),
         component: component_label.clone(),
         quantity_revision: field_revision,
@@ -806,12 +825,15 @@ async fn build_planar_field_from_source(
         "\"fm-planar-sha256:{:x}\"",
         Sha256::digest(sample_token.as_bytes())
     );
+    let section = resolved_source
+        .section
+        .map(|section| section.with_fem_section_extent(result.section_extent));
     Ok(BuiltPlanarField {
         result,
         target,
         request,
         source: resolved_source.identity,
-        section: resolved_source.section,
+        section,
         frame,
         operator,
         scene_revision,
@@ -835,6 +857,8 @@ async fn build_planar_field_from_source(
         source_entity_kind,
         scope_kind,
         scope_id: query.scope_id.clone(),
+        scope_region_id: query.scope_region_id.clone(),
+        position_fraction: query.position_fraction,
         etag,
         sample_token,
     })
@@ -954,6 +978,7 @@ async fn planar_probe_response(
         component: probe.component.clone(),
         scope_kind: probe.scope_kind.clone(),
         scope_id: probe.scope_id.clone(),
+        scope_region_id: probe.scope_region_id.clone(),
         stage_id: probe.stage_id.clone(),
         snapshot_id: probe.snapshot_id.clone(),
         resolution_x: probe.resolution_x,
@@ -967,6 +992,7 @@ async fn planar_probe_response(
         expected_mesh_revision: probe.expected_mesh_revision,
         expected_carrier_revision: probe.expected_carrier_revision,
         expected_field_revision: probe.expected_field_revision,
+        position_fraction: None,
     };
     let built = build_planar_field_from_source(state, quantity_id, source, &query).await?;
     let bounds = built.result.meta.bounds_uv_m;
@@ -1217,6 +1243,11 @@ fn validate_scope(
     snapshot: &crate::types::SessionStateResponse,
     query: &PlanarFieldQuery,
 ) -> Result<(), ApiError> {
+    if query.scope_region_id.is_some() && query.scope_kind.as_deref() != Some("region") {
+        return Err(ApiError::bad_request(
+            "invalid_planar_scope: scope_region_id is only valid for region scope",
+        ));
+    }
     match query.scope_kind.as_deref().unwrap_or("monitor_target") {
         "monitor_target" => {
             if query.scope_id.is_some() {
@@ -1243,6 +1274,18 @@ fn validate_scope(
             if query.scope_id.is_some() {
                 return Err(ApiError::bad_request(
                     "invalid_planar_scope: airbox does not accept scope_id",
+                ));
+            }
+        }
+        "region" => {
+            let object_id = query.scope_id.as_deref().filter(|id| !id.trim().is_empty());
+            let region_id = query
+                .scope_region_id
+                .as_deref()
+                .filter(|id| !id.trim().is_empty());
+            if object_id.is_none() || region_id.is_none() {
+                return Err(ApiError::bad_request(
+                    "invalid_planar_scope: region requires scope_id (object) and scope_region_id",
                 ));
             }
         }
@@ -1357,7 +1400,7 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
             )
         });
     PlanarFieldMetaResource {
-        schema_version: "planar_sample_meta.v5".to_string(),
+        schema_version: "planar_sample_meta.v7".to_string(),
         sample_token: built.sample_token.clone(),
         scene_revision: built.scene_revision,
         source: source_resource(&built.source),
@@ -1374,6 +1417,7 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
         field_precision: built.field_precision.clone(),
         scope_kind: built.scope_kind.clone(),
         scope_id: built.scope_id.clone(),
+        scope_region_id: built.scope_region_id.clone(),
         frame: PlanarFieldFrameResource {
             origin_m: built.frame.origin_m,
             u_axis: built.frame.u_axis,
@@ -1488,6 +1532,13 @@ fn canonical_sample_query(built: &BuiltPlanarField) -> String {
     if let Some(scope_id) = &built.scope_id {
         entries.push(("scope_id", scope_id.clone()));
     }
+    if let Some(scope_region_id) = &built.scope_region_id {
+        entries.push(("scope_region_id", scope_region_id.clone()));
+    }
+    if let Some(position_fraction) = built.position_fraction {
+        // Shortest round-trip decimal, so the link names the same slice.
+        entries.push(("position_fraction", position_fraction.to_string()));
+    }
     if let Some(stage_id) = &built.stage_id {
         entries.push(("stage_id", stage_id.clone()));
     }
@@ -1536,6 +1587,8 @@ fn section_resource(section: &ResolvedPlanarSection) -> PlanarSectionResource {
         normal_min_m: section.normal_min_m,
         normal_max_m: section.normal_max_m,
         navigation_step_m: section.navigation_step_m,
+        navigation_step_kind: section.navigation_step_kind.to_string(),
+        cut_element_count: section.cut_element_count,
         layer_stops_m: section.layer_stops_m.clone(),
     }
 }

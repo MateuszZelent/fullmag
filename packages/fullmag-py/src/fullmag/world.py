@@ -1784,13 +1784,15 @@ class GeometryMeshHandle:
             Require the requested through-thickness element count exactly.
         """
         self._owner._assert_active_context()
-        if source is not None:
-            raise ValueError(
-                "per-object mesh source is unavailable; use FEM(mesh=...) for "
-                "the supported study-level imported mesh route"
-            )
+        if source is not None and (
+            not isinstance(source, str) or not source.strip()
+            or Path(source).suffix.lower() != ".npz"
+        ):
+            raise ValueError("per-object mesh source requires a non-empty MeshData NPZ path")
 
         spec = copy.deepcopy(self._owner._mesh_spec)
+        if source is not None:
+            spec.source = source
         if cell_size is not None:
             if any(
                 value is not None
@@ -1831,6 +1833,8 @@ class GeometryMeshHandle:
             spec.hmin = resolved_hmin
         if order is not None:
             spec.order = order
+        if spec.source is not None and spec.order not in {None, 1}:
+            raise ValueError("explicit owner-bound MeshData source requires FEM P1")
         if calibrate_for is not None:
             spec.calibrate_for = _normalize_mesh_calibration(calibrate_for)
         if size_preset is not None:

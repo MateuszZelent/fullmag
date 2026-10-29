@@ -3,7 +3,7 @@ import { createRoot, hydrateRoot } from "react-dom/client";
 import { renderToString, renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
+import type { QuantityCatalogResource, VisualizationStateResource } from "@/kernel/api/apiTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
 import { PlanarVisualizationSection } from "./PlanarVisualizationSection";
@@ -16,6 +16,7 @@ import {
 
 const mocks = vi.hoisted(() => ({
   components: 3,
+  quantityProviderAvailable: true,
   discretization: "fem",
   metaCalls: 0,
   maskCalls: 0,
@@ -166,6 +167,28 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
 }));
 
 vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
+  useQuantityCatalogResource: () => ({
+    data: {
+      schema_version: "1.0",
+      quantities: ["m", "h_eff"].map((id) => ({
+        id, label: id, description: "", domain: "magnetic_only",
+        shape: mocks.components === 1 ? "spatial_scalar" : "vector_field",
+        unit: id === "m" ? "1" : "A/m", n_comp: mocks.components, location: "node",
+        normalization_hint: "none", interactive_preview: true,
+        supports_preview_2d: true, supports_preview_3d: true,
+        supports_history: false, supports_export: true, capability_state: "supported",
+        solver_capability: "supported", requestable: true, renderable: true,
+        materializable: true, materialization_state: "complete", publication_state: "interactive",
+        resolved_capability: {
+          quantity_id: id, provider: mocks.quantityProviderAvailable ? "available" : "unavailable",
+          request: "field_vector", materialization: "materialized", render: "renderable",
+          publication: "interactive", scope: "object", lane: "test", precision: "double", carriers: [],
+        },
+      })),
+    } satisfies QuantityCatalogResource,
+    error: null,
+    status: "ready",
+  }),
   useFieldCatalogResource: () => ({
     data: {
       quantities: [
@@ -263,6 +286,7 @@ describe("PlanarVisualizationSection", () => {
     mocks.overlay.boundary_classification = "exact";
     mocks.overlay.codec = "fmcs.v4";
     mocks.components = 3;
+    mocks.quantityProviderAvailable = true;
     mocks.maskStatus = "ready";
     mocks.discretization = "fem";
     mocks.planar.source = { kind: "monitor", monitor_id: "plane-1" };
@@ -712,6 +736,15 @@ describe("PlanarVisualizationSection", () => {
       await act(async () => root.unmount());
       dom.restore();
     }
+  });
+
+  it("does not offer cached fields whose resolved provider is unavailable", () => {
+    mocks.quantityProviderAvailable = false;
+
+    const html = renderToStaticMarkup(<PlanarVisualizationSection selection={selection} />);
+
+    expect(html).not.toContain("Effective field (A/m)");
+    expect(html).not.toContain("Magnetization (1)");
   });
 
   it("patches every planar presentation control through the canonical resource", async () => {

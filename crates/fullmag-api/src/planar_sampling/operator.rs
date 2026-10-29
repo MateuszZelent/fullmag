@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::error::ApiError;
 
-use super::{FemPlanarField, Occupancy, PlanarMeshOverlay};
+use super::{FemPlanarField, FemSectionExtent, Occupancy, PlanarMeshOverlay};
 
 /// Maximum number of local nodes of a supported plane-sampling element.
 pub(crate) const MAX_PLANE_OPERATOR_NODES: usize = 8;
@@ -33,6 +33,7 @@ pub(crate) struct FemPlaneOperator {
     pub topology_fingerprint: u64,
     pub pixels: Vec<FemPlanePixel>,
     pub overlay: PlanarMeshOverlay,
+    pub section_extent: Option<FemSectionExtent>,
 }
 
 impl FemPlaneOperator {

@@ -17,6 +17,7 @@ import {
 } from "@/kernel/workspace/crossSectionWorkspace";
 
 import { downloadPlanarPng, planarExportFilename } from "./fieldMapExport";
+import { planarScopeQuery } from "./model/fieldMapDataPlan";
 
 const commandTitles = {
   "field-map.export-png": "Export 2D PNG",
@@ -255,11 +256,7 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
           component: planar.component,
           resolution_x: planar.resolution.width,
           resolution_y: planar.resolution.height,
-          scope_id:
-            planar.view_scope.kind === "mesh_part"
-              ? planar.view_scope.scope_id
-              : undefined,
-          scope_kind: planar.view_scope.kind,
+          ...planarScopeQuery(planar.view_scope),
         },
         requestOptions,
       );
@@ -310,11 +307,7 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
         quality: "export",
         resolution_x: planar.resolution.width,
         resolution_y: planar.resolution.height,
-        scope_id:
-          planar.view_scope.kind === "mesh_part"
-            ? planar.view_scope.scope_id
-            : undefined,
-        scope_kind: planar.view_scope.kind,
+        ...planarScopeQuery(planar.view_scope),
         vector_budget: planar.resolution.vector_budget,
       };
       const [meta, monitor, png] = await Promise.all([

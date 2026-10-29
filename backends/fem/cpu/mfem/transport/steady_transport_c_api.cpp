@@ -7,12 +7,14 @@
  */
 
 #include "fullmag_fem.h"
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <vector>
 
 #include <cstdio>
 
@@ -24,6 +26,7 @@
 #include "cpu/mfem/transport/closed_loop_source_snapshot.hpp"
 #include "cpu/mfem/workflows/antenna_field_solve/accepted_terminal_charge_source.hpp"
 #include "cpu/mfem/workflows/antenna_field_solve/accepted_external_lead_source.hpp"
+#include "cpu/mfem/workflows/antenna_field_solve/accepted_surface_rt0.hpp"
 #include "cpu/mfem/interactions/oersted/direct_tetra_quadrature.hpp"
 #include "cpu/mfem/interactions/oersted/vector_potential.hpp"
 
@@ -38,6 +41,8 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
+#include "cpu/mfem/interactions/oersted/surface_rt0.hpp"
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -201,6 +206,16 @@ void set_error(fullmag_fem_steady_transport_rt0_result_v1 *result, const char *m
     result->canonical_face_digest[0] = '\0';
     result->balance_certificate_digest[0] = '\0';
     result->view_identity_digest[0] = '\0';
+}
+
+void set_error(fullmag_fem_prepared_closed_loop_rt0_surface_result_v1 *result,
+    const char *message)
+{
+    if (!result || result->struct_size != sizeof(*result)) return;
+    set_error(&result->rt0,message);
+    result->h_xyz_apm_len = 0;
+    result->evidence_json_len = 0;
+    std::snprintf(result->error_message,sizeof(result->error_message),"%s",message);
 }
 
 void set_error(
@@ -2147,7 +2162,11 @@ int solve_rt0(
         *quadrature_snapshot = nullptr,
     fullmag_fem_closed_loop_source_snapshot_result_v2 *source_snapshot = nullptr,
     const fullmag_fem_prepared_closed_loop_request_v2 *prepared_request = nullptr,
-    fullmag_fem_prepared_closed_loop_source_snapshot_result_v2 *prepared_snapshot = nullptr)
+    fullmag_fem_prepared_closed_loop_source_snapshot_result_v2 *prepared_snapshot = nullptr,
+    const fullmag_fem_prepared_closed_loop_rt0_surface_request_v1 *surface_request = nullptr,
+    fullmag_fem_prepared_closed_loop_rt0_surface_result_v1 *surface_result = nullptr,
+    fullmag::fem::oersted::SurfaceRt0PhaseReport *phase_report = nullptr,
+    const fullmag::fem::oersted::SurfaceRt0ProgressObserver *observer = nullptr)
 {
     validate_rt0_header(request, result);
     const bool coincident = request.closure_kind == FULLMAG_FEM_STEADY_TRANSPORT_RT0_CLOSURE_CLOSED_GEOMETRY &&
@@ -2313,6 +2332,8 @@ int solve_rt0(
             rt0_require(digest_bytes(periodic.prepared_execution_digest) == digest_bytes(text(prepared_request->binding.expected_prepared_execution_digest)),
                 "prepared execution digest differs from independently computed caller binding");
         }
+        if (observer) observer->emit(fullmag::fem::oersted::AntennaProgressPhase::solving_potential,
+            0, surface_request->target_points_xyz_len / 3, device_mesh_view.n_elements);
         periodic_snapshot =
             fullmag::fem::transport::PeriodicChargePotentialSolver::Solve(periodic);
         if (prepared_request) {
@@ -2335,6 +2356,8 @@ int solve_rt0(
         build.periodic_charge_potential.reset();
     }
 
+    if (observer) observer->emit(fullmag::fem::oersted::AntennaProgressPhase::reconstructing_current,
+        0, surface_request->target_points_xyz_len / 3, device_mesh_view.n_elements);
     const auto view = fullmag::fem::transport::ConservativeCurrentView::Build(build);
     if (prepared_snapshot) {
         rt0_require(view->canonical_balance_certificate_bytes().size() <= prepared_snapshot->canonical_balance_certificate_capacity,
@@ -2449,6 +2472,7 @@ int solve_rt0(
         options.relative_tolerance = oersted_request->relative_tolerance;
         options.maximum_source_target_pairs =
             oersted_request->maximum_source_target_pairs;
+        const auto work_limits = fullmag::fem::oersted::DirectTetraQuadrature::ResolveWorkLimits(options);
         std::vector<std::array<double, 3>> target_points;
         target_points.reserve(static_cast<std::size_t>(target_count));
         for (std::uint64_t index = 0; index < target_count; ++index) {
@@ -2528,10 +2552,8 @@ int solve_rt0(
             quadrature_snapshot->maximum_source_target_pairs = options.maximum_source_target_pairs;
             quadrature_snapshot->maximum_final_leaves_per_target =
                 fullmag::fem::oersted::DirectTetraQuadrature::maximum_final_leaves_per_target;
-            quadrature_snapshot->maximum_kernel_evaluations =
-                fullmag::fem::oersted::DirectTetraQuadrature::maximum_kernel_evaluations;
-            quadrature_snapshot->maximum_ledger_leaf_visits =
-                fullmag::fem::oersted::DirectTetraQuadrature::maximum_ledger_leaf_visits;
+            quadrature_snapshot->maximum_kernel_evaluations = work_limits.maximum_kernel_evaluations;
+            quadrature_snapshot->maximum_ledger_leaf_visits = work_limits.maximum_ledger_leaf_visits;
             copy_rt0_text(quadrature_snapshot->schema_version,
                 sizeof(quadrature_snapshot->schema_version),
                 "fem_direct_oersted_target_snapshot.v1", "OE-F1 snapshot schema");
@@ -2652,6 +2674,11 @@ int solve_rt0(
     }
     if (source_snapshot != nullptr) {
         fullmag::fem::transport::export_closed_loop_source_snapshot(*view, closed_closure, *periodic_snapshot, *source_snapshot, prepared_snapshot);
+    }
+    if (surface_request && surface_result) {
+        rt0_require(prepared_snapshot != nullptr,"surface RT0 requires the accepted prepared source snapshot");
+        fullmag::fem::antenna_field_solve::evaluate_accepted_surface_rt0(*view,
+            prepared_snapshot->accepted_source_state_digest,*surface_request,*surface_result,phase_report,observer);
     }
     if (charge_snapshot != nullptr) {
         const auto &potential = *view->charge_potential_vertex_values_v();
@@ -3300,6 +3327,114 @@ bool prepared_output_ranges_are_disjoint(
     return true;
 }
 
+// This additive ABI validates every output against every other output and
+// every recursively referenced request input before resetting any metadata.
+bool surface_ranges_are_disjoint(
+    const fullmag_fem_prepared_closed_loop_rt0_surface_request_v1 *request,
+    fullmag_fem_prepared_closed_loop_rt0_surface_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge,
+    fullmag_fem_prepared_closed_loop_source_snapshot_result_v2 *source,
+    fullmag_fem_surface_rt0_profile_result_v1 *profile,
+    const fullmag_fem_antenna_operation_observer_v1 *observer)
+{
+    if(!request || request->abi_version!=FULLMAG_FEM_SURFACE_RT0_ABI_VERSION ||
+        request->reserved_flags!=0 || request->struct_size!=sizeof(*request))return false;
+    if(request->rt0.abi_version!=FULLMAG_FEM_PREPARED_CLOSED_LOOP_ABI_VERSION ||
+        request->rt0.reserved_flags!=0 || request->rt0.struct_size!=sizeof(request->rt0) ||
+        request->rt0.base.abi_version!=FULLMAG_FEM_CHARGE_TRANSPORT_ABI_VERSION ||
+        request->rt0.base.reserved_flags!=0 || request->rt0.base.struct_size!=sizeof(request->rt0.base) ||
+        request->rt0.binding.abi_version!=FULLMAG_FEM_PREPARED_CLOSED_LOOP_ABI_VERSION ||
+        request->rt0.binding.reserved_flags!=0 || request->rt0.binding.struct_size!=sizeof(request->rt0.binding))return false;
+    if(!result || !charge || !source || result->struct_size!=sizeof(*result) ||
+        result->rt0.struct_size!=sizeof(result->rt0) || charge->struct_size!=sizeof(*charge) ||
+        source->source.struct_size!=sizeof(*source))return false;
+    if(profile && (profile->abi_version!=FULLMAG_FEM_SURFACE_RT0_PROFILE_ABI_VERSION ||
+        profile->reserved_flags!=0 || profile->struct_size!=sizeof(*profile)))return false;
+    struct Range {std::uintptr_t begin,end;};
+    std::vector<Range> outputs;
+    const auto range=[](const void *p,std::uint64_t n,std::uint64_t stride,Range &r){
+        if(!p || !n || !stride || n>std::numeric_limits<std::uintptr_t>::max()/stride)return false;
+        const auto begin=reinterpret_cast<std::uintptr_t>(p),bytes=n*stride;
+        if(bytes>std::numeric_limits<std::uintptr_t>::max()-begin)return false;
+        r={begin,begin+bytes};return true;
+    };
+    const auto overlaps=[](Range a,Range b){return a.begin<b.end && b.begin<a.end;};
+    const auto output=[&](const void *p,std::uint64_t n,std::uint64_t stride){
+        Range r{};if(!range(p,n,stride,r))return false;
+        for(auto o:outputs)if(overlaps(o,r))return false;
+        outputs.push_back(r);return true;
+    };
+    if(!output(result,1,sizeof(*result)) || !output(charge,1,sizeof(*charge)) ||
+        !output(source,1,sizeof(*source)) ||
+        !output(result->rt0.rt0_dof_values,result->rt0.rt0_dof_values_capacity,sizeof(double)) ||
+        !output(result->rt0.canonical_face_records,result->rt0.canonical_face_records_capacity,sizeof(*result->rt0.canonical_face_records)) ||
+        !output(result->h_xyz_apm,result->h_xyz_apm_capacity,sizeof(double)) ||
+        !output(result->evidence_json,result->evidence_json_capacity,1) ||
+        !output(charge->electric_potential_v,charge->electric_potential_v_capacity,sizeof(double)) ||
+        !output(charge->stable_vertex_ids,charge->stable_vertex_ids_capacity,sizeof(std::uint64_t)) ||
+        !output(charge->vertex_xyz_m,charge->vertex_xyz_m_capacity,sizeof(double)) ||
+        !output(source->source.cells,source->source.cells_capacity,sizeof(*source->source.cells)) ||
+        !output(source->source.paired_weak_reactions,source->source.paired_weak_reactions_capacity,sizeof(*source->source.paired_weak_reactions)) ||
+        !output(source->canonical_balance_certificate_bytes,source->canonical_balance_certificate_capacity,1))return false;
+    if(profile && !output(profile,1,sizeof(*profile)))return false;
+    const auto input=[&](const void *p,std::uint64_t n,std::uint64_t stride){
+        if(n==0)return true;Range r{};if(!range(p,n,stride,r))return false;
+        for(auto o:outputs)if(overlaps(o,r))return false;return true;
+    };
+    // Inspect only bytes proved disjoint; unlike strlen this cannot read an
+    // output's memory before rejecting a string that aliases it.
+    const auto text=[&](const char *p){
+        if(!p)return false;
+        for(std::uint64_t i=0;i<96;++i){
+            const auto a=reinterpret_cast<std::uintptr_t>(p);
+            if(i>std::numeric_limits<std::uintptr_t>::max()-a)return false;
+            const auto *c=reinterpret_cast<const char *>(a+i);
+            if(!input(c,1,1))return false;if(*c=='\0')return true;
+        }return false;
+    };
+    if(!input(request,1,sizeof(*request)) || (observer && !input(observer,1,sizeof(*observer))))return false;
+    const auto &r=request->rt0;const auto &m=r.base.mesh;const auto &b=r.binding;
+    if(!input(request->target_points_xyz,request->target_points_xyz_len,sizeof(double)) ||
+        !text(request->options.policy_version))return false;
+#define INPUT(field,type) if(!input(m.field,m.field##_len,sizeof(type)))return false
+    INPUT(nodes_xyz,double);INPUT(cell_types,std::uint32_t);INPUT(cell_offsets,std::uint32_t);
+    INPUT(cell_nodes,std::uint32_t);INPUT(cell_global_ordinals,std::uint64_t);INPUT(cell_markers,std::uint32_t);
+    INPUT(facet_types,std::uint32_t);INPUT(facet_roles,std::uint32_t);INPUT(facet_offsets,std::uint32_t);
+    INPUT(facet_nodes,std::uint32_t);INPUT(facet_global_ordinals,std::uint64_t);INPUT(facet_markers,std::uint32_t);
+    INPUT(periodic_node_pairs,std::uint32_t);INPUT(periodic_boundary_pair_markers,std::uint32_t);
+#undef INPUT
+    if(!text(r.base.constitutive_version) || !text(r.base.operator_version) || !text(r.base.physical_residual_version) ||
+        !input(r.base.charge_conductivity_spm_per_element,r.base.charge_conductivity_spm_per_element_len,sizeof(double)) ||
+        !input(r.base.dirichlet_boundary_attributes,r.base.dirichlet_boundary_count,sizeof(std::uint32_t)) ||
+        !input(r.base.dirichlet_boundary_values_v,r.base.dirichlet_boundary_count,sizeof(double)))return false;
+    const char *binding_strings[]={b.source_revision,b.object_id,b.geometry_id,b.source_module_id,
+        b.mesh_revision,b.topology_revision,b.mesh_digest,b.authored_input_digest,b.materials_digest,
+        b.envelope_revision,b.envelope_digest,b.expected_prepared_execution_digest};
+    for(const auto *value:binding_strings)if(!text(value))return false;
+    if(!text(r.stable_vertex_identities.version) ||
+        !input(r.stable_vertex_identities.local_to_stable_vertex_ids,r.stable_vertex_identities.local_to_stable_vertex_ids_len,sizeof(std::uint64_t)) ||
+        !input(r.boundary_faces,r.boundary_face_count,sizeof(*r.boundary_faces)) ||
+        !input(r.closed_geometry,1,sizeof(*r.closed_geometry)) ||
+        !input(r.material_parts,r.material_part_count,sizeof(*r.material_parts)) ||
+        !input(r.observations,r.observation_count,sizeof(*r.observations)))return false;
+    for(std::uint64_t i=0;i<r.boundary_face_count;++i)
+        if(r.boundary_faces[i].circuit_id && !text(r.boundary_faces[i].circuit_id))return false;
+    const auto &g=*r.closed_geometry;
+    if(!text(g.operator_version) || !text(g.revision) || !text(g.digest) ||
+        !input(g.source_cuts,g.source_cut_count,sizeof(*g.source_cuts)))return false;
+    for(std::uint64_t i=0;i<g.source_cut_count;++i){const auto &cut=g.source_cuts[i];
+        if(!text(cut.id) || !input(cut.face_pairs,cut.face_pair_count,sizeof(*cut.face_pairs)))return false;
+    }
+    for(std::uint64_t i=0;i<r.material_part_count;++i){const auto &part=r.material_parts[i];
+        if(!text(part.part_id) || !input(part.element_ordinals,part.element_count,sizeof(*part.element_ordinals)))return false;
+    }
+    for(std::uint64_t i=0;i<r.observation_count;++i){const auto &o=r.observations[i];
+        if(!text(o.id) || !text(o.part_id) || !text(o.selector) || !text(o.normal_convention) ||
+            !input(o.faces,o.face_count,sizeof(*o.faces)))return false;
+    }
+    return true;
+}
+
 template<typename Result, typename Solve>
 int call_with_prepared_closed_loop(Result *result,
     fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge,
@@ -3382,4 +3517,125 @@ extern "C" int fullmag_fem_solve_prepared_closed_loop_rt0_oersted_v2(
         return FULLMAG_FEM_ERR_UNAVAILABLE;
 #endif
     });
+}
+
+static int solve_prepared_closed_loop_rt0_surface(
+    const fullmag_fem_prepared_closed_loop_rt0_surface_request_v1 *request,
+    fullmag_fem_prepared_closed_loop_rt0_surface_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge,
+    fullmag_fem_prepared_closed_loop_source_snapshot_result_v2 *source,
+    fullmag_fem_surface_rt0_profile_result_v1 *profile,
+    const fullmag_fem_antenna_operation_observer_v1 *observer = nullptr)
+{
+    if (observer && (observer->abi_version != FULLMAG_FEM_ANTENNA_OPERATION_PROGRESS_ABI_VERSION ||
+        observer->reserved_flags != 0 || observer->struct_size != sizeof(*observer) || !observer->callback))
+        return FULLMAG_FEM_ERR_INVALID;
+    // Alias refusal is deliberately mutation-free, including error strings.
+    try {
+        if(!surface_ranges_are_disjoint(request,result,charge,source,profile,observer))return FULLMAG_FEM_ERR_INVALID;
+    } catch (...) { return FULLMAG_FEM_ERR_INTERNAL; }
+    if(profile) {
+        profile->available=0;profile->accounting_issue=0;profile->operator_wall_time_ns=0;
+        std::memset(profile->phase_wall_time_ns,0,sizeof(profile->phase_wall_time_ns));
+    }
+#if FULLMAG_HAS_MFEM_STACK
+    std::optional<fullmag::fem::oersted::SurfaceRt0PhaseReport> phases;
+    if(profile)phases.emplace();
+    struct Observation {
+        const fullmag_fem_antenna_operation_observer_v1 *target;
+        std::chrono::steady_clock::time_point started;
+    } observation{observer, {}};
+    std::optional<fullmag::fem::oersted::SurfaceRt0ProgressObserver> progress;
+    if (observer) {
+        observation.started = std::chrono::steady_clock::now();
+        progress.emplace(fullmag::fem::oersted::SurfaceRt0ProgressObserver{&observation,
+            [](void *context, fullmag::fem::oersted::AntennaProgressPhase phase,
+                std::uint64_t completed, std::uint64_t total, std::uint64_t source_cells) noexcept {
+                const auto &state = *static_cast<Observation *>(context);
+                const fullmag_fem_antenna_operation_progress_v1 value{
+                    FULLMAG_FEM_ANTENNA_OPERATION_PROGRESS_ABI_VERSION, 0, sizeof(value),
+                    static_cast<std::uint32_t>(phase), 0, completed, total, source_cells,
+                    std::chrono::duration<double>(std::chrono::steady_clock::now()-state.started).count()};
+                try { state.target->callback(state.target->user_data, &value); } catch (...) {}
+            }});
+        progress->emit(fullmag::fem::oersted::AntennaProgressPhase::preparing_source, 0,
+            request->target_points_xyz_len / 3, request->rt0.base.mesh.cell_types_len);
+    }
+    struct ProfileExport {
+        fullmag_fem_surface_rt0_profile_result_v1 *target;
+        fullmag::fem::oersted::SurfaceRt0PhaseReport *report;
+        ~ProfileExport() noexcept {
+            if(!target || !report)return;
+            static_assert(fullmag::fem::oersted::surface_rt0_phase_count==FULLMAG_FEM_SURFACE_RT0_PROFILE_PHASE_COUNT);
+            target->available=report->started?1:0;
+            target->accounting_issue=report->accounting_issue?1:0;
+            target->operator_wall_time_ns=report->total_wall_time_ns;
+            std::copy(report->wall_time_ns.begin(),report->wall_time_ns.end(),target->phase_wall_time_ns);
+        }
+    } profile_export{profile,phases?&*phases:nullptr};
+#endif
+    // Headers may be malformed, but all complete, disjoint metadata is safe to
+    // clear. In particular, an invalid source ABI must not retain old digests.
+    set_error(result,"");set_error(charge,"");set_error(&source->source,"");
+    std::memset(source->prepared_execution_digest,0,sizeof(source->prepared_execution_digest));
+    std::memset(source->accepted_charge_field_digest,0,sizeof(source->accepted_charge_field_digest));
+    std::memset(source->accepted_source_state_digest,0,sizeof(source->accepted_source_state_digest));
+    std::memset(source->digest_encoding_version,0,sizeof(source->digest_encoding_version));
+    std::memset(source->prepared_digest_version,0,sizeof(source->prepared_digest_version));
+    std::memset(source->accepted_charge_digest_version,0,sizeof(source->accepted_charge_digest_version));
+    std::memset(source->accepted_source_digest_version,0,sizeof(source->accepted_source_digest_version));
+    source->canonical_balance_certificate_len=0;
+    if(source->source.abi_version!=FULLMAG_FEM_PREPARED_CLOSED_LOOP_ABI_VERSION || source->source.reserved_flags!=0){
+        set_error(result,"surface RT0 source snapshot ABI mismatch");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    return call_with_prepared_closed_loop(result,charge,source,nullptr,[&] {
+#if FULLMAG_HAS_MFEM_STACK
+        rt0_require(request->abi_version==FULLMAG_FEM_SURFACE_RT0_ABI_VERSION &&
+            request->reserved_flags==0 && request->struct_size==sizeof(*request),"surface RT0 request ABI mismatch");
+        rt0_require(result->abi_version==FULLMAG_FEM_SURFACE_RT0_ABI_VERSION &&
+            result->reserved_flags==0 && result->struct_size==sizeof(*result),"surface RT0 result ABI mismatch");
+        rt0_require(result->h_xyz_apm_capacity>=request->target_points_xyz_len,
+            "surface RT0 field capacity is smaller than ordered targets");
+        fullmag::fem::antenna_field_solve::validate_surface_rt0_request(*request);
+        const auto adapter=prepared_rt0_adapter(request->rt0);
+        return solve_rt0(adapter,result->rt0,nullptr,nullptr,nullptr,nullptr,charge,nullptr,
+            &source->source,&request->rt0,source,request,result,phases?&*phases:nullptr,progress?&*progress:nullptr);
+#else
+        set_error(result,"surface RT0 requires FULLMAG_USE_MFEM_STACK=ON");
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+#endif
+    });
+}
+
+
+extern "C" int fullmag_fem_solve_prepared_closed_loop_rt0_surface_observed_v1(
+    const fullmag_fem_prepared_closed_loop_rt0_surface_request_v1 *request,
+    fullmag_fem_prepared_closed_loop_rt0_surface_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge,
+    fullmag_fem_prepared_closed_loop_source_snapshot_result_v2 *source,
+    fullmag_fem_surface_rt0_profile_result_v1 *profile,
+    const fullmag_fem_antenna_operation_observer_v1 *observer)
+{
+    return solve_prepared_closed_loop_rt0_surface(request,result,charge,source,profile,observer);
+}
+
+extern "C" int fullmag_fem_solve_prepared_closed_loop_rt0_surface_v1(
+    const fullmag_fem_prepared_closed_loop_rt0_surface_request_v1 *request,
+    fullmag_fem_prepared_closed_loop_rt0_surface_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge,
+    fullmag_fem_prepared_closed_loop_source_snapshot_result_v2 *source)
+{
+    return solve_prepared_closed_loop_rt0_surface(request,result,charge,source,nullptr);
+}
+
+extern "C" int fullmag_fem_solve_prepared_closed_loop_rt0_surface_profiled_v1(
+    const fullmag_fem_prepared_closed_loop_rt0_surface_request_v1 *request,
+    fullmag_fem_prepared_closed_loop_rt0_surface_result_v1 *result,
+    fullmag_fem_steady_transport_rt0_charge_snapshot_result_v1 *charge,
+    fullmag_fem_prepared_closed_loop_source_snapshot_result_v2 *source,
+    fullmag_fem_surface_rt0_profile_result_v1 *profile)
+{
+    if(!profile)return FULLMAG_FEM_ERR_INVALID;
+    return solve_prepared_closed_loop_rt0_surface(request,result,charge,source,profile);
 }

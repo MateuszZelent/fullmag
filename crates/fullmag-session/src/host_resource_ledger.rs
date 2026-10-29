@@ -18,6 +18,20 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::canonical_json_sha256;
+
+/// The active compute-node owner has no current sample. The sampler publishes
+/// a fresh one periodically, so admission waits for it; this is never a fault
+/// of the request itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ComputeNodeSampleNotCurrent;
+
+impl std::fmt::Display for ComputeNodeSampleNotCurrent {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("host admission requires a current sample for the active compute-node owner")
+    }
+}
+
+impl std::error::Error for ComputeNodeSampleNotCurrent {}
 use crate::compute_node_snapshot::{
     ComputeNodeSnapshot, EnforcementStatus, GpuPartition, Reported, UnavailableReason,
 };
@@ -3026,7 +3040,8 @@ impl HostResourceLedger {
         self.read_document_locked()?;
         let snapshot = self
             .read_compute_node_snapshot_locked()?
-            .context("host admission requires a published compute-node sample")?;
+            .ok_or_else(|| anyhow::Error::new(ComputeNodeSampleNotCurrent)
+                .context("host admission requires a published compute-node sample; compute-node snapshot is missing"))?;
         let descriptor = HostInventoryOwnerDescriptor {
             host_owner_id: snapshot
                 .host_owner_id
@@ -3061,13 +3076,15 @@ impl HostResourceLedger {
         }
         let active = self
             .active_inventory_owner_locked()?
-            .context("host admission has no active compute-node inventory owner")?;
+            .ok_or_else(|| anyhow::Error::new(ComputeNodeSampleNotCurrent)
+                .context("host admission has no active compute-node inventory owner"))?;
         if active.host_owner_id.as_str() != owner_id || active.host_owner_epoch != owner_epoch {
             bail!("host request is fenced by a different compute-node inventory owner");
         }
         let snapshot = self
             .read_compute_node_snapshot_locked()?
-            .context("host admission requires a published compute-node sample")?;
+            .ok_or_else(|| anyhow::Error::new(ComputeNodeSampleNotCurrent)
+                .context("host admission requires a published compute-node sample; compute-node snapshot is missing"))?;
         self.validate_v2_snapshot_locked(&snapshot)?;
         if snapshot.schema_version
             != crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2
@@ -3078,7 +3095,7 @@ impl HostResourceLedger {
             || snapshot.host_owner_epoch != Some(owner_epoch)
             || !snapshot.is_current_at(chrono::Utc::now())?
         {
-            bail!("host admission requires a current sample for the active compute-node owner");
+            return Err(anyhow::Error::new(ComputeNodeSampleNotCurrent));
         }
         Ok(())
     }
@@ -3108,7 +3125,8 @@ impl HostResourceLedger {
 
         let snapshot = self
             .read_compute_node_snapshot_locked()?
-            .context("host admission requires a published compute-node sample")?;
+            .ok_or_else(|| anyhow::Error::new(ComputeNodeSampleNotCurrent)
+                .context("host admission requires a published compute-node sample; compute-node snapshot is missing"))?;
 
         if !self.policy.allowed_cpu_ids.is_empty() || !request.cpu_ids.is_empty() {
             let topology = match &snapshot.cpu.topology {
@@ -4006,7 +4024,9 @@ impl HostResourceLedger {
         )?;
         let bytes =
             read_bounded_regular_file(&self.root, HOST_RESOURCE_LEDGER_FILE, MAX_LEDGER_BYTES)?;
-        let document = self.validate_document_snapshot(&marker, &bytes)?;
+        // A publisher may retire the old CAS while this lock-free read validates it.
+        // Recheck the pointer before treating a validation error as durable corruption.
+        let validation = self.validate_document_snapshot(&marker, &bytes);
         let current_marker = read_bounded_regular_file(
             &self.root,
             HOST_RESOURCE_LEDGER_MARKER_FILE,
@@ -4018,6 +4038,7 @@ impl HostResourceLedger {
             return Err(anyhow::Error::new(crate::writer::StoreWriterBusy)
                 .context("host ledger observation changed during validation"));
         }
+        let document = validation?;
         Ok(HostResourceLedgerSnapshot {
             policy_history_sha256: document.policy_history_sha256()?,
             policy: document.policy,
@@ -4108,9 +4129,67 @@ impl HostResourceLedger {
         operation: impl FnOnce(&HostResourceLedgerSnapshot, &str) -> Result<T>,
     ) -> Result<T> {
         crate::repository_path::validate_store_id(run_id)?;
-        let store_id = Self::store_id(store.root())?;
         let _host_writer = self.writer.acquire()?;
         let _store_writer = store.write_transaction()?;
+        let document = self.read_document_locked()?;
+        let evidence_sha256 = self.terminal_run_evidence_sha256_locked(store, run_id)?;
+        let snapshot = HostResourceLedgerSnapshot {
+            policy_history_sha256: document.policy_history_sha256()?,
+            policy: document.policy.clone(),
+            reservations: document.reservations.clone(),
+            node_policy: document.node_policy.clone(),
+        };
+        operation(&snapshot, &evidence_sha256)
+    }
+
+    /// Caller holds the host writer before the SessionStore writer for the
+    /// complete operation; this helper never acquires or releases either guard.
+    pub(crate) fn terminal_run_evidence_sha256_locked(
+        &self,
+        store: &SessionStore,
+        run_id: &str,
+    ) -> Result<String> {
+        self.recovery_run_evidence_sha256_locked(store, run_id, false)
+    }
+
+    /// Read held-manual evidence under the same host-before-store writer order
+    /// as terminal evidence. This never creates a start release or runs work.
+    pub fn with_held_manual_run_evidence_fence<T>(
+        &self,
+        store: &SessionStore,
+        run_id: &str,
+        operation: impl FnOnce(&HostResourceLedgerSnapshot, &str) -> Result<T>,
+    ) -> Result<T> {
+        crate::repository_path::validate_store_id(run_id)?;
+        let _host_writer = self.writer.acquire()?;
+        let _store_writer = store.write_transaction()?;
+        let document = self.read_document_locked()?;
+        let evidence_sha256 = self.held_manual_run_evidence_sha256_locked(store, run_id)?;
+        let snapshot = HostResourceLedgerSnapshot {
+            policy_history_sha256: document.policy_history_sha256()?,
+            policy: document.policy.clone(),
+            reservations: document.reservations.clone(),
+            node_policy: document.node_policy.clone(),
+        };
+        operation(&snapshot, &evidence_sha256)
+    }
+
+    pub(crate) fn held_manual_run_evidence_sha256_locked(
+        &self,
+        store: &SessionStore,
+        run_id: &str,
+    ) -> Result<String> {
+        self.recovery_run_evidence_sha256_locked(store, run_id, true)
+    }
+
+    fn recovery_run_evidence_sha256_locked(
+        &self,
+        store: &SessionStore,
+        run_id: &str,
+        held_manual: bool,
+    ) -> Result<String> {
+        crate::repository_path::validate_store_id(run_id)?;
+        let store_id = Self::store_id(store.root())?;
         let document = self.read_document_locked()?;
         let mut exact_rows = Vec::new();
         for row in document.reservations.iter().filter(|row| {
@@ -4312,11 +4391,14 @@ impl HostResourceLedger {
             }
         };
 
-        let store_value = store.terminal_run_evidence_value_locked(
-            run_id,
-            worker_proof,
-            preparation_proof,
-        )?;
+        let store_value = if held_manual {
+            if exact_rows.iter().any(|(row, _)| matches!(&row.identity.owner, HostReservationOwner::Solver { .. })) {
+                bail!("held manual run has a historical solver host reservation");
+            }
+            store.held_manual_run_evidence_value_locked(run_id, worker_proof, preparation_proof)?
+        } else {
+            store.terminal_run_evidence_value_locked(run_id, worker_proof, preparation_proof)?
+        };
         let host_rows = exact_rows
             .iter()
             .map(|(row, proof)| {
@@ -4336,13 +4418,7 @@ impl HostResourceLedger {
             "exact_host_rows": host_rows,
         });
         let evidence_sha256 = canonical_json_sha256(&evidence);
-        let snapshot = HostResourceLedgerSnapshot {
-            policy_history_sha256: document.policy_history_sha256()?,
-            policy: document.policy.clone(),
-            reservations: document.reservations.clone(),
-            node_policy: document.node_policy.clone(),
-        };
-        operation(&snapshot, &evidence_sha256)
+        Ok(evidence_sha256)
     }
 
     /// Prove, under the same host-before-store writer order, that an exact run
@@ -6353,9 +6429,8 @@ fn validate_ledger_document_body(document: &HostResourceLedgerDocument, root: &P
                 bail!("host reservation is bound to a future node policy revision");
             }
         }
-        if reservation.state == HostResourceReservationState::Released {
-            validate_release_proof(root, reservation_policy, reservation)?;
-        }
+        let consumes_solver_epoch =
+            reservation_consumes_solver_epoch(root, reservation_policy, reservation)?;
         if !identities.insert(reservation.identity.clone()) {
             bail!("host resource ledger contains a duplicate exact reservation identity");
         }
@@ -6373,7 +6448,7 @@ fn validate_ledger_document_body(document: &HostResourceLedgerDocument, root: &P
                 );
             }
         }
-        if reservation_consumes_solver_epoch(root, reservation_policy, reservation)? {
+        if consumes_solver_epoch {
             if let Some(epoch) = reservation.identity.owner.solver_epoch() {
                 let epochs = task_epochs.entry(task.clone()).or_default();
                 if !epochs.insert(epoch) {
@@ -6992,20 +7067,7 @@ fn reservation_consumes_solver_epoch(
     if reservation.state != HostResourceReservationState::Released {
         return Ok(true);
     }
-    validate_release_proof(root, policy, reservation)?;
-    let digest = reservation
-        .release_proof_sha256
-        .as_ref()
-        .context("released reservation has no proof digest")?;
-    let bytes = read_bounded_regular_file(
-        root,
-        &release_proof_relative_path(digest)?,
-        MAX_RELEASE_PROOF_BYTES,
-    )?;
-    if format!("{:x}", Sha256::digest(&bytes)) != *digest {
-        bail!("released reservation epoch certificate digest mismatch");
-    }
-    let proof: HostResourceReleaseProof = serde_json::from_slice(&bytes)?;
+    let proof = read_validated_release_proof(root, policy, reservation)?;
     Ok(proof.kind != HostResourceReleaseProofKind::AdmissionAbsent)
 }
 
@@ -7313,29 +7375,19 @@ fn validate_pre_admission_task_scope(
     intent.validate_task_scope(store, current, catalog.revision)
 }
 
-fn read_validated_release_proof(
-    root: &Path,
-    policy: &HostResourceLedgerPolicy,
-    reservation: &HostResourceReservation,
-) -> Result<HostResourceReleaseProof> {
-    validate_release_proof(root, policy, reservation)?;
-    let digest = reservation
-        .release_proof_sha256
-        .as_deref()
-        .context("released host reservation has no proof digest")?;
-    let relative = release_proof_relative_path(digest)?;
-    let bytes = read_bounded_regular_file(root, &relative, MAX_RELEASE_PROOF_BYTES)?;
-    if format!("{:x}", Sha256::digest(&bytes)) != digest {
-        bail!("host release proof changed after canonical validation");
-    }
-    serde_json::from_slice(&bytes).context("parsing validated host release proof")
-}
-
 fn validate_release_proof(
     root: &Path,
     policy: &HostResourceLedgerPolicy,
     reservation: &HostResourceReservation,
 ) -> Result<()> {
+    read_validated_release_proof(root, policy, reservation).map(|_| ())
+}
+
+fn read_validated_release_proof(
+    root: &Path,
+    policy: &HostResourceLedgerPolicy,
+    reservation: &HostResourceReservation,
+) -> Result<HostResourceReleaseProof> {
     let digest = reservation
         .release_proof_sha256
         .as_deref()
@@ -7538,7 +7590,8 @@ fn validate_release_proof(
                 .context("orphan teardown proof has no typed teardown evidence")?;
             validate_worker_orphan_release_proof_identity(root, policy, reservation, orphan)
         }
-    }
+    }?;
+    Ok(proof)
 }
 
 fn validate_worker_orphan_release_proof_identity(

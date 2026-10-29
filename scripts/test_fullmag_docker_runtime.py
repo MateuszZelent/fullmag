@@ -2309,8 +2309,11 @@ class DockerRuntimeContract(unittest.TestCase):
             recover_idle_failure=lambda _paths: None,
             ensure_configuration=lambda _paths: {},
             process_environment=lambda _paths: {},
+            terminal_observation_preflight=Mock(return_value=None),
             accepted_reattach_preflight=lambda _paths: None,
-                accepted_reattach_api_input=lambda _paths, **_kwargs: nullcontext(({}, None)),
+            terminal_observation_api_input=Mock(
+                side_effect=lambda _paths, **_kwargs: nullcontext(({}, None, None))
+            ),
             process_receipt_path=service_module.process_receipt_path,
             start=lambda _paths, **_kwargs: handle,
             stop=lambda _handle, timeout: terminal,
@@ -2334,6 +2337,10 @@ class DockerRuntimeContract(unittest.TestCase):
                 patch.object(entrypoint, "activate_startup_script", side_effect=fail_activation):
             self.assertEqual(entrypoint.serve(), 1)
 
+        service.terminal_observation_preflight.assert_called_once_with(paths)
+        service.terminal_observation_api_input.assert_called_once_with(
+            paths, terminal_preflight=None, accepted_preflight=None
+        )
         self.assertGreaterEqual(len(receipts), 4)
         self.assertEqual(receipts[1]["service_owner"], owner)
         self.assertEqual(receipts[-1]["state"], "drained")
@@ -2385,8 +2392,11 @@ class DockerRuntimeContract(unittest.TestCase):
             recover_idle_failure=mock.Mock(return_value=None),
             ensure_configuration=mock.Mock(return_value={}),
             process_environment=mock.Mock(return_value={}),
+            terminal_observation_preflight=Mock(return_value=None),
             accepted_reattach_preflight=lambda _paths: None,
-                accepted_reattach_api_input=lambda _paths, **_kwargs: nullcontext(({}, None)),
+            terminal_observation_api_input=Mock(
+                side_effect=lambda _paths, **_kwargs: nullcontext(({}, None, None))
+            ),
             process_receipt_path=service_module.process_receipt_path,
             start=mock.Mock(return_value=handle),
             check=mock.Mock(return_value=None),
@@ -2409,6 +2419,10 @@ class DockerRuntimeContract(unittest.TestCase):
                 patch.object(entrypoint, "activate_startup_script", activation):
             self.assertEqual(entrypoint.serve(), 0)
 
+        service.terminal_observation_preflight.assert_called_once_with(paths)
+        service.terminal_observation_api_input.assert_called_once_with(
+            paths, terminal_preflight=None, accepted_preflight=None
+        )
         activation.assert_called_once_with()
         service.check.assert_called_once_with(handle, full_api_probe=False)
         service.stop.assert_called_once_with(handle, timeout=30)
@@ -3472,7 +3486,15 @@ class DockerRuntimeContract(unittest.TestCase):
         for scenario in ("no_authorization", "wrong_hash", "profile_change", "corrupt_backup"):
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory).resolve()
-                paths = replace(service.RuntimePaths(), config=root / "runtime.json")
+                paths = replace(
+                    service.RuntimePaths(),
+                    state=root,
+                    storage=root,
+                    runs=root / "runs" / service.WORKTREE_ID,
+                    store=root / "runs" / service.WORKTREE_ID / "session-store",
+                    state_root=root / ".fullmag",
+                    config=root / "runtime.json",
+                )
                 old = self.host_profile_fixture(service)["configuration"]
                 expected = copy.deepcopy(old)
                 expected["host_execution"]["runtime_generation_sha256"] = "b" * 64
@@ -3490,9 +3512,16 @@ class DockerRuntimeContract(unittest.TestCase):
                     (root / f"docker-all.previous-{old_sha}.json").write_bytes(b"different history")
                 with patch.dict(os.environ, environment, clear=True), patch.object(
                         service, "initialize_host_configuration", return_value=expected):
-                    with self.assertRaises(service.RuntimeServiceError):
-                        service.ensure_configuration(paths)
+                    if scenario in {"no_authorization", "wrong_hash"}:
+                        with self.assertRaisesRegex(
+                                service.RuntimeServiceError, "owner lock is missing"):
+                            service.ensure_configuration(paths)
+                    else:
+                        with self.assertRaises(service.RuntimeServiceError):
+                            service.ensure_configuration(paths)
                 self.assertEqual(paths.config.read_bytes(), original)
+                if scenario in {"no_authorization", "wrong_hash"}:
+                    self.assertFalse((root / f"docker-all.previous-{old_sha}.json").exists())
 
     @unittest.skipIf(os.name == "nt", "Guest publication fsync is qualified on Linux")
     def test_recreate_requires_existing_config_and_can_pin_legacy_generation(self):

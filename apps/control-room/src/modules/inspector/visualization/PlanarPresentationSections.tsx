@@ -5,7 +5,7 @@ import type {
 import type { FieldMapCapability, PlanarInspectorCapabilities } from "@/kernel/visualization/planarCapabilities";
 import type { PlanarResolutionPreset } from "@/kernel/visualization/planarSectionModel";
 import { Button } from "@/shared/ui/Button";
-import { ArrowRightLeft, Crosshair, Eye, ScanLine, SquareDashed } from "lucide-react";
+import { ArrowRightLeft, Crosshair, Eye, ScanLine, SquareDashed, Waves } from "lucide-react";
 
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
@@ -39,7 +39,8 @@ function reason(capability: FieldMapCapability): string | undefined {
     case "fem_layer_scope_not_supported": return "Native layer scope requires an FDM multilayer carrier.";
     case "quantity_not_vector": return "The selected scalar quantity has no vector components.";
     case "quantity_not_spatial": return "The selected quantity is not spatially sampleable.";
-    default: return "Unavailable";
+    case "airbox_carrier_unresolved": return "Waiting for the backend to resolve the Airbox carrier.";
+    default: return capability.reasonCode ? `Unavailable: ${capability.reasonCode}` : "Unavailable";
   }
 }
 
@@ -90,6 +91,15 @@ export function PlanarDisplayPassesSection({
             label: "Vectors",
             pressed: visible && layers.vectors,
             onToggle: () => toggle("vectors"),
+          },
+          {
+            // Streamlines trace the same frame-vector raster as the quiver.
+            disabled: !capabilities.vectors.enabled,
+            icon: <Waves aria-hidden="true" size={13} strokeWidth={1.75} />,
+            id: "streamlines",
+            label: "Streamlines",
+            pressed: visible && Boolean(layers.streamlines),
+            onToggle: () => toggle("streamlines"),
           },
           {
             ariaLabel: "Toggle Points",

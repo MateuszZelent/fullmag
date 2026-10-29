@@ -16,6 +16,9 @@ use std::collections::BTreeMap;
 
 use crate::study::AcceptedStudySnapshot;
 
+mod recovered_inspection;
+pub use recovered_inspection::publish_recovered_inspection_solution;
+
 const RUNNING_ASSESSMENT_REASON: &str =
     "scientific assessment is pending while execution is running";
 
@@ -236,11 +239,12 @@ fn build_solution(
     let manifest_ref = published_object_ref(manifest_artifact)?;
     let manifest_bytes = store
         .cas()
-        .get(manifest_ref)?
+        .get_bounded(manifest_ref, fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES)?
         .context("study solution output manifest is missing from CAS")?;
-    let manifest: fullmag_session::FmsStudyOutputManifest = serde_json::from_slice(&manifest_bytes)
+    let terminal = crate::study_output_history::open_published_terminal_manifest(store,accepted,claim,step_id,
+        &manifest_bytes,manifest_artifact,artifact_catalog)?;
+    let manifest = crate::study_output_history::read_manifest_projection(&manifest_bytes)
         .context("study solution output manifest is not typed")?;
-    manifest.validate()?;
     if manifest.run_id != accepted.run.specification.run_id.as_str()
         || manifest.task_id != task_id
         || manifest.step_id != step_id
@@ -275,23 +279,7 @@ fn build_solution(
         .with_context(|| format!("accepted study step `{step_id}` has no resolved plan"))?;
 
     let solution_set_id = solution_set_id_for_claim(claim);
-    let provenance = SolutionSetProvenance {
-        run_spec_digest: prefixed_digest(accepted.run.specification.fingerprint()?),
-        model_digest: canonical_digest(&serde_json::json!({
-            "project_definition_sha256": accepted.run.specification.snapshot.definition_sha256,
-            "model": &step.model,
-        }))?,
-        physics_digest: canonical_digest(problem)?,
-        discretization_digest: canonical_digest(&step.discretization)?,
-        resolved_plan_digest: canonical_digest(resolved_plan)?,
-        acquisition_digest: canonical_digest(&serde_json::json!({
-            "policy": &step.acquisition,
-            "outputs": &step.outputs,
-        }))?,
-        seed_digest: (!accepted.run.specification.seeds.is_empty())
-            .then(|| canonical_digest(&accepted.run.specification.seeds))
-            .transpose()?,
-    };
+    let provenance = solution_provenance(accepted, step, problem, resolved_plan)?;
 
     let mut artifacts_by_case: BTreeMap<Option<String>, Vec<SolutionArtifactRef>> = BTreeMap::new();
     let mut coverage = Vec::new();
@@ -313,6 +301,10 @@ fn build_solution(
             claim.run_id.as_str(),
             &provenance.run_spec_digest,
         )?;
+        let inspection_tensors = if output.codec_id == fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID {
+            crate::study_inspection_tensor::materialize(store, problem, step, &artifact, output,
+                claim, &provenance.run_spec_digest, &solution_set_id)?
+        } else { Vec::new() };
         coverage.push(SolutionArtifactCoverage {
             artifact_id: artifact.artifact_id.clone(),
             state: SolutionCoverageState::Unknown,
@@ -324,6 +316,7 @@ fn build_solution(
             .entry(Some(output.case_id.clone()))
             .or_default()
             .push(artifact);
+        artifacts_by_case.entry(Some(output.case_id.clone())).or_default().extend(inspection_tensors);
         if let Some(field_tensor) = field_tensor {
             artifacts_by_case
                 .entry(Some(output.case_id.clone()))
@@ -337,7 +330,8 @@ fn build_solution(
         store,
         manifest_artifact,
         SolutionArtifactKind::Diagnostic,
-        fullmag_session::FMS_STUDY_OUTPUT_MANIFEST_SCHEMA.to_string(),
+        terminal.as_ref().map_or(fullmag_session::FMS_STUDY_OUTPUT_MANIFEST_SCHEMA,
+            |_| fullmag_session::FMS_STUDY_OUTPUT_MANIFEST_SCHEMA_V4).to_string(),
         None,
     )?);
     if let Some(source) = &manifest.observation_source {
@@ -357,6 +351,33 @@ fn build_solution(
             format!("{}@{}", source.state_codec_id, source.state_codec_version),
             Some(source.accepted_state_ref.id.clone()),
         )?);
+    }
+
+    if let Some(terminal) = &terminal {
+        let source = &terminal.observation_source;
+        for (id,schema) in [(&source.snapshot_artifact_id,source.snapshot_schema_version.clone()),
+            (&source.state_artifact_id,format!("{}@{}",source.state_codec_id,source.state_codec_version))] {
+            metadata.push(solution_artifact(store,exact_artifact(artifact_catalog,claim,id)?,SolutionArtifactKind::Diagnostic,
+                schema,Some(source.accepted_state_ref.id.clone()))?);
+        }
+        for carrier in &source.primary_carriers {
+            metadata.push(solution_artifact(store,exact_artifact(artifact_catalog,claim,&carrier.artifact_id)?,SolutionArtifactKind::Diagnostic,
+                format!("{}@{}",carrier.codec_id,carrier.codec_version),Some(source.accepted_state_ref.id.clone()))?);
+        }
+        for binding in &terminal.histories {
+            let bytes = store.cas().get_bounded(&binding.object_ref,fullmag_session::MAX_OUTPUT_HISTORY_METADATA_BYTES)?
+                .context("terminal solution history index is absent")?;
+            let index: fullmag_session::FmsOutputHistoryIndex = serde_json::from_slice(&bytes)?; index.validate()?;
+            metadata.push(solution_artifact(store,exact_artifact(artifact_catalog,claim,&binding.artifact_id)?,SolutionArtifactKind::Diagnostic,
+                index.schema_version.clone(),Some(source.accepted_state_ref.id.clone()))?);
+            coverage.push(SolutionArtifactCoverage {artifact_id:binding.artifact_id.clone(),state:SolutionCoverageState::Complete,
+                expected_samples:Some(index.sample_count),committed_samples:index.sample_count,
+                segments:index.pages.iter().map(|page|Ok(fullmag_quantities::SolutionSegmentRef {
+                    segment_id:page.artifact_id.clone(),start_sample:page.first_ordinal,
+                    end_sample_exclusive:page.first_ordinal.checked_add(page.sample_count).context("solution history count overflow")?,
+                    object_ref:page.object_ref.clone(),byte_length:page.byte_count,
+                })).collect::<Result<Vec<_>>>()?});
+        }
     }
 
     let mut members = Vec::with_capacity(artifacts_by_case.len());
@@ -549,6 +570,31 @@ fn artifact_kind(data_kind: &str) -> SolutionArtifactKind {
         "table" | "scalar" => SolutionArtifactKind::Table,
         _ => SolutionArtifactKind::Other,
     }
+}
+
+fn solution_provenance(
+    accepted: &AcceptedStudySnapshot,
+    step: &fullmag_authoring::StudyStep,
+    problem: &fullmag_ir::ProblemIR,
+    resolved_plan: &fullmag_ir::ExecutionPlanIR,
+) -> Result<SolutionSetProvenance> {
+    Ok(SolutionSetProvenance {
+        run_spec_digest: prefixed_digest(accepted.run.specification.fingerprint()?),
+        model_digest: canonical_digest(&serde_json::json!({
+            "project_definition_sha256": accepted.run.specification.snapshot.definition_sha256,
+            "model": &step.model,
+        }))?,
+        physics_digest: canonical_digest(problem)?,
+        discretization_digest: canonical_digest(&step.discretization)?,
+        resolved_plan_digest: canonical_digest(resolved_plan)?,
+        acquisition_digest: canonical_digest(&serde_json::json!({
+            "policy": &step.acquisition,
+            "outputs": &step.outputs,
+        }))?,
+        seed_digest: (!accepted.run.specification.seeds.is_empty())
+            .then(|| canonical_digest(&accepted.run.specification.seeds))
+            .transpose()?,
+    })
 }
 
 fn canonical_digest(value: &impl Serialize) -> Result<String> {

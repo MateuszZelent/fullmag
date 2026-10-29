@@ -839,6 +839,9 @@ pub(crate) struct SessionStateResponse {
     pub stage_execution: Option<StageExecutionState>,
     #[serde(skip_serializing)]
     pub simulation_preparation: Option<SimulationPreparationSnapshot>,
+    /// Importer-issued geometry evidence; never serialized or accepted from a publisher.
+    #[serde(skip)]
+    pub imported_antenna_mesh_proof: Option<crate::session_persistence::antenna_mesh_import::ImportedAntennaMeshProof>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scene_document: Option<SceneDocument>,
     pub scalar_rows: Vec<ScalarRow>,
@@ -1601,6 +1604,8 @@ pub(crate) struct StageExecutionRecord {
     pub stage_id: Option<String>,
     #[serde(default)]
     pub antenna_solve_stage_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub antenna_progress: Option<fullmag_runner::AntennaOperationProgress>,
     #[serde(default)]
     pub kind: Option<String>,
     pub status: StageLifecycleState,
@@ -2270,6 +2275,7 @@ mod tests {
                 allocated_region_ids: Vec::new(),
                 material_parameter_fields: Vec::new(),
                 absorbing_boundary: None,
+                visualization_hint: Default::default(),
             }],
             mesh_interfaces: Vec::new(),
             field_drives: Vec::new(),
@@ -2296,6 +2302,7 @@ mod tests {
             session_protocol_version: "1".to_string(),
             capability_profile_version: "2026-04-04".to_string(),
             coupled_checkpoint: None,
+            imported_antenna_mesh_proof: None,
             capabilities: None,
             session: SessionManifest {
                 session_id: "s1".to_string(),

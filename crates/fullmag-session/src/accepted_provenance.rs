@@ -389,6 +389,17 @@ impl AcceptedProvenanceManifest {
         }
         validate_solution_histories(&solution_sets)?;
 
+        // Only immutable input assets may be empty. A shared CAS digest does
+        // not permit an empty solver output, definition, tensor or geometry.
+        for object in self.cas_objects.iter().filter(|object| object.byte_count == 0) {
+            if required_cas.contains(&object.object_ref)
+                || !intent.asset_object_refs.values().any(|reference| reference == &object.object_ref)
+            {
+                bail!("empty accepted provenance CAS object is not exclusively an immutable input asset");
+            }
+        }
+        required_cas.extend(intent.asset_object_refs.values().cloned());
+
         let declared_cas = self
             .cas_objects
             .iter()
@@ -440,10 +451,11 @@ impl AcceptedProvenanceManifest {
             }
         }
         let mut object_refs = BTreeSet::new();
+        let empty_content_sha256 = crate::hex_sha256(b"");
         for object in &self.cas_objects {
             crate::cas::validate_hash(&object.object_ref)?;
-            if object.byte_count == 0 {
-                bail!("accepted provenance CAS object has zero length");
+            if (object.byte_count == 0) != (object.object_ref == empty_content_sha256) {
+                bail!("accepted provenance CAS object length differs from its empty-content identity");
             }
             if !object_refs.insert(object.object_ref.as_str()) {
                 bail!("duplicate accepted provenance CAS object");
@@ -474,9 +486,6 @@ fn collect_required_intent_objects(
     .flatten()
     {
         add_required_cas_object(required, object_ref, "run intent")?;
-    }
-    for object_ref in intent.asset_object_refs.values() {
-        add_required_cas_object(required, object_ref, "run intent asset")?;
     }
     Ok(())
 }
@@ -810,7 +819,7 @@ pub fn plan_accepted_provenance(
         add_cas_object(&store, &mut cas_objects, object_ref)?;
     }
     for object_ref in intent.asset_object_refs.values() {
-        add_cas_object(&store, &mut cas_objects, object_ref)?;
+        add_cas_object_for_role(&store, &mut cas_objects, object_ref, CasObjectRole::InputAsset)?;
     }
 
     let catalog_relative = format!("runs/{}/run_catalog.json", context.accepted_run_id);
@@ -1155,18 +1164,33 @@ fn collect_solution_revision_objects(
     Ok(())
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CasObjectRole {
+    RequiredData,
+    InputAsset,
+}
+
 fn add_cas_object(
     store: &SessionStore,
     objects: &mut BTreeMap<String, AcceptedProvenanceCasObject>,
     object_ref: &str,
+) -> Result<()> {
+    add_cas_object_for_role(store, objects, object_ref, CasObjectRole::RequiredData)
+}
+
+fn add_cas_object_for_role(
+    store: &SessionStore,
+    objects: &mut BTreeMap<String, AcceptedProvenanceCasObject>,
+    object_ref: &str,
+    role: CasObjectRole,
 ) -> Result<()> {
     crate::cas::validate_hash(object_ref)?;
     let byte_count = store
         .cas()
         .verified_length(object_ref)?
         .with_context(|| format!("accepted provenance CAS object is missing: {object_ref}"))?;
-    if byte_count == 0 {
-        bail!("accepted provenance CAS object is empty");
+    if byte_count == 0 && role != CasObjectRole::InputAsset {
+        bail!("accepted provenance CAS object is empty: {object_ref}");
     }
     if let Some(previous) = objects.get(object_ref) {
         if previous.byte_count != byte_count {
@@ -1671,6 +1695,93 @@ mod accepted_provenance_closure_tests {
             })
             .collect::<Result<BTreeMap<_, _>>>()
             .unwrap()
+    }
+
+    fn empty_input_fixture() -> (tempfile::TempDir, AcceptedProvenancePlan, String) {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("accepted-store");
+        let store = SessionStore::open(&root).unwrap();
+        let empty = store.cas().put(b"").unwrap();
+        let mut intent = FmsRunIntent::new("run-accepted", "intent-empty", serde_json::json!({
+            "run_id": "run-accepted",
+            "immutable_assets": [{"asset_id": "package-marker", "content_sha256": empty}]
+        }));
+        intent.asset_object_refs.insert("package-marker".into(), empty.clone());
+        store.commit_run_intent(&intent).unwrap();
+        store.commit_run_catalog(&FmsRunCatalog {
+            schema_version: FMS_RUN_CATALOG_SCHEMA.into(), run_id: "run-accepted".into(),
+            revision: 1, updated_at: Utc::now(), tasks: Vec::new(),
+        }).unwrap();
+        let plan = plan_accepted_provenance(&root, &context()).unwrap();
+        (directory, plan, empty)
+    }
+
+    #[test]
+    fn empty_input_asset_closure_preserves_bytes_and_rejects_forged_length() {
+        let (_directory, plan, empty) = empty_input_fixture();
+        plan.verify_sources().unwrap();
+        assert_eq!(plan.manifest.cas_objects, vec![AcceptedProvenanceCasObject {
+            object_ref: empty.clone(), byte_count: 0,
+        }]);
+        let detached = detached_for(&plan);
+        plan.manifest.validate_detached_records(&detached).unwrap();
+        let mut unowned = plan.manifest.clone();
+        let record = unowned.records.iter_mut()
+            .find(|record| record.kind == AcceptedProvenanceRecordKind::RunIntent).unwrap();
+        let intent = FmsRunIntent::new("run-accepted", "intent-empty", serde_json::json!({
+            "run_id": "run-accepted", "immutable_assets": []
+        }));
+        let bytes = serde_json::to_vec_pretty(&intent).unwrap();
+        record.byte_count = bytes.len() as u64;
+        record.content_sha256 = crate::hex_sha256(&bytes);
+        let mut detached_without_asset = detached.clone();
+        detached_without_asset.insert(record.archive_path.clone(), bytes);
+        unowned.closure_sha256 = unowned.expected_closure_sha256().unwrap();
+        assert!(unowned.validate_detached_records(&detached_without_asset).is_err());
+        let mut forged = plan.manifest.clone();
+        forged.cas_objects[0].byte_count = 1;
+        forged.closure_sha256 = forged.expected_closure_sha256().unwrap();
+        assert!(forged.validate().is_err());
+        forged.cas_objects[0].byte_count = 0;
+        forged.cas_objects[0].object_ref = crate::hex_sha256(b"nonempty");
+        forged.closure_sha256 = forged.expected_closure_sha256().unwrap();
+        assert!(forged.validate().is_err());
+    }
+
+    #[test]
+    fn empty_input_asset_cannot_also_be_a_solver_output() {
+        let (_directory, mut plan, empty) = empty_input_fixture();
+        let store = SessionStore::open_existing(&plan.source_root).unwrap();
+        let mut objects = plan.manifest.cas_objects.iter().cloned()
+            .map(|object| (object.object_ref.clone(), object)).collect();
+        assert!(add_cas_object(&store, &mut objects, &empty).is_err());
+        let catalog = FmsArtifactCatalog {
+            schema_version: FMS_ARTIFACT_CATALOG_SCHEMA.into(), run_id: "run-accepted".into(),
+            revision: 1, updated_at: Utc::now(),
+            entries: vec![FmsArtifactCatalogEntry {
+                artifact_id: "artifact-empty-output".into(), task_id: "task-output".into(),
+                attempt_id: "attempt-1".into(), ownership_epoch: 1,
+                logical_path: "outputs/empty.bin".into(), artifact_type: "state".into(),
+                content_sha256: empty.clone(), object_ref: Some(empty),
+                status: FmsArtifactStatus::Published, required: true, study_output: None,
+            }],
+        };
+        let bytes = serde_json::to_vec_pretty(&catalog).unwrap();
+        catalog.validate().unwrap();
+        let mut detached = detached_for(&plan);
+        let source_path = "runs/run-accepted/artifact_catalog.json";
+        let mut records = BTreeMap::new();
+        add_control_record_with_bytes(&mut records, "run-accepted",
+            AcceptedProvenanceRecordKind::ArtifactCatalog, source_path, &bytes).unwrap();
+        let record = records.into_values().next().unwrap();
+        detached.insert(record.archive_path.clone(), bytes.clone());
+        plan.manifest.records.push(record);
+        plan.manifest.closure_sha256 = plan.manifest.expected_closure_sha256().unwrap();
+        let error = plan.manifest.validate_detached_records(&detached).unwrap_err();
+        assert!(error.to_string().contains("exclusively an immutable input asset"));
+        fs::write(plan.source_root.join(source_path), bytes).unwrap();
+        let error = plan_accepted_provenance(&plan.source_root, &context()).unwrap_err();
+        assert!(error.to_string().contains("CAS object is empty"));
     }
 
     #[test]

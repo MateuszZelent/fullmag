@@ -7,6 +7,7 @@ import { homeView } from "@/kernel/layout/homeView";
 import { instanceTabs, useEmbeddedInstanceTab } from "@/kernel/layout/instanceTabs";
 import { useInstanceDiscovery } from "@/kernel/resources/instanceDiscoveryResources";
 import { useProjectDocumentSnapshot } from "@/kernel/persistence/ProjectDocumentStatus";
+import { createAndActivateScriptProject } from "@/kernel/persistence/ScriptProjectActivation";
 import { useSessionCollection } from "@/kernel/resources/useSessionCollection";
 import { useSessionResourceIdentity, useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import type { ModuleProps } from "@/kernel/types";
@@ -319,8 +320,7 @@ export function StartScreen({ kernel }: ModuleProps) {
   const projectCreator: ProjectCreator | null = projectDocument
     ? async (script) => {
         try {
-          const response = await projectDocument.createFromScript(buildFromScriptRequest(script));
-          kernel.authoringHistory?.clear();
+          const response = await createAndActivateScriptProject(kernel, buildFromScriptRequest(script));
           homeView.close();
           return {
             kind: "created",

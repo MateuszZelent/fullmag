@@ -1,0 +1,61 @@
+{
+  "schema": "fullmag.native-completion-public-projection.v1",
+  "source_path": "/home/kkingstoun/git/fullmag/storage/runtimes/fullmag-902a54b7b1f633a7/docker-volume-dev/176c53b2754048829eb049e7d7239863/runs/docker-all/session-store/runs/run-live-d06087ec50780f18efb6b3bf47d774c839cae891da150dfb7a602c6d6086d7e8/worker-attempts/task-8cb773c1f20e0ed32e1ea2574d825235faf28c23673d54032cb5b4849f1592d5/attempt-8452ad205e584581916bcc78bbfcdb05/epoch-1/worker_execution_completed.v1.json",
+  "source_sha256": "373881cebfa929974cb4b2eaecd687be3a892b478de9850386ead853c5858a03",
+  "omitted_fields": [
+    "identity.claim.lease"
+  ],
+  "receipt": {
+    "schema_version": "fullmag.accepted_worker_execution.v1",
+    "identity": {
+      "schema_version": "fullmag.accepted_worker_execution.v1",
+      "claim": {
+        "run_id": "run-live-d06087ec50780f18efb6b3bf47d774c839cae891da150dfb7a602c6d6086d7e8",
+        "task_id": "task-8cb773c1f20e0ed32e1ea2574d825235faf28c23673d54032cb5b4849f1592d5",
+        "attempt_id": "attempt-8452ad205e584581916bcc78bbfcdb05",
+        "ownership_epoch": 1
+      },
+      "start_message_id": "command-b0322fcd9e654ee99fd618ecb1ec9bee",
+      "start_sequence": 2,
+      "case_id": "default",
+      "plan_fingerprint": "668917c4129629abc4d353e4346dba5e8533aff1143d6f87cb01d215764bad86"
+    },
+    "status": "completed",
+    "completed_step_count": 10,
+    "outputs": [
+      {
+        "port_id": "final_state",
+        "case_id": "default",
+        "data_kind": "state",
+        "codec_id": "fullmag.runner.field_json",
+        "codec_version": "v1",
+        "object_ref": "138d2640ae8475d20fa88ad6ffdc495352303f97113d1943b03e1f58d99585f6",
+        "byte_count": 19748133
+      },
+      {
+        "port_id": "total_energy",
+        "case_id": "default",
+        "data_kind": "scalar",
+        "codec_id": "fullmag.study.scalar_json",
+        "codec_version": "v1",
+        "object_ref": "4f385c6dc84af687a7a35ff79b9e2c54e8d8d50cd8c042306dc7d2d355dbc0a4",
+        "byte_count": 128
+      }
+    ],
+    "accepted_state_ref": {
+      "id": {
+        "run_id": "run-live-d06087ec50780f18efb6b3bf47d774c839cae891da150dfb7a602c6d6086d7e8",
+        "stage_id": "minimize-1",
+        "accepted_step": 10,
+        "clock_digest": "sha256:a62c11cb6de01bf1c188aedcbba5069bd9d44f1ee8180bf4b32d136d51692951",
+        "state_digest": "sha256:abb84b2cdb4c8e832c8bb9f4839a37f345291c08ec1936d7ab586b89af3dd5ad",
+        "domain_digest": "sha256:2b09a6843da0b8e5579c9517ff14052e03594085767a7b874836f9de0ef31f32",
+        "plan_digest": "sha256:668917c4129629abc4d353e4346dba5e8533aff1143d6f87cb01d215764bad86"
+      },
+      "generation": {
+        "runtime_epoch": 1,
+        "accepted_revision": 10
+      }
+    }
+  }
+}

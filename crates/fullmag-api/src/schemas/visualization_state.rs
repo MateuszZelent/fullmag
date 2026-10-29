@@ -226,6 +226,29 @@ pub struct PlanarVisualizationState {
     pub point_style: PlanarPointStyleState,
     pub vector_style: PlanarVectorStyleState,
     pub interaction: PlanarInteractionState,
+    #[serde(default = "default_planar_multislice_state")]
+    pub multislice: PlanarMultisliceState,
+}
+
+/// Multislice presentation (F6 B2, note 0970 § Multislice panels): panels of
+/// the Default source at fixed position fractions along the current plane
+/// normal, sharing quantity, component, colour range and palette. Each panel
+/// is its own sample (`position_fraction` query override).
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PlanarMultisliceState {
+    pub enabled: bool,
+    pub position_fractions: Vec<f64>,
+}
+
+pub const PLANAR_MULTISLICE_MIN_PANELS: usize = 2;
+pub const PLANAR_MULTISLICE_MAX_PANELS: usize = 4;
+
+pub(crate) fn default_planar_multislice_state() -> PlanarMultisliceState {
+    PlanarMultisliceState {
+        enabled: false,
+        position_fractions: vec![0.25, 0.5, 0.75],
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Default)]
@@ -251,6 +274,7 @@ pub struct PlanarVisualizationPatch {
     pub point_style: Option<PlanarPointStyleState>,
     pub vector_style: Option<PlanarVectorStyleState>,
     pub interaction: Option<PlanarInteractionState>,
+    pub multislice: Option<PlanarMultisliceState>,
 }
 
 /// The source selected by the session-scoped planar viewport state.
@@ -331,6 +355,8 @@ pub enum PlanarViewScopeState {
     Airbox,
     /// Native layer of an FDM multilayer carrier, keyed by its canonical layer id.
     Layer { scope_id: String },
+    /// One region of a ferromagnetic object: `scope_id` is the object id.
+    Region { scope_id: String, region_id: String },
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
@@ -384,6 +410,10 @@ pub struct PlanarLayerState {
     pub points: bool,
     pub vectors: bool,
     pub probes: bool,
+    /// In-plane streamlines of the vector raster (presentation only, note 0970
+    /// `eq-planar-streamlines`); absent in state persisted before the layer.
+    #[serde(default)]
+    pub streamlines: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
@@ -460,6 +490,7 @@ pub(crate) fn default_planar_visualization_state() -> PlanarVisualizationState {
             points: false,
             vectors: false,
             probes: true,
+            streamlines: false,
         },
         wireframe_style: PlanarWireframeStyleState {
             color: "var(--fm-border-strong)".to_string(),
@@ -484,6 +515,7 @@ pub(crate) fn default_planar_visualization_state() -> PlanarVisualizationState {
             pan_u_m: 0.0,
             pan_v_m: 0.0,
         },
+        multislice: default_planar_multislice_state(),
     }
 }
 

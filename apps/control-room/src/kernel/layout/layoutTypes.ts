@@ -46,6 +46,8 @@ export interface ViewportCompanion {
 export interface LayoutState {
   /** Currently active ribbon tab */
   activeModuleTab: RibbonTabId;
+  /** Transient source selected in the Results navigator. */
+  resultsSource?: "current" | "saved";
   /** Active center viewport surface module */
   activeViewportMainModuleId: ModuleId;
   /** Last spatial center surface, retained while a non-spatial module is active. */
@@ -62,6 +64,7 @@ export interface LayoutState {
 
 export const DEFAULT_LAYOUT: LayoutState = {
   activeModuleTab: "home",
+  resultsSource: "current",
   activeBottomPanelTab: "telemetry",
   activeViewportMainModuleId: "viewport-3d",
   lastSpatialViewportMainModuleId: "viewport-3d",

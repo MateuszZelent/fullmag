@@ -14,8 +14,8 @@ use super::operator::{
     fem_topology_fingerprint, FemPlaneOperator, FemPlanePixel, MAX_PLANE_OPERATOR_NODES,
 };
 use super::{
-    FemPlanarElement, FemPlanarField, PlanarCompatibilityReduction, PlanarSampleResult,
-    ResolvedPlanarSampleRequest,
+    FemPlanarElement, FemPlanarField, FemSectionExtent, PlanarCompatibilityReduction,
+    PlanarSampleResult, ResolvedPlanarSampleRequest,
 };
 use super::{
     PlanarMeshOverlay, PlanarOverlayPolygon, PlanarOverlaySegment, PlanarOverlaySegmentKind,
@@ -276,9 +276,16 @@ pub(super) fn build_plane_operator(
     let pixel_count = request.resolution[0] as usize * request.resolution[1] as usize;
     let mut claimed = vec![false; pixel_count];
     let mut pixels = Vec::new();
+    let mut cut_extents = Vec::new();
     let du = (frame.bounds[1] - frame.bounds[0]) / request.resolution[0] as f64;
     let dv = (frame.bounds[3] - frame.bounds[2]) / request.resolution[1] as f64;
-    for (element_index, element) in field.elements().iter().enumerate() {
+    // Only elements whose box meets the plane (PM-N17), in ascending order so
+    // pixel claims and cut extents equal the full traversal.
+    let index = super::element_index::cached_fem_element_index(field, topology_fingerprint);
+    let mut candidates = Vec::new();
+    index.candidates_crossing_plane(frame.origin, frame.normal, &mut candidates);
+    for element_index in candidates.into_iter().map(|index| index as usize) {
+        let element = &field.elements()[element_index];
         if field.markers().get(element_index).copied().unwrap_or(1) == 0 {
             continue;
         }
@@ -302,6 +309,7 @@ pub(super) fn build_plane_operator(
         if n_min > 0.0 || n_max < 0.0 {
             continue;
         }
+        cut_extents.push(n_max - n_min);
         let u_min = projected
             .iter()
             .map(|point| point[0])
@@ -393,7 +401,27 @@ pub(super) fn build_plane_operator(
         topology_fingerprint,
         pixels,
         overlay,
+        section_extent: section_extent(cut_extents),
     }
+}
+
+/// Median normal extent of the cut elements (`eq-planar-navigation-step`).
+pub(super) fn section_extent(mut extents: Vec<f64>) -> Option<FemSectionExtent> {
+    extents.retain(|extent| extent.is_finite() && *extent > 0.0);
+    if extents.is_empty() {
+        return None;
+    }
+    extents.sort_unstable_by(f64::total_cmp);
+    let middle = extents.len() / 2;
+    let median = if extents.len() % 2 == 0 {
+        0.5 * (extents[middle - 1] + extents[middle])
+    } else {
+        extents[middle]
+    };
+    Some(FemSectionExtent {
+        cut_element_count: u32::try_from(extents.len()).unwrap_or(u32::MAX),
+        normal_extent_median_m: median,
+    })
 }
 
 fn plane_pixel(
@@ -470,6 +498,7 @@ pub(super) fn apply_plane_operator(
         occupancy,
         source_entity_ids,
         overlay: None,
+        section_extent: operator.section_extent,
     }
 }
 
@@ -595,6 +624,61 @@ fn sample_volume(
         "fem_element_volume_weighted",
         thickness.map(|value| pixel_area * value),
     )
+}
+
+/// Element AABB hierarchy over the selected (non-zero marker) elements.
+pub(super) fn element_index(field: &FemPlanarField) -> super::element_index::ElementBvh {
+    let mut lower = [f64::INFINITY; 3];
+    let mut upper = [f64::NEG_INFINITY; 3];
+    let boxes = field
+        .elements()
+        .iter()
+        .map(|element| {
+            let mut min = [f64::INFINITY; 3];
+            let mut max = [f64::NEG_INFINITY; 3];
+            for node in element.nodes() {
+                let position = field.nodes()[*node as usize];
+                for axis in 0..3 {
+                    min[axis] = min[axis].min(position[axis]);
+                    max[axis] = max[axis].max(position[axis]);
+                }
+            }
+            for axis in 0..3 {
+                lower[axis] = lower[axis].min(min[axis]);
+                upper[axis] = upper[axis].max(max[axis]);
+            }
+            (min, max)
+        })
+        .collect::<Vec<_>>();
+    let selected = (0..field.elements().len() as u32)
+        .filter(|index| field.markers().get(*index as usize).copied().unwrap_or(1) != 0)
+        .collect();
+    // Covers the 1e-11 weight tolerance of `element_weights` on any element.
+    let diagonal = ((0..3).map(|axis| (upper[axis] - lower[axis]).powi(2)).sum::<f64>()).sqrt();
+    super::element_index::ElementBvh::build(boxes, selected, 1.0e-9 * diagonal.max(f64::MIN_POSITIVE))
+}
+
+/// `interpolate_at` restricted to the index candidates, visited in ascending
+/// element order, so the located element and value equal the direct scan.
+pub(super) fn interpolate_at_indexed(
+    field: &FemPlanarField,
+    index: &super::element_index::ElementBvh,
+    candidates: &mut Vec<u32>,
+    point: [f64; 3],
+) -> Option<(u32, Vec<f64>)> {
+    index.candidates(point, candidates);
+    for &element_index in candidates.iter() {
+        let element = &field.elements()[element_index as usize];
+        let nodes = element
+            .nodes()
+            .iter()
+            .map(|index| field.nodes()[*index as usize])
+            .collect::<Vec<_>>();
+        if let Some(result) = interpolate_element(field, element, &nodes, point) {
+            return Some((element_index, result));
+        }
+    }
+    None
 }
 
 pub(super) fn interpolate_at(field: &FemPlanarField, point: [f64; 3]) -> Option<(u32, Vec<f64>)> {

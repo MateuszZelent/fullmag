@@ -119,6 +119,15 @@ def validate_lease(lease, root, run_id, task_id, execution):
             artifact_sha256(actual) == lease['sha256'], 'FEM lease bytes changed after discovery')
 
 
+def finite_nonnegative_number(value):
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value) and value >= 0
+    except OverflowError:
+        return False
+
+
 def validate_completed_outputs(store_root, attempt_root, accepted_state, task_id, lease):
     completed = read_json(attempt_root / 'worker_execution_completed.v1.json', store_root)
     require(completed.get('status') == 'completed' and completed.get('accepted_state_ref') == accepted_state,
@@ -127,7 +136,9 @@ def validate_completed_outputs(store_root, attempt_root, accepted_state, task_id
             'Completed FEM worker receipt has no executed solver steps')
     identity = completed.get('identity', {})
     started = read_json(attempt_root / 'worker_execution_started.v1.json', store_root)
-    require(completed.get('schema_version') == 'fullmag.accepted_worker_execution.v1' and
+    completion_schema = completed.get('schema_version')
+    require(completion_schema in ('fullmag.accepted_worker_execution.v1',
+                                  'fullmag.accepted_worker_execution.v3') and
             identity.get('schema_version') == 'fullmag.accepted_worker_execution.v1' and
             started.get('identity') == identity and isinstance(identity.get('start_message_id'), str) and
             bool(identity['start_message_id']) and type(identity.get('start_sequence')) is int and
@@ -135,6 +146,21 @@ def validate_completed_outputs(store_root, attempt_root, accepted_state, task_id
             re.fullmatch('[a-f0-9]{64}', identity['plan_fingerprint']) and
             isinstance(identity.get('case_id'), str) and bool(identity['case_id']),
             'FEM start/completed receipts differ or omit full execution identity')
+    if completion_schema == 'fullmag.accepted_worker_execution.v3':
+        stats = completed.get('final_step_stats')
+        state_id = accepted_state.get('id', {})
+        accepted_step = state_id.get('accepted_step') if isinstance(state_id, dict) else None
+        stats_step = stats.get('step') if isinstance(stats, dict) else None
+        require(isinstance(stats, dict) and type(stats_step) is int and stats_step >= 0 and
+                type(accepted_step) is int and stats_step == accepted_step,
+                'FEM final StepStats step differs from its accepted state')
+        require(stats.get('kind') == 'physical_observation' and
+                stats.get('solver_progress') is None,
+                'FEM final StepStats is not a physical observation')
+        require(finite_nonnegative_number(stats.get('time')),
+                'FEM final StepStats time is not finite and nonnegative')
+        require(completed.get('terminal_publication') is None,
+                'FEM completion unexpectedly contains a terminal publication')
     claim = identity.get('claim', {})
     require(claim.get('run_id') == accepted_state['id']['run_id'] and claim.get('task_id') == task_id and
             claim.get('ownership_epoch') == accepted_state['generation']['runtime_epoch'] and

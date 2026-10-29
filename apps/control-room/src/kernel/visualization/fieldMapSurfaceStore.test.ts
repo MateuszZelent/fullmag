@@ -33,6 +33,13 @@ describe("field-map surface store", () => {
     unsubscribe();
   });
 
+  it("publishes a new continuous navigation step for the same section", () => {
+    const continuous = { ...GEOMETRY, layerCount: null, layerSpacing: null, nativeResolution: null };
+    fieldMapStore.set({ sectionGeometry: continuous });
+    fieldMapStore.set({ sectionGeometry: { ...continuous, navigationStepM: 20e-9 } });
+    expect(fieldMapStore.get().sectionGeometry?.navigationStepM).toBe(20e-9);
+  });
+
   it("uses the same deterministic snapshot for server and first client render", () => {
     expect(fieldMapStore.get()).toEqual({ evidenceStatus: null, planar: null, sectionGeometry: null });
   });

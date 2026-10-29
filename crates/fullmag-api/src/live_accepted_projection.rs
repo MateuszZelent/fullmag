@@ -42,6 +42,7 @@ pub(crate) struct ProjectionPublicationFence {
     scene_revision: u64,
     state_version: u64,
     scalar_revision: u64,
+    solver_profile_revision: u64,
     mesh_revision: u64,
     mesh_build_revision: u64,
     field_catalog_revision: u64,
@@ -80,6 +81,7 @@ impl ProjectionPublicationFence {
             scene_revision,
             state_version: snapshot.state_version,
             scalar_revision: snapshot.scalar_revision,
+            solver_profile_revision: snapshot.solver_profile.revision,
             mesh_revision: snapshot.mesh_revision,
             mesh_build_revision: snapshot.mesh_build_revision,
             field_catalog_revision: snapshot.field_catalog_revision,
@@ -107,6 +109,35 @@ impl ProjectionPublicationFence {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct StageJournalDetails {
+    reason: Option<String>,
+    started_at_unix_ms: Option<u64>,
+    completed_at_unix_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CachedStageJournalDetails {
+    run_id: String,
+    input_fingerprint: String,
+    attempt_id: Option<String>,
+    ownership_epoch: Option<u64>,
+    lifecycle: fullmag_session::FmsTaskLifecycle,
+    details: StageJournalDetails,
+}
+
+impl CachedStageJournalDetails {
+    fn matches(&self, run_id: &str, task: &fullmag_session::FmsTaskCatalogEntry) -> bool {
+        self.run_id == run_id
+            && self.input_fingerprint == task.input_fingerprint
+            && self.attempt_id == task.attempt_id
+            && self.ownership_epoch == task.ownership_epoch
+            && self.lifecycle == task.lifecycle
+    }
+}
+
+type StageJournalDetailsCache = std::collections::BTreeMap<String, CachedStageJournalDetails>;
+
 #[derive(Debug, Clone, PartialEq)]
 struct ProjectionCursor {
     api_instance_id: String,
@@ -120,11 +151,13 @@ struct ProjectionCursor {
     run_revision: u64,
     artifact_revision: Option<u64>,
     status: &'static str,
+    solver_profile_identity: Option<String>,
     latest_output_identity: Option<String>,
     live_observation_identity: Option<String>,
     live_observation_sequence: Option<u64>,
     live_magnetization_sequence: Option<u64>,
     stage_execution: crate::types::StageExecutionState,
+    stage_journal_details: StageJournalDetailsCache,
 }
 
 #[derive(Debug, Clone)]
@@ -151,6 +184,7 @@ struct DurableProjection {
     accepted_runtime_mode: Option<fullmag_ir::ExecutionMode>,
     accepted_runtime_problem: Option<fullmag_ir::ProblemIR>,
     command_id: Option<String>,
+    preclaim_cancellations: Vec<(String, String)>,
     /// The run executes one interactive command (not a startup script).
     interactive_command: bool,
     /// Runtime capabilities of the finished step, including the resolved
@@ -164,7 +198,9 @@ struct DurableProjection {
     live_observation_identity: Option<String>,
     live_observation_sequence: Option<u64>,
     live_magnetization_sequence: Option<u64>,
+    solver_profile: Option<crate::schemas::diagnostics::SolverProfileResource>,
     stage_execution: crate::types::StageExecutionState,
+    stage_journal_details: StageJournalDetailsCache,
 }
 
 /// Start the read-only accepted-output projector for the Docker API-only
@@ -278,11 +314,13 @@ async fn poll_once(
         run_revision: projection.run_catalog_revision,
         artifact_revision: projection.artifact_catalog_revision,
         status: projection.status,
+        solver_profile_identity: projection.solver_profile.as_ref().map(profile_content_identity).transpose()?,
         latest_output_identity: projection.latest_output_identity.clone(),
         live_observation_identity: projection.live_observation_identity.clone(),
         live_observation_sequence: projection.live_observation_sequence,
         live_magnetization_sequence: projection.live_magnetization_sequence,
         stage_execution: projection.stage_execution.clone(),
+        stage_journal_details: projection.stage_journal_details.clone(),
     };
     if cursor.as_ref() == Some(&next_cursor) {
         return Ok(());
@@ -426,6 +464,9 @@ async fn capture_context(state: &AppState) -> Result<Option<ProjectionContext>, 
         let Some(snapshot) = current.as_ref() else {
             return Ok(None);
         };
+        if snapshot.runtime_status.code == "imported_read_only" {
+            return Ok(None);
+        }
         let Some(run) = snapshot.run.as_ref() else {
             return Ok(None);
         };
@@ -625,6 +666,27 @@ fn load_durable_projection(
                 })
         })
         .collect::<Result<std::collections::BTreeMap<_, _>, _>>()?;
+    if artifact_catalog.is_none() && preclaim_cancelled_without_artifacts(&store, &run_catalog)? {
+        let planned_count = accepted.lowered.steps.iter()
+            .filter(|step| matches!(step.status, fullmag_plan::StudyStepLoweringStatus::Planned))
+            .count();
+        if run_catalog.tasks.len() != planned_count {
+            return Err(ApiError::conflict("cancelled run catalog does not cover every planned Study step"));
+        }
+        for task in &run_catalog.tasks {
+            let order = task_order.get(&task.task_id).ok_or_else(|| {
+                ApiError::conflict("cancelled task is not present in the canonical Study execution order")
+            })?;
+            let step = &accepted.lowered.steps[*order];
+            let fingerprint = fullmag_application::study_task_input_fingerprint(&specification, step)
+                .map_err(|error| ApiError::conflict(format!("cancelled Study input is invalid: {error}")))?;
+            if !matches!(step.status, fullmag_plan::StudyStepLoweringStatus::Planned)
+                || task.input_fingerprint != fingerprint
+            {
+                return Err(ApiError::conflict("cancelled task input differs from its canonical Study step"));
+            }
+        }
+    }
     let active_task = run_catalog
         .tasks
         .iter()
@@ -633,10 +695,17 @@ fn load_durable_projection(
                 task.lifecycle,
                 fullmag_session::FmsTaskLifecycle::Running
                     | fullmag_session::FmsTaskLifecycle::Stopping
-            )
+            ) || (matches!(task.lifecycle,
+                    fullmag_session::FmsTaskLifecycle::Succeeded
+                    | fullmag_session::FmsTaskLifecycle::Failed
+                    | fullmag_session::FmsTaskLifecycle::Interrupted
+                    | fullmag_session::FmsTaskLifecycle::Cancelled)
+                && task_order.get(&task.task_id).is_some_and(|order| matches!(
+                    accepted.lowered.steps[*order].kind,
+                    fullmag_authoring::StudyStepKind::ClosedLoopInspection { .. })))
         })
         .filter_map(|task| task_order.get(&task.task_id).map(|order| (*order, task)))
-        .max_by_key(|(order, _)| *order);
+        .max_by_key(|(order, task)| observation_priority(task.lifecycle, *order));
     let mut live_observation_identity = None;
     let mut live_observation_sequence = None;
     let mut live_magnetization_sequence = None;
@@ -656,6 +725,7 @@ fn load_durable_projection(
                         && cursor.live_observation_identity.as_deref() == Some(identity.as_str())
                 })
                 .and_then(|cursor| cursor.live_magnetization_sequence);
+            let observation_result = (|| {
             let observation = crate::accepted_study_worker::read_accepted_live_observation(
                 store_root,
                 &context.run_id,
@@ -668,6 +738,44 @@ fn load_durable_projection(
             .map_err(|error| {
                 ApiError::conflict(format!("read accepted live observation: {error:#}"))
             })?;
+            if previous_cursor.filter(|cursor| cursor_matches_context(cursor, context)
+                && cursor.live_observation_identity.as_deref() == Some(identity.as_str()))
+                .and_then(|cursor| cursor.live_observation_sequence)
+                .zip(observation.as_ref().map(|value| value.header.sequence))
+                .is_some_and(|(previous, next)| next < previous)
+            {
+                return Err(ApiError::conflict("accepted live observation sequence regressed"));
+            }
+            if let Some((cursor, next)) = previous_cursor
+                .filter(|cursor| cursor_matches_context(cursor, context)
+                    && cursor.live_observation_identity.as_deref() == Some(identity.as_str()))
+                .zip(observation.as_ref())
+            {
+                if let Some(previous) = cursor.stage_execution.stages.iter()
+                    .find(|stage| stage.stage_id.as_deref() == Some(step_id.as_str()))
+                    .and_then(|stage| stage.antenna_progress.as_ref())
+                {
+                    let Some(progress) = next.header.operation_progress.as_ref() else {
+                        return Err(ApiError::conflict("antenna observation changed its payload kind"));
+                    };
+                    if !crate::accepted_study_worker::accepted_antenna_progress::follows(previous, progress)
+                        || (cursor.live_observation_sequence == Some(next.header.sequence) && previous != progress)
+                    {
+                        return Err(ApiError::conflict("antenna observation progress regressed or changed without a revision"));
+                    }
+                }
+            }
+            if observation.as_ref().is_some_and(|observation| {
+                let is_antenna = matches!(accepted.lowered.steps[order].kind,
+                    fullmag_authoring::StudyStepKind::ClosedLoopInspection { .. });
+                is_antenna != observation.header.operation_progress.is_some()
+            }) {
+                return Err(ApiError::conflict("accepted live observation kind differs from its study step"));
+            }
+                Ok(observation)
+            })();
+            let observation = observation_diagnostic_result(
+                observation_priority(task.lifecycle, order).0, observation_result)?;
             live_observation_identity = Some(identity);
             live_observation_sequence = observation
                 .as_ref()
@@ -711,10 +819,15 @@ fn load_durable_projection(
     } else {
         Vec::new()
     };
-    let stage_terminal_details = if durable_changed {
-        load_stage_terminal_details(&store, &context.run_id, &run_catalog.tasks)?
+    let previous_stage_details = previous_cursor
+        .filter(|cursor| cursor_matches_context(cursor, context))
+        .map(|cursor| &cursor.stage_journal_details);
+    // Heartbeats change catalog revisions, not attempt lifecycle. Reuse their
+    // immutable journal details; sidecar-only updates never read the journal.
+    let stage_journal_details = if durable_changed {
+        load_stage_journal_details(&store, &run_catalog, previous_stage_details)?
     } else {
-        std::collections::BTreeMap::new()
+        previous_stage_details.cloned().unwrap_or_default()
     };
     let latest_state = verified
         .iter()
@@ -843,7 +956,7 @@ fn load_durable_projection(
                 &run_catalog.tasks,
                 live_observation.as_ref(),
                 &verified,
-                &stage_terminal_details,
+                &stage_journal_details,
                 status,
             )?
         }
@@ -853,7 +966,7 @@ fn load_durable_projection(
             &run_catalog.tasks,
             live_observation.as_ref(),
             &verified,
-            &stage_terminal_details,
+            &stage_journal_details,
             status,
         )?
     };
@@ -862,6 +975,17 @@ fn load_durable_projection(
         .pointer("/parameters/live_workspace/command_id")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
+    let mut preclaim_cancellations = Vec::new();
+    if status == "cancelled" && preclaim_cancelled_without_artifacts(&store, &run_catalog)? {
+        for task in &run_catalog.tasks {
+            let cancellation = store.read_task_cancellation_intent(&context.run_id, &task.task_id)
+                .map_err(|error| ApiError::conflict(format!("read command cancellation proof: {error}")))?
+                .ok_or_else(|| ApiError::conflict("command cancellation proof disappeared"))?;
+            cancellation.validate_task_scope(&store, task, run_catalog.revision)
+                .map_err(|error| ApiError::conflict(format!("invalid command cancellation proof: {error}")))?;
+            preclaim_cancellations.push((task.task_id.clone(), cancellation.cancellation_id));
+        }
+    }
     let interactive_command = intent
         .specification
         .pointer("/parameters/live_workspace/command/kind")
@@ -887,7 +1011,22 @@ fn load_durable_projection(
     } else {
         None
     };
+    let solver_profile = if intent.specification.pointer("/parameters/solver_profile").is_some() {
+        let profile_specification: fullmag_application::RunSpecification = serde_json::from_value(intent.specification.clone())
+            .map_err(|error| ApiError::conflict(format!("invalid accepted profile RunSpec: {error}")))?;
+        crate::accepted_solver_profile::load_projection(&store, &profile_specification, &run_catalog.tasks)
+            .and_then(|profile| profile.map(|profile| {
+                let mut resource: crate::schemas::diagnostics::SolverProfileResource =
+                    serde_json::from_value(serde_json::to_value(profile)?)?;
+                for sample in &mut resource.operation_samples {
+                    sample.execution_config = Some(resource.config.clone());
+                }
+                Ok::<_, anyhow::Error>(resource)
+            }).transpose())
+            .map_err(|error| ApiError::conflict(format!("invalid accepted operation diagnostics: {error:#}")))?
+    } else { None };
     Ok(Some(DurableProjection {
+        solver_profile,
         run_catalog_revision: run_catalog.revision,
         artifact_catalog_revision,
         terminal_without_outputs,
@@ -896,6 +1035,7 @@ fn load_durable_projection(
         accepted_runtime_mode: None,
         accepted_runtime_problem,
         command_id,
+        preclaim_cancellations,
         interactive_command,
         resolved_capabilities,
         latest_state,
@@ -907,7 +1047,38 @@ fn load_durable_projection(
         live_observation_sequence,
         live_magnetization_sequence,
         stage_execution,
+        stage_journal_details,
     }))
+}
+
+fn preclaim_cancelled_without_artifacts(
+    store: &fullmag_session::SessionStore,
+    catalog: &fullmag_session::FmsRunCatalog,
+) -> Result<bool, ApiError> {
+    if catalog.tasks.is_empty() || catalog.tasks.iter().any(|task| {
+        task.lifecycle != fullmag_session::FmsTaskLifecycle::Cancelled
+            || task.attempt_id.is_some()
+            || task.ownership_epoch.is_some()
+            || task.resource_id.is_some()
+            || task.resolved_input_fingerprint.is_some()
+            || task.observation.is_some()
+            || !task.artifact_ids.is_empty()
+            || task.coordinator_watermark.is_some()
+            || task.coordinator_genesis.is_some()
+    }) {
+        return Ok(false);
+    }
+    for task in &catalog.tasks {
+        let Some(intent) = store.read_task_cancellation_intent(&catalog.run_id, &task.task_id)
+            .map_err(|error| ApiError::conflict(format!("read pre-claim cancellation intent: {error}")))?
+        else {
+            return Ok(false);
+        };
+        intent.validate_task_scope(store, task, catalog.revision).map_err(|error| {
+            ApiError::conflict(format!("pre-claim cancellation scope is invalid: {error}"))
+        })?;
+    }
+    Ok(true)
 }
 
 /// The accepted Study is a pure function of the immutable RunIntent and the
@@ -1038,12 +1209,45 @@ fn accepted_runtime_capabilities_for_state(
     Some(capabilities)
 }
 
+/// Build a terminal read model from evidence already pinned by the caller's
+/// native fence. This function acquires no locks and publishes no effects.
+pub(crate) fn build_terminal_observation_stage_execution(
+    accepted: &fullmag_runtime_control::AcceptedStudySnapshot,
+    catalog: &fullmag_session::FmsRunCatalog,
+    journal: &[fullmag_session::FmsCoordinatorJournalEntry],
+    status: &'static str,
+) -> Result<crate::types::StageExecutionState, ApiError> {
+    if catalog.run_id != accepted.run.specification.run_id.as_str()
+        || !matches!(status, "failed" | "completed" | "cancelled" | "interrupted")
+        || catalog.tasks.is_empty()
+        || catalog.tasks.iter().any(|task| !matches!(task.lifecycle,
+            fullmag_session::FmsTaskLifecycle::Succeeded
+                | fullmag_session::FmsTaskLifecycle::Failed
+                | fullmag_session::FmsTaskLifecycle::Cancelled
+                | fullmag_session::FmsTaskLifecycle::Interrupted))
+    {
+        return Err(ApiError::conflict("terminal stage observation requires its exact terminal catalog"));
+    }
+    let mut details = StageJournalDetailsCache::new();
+    for task in &catalog.tasks {
+        details.insert(task.task_id.clone(), CachedStageJournalDetails {
+            run_id: catalog.run_id.clone(),
+            input_fingerprint: task.input_fingerprint.clone(),
+            attempt_id: task.attempt_id.clone(),
+            ownership_epoch: task.ownership_epoch,
+            lifecycle: task.lifecycle,
+            details: stage_journal_details_for_task(&catalog.run_id, task, journal)?,
+        });
+    }
+    build_stage_execution(accepted, &catalog.tasks, None, &[], &details, status)
+}
+
 fn build_stage_execution(
     accepted: &fullmag_runtime_control::AcceptedStudySnapshot,
     tasks: &[fullmag_session::FmsTaskCatalogEntry],
     live_observation: Option<&(usize, crate::accepted_study_worker::AcceptedLiveObservation)>,
     verified_outputs: &[VerifiedOutput],
-    terminal_details: &std::collections::BTreeMap<String, Option<String>>,
+    journal_details: &StageJournalDetailsCache,
     status: &'static str,
 ) -> Result<crate::types::StageExecutionState, ApiError> {
     let tasks_by_id = tasks
@@ -1074,11 +1278,27 @@ fn build_stage_execution(
             None,
             stage_status,
         );
-        if let Some(detail) = task
-            .and_then(|task| terminal_details.get(&task.task_id))
-            .and_then(Option::as_ref)
+        record.antenna_solve_stage_id = match &step.kind {
+            fullmag_authoring::StudyStepKind::ClosedLoopInspection { stage_id, .. } => {
+                Some(stage_id.clone())
+            }
+            fullmag_authoring::StudyStepKind::Primitive {
+                stage_kind: fullmag_authoring::StudyPrimitiveStageKind::AntennaFieldSolve,
+            } => step.execution_plan.as_ref().and_then(|plan| match &plan.backend_plan {
+                fullmag_ir::BackendPlanIR::AntennaFieldOnly(antenna) => Some(antenna.stage_id.clone()),
+                fullmag_ir::BackendPlanIR::AntennaExternalLeadInspection(antenna) => {
+                    Some(antenna.input.stage.id.clone())
+                }
+                _ => None,
+            }),
+            _ => None,
+        };
+        if let Some(cached) = task.and_then(|task| journal_details.get(&task.task_id)
+            .filter(|cached| cached.matches(accepted.run.specification.run_id.as_str(), task)))
         {
-            record.state_transition_reason = Some(detail.clone());
+            record.state_transition_reason = cached.details.reason.clone();
+            record.started_at_unix_ms = cached.details.started_at_unix_ms;
+            record.completed_at_unix_ms = cached.details.completed_at_unix_ms;
         }
         if let Some(output) = verified_outputs
             .iter()
@@ -1096,21 +1316,7 @@ fn build_stage_execution(
         if let Some((_, observation)) = live_observation.filter(|(_, observation)| {
             observation.header.step_id == step.step_id
         }) {
-            let stats = &observation.header.stats;
-            if stats.time.is_finite()
-                && stats.time >= 0.0
-                && stats.dt.is_finite()
-                && stats.dt >= 0.0
-            {
-                record.applied_step = Some(stats.step);
-                record.applied_time_seconds = Some(stats.time);
-                record.progress_label = Some("Solver update".to_owned());
-                record.progress_detail = Some(format!(
-                    "step {}; time {:.9e} s; dt {:.9e} s",
-                    stats.step, stats.time, stats.dt
-                ));
-                record.last_progress_unix_ms = Some(observation.header.written_at_unix_ms);
-            }
+            apply_observation_stage_progress(&mut record, observation);
         }
         stages.push(record);
     }
@@ -1120,11 +1326,32 @@ fn build_stage_execution(
     ))
 }
 
+fn observation_priority(lifecycle: fullmag_session::FmsTaskLifecycle, order: usize) -> (bool, usize) {
+    (matches!(lifecycle, fullmag_session::FmsTaskLifecycle::Running
+        | fullmag_session::FmsTaskLifecycle::Stopping), order)
+}
+
+fn observation_diagnostic_result(
+    active: bool,
+    result: Result<Option<crate::accepted_study_worker::AcceptedLiveObservation>, ApiError>,
+) -> Result<Option<crate::accepted_study_worker::AcceptedLiveObservation>, ApiError> {
+    // A terminal diagnostic cannot veto the authoritative durable outcome.
+    if active { result } else { Ok(result.unwrap_or(None)) }
+}
+
 fn refresh_live_stage_progress(
     stage_execution: &mut crate::types::StageExecutionState,
     live_observation: Option<&(usize, crate::accepted_study_worker::AcceptedLiveObservation)>,
 ) {
     let Some((_, observation)) = live_observation else {
+        for stage in &mut stage_execution.stages {
+            if stage.antenna_progress.take().is_some() {
+                stage.progress_percent = None;
+                stage.progress_label = None;
+                stage.progress_detail = None;
+                stage.last_progress_unix_ms = None;
+            }
+        }
         return;
     };
     let Some(stage) = stage_execution.stages.iter_mut().find(|stage| {
@@ -1132,113 +1359,280 @@ fn refresh_live_stage_progress(
     }) else {
         return;
     };
-    let stats = &observation.header.stats;
-    if stats.time.is_finite()
-        && stats.time >= 0.0
-        && stats.dt.is_finite()
-        && stats.dt >= 0.0
-    {
-        stage.applied_step = Some(stats.step);
-        stage.applied_time_seconds = Some(stats.time);
-        stage.progress_label = Some("Solver update".to_owned());
-        stage.progress_detail = Some(format!(
-            "step {}; time {:.9e} s; dt {:.9e} s",
-            stats.step, stats.time, stats.dt
-        ));
+    apply_observation_stage_progress(stage, observation);
+}
+
+fn apply_observation_stage_progress(
+    stage: &mut crate::types::StageExecutionRecord,
+    observation: &crate::accepted_study_worker::AcceptedLiveObservation,
+) {
+    if let Some(progress) = observation.header.operation_progress {
+        stage.antenna_progress = Some(progress);
+        stage.applied_step = None;
+        stage.applied_time_seconds = None;
+        // This percentage describes field targets only, never durable completion.
+        stage.progress_percent = (matches!(progress.phase,
+            fullmag_runner::AntennaOperationPhase::EvaluatingField
+            | fullmag_runner::AntennaOperationPhase::ValidatingResult
+            | fullmag_runner::AntennaOperationPhase::PublishingResult))
+            .then_some(100.0 * progress.completed_targets as f64 / progress.total_targets as f64);
+        stage.progress_label = Some(progress.phase.as_str().into());
+        stage.progress_detail = Some(format!("field targets {}/{}; source cells {}; elapsed {:.1} s",
+            progress.completed_targets, progress.total_targets, progress.source_cells, progress.elapsed_seconds));
         stage.last_progress_unix_ms = Some(observation.header.written_at_unix_ms);
+    } else if let Some(stats) = observation.header.stats.as_ref() {
+        if stats.time.is_finite() && stats.time >= 0.0
+            && stats.dt.is_finite() && stats.dt >= 0.0 {
+            stage.antenna_progress = None;
+            stage.applied_step = Some(stats.step);
+            stage.applied_time_seconds = Some(stats.time);
+            stage.progress_label = Some("Solver update".to_owned());
+            stage.progress_detail = Some(format!("step {}; time {:.9e} s; dt {:.9e} s",
+                stats.step, stats.time, stats.dt));
+            stage.last_progress_unix_ms = Some(observation.header.written_at_unix_ms);
+        }
     }
 }
 
-/// Read raw terminal details only from the exact task attempt journal. The
-/// task catalog remains authoritative for lifecycle, and this path does not
-/// infer a typed scientific stop criterion from a generic task outcome.
-fn load_stage_terminal_details(
+/// Reuse details only for the same task input, attempt and lifecycle. Durable
+/// entries are immutable; heartbeat revisions must not trigger a full replay.
+fn load_stage_journal_details(
     store: &fullmag_session::SessionStore,
-    run_id: &str,
-    tasks: &[fullmag_session::FmsTaskCatalogEntry],
-) -> Result<
-    std::collections::BTreeMap<String, Option<String>>,
-    ApiError,
-> {
-    use fullmag_session::{FmsCoordinatorJournalDirection as Direction, FmsTaskLifecycle as Life};
+    catalog: &fullmag_session::FmsRunCatalog,
+    previous: Option<&StageJournalDetailsCache>,
+) -> Result<StageJournalDetailsCache, ApiError> {
+    use fullmag_session::FmsTaskLifecycle as Life;
 
-    let terminal_tasks = tasks
-        .iter()
-        .filter(|task| {
-            matches!(task.lifecycle, Life::Failed | Life::Cancelled | Life::Interrupted)
-        })
-        .collect::<Vec<_>>();
-    if terminal_tasks.is_empty() {
-        return Ok(std::collections::BTreeMap::new());
+    let mut details = StageJournalDetailsCache::new();
+    let mut missing = Vec::new();
+    for task in &catalog.tasks {
+        if let Some(cached) = previous
+            .and_then(|cache| cache.get(&task.task_id))
+            .filter(|cached| cached.matches(&catalog.run_id, task))
+        {
+            details.insert(task.task_id.clone(), cached.clone());
+            continue;
+        }
+        details.insert(
+            task.task_id.clone(),
+            CachedStageJournalDetails {
+                run_id: catalog.run_id.clone(),
+                input_fingerprint: task.input_fingerprint.clone(),
+                attempt_id: task.attempt_id.clone(),
+                ownership_epoch: task.ownership_epoch,
+                lifecycle: task.lifecycle,
+                details: StageJournalDetails::default(),
+            },
+        );
+        if task.attempt_id.is_some()
+            && task.ownership_epoch.is_some()
+            && matches!(
+                task.lifecycle,
+                Life::Running
+                    | Life::Stopping
+                    | Life::Succeeded
+                    | Life::Failed
+                    | Life::Cancelled
+                    | Life::Interrupted
+            )
+        {
+            missing.push(task);
+        }
+    }
+    if missing.is_empty() {
+        return Ok(details);
+    }
+
+    // This is a real shared native fence, not an unlocked snapshot or writer
+    // takeover. A busy store defers the existing projector poll with its cursor intact.
+    let transaction = store.read_transaction().map_err(|error| {
+        ApiError::conflict(format!("read accepted stage journal fence: {error}"))
+    })?;
+    if store
+        .read_run_catalog(&catalog.run_id)
+        .map_err(|error| ApiError::conflict(format!("read accepted stage catalog: {error}")))?
+        .as_ref()
+        != Some(catalog)
+    {
+        return Err(ApiError::conflict(
+            "accepted stage catalog changed before journal capture",
+        ));
     }
     let journal = store
-        .read_coordinator_journal(run_id)
-        .map_err(|error| ApiError::conflict(format!("read accepted terminal journal: {error}")))?;
-    let mut reasons = std::collections::BTreeMap::new();
-    for task in terminal_tasks {
-        let mut failure_detail = None;
-        let mut stop_detail = None;
-        if let (Some(attempt_id), Some(ownership_epoch)) =
-            (task.attempt_id.as_deref(), task.ownership_epoch)
+        .read_coordinator_journal_readonly(&catalog.run_id, &transaction)
+        .map_err(|error| ApiError::conflict(format!("read accepted stage journal: {error}")))?;
+    for task in missing {
+        details
+            .get_mut(&task.task_id)
+            .expect("current task cache entry")
+            .details = stage_journal_details_for_task(&catalog.run_id, task, &journal)?;
+    }
+    Ok(details)
+}
+
+/// UTC timestamps describe durable worker stage events, not native-call or CPU time.
+fn stage_journal_details_for_task(
+    run_id: &str,
+    task: &fullmag_session::FmsTaskCatalogEntry,
+    journal: &[fullmag_session::FmsCoordinatorJournalEntry],
+) -> Result<StageJournalDetails, ApiError> {
+    use fullmag_application::{
+        CoordinatorMessage as Message, TaskLifecycle as TaskLife, WorkerCommand, WorkerEvent,
+    };
+    use fullmag_session::{FmsCoordinatorJournalDirection as Direction, FmsTaskLifecycle as Life};
+
+    let mut details = StageJournalDetails::default();
+    let (Some(attempt_id), Some(epoch)) = (task.attempt_id.as_deref(), task.ownership_epoch) else {
+        return Ok(details);
+    };
+    let mut failure_reason = None;
+    let mut stop_reason = None;
+    let mut saw_started = false;
+    for entry in journal.iter().filter(|entry| {
+        entry.task_id == task.task_id
+            && entry.attempt_id == attempt_id
+            && entry.ownership_epoch == epoch
+    }) {
+        entry.validate_for_task(task).map_err(|error| {
+            ApiError::conflict(format!("invalid accepted stage journal entry: {error}"))
+        })?;
+        let transition: fullmag_application::CoordinatorTransition =
+            serde_json::from_value(entry.payload.clone()).map_err(|error| {
+                ApiError::conflict(format!(
+                    "accepted task coordinator transition is invalid: {error}"
+                ))
+            })?;
+        let checkpoint = &transition.checkpoint;
+        let claim = &checkpoint.claim;
+        if entry.run_id != run_id
+            || claim.run_id.as_str() != run_id
+            || claim.task_id.as_str() != task.task_id
+            || claim.attempt_id.as_str() != attempt_id
+            || claim.ownership_epoch.value() != epoch
+            || entry.lease_token != claim.lease.lease_token.as_str()
+            || transition.schema_version != fullmag_application::COORDINATOR_TRANSITION_SCHEMA
+            || checkpoint.schema_version != fullmag_application::COORDINATOR_CHECKPOINT_SCHEMA
+            || checkpoint.task.run_id != claim.run_id
+            || checkpoint.task.task_id != claim.task_id
+            || checkpoint.task.attempt_id.as_ref() != Some(&claim.attempt_id)
+            || checkpoint.task.ownership_epoch != Some(claim.ownership_epoch)
+            || checkpoint.task.input_fingerprint != task.input_fingerprint
         {
-            for entry in journal.iter().filter(|entry| {
-                entry.task_id == task.task_id
-                    && entry.attempt_id == attempt_id
-                    && entry.ownership_epoch == ownership_epoch
-            }) {
-                let transition: fullmag_application::CoordinatorTransition =
-                    serde_json::from_value(entry.payload.clone()).map_err(|error| {
+            return Err(ApiError::conflict(
+                "accepted stage journal claim differs from its task attempt",
+            ));
+        }
+        checkpoint.task.fence(claim).map_err(|error| {
+            ApiError::conflict(format!(
+                "accepted stage checkpoint claim is invalid: {error}"
+            ))
+        })?;
+        let timestamp = u64::try_from(entry.created_at.timestamp_millis())
+            .ok()
+            .filter(|value| *value > 0);
+        match (entry.direction, &transition.message) {
+            (Direction::Command, Message::Command(envelope)) => {
+                envelope
+                    .validate_for_claim(&claim.identity())
+                    .map_err(|error| {
                         ApiError::conflict(format!(
-                            "accepted task coordinator transition is invalid: {error}"
+                            "accepted stage command claim is invalid: {error}"
                         ))
                     })?;
-                let claim = &transition.checkpoint.claim;
-                if claim.run_id.as_str() != run_id
-                    || claim.task_id.as_str() != task.task_id
-                    || claim.attempt_id.as_str() != attempt_id
-                    || claim.ownership_epoch.value() != ownership_epoch
+                if entry.entry_id != envelope.message_id
+                    || entry.sequence != envelope.sequence
+                    || checkpoint.command_sequence != envelope.sequence
+                    || entry.terminal
                 {
                     return Err(ApiError::conflict(
-                        "accepted terminal journal claim differs from its task attempt",
+                        "accepted stage command identity differs from journal",
                     ));
                 }
-                match (entry.direction, &transition.message) {
-                    (
-                        Direction::Command,
-                        fullmag_application::CoordinatorMessage::Command(envelope),
-                    ) => {
-                        if let fullmag_application::WorkerCommand::Stop { reason } =
-                            &envelope.command
-                        {
-                            stop_detail = Some(reason.clone());
-                        }
-                    }
-                    (
-                        Direction::Event,
-                        fullmag_application::CoordinatorMessage::Event(envelope),
-                    ) => match &envelope.event {
-                        fullmag_application::WorkerEvent::Failed { reason, .. }
-                        | fullmag_application::WorkerEvent::Rejected { reason } => {
-                            failure_detail = Some(reason.clone());
-                        }
-                        _ => {}
-                    },
-                    _ => {
-                        return Err(ApiError::conflict(
-                            "accepted terminal journal direction differs from its transition",
-                        ));
-                    }
+                if let WorkerCommand::Stop { reason } = &envelope.command {
+                    stop_reason = Some(reason.clone());
                 }
             }
+            (Direction::Event, Message::Event(envelope)) => {
+                envelope
+                    .validate_for_claim(&claim.identity())
+                    .map_err(|error| {
+                        ApiError::conflict(format!(
+                            "accepted stage event claim is invalid: {error}"
+                        ))
+                    })?;
+                if entry.entry_id != envelope.message_id
+                    || entry.sequence != envelope.sequence
+                    || checkpoint.event_sequence != envelope.sequence
+                    || entry.terminal
+                        != matches!(
+                            &envelope.event,
+                            WorkerEvent::Completed { .. }
+                                | WorkerEvent::Failed { .. }
+                                | WorkerEvent::Rejected { .. }
+                        )
+                {
+                    return Err(ApiError::conflict(
+                        "accepted stage event identity differs from journal",
+                    ));
+                }
+                let expected_terminal = match &envelope.event {
+                    WorkerEvent::Started => {
+                        if saw_started || checkpoint.task.lifecycle != TaskLife::Running {
+                            return Err(ApiError::conflict(
+                                "accepted stage has inconsistent Started evidence",
+                            ));
+                        }
+                        saw_started = true;
+                        details.started_at_unix_ms = timestamp;
+                        None
+                    }
+                    WorkerEvent::Completed { .. } => Some((Life::Succeeded, TaskLife::Succeeded)),
+                    WorkerEvent::Stopped => Some((Life::Cancelled, TaskLife::Cancelled)),
+                    WorkerEvent::Failed { reason, .. } | WorkerEvent::Rejected { reason } => {
+                        failure_reason = Some(reason.clone());
+                        Some((Life::Failed, TaskLife::Failed))
+                    }
+                    _ => None,
+                };
+                if let Some((lifecycle, checkpoint_lifecycle)) = expected_terminal {
+                    if checkpoint.task.lifecycle != checkpoint_lifecycle {
+                        return Err(ApiError::conflict(
+                            "accepted terminal event differs from its checkpoint",
+                        ));
+                    }
+                    // Interrupted has no worker event of its own. Keep its historical
+                    // failure reason without inventing a process termination timestamp.
+                    if task.lifecycle == Life::Interrupted && lifecycle == Life::Failed {
+                        continue;
+                    }
+                    if task.lifecycle != lifecycle {
+                        return Err(ApiError::conflict(
+                            "accepted terminal event differs from task lifecycle",
+                        ));
+                    }
+                    details.completed_at_unix_ms = timestamp;
+                }
+            }
+            _ => {
+                return Err(ApiError::conflict(
+                    "accepted stage journal direction differs from its transition",
+                ))
+            }
         }
-        let detail = match task.lifecycle {
-            Life::Failed | Life::Interrupted => failure_detail,
-            Life::Cancelled => stop_detail,
-            _ => continue,
-        };
-        reasons.insert(task.task_id.clone(), detail);
     }
-    Ok(reasons)
+    details.reason = match task.lifecycle {
+        Life::Failed | Life::Interrupted => failure_reason,
+        Life::Cancelled => stop_reason,
+        _ => None,
+    };
+    if details
+        .started_at_unix_ms
+        .zip(details.completed_at_unix_ms)
+        .is_some_and(|(start, end)| end < start)
+    {
+        details.completed_at_unix_ms = None;
+    }
+    Ok(details)
 }
 
 fn cursor_matches_context(cursor: &ProjectionCursor, context: &ProjectionContext) -> bool {
@@ -2179,6 +2573,24 @@ fn ensure_projection_context(
     Ok(())
 }
 
+fn profile_content_identity(profile: &crate::schemas::diagnostics::SolverProfileResource) -> Result<String, ApiError> {
+    let mut value = serde_json::to_value(profile)
+        .map_err(|error| ApiError::internal(format!("serialize operation diagnostics identity: {error}")))?;
+    value.as_object_mut().ok_or_else(|| ApiError::internal("solver profile resource must be an object"))?
+        .remove("revision");
+    Ok(fullmag_session::canonical_json_sha256(&value))
+}
+
+fn replace_operation_profile(
+    current: &mut crate::schemas::diagnostics::SolverProfileResource,
+    mut candidate: crate::schemas::diagnostics::SolverProfileResource,
+) -> Result<bool, ApiError> {
+    if profile_content_identity(&candidate)? == profile_content_identity(current)? { return Ok(false); }
+    candidate.revision = current.revision.wrapping_add(1);
+    *current = candidate;
+    Ok(true)
+}
+
 async fn apply_projection(
     state: &Arc<AppState>,
     context: &ProjectionContext,
@@ -2195,9 +2607,32 @@ async fn apply_projection(
     let publication_fence = ProjectionPublicationFence::capture(&next)?;
     let display_revision = state.current_display_selection.read().await.revision;
 
+    let profile_changed = if let Some(profile) = projection.solver_profile.as_ref() {
+        // The recovered journal, rather than a default startup frame, owns a
+        // later explicit next-admission config (including Disable).
+        let configured = state.current_command_ledger.lock().await.iter().rev()
+            .find(|record| record.command.kind == "set_solver_profile"
+                && record.status == crate::types::CommandLifecycleState::Completed)
+            .and_then(|record| record.command.profile.clone());
+        let config = match configured {
+            Some(value) => serde_json::from_value(value)
+                .map_err(|error| ApiError::conflict(format!("invalid recovered solver profile configuration: {error}")))?,
+            None => profile.config.clone(),
+        };
+        let mut candidate = profile.clone();
+        candidate.config = config;
+        candidate.state = if candidate.config.enabled { "enabled" } else { "disabled" }.into();
+        if !candidate.config.enabled { candidate.operation_samples.clear(); }
+        replace_operation_profile(&mut next.solver_profile, candidate)?
+    } else if !next.solver_profile.operation_samples.is_empty() {
+        next.solver_profile.operation_samples.clear();
+        next.solver_profile.revision = next.solver_profile.revision.wrapping_add(1);
+        true
+    } else { false };
     let previous_status = next.session.status.clone();
     let terminal = matches!(projection.status, "completed" | "failed" | "cancelled");
-    let mut changed = false;
+    let mut changed = profile_changed;
+    let mut scalar_sample_advanced = false;
     if let Some(run) = next.run.as_mut() {
         if run.status != projection.status {
             run.status = projection.status.to_string();
@@ -2376,10 +2811,20 @@ async fn apply_projection(
             }
         }
     }
-    if let Some((_, observation)) = projection.live_observation.as_ref() {
-        let stats = &observation.header.stats;
+    // Apply the durable terminal row after any live observation so it wins
+    // over a stale sidecar. Both paths retain the current lineage reset and
+    // scalar-progress signal used by the projector's publication cadence.
+    let live_stats = projection
+        .live_observation
+        .as_ref()
+        .and_then(|(_, observation)| observation.header.stats.as_ref());
+    let terminal_stats = terminal.then_some(projection.final_step_stats.as_ref()).flatten();
+    for stats in [live_stats, terminal_stats].into_iter().flatten() {
         if let Some(row) = scalar_row_from_step_stats(stats) {
             let scalar_revision = next.scalar_revision;
+            if next.scalar_rows.last().is_some_and(|last| row.step < last.step) {
+                next.scalar_rows.clear();
+            }
             crate::session::apply_current_live_scalar_frame(
                 &mut next,
                 crate::types::CurrentLiveScalarFrameRequest {
@@ -2387,28 +2832,10 @@ async fn apply_projection(
                     latest_scalar_row: Some(row),
                 },
             )?;
-            changed |= next.scalar_revision != scalar_revision;
-        }
-    }
-    // A terminal worker's durable receipt is the authoritative source once
-    // live sidecars are gone. Keep this after the live path so a final row
-    // wins over a stale in-flight observation, while the session helper still
-    // owns observation-frame binding and monotonic/idempotent upsert rules.
-    if terminal {
-        if let Some(row) = projection
-            .final_step_stats
-            .as_ref()
-            .and_then(scalar_row_from_step_stats)
-        {
-            let scalar_revision = next.scalar_revision;
-            crate::session::apply_current_live_scalar_frame(
-                &mut next,
-                crate::types::CurrentLiveScalarFrameRequest {
-                    session_id: context.session_id.clone(),
-                    latest_scalar_row: Some(row),
-                },
-            )?;
-            changed |= next.scalar_revision != scalar_revision;
+            if next.scalar_revision != scalar_revision {
+                changed = true;
+                scalar_sample_advanced = true;
+            }
         }
     }
 
@@ -2612,11 +3039,23 @@ async fn apply_projection(
             }
         }
     }
-    if !changed && previous_status == projection.status {
+    if !changed && previous_status == public_status && !terminal {
         return Ok(());
     }
     next.state_version = next.state_version.saturating_add(1);
     let published_fence = ProjectionPublicationFence::capture(&next)?;
+    // Accepted runs publish scalars through this projection, so emit the same
+    // scalar.sample event the interactive sync path does for live clients.
+    let scalar_sample = scalar_sample_advanced
+        .then(|| next.scalar_rows.last().cloned())
+        .flatten()
+        .map(|row| crate::PendingRealtimeScalarSample {
+            session_id: next.session.session_id.clone(),
+            run_id: next.run.as_ref().map(|run| run.run_id.clone()),
+            revision: next.scalar_revision,
+            row,
+            terminal,
+        });
     let mut realtime_state =
         crate::current_live_realtime_state_from_snapshot(state, &next, display_revision).await;
 
@@ -2652,14 +3091,24 @@ async fn apply_projection(
             state,
             &next,
             projection.command_id.as_deref(),
+            &projection.preclaim_cancellations,
             projection.status,
         )
         .await?;
+    }
+    // Terminal command reconciliation is idempotent even when the snapshot
+    // was already projected; do not publish an unchanged snapshot again.
+    if !changed && previous_status == public_status {
+        drop(transition);
+        return Ok(());
     }
     let previous = {
         let mut current = state.current_live_state.write().await;
         std::mem::replace(&mut *current, Some(next))
     };
+    if let Some(sample) = scalar_sample {
+        crate::queue_current_live_realtime_scalar_sample(state.as_ref(), sample).await?;
+    }
     drop(transition);
     if let Some(previous) = previous {
         let _ = tokio::task::spawn_blocking(move || drop(previous));
@@ -2726,6 +3175,7 @@ async fn complete_bound_command(
     state: &AppState,
     snapshot: &SessionStateResponse,
     command_id: Option<&str>,
+    preclaim_cancellations: &[(String, String)],
     status: &str,
 ) -> Result<(), ApiError> {
     let run_id = snapshot.run.as_ref().map(|run| run.run_id.as_str());
@@ -2741,6 +3191,16 @@ async fn complete_bound_command(
     crate::live_command_journal::mutate(state, snapshot, |records| {
         let mut changed = false;
         for record in records.iter_mut() {
+            let bound_execution = command_id.is_some_and(|id| record.command.command_id == id)
+                || (record.command.kind == "mesh_build"
+                    && command_id.is_some_and(|id| id == format!("live-preparation-{}", record.command.command_id)));
+            let bound_stop = status == "cancelled" && record.command.kind == "stop"
+                && !preclaim_cancellations.is_empty()
+                && preclaim_cancellations.iter().all(|(task_id, cancellation_id)| {
+                    *cancellation_id == format!("cancel-live-{}", fullmag_session::hex_sha256(
+                        format!("{}\0{}\0{}", record.command.command_id, snapshot.session.run_id, task_id).as_bytes(),
+                    ))
+                });
             // Releasing a held startup Study does not rewrite its immutable
             // RunIntent command_id. Complete the exact run-bound Solve too,
             // otherwise its Accepted ledger entry blocks future commands.
@@ -2758,8 +3218,7 @@ async fn complete_bound_command(
             let stops_this_run = targets_this_run
                 && record.command.kind == "stop"
                 && status == "cancelled";
-            if (!command_id.is_some_and(|id| record.command.command_id == id)
-                && !releases_this_run && !stops_this_run)
+            if (!bound_execution && !bound_stop && !releases_this_run && !stops_this_run)
                 || matches!(
                     record.status,
                     crate::types::CommandLifecycleState::Completed
@@ -2864,6 +3323,902 @@ mod tests {
             catalog_status(&[task(fullmag_session::FmsTaskLifecycle::Succeeded)]),
             "completed"
         );
+    }
+
+    fn preclaim_cancelled_fixture() -> (
+        tempfile::TempDir,
+        fullmag_session::SessionStore,
+        ProjectionContext,
+        fullmag_session::FmsRunCatalog,
+    ) {
+        preclaim_cancelled_scene_fixture(None)
+    }
+
+    fn preclaim_cancelled_scene_fixture(authored: Option<&fullmag_authoring::SceneDocument>) -> (
+        tempfile::TempDir,
+        fullmag_session::SessionStore,
+        ProjectionContext,
+        fullmag_session::FmsRunCatalog,
+    ) {
+        use fullmag_application::{ProjectEnvelope, ProjectId, ProjectSnapshot, RequestedExecution,
+            RequestedResourceBudget, RunId, RunIntent, RunSpecification, StudyId, StudyReference};
+        use fullmag_authoring::{PrimitiveStageNode, StudyDiscretizationReference,
+            StudyExecutionProfileReference, StudyModelReference, StudyPipelineDocument,
+            StudyPipelineNode, StudyPipelineNodeSource, StudyPlan, StudyPlanMigrationDefaults,
+            StudyPrimitiveStageKind, StudySolverConfigReference};
+        use fullmag_plan::{StudyProblemCatalog, StudyProblemCatalogEntry};
+
+        let directory = tempfile::tempdir().unwrap();
+        let store = fullmag_session::SessionStore::open(directory.path().join("store")).unwrap();
+        let mut definition = ProjectEnvelope::blank(ProjectId::parse("project-cancel").unwrap(), "Cancel").unwrap();
+        if let Some(authored) = authored {
+            // Reproduce the historical writer: immutable definition contains
+            // the derived profile, while RunIntent pins the authored scene.
+            let mut effective = authored.clone();
+            effective.study.execution_profile = Some(fullmag_application::legacy_live_execution_profile());
+            definition.replace_scene(fullmag_application::RawJsonEnvelope::from_value(
+                serde_json::to_value(effective).unwrap()).unwrap()).unwrap();
+            definition.definition.revision = authored.revision;
+            definition.rewrite_known_fields().unwrap();
+        }
+        let study = StudyPlan::from_pipeline("study-cancel", 1, &StudyPipelineDocument {
+            version: "study_pipeline.v2".into(),
+            nodes: ["step:run", "step:run-2"].into_iter().map(|id|
+                StudyPipelineNode::Primitive(PrimitiveStageNode {
+                    id: id.into(), label: "Run".into(), enabled: true, notes: None,
+                    source: Some(StudyPipelineNodeSource::UiAuthored),
+                    stage_kind: StudyPrimitiveStageKind::Run,
+                    payload: [("until_seconds".into(), json!("1e-9"))].into_iter().collect(),
+                })).collect(),
+        }, &StudyPlanMigrationDefaults {
+            model: StudyModelReference { model_id: "model:one".into(), version: "v1".into() },
+            solver_config: StudySolverConfigReference { preset_id: "solver:default".into(), version: "v1".into() },
+            discretization: StudyDiscretizationReference { recipe_id: "mesh:default".into(), version: "v1".into() },
+            execution_profile: StudyExecutionProfileReference { profile_id: "exec:auto".into(), version: "v1".into() },
+        }).unwrap();
+        let problem_catalog = StudyProblemCatalog::from_entries(&study, study.steps.iter().map(|step|
+            StudyProblemCatalogEntry::from_step(step, fullmag_ir::ProblemIR::bootstrap_example()),
+        ).collect()).unwrap();
+        let context = ProjectionContext {
+            session_id: "session-cancel".into(), run_id: "run-cancel".into(), session_epoch: 4,
+            scene_revision: authored.map_or(9, |scene| scene.revision),
+            execution_input: authored.map(|scene| crate::live_execution_binding::input_identity(scene).unwrap()),
+            api_instance_id: "api-cancel".into(),
+            allow_api_instance_rebind: false,
+        };
+        let mut specification = RunSpecification::new(
+            ProjectSnapshot::from_envelope(&definition).unwrap(),
+            StudyReference {
+                study_id: StudyId::parse("study-cancel").unwrap(), plan_version: study.schema_version.clone(),
+                plan_sha256: study.canonical_sha256().unwrap(),
+            }, fullmag_session::canonical_json_sha256(&serde_json::to_value(&problem_catalog).unwrap()),
+            json!({"live_workspace": {"api_instance_id": context.api_instance_id, "session_id": context.session_id,
+                "session_epoch": context.session_epoch, "scene_revision": context.scene_revision,
+                "command_id": "live-preparation-mesh-command"}}),
+            RequestedExecution { backend: "fdm".into(), device: "cpu".into(), precision: "double".into(),
+                mode: "strict".into(), minimum_resources: Some(RequestedResourceBudget {
+                    cpu_millis: 100, memory_bytes: 1, gpu_memory_bytes: 0, storage_bytes: 1,
+                }) },
+        );
+        specification.run_id = RunId::parse(context.run_id.clone()).unwrap();
+        if let Some(identity) = context.execution_input.as_ref() {
+            specification.parameters["live_workspace"]["execution_input"] = serde_json::to_value(identity).unwrap();
+        }
+        crate::run_intent_persistence::commit_validated_run_intent(&store,
+            &RunIntent::new("submit-cancel", specification), &definition, &study, &problem_catalog,
+            &std::collections::BTreeMap::new()).unwrap();
+        let catalog = crate::run_intent_persistence::materialize_accepted_run_catalog(
+            &store, &context.run_id, &ProjectId::parse("project-cancel").unwrap()).unwrap();
+        let application_root = directory.path().join("application-state");
+        std::fs::create_dir(&application_root).unwrap();
+        let ledger = fullmag_session::host_resource_ledger::HostResourceLedger::initialize_for_application(&application_root,
+            directory.path().join("host-ledger"), fullmag_session::host_resource_ledger::HostResourceLedgerPolicy {
+                schema_version: fullmag_session::host_resource_ledger::HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V1.into(),
+                host_id: "host-cancel".into(), topology_sha256: "a".repeat(64), revision: 1, owner_epoch: 1,
+                total_budget: fullmag_session::FmsResourceBudget {
+                    cpu_millis: 1000, memory_bytes: 1024, gpu_memory_bytes: 0, storage_bytes: 1024,
+                }, gpu_vram_bytes_by_uuid: Default::default(), allowed_cpu_ids: Default::default(),
+            }).unwrap();
+        for task in &catalog.tasks {
+            let revision = store.read_run_catalog(&context.run_id).unwrap().unwrap().revision;
+            let cancellation_id = format!("cancel-live-{}", fullmag_session::hex_sha256(
+                format!("stop-command\0{}\0{}", context.run_id, task.task_id).as_bytes(),
+            ));
+            store.request_task_cancellation_intent(&context.run_id, &task.task_id,
+                &cancellation_id, revision, "operator cancelled before claim").unwrap();
+            assert!(ledger.project_unclaimed_task_cancellation(&store, &context.run_id, &task.task_id).unwrap());
+        }
+        let catalog = store.read_run_catalog(&context.run_id).unwrap().unwrap();
+        assert_eq!(catalog.revision, 5);
+        (directory, store, context, catalog)
+    }
+
+    #[test]
+    fn accepted_antenna_linkage_keeps_closed_loop_authored_and_runtime_ids_separate() {
+        let (_directory, store, context, mut catalog) = preclaim_cancelled_fixture();
+        let mut accepted = fullmag_runtime_control::load_accepted_study_snapshot(&store,
+            &fullmag_application::RunId::parse(context.run_id).unwrap(),
+            &fullmag_application::ProjectId::parse("project-cancel").unwrap()).unwrap();
+        let step = &mut accepted.lowered.steps[0];
+        let runtime_id = step.step_id.clone();
+        step.kind = fullmag_authoring::StudyStepKind::ClosedLoopInspection {
+            stage_id: "inspect_loop".into(), port_mode_id: "loop_port".into(), output_id: "loop_output".into(),
+        };
+        // Closed-loop linkage comes from its typed operation, without assuming
+        // the runtime ID, label or a magnetic backend plan is the authored ID.
+        step.execution_plan = None;
+        for task in &mut catalog.tasks { task.lifecycle = fullmag_session::FmsTaskLifecycle::Succeeded; }
+        let projected = build_stage_execution(&accepted, &catalog.tasks, None, &[],
+            &std::collections::BTreeMap::new(), "completed").unwrap();
+        assert_eq!(projected.stages[0].stage_id.as_deref(), Some(runtime_id.as_str()));
+        assert_eq!(projected.stages[0].antenna_solve_stage_id.as_deref(), Some("inspect_loop"));
+        assert_eq!(projected.stages[0].status, crate::types::StageLifecycleState::Completed);
+        assert!(projected.stages[0].artifact_refs.is_empty());
+        assert!(projected.stages[1].antenna_solve_stage_id.is_none());
+    }
+
+    #[test]
+    fn accepted_antenna_linkage_requires_primitive_kind_and_selected_typed_plan() {
+        let (_directory, store, context, catalog) = preclaim_cancelled_fixture();
+        let mut accepted = fullmag_runtime_control::load_accepted_study_snapshot(&store,
+            &fullmag_application::RunId::parse(context.run_id).unwrap(),
+            &fullmag_application::ProjectId::parse("project-cancel").unwrap()).unwrap();
+        let step = &mut accepted.lowered.steps[0];
+        step.kind = fullmag_authoring::StudyStepKind::Primitive {
+            stage_kind: fullmag_authoring::StudyPrimitiveStageKind::AntennaFieldSolve,
+        };
+        let before = build_stage_execution(&accepted, &catalog.tasks, None, &[],
+            &std::collections::BTreeMap::new(), "cancelled").unwrap();
+        assert!(before.stages[0].antenna_solve_stage_id.is_none());
+        accepted.lowered.steps[0].execution_plan.as_mut().unwrap().backend_plan =
+            fullmag_ir::BackendPlanIR::AntennaFieldOnly(fullmag_ir::AntennaFieldOnlyPlanIR {
+                schema_version: "antenna_field_only_plan.v1".into(), stage_id: "authored-inspection".into(),
+                port_mode_id: "port".into(), source_object_id: "antenna".into(),
+                source_mesh: fullmag_ir::MeshIR::default(), source_object_segments: Vec::new(), source_mesh_parts: Vec::new(),
+                field_sampling: fullmag_ir::AntennaFieldSamplingPlanIR {
+                    domain: fullmag_ir::FieldTargetIR::Global {}, carrier_kind: "fem_domain_mesh_asset".into(),
+                    location: "node".into(), topology_digest: "a".repeat(64), positions_xyz_m: Vec::new(),
+                    cells: fullmag_ir::FemConnectivityIR::empty(),
+                },
+            });
+        let projected = build_stage_execution(&accepted, &catalog.tasks, None, &[],
+            &std::collections::BTreeMap::new(), "cancelled").unwrap();
+        assert_eq!(projected.stages[0].antenna_solve_stage_id.as_deref(), Some("authored-inspection"));
+        accepted.lowered.steps[0].kind = fullmag_authoring::StudyStepKind::Primitive {
+            stage_kind: fullmag_authoring::StudyPrimitiveStageKind::Run,
+        };
+        let unrelated = build_stage_execution(&accepted, &catalog.tasks, None, &[],
+            &std::collections::BTreeMap::new(), "cancelled").unwrap();
+        assert!(unrelated.stages[0].antenna_solve_stage_id.is_none());
+    }
+
+    #[test]
+    fn accepted_stage_records_copy_only_current_attempt_journal_times() {
+        let (_directory, store, context, mut catalog) = preclaim_cancelled_fixture();
+        let accepted = fullmag_runtime_control::load_accepted_study_snapshot(
+            &store,
+            &fullmag_application::RunId::parse(context.run_id).unwrap(),
+            &fullmag_application::ProjectId::parse("project-cancel").unwrap(),
+        )
+        .unwrap();
+        let task = &mut catalog.tasks[0];
+        task.lifecycle = fullmag_session::FmsTaskLifecycle::Succeeded;
+        task.attempt_id = Some("attempt-timing".into());
+        task.ownership_epoch = Some(1);
+        let cached = CachedStageJournalDetails {
+            run_id: catalog.run_id.clone(),
+            input_fingerprint: task.input_fingerprint.clone(),
+            attempt_id: task.attempt_id.clone(),
+            ownership_epoch: task.ownership_epoch,
+            lifecycle: task.lifecycle,
+            details: StageJournalDetails {
+                reason: None,
+                started_at_unix_ms: Some(2000),
+                completed_at_unix_ms: Some(4000),
+            },
+        };
+        let mut cache = [(task.task_id.clone(), cached)]
+            .into_iter()
+            .collect::<StageJournalDetailsCache>();
+        let projected =
+            build_stage_execution(&accepted, &catalog.tasks, None, &[], &cache, "completed")
+                .unwrap();
+        assert_eq!(projected.stages[0].started_at_unix_ms, Some(2000));
+        assert_eq!(projected.stages[0].completed_at_unix_ms, Some(4000));
+        assert!(projected.stages[1].started_at_unix_ms.is_none());
+        cache.values_mut().next().unwrap().attempt_id = Some("old-attempt".into());
+        let stale =
+            build_stage_execution(&accepted, &catalog.tasks, None, &[], &cache, "completed")
+                .unwrap();
+        assert!(stale.stages[0].started_at_unix_ms.is_none());
+        assert!(stale.stages[0].completed_at_unix_ms.is_none());
+    }
+
+    // Focused parser fixtures; production reads also validate the complete
+    // journal stream and capture its exact catalog under a native shared fence.
+    fn timing_task(
+        lifecycle: fullmag_session::FmsTaskLifecycle,
+    ) -> (
+        fullmag_application::TaskRecord,
+        fullmag_session::FmsTaskCatalogEntry,
+    ) {
+        use fullmag_application::{ResourceBudget, ResourceKind, ResourceLease, RunId, TaskRecord};
+        let mut application =
+            TaskRecord::new(RunId::parse("run-timing").unwrap(), "a".repeat(64)).unwrap();
+        application.queue().unwrap();
+        let claim = application
+            .claim(
+                ResourceLease::new(
+                    "cpu-timing",
+                    ResourceKind::Cpu,
+                    ResourceBudget {
+                        cpu_millis: 1000,
+                        memory_bytes: 1024,
+                        gpu_memory_bytes: 0,
+                        storage_bytes: 1024,
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        application.begin_running(&claim).unwrap();
+        let mut catalog = task(lifecycle);
+        catalog.task_id = application.task_id.as_str().into();
+        catalog.attempt_id = Some(claim.attempt_id.as_str().into());
+        catalog.ownership_epoch = Some(claim.ownership_epoch.value());
+        (application, catalog)
+    }
+
+    fn timing_event(
+        application: &fullmag_application::TaskRecord,
+        event: fullmag_application::WorkerEvent,
+        sequence: u64,
+        timestamp_ms: i64,
+    ) -> fullmag_session::FmsCoordinatorJournalEntry {
+        use chrono::TimeZone;
+        use fullmag_application::{
+            CoordinatorCheckpoint, CoordinatorMessage, CoordinatorTransition, TaskLifecycle,
+            WorkerEvent, WorkerEventEnvelope,
+        };
+        let claim = application.claim.as_ref().unwrap().clone();
+        let mut task = application.clone();
+        task.lifecycle = match &event {
+            WorkerEvent::Completed { .. } => TaskLifecycle::Succeeded,
+            WorkerEvent::Failed { .. } | WorkerEvent::Rejected { .. } => TaskLifecycle::Failed,
+            WorkerEvent::Stopped => TaskLifecycle::Cancelled,
+            _ => TaskLifecycle::Running,
+        };
+        let terminal = matches!(
+            &event,
+            WorkerEvent::Completed { .. }
+                | WorkerEvent::Failed { .. }
+                | WorkerEvent::Rejected { .. }
+        );
+        let message_id = format!("event-{sequence}");
+        let transition = CoordinatorTransition {
+            schema_version: fullmag_application::COORDINATOR_TRANSITION_SCHEMA.into(),
+            checkpoint: CoordinatorCheckpoint {
+                schema_version: fullmag_application::COORDINATOR_CHECKPOINT_SCHEMA.into(),
+                task,
+                claim: claim.clone(),
+                command_sequence: 2,
+                event_sequence: sequence,
+            },
+            message: CoordinatorMessage::Event(WorkerEventEnvelope {
+                schema_version: fullmag_application::WORKER_PROTOCOL_SCHEMA.into(),
+                message_id: message_id.clone(),
+                sequence,
+                claim: claim.identity(),
+                event,
+            }),
+        };
+        let payload = serde_json::to_value(transition).unwrap();
+        fullmag_session::FmsCoordinatorJournalEntry {
+            schema_version: fullmag_session::FMS_COORDINATOR_JOURNAL_SCHEMA.into(),
+            entry_id: message_id,
+            run_id: claim.run_id.as_str().into(),
+            task_id: claim.task_id.as_str().into(),
+            attempt_id: claim.attempt_id.as_str().into(),
+            ownership_epoch: claim.ownership_epoch.value(),
+            lease_token: claim.lease.lease_token.as_str().into(),
+            direction: fullmag_session::FmsCoordinatorJournalDirection::Event,
+            sequence,
+            terminal,
+            payload_sha256: fullmag_session::canonical_json_sha256(&payload),
+            payload,
+            created_at: chrono::Utc
+                .timestamp_millis_opt(timestamp_ms)
+                .single()
+                .unwrap(),
+        }
+    }
+
+    fn timing_command(
+        application: &fullmag_application::TaskRecord,
+        command: fullmag_application::WorkerCommand,
+    ) -> fullmag_session::FmsCoordinatorJournalEntry {
+        let mut entry = timing_event(
+            application,
+            fullmag_application::WorkerEvent::Started,
+            2,
+            1000,
+        );
+        let claim = application.claim.as_ref().unwrap();
+        entry.direction = fullmag_session::FmsCoordinatorJournalDirection::Command;
+        entry.entry_id = "command-2".into();
+        entry.payload["checkpoint"]["task"]["lifecycle"] = serde_json::to_value(match &command {
+            fullmag_application::WorkerCommand::Start => {
+                fullmag_application::TaskLifecycle::Preparing
+            }
+            fullmag_application::WorkerCommand::Stop { .. } => {
+                fullmag_application::TaskLifecycle::Stopping
+            }
+            _ => application.lifecycle,
+        })
+        .unwrap();
+        entry.payload["message"] =
+            serde_json::to_value(fullmag_application::CoordinatorMessage::Command(
+                fullmag_application::WorkerCommandEnvelope {
+                    schema_version: fullmag_application::WORKER_PROTOCOL_SCHEMA.into(),
+                    message_id: entry.entry_id.clone(),
+                    sequence: 2,
+                    claim: claim.identity(),
+                    command,
+                },
+            ))
+            .unwrap();
+        entry.payload_sha256 = fullmag_session::canonical_json_sha256(&entry.payload);
+        entry
+    }
+
+    #[test]
+    fn accepted_stage_times_use_started_event_and_matching_terminal_not_start_command() {
+        use fullmag_application::{ScientificAssessment, WorkerCommand, WorkerEvent};
+        let (application, mut task) = timing_task(fullmag_session::FmsTaskLifecycle::Running);
+        let command = timing_command(&application, WorkerCommand::Start);
+        let pending =
+            stage_journal_details_for_task("run-timing", &task, &[command.clone()]).unwrap();
+        assert_eq!(pending.started_at_unix_ms, None);
+        let started = timing_event(&application, WorkerEvent::Started, 2, 2000);
+        let running = stage_journal_details_for_task(
+            "run-timing",
+            &task,
+            &[command.clone(), started.clone()],
+        )
+        .unwrap();
+        assert_eq!(running.started_at_unix_ms, Some(2000));
+        assert_eq!(running.completed_at_unix_ms, None);
+        task.lifecycle = fullmag_session::FmsTaskLifecycle::Succeeded;
+        let completed = timing_event(
+            &application,
+            WorkerEvent::Completed {
+                assessment: ScientificAssessment::Unassessed,
+            },
+            3,
+            4000,
+        );
+        let journal = [command, started, completed];
+        let done = stage_journal_details_for_task("run-timing", &task, &journal).unwrap();
+        assert_eq!(
+            (done.started_at_unix_ms, done.completed_at_unix_ms),
+            (Some(2000), Some(4000))
+        );
+        // A fresh reader of the same durable entries reconstructs the same times.
+        assert_eq!(
+            done,
+            stage_journal_details_for_task("run-timing", &task, &journal).unwrap()
+        );
+    }
+
+    #[test]
+    fn accepted_stage_times_preserve_failure_and_stop_reasons_without_inventing_start() {
+        use fullmag_application::{WorkerCommand, WorkerEvent};
+        let (application, mut task) = timing_task(fullmag_session::FmsTaskLifecycle::Failed);
+        let failure = timing_event(
+            &application,
+            WorkerEvent::Failed {
+                retryable: false,
+                reason: "native failure".into(),
+            },
+            3,
+            4000,
+        );
+        let failed =
+            stage_journal_details_for_task("run-timing", &task, &[failure.clone()]).unwrap();
+        assert_eq!(failed.reason.as_deref(), Some("native failure"));
+        assert_eq!(
+            (failed.started_at_unix_ms, failed.completed_at_unix_ms),
+            (None, Some(4000))
+        );
+        task.lifecycle = fullmag_session::FmsTaskLifecycle::Interrupted;
+        let interrupted = stage_journal_details_for_task("run-timing", &task, &[failure]).unwrap();
+        assert_eq!(interrupted.reason.as_deref(), Some("native failure"));
+        assert_eq!(interrupted.completed_at_unix_ms, None);
+        task.lifecycle = fullmag_session::FmsTaskLifecycle::Cancelled;
+        let stop = timing_command(
+            &application,
+            WorkerCommand::Stop {
+                reason: "operator stop".into(),
+            },
+        );
+        let stopped = timing_event(&application, WorkerEvent::Stopped, 3, 5000);
+        let cancelled =
+            stage_journal_details_for_task("run-timing", &task, &[stop, stopped]).unwrap();
+        assert_eq!(cancelled.reason.as_deref(), Some("operator stop"));
+        assert_eq!(
+            (cancelled.started_at_unix_ms, cancelled.completed_at_unix_ms),
+            (None, Some(5000))
+        );
+    }
+
+    #[test]
+    fn accepted_stage_times_reject_crossed_envelope_checkpoint_and_journal_fences() {
+        let (application, task) = timing_task(fullmag_session::FmsTaskLifecycle::Running);
+        let entry = timing_event(
+            &application,
+            fullmag_application::WorkerEvent::Started,
+            2,
+            2000,
+        );
+        for (pointer, value) in [
+            ("/checkpoint/claim/run_id", json!("foreign-run")),
+            ("/checkpoint/task/attempt_id", json!("foreign-attempt")),
+            (
+                "/message/envelope/claim/attempt_id",
+                json!("foreign-attempt"),
+            ),
+            ("/message/envelope/claim/ownership_epoch", json!(2)),
+            (
+                "/message/envelope/claim/lease_token",
+                json!("foreign-lease"),
+            ),
+            ("/message/envelope/message_id", json!("foreign-message")),
+            ("/message/envelope/sequence", json!(3)),
+        ] {
+            let mut corrupt = entry.clone();
+            *corrupt.payload.pointer_mut(pointer).unwrap() = value;
+            corrupt.payload_sha256 = fullmag_session::canonical_json_sha256(&corrupt.payload);
+            assert!(
+                stage_journal_details_for_task("run-timing", &task, &[corrupt]).is_err(),
+                "{pointer}"
+            );
+        }
+        let mut foreign_run = entry.clone();
+        foreign_run.run_id = "foreign-run".into();
+        assert!(stage_journal_details_for_task("run-timing", &task, &[foreign_run]).is_err());
+        let mut foreign_lease = entry.clone();
+        foreign_lease.lease_token = "foreign-lease".into();
+        assert!(stage_journal_details_for_task("run-timing", &task, &[foreign_lease]).is_err());
+        let mut crossed = entry;
+        crossed.direction = fullmag_session::FmsCoordinatorJournalDirection::Command;
+        assert!(stage_journal_details_for_task("run-timing", &task, &[crossed]).is_err());
+    }
+
+    #[test]
+    fn accepted_stage_times_ignore_old_attempts_and_reject_wrong_terminal_lifecycle() {
+        use fullmag_application::{ScientificAssessment, WorkerEvent};
+        let (application, task) = timing_task(fullmag_session::FmsTaskLifecycle::Running);
+        let mut old = timing_event(&application, WorkerEvent::Started, 2, 1000);
+        old.attempt_id = "old-attempt".into();
+        let details = stage_journal_details_for_task("run-timing", &task, &[old]).unwrap();
+        assert_eq!(details, StageJournalDetails::default());
+        let completed = timing_event(
+            &application,
+            WorkerEvent::Completed {
+                assessment: ScientificAssessment::Unassessed,
+            },
+            3,
+            4000,
+        );
+        assert!(stage_journal_details_for_task("run-timing", &task, &[completed]).is_err());
+        let started = timing_event(&application, WorkerEvent::Started, 2, 2000);
+        assert!(
+            stage_journal_details_for_task("run-timing", &task, &[started.clone(), started])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn accepted_stage_times_omit_invalid_utc_and_backwards_completion() {
+        use fullmag_application::{ScientificAssessment, WorkerEvent};
+        let (application, task) = timing_task(fullmag_session::FmsTaskLifecycle::Succeeded);
+        for start in [0, -1] {
+            let details = stage_journal_details_for_task(
+                "run-timing",
+                &task,
+                &[timing_event(&application, WorkerEvent::Started, 2, start)],
+            )
+            .unwrap();
+            assert_eq!(details.started_at_unix_ms, None);
+        }
+        let details = stage_journal_details_for_task(
+            "run-timing",
+            &task,
+            &[
+                timing_event(&application, WorkerEvent::Started, 2, 4000),
+                timing_event(
+                    &application,
+                    WorkerEvent::Completed {
+                        assessment: ScientificAssessment::Unassessed,
+                    },
+                    3,
+                    2000,
+                ),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            (details.started_at_unix_ms, details.completed_at_unix_ms),
+            (Some(4000), None)
+        );
+    }
+
+    #[test]
+    fn accepted_stage_journal_cache_reuses_heartbeat_but_invalidates_exact_identity() {
+        let (_directory, store, _context, mut catalog) = preclaim_cancelled_fixture();
+        let task = &mut catalog.tasks[0];
+        task.lifecycle = fullmag_session::FmsTaskLifecycle::Running;
+        task.attempt_id = Some("attempt-timing".into());
+        task.ownership_epoch = Some(1);
+        let cached = CachedStageJournalDetails {
+            run_id: catalog.run_id.clone(),
+            input_fingerprint: task.input_fingerprint.clone(),
+            attempt_id: task.attempt_id.clone(),
+            ownership_epoch: task.ownership_epoch,
+            lifecycle: task.lifecycle,
+            details: StageJournalDetails {
+                started_at_unix_ms: Some(2000),
+                ..Default::default()
+            },
+        };
+        let previous = [(task.task_id.clone(), cached)]
+            .into_iter()
+            .collect::<StageJournalDetailsCache>();
+        catalog.revision += 100; // A heartbeat revision alone must not reacquire any store fence.
+        let _writer = store.write_transaction().unwrap();
+        let reused = load_stage_journal_details(&store, &catalog, Some(&previous)).unwrap();
+        assert_eq!(
+            reused[&catalog.tasks[0].task_id].details.started_at_unix_ms,
+            Some(2000)
+        );
+        assert!(load_stage_journal_details(&store, &catalog, None).is_err());
+        for key in ["run", "fingerprint", "attempt", "epoch", "lifecycle"] {
+            let mut changed = catalog.clone();
+            match key {
+                "run" => changed.run_id = "different-run".into(),
+                "fingerprint" => changed.tasks[0].input_fingerprint = "b".repeat(64),
+                "attempt" => changed.tasks[0].attempt_id = Some("next-attempt".into()),
+                "epoch" => changed.tasks[0].ownership_epoch = Some(2),
+                _ => changed.tasks[0].lifecycle = fullmag_session::FmsTaskLifecycle::Succeeded,
+            }
+            assert!(
+                load_stage_journal_details(&store, &changed, Some(&previous)).is_err(),
+                "{key}"
+            );
+        }
+    }
+
+    #[test]
+    fn preclaim_cancellation_projects_terminal_metadata_without_creating_artifacts() {
+        let (_directory, store, context, catalog) = preclaim_cancelled_fixture();
+        assert!(preclaim_cancelled_without_artifacts(&store, &catalog).unwrap());
+        assert!(store.read_artifact_catalog(&context.run_id).unwrap().is_none());
+        let before = std::fs::read(store.root().join(format!("runs/{}/run_catalog.json", context.run_id))).unwrap();
+        let projection = load_durable_projection(store.root(), &context, None, &mut None).unwrap().unwrap();
+        assert_eq!(projection.status, "cancelled");
+        assert_eq!(projection.command_id.as_deref(), Some("live-preparation-mesh-command"));
+        assert_eq!(projection.artifact_catalog_revision, None);
+        assert!(projection.latest_state.is_none());
+        assert!(projection.latest_total_energy.is_none());
+        assert!(projection.latest_output_identity.is_none());
+        assert!(projection.live_observation.is_none());
+        assert!(projection.stage_execution.stages.iter().all(|stage|
+            stage.status == crate::types::StageLifecycleState::Cancelled));
+        assert!(store.read_artifact_catalog(&context.run_id).unwrap().is_none());
+        assert_eq!(before, std::fs::read(store.root().join(format!("runs/{}/run_catalog.json", context.run_id))).unwrap());
+    }
+
+    #[tokio::test]
+    async fn preclaim_cancellation_completes_live_session_and_bound_mesh_command() {
+        let (directory, store, context, _catalog) = preclaim_cancelled_fixture();
+        let projection = load_durable_projection(store.root(), &context, None, &mut None).unwrap().unwrap();
+        let mut state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        let journal_root = directory.path().join("live-journal");
+        Arc::get_mut(&mut state).unwrap().current_command_journal_store_root = Some(journal_root.clone());
+        state.current_live_session_epoch.store(context.session_epoch, std::sync::atomic::Ordering::Release);
+        let mut scene = crate::router_v2::handlers::sessions::create::create_empty_scene_document(
+            &serde_json::from_value(json!({"name":"Cancel", "backend":"fdm", "device":"cpu", "precision":"double"})).unwrap(),
+        ).unwrap();
+        scene.revision = context.scene_revision;
+        scene.scene.id = context.session_id.clone();
+        {
+            let mut current = state.current_live_state.write().await;
+            let snapshot = current.as_mut().unwrap();
+            snapshot.session.session_id = context.session_id.clone();
+            snapshot.session.run_id = context.run_id.clone();
+            snapshot.session.status = "waiting_for_compute".into();
+            snapshot.scene_document = Some(scene);
+            snapshot.run = Some(serde_json::from_value(json!({
+                "run_id":context.run_id, "session_id":context.session_id, "status":"waiting_for_compute",
+                "total_steps":2, "artifact_dir":""
+            })).unwrap());
+        }
+        state.current_command_ledger.lock().await.push_back(serde_json::from_value(json!({
+            "command":{"seq":1,"command_id":"mesh-command","kind":"mesh_build","created_at_unix_ms":1},
+            "status":"accepted"
+        })).unwrap());
+        for (seq, id, kind) in [
+            (2, "stop-command", "stop"),
+            (3, "unrelated-mesh", "mesh_build"),
+            (4, "unrelated-stop", "stop"),
+            (5, "live-preparation-mesh-command-extra", "mesh_build"),
+        ] {
+            state.current_command_ledger.lock().await.push_back(serde_json::from_value(json!({
+                "command":{"seq":seq,"command_id":id,"kind":kind,"created_at_unix_ms":1},
+                "status":"accepted"
+            })).unwrap());
+        }
+        // apply_projection owns its publication transition fence.
+        apply_projection(&state, &context, projection).await.unwrap();
+        let current = state.current_live_state.read().await;
+        let snapshot = current.as_ref().unwrap();
+        assert_eq!(snapshot.session.status, "cancelled");
+        assert_eq!(snapshot.run.as_ref().unwrap().status, "cancelled");
+        assert!(snapshot.session.finished_at_unix_ms > 0);
+        let ledger = state.current_command_ledger.lock().await;
+        assert_eq!(ledger[0].status, crate::types::CommandLifecycleState::Completed);
+        assert_eq!(ledger[0].completion_status, Some(crate::types::CommandCompletionState::Cancelled));
+        assert_eq!(ledger[1].completion_status, Some(crate::types::CommandCompletionState::Cancelled));
+        assert!(ledger.iter().skip(2).all(|record|
+            record.status == crate::types::CommandLifecycleState::Accepted));
+        let journal = fullmag_session::SessionStore::open_existing(journal_root).unwrap()
+            .read_live_command_journal(&context.session_id).unwrap().unwrap();
+        let journal: Value = serde_json::from_slice(&journal).unwrap();
+        assert_eq!(journal["records"][0]["completion_status"], "cancelled");
+        assert!(store.read_artifact_catalog(&context.run_id).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn recovered_legacy_profile_completes_stop_in_snapshot_and_durable_journal() {
+        let mut authored = fullmag_authoring::SceneDocument::default();
+        authored.revision = 9;
+        authored.scene.id = "session-cancel".into();
+        assert!(authored.study.execution_profile.is_none());
+        let (directory, store, mut context, _) = preclaim_cancelled_scene_fixture(Some(&authored));
+        let accepted = fullmag_runtime_control::load_accepted_study_snapshot(
+            &store,
+            &fullmag_application::RunId::parse(context.run_id.clone()).unwrap(),
+            &fullmag_application::ProjectId::parse("project-cancel").unwrap(),
+        ).unwrap();
+        let restored = crate::development_accepted_restore::scene_from_definition(
+            &accepted.run.definition_bytes, &accepted.run.specification,
+        ).unwrap();
+        assert_eq!(restored, authored);
+        context.execution_input = Some(crate::live_execution_binding::input_identity(&restored).unwrap());
+        let mut state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        let journal_root = directory.path().join("recovered-journal");
+        Arc::get_mut(&mut state).unwrap().current_command_journal_store_root = Some(journal_root.clone());
+        context.api_instance_id = state.request_scope_instance_id.clone();
+        context.allow_api_instance_rebind = true;
+        state.current_live_session_epoch.store(context.session_epoch, std::sync::atomic::Ordering::Release);
+        {
+            let mut current = state.current_live_state.write().await;
+            let snapshot = current.as_mut().unwrap();
+            snapshot.session.session_id = context.session_id.clone();
+            snapshot.session.run_id = context.run_id.clone();
+            snapshot.session.status = "stopping".into();
+            snapshot.scene_document = Some(restored);
+            snapshot.run = Some(serde_json::from_value(json!({
+                "run_id":context.run_id, "session_id":context.session_id,
+                "status":"stopping", "total_steps":2, "artifact_dir":""
+            })).unwrap());
+        }
+        state.current_command_ledger.lock().await.push_back(serde_json::from_value(json!({
+            "command":{"seq":1,"command_id":"stop-command","kind":"stop","created_at_unix_ms":1,
+                "target":{"kind":"run","run_id":context.run_id}},
+            "status":"accepted"
+        })).unwrap());
+        let catalog_before = std::fs::read(store.root().join(format!("runs/{}/run_catalog.json", context.run_id))).unwrap();
+        let projection = load_durable_projection(store.root(), &context, None, &mut None).unwrap().unwrap();
+        apply_projection(&state, &context, projection).await.unwrap();
+        {
+            let current = state.current_live_state.read().await;
+            let snapshot = current.as_ref().unwrap();
+            assert_eq!(snapshot.session.status, "cancelled");
+            assert_eq!(snapshot.run.as_ref().unwrap().status, "cancelled");
+        }
+        let ledger = state.current_command_ledger.lock().await;
+        assert_eq!(ledger[0].status, crate::types::CommandLifecycleState::Completed);
+        assert_eq!(ledger[0].completion_status, Some(crate::types::CommandCompletionState::Completed));
+        drop(ledger);
+        let journal = fullmag_session::SessionStore::open_existing(journal_root).unwrap()
+            .read_live_command_journal(&context.session_id).unwrap().unwrap();
+        let journal: Value = serde_json::from_slice(&journal).unwrap();
+        assert_eq!(journal["records"][0]["status"], "completed");
+        assert_eq!(journal["records"][0]["completion_status"], "completed");
+        assert_eq!(catalog_before, std::fs::read(store.root().join(format!("runs/{}/run_catalog.json", context.run_id))).unwrap());
+        assert!(store.read_artifact_catalog(&context.run_id).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn failed_run_without_outputs_completes_only_its_bound_command() {
+        let (directory, store, context, mut catalog) = preclaim_cancelled_fixture();
+        for task in &mut catalog.tasks {
+            task.lifecycle = fullmag_session::FmsTaskLifecycle::Failed;
+        }
+        std::fs::write(store.root().join(format!("runs/{}/run_catalog.json", context.run_id)),
+            serde_json::to_vec(&catalog).unwrap()).unwrap();
+        let mut state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        Arc::get_mut(&mut state).unwrap().current_command_journal_store_root =
+            Some(directory.path().join("live-journal"));
+        state.current_live_session_epoch.store(context.session_epoch, std::sync::atomic::Ordering::Release);
+        let mut scene = crate::router_v2::handlers::sessions::create::create_empty_scene_document(
+            &serde_json::from_value(json!({"name":"Failure", "backend":"fdm", "device":"cpu", "precision":"double"})).unwrap(),
+        ).unwrap();
+        scene.revision = context.scene_revision;
+        scene.scene.id = context.session_id.clone();
+        {
+            let mut current = state.current_live_state.write().await;
+            let snapshot = current.as_mut().unwrap();
+            snapshot.session.session_id = context.session_id.clone();
+            snapshot.session.run_id = context.run_id.clone();
+            snapshot.session.status = "running".into();
+            snapshot.scene_document = Some(scene);
+            snapshot.run = Some(serde_json::from_value(json!({
+                "run_id":context.run_id, "session_id":context.session_id, "status":"running",
+                "total_steps":2, "artifact_dir":""
+            })).unwrap());
+        }
+        for (seq, id, kind) in [
+            (1, "live-preparation-mesh-command", "solve"),
+            (2, "unrelated-solve", "solve"),
+            (3, "stop-command", "stop"),
+        ] {
+            state.current_command_ledger.lock().await.push_back(serde_json::from_value(json!({
+                "command":{"seq":seq,"command_id":id,"kind":kind,"created_at_unix_ms":1},
+                "status":"running"
+            })).unwrap());
+        }
+        // apply_projection owns its publication transition fence.
+        let projection = load_durable_projection(store.root(), &context, None, &mut None).unwrap().unwrap();
+        assert_eq!(projection.status, "failed");
+        assert!(projection.terminal_without_outputs);
+        assert!(projection.preclaim_cancellations.is_empty());
+        assert!(projection.stage_execution.stages.iter().all(|stage|
+            stage.status == crate::types::StageLifecycleState::Failed));
+        apply_projection(&state, &context, projection).await.unwrap();
+        let completed_at = {
+            let ledger = state.current_command_ledger.lock().await;
+            assert_eq!(ledger[0].status, crate::types::CommandLifecycleState::Failed);
+            assert_eq!(ledger[0].completion_status, Some(crate::types::CommandCompletionState::Failed));
+            assert_eq!(ledger[0].error.as_deref(), Some(
+                "Stage step:run failed: no failure detail was published. Inspect diagnostics and correct the cause before starting another run.",
+            ));
+            assert!(ledger.iter().skip(1).all(|record|
+                record.status == crate::types::CommandLifecycleState::Running));
+            ledger[0].completed_at_unix_ms.unwrap()
+        };
+        assert!(completed_at > 0);
+        let projection = load_durable_projection(store.root(), &context, None, &mut None).unwrap().unwrap();
+        apply_projection(&state, &context, projection).await.unwrap();
+        assert_eq!(state.current_command_ledger.lock().await[0].completed_at_unix_ms, Some(completed_at));
+        let current = state.current_live_state.read().await;
+        let snapshot = current.as_ref().unwrap();
+        assert_eq!(snapshot.session.status, "failed");
+        assert_eq!(snapshot.run.as_ref().unwrap().status, "failed");
+        assert!(snapshot.session.finished_at_unix_ms > 0);
+        assert!(store.read_artifact_catalog(&context.run_id).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn stop_completion_requires_every_task_proof_for_the_current_run() {
+        let state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        let snapshot = state.current_live_state.read().await.as_ref().unwrap().clone();
+        state.current_command_ledger.lock().await.push_back(serde_json::from_value(json!({
+            "command":{"seq":1,"command_id":"stop-command","kind":"stop","created_at_unix_ms":1},
+            "status":"accepted"
+        })).unwrap());
+        let proof = |run_id: &str, task_id: &str| (task_id.to_owned(), format!("cancel-live-{}",
+            fullmag_session::hex_sha256(format!("stop-command\0{run_id}\0{task_id}").as_bytes())));
+        for proofs in [
+            Vec::new(),
+            vec![proof("other-run", "task-a")],
+            vec![proof(&snapshot.session.run_id, "task-a"), proof("other-run", "task-b")],
+        ] {
+            complete_bound_command(&state, &snapshot, Some("live-preparation-mesh-command"),
+                &proofs, "cancelled").await.unwrap();
+            assert_eq!(state.current_command_ledger.lock().await[0].status,
+                crate::types::CommandLifecycleState::Accepted);
+        }
+        complete_bound_command(&state, &snapshot, Some("live-preparation-mesh-command"),
+            &[proof(&snapshot.session.run_id, "task-a")], "cancelled").await.unwrap();
+        assert_eq!(state.current_command_ledger.lock().await[0].completion_status,
+            Some(crate::types::CommandCompletionState::Cancelled));
+    }
+
+    #[test]
+    fn preclaim_cancellation_rejects_an_incomplete_study_task_catalog() {
+        let (_directory, store, context, mut catalog) = preclaim_cancelled_fixture();
+        assert_eq!(catalog.tasks.len(), 2);
+        catalog.tasks.pop();
+        std::fs::write(store.root().join(format!("runs/{}/run_catalog.json", context.run_id)),
+            serde_json::to_vec(&catalog).unwrap()).unwrap();
+        assert!(load_durable_projection(store.root(), &context, None, &mut None).is_err());
+        assert!(store.read_artifact_catalog(&context.run_id).unwrap().is_none());
+    }
+
+    #[test]
+    fn missing_artifacts_exception_refuses_every_non_cancelled_or_mixed_catalog() {
+        use fullmag_session::FmsTaskLifecycle::*;
+        let (_directory, store, _context, catalog) = preclaim_cancelled_fixture();
+        for lifecycle in [Accepted, Queued, Preparing, Running, Stopping, Succeeded, Failed, Interrupted] {
+            let mut changed = catalog.clone();
+            changed.tasks[0].lifecycle = lifecycle;
+            assert!(!preclaim_cancelled_without_artifacts(&store, &changed).unwrap());
+            changed.tasks.push(catalog.tasks[0].clone());
+            assert!(!preclaim_cancelled_without_artifacts(&store, &changed).unwrap());
+        }
+        let mut empty = catalog.clone();
+        empty.tasks.clear();
+        assert!(!preclaim_cancelled_without_artifacts(&store, &empty).unwrap());
+    }
+
+    #[test]
+    fn missing_artifacts_exception_refuses_claimed_state_and_unknown_cancellation_scope() {
+        let (_directory, store, context, catalog) = preclaim_cancelled_fixture();
+        let mut claimed = catalog.clone();
+        claimed.tasks[0].attempt_id = Some("attempt".into());
+        claimed.tasks[0].ownership_epoch = Some(1);
+        claimed.tasks[0].resource_id = Some("cpu".into());
+        assert!(!preclaim_cancelled_without_artifacts(&store, &claimed).unwrap());
+        for field in ["ownership_epoch", "resolved_input_fingerprint", "artifact_ids", "coordinator_watermark"] {
+            let mut changed = catalog.clone();
+            match field {
+                "ownership_epoch" => changed.tasks[0].ownership_epoch = Some(1),
+                "resolved_input_fingerprint" => changed.tasks[0].resolved_input_fingerprint = Some("b".repeat(64)),
+                "artifact_ids" => changed.tasks[0].artifact_ids.push("artifact".into()),
+                _ => changed.tasks[0].coordinator_watermark = Some(Default::default()),
+            }
+            assert!(!preclaim_cancelled_without_artifacts(&store, &changed).unwrap());
+        }
+        let mut replaced = catalog.clone();
+        replaced.tasks[0].input_fingerprint = "b".repeat(64);
+        assert!(preclaim_cancelled_without_artifacts(&store, &replaced).is_err());
+        std::fs::remove_file(store.root().join(format!("runs/{}/task_cancellation_intents/{}.json",
+            context.run_id, catalog.tasks[0].task_id))).unwrap();
+        let projection = load_durable_projection(store.root(), &context, None, &mut None).unwrap().unwrap();
+        assert!(projection.terminal_without_outputs);
+        assert!(projection.preclaim_cancellations.is_empty());
+    }
+
+    #[test]
+    fn preclaim_cancellation_without_artifacts_keeps_live_binding_fences() {
+        let (_directory, store, context, _catalog) = preclaim_cancelled_fixture();
+        for field in ["api_instance_id", "session_id", "session_epoch", "scene_revision", "run_id"] {
+            let mut stale = context.clone();
+            match field {
+                "api_instance_id" => stale.api_instance_id = "other-api".into(),
+                "session_id" => stale.session_id = "other-session".into(),
+                "session_epoch" => stale.session_epoch += 1,
+                "scene_revision" => stale.scene_revision += 1,
+                _ => stale.run_id = "other-run".into(),
+            }
+            assert!(!matches!(load_durable_projection(store.root(), &stale, None, &mut None), Ok(Some(_))));
+        }
+    }
+
+    #[test]
+    fn preclaim_exception_does_not_accept_an_invalid_existing_artifact_catalog() {
+        let (_directory, store, context, _catalog) = preclaim_cancelled_fixture();
+        let path = store.root().join(format!("runs/{}/artifact_catalog.json", context.run_id));
+        for (run_id, revision) in [(context.run_id.as_str(), 0), ("other-run", 1)] {
+            let catalog = fullmag_session::FmsArtifactCatalog {
+                schema_version: fullmag_session::FMS_ARTIFACT_CATALOG_SCHEMA.into(), run_id: run_id.into(),
+                revision, updated_at: chrono::Utc::now(), entries: Vec::new(),
+            };
+            std::fs::write(&path, serde_json::to_vec(&catalog).unwrap()).unwrap();
+            assert!(load_durable_projection(store.root(), &context, None, &mut None).is_err());
+        }
     }
 
     #[test]
@@ -3051,6 +4406,7 @@ mod tests {
             run_revision: 1,
             artifact_revision: Some(1),
             status: "running",
+            solver_profile_identity: None,
             latest_output_identity: None,
             live_observation_identity: None,
             live_observation_sequence: None,
@@ -3059,6 +4415,7 @@ mod tests {
                 Vec::new(),
                 crate::types::RuntimeLifecycleState::Unknown,
             ),
+            stage_journal_details: StageJournalDetailsCache::new(),
         };
         assert!(!cursor_matches_context(&previous, &context));
     }
@@ -3275,6 +4632,9 @@ mod tests {
                 run_catalog_revision: 1,
                 artifact_catalog_revision: Some(1),
                 terminal_without_outputs: false,
+                preclaim_cancellations: Vec::new(),
+                solver_profile: None,
+                stage_journal_details: StageJournalDetailsCache::new(),
                 status: "completed",
                 accepted_runtime_capabilities: None,
                 accepted_runtime_mode: None,
@@ -3344,6 +4704,9 @@ mod tests {
                 run_catalog_revision: 2,
                 artifact_catalog_revision: Some(2),
                 terminal_without_outputs: false,
+                preclaim_cancellations: Vec::new(),
+                solver_profile: None,
+                stage_journal_details: StageJournalDetailsCache::new(),
                 status: "completed",
                 accepted_runtime_capabilities: None,
                 accepted_runtime_mode: None,
@@ -3372,4 +4735,134 @@ mod tests {
         assert_eq!(snapshot.scalar_rows.len(), 1);
         assert_eq!(snapshot.scalar_rows[0].step, 5);
     }
+}
+
+#[cfg(test)]
+mod operation_profile_projection_tests {
+    use super::{profile_content_identity, replace_operation_profile};
+    use crate::schemas::diagnostics::SolverProfileResource;
+
+    #[test]
+    fn identical_profile_does_not_advance_revision() {
+        let mut current = SolverProfileResource::default();
+        current.revision = 17;
+        let mut repeated = current.clone();
+        repeated.revision = 1;
+        assert_eq!(profile_content_identity(&current).unwrap(), profile_content_identity(&repeated).unwrap());
+        assert!(!replace_operation_profile(&mut current, repeated).unwrap());
+        assert_eq!(current.revision, 17);
+        let mut changed = current.clone();
+        changed.config.max_samples += 1;
+        assert!(replace_operation_profile(&mut current, changed.clone()).unwrap());
+        assert_eq!(current.revision, 18);
+        assert!(!replace_operation_profile(&mut current, changed).unwrap());
+        assert_eq!(current.revision, 18);
+    }
+
+    #[test]
+    fn execution_config_survives_next_admission_overlay() {
+        let mut profile = SolverProfileResource::default();
+        let execution = profile.config.clone();
+        let sample = serde_json::json!({"execution_config": execution,
+            "sequence": 0, "operation_id": "antenna.closed_loop.inspect", "outcome": "completed",
+            "total_wall_time_ns": 100, "native_operator_wall_ns": 80, "phases": [], "accounting_issue": false});
+        // This test exercises the resource merge only; the receipt reader
+        // independently validates all nine numerical timing phases.
+        profile.operation_samples.push(serde_json::from_value(sample).unwrap());
+        profile.config.max_samples += 1;
+        assert_ne!(serde_json::to_value(&profile.config).unwrap(),
+            serde_json::to_value(profile.operation_samples[0].execution_config.as_ref().unwrap()).unwrap());
+        let execution = serde_json::to_value(&profile.operation_samples[0].execution_config).unwrap();
+        let mut current = SolverProfileResource::default();
+        assert!(replace_operation_profile(&mut current, profile).unwrap());
+        assert_eq!(execution, serde_json::to_value(&current.operation_samples[0].execution_config).unwrap());
+    }
+}
+
+
+#[cfg(test)]
+mod antenna_operation_progress_projection_tests {
+    #[test]
+    fn completed_field_sampling_is_not_a_durable_completed_stage_or_llg_step() {
+        let mut stage = crate::session::accepted_stage_record(
+            "antenna-step", None, crate::types::StageLifecycleState::Failed);
+        stage.applied_step = Some(99);
+        stage.applied_time_seconds = Some(1.0);
+        let progress = fullmag_runner::AntennaOperationProgress {
+            phase: fullmag_runner::AntennaOperationPhase::PublishingResult,
+            completed_targets: 1145, total_targets: 1145, source_cells: 1856,
+            elapsed_seconds: 7985.0,
+        };
+        let observation = crate::accepted_study_worker::AcceptedLiveObservation {
+            header: crate::accepted_study_worker::AcceptedLiveObservationHeader {
+                schema_version: crate::accepted_study_worker::ACCEPTED_LIVE_OBSERVATION_SCHEMA.into(),
+                run_id: "run".into(), task_id: "task".into(), step_id: "antenna-step".into(),
+                attempt_id: "attempt".into(), ownership_epoch: 1, realization: "fem_cpu".into(),
+                sequence: 5, written_at_unix_ms: 1000, stats: None,
+                operation_progress: Some(progress), magnetization: None,
+            },
+            magnetization_values: None, fields: Vec::new(),
+        };
+        super::apply_observation_stage_progress(&mut stage, &observation);
+        assert_eq!(stage.status, crate::types::StageLifecycleState::Failed);
+        assert_eq!(stage.progress_percent, Some(100.0));
+        assert_eq!(stage.applied_step, None);
+        assert_eq!(stage.applied_time_seconds, None);
+        assert_eq!(stage.completed_step, None);
+        assert_eq!(stage.antenna_progress, Some(progress));
+        let published = crate::schemas::runtime::AntennaOperationProgressResource::from(&progress);
+        assert_eq!(published.phase, "publishing_result");
+    }
+    #[test]
+    fn running_task_wins_over_a_later_terminal_antenna_diagnostic() {
+        use fullmag_session::FmsTaskLifecycle as Life;
+        let tasks = [(0, Life::Running), (1, Life::Succeeded)];
+        let chosen = tasks.into_iter().max_by_key(|(order, life)| super::observation_priority(*life, *order)).unwrap();
+        assert_eq!(chosen.0, 0);
+        assert_eq!(super::observation_priority(Life::Stopping, 0), (true, 0));
+        assert_eq!(super::observation_priority(Life::Failed, 1), (false, 1));
+    }
+
+    #[test]
+    fn invalid_terminal_diagnostic_cannot_block_outcome_or_keep_stale_progress() {
+        use crate::types::StageLifecycleState as Stage;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("runs/run-a/worker-attempts/task-a/attempt-a/epoch-1");
+        std::fs::create_dir_all(&path).unwrap();
+        let foreign_header = serde_json::json!({
+            "schema_version": crate::accepted_study_worker::ACCEPTED_LIVE_OBSERVATION_SCHEMA,
+            "run_id": "run-a", "task_id": "task-a", "step_id": "step-a",
+            "attempt_id": "foreign-attempt", "ownership_epoch": 1,
+            "realization": "fem_cpu", "sequence": 2, "written_at_unix_ms": 100,
+            "operation_progress": { "phase": "publishing_result", "completed_targets": 20,
+                "total_targets": 20, "source_cells": 1856, "elapsed_seconds": 20.0 }
+        });
+        for bytes in [b"{".to_vec(), serde_json::to_vec(&foreign_header).unwrap()] {
+            std::fs::write(path.join(crate::accepted_study_worker::ACCEPTED_LIVE_OBSERVATION_FILE), bytes).unwrap();
+            let read = || crate::accepted_study_worker::read_accepted_live_observation(
+                root.path(), "run-a", "task-a", "step-a", "attempt-a", 1, None)
+                .map_err(|error| super::ApiError::conflict(format!("{error:#}")));
+            assert!(super::observation_diagnostic_result(true, read()).is_err());
+            for status in [Stage::Failed, Stage::Completed] {
+                let observation = super::observation_diagnostic_result(false, read()).unwrap();
+                assert!(observation.is_none());
+                let mut stage = crate::session::accepted_stage_record("step-a", None, status);
+                stage.antenna_progress = Some(fullmag_runner::AntennaOperationProgress {
+                    phase: fullmag_runner::AntennaOperationPhase::EvaluatingField,
+                    completed_targets: 4, total_targets: 20, source_cells: 1856, elapsed_seconds: 10.0,
+                });
+                stage.progress_percent = Some(20.0);
+                let mut stages = crate::session::accepted_stage_execution_state(
+                    vec![stage], crate::types::RuntimeLifecycleState::Failed);
+                super::refresh_live_stage_progress(&mut stages, None);
+                assert_eq!(stages.stages[0].status, status);
+                assert_eq!(stages.stages[0].antenna_progress, None);
+                assert_eq!(stages.stages[0].progress_percent, None);
+            }
+        }
+        // A sequence/phase validation failure is also diagnostic-only after termination.
+        assert!(super::observation_diagnostic_result(false,
+            Err(super::ApiError::conflict("observation sequence regressed"))).unwrap().is_none());
+    }
+
 }

@@ -48,7 +48,16 @@ pub struct RetainedTerminalRunsPreflight {
 }
 
 type ClaimKey = (String, String, u64, String);
-type JournalKey = (String, String);
+type JournalKey = (String, String, String);
+type InboxKey = (String, String);
+
+fn claim_task<'a>(tasks: &'a BTreeMap<String, FmsTaskCatalogEntry>, task_id: &str, attempt_id: &str, epoch: u64, resource: Option<&str>) -> Result<&'a FmsTaskCatalogEntry> {
+    tasks.values().find(|task| task.task_id == task_id
+        && task.attempt_id.as_deref() == Some(attempt_id) && task.ownership_epoch == Some(epoch)
+        && resource.is_none_or(|id| task.resource_id.as_deref() == Some(id)))
+        .context("terminal-run v3 does not support historical compute attempts or an unlisted claim")
+}
+
 
 /// Validate the exact retained run inventory, terminal task state, released
 /// leases, closed coordinator streams, inboxes, artifact catalog, and CAS
@@ -90,6 +99,16 @@ pub(super) fn validate_terminal_runs_subset(
     pins: &[RetainedTerminalRunPin],
     budget: &mut ReadBudget,
     referenced_object_refs: &mut BTreeSet<String>,
+) -> Result<usize> {
+    validate_terminal_runs_subset_with_histories(store, pins, budget, referenced_object_refs, &[])
+}
+
+pub(super) fn validate_terminal_runs_subset_with_histories(
+    store: &SessionStore,
+    pins: &[RetainedTerminalRunPin],
+    budget: &mut ReadBudget,
+    referenced_object_refs: &mut BTreeSet<String>,
+    histories: &[super::retained_attempt_histories::RetainedAttemptHistoryPin],
 ) -> Result<usize> {
     if pins.len() > retained_cancelled_runs::MAX_RETAINED_CANCELLED_RUN_PINS {
         bail!("terminal subset pin count must not exceed 128");
@@ -219,9 +238,19 @@ pub(super) fn validate_terminal_runs_subset(
             }
         }
 
+        let current_tasks = tasks.clone();
+        if let Some(history) = histories.iter().find(|pin| pin.run_id == run_id) {
+            let historical = super::retained_attempt_histories::read_historical_tasks(
+                store, history, &catalog, budget, referenced_object_refs,
+            )?;
+            for task in historical {
+                let key = format!("{}/{}", task.task_id, task.attempt_id.as_deref().context("historical claim has no attempt")?);
+                if tasks.insert(key, task).is_some() { bail!("historical claim key is duplicated"); }
+            }
+        }
         let solver_leases = read_solver_leases(store, &run_id, &tasks, budget)?;
-        read_preparation_leases(store, &run_id, &tasks, budget)?;
-        validate_cancellation_intents(store, &run_id, &tasks, catalog.revision, budget)?;
+        read_preparation_leases(store, &run_id, &current_tasks, budget)?;
+        validate_cancellation_intents(store, &run_id, &current_tasks, catalog.revision, budget)?;
         validate_task_admissions(
             store,
             &run_id,
@@ -242,11 +271,14 @@ pub(super) fn validate_terminal_runs_subset(
             &solver_leases,
             budget,
         )?;
+        if histories.iter().any(|pin| pin.run_id == run_id) {
+            validate_history_worker_exits(store, &run_id, &tasks, &current_tasks, &solver_leases, budget)?;
+        }
         validate_artifact_catalog(
             store,
             &run_id,
             pin,
-            &tasks,
+            &current_tasks,
             &solver_leases,
             referenced_object_refs,
             budget,
@@ -313,19 +345,8 @@ fn read_solver_leases(
             if lease.state != FmsResourceLeaseState::Released {
                 bail!("retained terminal run `{run_id}` has an active solver lease");
             }
-            let task = tasks
-                .get(&lease.task_id)
-                .context("terminal-run solver lease refers to an unlisted task")?;
-            if task.attempt_id.as_deref() != Some(lease.attempt_id.as_str()) {
-                bail!(
-                    "terminal-run v3 does not support historical compute attempts in solver leases"
-                );
-            }
-            if task.ownership_epoch != Some(lease.ownership_epoch)
-                || task.resource_id.as_deref() != Some(lease.resource_id.as_str())
-            {
-                bail!("terminal-run solver lease is outside the task's pinned claim");
-            }
+            let task = claim_task(tasks, &lease.task_id, &lease.attempt_id, lease.ownership_epoch, Some(&lease.resource_id))?;
+            let _ = task;
             let key = (
                 lease.task_id.clone(),
                 lease.attempt_id.clone(),
@@ -354,6 +375,47 @@ fn read_solver_leases(
         }
     }
     Ok(leases)
+}
+
+fn validate_history_worker_exits(
+    store: &SessionStore,
+    run_id: &str,
+    tasks: &BTreeMap<String, FmsTaskCatalogEntry>,
+    current: &BTreeMap<String, FmsTaskCatalogEntry>,
+    leases: &BTreeMap<ClaimKey, FmsResourceLease>,
+    budget: &mut ReadBudget,
+) -> Result<()> {
+    let relative = format!("runs/{run_id}/worker_process_exit_receipts");
+    let directory = retained_cancelled_runs::optional_directory(store.root(), &relative)?.context("historical claims require worker exit receipts")?;
+    let mut seen = BTreeSet::new();
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        reject_link(&entry.path())?;
+        let name = entry.file_name().into_string().map_err(|_| anyhow::anyhow!("worker exit name is not UTF-8"))?;
+        let id = name.strip_suffix(".json").context("worker exit receipt must be JSON")?;
+        validate_store_id(id)?;
+        budget.observe_file(store.root(), &format!("{relative}/{name}"), MAX_JOURNAL_BYTES)?;
+        let receipt = store.read_worker_process_exit_receipt(run_id, id)?.context("worker exit receipt disappeared")?;
+        let task = claim_task(tasks, &receipt.task_id, &receipt.attempt_id, receipt.ownership_epoch, Some(&receipt.resource_id))?;
+        receipt.validate_for_task(task)?;
+        let key = (receipt.task_id.clone(), receipt.attempt_id.clone(), receipt.ownership_epoch, receipt.resource_id.clone());
+        let lease = leases.get(&key).context("worker exit has no released claim lease")?;
+        if receipt.run_id != run_id || receipt.resource_id != lease.resource_id || receipt.lease_token != lease.lease_token
+            || receipt.lease_heartbeat_sequence != lease.heartbeat_sequence || !seen.insert(key) {
+            bail!("worker exit history is ambiguous or differs from its released lease");
+        }
+    }
+    for (id, task) in tasks {
+        if current.contains_key(id) { continue; }
+        let key = (task.task_id.clone(), task.attempt_id.clone().context("historical task has no attempt")?, task.ownership_epoch.context("historical task has no epoch")?, task.resource_id.clone().context("historical task has no resource")?);
+        if !seen.contains(&key) { bail!("historical attempt has no exact worker exit"); }
+        let receipt = read_matching_worker_exit_receipt(store, run_id, task, tasks, leases.get(&key).context("historical lease disappeared")?, budget)?;
+        if receipt.status_success || !receipt.exit_code.is_some_and(|code| code != 0) || receipt.timed_out
+            || receipt.process_start_token.as_deref().is_none_or(str::is_empty) {
+            bail!("v5 historical failed attempt requires an observed nonzero worker exit");
+        }
+    }
+    Ok(())
 }
 
 fn read_preparation_leases(
@@ -506,9 +568,7 @@ fn validate_task_admissions(
             .into_string()
             .map_err(|_| anyhow::anyhow!("terminal-run task-admission task id is not UTF-8"))?;
         validate_store_id(&task_id)?;
-        let task = tasks
-            .get(&task_id)
-            .context("terminal-run admission refers to an unlisted task")?;
+        if !tasks.values().any(|task| task.task_id == task_id) { bail!("terminal-run admission refers to an unlisted task"); }
         let mut task_admissions = 0usize;
         for entry in fs::read_dir(task_entry.path())? {
             let entry = entry?;
@@ -525,26 +585,14 @@ fn validate_task_admissions(
                 .strip_suffix(".json")
                 .context("terminal-run admission filename must end in .json")?;
             validate_store_id(attempt_id)?;
-            if task.attempt_id.as_deref() != Some(attempt_id) {
-                bail!("terminal-run v3 does not support historical compute task admissions");
-            }
-            let key = (
-                task.task_id.clone(),
-                attempt_id.to_owned(),
-                task.ownership_epoch
-                    .context("admitted terminal task has no epoch")?,
-                task.resource_id
-                    .clone()
-                    .context("admitted terminal task has no resource")?,
-            );
-            let released = solver_leases
-                .get(&key)
-                .context("terminal-run task admission has no matching released solver lease")?;
             let admission_relative = format!("{relative}/{task_id}/{name}");
             budget.observe_file(store.root(), &admission_relative, MAX_ADMISSION_BYTES)?;
-            let admission: FmsTaskAdmissionRecord = store
-                .read_task_admission(run_id, &task_id, attempt_id)?
+            let admission: FmsTaskAdmissionRecord = store.read_task_admission(run_id, &task_id, attempt_id)?
                 .context("listed terminal-run task admission disappeared")?;
+            let task = claim_task(tasks, &task_id, attempt_id, admission.lease.ownership_epoch, Some(&admission.lease.resource_id))
+                .context("terminal-run v3 does not support historical compute task admissions")?;
+            let key = (task.task_id.clone(), attempt_id.to_owned(), admission.lease.ownership_epoch, admission.lease.resource_id.clone());
+            let released = solver_leases.get(&key).context("terminal-run task admission has no matching released solver lease")?;
             if let Some(snapshot) = admission.resolved_inputs_snapshot.as_ref() {
                 referenced_object_refs.extend(snapshot.object_refs()?);
             }
@@ -561,7 +609,7 @@ fn validate_task_admissions(
                     "terminal-run task-admission record does not match its released terminal claim"
                 );
             }
-            if !admitted.insert(task_id.clone()) {
+            if !admitted.insert((task_id.clone(), attempt_id.to_owned())) {
                 bail!("terminal-run task has duplicate admission records");
             }
             task_admissions += 1;
@@ -571,7 +619,7 @@ fn validate_task_admissions(
         }
     }
     for task in tasks.values().filter(|task| task.attempt_id.is_some()) {
-        if !admitted.contains(&task.task_id) {
+        if !admitted.contains(&(task.task_id.clone(), task.attempt_id.clone().context("claimed task has no attempt")?)) {
             bail!("claimed terminal task is missing its task-admission record");
         }
     }
@@ -649,9 +697,7 @@ fn read_coordinator_journals(
             {
                 bail!("terminal-run coordinator journal path identity mismatch");
             }
-            let task = tasks
-                .get(&journal.task_id)
-                .context("terminal-run journal refers to an unlisted task")?;
+            let task = claim_task(tasks, &journal.task_id, &journal.attempt_id, journal.ownership_epoch, None)?;
             journal.validate_for_task(task)?;
             let key = (
                 journal.task_id.clone(),
@@ -668,7 +714,7 @@ fn read_coordinator_journals(
                 bail!("terminal-run journal lease token differs from released lease");
             }
             journals
-                .entry((journal.task_id.clone(), direction.as_str().to_owned()))
+                .entry((journal.task_id.clone(), journal.attempt_id.clone(), direction.as_str().to_owned()))
                 .or_default()
                 .push(journal);
         }
@@ -693,7 +739,7 @@ fn read_worker_inboxes(
     tasks: &BTreeMap<String, FmsTaskCatalogEntry>,
     leases: &BTreeMap<ClaimKey, FmsResourceLease>,
     budget: &mut ReadBudget,
-) -> Result<BTreeMap<String, FmsWorkerInboxRecord>> {
+) -> Result<BTreeMap<InboxKey, FmsWorkerInboxRecord>> {
     let relative = format!("runs/{run_id}/worker_inbox");
     let Some(directory) = retained_cancelled_runs::optional_directory(store.root(), &relative)?
     else {
@@ -733,16 +779,9 @@ fn read_worker_inboxes(
             .get("task_id")
             .and_then(Value::as_str)
             .context("terminal-run worker inbox claim has no task id")?;
-        let task = tasks
-            .get(task_id)
-            .context("terminal-run worker inbox refers to an unlisted task")?;
-        let attempt_id = task
-            .attempt_id
-            .as_deref()
-            .context("terminal-run worker inbox refers to an unclaimed task")?;
-        let epoch = task
-            .ownership_epoch
-            .context("terminal-run worker inbox task has no ownership epoch")?;
+        let attempt_id = claim.get("attempt_id").and_then(Value::as_str).context("worker inbox has no attempt")?;
+        let epoch = claim.get("ownership_epoch").and_then(Value::as_u64).context("worker inbox has no epoch")?;
+        let task = claim_task(tasks, task_id, attempt_id, epoch, None)?;
         let resource_id = task
             .resource_id
             .as_deref()
@@ -763,7 +802,7 @@ fn read_worker_inboxes(
         {
             bail!("terminal-run worker inbox has a pending or mismatched claim");
         }
-        if inboxes.insert(task.task_id.clone(), inbox).is_some() {
+        if inboxes.insert((task.task_id.clone(), attempt_id.to_owned()), inbox).is_some() {
             bail!("terminal-run task has duplicate worker inbox records");
         }
     }
@@ -775,7 +814,7 @@ fn validate_terminal_streams(
     run_id: &str,
     tasks: &BTreeMap<String, FmsTaskCatalogEntry>,
     journals: &BTreeMap<JournalKey, Vec<FmsCoordinatorJournalEntry>>,
-    inboxes: &BTreeMap<String, FmsWorkerInboxRecord>,
+    inboxes: &BTreeMap<InboxKey, FmsWorkerInboxRecord>,
     leases: &BTreeMap<ClaimKey, FmsResourceLease>,
     budget: &mut ReadBudget,
 ) -> Result<()> {
@@ -784,11 +823,11 @@ fn validate_terminal_streams(
             continue;
         };
         let command = journals
-            .get(&(task.task_id.clone(), "command".to_owned()))
+            .get(&(task.task_id.clone(), attempt_id.to_owned(), "command".to_owned()))
             .map(Vec::as_slice)
             .unwrap_or(&[]);
         let events = journals
-            .get(&(task.task_id.clone(), "event".to_owned()))
+            .get(&(task.task_id.clone(), attempt_id.to_owned(), "event".to_owned()))
             .map(Vec::as_slice)
             .unwrap_or(&[]);
         if events.is_empty() {
@@ -858,7 +897,7 @@ fn validate_terminal_streams(
         {
             bail!("terminal coordinator event does not match the task's terminal lifecycle");
         }
-        match (command.is_empty(), inboxes.get(&task.task_id)) {
+        match (command.is_empty(), inboxes.get(&(task.task_id.clone(), attempt_id.to_owned()))) {
             (true, None) => {}
             (false, Some(inbox)) => {
                 let applied = inbox
@@ -913,7 +952,7 @@ fn validate_terminal_streams(
                 task,
                 command,
                 events,
-                inboxes.get(&task.task_id),
+                inboxes.get(&(task.task_id.clone(), attempt_id.to_owned())),
                 &tasks,
                 leases,
                 budget,
@@ -925,8 +964,8 @@ fn validate_terminal_streams(
             bail!("terminal-run coordinator stream changed task attempt");
         }
     }
-    for ((task_id, _), _) in journals {
-        if !tasks.contains_key(task_id) {
+    for ((task_id, _, _), _) in journals {
+        if !tasks.values().any(|task| &task.task_id == task_id) {
             bail!("terminal-run coordinator journal contains an unlisted task");
         }
     }
@@ -1040,7 +1079,7 @@ fn validate_unapplied_heartbeat_suffix(
     Ok(())
 }
 
-fn read_matching_worker_exit_receipt(
+pub(super) fn read_matching_worker_exit_receipt(
     store: &SessionStore,
     run_id: &str,
     task: &FmsTaskCatalogEntry,
@@ -1079,13 +1118,11 @@ fn read_matching_worker_exit_receipt(
         if receipt.run_id != run_id {
             bail!("worker process-exit receipt is stored under the wrong run");
         }
-        let receipt_task = tasks
-            .get(&receipt.task_id)
-            .context("worker process-exit receipt refers to an unlisted terminal task")?;
+        if !tasks.values().any(|task| task.task_id == receipt.task_id) { bail!("worker process-exit receipt refers to an unlisted terminal task"); }
         let is_current_attempt =
             receipt.task_id == task.task_id && receipt.attempt_id == current_attempt;
         if is_current_attempt {
-            receipt.validate_for_task(receipt_task)?;
+            receipt.validate_for_task(task)?;
             if matching.replace(receipt).is_some() {
                 bail!("failed terminal attempt has ambiguous process-exit receipts");
             }
@@ -2362,6 +2399,208 @@ mod tests {
             &active,
         );
         assert!(validate(&fixture).is_err());
+    }
+
+    fn history_pin(fixture: &Fixture) -> super::super::retained_attempt_histories::RetainedAttemptHistoryPin {
+        let root = fixture.store.root().join(format!("runs/{RUN_ID}"));
+        let records = tree_snapshot(&root).into_iter().map(|(path, raw)| (path, crate::hex_sha256(&raw))).collect::<BTreeMap<_, _>>();
+        super::super::retained_attempt_histories::RetainedAttemptHistoryPin {
+            run_id: RUN_ID.into(),
+            run_evidence_sha256: crate::canonical_json_sha256(&serde_json::to_value(records).unwrap()),
+            attempts: vec![super::super::retained_attempt_histories::RetainedAttemptPin {
+                task_id: TASK_ID.into(), attempt_id: ATTEMPT_ID.into(), ownership_epoch: 1, resource_id: RESOURCE_ID.into(),
+            }],
+        }
+    }
+
+    fn historical_retry_fixture(acked_heartbeats: u64) -> Fixture {
+        let mut fixture = fixture();
+        add_unapplied_heartbeat_suffix(&mut fixture, "heartbeat");
+        let now = Utc::now();
+        let run = fixture.store.root().join(format!("runs/{RUN_ID}"));
+        let mut commands = Vec::new();
+        for index in 0..acked_heartbeats {
+            let sequence = index + 3;
+            let heartbeat = index + 1;
+            let mut command = journal(RUN_ID, TASK_ID, &format!("command-{sequence}"), FmsCoordinatorJournalDirection::Command, sequence, false, sequence, sequence - 1, "heartbeat", now);
+            command.payload["message"]["envelope"]["command"]["lease_heartbeat_sequence"] = serde_json::json!(heartbeat);
+            command.payload["checkpoint"]["claim"]["lease"]["heartbeat_sequence"] = serde_json::json!(heartbeat);
+            command.payload_sha256 = crate::canonical_json_sha256(&command.payload);
+            write_json(&run.join(format!("coordinator_journal/command/{}.json", command.entry_id)), &command);
+            commands.push(command.payload["message"]["envelope"].clone());
+            let mut ack = journal(RUN_ID, TASK_ID, &format!("event-{sequence}"), FmsCoordinatorJournalDirection::Event, sequence, false, sequence, sequence, "heartbeat_ack", now);
+            ack.payload["message"]["envelope"]["event"]["lease_heartbeat_sequence"] = serde_json::json!(heartbeat);
+            ack.payload["checkpoint"]["claim"]["lease"]["heartbeat_sequence"] = serde_json::json!(heartbeat);
+            ack.payload_sha256 = crate::canonical_json_sha256(&ack.payload);
+            write_json(&run.join(format!("coordinator_journal/event/{}.json", ack.entry_id)), &ack);
+        }
+        // Replace the original suffix/final records by the exact 2/3 or
+        // 170/171 shape; this is the production reconciliation exception.
+        if acked_heartbeats > 0 {
+            fs::remove_file(run.join("coordinator_journal/command/command-three.json")).unwrap();
+            fs::remove_file(run.join("coordinator_journal/event/event-three.json")).unwrap();
+        }
+        let sequence = acked_heartbeats + 3;
+        let mut suffix = journal(RUN_ID, TASK_ID, "command-three", FmsCoordinatorJournalDirection::Command, sequence, false, sequence, sequence - 1, "heartbeat", now);
+        suffix.payload["message"]["envelope"]["command"]["lease_heartbeat_sequence"] = serde_json::json!(acked_heartbeats + 1);
+        suffix.payload["checkpoint"]["claim"]["lease"]["heartbeat_sequence"] = serde_json::json!(acked_heartbeats + 1);
+        suffix.payload_sha256 = crate::canonical_json_sha256(&suffix.payload);
+        write_json(&run.join("coordinator_journal/command/command-three.json"), &suffix);
+        let mut terminal = journal(RUN_ID, TASK_ID, "event-three", FmsCoordinatorJournalDirection::Event, sequence, true, sequence, sequence, "failed", now);
+        terminal.payload["checkpoint"]["claim"]["lease"]["heartbeat_sequence"] = serde_json::json!(acked_heartbeats + 1);
+        terminal.payload["checkpoint"]["task"]["claim"] = terminal.payload["checkpoint"]["claim"].clone();
+        terminal.payload["checkpoint"]["task"]["input_fingerprint"] = serde_json::json!(fixture.catalog.tasks[0].input_fingerprint);
+        terminal.payload["checkpoint"]["task"]["readiness"] = serde_json::json!({"state":"ready"});
+        terminal.payload["checkpoint"]["task"]["observation"] = serde_json::json!("disconnected");
+        terminal.payload["checkpoint"]["task"]["assessment"] = serde_json::json!("invalid");
+        terminal.payload_sha256 = crate::canonical_json_sha256(&terminal.payload);
+        write_json(&run.join("coordinator_journal/event/event-three.json"), &terminal);
+        fixture.lease.heartbeat_sequence = acked_heartbeats;
+        write_json(&run.join(format!("resource_leases/{RESOURCE_ID}/{LEASE_TOKEN}.json")), &fixture.lease);
+        let mut old_inbox = inbox_record(None).payload;
+        old_inbox["applied"].as_array_mut().unwrap().extend(commands);
+        let old_record = FmsWorkerInboxRecord::new(old_inbox).unwrap();
+        write_json(&fixture.store.root().join(old_record.relative_path().unwrap()), &old_record);
+        let exit_path = run.join("worker_process_exit_receipts/process-exit-terminal.json");
+        let mut exit: FmsWorkerProcessExitReceipt = serde_json::from_slice(&fs::read(&exit_path).unwrap()).unwrap();
+        exit.lease_heartbeat_sequence = acked_heartbeats;
+        write_json(&exit_path, &exit);
+        let mut failed = fixture.catalog.tasks[0].clone();
+        failed.coordinator_watermark = Some(FmsCoordinatorWatermark { command_sequence: sequence, event_sequence: sequence });
+        let retry = crate::types::FmsRetryDecision {
+            schema_version: crate::types::FMS_RETRY_DECISION_SCHEMA.into(), decision_id: "operator-retry".into(),
+            run_id: RUN_ID.into(), task_id: TASK_ID.into(), attempt_id: ATTEMPT_ID.into(), ownership_epoch: 1,
+            trigger: crate::types::FmsRetryTrigger::ExplicitOperatorRequest, action: crate::types::FmsRetryAction::Retry,
+            reason: "explicit local operator retry".into(), created_at: now,
+        };
+        write_json(&run.join("retry_decisions/operator-retry.json"), &retry);
+        let mut queued = failed.clone();
+        queued.lifecycle = FmsTaskLifecycle::Queued; queued.observation = Some(FmsObservationState::Reconciling);
+        queued.attempt_id = None; queued.resource_id = None; queued.resolved_input_fingerprint = None;
+        let mut next_task = queued.clone();
+        next_task.lifecycle = FmsTaskLifecycle::Preparing; next_task.attempt_id = Some("attempt-next".into());
+        next_task.ownership_epoch = Some(2); next_task.resource_id = Some(RESOURCE_ID.into());
+        next_task.coordinator_watermark = None; next_task.coordinator_genesis = None;
+        let mut next_lease = fixture.lease.clone();
+        next_lease.attempt_id = "attempt-next".into(); next_lease.ownership_epoch = 2; next_lease.lease_token = "lease-next".into();
+        next_lease.heartbeat_sequence = 0; next_lease.state = FmsResourceLeaseState::Active; next_lease.released_at = None;
+        let next_admission = FmsTaskAdmissionRecord { schema_version: crate::types::FMS_TASK_ADMISSION_SCHEMA.into(),
+            expected_catalog_revision: 4, queued_task: queued, task: next_task.clone(), lease: next_lease.clone(), resolved_inputs_snapshot: None };
+        next_admission.validate().unwrap();
+        write_json(&run.join(format!("task_admissions/{TASK_ID}/attempt-next.json")), &next_admission);
+        next_lease.state = FmsResourceLeaseState::Released; next_lease.released_at = Some(now);
+        write_json(&run.join(format!("resource_leases/{RESOURCE_ID}/lease-next.json")), &next_lease);
+        let shapes = [ ("next-command-one", FmsCoordinatorJournalDirection::Command, 1, false, 1, 0, "prepare"),
+            ("next-command-two", FmsCoordinatorJournalDirection::Command, 2, false, 2, 1, "start"),
+            ("next-event-one", FmsCoordinatorJournalDirection::Event, 1, false, 1, 1, "prepared"),
+            ("next-event-two", FmsCoordinatorJournalDirection::Event, 2, false, 2, 2, "started"),
+            ("next-event-three", FmsCoordinatorJournalDirection::Event, 3, true, 2, 3, "completed") ];
+        let mut next_commands = Vec::new();
+        for (id, direction, sequence, terminal, command_sequence, event_sequence, kind) in shapes {
+            let mut entry = journal(RUN_ID, TASK_ID, id, direction, sequence, terminal, command_sequence, event_sequence, kind, now);
+            entry.attempt_id = "attempt-next".into(); entry.ownership_epoch = 2; entry.lease_token = "lease-next".into();
+            for pointer in ["/checkpoint/task", "/checkpoint/claim", "/message/envelope/claim"] {
+                let claim = entry.payload.pointer_mut(pointer).unwrap();
+                claim["attempt_id"] = serde_json::json!("attempt-next"); claim["ownership_epoch"] = serde_json::json!(2);
+            }
+            entry.payload["checkpoint"]["claim"]["lease"]["lease_token"] = serde_json::json!("lease-next");
+            entry.payload["message"]["envelope"]["claim"]["lease_token"] = serde_json::json!("lease-next");
+            if kind == "completed" {
+                entry.payload["message"]["envelope"]["event"]["assessment"] = serde_json::json!({});
+                entry.payload["checkpoint"]["task"]["lifecycle"] = serde_json::json!("succeeded");
+            }
+            entry.payload_sha256 = crate::canonical_json_sha256(&entry.payload);
+            if direction == FmsCoordinatorJournalDirection::Command { next_commands.push(entry.payload["message"]["envelope"].clone()); }
+            write_json(&run.join(format!("coordinator_journal/{}/{}.json", direction.as_str(), id)), &entry);
+        }
+        let next_inbox = FmsWorkerInboxRecord::new(serde_json::json!({"schema_version":"worker_inbox.v1",
+            "claim":{"run_id":RUN_ID,"task_id":TASK_ID,"attempt_id":"attempt-next","ownership_epoch":2,"lease_token":"lease-next"},
+            "applied":next_commands,"pending":null})).unwrap();
+        write_json(&fixture.store.root().join(next_inbox.relative_path().unwrap()), &next_inbox);
+        next_task.lifecycle = FmsTaskLifecycle::Succeeded;
+        next_task.coordinator_watermark = Some(FmsCoordinatorWatermark { command_sequence: 2, event_sequence: 3 });
+        fixture.catalog.tasks = vec![next_task]; fixture.catalog.revision = 8;
+        refresh_catalog_pin(&mut fixture);
+        fixture
+    }
+
+    fn validate_history(fixture: &Fixture, pin: &super::super::retained_attempt_histories::RetainedAttemptHistoryPin) -> Result<()> {
+        let _writer = fixture.store.write_transaction()?;
+        validate_history_locked(fixture, pin)
+    }
+
+    fn validate_history_locked(fixture: &Fixture, pin: &super::super::retained_attempt_histories::RetainedAttemptHistoryPin) -> Result<()> {
+        let mut budget = ReadBudget::for_attempt_history_v5();
+        let mut refs = BTreeSet::new();
+        super::super::retained_attempt_histories::validate_pins(std::slice::from_ref(pin), std::slice::from_ref(&fixture.pin))?;
+        super::super::retained_attempt_histories::validate_inventory(&fixture.store, std::slice::from_ref(pin), &mut budget)?;
+        validate_terminal_runs_subset_with_histories(&fixture.store, std::slice::from_ref(&fixture.pin), &mut budget, &mut refs, std::slice::from_ref(pin))?;
+        retained_cancelled_runs::validate_run_cas_pins(&fixture.store, &refs, &mut budget)?;
+        super::super::retained_attempt_histories::validate_inventory(&fixture.store, std::slice::from_ref(pin), &mut budget)
+    }
+
+    #[test]
+    fn v5_retains_failed_retry_history_and_existing_final_heartbeat_exception_read_only() {
+        for heartbeats in [0, 168] {
+            let fixture = historical_retry_fixture(heartbeats);
+            let pin = history_pin(&fixture);
+            {
+                // Lock acquisition/release writes ownership metadata. Compare
+                // every byte while holding the same lock as production.
+                let _writer = fixture.store.write_transaction().unwrap();
+                let before = tree_snapshot(fixture.store.root());
+                validate_history_locked(&fixture, &pin).unwrap();
+                assert_eq!(before, tree_snapshot(fixture.store.root()));
+            }
+            assert!(validate(&fixture).is_err(), "v3 must continue refusing historical attempts");
+        }
+    }
+
+    #[test]
+    fn v5_rejects_changed_or_additional_run_evidence_even_if_not_a_control_record() {
+        let fixture = historical_retry_fixture(0);
+        let pin = history_pin(&fixture);
+        fs::write(fixture.store.root().join(format!("runs/{RUN_ID}/unrecognized-extra.bin")), b"extra").unwrap();
+        assert!(validate_history(&fixture, &pin).is_err());
+        assert!(validate_history(&fixture, &history_pin(&fixture)).is_err(), "unknown namespace must remain refused even if explicitly hashed");
+    }
+
+    #[test]
+    fn v5_rejects_invalid_historical_claim_evidence_even_when_raw_inventory_is_repinned() {
+        for fault in ["missing-exit", "active-lease", "foreign-token", "pending", "missing-retry", "heartbeat-gap", "epoch-gap"] {
+            let fixture = historical_retry_fixture(0);
+            let run = fixture.store.root().join(format!("runs/{RUN_ID}"));
+            match fault {
+                "missing-exit" => fs::remove_file(run.join("worker_process_exit_receipts/process-exit-terminal.json")).unwrap(),
+                "missing-retry" => fs::remove_file(run.join("retry_decisions/operator-retry.json")).unwrap(),
+                "active-lease" | "foreign-token" => {
+                    let path = run.join(format!("resource_leases/{RESOURCE_ID}/{LEASE_TOKEN}.json"));
+                    let mut lease = fixture.lease.clone();
+                    if fault == "active-lease" { lease.state = FmsResourceLeaseState::Active; lease.released_at = None; }
+                    else { lease.lease_token = "foreign-token".into(); }
+                    write_json(&path, &lease);
+                }
+                "pending" => {
+                    let path = run.join("coordinator_journal/command/command-three.json");
+                    let entry: FmsCoordinatorJournalEntry = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+                    // A valid pending envelope must reach the recovery gate;
+                    // malformed protocol data would fail in fixture creation.
+                    write_inbox(&fixture.store, Some(entry.payload["message"]["envelope"].clone()));
+                }
+                "heartbeat-gap" => {
+                    let path = run.join("coordinator_journal/command/command-three.json");
+                    let mut entry: FmsCoordinatorJournalEntry = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+                    entry.payload["message"]["envelope"]["command"]["lease_heartbeat_sequence"] = serde_json::json!(2);
+                    entry.payload_sha256 = crate::canonical_json_sha256(&entry.payload); write_json(&path, &entry);
+                }
+                "epoch-gap" => {
+                    let mut pin = history_pin(&fixture); pin.attempts[0].ownership_epoch = 2;
+                    assert!(validate_history(&fixture, &pin).is_err()); continue;
+                }
+                _ => unreachable!(),
+            }
+            assert!(validate_history(&fixture, &history_pin(&fixture)).is_err(), "fault {fault}");
+        }
     }
 
     #[test]

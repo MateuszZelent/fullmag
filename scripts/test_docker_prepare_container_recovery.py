@@ -98,6 +98,23 @@ class PreparationTests(unittest.TestCase):
         self.assertNotIn('retained_terminal_runs',operator)
         self.assertNotIn('retained_held_manual_runs',operator)
 
+    def test_v5_history_pins_are_reobserved_under_lease_without_operator_schema_drift(self):
+        terminal=[{'run_id':'terminal'}]; held=[{'run_id':'held'}]
+        history=[{'run_id':'terminal','run_evidence_sha256':'a'*64,'attempts':[]}]
+        result=module.prepare(self.control,self.pins,{},retained_terminal_runs=terminal,
+                              retained_held_manual_runs=held,retained_attempt_histories=history,publish=True)
+        self.assertEqual(self.builder.call_count,2)
+        for call in self.builder.call_args_list:
+            self.assertEqual(call.kwargs['retained_attempt_histories'],history)
+        operator=json.loads(self.control.records[result['operator_authorization_path']])
+        self.assertNotIn('retained_attempt_histories',operator)
+        self.assertFalse(result['compute_started'])
+
+    def test_v5_history_requires_both_explicit_retained_run_arrays(self):
+        with self.assertRaisesRegex(BuildControlError,'requires both'):
+            module.prepare(self.control,self.pins,{},retained_attempt_histories=[])
+        self.builder.assert_not_called()
+
     def test_v4_held_input_requires_explicit_terminal_array_even_when_empty(self):
         held=[{'run_id':'held-run','run_intent_sha256':'a'*64,'run_catalog_sha256':'b'*64,'start_release':'absent'}]
         with self.assertRaisesRegex(BuildControlError,'retained-terminal-runs'):

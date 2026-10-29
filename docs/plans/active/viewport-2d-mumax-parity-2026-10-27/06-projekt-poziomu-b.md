@@ -8,6 +8,8 @@ Wspólna zasada: każda funkcja jest **zasobem pochodnym tej samej klatki** (`sa
 
 ## B1. Profil liniowy
 
+Status: **zrobione** (2026-10-28). Odstępstwo: odpowiedź JSON (jak sonda), nie FMVP — liczba punktów jest ograniczona (≤ 16 384), a wartości są punktowymi ewaluacjami tej samej próbki.
+
 | Aspekt | Projekt |
 |---|---|
 | Interakcja | Shift + przeciągnięcie na mapie rysuje odcinek w (u,v); uchwyty końców edytowalne; `Esc` usuwa |
@@ -18,6 +20,8 @@ Wspólna zasada: każda funkcja jest **zasobem pochodnym tej samej klatki** (`sa
 | Koszt | FEM wymaga lokalizacji punktów — wykorzystać operator płaszczyzny (piksele na odcinku) albo indeks przestrzenny z B6 |
 
 ## B2. Multislice
+
+Status: **zrobione** (2026-10-28). Nota 0970 § Multislice panels, bramka PM-N27 (sprawdzona w runtime, `docs/diagnostics/viewport-2d-multislice-2026-10-28/`). Odstępstwa od projektu: stan to `planar.multislice: { enabled, position_fractions }` jako pole addytywne `serde(default)` bez migracji wersji schematu; parametr zapytania nazywa się `position_fraction` (zgodnie z `default_slice`); wspólny zakres liczony z ekstremów renderowalnych próbek paneli tą samą redukcją co widok pojedynczy (nie z `occupied_range` meta); panele nie mają sondy ani podglądu zestawu płaszczyzn w 3D; liczba paneli 2–4.
 
 | Aspekt | Projekt |
 |---|---|
@@ -30,6 +34,8 @@ Wspólna zasada: każda funkcja jest **zasobem pochodnym tej samej klatki** (`sa
 
 ## B3. Streamlines
 
+Status: **zrobione** (2026-10-28). Nota 0970 § In-plane streamlines (presentation), `eq-planar-streamlines`, bramka PM-N26. Warstwa `streamlines` w `visualization/state.planar.layers` (pole addytywne `serde(default)`, bez migracji schematu); przełączniki „Lines” w pasku 2D i „Streamlines” w Inspectorze. Odstępstwo: linie są monochromatyczne (kolor stylu wektorów, ciemne nad kołem barw) z grotem w połowie linii; kolorowanie |v∥| z legendą nie jest zrobione.
+
 | Aspekt | Projekt |
 |---|---|
 | Numeryka | całkowanie RK4 w płaszczyźnie (składowe u,v) z krokiem ≤ ½ piksela, interpolacja dwuliniowa rastra wektorowego, zatrzymanie na masce i przy |v∥| < ε; seeding jednorodny z odrzucaniem kolizji (Jobard–Lefer) |
@@ -40,6 +46,8 @@ Wspólna zasada: każda funkcja jest **zasobem pochodnym tej samej klatki** (`sa
 
 ## B4. Nawigator czasu i etapu
 
+Status: **zaimplementowane, runtime zablokowany** (2026-10-28). Nawigator nad mapą 2D dla migawek `m` etapu histerezy (‹ ›, odtwarzanie klatka po klatce, „Live”), przez to samo zaznaczenie co wykres histerezy. Odstępstwa: tylko `m` (zgodnie z ograniczeniem `snapshot_quantity_unsupported`; rozszerzenie runtime na inne wielkości — osobne zadanie); brak prefetchu N klatek (odtwarzanie czeka na narysowanie bieżącej); wejście w tryb migawek przez wybór punktu histerezy. Runtime: master odrzuca aktywację etapu histerezy (`study pipeline primitive stage 'hysteresis' is not yet executable by the runtime`), dowody w `docs/diagnostics/viewport-2d-level-b-b4-b6-2026-10-28/`.
+
 | Aspekt | Projekt |
 |---|---|
 | UI | pasek pod mapą: etap, migawka, czas symulacji; strzałki ‹ › między migawkami; tryb „na żywo” |
@@ -49,6 +57,8 @@ Wspólna zasada: każda funkcja jest **zasobem pochodnym tej samej klatki** (`sa
 
 ## B5. Gizmo płaszczyzny w 3D
 
+Status: **zrobione** (2026-10-28). Uchwyt przesunięcia wzdłuż normalnej, dwa pierścienie obrotu (wokół u i v; Shift przyciąga do 5°), `Shift+[`/`Shift+]` (obrót wokół u o 5°) i pick-from-face („Pick face in 3D” w Inspectorze: normalna ściany przez punkt trafienia). Inspector rejestruje się jako właściciel szkicu, a gizmo proponuje zmiany ramki tą samą ścieżką aktualizacji szkicu; `Esc` przywraca ramkę; ramki reortonormalizowane (v = n × u). Dowody przeglądarkowe dla wszystkich czterech interakcji w `docs/diagnostics/viewport-2d-level-b-b4-b6-2026-10-28/`.
+
 | Aspekt | Projekt |
 |---|---|
 | Interakcja | uchwyt przesunięcia wzdłuż normalnej i dwa pierścienie obrotu w widoku 3D; pick-from-face ustawia płaszczyznę na ścianie obiektu |
@@ -57,6 +67,8 @@ Wspólna zasada: każda funkcja jest **zasobem pochodnym tej samej klatki** (`sa
 | Dowód | smoke przeglądarkowy z kontekstem WebGL i porównaniem ramki z meta próbki |
 
 ## B6. Indeks przestrzenny i gather na GPU
+
+Status: **zrobione częściowo** (2026-10-28). BVH po AABB wybranych elementów dla wsadowej lokalizacji punktów (profil liniowy od 32 punktów), kandydaci w rosnącej kolejności elementów, więc wynik równy skanowi bezpośredniemu (nota 0970 § Spatial index for point location; nowa bramka PM-N28 spełniona w runtime: 61 punktów profilu bitowo równych sondzie; operator płaszczyzny rasteryzuje tylko elementy, których pudełko przecina płaszczyznę, z BVH cache'owanego po fingerprincie topologii — PM-N17: test pokrycia na 10k Tet4, A/B runtime 12/12 przekrojów bitowo identycznych, na 164k Tet4 168/168 pikseli równych sondzie i 0 zgubionych elementów; przyspieszenie end-to-end przy 164k niewykazane (380 vs 419 ms); przy 2,26M Tet4 168/168 pikseli równych sondzie, 0 zgubionych elementów, meta 11,6 s/płaszczyznę z indeksem, wariant bez indeksu przy 2M niezmierzony). Gather na GPU **BLOCKED** (tor FEM GPU zablokowany).
 
 - BVH po AABB elementów (budowane raz na `topology_fingerprint`) dla płaszczyzn skośnych, sondy i profili; obecnie płaszczyzna rasteryzuje element po elemencie, a sonda skanuje elementy liniowo.
 - Gather operatora (rzadkie mnożenie) na urządzeniu dla FEM GPU, aby nie kopiować całego pola przy każdym kroku; wymaga noty i kwalifikacji parytetu z CPU.

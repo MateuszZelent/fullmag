@@ -51,6 +51,7 @@ import { activeLaneCapabilityFixture } from "./activeLaneCapabilityFixture.testS
 
 import {
   STUDY_RUNTIME_CONTROL_RESOURCE_KEYS,
+  hasPublishedFemMeshEvidence,
   readyCommandResourceData,
   frequencyDomainJsonArtifactRevision,
   frequencyDomainManifestRevision,
@@ -1587,6 +1588,51 @@ describe("study runtime command resource bundles", () => {
     };
 
     expect(shouldLoadRuntimeMeshManifest(true, status)).toBe(true);
+  });
+
+  it("loads published FEM facts without resolving an execution lane", () => {
+    const status = statusWith({ discretization: "fem", explicitTopology: true,
+      resources: { mesh_revision: 2, domain_generation_id: "0" } });
+    status.capabilities.active_lane.authored = {
+      ...status.capabilities.active_lane.authored, backend: "fem", discretization: "fem",
+    };
+    status.capabilities.active_lane.resolved = null;
+    expect(hasPublishedFemMeshEvidence(status)).toBe(true);
+    expect(shouldLoadRuntimeMeshManifest(true, status)).toBe(true);
+    expect(shouldLoadRuntimeMeshManifest(false, status)).toBe(false);
+    expect(status.capabilities.active_lane.resolved).toBeNull();
+    const previous = structuredClone(status);
+    status.capabilities.active_lane.authored.backend = "fdm";
+    expect(hasPublishedFemMeshEvidence(status)).toBe(false);
+    expect(shouldLoadRuntimeMeshManifest(true, status)).toBe(false);
+    expect(runtimeCommandControlSessionStatusEquals(previous, status)).toBe(false);
+    expect(studyRuntimeCommandSessionStatusEquals(
+      selectStudyRuntimeCommandSessionStatus({ data: previous }),
+      selectStudyRuntimeCommandSessionStatus({ data: status }),
+    )).toBe(false);
+  });
+
+  it("requires published evidence and rejects stale or conflicting lane hints", () => {
+    const status = statusWith({ discretization: "fem", explicitTopology: true,
+      resources: { mesh_revision: 2, domain_generation_id: "0" } });
+    status.capabilities.active_lane.authored = {
+      ...status.capabilities.active_lane.authored, backend: "fem", discretization: "fem",
+    };
+    status.capabilities.active_lane.resolved = null;
+    const variants = [
+      { ...status, capabilities: { ...status.capabilities, explicit_topology: false } },
+      { ...status, resources: { ...status.resources, mesh_revision: 0 } },
+      { ...status, domain: { ...status.domain, discretization: "fdm" } },
+      { ...status, capabilities: { ...status.capabilities, active_lane: null } },
+      { ...status, capabilities: { ...status.capabilities, active_lane: {
+        ...status.capabilities.active_lane, resolved: { backend: "fdm", discretization: "fdm" },
+      } } },
+      { ...status, capabilities: { ...status.capabilities, active_lane: {
+        ...status.capabilities.active_lane, resolved: { backend: "fdm", discretization: "fem" },
+      } } },
+      { ...status, capabilities: { explicit_topology: true, active_lane_discretization: "fem" } },
+    ];
+    for (const variant of variants) expect(hasPublishedFemMeshEvidence(variant)).toBe(false);
   });
 
   it("fails closed for an unresolved active lane instead of using requested FEM", () => {

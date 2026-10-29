@@ -34,6 +34,31 @@ class AcceptedAntennaRuntimeTests(unittest.TestCase):
         records = fixture()
         self.assertEqual(runtime.validate_worker_publication(*records), records[1]['outputs'][0])
 
+    def test_accepts_v3_standalone_output_without_solver_stats(self):
+        records = fixture()
+        records[1]['schema_version'] = 'fullmag.accepted_worker_execution.v3'
+        self.assertEqual(runtime.validate_worker_publication(*records), records[1]['outputs'][0])
+
+    def test_rejects_v3_solver_stats_terminal_publication_or_unknown_schema(self):
+        for key, value in (
+            ('final_step_stats', {}),
+            ('terminal_publication', {}),
+            ('schema_version', 'fullmag.accepted_worker_execution.v99'),
+        ):
+            with self.subTest(key=key):
+                records = fixture()
+                records[1]['schema_version'] = 'fullmag.accepted_worker_execution.v3'
+                records[1][key] = value
+                with self.assertRaises(ValueError):
+                    runtime.validate_worker_publication(*records)
+
+    def test_v3_keeps_identity_schema_v1(self):
+        records = fixture()
+        records[1]['schema_version'] = 'fullmag.accepted_worker_execution.v3'
+        records[1]['identity']['schema_version'] = 'fullmag.accepted_worker_execution.v3'
+        with self.assertRaises(ValueError):
+            runtime.validate_worker_publication(*records)
+
     def test_rejects_foreign_attempt_publication_or_lease(self):
         for key in ('run_id', 'task_id', 'attempt_id', 'ownership_epoch', 'case_id', 'package_object_ref'):
             with self.subTest(key=key):

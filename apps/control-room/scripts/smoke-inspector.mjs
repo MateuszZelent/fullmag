@@ -739,7 +739,7 @@ try {
   await page.waitForTimeout(100);
   const controlsGeometry = await overview.evaluate((element) => {
     const segmented = element.querySelector('[data-slot="segmented-control"]');
-    const quantity = element.querySelector('select[aria-label="Quantity Source"]');
+    const quantity = element.querySelector('[role="combobox"][aria-label="Quantity source"]');
     const renderMode = element.querySelector('[role="radiogroup"][aria-label="Render mode"]');
     return {
       overview: element.getBoundingClientRect().toJSON(),
@@ -4345,26 +4345,30 @@ async function installInspectorFixtureApi(page, fixture) {
       quantities: [{
         capability_state: "supported",
         description: "Magnetization",
-        domain: "magnetic",
+        domain: "magnetic_only",
         id: "m",
         interactive_preview: true,
         label: "Magnetization",
         location: "cell",
         materializable: true,
         materialization_reason_code: null,
-        materialization_state: "ready",
+        materialization_state: "complete",
         n_comp: 3,
         normalization_hint: "unit_vector",
         quick_access_label: "m",
         scalar_metric_key: null,
-        shape: "vector",
+        shape: "vector_field",
+        solver_capability: "supported",
+        requestable: true,
+        renderable: true,
+        publication_state: "interactive",
         supports_export: true,
         supports_history: true,
         supports_preview_2d: true,
         supports_preview_3d: true,
         unit: "1",
       }],
-      schema_version: "quantity-catalog.v1",
+      schema_version: "1.0",
     });
     if (/^\/v2\/sessions\/current\/data\/fields\/[^/]+\/availability$/.test(path)) {
       const quantityId = decodeURIComponent(path.split("/").at(-2) ?? "m");

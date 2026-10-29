@@ -1122,6 +1122,10 @@ pub enum SpinInterfaceIR {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SpinBoundaryIR {
+    HomogeneousSpinPotentialGradient {
+        id: String,
+        surfaces: Vec<SurfaceRefIR>,
+    },
     SpinInsulating {
         id: String,
         surfaces: Vec<SurfaceRefIR>,
@@ -1530,6 +1534,7 @@ pub struct ResolvedFdmStructuredCurrentClosureIR {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ResolvedSpinBoundaryConditionIR {
+    HomogeneousSpinPotentialGradient,
     SpinInsulating,
     SpinSink,
     SpecifiedPotential {
@@ -1717,6 +1722,8 @@ pub struct ResolvedReciprocalMaterialIR {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResolvedFdmCoupledSpinTransportIR {
     pub descriptor_schema: String,
+    /// Required v2 magnetic domain on the common transport grid; no legacy default.
+    pub magnetic_active_mask: Vec<bool>,
     /// Authored charge-source envelope evaluated at each coupled transport
     /// stage.  It scales only prescribed charge drives; the reciprocal
     /// constitutive solve still uses the stage magnetization to determine
