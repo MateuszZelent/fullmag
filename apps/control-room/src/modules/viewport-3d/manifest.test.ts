@@ -5,7 +5,10 @@ import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
 import { ALL_MODULES } from "@/modules/registry";
 
 import { viewport3dManifest } from "./manifest";
-import { viewport3dStore } from "./viewport3dStore";
+import {
+  DEFAULT_VIEWPORT_3D_CAMERA_STATE,
+  viewport3dStore,
+} from "./viewport3dStore";
 import { VIEWPORT_3D_FRAMELOOP } from "./viewport3dTypes";
 
 describe("viewport3dManifest", () => {
@@ -53,6 +56,57 @@ describe("viewport3dManifest", () => {
     expect(viewport3dStore.getSnapshot().captureReturnProfileId).toBe(
       "interactive",
     );
+  });
+
+  it("routes camera commands to the visible saved owner despite unrelated selection", async () => {
+    viewport3dStore.resetForTest();
+    viewport3dStore.setCamera({
+      position: [9, 9, 9],
+      target: [1, 1, 1],
+      up: [0, 1, 0],
+    });
+    const fit = vi.fn();
+    const reset = vi.fn();
+    const patchCamera = vi.fn();
+    const unregister = viewport3dStore.registerSavedCameraOwner({ fit, reset });
+    const context = {
+      cameraRegistry: { patchCamera },
+      selection: { get: () => ({ kind: "results.output.file" }) },
+      source: "test",
+    } as never;
+    const before = viewport3dStore.getSnapshot();
+    const registry = registerViewportCommands();
+
+    await registry.execute("viewport-3d.fit", context);
+    await registry.execute("viewport-3d.reset-camera", context);
+
+    expect(fit).toHaveBeenCalledTimes(1);
+    expect(reset).toHaveBeenCalledTimes(1);
+    expect(patchCamera).not.toHaveBeenCalled();
+    expect(viewport3dStore.getSnapshot()).toEqual(before);
+
+    unregister();
+  });
+
+  it("keeps the live reset fallback when no saved camera owns the viewport", async () => {
+    viewport3dStore.resetForTest();
+    viewport3dStore.setCamera({
+      position: [9, 9, 9],
+      target: [1, 1, 1],
+      up: [0, 1, 0],
+    });
+    const patchCamera = vi.fn();
+    const context = {
+      cameraRegistry: { patchCamera },
+      selection: { get: () => ({ kind: "results.output.file" }) },
+      source: "test",
+    } as never;
+    const registry = registerViewportCommands();
+
+    await registry.execute("viewport-3d.reset-camera", context);
+
+    expect(viewport3dStore.getSnapshot().camera).toEqual(DEFAULT_VIEWPORT_3D_CAMERA_STATE);
+    expect(patchCamera).toHaveBeenCalledTimes(1);
   });
 
   it("opens viewport settings and resets appearance sections through commands", async () => {

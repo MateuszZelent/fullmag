@@ -1,4 +1,5 @@
 "use client";
+import { returnResultsToLive } from "../visualization/returnResultsToLive";
 
 import { useCallback, useEffect, useRef } from "react";
 
@@ -106,7 +107,7 @@ export function WorkspaceShellClient() {
     homeView.close();
   }, [sessionScopeKey, startOwnsPage]);
 
-  if (savedPlayback) return <SavedResultsWorkspaceShell />;
+  if (savedPlayback) return <SavedResultsWorkspaceShell liveDiagnosticsAvailable={sessionState === "ready" && identity !== null} />;
 
   if (sessionState !== "ready" && project.state === "ready") {
     return <ProjectWorkspaceShell sessionState={sessionState} onRetry={onRetry} />;
@@ -127,7 +128,7 @@ export function WorkspaceShellClient() {
   return <ActiveWorkspaceShell />;
 }
 
-function SavedResultsWorkspaceShell() {
+function SavedResultsWorkspaceShell({ liveDiagnosticsAvailable }: { liveDiagnosticsAvailable: boolean }) {
   const kernel = useKernel();
   const selection = useSavedResultsPlaybackSelection();
   if (!selection) return null;
@@ -146,15 +147,15 @@ function SavedResultsWorkspaceShell() {
         </div>
         <Button
           className="fm-saved-results-playback-shell__close"
-          onClick={() => kernel.savedResultsPlayback?.close()}
+          onClick={() => returnResultsToLive(kernel)}
           type="button"
           variant="secondary"
         >
-          Close playback
+          Return to live
         </Button>
       </section>
       <WorkspaceRenderProfiler id="WorkspaceDockLayout">
-        <WorkspaceDockLayout />
+        <WorkspaceDockLayout liveDiagnosticsAvailable={liveDiagnosticsAvailable} />
       </WorkspaceRenderProfiler>
       <CommandFeedbackPresenter />
     </WorkspaceContentScopeProvider>

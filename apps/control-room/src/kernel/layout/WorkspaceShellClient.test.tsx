@@ -18,6 +18,8 @@ import { RealtimeConnectionController } from "../realtime/RealtimeConnectionCont
 import { statusRefreshIntervalMs } from "../realtime/communicationPolicy";
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
+import { ResultsBrowserUiController } from "../results-browser/ResultsBrowserUiController";
+import { SelectionController } from "../selection/SelectionController";
 import { SavedResultsPlaybackController } from "../saved-results/SavedResultsPlaybackController";
 import {
   resetSharedResourceRuntimeStoreForTests,
@@ -30,6 +32,7 @@ import {
   findElements,
   installSimulationPreparationTestDom,
   type TestElement,
+  TestEvent,
 } from "./simulationPreparationTestDom.test-support";
 import { WorkspaceShellClient } from "./WorkspaceShellClient";
 import { startScreenManifest } from "@/modules/start/manifest";
@@ -107,11 +110,32 @@ describe("WorkspaceShellClient Home entry surface", () => {
       expect(findByAttribute(container, "data-saved-results-playback", "read-only")).toBeTruthy();
       expect(container.textContent).toContain("Saved results · read only");
       expect(container.textContent).toContain("orphaned-run");
+      expect(findByAttribute(container, "aria-label", "Search saved result outputs")).toBeTruthy();
       expect(findByAttribute(container, "data-slot-id", "viewport-aux")).toBeNull();
       expect(findByAttribute(container, "data-slot-id", "panel-bottom")).toBeNull();
       expect(findByAttribute(container, "data-slot-id", "start-screen")).toBeNull();
       expect(findByAttribute(container, "data-saved-playback-viewport", "mounted")).toBeTruthy();
       expect(findByAttribute(container, "data-saved-results-folder-summary", "read-only")).toBeTruthy();
+      const inspectorFrame = findByAttribute(container, "data-panel-frame", "panel-right");
+      await act(async () => {
+        kernel.layout.setPanelVisible("left", false);
+        kernel.layout.setPanelVisible("right", false);
+      });
+      await settle();
+      expect(inspectorFrame?.hasAttribute("hidden")).toBe(true);
+      const restoreLeft = findByAttribute(container, "data-restore-panel", "panel-left");
+      const restoreRight = findByAttribute(container, "data-restore-panel", "panel-right");
+      expect(restoreLeft).toBeTruthy();
+      expect(restoreRight).toBeTruthy();
+      expect(findByAttribute(container, "data-restore-panel", "panel-bottom")).toBeNull();
+      await act(async () => {
+        restoreLeft!.dispatchEvent(new TestEvent("click", { bubbles: true }));
+        restoreRight!.dispatchEvent(new TestEvent("click", { bubbles: true }));
+      });
+      await settle();
+      expect(inspectorFrame?.hasAttribute("hidden")).toBe(false);
+      expect(playback.getSnapshot()?.itemId).toBe("result-source-less");
+
 
       await act(async () => playback.close());
       await settle();
@@ -732,6 +756,7 @@ function makeKernel(
   const bus = new EventBus<KernelEventMap>();
   const commands = new CommandRegistry();
   const modules = new ModuleRegistry();
+  const resultsBrowserUi = new ResultsBrowserUiController();
   if (options.includeStartScreen !== false) {
     modules.register({
       ...startScreenManifest,
@@ -760,8 +785,13 @@ function makeKernel(
   for (const command of SHELL_COMMANDS) commands.register(command);
   for (const command of startScreenManifest.contributes?.commands ?? []) commands.register(command);
   return {
+    resultsBrowserUi,
     savedResultsPlayback: options.savedResultsPlayback,
+    selection: new SelectionController(bus),
     api: {
+      results: {
+        catalog: async () => ({schema:"fullmag.results-catalog.v1", revision:"test:results",root_label:"Outputs", run_id:null,entries:[],next_cursor:null,total_count:0,truncated:false}),
+      },
       diagnostics: {
         cpuTelemetry: async () => { throw new Error("telemetry is not served in this test"); },
         gpuTelemetry: async () => { throw new Error("telemetry is not served in this test"); },

@@ -157,6 +157,55 @@ describe("viewport3dStore", () => {
     );
   });
 
+  it("routes fit and reset callbacks to the active saved camera owner", () => {
+    viewport3dStore.resetForTest();
+    viewport3dStore.setCamera({
+      position: [9, 9, 9],
+      target: [1, 1, 1],
+      up: [0, 1, 0],
+    });
+    const fit = vi.fn();
+    const reset = vi.fn();
+    const unregister = viewport3dStore.registerSavedCameraOwner({ fit, reset });
+    const before = viewport3dStore.getSnapshot();
+
+    expect(viewport3dStore.requestFit()).toBe(true);
+    expect(viewport3dStore.resetCamera()).toBe(true);
+
+    expect(fit).toHaveBeenCalledTimes(1);
+    expect(reset).toHaveBeenCalledTimes(1);
+    expect(viewport3dStore.getSnapshot()).toEqual(before);
+
+    unregister();
+  });
+
+  it("does not let an older saved owner unregister a newer owner", () => {
+    viewport3dStore.resetForTest();
+    const firstFit = vi.fn();
+    const firstReset = vi.fn();
+    const secondFit = vi.fn();
+    const secondReset = vi.fn();
+    const unregisterFirst = viewport3dStore.registerSavedCameraOwner({
+      fit: firstFit,
+      reset: firstReset,
+    });
+    const unregisterSecond = viewport3dStore.registerSavedCameraOwner({
+      fit: secondFit,
+      reset: secondReset,
+    });
+
+    unregisterFirst();
+    expect(viewport3dStore.requestFit()).toBe(true);
+    expect(viewport3dStore.resetCamera()).toBe(true);
+    expect(firstFit).not.toHaveBeenCalled();
+    expect(firstReset).not.toHaveBeenCalled();
+    expect(secondFit).toHaveBeenCalledTimes(1);
+    expect(secondReset).toHaveBeenCalledTimes(1);
+
+    unregisterSecond();
+    expect(viewport3dStore.requestFit()).toBe(false);
+  });
+
   it("defaults orientation widget preferences for the v2 viewport", () => {
     viewport3dStore.resetForTest();
 

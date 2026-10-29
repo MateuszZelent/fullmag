@@ -12,6 +12,8 @@ import {
   selectionSnapshotEquals,
   useSelectionSelector,
 } from "@/kernel/selection/useSelection";
+import { returnResultsToLive } from "@/kernel/visualization/returnResultsToLive";
+import { Button } from "@/shared/ui/Button";
 
 import { InspectorDirtySelectionGuard } from "./InspectorDirtySelectionGuard";
 import {
@@ -75,7 +77,29 @@ function PendingFormBridge() {
 
 export default function InspectorModule() {
   const savedPlayback = useSavedResultsPlaybackSelection();
+  const selectionRef = useSelectionSelector((state) => state.ref);
+  const hasResultOutputSelection = selectionRef?.type === "result-output";
+  if (hasResultOutputSelection) return <LiveInspectorModule />;
+  if (savedPlayback?.browserOnly) return <BrowserOnlyResultsInspector />;
   return savedPlayback ? <SavedResultsPlaybackInspector /> : <LiveInspectorModule />;
+}
+
+function BrowserOnlyResultsInspector() {
+  const kernel = useKernel();
+  return (
+    <section
+      aria-label="Results output Inspector"
+      className="fm-inspector-panel grid min-w-0 gap-3 p-3"
+    >
+      <h2 className="m-0 text-fm-md font-semibold text-fm-primary">Results output</h2>
+      <p className="m-0 text-fm-xs text-fm-muted" role="status">
+        Select an output in Results to inspect its metadata and load it into 3D.
+      </p>
+      <Button size="sm" type="button" variant="secondary" onClick={() => returnResultsToLive(kernel)}>
+        Return to live
+      </Button>
+    </section>
+  );
 }
 
 function LiveInspectorModule() {
@@ -107,9 +131,9 @@ function LiveInspectorModule() {
     <WorkspaceRenderProfiler id="InspectorModule">
       <InspectorEditSessionProvider>
         <PendingFormBridge />
-        <InspectorDirtySelectionGuard controller={kernel.selection} selection={projectOnly && selection.ref?.type !== "materialized-dataset" ? EMPTY_SELECTION : selection}>
+        <InspectorDirtySelectionGuard controller={kernel.selection} selection={projectOnly && selection.ref?.type !== "materialized-dataset" && selection.ref?.type !== "result-output" ? EMPTY_SELECTION : selection}>
         {(guardedSelection) => {
-          const canInspect = !projectOnly || guardedSelection.ref?.type === "materialized-dataset";
+          const canInspect = !projectOnly || guardedSelection.ref?.type === "materialized-dataset" || guardedSelection.ref?.type === "result-output";
           const panel = canInspect ? resolveInspectorPanel(guardedSelection) : null;
           const fallbackPanel = canInspect && guardedSelection.kind
             ? resolveUnknownInspectorRoute().contribution
@@ -126,7 +150,7 @@ function LiveInspectorModule() {
               onFocus={handleFocus}
               focusDisabled={projectOnly}
               onSelectBreadcrumb={(next) => {
-                if (!projectOnly || next.ref?.type === "materialized-dataset") kernel.selection.set(next, "inspector");
+                if (!projectOnly || next.ref?.type === "materialized-dataset" || next.ref?.type === "result-output") kernel.selection.set(next, "inspector");
               }}
               onToggleVisibility={handleToggleVisibility}
             >

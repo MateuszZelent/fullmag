@@ -31,6 +31,8 @@ import type {
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 
+import { WorkspaceResultsFolders } from "./WorkspaceResultsFolders";
+
 const MATERIALIZED_DATASET_SCHEMA = "fullmag.materialized_dataset.v1";
 
 type SavedResultsBrowserProps = Pick<ModuleProps, "kernel" | "moduleId">;
@@ -48,30 +50,36 @@ export function SavedResultsBrowser({
 
   if (project.state !== "ready") {
     return (
-      <section
-        aria-label="Saved results"
-        className="fm-results-navigator__saved grid min-w-0 gap-3 p-3"
-      >
-        <header className="grid min-w-0 gap-1">
-          <h2 className="m-0 text-fm-md font-semibold text-fm-primary">Saved results</h2>
-          <p className="m-0 text-fm-xs text-fm-muted">
-            Open a project before browsing durable SolutionSet revisions.
+      <>
+        <WorkspaceResultsFolders kernel={kernel} />
+        <section
+          aria-label="Project SolutionSet revisions"
+          className="fm-results-navigator__saved grid min-w-0 gap-3 p-3"
+        >
+          <header className="grid min-w-0 gap-1">
+            <h2 className="m-0 text-fm-md font-semibold text-fm-primary">Project SolutionSet revisions</h2>
+            <p className="m-0 text-fm-xs text-fm-muted">
+              Open a project before browsing durable SolutionSet revisions.
+            </p>
+          </header>
+          <p className="m-0 text-fm-xs text-fm-muted" role="status">
+            Project state: {project.state}.
           </p>
-        </header>
-        <p className="m-0 text-fm-xs text-fm-muted" role="status">
-          Project state: {project.state}.
-        </p>
-      </section>
+        </section>
+      </>
     );
   }
 
   return (
-    <SavedProjectResults
-      key={project.resource.project_id}
-      kernel={kernel}
-      moduleId={moduleId}
-      projectId={project.resource.project_id}
-    />
+    <>
+      <WorkspaceResultsFolders kernel={kernel} />
+      <SavedProjectResults
+        key={project.resource.project_id}
+        kernel={kernel}
+        moduleId={moduleId}
+        projectId={project.resource.project_id}
+      />
+    </>
   );
 }
 

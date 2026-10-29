@@ -17,6 +17,7 @@ export interface InspectorGroupProps {
   summary?: string;
   /** Use "nav" style: full-width clickable row with icon, title, summary, and chevron-right */
   variant?: "default" | "nav";
+  onOpenChange?: (open: boolean) => void;
   title: string;
 }
 
@@ -30,10 +31,16 @@ export function InspectorGroup({
   icon,
   summary,
   variant = "default",
+  onOpenChange,
   title,
 }: InspectorGroupProps) {
   const [open, setOpen] = useState(defaultOpen);
   const contentId = useId();
+  const toggleOpen = () => {
+    const next = !open;
+    setOpen(next);
+    onOpenChange?.(next);
+  };
 
   const heading = (
     <div className="min-w-0 flex-1" data-slot="inspector-group-heading">
@@ -66,7 +73,7 @@ export function InspectorGroup({
           className="fm-inspector-group-nav-trigger flex w-full min-w-0 items-center gap-3 px-fm-inline py-2.5 text-left outline-none transition-[background-color,box-shadow,transform] hover:bg-fm-hover active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-fm-accent"
           data-slot="inspector-group-trigger"
           type="button"
-          onClick={() => setOpen((current) => !current)}
+          onClick={toggleOpen}
         >
           {icon ? (
             <span className="fm-inspector-group-nav-icon">
@@ -115,7 +122,7 @@ export function InspectorGroup({
           className="flex h-fm-control-sm w-full min-w-0 items-center gap-1.5 rounded-fm-disclosure px-1.5 text-left outline-none transition-[background-color,box-shadow,transform] hover:bg-fm-disabled active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-fm-accent"
           data-slot="inspector-group-trigger"
           type="button"
-          onClick={() => setOpen((current) => !current)}
+          onClick={toggleOpen}
         >
           {icon ? (
             <span className="fm-inspector-group-icon-box">

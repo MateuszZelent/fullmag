@@ -20,50 +20,26 @@ import {
   type RunRecord,
 } from "./provenance";
 import type { Author } from "./types";
+import { WorkspaceHostError, type WorkspaceLastRun } from "./workspaceItems";
 import {
-  WorkspaceHostError,
-  type WorkspaceItemStatus,
-  type WorkspaceLastRun,
-  type WorkspaceOutcome,
-  type WorkspaceOutcomeState,
-} from "./workspaceItems";
+  parseApiWorkspaceItem as parseSharedApiWorkspaceItem,
+  parseApiWorkspaceList as parseSharedApiWorkspaceList,
+  type ApiItemKind,
+  type ApiWorkspaceItem,
+  type ApiWorkspaceList,
+} from "@/kernel/api/workspaceItems";
 
-export type ApiItemKind = "project" | "script" | "result";
+export type {
+  ApiItemKind,
+  ApiWorkspaceItem,
+  ApiWorkspaceList,
+  ApiThumbnailOrigin,
+  WorkspaceItemStatus,
+  WorkspaceOutcome,
+  WorkspaceOutcomeState,
+} from "@/kernel/api/workspaceItems";
+
 export type ApiKindFilter = "all" | ApiItemKind;
-
-export interface ApiWorkspaceItem {
-  readonly id: string;
-  readonly kind: ApiItemKind;
-  readonly path: string;
-  readonly name: string;
-  readonly projectId?: string;
-  readonly firstSeenAt: string;
-  readonly lastUsedAt: string;
-  readonly useCount: number;
-  readonly pinned: boolean;
-  readonly status: WorkspaceItemStatus;
-  readonly sizeBytes?: number;
-  readonly modifiedAt?: string;
-  /** Kind specific facts; read through the accessors below, never assumed. */
-  readonly meta: Readonly<Record<string, unknown>>;
-  readonly hasThumbnail: boolean;
-  /**
-   * Whose image the thumbnail is. A result folder only ever shows
-   * `source_project`: the stored preview of the project that produced it, not
-   * a render of the result.
-   */
-  readonly thumbnailOrigin?: ApiThumbnailOrigin;
-}
-
-export type ApiThumbnailOrigin = "item" | "source_project";
-const THUMBNAIL_ORIGINS: readonly ApiThumbnailOrigin[] = ["item", "source_project"];
-
-export interface ApiWorkspaceList {
-  readonly items: readonly ApiWorkspaceItem[];
-  readonly outcome: WorkspaceOutcome;
-  /** Items without a usable identity; left out and counted. */
-  readonly skipped: number;
-}
 
 /* ── Details ────────────────────────────────────────────────────────────── */
 
@@ -233,67 +209,27 @@ const invalid = (what: string): WorkspaceHostError =>
   new WorkspaceHostError("invalid_response", `The backend returned an unexpected ${what}.`);
 
 const KINDS: readonly ApiItemKind[] = ["project", "script", "result"];
-const STATUSES: readonly WorkspaceItemStatus[] = ["ready", "missing", "failed", "migrate", "readonly"];
-const OUTCOMES: readonly WorkspaceOutcomeState[] = [
-  "ready",
-  "created",
-  "migrated",
-  "quarantined",
-  "read_only_newer_schema",
-];
 
-/** The item, or null when it lacks the identity a row cannot do without. */
+/** Compatibility export for Start callers; the parser lives in the kernel resource. */
 export function parseApiWorkspaceItem(value: unknown): ApiWorkspaceItem | null {
-  if (!isRecord(value)) return null;
-  const id = typeof value.id === "string" && value.id !== "" ? value.id : undefined;
-  const kind = KINDS.find((k) => k === value.kind);
-  if (!id || !kind || typeof value.path !== "string" || typeof value.name !== "string") return null;
-  return {
-    id,
-    kind,
-    path: value.path,
-    name: value.name,
-    projectId: str(value.project_id),
-    firstSeenAt: str(value.first_seen_at) ?? "",
-    lastUsedAt: str(value.last_used_at) ?? "",
-    useCount: Math.max(0, Math.trunc(num(value.use_count) ?? 0)),
-    pinned: value.pinned === true,
-    status: STATUSES.find((s) => s === value.status) ?? "ready",
-    sizeBytes: num(value.size_bytes),
-    modifiedAt: str(value.modified_at),
-    meta: isRecord(value.meta) ? value.meta : {},
-    hasThumbnail: value.has_thumbnail === true,
-    thumbnailOrigin: THUMBNAIL_ORIGINS.find((origin) => origin === value.thumbnail_origin),
-  };
-}
-
-function parseOutcome(value: unknown): WorkspaceOutcome {
-  if (!isRecord(value)) throw invalid("workspace outcome");
-  const state = OUTCOMES.find((s) => s === value.state);
-  if (!state) throw invalid("workspace outcome state");
-  return { state, detail: str(value.detail) };
+  return parseSharedApiWorkspaceItem(value);
 }
 
 /**
- * The envelope must be right or the whole answer is rejected; a malformed or
- * duplicate item is skipped and counted, so one bad row never hides the rest.
+ * Compatibility export for Start callers. Preserve the historical
+ * `WorkspaceHostError` contract while sharing the parser implementation with
+ * kernel consumers such as the Results browser.
  */
 export function parseApiWorkspaceList(raw: unknown): ApiWorkspaceList {
-  if (!isRecord(raw) || !Array.isArray(raw.items)) throw invalid("workspace list");
-  const outcome = parseOutcome(raw.outcome);
-  const seen = new Set<string>();
-  const items: ApiWorkspaceItem[] = [];
-  let skipped = 0;
-  for (const value of raw.items) {
-    const item = parseApiWorkspaceItem(value);
-    if (!item || seen.has(item.id)) {
-      skipped += 1;
-      continue;
-    }
-    seen.add(item.id);
-    items.push(item);
+  try {
+    return parseSharedApiWorkspaceList(raw);
+  } catch (error) {
+    if (error instanceof WorkspaceHostError) throw error;
+    throw new WorkspaceHostError(
+      "invalid_response",
+      error instanceof Error ? error.message : "The backend returned an unexpected workspace list.",
+    );
   }
-  return { items, outcome, skipped };
 }
 
 function parseLastRun(value: unknown): WorkspaceLastRun | undefined {

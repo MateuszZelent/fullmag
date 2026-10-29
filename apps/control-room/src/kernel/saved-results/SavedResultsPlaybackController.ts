@@ -1,4 +1,5 @@
 export interface SavedResultsPlaybackSelection {
+  browserOnly?: boolean;
   itemId: string;
   name: string;
   stageId: string | null;
@@ -17,7 +18,7 @@ export class SavedResultsPlaybackController {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
   };
-  open(source: Pick<SavedResultsPlaybackSelection, "itemId" | "name">) {
+  open(source: Pick<SavedResultsPlaybackSelection, "itemId" | "name" | "browserOnly">) {
     if (!source.itemId || !source.name) throw new Error("A saved result folder is required.");
     this.publish({ ...source, stageId: null, frameIndex: 0, component: 2, colorLimit: null });
   }

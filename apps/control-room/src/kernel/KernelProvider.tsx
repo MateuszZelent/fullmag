@@ -82,6 +82,7 @@ import { SelectionController } from "./selection/SelectionController";
 import type { KernelApi } from "./types";
 import { ChartViewportHandoffController } from "./visualization/ChartViewportHandoffController";
 import { CameraRegistryController } from "./visualization/CameraRegistryController";
+import { SnapshotVisualizationController } from "./visualization/SnapshotVisualizationController";
 import { AnalysisFieldOverlayController } from "./visualization/AnalysisFieldOverlayController";
 import { ModeCompositionController } from "./visualization/ModeCompositionController";
 import { ANALYSIS_FIELD_OVERLAY_COMMANDS } from "./visualization/analysisFieldOverlayCommandContributions";
@@ -101,6 +102,7 @@ import type { GeometryObjectDraft } from "./authoring/object-edit/objectEditType
 import { PendingFormRegistry } from "./authoring/PendingFormRegistry";
 import { ProjectDocumentController } from "./persistence/ProjectDocumentController";
 import { RunOutcomeConnector } from "./persistence/RunOutcomeConnector";
+import { ResultsBrowserUiController } from "./results-browser/ResultsBrowserUiController";
 import { resolveControlRoomModules } from "@/modules";
 
 installPerformanceMeasureGuard();
@@ -134,6 +136,7 @@ function createKernel(): KernelApi {
     diagnostics,
   });
   const savedResultsPlayback = new SavedResultsPlaybackController();
+  const snapshotVisualizations = new SnapshotVisualizationController();
   const projectDocument = new ProjectDocumentController(api);
   const commands = new CommandRegistry();
   commands.attachSessionScopeSource(
@@ -153,6 +156,7 @@ function createKernel(): KernelApi {
 
   const modules = new ModuleRegistry();
   const resources = new ResourceInvalidationController(bus);
+  const resultsBrowserUi = new ResultsBrowserUiController();
   const authoringHistory = new AuthoringHistoryController(api, resources);
   const objectEditSession = new ObjectEditSessionController<GeometryObjectDraft>();
   const pendingForms = new PendingFormRegistry();
@@ -243,12 +247,19 @@ function createKernel(): KernelApi {
       }
       const transition = await pendingForms.prepareTransition({applyPendingChanges: false});
       try {
-        await api.workspace.playback(input.itemId);
+        const [catalog, playback] = await Promise.allSettled([
+          api.results.catalog({kind: "workspace", itemId: input.itemId}),
+          api.workspace.playback(input.itemId),
+        ]);
+        if (catalog.status === "rejected") throw catalog.reason;
         transition.assertCurrent();
         if (objectEditSession.getSnapshot().dirty) {
           return {status: "failed", message: "Object edits changed while opening saved results."};
         }
-        savedResultsPlayback.open({itemId: input.itemId, name: input.name});
+        snapshotVisualizations.returnToLive();
+        selection.clear("workspace");
+        savedResultsPlayback.open({itemId: input.itemId, name: input.name,
+          ...(playback.status === "rejected" ? {browserOnly: true} : {})});
         homeView.close();
         return {status: "completed", message: "Saved results opened read only."};
       } finally {
@@ -268,6 +279,7 @@ function createKernel(): KernelApi {
   }
 
   return {
+    snapshotVisualizations,
     savedResultsPlayback,
     api,
     analysisFieldOverlay,
@@ -290,6 +302,7 @@ function createKernel(): KernelApi {
     realtime,
     realtimeConnection,
     resources,
+    resultsBrowserUi,
     selection,
     visualization,
     visualizationDebug,

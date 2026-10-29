@@ -1,19 +1,50 @@
 "use client";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type CSSProperties } from "react";
+import type { ComponentRef } from "react";
 import { OrbitControls } from "@react-three/drei";
 import { useThree } from "@react-three/fiber";
-import { BoxGeometry, BufferAttribute, BufferGeometry, Color, DoubleSide, InstancedMesh, Matrix4, MeshBasicMaterial, type Mesh } from "three";
+import { BoxGeometry, BufferAttribute, BufferGeometry, Color, DoubleSide, InstancedMesh, Matrix4, MeshBasicMaterial, Vector3, type Camera, type Mesh } from "three";
 import { useKernel } from "@/kernel/KernelContext";
 import { useSavedResultsPlaybackSelection } from "@/kernel/saved-results/useSavedResultsPlayback";
 import { useSavedResultsFrameResource, useSavedResultsManifestResource, useSavedResultsGeometryResource } from "@/kernel/resources/savedResultsPlaybackResources";
 import { scalarColorPaletteGradientCss } from "@/shared/visualization/scalarColorPalette";
+import { viewport3dStore } from "./viewport3dStore";
 import { Viewport3DCanvas } from "./Viewport3DCanvas";
 import { useBatchedInvalidate } from "./viewport3dBatchedInvalidate";
 import { Viewport3DErrorBoundary } from "./Viewport3DErrorBoundary";
 import { useViewport3DColors } from "./hooks/useViewport3DColors";
 import { savedCameraDistance, savedFrameColors, savedGridGeometry, savedSurfaceGeometry } from "./model/savedResultsPlaybackModel";
+import type { DiagnosticRecorderController } from "@/kernel/performance/diagnostic-recorder/DiagnosticRecorderController";
 
 type Geometry = ReturnType<typeof savedGridGeometry>;
+export type SavedFieldCanvasGeometry = Geometry | ReturnType<typeof savedSurfaceGeometry>;
+type SavedOrbitControlsHandle = ComponentRef<typeof OrbitControls>;
+
+const SAVED_CAMERA_DEFAULT_DIRECTION = new Vector3(0.2, -0.9, 0.8).normalize();
+
+function applySavedCameraPose({
+  camera,
+  controls,
+  direction,
+  geometry,
+  aspect,
+}: {
+  camera: Camera;
+  controls: SavedOrbitControlsHandle | null;
+  direction: Vector3;
+  geometry: SavedFieldCanvasGeometry;
+  aspect: number;
+}): void {
+  const target = new Vector3(...geometry.center);
+  const distance = savedCameraDistance(geometry.size, aspect);
+  camera.position.copy(target).add(direction.clone().normalize().multiplyScalar(distance));
+  camera.lookAt(target);
+  camera.updateMatrixWorld();
+  if (controls) {
+    controls.target.copy(target);
+    controls.update();
+  }
+}
 
 function SavedGridLayer({geometry,colors}: {geometry:Geometry;colors:Float32Array|null}) {
   const invalidate=useBatchedInvalidate("frame-commit");
@@ -85,22 +116,96 @@ function SavedCamera({geometry,frameIndex}: {geometry:Geometry|ReturnType<typeof
   const camera=useThree(state=>state.camera);
   const gl=useThree(state=>state.gl);
   const size=useThree(state=>state.size);
+  const controlsRef=useRef<SavedOrbitControlsHandle>(null);
   const fitted=useRef<typeof geometry|null>(null);
   const report=useCallback(()=>{gl.domElement.setAttribute("data-saved-camera-pose",JSON.stringify({position:camera.position.toArray(),quaternion:camera.quaternion.toArray()}));},[camera,gl]);
-  useLayoutEffect(()=>{
-    if(fitted.current===geometry || size.width<=0 || size.height<=0)return;
-    const distance=savedCameraDistance(geometry.size,size.width/size.height);
-    const directionLength=Math.hypot(0.2,0.9,0.8);
-    const center=geometry.center;
-    camera.position.set(center[0]+distance*0.2/directionLength,center[1]-distance*0.9/directionLength,center[2]+distance*0.8/directionLength);
-    camera.lookAt(...center);
-    camera.updateMatrixWorld();
-    fitted.current=geometry;
+  const resetSavedCamera=useCallback(()=>{
+    if(size.width<=0 || size.height<=0)return;
+    applySavedCameraPose({
+      aspect:size.width/size.height,
+      camera,
+      controls:controlsRef.current,
+      direction:SAVED_CAMERA_DEFAULT_DIRECTION,
+      geometry,
+    });
     report();
     invalidate();
-  },[camera,geometry,invalidate,report,size.width,size.height]);
+  },[camera,geometry,invalidate,report,size.height,size.width]);
+  const fitSavedCamera=useCallback(()=>{
+    if(size.width<=0 || size.height<=0)return;
+    const controls=controlsRef.current;
+    const target=controls?.target ?? new Vector3(...geometry.center);
+    const direction=camera.position.clone().sub(target);
+    if(direction.lengthSq()<=Number.EPSILON) direction.copy(SAVED_CAMERA_DEFAULT_DIRECTION);
+    applySavedCameraPose({
+      aspect:size.width/size.height,
+      camera,
+      controls,
+      direction,
+      geometry,
+    });
+    report();
+    invalidate();
+  },[camera,geometry,invalidate,report,size.height,size.width]);
+  useLayoutEffect(()=>viewport3dStore.registerSavedCameraOwner({fit:fitSavedCamera,reset:resetSavedCamera}),[fitSavedCamera,resetSavedCamera]);
+  useLayoutEffect(()=>{
+    if(fitted.current===geometry || size.width<=0 || size.height<=0)return;
+    resetSavedCamera();
+    fitted.current=geometry;
+  },[geometry,resetSavedCamera,size.height,size.width]);
   useLayoutEffect(()=>{report();},[report,frameIndex]);
-  return <OrbitControls target={geometry.center} makeDefault enableDamping={false} onChange={()=>{report();invalidate();}} />;
+  return <OrbitControls ref={controlsRef} target={geometry.center} makeDefault enableDamping={false} onChange={()=>{report();invalidate();}} />;
+}
+
+export interface SavedFieldCanvasProps {
+  geometry: SavedFieldCanvasGeometry;
+  colors: Float32Array | null;
+  frameIndex: number;
+  diagnosticRecorder: Pick<DiagnosticRecorderController, "record">;
+  className?: string;
+  style?: CSSProperties;
+}
+
+/** Shared saved-field canvas used by both legacy playback and results snapshots. */
+export function SavedFieldCanvas({
+  geometry,
+  colors,
+  frameIndex,
+  diagnosticRecorder,
+  className = "fm-saved-playback-canvas",
+  style,
+}: SavedFieldCanvasProps) {
+  const { colors: viewportColors } = useViewport3DColors();
+  const camera = useMemo(() => {
+    const radius = Math.max(...geometry.size);
+    const center = geometry.center;
+    return {
+      position: [center[0] + radius * 0.2, center[1] - radius * 0.9, center[2] + radius * 0.8] as [number, number, number],
+      near: radius / 10000,
+      far: radius * 100,
+      fov: 45,
+    };
+  }, [geometry]);
+
+  return (
+    <div className={className} style={{ flex: 1, minHeight: 260, position: "relative", ...style }}>
+      <Viewport3DErrorBoundary diagnosticRecorder={diagnosticRecorder}>
+        <Viewport3DCanvas
+          camera={camera}
+          frameloop="demand"
+          gl={{ preserveDrawingBuffer: true, antialias: true }}
+          style={{ background: typeof viewportColors?.background === "string" ? viewportColors.background : "var(--fm-bg-viewport)" }}
+        >
+          <SavedCamera geometry={geometry} frameIndex={frameIndex} />
+          {geometry.kind === "instances" ? (
+            <SavedGridLayer geometry={geometry} colors={colors} />
+          ) : (
+            <SavedSurfaceLayer geometry={geometry} colors={colors} />
+          )}
+        </Viewport3DCanvas>
+      </Viewport3DErrorBoundary>
+    </div>
+  );
 }
 
 export default function SavedResultsPlaybackViewport() {
@@ -118,13 +223,6 @@ export default function SavedResultsPlaybackViewport() {
   },[manifest,mesh.data]);
   const geometry=geometryResult.geometry;
   const presentation=useMemo(()=>frame.data && source && geometry ? savedFrameColors(frame.data,source.component,source.colorLimit,geometry.activeNodes):null,[frame.data,source,geometry]);
-  const {colors}=useViewport3DColors();
-  const camera=useMemo(()=>{
-    if(!geometry) return undefined;
-    const radius=Math.max(...geometry.size);
-    const c=geometry.center;
-    return {position:[c[0]+radius*0.2,c[1]-radius*0.9,c[2]+radius*0.8] as [number,number,number],near:radius/10000,far:radius*100,fov:45};
-  },[geometry]);
   const error=metadata.error?.message ?? geometryResult.error ?? mesh.error?.message ?? frame.error?.message ?? (!stage && manifest ? "This saved stage is unavailable." : null);
   const currentReady=frame.status==="ready" && !error && Boolean(presentation);
   return <section className="fm-saved-playback-viewport" aria-label="Saved simulation 3D"
@@ -134,15 +232,7 @@ export default function SavedResultsPlaybackViewport() {
       {source?.name} · m_{["x","y","z"][source?.component ?? 2]} · {stage ? ((stage.times_s[index] ?? 0)*1e9).toFixed(3) : "—"} ns · {index+1}/{stage?.frame_count ?? "—"}
       {error ? <span role="alert"> · {error}</span> : !currentReady ? " · Loading selected frame…" : null}
     </div>
-    {geometry && camera ? <div className="fm-saved-playback-canvas" style={{flex:1,minHeight:260,position:"relative"}}>
-      <Viewport3DErrorBoundary diagnosticRecorder={kernel.diagnosticRecorder}>
-        <Viewport3DCanvas camera={camera} frameloop="demand" gl={{preserveDrawingBuffer:true,antialias:true}}
-          style={{background:typeof colors?.background === "string" ? colors.background : "var(--fm-bg-viewport)"}}>
-          <SavedCamera geometry={geometry} frameIndex={index}/>
-          {geometry.kind === "instances" ? <SavedGridLayer geometry={geometry} colors={currentReady && presentation ? presentation.colors : null}/> : <SavedSurfaceLayer geometry={geometry} colors={currentReady && presentation ? presentation.colors : null}/>}
-        </Viewport3DCanvas>
-      </Viewport3DErrorBoundary>
-    </div> : null}
+    {geometry ? <SavedFieldCanvas colors={currentReady && presentation ? presentation.colors : null} diagnosticRecorder={kernel.diagnosticRecorder} frameIndex={index} geometry={geometry}/> : null}
     {presentation && currentReady ? <div className="fm-saved-playback-legend" aria-label="Magnetization color scale" style={{padding:"8px 12px",color:"var(--fm-text-primary)"}}>
       −{presentation.limit.toExponential(3)} <span className="fm-saved-playback-gradient" style={{display:"inline-block",width:180,height:12,background:scalarColorPaletteGradientCss("coolwarm")}}/> +{presentation.limit.toExponential(3)} · m_{["x","y","z"][source?.component ?? 2]} [1] · {source?.colorLimit === null ? "automatic per frame" : "fixed scale"} · dimensions in µm
     </div> : null}

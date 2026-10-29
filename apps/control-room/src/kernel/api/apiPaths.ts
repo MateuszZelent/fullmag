@@ -1213,3 +1213,16 @@ export const PLATFORM_COMPUTE_PREVIEW_PATH = openApiV2Path("/v2/platform/compute
 export const PLATFORM_COMPUTE_NODES_PATH = openApiV2Path("/v2/platform/compute/nodes");
 export const PLATFORM_COMPUTE_NODE_PATH = openApiV2Path("/v2/platform/compute/nodes/{node_id}");
 export const PLATFORM_COMPUTE_NODE_POLICY_PATH = openApiV2Path("/v2/platform/compute/nodes/{node_id}/policy");
+
+// Actual result-folder/Zarr resources, shared by live-run and workspace bindings.
+export const DATA_RESULTS_CATALOG_PATH=openApiV2Path("/v2/sessions/current/data/results");
+export const DATA_RESULTS_ARRAY_PATH=openApiV2Path("/v2/sessions/current/data/results/arrays/{array_id}");
+export const DATA_RESULTS_SAMPLE_PATH=openApiV2Path("/v2/sessions/current/data/results/arrays/{array_id}/samples/{sample_index}");
+export const DATA_RESULTS_ENTRY_PATH=openApiV2Path("/v2/sessions/current/data/results/entries/{entry_id}");
+export const WORKSPACE_RESULTS_CATALOG_PATH=openApiV2Path("/v2/workspace/items/{id}/results");
+export const WORKSPACE_RESULTS_ARRAY_PATH=openApiV2Path("/v2/workspace/items/{id}/results/arrays/{array_id}");
+export const WORKSPACE_RESULTS_SAMPLE_PATH=openApiV2Path("/v2/workspace/items/{id}/results/arrays/{array_id}/samples/{sample_index}");
+export const WORKSPACE_RESULTS_ENTRY_PATH=openApiV2Path("/v2/workspace/items/{id}/results/entries/{entry_id}");
+
+export const DATA_RESULTS_GEOMETRY_PATH=openApiV2Path("/v2/sessions/current/data/results/arrays/{array_id}/geometry");
+export const WORKSPACE_RESULTS_GEOMETRY_PATH=openApiV2Path("/v2/workspace/items/{id}/results/arrays/{array_id}/geometry");

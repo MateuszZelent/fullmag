@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PanelImperativeHandle } from "react-resizable-panels";
 import { Button } from "@/shared/ui/Button";
 import { PanelChrome, PanelFrame } from "@/shared/ui/PanelFrame";
@@ -15,6 +15,8 @@ import {
   WORKSPACE_LAYOUT_STORAGE_KEY,
   type WorkspaceColumnLayout,
 } from "./layoutModel";
+import { ResultsOutputExplorer } from "@/modules/results-navigator/public";
+import type { ResultsSource } from "../api/resultsBrowser";
 import { SlotHost } from "./SlotHost";
 import { ViewportTabHost } from "./ViewportTabHost";
 import { useWorkspaceContentScope } from "./WorkspaceContentScope";
@@ -47,6 +49,9 @@ function WorkspaceColumnContent({
   slotId: WorkspaceColumnLayout["slotId"];
 }) {
   const scope = useWorkspaceContentScope();
+  const folderItemId = playbackSelection?.itemId ?? null;
+  const folderSource = useMemo<ResultsSource>(() => folderItemId
+    ? {kind: "workspace", itemId: folderItemId} : {kind: "current"}, [folderItemId]);
   const kernel = useKernel();
   if (slotId === "viewport-main") {
     if (playbackSelection) {
@@ -63,6 +68,8 @@ function WorkspaceColumnContent({
   }
   if (playbackSelection && slotId === "panel-left") {
     return (
+      <>
+      <PanelChrome><span className="fm-panel-chrome__title">Saved folder</span></PanelChrome>
       <section aria-label="Saved result folder summary" className="fm-saved-results-playback__summary" data-saved-results-folder-summary="read-only">
         <h2 className="fm-saved-results-playback__summary-title">Saved result folder</h2>
         <dl className="fm-saved-results-playback__summary-data">
@@ -75,10 +82,12 @@ function WorkspaceColumnContent({
             <dd title={playbackSelection.itemId}>{playbackSelection.itemId}</dd>
           </div>
         </dl>
+        <ResultsOutputExplorer source={folderSource} />
         <p className="fm-saved-results-playback__summary-note">
           Published data is read directly from this folder. The source project is unchanged and no session is started.
         </p>
       </section>
+      </>
     );
   }
   if (scope === "project" && slotId === "panel-left") {
@@ -117,11 +126,12 @@ function SortableWorkspaceColumn({ column, playbackSelection, visible, drawer, d
   )}</SortableItem>;
 }
 
-export function WorkspaceDockLayout() {
+export function WorkspaceDockLayout({ liveDiagnosticsAvailable = true }: { liveDiagnosticsAvailable?: boolean } = {}) {
   const kernel = useKernel();
   const playbackSelection = useSavedResultsPlaybackSelection();
   const playbackOnly = playbackSelection !== null;
   const projectOnly = useWorkspaceContentScope() === "project";
+  const showDiagnostics = !projectOnly && liveDiagnosticsAvailable;
   const panelVisible = useLayoutSelector((layout) => layout.panelVisible);
   const hasAuxViewportModule = !projectOnly && !playbackOnly && kernel.modules.forSlot("viewport-aux").length > 0;
   const [dockState, setDockState] = useState<WorkspaceDockState>({ layout: DEFAULT_WORKSPACE_LAYOUT, restored: false });
@@ -160,9 +170,7 @@ export function WorkspaceDockLayout() {
   }, [dockedPanels, dockState.restored]);
 
   const columns = dockState.layout.columns.filter(column => column.slotId !== "viewport-aux" || hasAuxViewportModule);
-  const visible = (id: string) => playbackOnly && id === "panel-right"
-    ? true
-    : id === "panel-left" ? panelVisible.left : id === "panel-right" ? panelVisible.right : true;
+  const visible = (id: string) => id === "panel-left" ? panelVisible.left : id === "panel-right" ? panelVisible.right : true;
   const isDrawer = (id: string) => id === "panel-right" && windowWidth < 1180 || id === "panel-left" && windowWidth < 760;
   // Explorer and Inspector drawers open together only below 760px; they then split the width.
   const drawersShared = isDrawer("panel-left") && isDrawer("panel-right") && visible("panel-left") && visible("panel-right");
@@ -173,38 +181,37 @@ export function WorkspaceDockLayout() {
   };
   if (!dockState.restored) return <div className="fm-workspace-body" data-dock-hydration-pending="true" id="fm-main-content" tabIndex={-1}>
     {columns.filter(column => visible(column.slotId)).map(column => <div key={column.slotId} className="fm-dock-column"><section className="fm-slot" data-slot-id={column.slotId} aria-label={column.label} aria-busy="true" /></div>)}
-    {!projectOnly && !playbackOnly && panelVisible.bottom ? <div className="fm-workspace-bottom-panel"><section className="fm-slot" data-slot-id="panel-bottom" aria-label="Diagnostics" aria-busy="true" /></div> : null}
+    {showDiagnostics && panelVisible.bottom ? <div className="fm-workspace-bottom-panel"><section className="fm-slot" data-slot-id="panel-bottom" aria-label="Diagnostics" aria-busy="true" /></div> : null}
   </div>;
 
   return <div className="fm-workspace-body" id="fm-main-content" tabIndex={-1}>
-    <ResizablePanelGroup autoSaveId="fullmag-workspace-main:retained-v1" direction="vertical" panelCount={projectOnly || playbackOnly ? 1 : 2}>
+    <ResizablePanelGroup autoSaveId="fullmag-workspace-main:retained-v1" direction="vertical" panelCount={showDiagnostics ? 2 : 1}>
       <ResizablePanel defaultSize="78%" id="workspace-main" minSize="160px">
         <SortableList id="workspace-dock-columns" items={columns.map(column => column.slotId)} onMove={(activeId, overId) => setDockState(current => ({ ...current, layout: moveWorkspaceColumn(current.layout, activeId, overId) }))}>
           <ResizablePanelGroup autoSaveId={`fullmag-workspace-columns:retained-v1:${columns.map(column => column.slotId).join("|")}`} direction="horizontal" panelCount={columns.length}>
             {columns.map((column, index) => <Fragment key={column.slotId}>
-              <ResizablePanel id={column.slotId} defaultSize={column.defaultSize} minSize={column.slotId === "panel-right" ? "240px" : "160px"} maxSize={column.slotId === "panel-right" ? "560px" : column.maxSize} groupResizeBehavior={column.resizeBehavior} collapsible collapsedSize={0} panelRef={handle => { panels.current[column.slotId] = handle; }}>
-                <SortableWorkspaceColumn column={column} playbackSelection={playbackSelection} visible={visible(column.slotId)} drawer={isDrawer(column.slotId)} drawerShared={drawersShared && isDrawer(column.slotId)} onDockChange={onDockChange} onHide={column.slotId === "panel-left" ? () => kernel.layout.setPanelVisible("left", false) : column.slotId === "panel-right" && !playbackOnly ? () => kernel.layout.setPanelVisible("right", false) : undefined} onMove={direction => move(column.slotId, direction)} />
+              <ResizablePanel id={column.slotId} defaultSize={column.defaultSize} minSize={column.slotId === "panel-right" || column.slotId === "panel-left" ? "240px" : "160px"} maxSize={column.slotId === "panel-right" ? "560px" : column.maxSize} groupResizeBehavior={column.resizeBehavior} collapsible collapsedSize={0} panelRef={handle => { panels.current[column.slotId] = handle; }}>
+                <SortableWorkspaceColumn column={column} playbackSelection={playbackSelection} visible={visible(column.slotId)} drawer={isDrawer(column.slotId)} drawerShared={drawersShared && isDrawer(column.slotId)} onDockChange={onDockChange} onHide={column.slotId === "panel-left" ? () => kernel.layout.setPanelVisible("left", false) : column.slotId === "panel-right" ? () => kernel.layout.setPanelVisible("right", false) : undefined} onMove={direction => move(column.slotId, direction)} />
               </ResizablePanel>
               {index < columns.length - 1 ? <ResizableHandle className="fm-resize-handle--vertical" aria-label={`Resize ${column.label} and ${columns[index + 1].label} panels`} onDoubleClick={column.slotId === "panel-right" || columns[index + 1].slotId === "panel-right" ? resetInspectorWidth : undefined} style={dockedPanels[column.slotId] === false || dockedPanels[columns[index + 1].slotId] === false ? { display: "none" } : undefined} /> : null}
             </Fragment>)}
           </ResizablePanelGroup>
         </SortableList>
       </ResizablePanel>
-      {!projectOnly && !playbackOnly ? <>
+      {showDiagnostics ? <>
         <ResizableHandle className="fm-resize-handle--horizontal" aria-label="Resize bottom diagnostics" style={dockedPanels["panel-bottom"] === false ? { display: "none" } : undefined} />
         <ResizablePanel defaultSize={`${dockState.layout.bottomDockDefaultSize}%`} minSize="100px" className="fm-workspace-bottom-panel" id="panel-bottom" collapsible collapsedSize={0} panelRef={handle => { panels.current["panel-bottom"] = handle; }}>
           <PanelFrame id="panel-bottom" title="Diagnostics" visible={panelVisible.bottom} onDockChange={bottomDockChange} onHide={() => kernel.layout.setPanelVisible("bottom", false)}>
+            {playbackOnly ? <p className="m-0 px-3 py-1 text-fm-xs text-fm-muted" data-diagnostics-source="live-session">Live session diagnostics</p> : null}
             <SlotHost slotId="panel-bottom" />
           </PanelFrame>
         </ResizablePanel>
       </> : null}
     </ResizablePanelGroup>
-    {!playbackOnly ? (
-      <div className="fm-panel-restore-bar" aria-label="Restore hidden panels">
-        {!panelVisible.left ? <Button data-restore-panel="panel-left" size="sm" variant="secondary" onClick={() => kernel.layout.setPanelVisible("left", true)}>Restore Explorer</Button> : null}
+    <div className="fm-panel-restore-bar" aria-label="Restore hidden panels">
+        {!panelVisible.left ? <Button data-restore-panel="panel-left" size="sm" variant="secondary" onClick={() => kernel.layout.setPanelVisible("left", true)}>{playbackOnly ? "Restore Saved folder" : "Restore Explorer"}</Button> : null}
         {!panelVisible.right ? <Button data-restore-panel="panel-right" size="sm" variant="secondary" onClick={() => kernel.layout.setPanelVisible("right", true)}>Restore Inspector</Button> : null}
-        {!projectOnly && !panelVisible.bottom ? <Button data-restore-panel="panel-bottom" size="sm" variant="secondary" onClick={() => kernel.layout.setPanelVisible("bottom", true)}>Restore Diagnostics</Button> : null}
-      </div>
-    ) : null}
+        {showDiagnostics && !panelVisible.bottom ? <Button data-restore-panel="panel-bottom" size="sm" variant="secondary" onClick={() => kernel.layout.setPanelVisible("bottom", true)}>Restore Diagnostics</Button> : null}
+    </div>
   </div>;
 }

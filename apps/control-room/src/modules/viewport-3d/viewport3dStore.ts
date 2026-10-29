@@ -62,6 +62,16 @@ export interface Viewport3DCommandState {
 }
 
 type Viewport3DListener = () => void;
+export interface SavedCameraOwner {
+  fit: () => void;
+  reset: () => void;
+}
+
+interface RegisteredSavedCameraOwner {
+  owner: SavedCameraOwner;
+  token: symbol;
+}
+
 export type Viewport3DHslReferenceMode = "auto" | "off" | "on";
 export type Viewport3DCameraProjection = "perspective" | "orthographic";
 export type Viewport3DDimensionFrameDensity = "auto" | "coarse" | "fine";
@@ -222,17 +232,24 @@ class Viewport3DStore {
   private persistedPreferenceRevision = 0;
   private postProcessingDataProtected = false;
   private postProcessingAvailable = true;
+  private savedCameraOwner: RegisteredSavedCameraOwner | null = null;
 
   getSnapshot(): Viewport3DCommandState {
     return this.snapshot;
   }
 
-  requestFit(): void {
+  requestFit(): boolean {
+    if (this.savedCameraOwner) {
+      this.savedCameraOwner.owner.fit();
+      return true;
+    }
+
     this.snapshot = {
       ...this.snapshot,
       fitRevision: this.snapshot.fitRevision + 1,
     };
     this.notify();
+    return false;
   }
 
   requestCapture(): void {
@@ -280,13 +297,32 @@ class Viewport3DStore {
     this.notify();
   }
 
-  resetCamera(): void {
+  resetCamera(): boolean {
+    if (this.savedCameraOwner) {
+      this.savedCameraOwner.owner.reset();
+      return true;
+    }
+
     this.snapshot = {
       ...this.snapshot,
       camera: DEFAULT_VIEWPORT_3D_STATE.camera,
       resetCameraRevision: this.snapshot.resetCameraRevision + 1,
     };
     this.notify();
+    return false;
+  }
+
+  /**
+   * Routes camera commands to the currently mounted saved-results viewport.
+   * The token keeps a stale unmount from clearing a newer owner.
+   */
+  registerSavedCameraOwner(owner: SavedCameraOwner): () => void {
+    const token = Symbol("saved-camera-owner");
+    this.savedCameraOwner = { owner, token };
+    return () => {
+      if (this.savedCameraOwner?.token !== token) return;
+      this.savedCameraOwner = null;
+    };
   }
 
   resetForTest(): void {
@@ -294,6 +330,7 @@ class Viewport3DStore {
     this.persistedPreferenceRevision = 0;
     this.postProcessingDataProtected = false;
     this.postProcessingAvailable = true;
+    this.savedCameraOwner = null;
     this.notify();
   }
 

@@ -30,6 +30,7 @@ import {
 } from "@/kernel/resources/studyRuntimeResources";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import type { ModuleProps } from "@/kernel/types";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/shared/ui/Accordion";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
   analysisResultFieldOverlayAdapter,
@@ -38,6 +39,7 @@ import {
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
 
 import { ResultsNavigatorTree } from "./ResultsNavigatorTree";
+import { ResultsOutputExplorer } from "./ResultsOutputExplorer";
 import { ResultDatasetBrowser } from "./ResultDatasetBrowser";
 import { SavedResultsBrowser } from "./SavedResultsBrowser";
 import { useWorkspaceContentScope } from "@/kernel/layout/WorkspaceContentScope";
@@ -77,6 +79,8 @@ import {
 import {
   kernelSelectionForResultsNavigatorNode,
 } from "./resultsNavigatorSelection";
+
+const CURRENT_RESULTS_SOURCE = Object.freeze({ kind: "current" as const });
 
 function activeStageId(
   activeStageIndex: number | null | undefined,
@@ -738,10 +742,19 @@ function CurrentResultsNavigator({
     <section aria-label="Results" className="fm-results-navigator">
       <header className="fm-results-navigator__header">
         <h2>Results</h2>
-        <span data-status={nodes[0]?.status ?? "missing"}>
-          {nodes[0]?.status ?? "missing"}
-        </span>
       </header>
+      <div aria-label="Results output files" className="fm-results-navigator__output-files">
+        <ResultsOutputExplorer source={CURRENT_RESULTS_SOURCE} watch />
+      </div>
+      <Accordion
+        className="fm-results-navigator__analysis"
+        collapsible
+        defaultValue=""
+        type="single"
+      >
+        <AccordionItem value="analysis">
+          <AccordionTrigger>Modes &amp; analysis</AccordionTrigger>
+          <AccordionContent>
       {resultDatasetBrowserVisible ? (
         <ResultDatasetBrowser
           branchesPage={verifiedResultBranches}
@@ -806,8 +819,7 @@ function CurrentResultsNavigator({
               className="fm-results-navigator__compatibility-status"
               role="status"
             >
-              Typed result index has no published datasets; showing the bounded
-              legacy frequency-domain compatibility view.
+              No analysis datasets are published; showing the available analysis view.
             </p>
           ) : null}
           <ResultsNavigatorTree
@@ -817,6 +829,9 @@ function CurrentResultsNavigator({
           />
         </>
       )}
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
     </section>
   );
 }

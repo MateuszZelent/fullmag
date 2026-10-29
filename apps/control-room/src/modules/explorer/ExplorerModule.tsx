@@ -98,6 +98,7 @@ import {
   useObjectExtensionActivationSnapshot,
 } from "@/kernel/object-extensions/useObjectExtensionActivation";
 import type { ModuleProps } from "@/kernel/types";
+import { ResultsOutputExplorer } from "@/modules/results-navigator/public";
 import { useCrossSectionWorkspaceSelector } from "@/kernel/workspace/useCrossSectionWorkspace";
 import { useQuickChartWorkspaceSelector } from "@/kernel/workspace/useQuickChartWorkspace";
 import { useObservationSourceWorkspaceSelector } from "@/kernel/workspace/useObservationSourceWorkspace";
@@ -108,6 +109,7 @@ import {
   normalizeMeshPipelineStatus,
   resolveMeshBuildStatusLabel,
 } from "@/shared/domain/mesh/buildPipeline";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/shared/ui/Accordion";
 
 import {
   buildExplorerTree,
@@ -157,6 +159,8 @@ import { useAnalysisFieldOverlayResultContext } from "./useAnalysisFieldOverlayR
 
 type TextureLoadNodeRequestedEvent =
   KernelEventMap["explorer:texture-load-node-requested"];
+
+const CURRENT_RESULTS_SOURCE = Object.freeze({ kind: "current" as const });
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -1060,6 +1064,100 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     expandExplorerNodes("model", crossSectionExpansionIds);
   }, [crossSectionExpansionIds]);
 
+  const treeContents = (
+    <>
+      {activeTab === "results" ? (
+        <ResultContextSelector
+          currentRunId={currentRunId}
+          knownRunIds={knownResultContextRunIds}
+          onChange={setExplorerResultContextRunId}
+          selectedRunId={resolvedResultContextRunId}
+        />
+      ) : null}
+      <AnalysisFieldOverlayContextNotice
+        context={analysisFieldOverlayContext}
+        onClear={() => {
+          void kernel.commands.execute(
+            "analysis.frequency-domain.clear-3d-overlay",
+            overlayCommandContext,
+          );
+        }}
+        onRebind={() => {
+          void kernel.commands.execute(
+            "analysis.frequency-domain.rebind-3d-overlay",
+            overlayCommandContext,
+          );
+        }}
+        rebindDisabledReason={rebindDisabledReason}
+      />
+      {/* These controls scope to the semantic analysis tree, never the output folder. */}
+      <div className="fm-explorer-filter-row">
+        <label className="fm-explorer-filter">
+          <Search size={13} aria-hidden="true" className="fm-explorer-filter__search-icon" />
+          <input
+            aria-label={activeTab === "results" ? "Filter analysis results" : "Filter explorer"}
+            value={filterText}
+            onChange={(event) => setExplorerFilterText(event.target.value)}
+            placeholder={activeTab === "results" ? "Filter analysis results..." : "Filter nodes..."}
+            type="search"
+          />
+        </label>
+        <div
+          aria-label={activeTab === "results" ? "Analysis tree actions" : "Explorer tree actions"}
+          className="fm-explorer-toolbar"
+          role="group"
+        >
+          <button
+            className="fm-explorer-toolbar__action"
+            aria-label={activeTab === "results" ? "Expand all analysis nodes" : "Expand all explorer nodes"}
+            title="Expand All"
+            type="button"
+            onClick={() => {
+              expandExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
+            }}
+          >
+            <ChevronsUpDown size={13} aria-hidden="true" />
+          </button>
+          <button
+            className="fm-explorer-toolbar__action"
+            aria-label={activeTab === "results" ? "Collapse all analysis nodes" : "Collapse all explorer nodes"}
+            title="Collapse All"
+            type="button"
+            onClick={() => {
+              collapseExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
+            }}
+          >
+            <ChevronsDownUp size={13} aria-hidden="true" />
+          </button>
+          <button
+            className="fm-explorer-toolbar__action"
+            aria-label={activeTab === "results" ? "Reset analysis filter and expand nodes" : "Reset explorer filter and expand nodes"}
+            title="Reset filter and expand nodes"
+            type="button"
+            onClick={() => {
+              setExplorerFilterText("");
+              expandExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
+            }}
+          >
+            <RefreshCw size={13} aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+      <ExplorerTreeView
+        activeNodeId={selectedNodeId}
+        expandedIds={expandedIds}
+        keyboardRowId={keyboardRow}
+        kernel={kernel}
+        moduleId={moduleId}
+        nodes={nodes}
+        sceneResourceData={
+          modelResource.status === "ready" ? modelResource.data : null
+        }
+        tabId={activeTab}
+      />
+    </>
+  );
+
   return (
     <WorkspaceRenderProfiler id="ExplorerModule">
       <section className="fm-explorer" aria-label="Explorer">
@@ -1068,90 +1166,23 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           onTabChange={setExplorerActiveTab}
         />
         {activeTab === "results" ? (
-          <ResultContextSelector
-            currentRunId={currentRunId}
-            knownRunIds={knownResultContextRunIds}
-            onChange={setExplorerResultContextRunId}
-            selectedRunId={resolvedResultContextRunId}
-          />
-        ) : null}
-        <AnalysisFieldOverlayContextNotice
-          context={analysisFieldOverlayContext}
-          onClear={() => {
-            void kernel.commands.execute(
-              "analysis.frequency-domain.clear-3d-overlay",
-              overlayCommandContext,
-            );
-          }}
-          onRebind={() => {
-            void kernel.commands.execute(
-              "analysis.frequency-domain.rebind-3d-overlay",
-              overlayCommandContext,
-            );
-          }}
-          rebindDisabledReason={rebindDisabledReason}
-        />
-        {/* Tree actions share the filter row instead of a separate footer row. */}
-        <div className="fm-explorer-filter-row">
-          <label className="fm-explorer-filter">
-            <Search size={13} aria-hidden="true" className="fm-explorer-filter__search-icon" />
-            <input
-              aria-label="Filter explorer"
-              value={filterText}
-              onChange={(event) => setExplorerFilterText(event.target.value)}
-              placeholder="Filter nodes..."
-              type="search"
-            />
-          </label>
-          <div aria-label="Explorer tree actions" className="fm-explorer-toolbar" role="group">
-            <button
-              className="fm-explorer-toolbar__action"
-              aria-label="Expand all explorer nodes"
-              title="Expand All"
-              type="button"
-              onClick={() => {
-                expandExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
-              }}
+          <>
+            <div aria-label="Results output files" className="fm-explorer-results-output">
+              <ResultsOutputExplorer source={CURRENT_RESULTS_SOURCE} watch />
+            </div>
+            <Accordion
+              className="fm-explorer-results-analysis"
+              collapsible
+              defaultValue=""
+              type="single"
             >
-              <ChevronsUpDown size={13} aria-hidden="true" />
-            </button>
-            <button
-              className="fm-explorer-toolbar__action"
-              aria-label="Collapse all explorer nodes"
-              title="Collapse All"
-              type="button"
-              onClick={() => {
-                collapseExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
-              }}
-            >
-              <ChevronsDownUp size={13} aria-hidden="true" />
-            </button>
-            <button
-              className="fm-explorer-toolbar__action"
-              aria-label="Reset explorer filter and expand nodes"
-              title="Reset filter and expand nodes"
-              type="button"
-              onClick={() => {
-                setExplorerFilterText("");
-                expandExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
-              }}
-            >
-              <RefreshCw size={13} aria-hidden="true" />
-            </button>
-          </div>
-        </div>
-        <ExplorerTreeView
-          activeNodeId={selectedNodeId}
-          expandedIds={expandedIds}
-          keyboardRowId={keyboardRow}
-          kernel={kernel}
-          moduleId={moduleId}
-          nodes={nodes}
-          sceneResourceData={
-            modelResource.status === "ready" ? modelResource.data : null
-          }
-          tabId={activeTab}
-        />
+              <AccordionItem value="analysis">
+                <AccordionTrigger>Analysis results</AccordionTrigger>
+                <AccordionContent>{treeContents}</AccordionContent>
+              </AccordionItem>
+            </Accordion>
+          </>
+        ) : treeContents}
       </section>
     </WorkspaceRenderProfiler>
   );
