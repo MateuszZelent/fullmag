@@ -96,6 +96,42 @@ def _runtime_relative(path: object) -> str:
     return "runtime-control/runtime-service/" + name
 
 
+def _container_iteration(control, args, previous):
+    """Use only an explicit, successful linked iteration for missing DEV IDs.
+
+    This is historical container identity, not a start-time or ownership proof:
+    the failed resume and the live probe must still authenticate this start.
+    """
+    attempt = getattr(args, "iteration_attempt", None)
+    if attempt is None:
+        return None
+    for key in ("backend_container", "frontend_container"):
+        value = previous.get(key)
+        if value is not None and (not isinstance(value, str) or CONTAINER_RE.fullmatch(value) is None):
+            _fail("Development terminal has an invalid explicit " + key)
+    if all(previous.get(key) is not None for key in ("backend_container", "frontend_container")):
+        _fail("An iteration identity is only needed when the development terminal omitted service IDs")
+    from docker_volume_stop_diagnostic import _validate_resume_terminal
+
+    pin = _validate_resume_terminal(
+        control, attempt, development_attempt=args.attempt,
+        config_sha256=args.config_sha256, previous=previous, phase="iteration",
+    )
+    # Do not adopt a superseded or failed latest iteration merely because a
+    # historical successful receipt still exists in the control volume.
+    current = "iteration/current.json"
+    if _sha256(_read_raw(control, current)) != pin["sha256"]:
+        _fail("The pinned successful iteration is not the current iteration")
+    return {**pin, "current_relative": current}
+
+
+def _verify_container_iteration(control, pin):
+    if pin is not None:
+        for relative in (pin["relative"], pin["current_relative"]):
+            if _sha256(_read_raw(control, relative)) != pin["sha256"]:
+                _fail("Pinned container iteration changed during the bootstrap stop")
+
+
 def _validate_resume(
     control: BuildControl,
     *,
@@ -228,15 +264,23 @@ def _load_pins(args, control: BuildControl, selected: Path) -> dict[str, object]
     _operator_probe_record_from_retained(previous, document)
     _port_matches(document, args.port)
 
+    iteration = _container_iteration(control, args, previous)
+    identity_previous = dict(previous)
+    if iteration is not None:
+        for key in ("backend_container", "frontend_container"):
+            identity_previous[key] = iteration[key]
     resume = _validate_resume(
         control,
         attempt=args.attempt,
         resume_attempt=args.resume_attempt,
         config_sha256=args.config_sha256,
         selected=selected,
-        previous=previous,
+        previous=identity_previous,
         previous_inputs=inputs,
     )
+    if iteration is not None:
+        for key in ("backend_container", "frontend_container"):
+            resume["pin_sources"][key][0] = "explicit succeeded iteration terminal"
     resume_sidecar_relative = "resume/attempts/" + args.resume_attempt + "/process-failure.json"
     sidecar_raw = _control_raw(
         control, resume_sidecar_relative, optional=True, maximum=MAX_EVIDENCE_BYTES
@@ -277,6 +321,7 @@ def _load_pins(args, control: BuildControl, selected: Path) -> dict[str, object]
         "process_raw": process_raw,
         "effective_previous": effective_previous,
         "pin_sources": resume["pin_sources"],
+        "container_iteration": iteration,
     }
 
 
@@ -652,6 +697,7 @@ def _assert_group_consumers(control: BuildControl, operation, ids: Mapping[str, 
 
 def _fingerprint(pins: Mapping[str, object], evidence: Mapping[str, object], image: str, ids: Mapping[str, str], actual) -> tuple[object, ...]:
     return (
+        pins.get("container_iteration"),
         pins["terminal_sha256"], pins["compose_sha256"], pins["resume"]["sha256"],
         pins["resume_sidecar_sha256"], pins["backend_started_at"], pins["image_id"],
         pins["backend_container"], pins["frontend_container"],
@@ -732,6 +778,7 @@ def stop_bootstrap(args: argparse.Namespace) -> dict[str, object]:
         "current_build_commit": initial_evidence["current_build_commit"],
         "current_build_snapshot": initial_evidence["current_build_snapshot"],
         "pin_sources": initial_pins["pin_sources"],
+        "container_iteration": initial_pins["container_iteration"],
         "execution_state": "unknown",
     }
 
@@ -762,6 +809,7 @@ def stop_bootstrap(args: argparse.Namespace) -> dict[str, object]:
             "frontend_container_id": ids["frontend"],
             "backend_started_at": pins["backend_started_at"],
             "pin_sources": pins["pin_sources"],
+            "container_iteration": pins["container_iteration"],
             "runtime_owner_state": "ready-history-preserved",
             "owner_sha256": evidence["owner_sha256"],
             "owner_pids_absent": evidence["owner_pids_absent"],
@@ -849,6 +897,7 @@ def stop_bootstrap(args: argparse.Namespace) -> dict[str, object]:
         if before_comparable != after_comparable:
             _fail("Supervisor changed process evidence beyond the expected unknown API shutdown")
 
+        _verify_container_iteration(control, pins["container_iteration"])
         terminal_raw = _read_raw(control, pins["terminal_relative"])
         resume_raw = _read_raw(control, pins["resume"]["relative"])
         compose_raw = _read_raw(control, pins["compose_relative"])
@@ -882,6 +931,7 @@ def stop_bootstrap(args: argparse.Namespace) -> dict[str, object]:
             "backend_started_at": pins["backend_started_at"],
             "frontend_container_id": ids["frontend"],
             "pin_sources": pins["pin_sources"],
+            "container_iteration": pins["container_iteration"],
             "development_terminal_sha256": pins["terminal_sha256"],
             "resume_terminal_sha256": pins["resume"]["sha256"],
             "compose_sha256": pins["compose_sha256"],

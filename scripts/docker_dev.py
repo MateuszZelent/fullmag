@@ -2703,6 +2703,10 @@ def _parser() -> argparse.ArgumentParser:
     stop_bootstrap.add_argument("--attempt", required=True)
     stop_bootstrap.add_argument("--config-sha256", required=True)
     stop_bootstrap.add_argument("--resume-attempt", required=True)
+    stop_bootstrap.add_argument(
+        "--iteration-attempt",
+        help="exact current successful iteration supplying service IDs omitted by the development terminal; the failed resume still pins the current start",
+    )
     stop_bootstrap.add_argument("--source-root", type=Path, required=True)
     stop_bootstrap.add_argument("--port", type=int, required=True)
     recreate_volume = subparsers.add_parser("recreate-volume", help="Replace exact stopped-backend DEV services while retaining Docker caches")
