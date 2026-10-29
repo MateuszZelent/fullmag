@@ -4,7 +4,7 @@ Data: 2026-10-28, aktualizacja 2026-10-29. Status: **REQUEST CHANGES dla całej 
 
 ## Aktualny stan audytu
 
-Poniższa tabela jest bieżącym podsumowaniem. Szczegółowe ustalenia UX-01–17 poniżej opisują także stan sprzed napraw; ich historyczne brzmienie nie oznacza, że każde pozostaje otwartym defektem.
+Poniższa tabela jest bieżącym podsumowaniem. Szczegółowe ustalenia UX-01–18 poniżej opisują także stan sprzed napraw; ich historyczne brzmienie nie oznacza, że każde pozostaje otwartym defektem.
 
 | Obszar | Aktualny wynik i zakres | Pozostała praca |
 |---|---|---|
@@ -491,3 +491,25 @@ Browser QA `06198ac2247842fcbd9dc1638e9c3931` przeszedł, harness SHA `dffacfde4
 Intercept dotyczył wyłącznie jednego GET próbki o indeksie 4; zwracał kontrolowany HTTP 503. Browser sprawdził stan error dla żądanej próbki, zachowanie poprzedniej klatki indeks 5 i jej prawdziwej współrzędnej 0,10 ns, niezmienioną kamerę i legendę, zachowany canvas, widoczny alert i dostępny przycisk Return to live. Zrzut błędu obejrzano: Requested 0,08 ns jest wyraźnie oddzielone od Displayed 0,10 ns. Po usunięciu interceptu, wyborze poprzednio poprawnej klatki i ponownym wyborze indeksu 4 nastąpił poprawny odczyt; hash bajtów użytych przez UI jest zgodny z niezależnym GET zapisanych danych. Końcowy powrót do Live, kontrola braku mutacji sesji, drafty Object/Airbox i no-session Close results także przeszły.
 
 To kwalifikacja krótkiego błędu odczytu i odzyskania przez ponowny wybór próbki; nie dowód wszystkich błędów, restartu backendu ani automatycznego retry. Return to live w samym stanie error sprawdzono jako dostępny; rzeczywiste kliknięcie powrotu wykonuje dalsza część scenariusza po odzyskaniu odczytu. Przeglądarka używa SwiftShader, bez deklaracji kwalifikacji sprzętowego GPU lub fizyki.
+
+
+## Kontynuacja 29.10 — publikacja przyrostowa i stan oczekiwania (UX-18)
+
+### UX-18 · P1 · Bieżący output nie jest źródłem autosave w czasie runu ani kompletną agregacją wielu etapów
+
+Odczyt źródeł potwierdził dwie granice publikacji. `AcceptedProjectStorage::prepare` ustawia `data_root` na prywatne `temp_dir/data`; writer autosave zapisuje tam próbki. `finish` dopiero po sukcesie kopiuje output do zarezerwowanego leafu i zapisuje finalne receipty. Resolver `workspace_results.rs::resolve_current_results_root` wymaga completed manifest i succeeded output-storage receipt. Usunięcie tych kontroli nie zapewni streamingu: w docelowym folderze nie ma jeszcze próbek. Osobno `artifacts.rs::publish_fem_autosave_playback` publikuje opis geometrii dopiero przy Completed i korzysta z producer-owned danych dla `m`.
+
+Dodatkowy kontrakt wielu etapów: resolver zwraca `current_results_publication_ambiguous`, jeżeli znajdzie więcej niż jeden pasujący opublikowany leaf. Nie należy naprawiać tego wyborem ostatniej nazwy lub katalogu. Użytkownik potrzebuje katalogu całego runu z jednoznaczną tożsamością etapów, attemptów i quantity.
+
+Pełny [kontrakt i kolejność wdrożenia](../plans/active/results-incremental-publication.md) obejmuje publiczny commit próbki, współrzędne i watermark, per-quantity geometry binding, wiele etapów, terminalizację failed/cancelled i przejście live/history. To projekt implementacji oparty na wskazanych źródłach, **nie dowód wdrożonego streamingu**. Numeryki, lease'ów storage i backendowego resolvera w tym checkpointcie nie zmieniono.
+
+Naprawiono natomiast mylący stan UI przed publikacją: tylko dla bieżącego źródła, pustego katalogu i dokładnego błędu HTTP 409 / `current_results_not_published` Explorer Results pokazuje status „Waiting for results publication”. Przy aktywnym watch opisuje odświeżanie widocznego panelu; bez watch wskazuje ręczny Refresh. Terminalny brak publikacji, inny kod/status, folder workspace i nieudane odświeżenie zachowanego katalogu nadal pokazują błąd. Dane nie są zastępowane pozornym pustym sukcesem.
+
+Test red potwierdził dotychczasowy ogólny alert. Po poprawce: Explorer **15/15**, Tree **9/9**, scoped ESLint i typecheck passed w stałym frontendzie 3298. Testy obejmują pojawienie się prawdziwego katalogu po oczekiwaniu, rozróżnienie awarii oraz brak obietnicy pollingu bez watch. Dowód browser jest rejestrowany oddzielnie.
+
+Próba QA `ef4e8ade113a48eabda1b3cb334a99b1` przekroczyła limit obserwacji. Najpierw potwierdzono terminalny exit 1 kontenera przeglądarki, następnie istniejący reconciler z pinami receipt/Compose/IDs zamknął ją jako failed-confirmed, output_lost, NOT VERIFIED. Nie uruchomiono drugiej próby na aktywnej blokadzie ani nie modyfikowano ręcznie receiptów. Odczyt kodu transportu wykazał błąd fixture: mock 409 nie zawierał nagłówków instancji i wersji API. Poprawka testu zachowuje nagłówki z oryginalnej odpowiedzi przez `route.fulfill({response, status, json})`, zgodnie z dokumentacją Playwright; kontrole tożsamości aplikacji pozostają aktywne.
+
+
+Końcowy browser QA tego etapu: `40bedc0a008e409982ffd0c0768a837c`, **passed**, harness SHA `8f787e49319f3625b997949fa8c255f7899a8ca7811edbb38bfd2a040118a5be`, bazowy HEAD `d871a5e090c73ee98bce69ab7383f5732962dc43` plus zmiany checkpointu. [Dowód JSON](2026-10-29-results-publication-state-evidence.json). Oddzielny kontekst przeglądarki wykonał cztery odczyty: kontrolowane waiting, automatyczny kolejny odczyt, terminalną awarię oraz rzeczywisty opublikowany katalog. Alert nie jest używany do oczekiwania, pojawia się dla końcowego błędu i znika po odzyskaniu. Brak mutacji sesji. Zrzut panelu waiting obejrzano — komunikat i Refresh mieszczą się w lewym panelu. Pozostałe asercje pełnego scenariusza (snapshoty, błąd próbki, drafty, Live i no-session) też przeszły.
+
+Zakres dowodu jest jawnie oznaczony jako `browser-availability-fixture-with-real-published-catalog`. Nie uruchamiano solvera w tym etapie i **nie zaliczono testu publikacji autosave przed terminalizacją**. UX-18 w części backendowej pozostaje otwarty; część mylącego komunikatu w UI została naprawiona.

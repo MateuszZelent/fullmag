@@ -20,6 +20,7 @@ export interface ResultsOutputTreeProps {
   catalog: ResultsCatalog | null;
   status: string;
   error: unknown;
+  publicationNotice?: string | null;
   selectedEntryId: string | null;
   onSelect: (entry: ResultsEntry) => void;
   onRefresh: () => void;
@@ -214,6 +215,7 @@ export function ResultsOutputTree({
   catalog,
   status,
   error,
+  publicationNotice = null,
   selectedEntryId,
   onSelect,
   onRefresh,
@@ -440,9 +442,10 @@ export function ResultsOutputTree({
         ) : null}
       </header>
 
+      {publicationNotice ? <p className="m-0 text-fm-xs text-fm-muted" role="status">{publicationNotice}</p> : null}
       {catalogError ? <p className="m-0 text-fm-xs text-fm-danger" role="alert">{catalogError}</p> : null}
-      {isLoading && catalog === null ? <p className="m-0 text-fm-xs text-fm-muted" role="status">Loading saved outputs…</p> : null}
-      {!isLoading && catalog === null && !catalogError ? (
+      {isLoading && catalog === null && !publicationNotice ? <p className="m-0 text-fm-xs text-fm-muted" role="status">Loading saved outputs…</p> : null}
+      {!isLoading && catalog === null && !catalogError && !publicationNotice ? (
         <p className="m-0 text-fm-xs text-fm-muted" role="status">No results catalog is available.</p>
       ) : null}
 

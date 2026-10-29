@@ -824,6 +824,52 @@ try {
   assert.equal(sessionsAfterResponse.status(),200);
   const sessionsAfter=await sessionsAfterResponse.json();
   assert.deepEqual(sessionsAfter.sessions.map(session=>session.id ?? session.session_id).sort(),sessionIdsBefore,"Result browsing changed simulation sessions.");
+  // Qualify publication-state UX with controlled availability responses and
+  // real catalog data. This does not claim an in-progress solver publication.
+  await context.close();
+  context=await browser.newContext({viewport:{width:1500,height:1000},deviceScaleFactor:1,serviceWorkers:"block"});
+  let publicationMode="pending",publicationChecks=0;
+  const publicationWrites=[];
+  await context.route(url=>url.pathname==="/v2/sessions/current/data/results",async route=>{
+    publicationChecks++;
+    if(publicationMode==="published")return route.continue();
+    const code=publicationMode==="pending"?"current_results_not_published":"current_results_publication_missing";
+    // Preserve the real API instance/contract headers; a headerless 409 is an
+    // invalid transport identity, not the publication state under test.
+    const response=await route.fetch();
+    assert.equal(response.status(),200);
+    await route.fulfill({response,status:409,json:{code,message:publicationMode==="pending"?"no canonical accepted output receipt has been published":"Completed run output publication is missing"}});
+  });
+  page=await context.newPage();page.setDefaultTimeout(timeout);
+  page.on("pageerror",error=>errors.push(error.message));
+  page.on("request",request=>{
+    const path=new URL(request.url()).pathname;
+    const observerLease=/^\/v2\/sessions\/current\/clients(?:\/[^/]+)?$/.test(path);
+    const renderAck=request.method()==="POST"&&path==="/v2/sessions/current/visualization/client-acks";
+    if(request.method()!=="GET"&&path.startsWith("/v2/sessions/")&&!observerLease&&!renderAck)publicationWrites.push({method:request.method(),path});
+  });
+  await page.goto(proxy.origin+"/workspace",{waitUntil:"domcontentloaded",timeout});
+  const publicationExplorer=page.getByRole("region",{name:"Explorer",exact:true});
+  await publicationExplorer.getByRole("tab",{name:"Results",exact:true}).click();
+  const publicationTree=publicationExplorer.getByRole("region",{name:"Saved result outputs",exact:true});
+  await publicationTree.getByRole("status").filter({hasText:"Waiting for results publication"}).waitFor({state:"visible"});
+  assert.equal(await publicationTree.getByRole("alert").count(),0,"Expected publication waiting was shown as a failure.");
+  const firstPublicationCheck=publicationChecks;
+  for(let attempt=0;attempt<400&&publicationChecks===firstPublicationCheck;attempt++)await page.waitForTimeout(50);
+  assert(publicationChecks>firstPublicationCheck,"Visible Results did not check for publication again.");
+  const publicationScreenshot=await publicationTree.screenshot({type:"png"});
+  assert(publicationScreenshot.length<=512*1024);
+  publicationMode="missing";
+  await publicationTree.getByRole("alert").filter({hasText:"Completed run output publication is missing"}).waitFor({state:"visible"});
+  assert.equal(await publicationTree.getByText("Waiting for results publication",{exact:false}).count(),0,"A terminal publication failure was hidden as waiting.");
+  publicationMode="published";
+  await publicationTree.locator('[data-entry-id="'+currentEntry.id+'"] > div > [data-entry-select="true"]').waitFor({state:"visible"});
+  assert.equal(await publicationTree.getByRole("alert").count(),0,"Publication success retained an obsolete error.");
+  assert.equal(await publicationTree.getByText("Waiting for results publication",{exact:false}).count(),0);
+  assert.deepEqual(publicationWrites,[],"Publication monitoring attempted a session mutation.");
+  result={...result,publication_waiting_ui_verified:true,publication_failure_distinct_verified:true,publication_catalog_arrival_verified:true,
+    publication_evidence:"browser-availability-fixture-with-real-published-catalog",publication_poll_count:publicationChecks,
+    publication_waiting_screenshot_base64:publicationScreenshot.toString("base64")};
   // Exercise the no-session shell with real saved data and explicitly injected
   // empty session discovery. Preserve the real completed session in the backend.
   await context.close();

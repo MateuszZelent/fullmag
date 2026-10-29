@@ -234,6 +234,7 @@ function ResultsOutputExplorerHost({
     <ResultsOutputExplorerPager
       firstPage={firstPage}
       source={source}
+      watch={watch}
     />
   );
 }
@@ -241,7 +242,8 @@ function ResultsOutputExplorerHost({
 function ResultsOutputExplorerPager({
   firstPage,
   source,
-}: Pick<ResultsOutputExplorerProps, "source"> & {
+  watch,
+}: ResultsOutputExplorerProps & {
   firstPage: ReturnType<typeof useResultsCatalogResource>;
 }) {
   const kernel = useKernel();
@@ -284,6 +286,17 @@ function ResultsOutputExplorerPager({
     ),
     [currentPage, cursor, pages],
   );
+  const catalogError = resource.refreshError ?? resource.error;
+  const awaitingPublication = source.kind === "current" && catalog === null &&
+    catalogError instanceof Error &&
+    "status" in catalogError && catalogError.status === 409 &&
+    "code" in catalogError && catalogError.code === "current_results_not_published";
+  const publicationNotice = awaitingPublication
+    ? "Waiting for results publication. Saved outputs are not available yet. " +
+      (watch
+        ? "This panel checks for published results while it is visible."
+        : "Use Refresh to check for published results.")
+    : null;
   const sessionIdentity = useSessionResourceIdentity();
   const sessionIdentityKey = sessionIdentity
     ? sessionResourceIdentityKey(sessionIdentity)
@@ -438,7 +451,8 @@ function ResultsOutputExplorerPager({
       ) : null}
       <ResultsOutputTree
         catalog={catalog}
-        error={resource.refreshError ?? resource.error}
+        error={awaitingPublication ? null : catalogError}
+        publicationNotice={publicationNotice}
         isHistoricalActive={isHistoricalActive}
         returnActionLabel={sessionIdentity ? "Return to live" : "Close results"}
         onNextPage={nextPage}

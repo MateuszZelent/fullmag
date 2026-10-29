@@ -38,6 +38,7 @@ const fixtures = vi.hoisted(() => {
   const resourceCalls: Array<string | null> = [];
   const pages = new Map<string, ResultsCatalog>();
   let firstPage: ResultsCatalog | null = null;
+  let catalogError: Error | null = null;
   let sessionIdentity: {
     sessionId: string;
     sessionEpoch: string;
@@ -54,11 +55,11 @@ const fixtures = vi.hoisted(() => {
       const data = cursor === null ? firstPage : pages.get(cursor) ?? null;
       return {
         data,
-        error: null,
+        error: catalogError,
         refreshError: null,
         refetch: vi.fn(),
         revision: data?.revision ?? null,
-        status: data ? "ready" : "loading",
+        status: catalogError ? "error" : data ? "ready" : "loading",
       };
     },
   );
@@ -74,6 +75,7 @@ const fixtures = vi.hoisted(() => {
     setSessionIdentity: (identity: typeof sessionIdentity) => {
       sessionIdentity = identity;
     },
+    setError: (error: Error | null) => { catalogError = error; },
     setFirstPage: (catalog: ResultsCatalog | null) => {
       firstPage = catalog;
     },
@@ -192,9 +194,10 @@ function changeInput(input: TestElement, value: string): void {
 async function renderExplorer(
   root: ReturnType<typeof createRoot>,
   renderSource: ResultsSource = source,
+  watch = false,
 ): Promise<void> {
   await act(async () => {
-    root.render(<ResultsOutputExplorer source={renderSource} />);
+    root.render(<ResultsOutputExplorer source={renderSource} watch={watch} />);
   });
 }
 
@@ -203,6 +206,7 @@ describe("ResultsOutputExplorer revision-pinned pagination and selection", () =>
     fixtures.pages.clear();
     fixtures.resourceCalls.length = 0;
     fixtures.setFirstPage(null);
+    fixtures.setError(null);
     fixtures.setSessionIdentity({
       sessionId: "session-1",
       sessionEpoch: "epoch-1",
@@ -212,6 +216,73 @@ describe("ResultsOutputExplorer revision-pinned pagination and selection", () =>
     uiController = new ResultsBrowserUiController();
     fixtures.kernel.resultsBrowserUi = uiController;
     vi.clearAllMocks();
+  });
+
+  it("shows publication waiting as a status and replaces it with the actual catalog", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    fixtures.setError(Object.assign(new Error("no canonical accepted output receipt"), {
+      status: 409, code: "current_results_not_published",
+    }));
+    try {
+      await renderExplorer(root, { kind: "current" }, true);
+      expect(container.textContent).toContain("Waiting for results publication");
+      expect(container.textContent).toContain("This panel checks for published results while it is visible.");
+      expect(findElements(container, el => el.getAttribute("role") === "alert")).toHaveLength(0);
+      expect(container.textContent).not.toContain("No results catalog is available.");
+      fixtures.setError(null);
+      fixtures.setFirstPage(catalog("revision-published", "run-1", [entry("m", "fields/m")]));
+      await renderExplorer(root, { kind: "current" }, true);
+      expect(container.textContent).not.toContain("Waiting for results publication");
+      expect(container.textContent).toContain("m");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("does not promise automatic checks when watch is disabled or hide a stale catalog failure", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    fixtures.setError(Object.assign(new Error("publication changed"), {
+      status: 409, code: "current_results_not_published",
+    }));
+    try {
+      await renderExplorer(root, { kind: "current" });
+      expect(container.textContent).toContain("Use Refresh to check for published results.");
+      expect(container.textContent).not.toContain("while it is visible");
+      fixtures.setFirstPage(catalog("old-revision", "old-run", [entry("m", "fields/m")]));
+      await renderExplorer(root, { kind: "current" }, true);
+      expect(container.textContent).not.toContain("Waiting for results publication");
+      expect(findElements(container, el => el.getAttribute("role") === "alert")).toHaveLength(1);
+      expect(container.textContent).toContain("publication changed");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it.each([
+    { code: "current_results_publication_missing", status: 409, source: { kind: "current" } },
+    { code: "results_run_mismatch", status: 409, source: { kind: "current" } },
+    { code: "current_results_not_published", status: 500, source: { kind: "current" } },
+    { code: "current_results_not_published", status: 409, source: { kind: "workspace", itemId: "1" } },
+  ] as const)("keeps $code/$status failures explicit for $source.kind", async ({code,status,source}) => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    fixtures.setError(Object.assign(new Error("Result catalog cannot be read"), { status, code }));
+    try {
+      await renderExplorer(root, source, true);
+      expect(findElements(container, el => el.getAttribute("role") === "alert")).toHaveLength(1);
+      expect(container.textContent).toContain("Result catalog cannot be read");
+      expect(container.textContent).not.toContain("Waiting for results publication");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
   });
 
   it("retains filter and collapse across a host remount for the exact source, run and session", async () => {
