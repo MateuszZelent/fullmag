@@ -27,6 +27,7 @@ Grupa: `fullmag-worktree-fullmag-033f6660666cdc47`, źródła testów `/opt/full
 - FEM RED: regresja nie przeszła z komunikatem `zero baseline regional Aex variation must remain nodal`. Po poprawce pełne `fullmag-plan --lib`: **624 PASS**.
 - FDM RED: **4 FAIL / 2 PASS**; zarówno AoS, jak i SoA zwracały połowę prawidłowego pola dla drugiej komórki. Po poprawce wszystkie sześć nowych regresji przechodzi.
 - Pełne `fullmag-engine --lib`: **382 PASS, 1 ignored**. Pierwsze uruchomienie ujawniło nieaktualny fixture M2: komórka magnetyczna znajdowała się poza domeną transportu. Fixture skorygowano zgodnie z [kontraktem M2](../physics/0970-spin-hall-drift-diffusion-transport.md); produkcyjny guard pozostaje bez zmian.
+- Workflow `bootstrap`, job `rust-contracts`, jawnie uruchamia nowe regresje FDM i FEM. Dotychczasowe filtrowane wywołania Cargo nie obejmowały ich automatycznie.
 - Bazowy build API miał E0507 w closure ponawiającym publikację skalarów. `std::slice::from_ref(&entry)` zachowuje pożyczkę zamiast przenosić wpis. Zarządzany build `cuda-fem-gpu` po tej poprawce zakończył fazę `make` z kodem 0.
 - Logi: `/build/material-local-fem-red.log`, `/build/material-local-fem-green.log`, `/build/material-local-fdm-red-retry.log`, `/build/material-local-fdm-green-final.log` w zachowanym wolumenie grupy. Pierwszy FDM RED został przerwany wraz z błędem buildu API; nie jest zaliczany jako wynik regresji.
 

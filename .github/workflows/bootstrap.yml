@@ -238,6 +238,11 @@ jobs:
       - name: Run CPU periodic Newell kernel cache regressions
         run: cargo test -p fullmag-engine periodic_newell_kernel_cache_tests --lib
 
+      - name: Run local material coefficient regressions
+        run: |
+          cargo test --locked -p fullmag-engine --lib spatial_ms_anisotropy_tests
+          cargo test --locked -p fullmag-plan --lib fem_aex_field_uniformity_uses_relative_si_tolerance
+
       - name: Run typed active eigen Stop and Pause contracts
         run: |
           cargo test -p fullmag-engine fem_sparse::tests::lobpcg_control_ --lib
