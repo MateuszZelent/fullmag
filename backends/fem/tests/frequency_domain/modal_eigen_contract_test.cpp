@@ -9936,17 +9936,29 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
                       json_member_has_literal(last_probe.c_str(), "\"default_reason\":", "null"),
                   "absent true-probe history keeps its ordinal and reason unavailable");
         }
-        const bool candidate_waits_for_true_probe =
-            contains(hard_ksp_nearest_result.diagnostics_json,
-                     "\"candidate_operator_diagnostic\":{\"schema_version\":\"floquet_candidate_operator_diagnostic.v1\",\"requested\":true") &&
-            contains(hard_ksp_nearest_result.diagnostics_json,
-                     "\"reason\":\"awaiting_true_probe_candidate\"") &&
-            contains(hard_ksp_nearest_result.diagnostics_json,
-                     "\"sample_available\":false") &&
-            contains(hard_ksp_nearest_result.diagnostics_json,
-                     "\"live_pc_observation\":null");
-        check(candidate_waits_for_true_probe,
-              "hard failure keeps candidate measurements explicitly unavailable until a positive true-probe candidate exists");
+        const std::string candidate = json_object_after_key(
+            failure_probe.c_str(), "\"candidate_operator_diagnostic\":");
+        check(contains(candidate.c_str(),
+                       "\"schema_version\":\"floquet_candidate_operator_diagnostic.v1\"") &&
+                  json_member_has_literal(candidate.c_str(), "\"requested\":", "true"),
+              "hard failure preserves the requested candidate diagnostic schema");
+        if (attempts_count > 0.0) {
+            // A later hard error must preserve already captured diagnostic
+            // history; it must not relabel earlier positive callbacks absent.
+            check(json_member_has_literal(candidate.c_str(), "\"sample_available\":", "true") &&
+                      extract_json_number(candidate.c_str(), "\"callback_ordinal\":",
+                          "nearest candidate callback ordinal") ==
+                      extract_json_number(last_probe.c_str(), "\"callback_ordinal\":",
+                          "nearest paired true-probe callback ordinal") &&
+                      !contains(candidate.c_str(), "\"reason\":\"awaiting_true_probe_candidate\"") &&
+                      contains(candidate.c_str(), "\"live_pc_observation\":{\"schema_version\":\"floquet_live_pc_observation.v1\""),
+                  "hard failure retains measured candidate evidence paired with its last positive true-probe callback");
+        } else {
+            check(json_member_has_literal(candidate.c_str(), "\"sample_available\":", "false") &&
+                      contains(candidate.c_str(), "\"reason\":\"awaiting_true_probe_candidate\"") &&
+                      json_member_has_literal(candidate.c_str(), "\"live_pc_observation\":", "null"),
+                  "absent positive true-probe history keeps candidate measurements explicitly unavailable");
+        }
         check(floquet_dense_raw_spectrum_is_consistent(
                   hard_ksp_nearest_result.result_json, false),
               "hard-KSP result preserves the requested cached dense-oracle schema and truthful raw-spectrum availability");

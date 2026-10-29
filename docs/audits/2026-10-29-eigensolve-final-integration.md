@@ -361,3 +361,28 @@ Zachowano error/stop reason, null norms i pozostałe asercje. Brak zmiany solver
 macierzy lub tolerancji. Nowa asercja wymaga ponowienia CTest w GitHub Actions.
 
 [Strukturalny checkpoint i dokładne identyfikatory](2026-10-29-eigensolve-final-integration.evidence.json).
+
+
+## Kolejna obserwacja storage i kontraktu KSP
+
+Świeży pomiar mountów backendu rozdziela `/state` (bind z WSL, około
+6,5 GiB wolnego) od `/build` i runtime-control (named volumes Dockera,
+około 186 GiB wolnego). Fizyczny C: ma około 69 GiB; wolna przestrzeń
+wewnątrz wirtualnego dysku nie gwarantuje możliwości jego dalszego wzrostu.
+Nie ma podstaw do żądania dodatkowych 30 GiB w dystrybucji WSL na build.
+Nie usunięto danych. Odczyt `du` ma odmowy dostępu i nie jest kompletną
+kwalifikacją wyników do retencji; cache uv/pip są jedynie kandydatami.
+
+Native CI 40887820514 nadal ma 20/21 PASS. Jedyny fail wymagał, by candidate
+zawsze był unavailable po hard KSP error. Log zachował jednak poprawną
+obserwację z dodatniego callbacku 20 przed późniejszym MatSolve failure.
+Test sprawdza teraz powiązanie zachowanej próbki z ordinalem ostatniego
+true-probe; unavailable/null dotyczy braku dodatniej historii. Kod produkcji,
+residuale, progi i przerwanie przy hard error pozostają bez zmian. Poprawka
+wymaga kolejnego GitHub Actions; nie ogłaszamy 21/21 przed wynikiem.
+
+Bieżący run Gamma `run-live-ffe91832f1f9a883c7ac8f0b227e89bbed56580f3304d119a6bfdef7734720be`
+ma status running. Rzeczywisty worker PID 29195 zwiększa zużyty czas CPU;
+nie jest to wyłącznie wiszący status API. Nie aktywowano drugiego runu ani
+nie restartowano usług. Dowód 14 operacji R6 pozostaje zachowany wraz z
+nieukończonym jeszcze oczekiwaniem na końcowe wyniki tej generacji.
