@@ -561,6 +561,13 @@ class MagnetHandle:
         layer.m     = fm.texture.uniform(1, 0, 0)
     """
 
+    # Public state consumed by export, plus the dedicated control handles.
+    # Unknown attributes must not appear to configure physics and then vanish.
+    _PUBLIC_ATTRIBUTES = frozenset({
+        "region_name", "Ms", "Aex", "Dind", "Dbulk", "Ku1", "anisU", "Kc1",
+        "mesh", "regions",
+    })
+
     def __init__(
         self,
         shape: object,
@@ -605,6 +612,13 @@ class MagnetHandle:
             owner_state = self.__dict__.get("_owner_state")
             if owner_state is not None:
                 self._assert_active_context()
+            if name not in self._PUBLIC_ATTRIBUTES and not isinstance(
+                getattr(type(self), name, None), property
+            ):
+                raise AttributeError(
+                    f"MagnetHandle does not support attribute {name!r}; "
+                    "use a supported handle property or an explicit Material configuration"
+                )
         object.__setattr__(self, name, value)
 
     def _assert_active_context(self) -> None:
