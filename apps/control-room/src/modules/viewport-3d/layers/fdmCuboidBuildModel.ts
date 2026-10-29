@@ -32,8 +32,8 @@ export interface FdmCuboidInstanceModel {
   matrixContentRevision: string;
   /** Stable checksum of sampled cell membership and instance order. */
   membershipRevision: string;
-  /** Realized numeric region IDs for sampled cells. */
-  regionIds: Uint32Array;
+  /** Realized numeric region IDs, or null for geometry-only previews. */
+  regionIds: Uint32Array | null;
 }
 
 function writeFdmCuboidMatrix(
@@ -758,29 +758,41 @@ export function buildFdmCuboidInstanceModel(
     options.realizedRegionIds,
     totalCells,
   );
-  if (!realizedRegionIds) {
+  if (
+    domain.geometryOnly === true &&
+    (options.cellSelection !== "all" ||
+      options.fieldVector != null ||
+      realizedRegionIds !== null)
+  ) {
+    return null;
+  }
+  const unclassifiedPreview = domain.geometryOnly === true;
+  if (!realizedRegionIds && !unclassifiedPreview) {
     return null;
   }
   const fieldIndexing = options.fieldVector
     ? buildFdmFieldIndexResolver(options.fieldVector, totalCells)
     : null;
-  const displayCellIndices = sampleFdmDisplayCellIndicesWithMinimumMembership({
-    cellSelection: options.cellSelection,
-    displayCellCount: domain.displayCellCount,
-    fieldIndexing,
-    fieldVector: options.fieldVector,
-    realizedRegionIds,
-    threshold,
-    totalCells,
-  });
+  const displayCellIndices = unclassifiedPreview
+    ? sampleFdmDisplayCellIndices(totalCells, domain.displayCellCount)
+    : sampleFdmDisplayCellIndicesWithMinimumMembership({
+        cellSelection: options.cellSelection,
+        displayCellCount: domain.displayCellCount,
+        fieldIndexing,
+        fieldVector: options.fieldVector,
+        realizedRegionIds: realizedRegionIds!,
+        threshold,
+        totalCells,
+      });
   if (displayCellIndices.length <= 0) return null;
   const sampledCellIndices = new Uint32Array(displayCellIndices.length);
   let sampledCellCount = 0;
 
   for (const cellIndex of displayCellIndices) {
-    const isInactive =
-      (realizedRegionIds[cellIndex] ?? FMRM_INACTIVE_REGION_ID) ===
-      FMRM_INACTIVE_REGION_ID;
+    const isInactive = realizedRegionIds
+      ? (realizedRegionIds[cellIndex] ?? FMRM_INACTIVE_REGION_ID) ===
+        FMRM_INACTIVE_REGION_ID
+      : false;
     if (
       (options.cellSelection === "active" && isInactive) ||
       (options.cellSelection === "inactive" && !isInactive)
@@ -807,7 +819,7 @@ export function buildFdmCuboidInstanceModel(
   const centers = new Float32Array(count * 3);
   const matrices = new Float32Array(count * 16);
   const cellIndices = new Uint32Array(count);
-  const sampledRegionIds = new Uint32Array(count);
+  const sampledRegionIds = realizedRegionIds ? new Uint32Array(count) : null;
 
   const cellSize: [number, number, number] = [
     Math.max(dx * fillRatio, 1e-18),
@@ -817,7 +829,9 @@ export function buildFdmCuboidInstanceModel(
   for (let instance = 0; instance < count; instance += 1) {
     const cellIndex = sampledCellIndices[instance] ?? 0;
     cellIndices[instance] = cellIndex;
-    sampledRegionIds[instance] = realizedRegionIds[cellIndex] ?? 0;
+    if (sampledRegionIds) {
+      sampledRegionIds[instance] = realizedRegionIds?.[cellIndex] ?? 0;
+    }
     const ix = cellIndex % nx;
     const iy = Math.floor(cellIndex / nx) % ny;
     const iz = Math.floor(cellIndex / (nx * ny)) % nz;

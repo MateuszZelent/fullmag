@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { FMRM_INACTIVE_REGION_ID } from "@/kernel/api/codecs";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import { buildFdmSampledScalarColors } from "../viewport3dFieldMapping";
+import { resolveFdmCuboidPassPlan } from "./fdmCuboidPasses";
 
 import {
   buildFdmCuboidInstanceModel,
@@ -362,6 +363,31 @@ describe("FDM cuboid realized membership", () => {
 
     expect(model?.cellIndices).toEqual(new Uint32Array([0, 1]));
     expect(model?.regionIds).toEqual(new Uint32Array([0, 0]));
+  });
+
+  it("builds every cell and preserves native extents for a 240x240x4 film", () => {
+    const model = buildFdmDenseNativeLayerInstanceModel({
+      bounds: null,
+      displayCellBudget: 250_000,
+      displayCellCount: 230_400,
+      kind: "fdm-grid",
+      origin: [-120e-9, -120e-9, -4e-9],
+      shape: [240, 240, 4],
+      spacing: [1e-9, 1e-9, 2e-9],
+      stride: 1,
+      totalCells: 230_400,
+    });
+
+    expect(model?.count).toBe(230_400);
+    expect(model?.gridShape).toEqual([240, 240, 4]);
+    expect(model?.cellIndices[0]).toBe(0);
+    expect(model?.cellIndices.at(-1)).toBe(230_399);
+    expect(model?.centers.slice(0, 3)).toEqual(
+      Float32Array.from([-119.5e-9, -119.5e-9, -3e-9]),
+    );
+    expect(model?.centers.slice(-3)).toEqual(
+      Float32Array.from([119.5e-9, 119.5e-9, 3e-9]),
+    );
   });
 
   it("builds a dense native carrier through the worker-safe request contract", () => {
@@ -970,5 +996,66 @@ describe("FDM cuboid realized membership", () => {
       (segments?.[4] ?? 0) - (segments?.[1] ?? 0),
       (segments?.[5] ?? 0) - (segments?.[2] ?? 0),
     )).toBeCloseTo(1.5);
+  });
+
+  it("builds explicit geometry-only all-cell preview without inventing membership", () => {
+    const domain = {
+      bounds: null,
+      displayCellBudget: 4,
+      displayCellCount: 4,
+      geometryOnly: true,
+      kind: "fdm-grid" as const,
+      origin: [0, 0, 0] as [number, number, number],
+      shape: [2, 2, 1] as [number, number, number],
+      spacing: [1e-9, 1e-9, 1e-9] as [number, number, number],
+      stride: 1,
+      totalCells: 4,
+    };
+    const preview = buildFdmCuboidInstanceModel(domain, {
+      cellSelection: "all",
+      fieldVector: null,
+      realizedRegionIds: null,
+      voxelFillRatio: 1,
+      voxelMagnitudeThreshold: 0,
+    });
+
+    expect(preview?.cellIndices).toEqual(new Uint32Array([0, 1, 2, 3]));
+    expect(preview?.centers).toHaveLength(12);
+    expect(preview?.regionIds).toBeNull();
+    expect(
+      buildFdmCuboidInstanceModel(
+        { ...domain, geometryOnly: false },
+        {
+          cellSelection: "all",
+          fieldVector: null,
+          realizedRegionIds: null,
+        },
+      ),
+    ).toBeNull();
+    expect(
+      buildFdmCuboidInstanceModel(domain, {
+        cellSelection: "all",
+        fieldVector: fieldVector([1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0]),
+        realizedRegionIds: null,
+      }),
+    ).toBeNull();
+    expect(
+      resolveFdmCuboidPassPlan({
+        boundsVisible: false,
+        pointsVisible: true,
+        shaderVisible: false,
+        vectorsVisible: false,
+        wireframeVisible: false,
+      }),
+    ).toMatchObject({ hasAnyEffectivePass: true, needsPointGeometry: true });
+    expect(
+      resolveFdmCuboidPassPlan({
+        boundsVisible: false,
+        pointsVisible: false,
+        shaderVisible: false,
+        vectorsVisible: false,
+        wireframeVisible: true,
+      }),
+    ).toMatchObject({ hasAnyEffectivePass: true, needsSurfaceInstances: true });
   });
 });

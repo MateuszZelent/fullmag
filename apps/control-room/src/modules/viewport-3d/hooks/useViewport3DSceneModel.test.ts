@@ -48,6 +48,7 @@ import {
   resolveViewport3DDomainRenderLane,
   hasActiveViewport3DTargetQuantityDemand,
   resolveViewport3DFdmFieldIdentityCompatible,
+  resolveFdmNativeLayerFieldVector,
   resolveViewport3DFieldRenderModelBuildOptions,
   resolveViewport3DSelectedSnapshotId,
   resolveViewport3DSelectedSnapshotQuery,
@@ -592,6 +593,51 @@ describe("FDM Airbox mesh demand", () => {
       "fdmAirboxFieldBuffer && fdmAirboxVectorSegments",
     );
   });
+
+  it("keeps authored Airbox preview geometry independent from unavailable field data", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    const domainAdapterStart = source.indexOf(
+      "const fdmMultilayerAirboxDomain = useMemo(",
+    );
+    const fieldCatalogStart = source.indexOf("const fieldCatalog", domainAdapterStart);
+    const fieldRequestStart = source.indexOf(
+      "const fdmMultilayerAirboxFieldRequest = useMemo(",
+    );
+    const fieldRequestEnd = source.indexOf(
+      "const magneticPartFieldVectors =",
+      fieldRequestStart,
+    );
+    const geometryEntryStart = source.indexOf(
+      "if (fdmMultilayerAirboxDomain && airboxSettings.visible)",
+    );
+    const geometryEntryEnd = source.indexOf("return entries;", geometryEntryStart);
+    const diagnosticStart = source.indexOf(
+      'id: "fdm-multilayer-airbox-field"',
+    );
+    const diagnosticEnd = source.indexOf(
+      'id: "fdm-multilayer-airbox-build"',
+      diagnosticStart,
+    );
+
+    expect(source.slice(domainAdapterStart, fieldCatalogStart)).toContain(
+      "authoredUniverseBounds",
+    );
+    expect(source.slice(fieldRequestStart, fieldRequestEnd)).toContain(
+      "return request ?? EMPTY_FDM_MULTILAYER_AIRBOX_FIELD_REQUEST",
+    );
+    expect(source.slice(fieldRequestStart, fieldRequestEnd)).toContain(
+      "fdmMultilayerAirboxDomain,\n        ),",
+    );
+    expect(source.slice(geometryEntryStart, geometryEntryEnd)).toContain(
+      "fdmMultilayerAirboxDomain.geometryOnly || airboxVectorsOnlyEnabled",
+    );
+    expect(source.slice(diagnosticStart, diagnosticEnd)).toContain(
+      "!fdmMultilayerAirboxDomain?.geometryOnly",
+    );
+    expect(source.slice(diagnosticStart, diagnosticEnd)).toContain(
+      'status:\n        fdmLaneActive && !fdmMultilayerAirboxDomain?.geometryOnly',
+    );
+  });
 });
 const visualizationStateResourceSourceUrl = new URL(
   "../../../kernel/visualization/useVisualizationStateResource.ts",
@@ -754,6 +800,141 @@ function fieldVectorFixture(
     ...overrides,
   };
 }
+
+function nativeLayerFieldDomainFixture() {
+  return {
+    activeCellCount: 8,
+    activeMaskPresent: false,
+    bounds: null,
+    displayCellBudget: 8,
+    displayCellCount: 8,
+    gridFingerprint: "a".repeat(64),
+    inactiveCellCount: 0,
+    kind: "fdm-native-layer" as const,
+    layerId: "film",
+    magnetName: "film",
+    objectId: "object-film",
+    origin: [0, 0, 0] as [number, number, number],
+    shape: [2, 2, 2] as [number, number, number],
+    spacing: [1, 1, 1] as [number, number, number],
+    stride: 1,
+    totalCells: 8,
+    transferKind: "native",
+  };
+}
+
+describe("resolveFdmNativeLayerFieldVector", () => {
+  const domain = nativeLayerFieldDomainFixture();
+
+  it.each(["explicit_node_indices", "sampled_node_indices"] as const)(
+    "accepts native-local fields using %s when the FMVP grid describes only the samples",
+    (indexing) => {
+      const fieldVector = fieldVectorFixture({
+        domainGenerationId: "layout-7",
+        formatVersion: 3,
+        grid: [3, 1, 1],
+        indexing,
+        meshTopologyHash: domain.gridFingerprint,
+        nodeIndices: Uint32Array.from([0, 4, 7]),
+        pointCount: 3,
+        scopeId: domain.layerId,
+        scopeKind: "layer",
+      });
+
+      expect(
+        resolveFdmNativeLayerFieldVector(domain, "layout-7", fieldVector),
+      ).toBe(fieldVector);
+    },
+  );
+
+  it.each([
+    {
+      label: "a different layer scope",
+      overrides: { scopeId: "cylinder", scopeKind: "layer" as const },
+    },
+    {
+      label: "a different carrier fingerprint",
+      overrides: { meshTopologyHash: "b".repeat(64) },
+    },
+    {
+      label: "a different layout generation",
+      overrides: { domainGenerationId: "layout-8" },
+    },
+  ])("rejects sampled fields with $label", ({ overrides }) => {
+    const fieldVector = fieldVectorFixture({
+      domainGenerationId: "layout-7",
+      formatVersion: 3,
+      grid: [2, 1, 1],
+      indexing: "explicit_node_indices",
+      meshTopologyHash: domain.gridFingerprint,
+      nodeIndices: Uint32Array.from([0, 7]),
+      pointCount: 2,
+      scopeId: domain.layerId,
+      scopeKind: "layer",
+      ...overrides,
+    });
+
+    expect(
+      resolveFdmNativeLayerFieldVector(domain, "layout-7", fieldVector),
+    ).toBeNull();
+  });
+
+  it.each([
+    { label: "missing", nodeIndices: null },
+    { label: "out-of-range", nodeIndices: Uint32Array.from([0, 8]) },
+    { label: "duplicated", nodeIndices: Uint32Array.from([0, 0]) },
+  ])("rejects $label native-local sample indices", ({ nodeIndices }) => {
+    const fieldVector = fieldVectorFixture({
+      domainGenerationId: "layout-7",
+      formatVersion: 3,
+      grid: [2, 1, 1],
+      indexing: "sampled_node_indices",
+      meshTopologyHash: domain.gridFingerprint,
+      nodeIndices,
+      pointCount: 2,
+      scopeId: domain.layerId,
+      scopeKind: "layer",
+    });
+
+    expect(
+      resolveFdmNativeLayerFieldVector(domain, "layout-7", fieldVector),
+    ).toBeNull();
+  });
+
+  it("keeps dense native-layer payloads on the exact full-domain shape", () => {
+    const fieldVector = fieldVectorFixture({
+      domainGenerationId: "layout-7",
+      formatVersion: 3,
+      grid: [8, 1, 1],
+      indexing: "full_domain",
+      meshTopologyHash: domain.gridFingerprint,
+      pointCount: domain.totalCells,
+      scopeId: domain.layerId,
+      scopeKind: "layer",
+    });
+
+    expect(
+      resolveFdmNativeLayerFieldVector(domain, "layout-7", fieldVector),
+    ).toBeNull();
+  });
+
+  it("keeps dense native-layer payloads at the full-domain point count", () => {
+    const fieldVector = fieldVectorFixture({
+      domainGenerationId: "layout-7",
+      formatVersion: 3,
+      grid: domain.shape,
+      indexing: "full_domain",
+      meshTopologyHash: domain.gridFingerprint,
+      pointCount: domain.totalCells - 1,
+      scopeId: domain.layerId,
+      scopeKind: "layer",
+    });
+
+    expect(
+      resolveFdmNativeLayerFieldVector(domain, "layout-7", fieldVector),
+    ).toBeNull();
+  });
+});
 
 describe("useViewport3DSceneModel", () => {
   it("surfaces target-vector status only for current resolved-lane demand", () => {

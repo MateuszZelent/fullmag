@@ -39,7 +39,11 @@ import {
   type DomainResourceState,
   type FdmUniverseOutsideMagneticSupport,
 } from "@/shared/domain/mesh/domainPresentation";
-import { resolveFdmDisplaySampling } from "@/shared/domain/mesh/fdmDisplaySampling";
+import {
+  FDM_DISPLAY_CELL_BUDGET,
+  FDM_NATIVE_LAYER_DISPLAY_CELL_BUDGET,
+  resolveFdmDisplaySampling,
+} from "@/shared/domain/mesh/fdmDisplaySampling";
 import type { FdmCuboidInstanceModel } from "./layers/fdmCuboidBuildModel";
 import type { ScalarColorBuffer } from "./viewport3dFieldMapping";
 
@@ -120,6 +124,8 @@ export interface FdmGridRenderDomain {
   bounds: Viewport3DBounds | null;
   displayCellBudget: number;
   displayCellCount: number;
+  /** True only for authored-grid preview geometry with no accepted field carrier. */
+  geometryOnly?: boolean;
   kind: "fdm-grid";
   origin: [number, number, number];
   shape: [number, number, number];
@@ -142,13 +148,15 @@ export interface FdmNativeLayerRenderDomain extends Omit<FdmGridRenderDomain, "k
 }
 
 /**
- * Published target-only FDM multilayer Airbox.  This deliberately has no
- * relationship to the FFT/common-transform grid: it is the grid certified by
- * the Airbox carrier resource itself.
+ * FDM multilayer Airbox geometry. A published carrier is field-capable; a
+ * geometry-only preview is derived from authored Universe bounds and the
+ * shared resolved convolution spacing and must never bind fields.
  */
 export interface FdmMultilayerAirboxRenderDomain extends Omit<FdmGridRenderDomain, "kind"> {
-  carrierFingerprint: string;
+  carrierFingerprint: string | null;
   domainGenerationId: string;
+  geometryOnly: boolean;
+  geometryRevision: string;
   kind: "fdm-multilayer-airbox";
   layoutRevision: number;
   observationRevision: number;
@@ -180,7 +188,7 @@ export interface FdmMultilayerAirboxRenderView {
 
 export function adaptFdmMultilayerNativeLayerDomains(
   layout: FdmMultilayerLayoutResource | null | undefined,
-  displayCellBudget: number,
+  displayCellBudget = FDM_NATIVE_LAYER_DISPLAY_CELL_BUDGET,
 ): FdmNativeLayerRenderDomain[] {
   if (!layout?.available) return [];
   return layout.layers.flatMap((layer) => {
@@ -312,8 +320,26 @@ export function resolveFdmNativeLayerActiveMaskForRendering(
 export function adaptFdmMultilayerAirboxDomain(
   layout: FdmMultilayerLayoutResource | null | undefined,
   displayCellBudget: number,
+  authoredUniverseBounds?: Viewport3DBounds | null,
 ): FdmMultilayerAirboxRenderDomain | null {
-  if (!layout?.available || !layout.airbox?.carrier_available) return null;
+  if (!layout?.available) return null;
+  const publishedCarrier = adaptPublishedFdmMultilayerAirboxDomain(
+    layout,
+    displayCellBudget,
+  );
+  if (publishedCarrier) return publishedCarrier;
+  return adaptFdmMultilayerAirboxGeometryPreview(
+    layout,
+    displayCellBudget,
+    authoredUniverseBounds,
+  );
+}
+
+function adaptPublishedFdmMultilayerAirboxDomain(
+  layout: FdmMultilayerLayoutResource,
+  displayCellBudget: number,
+): FdmMultilayerAirboxRenderDomain | null {
+  if (!layout.airbox?.carrier_available) return null;
   const airbox = layout.airbox;
   const domainGenerationId = safeNonEmptyViewport3DDomainGenerationId(
     layout.domain_generation_id,
@@ -359,9 +385,167 @@ export function adaptFdmMultilayerAirboxDomain(
     displayCellBudget: sampling.budget,
     displayCellCount: sampling.displaySamples,
     domainGenerationId,
+    geometryOnly: false,
+    geometryRevision: `carrier:${carrierFingerprint}`,
     kind: "fdm-multilayer-airbox",
     layoutRevision: layout.layout_revision,
     observationRevision: layout.observation_revision,
+    origin,
+    shape,
+    spacing,
+    stride: sampling.stride,
+    totalCells,
+  };
+}
+
+const FDM_AIRBOX_GEOMETRY_MAX_CELLS = 1_000_000_000;
+const FDM_AIRBOX_GEOMETRY_MAX_ESTIMATED_BYTES = 8 * 1024 ** 3;
+const FDM_AIRBOX_GEOMETRY_ESTIMATED_BYTES_PER_CELL = 256;
+const FDM_AIRBOX_GRID_ROUNDING_EPSILON_MULTIPLIER = 8;
+
+/**
+ * Builds geometry-only preview from authored physical bounds. This mirrors
+ * AirboxObservationTarget::from_study_universe: it never uses FFT scratch
+ * dimensions and does not create a carrier identity or field-ready state.
+ */
+function adaptFdmMultilayerAirboxGeometryPreview(
+  layout: FdmMultilayerLayoutResource,
+  displayCellBudget: number,
+  authoredUniverseBounds: Viewport3DBounds | null | undefined,
+): FdmMultilayerAirboxRenderDomain | null {
+  if (
+    !authoredUniverseBounds ||
+    !Number.isSafeInteger(displayCellBudget) ||
+    displayCellBudget <= 0
+  ) {
+    return null;
+  }
+  const domainGenerationId = safeNonEmptyViewport3DDomainGenerationId(
+    layout.domain_generation_id,
+  );
+  const layoutRevision =
+    Number.isSafeInteger(layout.layout_revision) && layout.layout_revision >= 0
+      ? layout.layout_revision
+      : null;
+  const observationRevision =
+    Number.isSafeInteger(layout.observation_revision) &&
+    layout.observation_revision >= 0
+      ? layout.observation_revision
+      : null;
+  const center = tuple3Finite(authoredUniverseBounds.center);
+  const size = tuple3PositiveFinite(authoredUniverseBounds.size);
+  const firstLayerSpacing = tuple3PositiveFinite(
+    layout.layers[0]?.convolution_cell_size,
+  );
+  if (
+    !domainGenerationId ||
+    layoutRevision === null ||
+    observationRevision === null ||
+    !center ||
+    !size ||
+    !firstLayerSpacing ||
+    layout.layers.length === 0
+  ) {
+    return null;
+  }
+
+  for (const layer of layout.layers) {
+    const layerSpacing = tuple3PositiveFinite(layer.convolution_cell_size);
+    if (
+      !layerSpacing ||
+      layerSpacing.some((spacing, axis) => spacing !== firstLayerSpacing[axis])
+    ) {
+      return null;
+    }
+  }
+
+  const shape: [number, number, number] = [0, 0, 0];
+  const spacing = firstLayerSpacing;
+  const origin: [number, number, number] = [0, 0, 0];
+  for (let axis = 0; axis < 3; axis += 1) {
+    const requestedSize = size[axis]!;
+    const cellSize = spacing[axis]!;
+    const exactCellCount = requestedSize / cellSize;
+    const roundedCellCount = Math.round(exactCellCount);
+    if (
+      !Number.isFinite(exactCellCount) ||
+      !Number.isSafeInteger(roundedCellCount) ||
+      roundedCellCount <= 0 ||
+      roundedCellCount > 0xffff_ffff
+    ) {
+      return null;
+    }
+    const roundedExtent = roundedCellCount * cellSize;
+    const tolerance =
+      FDM_AIRBOX_GRID_ROUNDING_EPSILON_MULTIPLIER *
+      Number.EPSILON *
+      Math.max(
+        Math.abs(requestedSize),
+        Math.abs(roundedExtent),
+        Math.abs(cellSize),
+      );
+    if (
+      !Number.isFinite(roundedExtent) ||
+      !Number.isFinite(tolerance) ||
+      Math.abs(requestedSize - roundedExtent) > tolerance
+    ) {
+      return null;
+    }
+    shape[axis] = roundedCellCount;
+    origin[axis] = center[axis]! - requestedSize / 2;
+    if (!Number.isFinite(origin[axis])) return null;
+  }
+
+  const totalCells = shape[0] * shape[1] * shape[2];
+  const estimatedBytes =
+    totalCells * FDM_AIRBOX_GEOMETRY_ESTIMATED_BYTES_PER_CELL;
+  if (
+    !Number.isSafeInteger(totalCells) ||
+    totalCells <= 0 ||
+    totalCells > FDM_AIRBOX_GEOMETRY_MAX_CELLS ||
+    !Number.isSafeInteger(estimatedBytes) ||
+    estimatedBytes > FDM_AIRBOX_GEOMETRY_MAX_ESTIMATED_BYTES
+  ) {
+    return null;
+  }
+  const boundsSize: [number, number, number] = [
+    shape[0] * spacing[0],
+    shape[1] * spacing[1],
+    shape[2] * spacing[2],
+  ];
+  if (boundsSize.some((extent) => !Number.isFinite(extent) || extent <= 0)) {
+    return null;
+  }
+  const sampling = resolveFdmDisplaySampling(
+    totalCells,
+    Math.min(displayCellBudget, FDM_DISPLAY_CELL_BUDGET),
+  );
+  const geometryRevision = `geometry-only:${JSON.stringify({
+    domainGenerationId,
+    layoutRevision,
+    origin,
+    shape,
+    spacing,
+  })}`;
+  return {
+    bounds: {
+      center: [
+        origin[0] + boundsSize[0] / 2,
+        origin[1] + boundsSize[1] / 2,
+        origin[2] + boundsSize[2] / 2,
+      ],
+      radius: Math.hypot(...boundsSize) / 2,
+      size: boundsSize,
+    },
+    carrierFingerprint: null,
+    displayCellBudget: sampling.budget,
+    displayCellCount: sampling.displaySamples,
+    domainGenerationId,
+    geometryOnly: true,
+    geometryRevision,
+    kind: "fdm-multilayer-airbox",
+    layoutRevision,
+    observationRevision,
     origin,
     shape,
     spacing,

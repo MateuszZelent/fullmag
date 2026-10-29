@@ -1631,7 +1631,7 @@ export function useViewport3DFieldVectorRequest(
           preferCached: cachedBinaryResourceMatchesRevision(
             fieldVectorCache,
             requestKey,
-            resources.getRevision(unscopedRequestKey),
+            resources.getRevision(requestKey),
           ),
           retainCachedOnNotApplicable: true,
           signal,
@@ -1648,7 +1648,7 @@ export function useViewport3DFieldVectorRequest(
         ? null
         : resolveCachedFieldVectorEnvelope(fieldVectorCache, requestKey, data);
     },
-    [api, quantityId, query, requestKey, resources, unscopedRequestKey],
+    [api, quantityId, query, requestKey, resources],
   );
   const resolveRevision = useCallback(
     () => fieldVectorCache.peek(requestKey)?.etag ?? null,
@@ -1656,7 +1656,11 @@ export function useViewport3DFieldVectorRequest(
   );
 
   const resource = useResource({
-    abortStaleInflight: true,
+    // Field revisions can arrive while a binary sample GET is still in flight.
+    // Keep that same-identity read alive; ResourceRuntimeStore coalesces newer
+    // revisions into one throttled follow-up. A changed resource key or last
+    // subscriber release still aborts the old request.
+    abortStaleInflight: false,
     enabled: enabled && sessionIdentity !== null,
     load,
     minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),
