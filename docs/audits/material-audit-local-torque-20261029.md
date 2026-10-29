@@ -32,6 +32,12 @@ Bootstrap uruchamia nowe testy runnera jawnie w kroku regresji lokalnych współ
 
 Nie ma tu twierdzenia o błędnym kroku integracji ani o wykonaniu przestrzennego alpha na CUDA — ta kombinacja pozostaje jawnie blokowana przez planner.
 
+## Weryfikacja integracji z masterem
+
+Pierwszy CI wykonał nowe regresje torque poprawnie, ale ujawnił nieaktualną asercję API membership po równoległym PR #346. Master zintegrowano do brancha zadania w `f4185b5c65ead371ee755abdcb371d1e137bc6c2`. Brak jeszcze nieopublikowanej kopii membership jest według tego kontraktu odpowiedzią 200 z danych planu; istniejąca, sprzeczna kopia nadal powoduje 409. Test uzupełniono o identyfikatory warstwy i obiektu, legendę, liczbę komórek, rewizję, fingerprint oraz binarną maskę `[1,2]`.
+
+Pełny lokalny `router_v2` po integracji: **1181 PASS, 3 ignored**, kod 0. Proces testowy użył stosu 16 MiB i usunął wyłącznie dziedziczone `FULLMAG_RUNTIME_SERVICE_CONFIG` oraz `FULLMAG_WORKSPACE_STATE_DIR`, aby fixture korzystał z własnej konfiguracji i tymczasowej bazy. Środowisko grupy pozostało bez zmian. Log: `/build/material-next-api-router-green.log`.
+
 ## Odrębna niejednoznaczność do dalszego audytu
 
 FDM przy wyłączonej precesji raportuje istniejący znormalizowany tangent residual `-m×(m×B)`, niezależny od alpha. Katalog nazywa torque ilorazem LL torque i gamma0, natomiast [równanie damping-only](../physics/0580-canonical-relaxation-equilibrium-contract.md) zawiera czynnik `alpha/(1+alpha²)`. Test kontrolny utrwala bieżący payload i nie jest dowodem równości z fizycznym RHS/gamma0 w tym trybie. Normalizacja i znaczenie historycznych wyników wymagają osobnego uzgodnienia kontraktu; zmiana ich skali nie należy do naprawy lokalnego tłumienia przy włączonej precesji.
