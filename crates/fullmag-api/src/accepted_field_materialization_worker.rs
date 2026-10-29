@@ -643,7 +643,9 @@ fn publish_terminal_scalar_stats(
         required: false,
         study_output: None,
     };
-    retry_worker_store_writer_busy(|| store.append_artifact_catalog_entries_for_lease(&lease, &[entry]))?;
+    retry_worker_store_writer_busy(|| {
+        store.append_artifact_catalog_entries_for_lease(&lease, std::slice::from_ref(&entry))
+    })?;
     Ok(Some(bytes.len() as u64))
 }
 
