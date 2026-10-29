@@ -163,6 +163,12 @@ class BuildSpaceAdmissionTests(unittest.TestCase):
             fake.events.append("construct")
             return fake
 
+        # The Windows cold-pull guard is a static class check that runs before
+        # any BuildControl instance exists; unsafe permits its assert_ prefix.
+        control_class = mock.MagicMock(side_effect=make_control, unsafe=True)
+        control_class.assert_windows_pre_pull_space.side_effect = (
+            fake.assert_windows_pre_pull_space)
+
         with mock.patch.object(control, "require_host"), \
              mock.patch.object(control, "validate_host_path", return_value=repo), \
              mock.patch.object(control, "local_volume"), \
@@ -171,7 +177,7 @@ class BuildSpaceAdmissionTests(unittest.TestCase):
              mock.patch.object(control, "compose_capture", side_effect=pull) as compose, \
              mock.patch.object(control, "bounded_capture", return_value=subprocess.CompletedProcess(
                  [], 0, json.dumps(MANIFEST).encode(), b"")), \
-             mock.patch.object(control, "BuildControl", side_effect=make_control), \
+             mock.patch.object(control, "BuildControl", control_class), \
              mock.patch.object(storage, "resolve_layout", return_value={"worktree_id": "test"}), \
              mock.patch.object(compose_identity, "compose_project_identity", return_value={
                  "project_name": "fullmag-cache-test"}), \
@@ -343,10 +349,12 @@ class BuildSpaceAdmissionTests(unittest.TestCase):
         fake = FakeControl(receipt=None, events=events, stop_after_prepare=True)
         with self.assertRaises(StopAfterPrepare):
             self._run_toolchain(fake, base_present=False)
-        expected = ["construct"]
+        # Namespace authentication runs a --pull never helper, so the control
+        # is constructed only after the pinned helper image exists.
+        expected = []
         if control.os.name == "nt":
             expected.append("windows-pre-pull")
-        expected.extend(("pull", "prepare", "helper"))
+        expected.extend(("pull", "construct", "prepare", "helper"))
         self.assertEqual(events, expected)
 
     def test_bounded_budget_does_not_start_zero_space_lease(self):
@@ -373,13 +381,12 @@ class BuildSpaceAdmissionTests(unittest.TestCase):
         ])
 
     def test_windows_pre_pull_guard_uses_physical_backing_measurement(self):
-        identity = {"project_name": "fullmag-cache-test", "worktree_id": "test"}
-        with mock.patch("docker_control_namespace.resolve_namespace", return_value=None):
-            instance = control.BuildControl(identity, HELPER)
-        with mock.patch.object(instance, "_windows_backing_volume", return_value={
+        # The guard runs before the helper image exists, hence before any
+        # BuildControl instance can authenticate its namespace.
+        with mock.patch.object(control.BuildControl, "_windows_backing_volume", return_value={
                 "available_bytes": control.MIN_FREE_BUILD_BYTES - 1}):
             with self.assertRaisesRegex(control.BuildControlError, "32 GiB"):
-                instance.assert_windows_pre_pull_space()
+                control.BuildControl.assert_windows_pre_pull_space()
 
     def test_development_keeps_full_32_gib_guard_and_rejects_cache_budget(self):
         identity = {"project_name": "fullmag-cache-test", "worktree_id": "test"}
