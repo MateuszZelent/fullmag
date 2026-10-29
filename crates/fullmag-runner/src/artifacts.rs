@@ -1931,9 +1931,13 @@ fn collect_streamed_provenance_files(
         // Portable playback sidecars are canonical typed payloads. They are
         // deliberately published after execution provenance finalization and
         // must not receive an extra `provenance` member on a resumed run.
+        // The public autosave root also contains storage-owner descriptors and
+        // sample commits; their producers exclusively own these documents.
         if matches!(
             path.file_name().and_then(|name| name.to_str()),
             Some("geometry.json") | Some("playback.json")
+                | Some("run.json") | Some("fullmag-run.json")
+                | Some("output-storage.json") | Some(".fullmag-samples.json")
         ) {
             continue;
         }
@@ -2046,7 +2050,8 @@ fn finalize_provenance_files(
             changed = true;
         }
         if changed {
-            fs::write(path, serde_json::to_vec_pretty(&value)?)?;
+            crate::autosave_zarr::write_json_atomic(path, &value)
+                .map_err(|error| Error::new(ErrorKind::Other, error))?;
         }
     }
     Ok(())

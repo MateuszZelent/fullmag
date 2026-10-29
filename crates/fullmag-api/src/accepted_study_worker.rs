@@ -2970,7 +2970,7 @@ fn execute_accepted_worker_start_with_snapshot(
             None,
             until_seconds,
             &attempt_output_dir,
-            storage.as_ref().map(|value| value.data_root()).unwrap_or(&attempt_output_dir),
+            storage.as_ref().map(|value| value.data_root()).transpose()?.unwrap_or(&attempt_output_dir),
             field_sampling_interval,
             &display_selection,
             interrupt_requested,
@@ -3135,7 +3135,7 @@ fn execute_accepted_closed_loop_worker_start(
             return Ok(AcceptedRunnerExecution {status:RunStatus::Cancelled,completed_step_count:0,outputs:vec![],attempt_output_dir:attempt.clone(),recovered_from_receipt:false,accepted_state_ref:None,observation_source:None,final_step_stats:None});
         }
         let output=StudyOutputPayload {port_id:"inspection".into(),case_id:case_id.into(),codec_id:fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID.into(),codec_version:fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_VERSION.into(),bytes};
-        let root=storage.as_ref().map(|value|value.data_root()).unwrap_or(&attempt);
+        let root=storage.as_ref().map(|value|value.data_root()).transpose()?.unwrap_or(&attempt);
         // One owned framing file; no untrusted payload path is extracted to the filesystem.
         let mut file=OpenOptions::new().write(true).create_new(true).open(root.join("antenna-inspection.bundle"))?;
         file.write_all(&output.bytes)?;file.sync_all()?;drop(file);
@@ -3249,6 +3249,7 @@ fn execute_accepted_fem_worker_start(
             storage
                 .as_ref()
                 .map(|value| value.data_root())
+                .transpose()?
                 .unwrap_or(&attempt_output_dir),
             interrupt_requested,
         )
@@ -3418,7 +3419,7 @@ fn execute_accepted_antenna_worker_start(
         if status == RunStatus::Completed {
             if let Some(storage) = &mut storage {
                 crate::accepted_antenna_inspection_worker::stage_project_output(
-                    storage.data_root(),
+                    storage.data_root()?,
                     &outputs[0].bytes,
                     &prepared.execution_plan,
                 )?;
@@ -3488,6 +3489,7 @@ fn prepare_accepted_project_storage(
         &accepted_step.claim,
         &accepted_step.step_id,
         manifest,
+        attempt,
     ) {
         Ok(storage) => Ok(storage),
         Err(error) => {

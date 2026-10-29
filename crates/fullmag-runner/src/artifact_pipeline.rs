@@ -3079,8 +3079,19 @@ mod tests {
             fallback_occurred: false,
             fallback_reason: None,
         };
+        let owner_documents = ["run.json", "fullmag-run.json", "output-storage.json"];
+        for name in owner_documents {
+            fs::write(autosave_root.join(name), br#"{"owner":"storage"}"#).unwrap();
+        }
+        let commit_path = autosave_root.join("state.zarr/stages/stage_0000_relax/fields/m/.fullmag-samples.json");
+        let committed_before = fs::read(&commit_path).unwrap();
         crate::artifacts::finalize_stage_autosave_provenance(&autosave_root, &resolution)
             .expect("finalize separate stage autosave provenance");
+
+        for name in owner_documents {
+            assert_eq!(fs::read(autosave_root.join(name)).unwrap(), br#"{"owner":"storage"}"#);
+        }
+        assert_eq!(fs::read(commit_path).unwrap(), committed_before);
 
         let root_zattrs: serde_json::Value = serde_json::from_slice(
             &fs::read(autosave_root.join("state.zarr/.zattrs")).expect("read root zattrs"),

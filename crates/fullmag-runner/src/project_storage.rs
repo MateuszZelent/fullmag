@@ -27,6 +27,10 @@ pub struct ProjectStorageLease {
     token: String,
     active_file: Option<File>,
     finished: bool,
+    requested_success: Option<bool>,
+    scratch_cleaned: bool,
+    first_finalization_error: Option<String>,
+    last_finalization_error: Option<String>,
 }
 
 pub fn supported_data_formats() -> Vec<OutputDataFormatIR> {
@@ -117,6 +121,10 @@ impl ProjectStorageLease {
             token,
             active_file: None,
             finished: false,
+            requested_success: None,
+            scratch_cleaned: false,
+            first_finalization_error: None,
+            last_finalization_error: None,
         };
         let active_path = lease.resolved.output_dir.join(ACTIVE_FILE);
         lease.active_file = Some(
@@ -167,21 +175,134 @@ impl ProjectStorageLease {
         &self.resolved
     }
 
+    /// The reserved output belongs to this lease until all writers have joined.
+    /// Only trusted artifact writers may retain this path; it is not a general
+    /// caller-selected destination and must never outlive the lease.
+    pub fn active_output_dir(&self) -> Result<&Path, String> {
+        self.verify_active_identity()?;
+        Ok(&self.resolved.output_dir)
+    }
+
+    /// Publish a new descriptor without exposing partially written JSON or
+    /// replacing an existing file. The name must be a single path component.
+    pub fn publish_descriptor(&self, name: &str, value: &impl Serialize) -> Result<(), String> {
+        if name.is_empty()
+            || Path::new(name).components().count() != 1
+            || !matches!(
+                Path::new(name).components().next(),
+                Some(Component::Normal(_))
+            )
+        {
+            return Err("descriptor name must be one normal path component".into());
+        }
+        let root = self.active_output_dir()?;
+        let temporary = root.join(format!(".descriptor-{}.tmp", uuid::Uuid::new_v4()));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(message)?;
+        let result = (|| {
+            file.write_all(&serde_json::to_vec_pretty(value).map_err(message)?)
+                .map_err(message)?;
+            file.sync_all().map_err(message)?;
+            self.verify_active_identity()?;
+            // Linking is atomic and refuses any existing destination, including
+            // a dangling symlink. Both names are on the reserved filesystem.
+            fs::hard_link(&temporary, root.join(name)).map_err(message)
+        })();
+        drop(file);
+        if self.verify_active_identity().is_ok() {
+            let _ = fs::remove_file(&temporary);
+        }
+        result
+    }
+
     /// Call only when all children/worker handles that use scratch have terminated.
     pub fn finish(&mut self, success: bool) -> Result<(), String> {
+        self.finish_with(success, |_| Ok(()))
+    }
+
+    /// Prepare the terminal storage receipt, then commit the terminal manifest
+    /// while the reservation is still held. Consumers require both documents;
+    /// keeping the manifest callback last prevents a failed receipt/callback
+    /// sequence from looking completed. The requested outcome is immutable for
+    /// the lifetime of this lease. A failed callback or receipt keeps the
+    /// marker in place so a caller can retry the same finalization.
+    pub fn finish_with(
+        &mut self,
+        success: bool,
+        publish_terminal: impl FnOnce(&Path) -> Result<(), String>,
+    ) -> Result<(), String> {
+        if let Some(requested) = self.requested_success {
+            if requested != success {
+                return Err(format!(
+                    "storage lease finalization outcome changed: requested {requested}, received {success}"
+                ));
+            }
+        } else {
+            self.requested_success = Some(success);
+        }
         if self.finished {
             return Err("storage lease is already finalized".into());
         }
-        self.verify_active_identity()?;
+        if let Err(error) = self.verify_active_identity() {
+            return Err(self.record_finalization_error(error));
+        }
         let remove = self.resolved.cleanup == TempCleanupIR::Always
             || (success && self.resolved.cleanup == TempCleanupIR::OnSuccess);
-        if remove {
-            self.clean_private_temp()?;
+        if let Err(error) = self.write_receipt("finalizing", self.scratch_cleaned) {
+            return Err(self.record_finalization_error(error));
         }
-        self.write_receipt(if success { "succeeded" } else { "failed" }, remove)?;
+        if remove && !self.scratch_cleaned {
+            if let Err(error) = self.clean_private_temp() {
+                return Err(self.record_finalization_error(error));
+            }
+            self.scratch_cleaned = true;
+            if let Err(error) = self.write_receipt("finalizing", true) {
+                return Err(self.record_finalization_error(error));
+            }
+        }
+        if let Err(error) = self.verify_active_identity() {
+            return Err(self.record_finalization_error(error));
+        }
+        if let Err(error) = self.write_receipt(
+            if success { "succeeded" } else { "failed" },
+            self.scratch_cleaned,
+        ) {
+            return Err(self.record_finalization_error(error));
+        }
+        if let Err(error) = publish_terminal(&self.resolved.output_dir) {
+            return Err(self.record_finalization_error(error));
+        }
         self.finished = true;
         self.release_active_file();
         Ok(())
+    }
+
+    fn record_finalization_error(&mut self, error: String) -> String {
+        if self.first_finalization_error.is_none() {
+            self.first_finalization_error = Some(error.clone());
+        }
+        self.last_finalization_error = Some(error.clone());
+        let primary = self
+            .first_finalization_error
+            .as_deref()
+            .unwrap_or(error.as_str());
+        let summary = if primary == error {
+            primary.to_owned()
+        } else {
+            format!("initial finalization error: {primary}; subsequent error: {error}")
+        };
+        if let Err(receipt_error) = self.write_receipt("finalization_failed", self.scratch_cleaned)
+        {
+            self.last_finalization_error = Some(receipt_error.clone());
+            format!(
+                "{summary}; could not persist finalization_failed receipt: {receipt_error}; receipt/finalization remains uncertain"
+            )
+        } else {
+            format!("{summary}; finalization remains uncertain")
+        }
     }
 
     fn clean_private_temp(&self) -> Result<(), String> {
@@ -223,6 +344,9 @@ impl ProjectStorageLease {
     }
 
     fn verify_active_identity(&self) -> Result<(), String> {
+        if self.finished || self.active_file.is_none() {
+            return Err("storage lease is not active".into());
+        }
         ensure_no_reparse_ancestors(&self.resolved.output_dir)?;
         if fs::canonicalize(&self.resolved.output_dir).map_err(message)? != self.resolved.output_dir
         {
@@ -241,15 +365,15 @@ impl ProjectStorageLease {
         let receipt = serde_json::json!({
             "schema": "fullmag.output_storage.resolved.v1", "state": state,
             "resolved": self.resolved, "temp_cleaned": cleaned,
+            "requested_success": self.requested_success,
+            "first_finalization_error": self.first_finalization_error,
+            "last_finalization_error": self.last_finalization_error,
         });
         let receipt_path = self.resolved.output_dir.join("output-storage.json");
         if receipt_path.exists() {
             reject_reparse(&receipt_path)?;
         }
-        let mut file = File::create(receipt_path).map_err(message)?;
-        file.write_all(&serde_json::to_vec_pretty(&receipt).map_err(message)?)
-            .map_err(message)?;
-        file.sync_all().map_err(message)
+        crate::autosave_zarr::write_json_atomic(&receipt_path, &receipt)
     }
 
     fn release_active_file(&mut self) {
@@ -268,7 +392,13 @@ impl Drop for ProjectStorageLease {
     fn drop(&mut self) {
         // An interrupted owner preserves scratch for diagnosis/reconciliation.
         // Completion of a process alone does not prove completion of its workers.
-        self.release_active_file();
+        if self.requested_success.is_some() && !self.finished {
+            // Closing the descriptor is safe, but the marker is the durable
+            // evidence that terminal publication is still uncertain.
+            self.active_file.take();
+        } else {
+            self.release_active_file();
+        }
     }
 }
 
@@ -679,4 +809,79 @@ pub(crate) fn open_verified_artifact(root: &Path, relative: &Path) -> Result<Fil
 #[cfg(not(any(unix, windows)))]
 pub(crate) fn open_verified_artifact(_root: &Path, _relative: &Path) -> Result<File, String> {
     Err("verified artifact copy is unsupported on this platform".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    fn reserve(root: &Path) -> ProjectStorageLease {
+        let mut settings = OutputStorageIR::default();
+        let output = root.join("results");
+        let scratch = root.join("scratch");
+        fs::create_dir_all(&output).unwrap();
+        fs::create_dir_all(&scratch).unwrap();
+        settings.output_dir = Some(output.to_string_lossy().into_owned());
+        settings.temp_dir = Some(scratch.to_string_lossy().into_owned());
+        ProjectStorageLease::prepare(&settings, &output, root, "run-test").unwrap()
+    }
+
+    fn receipt(lease: &ProjectStorageLease) -> Value {
+        serde_json::from_slice(
+            &fs::read(lease.resolved().output_dir.join("output-storage.json")).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn failed_terminal_callback_keeps_marker_and_retry_completes_cleanup() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut lease = reserve(dir.path());
+        let output = lease.resolved().output_dir.clone();
+        let scratch = lease.resolved().temp_dir.clone();
+
+        let first = lease.finish_with(true, |_| Err("terminal writer failed".into()));
+        assert!(first.is_err());
+        assert!(!scratch.exists());
+        assert!(output.join(ACTIVE_FILE).exists());
+        let failed = receipt(&lease);
+        assert_eq!(failed["state"], "finalization_failed");
+        assert_eq!(failed["requested_success"], true);
+        assert_eq!(failed["first_finalization_error"], "terminal writer failed");
+        assert_eq!(failed["last_finalization_error"], "terminal writer failed");
+        assert_eq!(failed["temp_cleaned"], true);
+
+        lease
+            .finish_with(true, |dir| {
+                let before_manifest: Value =
+                    serde_json::from_slice(&fs::read(dir.join("output-storage.json")).unwrap())
+                        .unwrap();
+                assert_eq!(before_manifest["state"], "succeeded");
+                Ok(())
+            })
+            .expect("retry should publish the terminal receipt and manifest");
+        let succeeded = receipt(&lease);
+        assert_eq!(succeeded["state"], "succeeded");
+        assert!(!output.join(ACTIVE_FILE).exists());
+    }
+
+    #[test]
+    fn drop_after_failed_finalization_preserves_marker_and_outcome_is_immutable() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = {
+            let mut lease = reserve(dir.path());
+            let output = lease.resolved().output_dir.clone();
+            assert!(lease
+                .finish_with(true, |_| Err("terminal writer failed".into()))
+                .is_err());
+            assert!(lease
+                .finish_with(false, |_| Ok(()))
+                .expect_err("retrying with another outcome must fail")
+                .contains("outcome changed"));
+            assert!(output.join(ACTIVE_FILE).exists());
+            output
+        };
+        assert!(output.join(ACTIVE_FILE).exists());
+    }
 }
