@@ -2394,35 +2394,6 @@ fn has_referenced_material_anisotropy(problem: &ProblemIR) -> bool {
     })
 }
 
-/// Material-scoped conventional DMI must never be lost or promoted across objects.
-/// Current FDM execution represents these coefficients only as global terms.
-fn validate_fdm_material_dmi(problem: &ProblemIR) -> Result<(), PlanError> {
-    for (name, bulk) in [("interfacial", false), ("bulk", true)] {
-        let declared = problem.magnets.iter().filter_map(|magnet| {
-            problem.materials.iter().find(|m| m.name == magnet.material)
-                .map(|m| if bulk { m.bulk_dmi } else { m.interfacial_dmi })
-        }).collect::<Vec<_>>();
-        if !declared.iter().any(Option::is_some) { continue; }
-        let coefficient = declared.first().copied().flatten().unwrap_or(0.0);
-        if declared.iter().any(|d| d.unwrap_or(0.0) != coefficient) {
-            return Err(PlanError { reasons: vec![format!(
-                "per-object {name} material DMI differs between magnets; current FDM requires a uniform global coefficient and cannot promote the first material value"
-            )] });
-        }
-        let global = problem.energy_terms.iter().find_map(|term| match term {
-            EnergyTermIR::InterfacialDmi { d, .. } if !bulk => Some(*d),
-            EnergyTermIR::BulkDmi { d } if bulk => Some(*d),
-            _ => None,
-        }).unwrap_or(0.0);
-        if global != coefficient {
-            return Err(PlanError { reasons: vec![format!(
-                "{name} material DMI is not represented by the FDM global energy term; specify a matching explicit term or remove material DMI"
-            )] });
-        }
-    }
-    Ok(())
-}
-
 /// Resolve a study-level rDMI term onto one complete magnetic object.
 /// An explicit zero preserves the exclusion rather than inheriting global D.
 fn object_rotated_dmi(d: f64, object_ids: Option<&[String]>, magnet: &fullmag_ir::MagnetIR) -> f64 {
@@ -2430,18 +2401,72 @@ fn object_rotated_dmi(d: f64, object_ids: Option<&[String]>, magnet: &fullmag_ir
     if object_ids.is_none_or(|ids| ids.iter().any(|candidate| candidate == id)) { d } else { 0.0 }
 }
 
+fn resolve_multilayer_material_dmi_scalar(
+    problem: &ProblemIR,
+    parameter: &str,
+    material_value: impl Fn(&fullmag_ir::MaterialIR) -> Option<f64>,
+    errors: &mut Vec<String>,
+) -> Option<f64> {
+    let mut first_effective: Option<(&str, f64)> = None;
+    let mut first_authored = None;
+
+    for magnet in &problem.magnets {
+        let Some(material) = problem
+            .materials
+            .iter()
+            .find(|candidate| candidate.name == magnet.material)
+        else {
+            // Missing materials are reported by body lowering below. Do not
+            // create a second error from this scalar-only comparison.
+            continue;
+        };
+
+        let authored = material_value(material);
+        if first_authored.is_none() {
+            first_authored = authored;
+        }
+        let effective = authored.unwrap_or(0.0);
+        if let Some((first_body, first_value)) = first_effective {
+            // There is one D scalar in FdmMultilayerPlanIR. Compare the
+            // effective physical coefficients exactly; missing means zero.
+            if first_value != effective {
+                errors.push(format!(
+                    "multilayer FDM cannot lower material-owned {parameter} to one scalar: body '{first_body}' resolves to {first_value} while body '{}' resolves to {effective}; add an explicit energy term to override the material values",
+                    magnet.name
+                ));
+                return None;
+            }
+        } else {
+            first_effective = Some((magnet.name.as_str(), effective));
+        }
+    }
+
+    // Preserve an authored scalar zero as Some(0), while treating a missing
+    // value as the physical zero only for cross-body compatibility checks.
+    first_authored
+}
+
 pub(crate) fn plan_fdm(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
 ) -> Result<ExecutionPlanIR, PlanError> {
-    validate_fdm_material_dmi(problem)?;
     let mut errors = Vec::new();
     let active_transport_graph =
         crate::spin_transport::resolve_active_fdm_transport_graph(problem)?;
 
+    let first_material = problem.magnets.first().and_then(|magnet| {
+        problem
+            .materials
+            .iter()
+            .find(|candidate| candidate.name == magnet.material)
+    });
+    let material_interfacial_dmi = first_material.and_then(|material| material.interfacial_dmi);
+    let material_bulk_dmi = first_material.and_then(|material| material.bulk_dmi);
+
     let mut enable_exchange = false;
     let mut enable_demag = false;
-    let mut has_bulk_dmi = false;
+    let mut has_interfacial_dmi = material_interfacial_dmi.is_some();
+    let mut has_bulk_dmi = material_bulk_dmi.is_some();
     let mut has_rotated_interfacial_dmi = false;
     let mut has_nonzero_rotated_interfacial_dmi = false;
     let mut external_field = None;
@@ -2490,6 +2515,7 @@ pub(crate) fn plan_fdm(
             EnergyTermIR::InterfacialDmi {
                 interface_normal, ..
             } => {
+                has_interfacial_dmi = true;
                 if interface_normal
                     .is_some_and(|normal| !fdm_supports_interfacial_dmi_normal(normal))
                 {
@@ -2607,13 +2633,7 @@ pub(crate) fn plan_fdm(
                 .to_string(),
         );
     }
-    if has_rotated_interfacial_dmi
-        && (has_bulk_dmi
-            || problem
-                .energy_terms
-                .iter()
-                .any(|term| matches!(term, EnergyTermIR::InterfacialDmi { .. })))
-    {
+    if has_rotated_interfacial_dmi && (has_bulk_dmi || has_interfacial_dmi) {
         errors.push(
             "RotatedInterfacialDmi cannot be combined with InterfacialDmi or BulkDmi until independent native field and energy channels are implemented"
                 .to_string(),
@@ -2734,10 +2754,7 @@ pub(crate) fn plan_fdm(
         enable_demag,
         external_field.is_some() || has_static_field_map,
         enable_oersted,
-        problem
-            .energy_terms
-            .iter()
-            .any(|term| matches!(term, EnergyTermIR::InterfacialDmi { .. })),
+        has_interfacial_dmi,
         has_bulk_dmi,
         has_rotated_interfacial_dmi,
         has_rotated_interfacial_dmi,
@@ -3606,6 +3623,15 @@ pub(crate) fn plan_fdm(
         }
     }
 
+    // Explicit energy terms have already populated these fields and win over
+    // material-owned scalars, including explicit zero coefficients.
+    if fdm_plan.interfacial_dmi.is_none() {
+        fdm_plan.interfacial_dmi = material_interfacial_dmi;
+    }
+    if fdm_plan.bulk_dmi.is_none() {
+        fdm_plan.bulk_dmi = material_bulk_dmi;
+    }
+
     if fdm_plan.boundary_correction.is_some()
         && fdm_plan.boundary_correction.as_deref() != Some("none")
     {
@@ -4306,7 +4332,6 @@ pub(crate) fn plan_fdm_multilayer(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
 ) -> Result<ExecutionPlanIR, PlanError> {
-    validate_fdm_material_dmi(problem)?;
     let mut errors = Vec::new();
     let active_transport_graph =
         crate::spin_transport::resolve_active_fdm_transport_graph(problem)?;
@@ -4450,6 +4475,22 @@ pub(crate) fn plan_fdm_multilayer(
                 ));
             }
         }
+    }
+    if interfacial_dmi.is_none() {
+        interfacial_dmi = resolve_multilayer_material_dmi_scalar(
+            problem,
+            "interfacial_dmi",
+            |material| material.interfacial_dmi,
+            &mut errors,
+        );
+    }
+    if bulk_dmi.is_none() {
+        bulk_dmi = resolve_multilayer_material_dmi_scalar(
+            problem,
+            "bulk_dmi",
+            |material| material.bulk_dmi,
+            &mut errors,
+        );
     }
     let fft = plan_fdm_fft(problem, enable_demag, &mut errors);
     if bulk_dmi.is_some() {

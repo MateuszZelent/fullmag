@@ -217,6 +217,8 @@ const EFFECTIVE_FIELDS = [
   ["airbox_hmin", "Effective minimum element size"],
   ["airbox_growth_rate", "Effective growth rate"],
   ["airbox_grading", "Effective grading"],
+  ["airbox_curvature_factor", "Effective curvature factor"],
+  ["airbox_narrow_region_resolution", "Effective narrow-region resolution"],
   ["padding", "Effective padding"],
   ["size", "Effective size"],
   ["center", "Effective center"],

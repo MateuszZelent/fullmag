@@ -2030,6 +2030,9 @@ fn validate_material_parameter_field(
     field: &MaterialParameterFieldIR,
     errors: &mut Vec<String>,
 ) {
+    if let Err(error) = field.validate_unit(parameter) {
+        errors.push(format!("{path}: {error}"));
+    }
     match field {
         MaterialParameterFieldIR::Constant { value, .. } => {
             if let Some(number) = value.as_f64() {

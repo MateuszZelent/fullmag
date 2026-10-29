@@ -91,8 +91,11 @@ export function draftFromUniverseMeshPolicyResource(
     airboxHmin: readNumberText(config.airbox_hmin),
     configText: formatUniverseMeshPolicyConfig(resource.config),
     syncedConfigText: formatUniverseMeshPolicyConfig(resource.config),
-    curvatureFactor: readNumberText(config.curvature_factor),
-    narrowRegionResolution: readNumberText(config.narrow_region_resolution),
+    // Canonical air keys are prefixed; the unprefixed aliases come from older drafts.
+    curvatureFactor: readNumberText(config.airbox_curvature_factor ?? config.curvature_factor),
+    narrowRegionResolution: readNumberText(
+      config.airbox_narrow_region_resolution ?? config.narrow_region_resolution,
+    ),
     paddingX: readVec3Component(config.padding, 0),
     paddingY: readVec3Component(config.padding, 1),
     paddingZ: readVec3Component(config.padding, 2),
@@ -371,14 +374,16 @@ function buildAirboxMeshPolicyFormRequest(
       "Curvature factor",
     );
     if (!curvature.ok) return { error: curvature.error };
-    applyOptionalNumber(config, "curvature_factor", curvature.value);
+    delete config.curvature_factor;
+    applyOptionalNumber(config, "airbox_curvature_factor", curvature.value);
 
     const narrowRegion = parsePositiveNumber(
       draft.narrowRegionResolution,
       "Resolution of narrow regions",
     );
     if (!narrowRegion.ok) return { error: narrowRegion.error };
-    applyOptionalNumber(config, "narrow_region_resolution", narrowRegion.value);
+    delete config.narrow_region_resolution;
+    applyOptionalNumber(config, "airbox_narrow_region_resolution", narrowRegion.value);
   }
 
   // Airbox mode
@@ -438,6 +443,8 @@ const FEM_ONLY_POLICY_KEYS = [
   "airbox_growth_rate",
   "airbox_hmax",
   "airbox_hmin",
+  "airbox_curvature_factor",
+  "airbox_narrow_region_resolution",
   "curvature_factor",
   "narrow_region_resolution",
 ] as const;

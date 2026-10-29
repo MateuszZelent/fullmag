@@ -13844,8 +13844,22 @@ export interface components {
             stage_id: string;
             times_s: number[];
         };
+        /**
+         * @description Process-authenticated source of the single current scalar observation.
+         *     Absent for historical, imported, or unqualified rows.
+         */
+        ScalarObservationSource: {
+            request_scope_epoch: string;
+            run_id: string;
+            /** Format: int64 */
+            scalar_revision: number;
+            session_id: string;
+            /** Format: int64 */
+            source_step: number;
+        };
         ScalarWindow: {
             columns: string[];
+            current_observation?: null | components["schemas"]["ScalarObservationSource"];
             observation_frames: components["schemas"]["AcceptedObservationFrameRef"][];
             /** Format: int64 */
             returned_rows: number;

@@ -41,6 +41,9 @@ const expectedLiveFieldSetting = process.env.CONTROL_ROOM_BROWSER_QA_EXPECT_LIVE
 const expectedLiveField = expectedLiveFieldSetting ? expectedLiveFieldSetting : null;
 const expectAirboxVectorsSetting = process.env.CONTROL_ROOM_BROWSER_QA_EXPECT_AIRBOX_VECTORS ?? "0";
 const expectAirboxVectors = expectAirboxVectorsSetting === "1";
+const expectFemAirboxVectorsSetting = process.env.CONTROL_ROOM_BROWSER_QA_EXPECT_FEM_AIRBOX_VECTORS;
+const expectFemAirboxVectors = expectFemAirboxVectorsSetting === "1";
+const scenarioSetting = process.env.CONTROL_ROOM_BROWSER_QA_SCENARIO ?? "standard";
 const expectAmbiguousComputeFieldsSetting =
   process.env.CONTROL_ROOM_BROWSER_QA_EXPECT_AMBIGUOUS_COMPUTE_FIELDS ?? "0";
 const expectAmbiguousComputeFields = expectAmbiguousComputeFieldsSetting === "1";
@@ -68,6 +71,9 @@ const requestCancellations = [];
 const expectedResponseDrops = [];
 const intentionalResponseDropRequests = new WeakSet();
 const resourceResponses = [];
+const femAirboxVectorResponses = [];
+const blockedMutations = [];
+let displayPatchRequestCount = 0;
 const httpErrors = [];
 let harnessSourceHashes = null;
 let failurePageState = null;
@@ -117,6 +123,46 @@ const sessionIdentity = async (page) => {
     session_epoch: session.session_epoch,
     request_scope_epoch: session.request_scope_epoch,
   };
+};
+
+const activeFemRunIdentity = async (page) => {
+  const endpoint = new URL("/v2/sessions/current/status", page.url()).toString();
+  const response = await page.request.get(endpoint, { timeout });
+  if (response.status() !== 200) {
+    throw new Error(`GET /v2/sessions/current/status returned ${response.status()}`);
+  }
+  const body = await response.json();
+  const session = body?.session;
+  const runId = body?.run?.run_id;
+  const lifecycle = body?.lifecycle;
+  const discretization = body?.capabilities?.active_lane?.resolved?.discretization;
+  for (const key of ["session_id", "session_epoch", "request_scope_epoch"]) {
+    if (typeof session?.[key] !== "string" || session[key].trim() === "") {
+      throw new Error(`Current status response omitted session.${key}`);
+    }
+  }
+  if (lifecycle?.session_resource !== "active") {
+    throw new Error("Current status response did not identify an active session resource");
+  }
+  if (typeof runId !== "string" || runId.trim() === "") {
+    throw new Error("Current status response did not identify a current run");
+  }
+  if (typeof discretization !== "string" || discretization.trim().toLowerCase() !== "fem") {
+    throw new Error("FEM Airbox vector proof requires an explicitly resolved FEM session lane");
+  }
+  return {
+    session_id: session.session_id,
+    session_epoch: session.session_epoch,
+    request_scope_epoch: session.request_scope_epoch,
+    run_id: runId,
+    discretization: "fem",
+  };
+};
+
+const assertStableFemRunIdentity = (before, after, phase) => {
+  if (JSON.stringify(before) !== JSON.stringify(after)) {
+    throw new Error(`FEM Airbox proof changed the active session/run identity ${phase}`);
+  }
 };
 
 const canvasState = async (page) => page.locator(".fm-viewport-3d canvas").first().evaluate((canvas) => {
@@ -217,6 +263,254 @@ const waitForLiveField = async (page, quantityId, requireAirboxVectors) => {
     throw new Error("FDM-only airbox-vector gate unavailable: viewport exposes no FDM domain/model dataset; FEM has no corresponding airbox-vector dataset");
   }
   return observed;
+};
+
+const readFemAirboxDebugDom = () => {
+  const panel = document.querySelector(".fm-visualization-debug-panel");
+  if (!panel) return false;
+  const health = panel.querySelector(".fm-visualization-debug-health");
+  if (health?.getAttribute("data-disposition") !== "ready" ||
+      panel.querySelector('.fm-inspector-feedback[role="alert"]')) return false;
+  const fieldRows = (container) => [...container.querySelectorAll(".fm-inspector-field-row")]
+    .map((row) => ({
+      label: row.querySelector(".fm-inspector-field-row__label")?.textContent?.trim() ?? "",
+      value: row.querySelector(".fm-inspector-field-row__value")?.textContent?.trim() ?? "",
+    }));
+  const group = (title) => [...panel.querySelectorAll('[data-slot="inspector-group"]')]
+    .find((candidate) => candidate.querySelector("h3")?.textContent?.trim() === title) ?? null;
+  const groupRows = (title) => {
+    const selected = group(title);
+    return selected ? fieldRows(selected) : [];
+  };
+  const rowValue = (rows, label) => rows.find((row) => row.label === label)?.value ?? null;
+  const subsections = (title) => {
+    const selected = group(title);
+    return selected ? [...selected.querySelectorAll(".fm-visualization-debug-subsection")].map((section) => ({
+      carrier_id: section.querySelector("h4")?.textContent?.trim() ?? "",
+      rows: fieldRows(section),
+    })) : [];
+  };
+  const targetRows = groupRows("Active target");
+  if (rowValue(targetRows, "Selection kind") !== "airbox.visualization.debug" ||
+      rowValue(targetRows, "Target kind") !== "airbox" ||
+      rowValue(targetRows, "Target ID") !== "airbox") return false;
+  const requests = subsections("Request & transport");
+  const renders = subsections("Render passes");
+  const payloads = subsections("Decoded payload");
+  const resources = subsections("Viewport & carriers");
+  for (const request of requests) {
+    const resourceKey = rowValue(request.rows, "Canonical resource key");
+    const component = rowValue(request.rows, "Requested component");
+    if (!resourceKey || component !== "full" || !request.carrier_id) continue;
+    let url;
+    try {
+      url = new URL(resourceKey, "http://fullmag.invalid");
+    } catch {
+      continue;
+    }
+    const scopeId = url.searchParams.get("scope_id");
+    if (url.pathname !== "/v2/sessions/current/data/fields/H_demag/samples/vector" ||
+        url.searchParams.get("component") !== "full" ||
+        url.searchParams.get("scope_kind") !== "airbox" ||
+        !scopeId || scopeId.trim() === "") continue;
+    const render = renders.find((candidate) => candidate.carrier_id === request.carrier_id &&
+      rowValue(candidate.rows, "Vector source") === resourceKey);
+    const payload = payloads.find((candidate) => candidate.carrier_id === request.carrier_id &&
+      rowValue(candidate.rows, "Scope") === `airbox:${scopeId}`);
+    const resource = resources.find((candidate) => candidate.carrier_id === request.carrier_id);
+    if (!render || !payload || !resource) continue;
+    const fieldResourceState = rowValue(resource.rows, "Field resource") ?? "";
+    if (!fieldResourceState.startsWith("ready · data present · last-valid present")) continue;
+    const fieldBuffer = rowValue(render.rows, "Vector field buffer") ?? "";
+    const [fieldBufferState, ...fieldBufferIdParts] = fieldBuffer.split(" · ");
+    const fieldBufferId = fieldBufferIdParts.join(" · ").trim();
+    if (fieldBufferState !== "ready" || !fieldBufferId || fieldBufferId === "not adopted") continue;
+    const vectors = rowValue(render.rows, "Vectors") ?? "";
+    const vectorMatch = vectors.match(/^(.+?) · ([0-9][0-9,]*) segments · (.*)$/);
+    if (!vectorMatch || vectorMatch[1] === "not built") continue;
+    const segmentCount = Number(vectorMatch[2].replaceAll(",", ""));
+    if (!Number.isSafeInteger(segmentCount) || segmentCount <= 0) continue;
+    const pointValues = rowValue(payload.rows, "Points / values") ?? "";
+    const pointValueMatch = pointValues.match(/^([0-9][0-9,]*) \/ ([0-9][0-9,]*)$/);
+    if (!pointValueMatch || Number(pointValueMatch[1].replaceAll(",", "")) <= 0 ||
+        Number(pointValueMatch[2].replaceAll(",", "")) <= 0) continue;
+    return {
+      health_disposition: "ready",
+      target_id: "airbox",
+      target_kind: "airbox",
+      selection_kind: "airbox.visualization.debug",
+      carrier_id: request.carrier_id,
+      quantity_id: "H_demag",
+      component,
+      scope_kind: "airbox",
+      scope_id: scopeId,
+      resource_key: resourceKey,
+      field_resource_state: fieldResourceState,
+      payload_scope: rowValue(payload.rows, "Scope"),
+      payload_points: Number(pointValueMatch[1].replaceAll(",", "")),
+      payload_values: Number(pointValueMatch[2].replaceAll(",", "")),
+      payload_n_comp: Number((rowValue(payload.rows, "nComp") ?? "").replaceAll(",", "")),
+      field_buffer_state: fieldBufferState,
+      adopted_field_buffer_id: fieldBufferId,
+      adopted_resource_key: rowValue(render.rows, "Vector source"),
+      vector_build_key: vectorMatch[1],
+      rendered_vector_segment_count: segmentCount,
+      vector_degradation: vectorMatch[3],
+    };
+  }
+  return false;
+};
+
+const selectFemAirboxVisualization = async (page) => {
+  const modelSelector = '[data-node-id="model:airbox"]';
+  await page.waitForFunction((selector) => {
+    const visibleTrees = [...document.querySelectorAll(".fm-explorer-tree")]
+      .filter((tree) => tree.offsetParent !== null);
+    for (const tree of visibleTrees) tree.scrollTop = 0;
+    return Boolean(document.querySelector(selector));
+  }, modelSelector, { timeout });
+  const expand = async (nodeId) => {
+    const selector = `[data-node-id="${nodeId}"]`;
+    const node = page.locator(selector).first();
+    await node.waitFor({ state: "visible", timeout });
+    if ((await node.getAttribute("aria-expanded")) !== "false") return;
+    await node.scrollIntoViewIfNeeded();
+    await node.dblclick();
+    await page.waitForFunction((id) =>
+      document.querySelector(`[data-node-id="${id}"]`)?.getAttribute("aria-expanded") === "true",
+    nodeId, { timeout });
+  };
+  const select = async (nodeId, parentId) => {
+    const selector = `[data-node-id="${nodeId}"]`;
+    const parentSelector = `[data-node-id="${parentId}"]`;
+    await page.locator(parentSelector).scrollIntoViewIfNeeded();
+    const node = page.locator(selector).first();
+    await node.waitFor({ state: "visible", timeout });
+    await node.click();
+    await page.waitForFunction((id) =>
+      document.querySelector(`[data-node-id="${id}"]`)?.getAttribute("aria-selected") === "true",
+    nodeId, { timeout });
+  };
+  await expand("model:airbox");
+  await select("model:airbox:visualization", "model:airbox");
+  await expand("model:airbox:visualization");
+  return page.locator(".fm-inspector-panel").last();
+};
+
+const proveFemAirboxVectors = async (page, initialRunIdentity, primaryBefore) => {
+  const airboxPanel = await selectFemAirboxVisualization(page);
+  const applyDisplayControl = async (action, label) => {
+    const acknowledgement = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return response.request().method() === "PATCH" &&
+        url.pathname === "/v2/sessions/current/visualization/state";
+    }, { timeout });
+    await action();
+    const response = await acknowledgement;
+    if (response.status() < 200 || response.status() >= 300) {
+      throw new Error(`${label} display-state PATCH returned ${response.status()}`);
+    }
+  };
+  const quantity = airboxPanel.getByRole("combobox", { name: "Quantity source", exact: true });
+  if (await quantity.count() !== 1) throw new Error("Airbox inspector did not expose one Quantity source combobox");
+  // The picker uses the capability catalog's label. Radix does not expose
+  // the React value prop as a data-value attribute on its option elements.
+  const catalogResponse = await page.request.get(
+    new URL("/v2/sessions/current/data/quantities", page.url()).toString(), { timeout },
+  );
+  if (catalogResponse.status() !== 200) throw new Error("The live quantity catalog is unavailable");
+  const catalog = await catalogResponse.json();
+  const demagEntries = Array.isArray(catalog?.quantities)
+    ? catalog.quantities.filter((entry) => entry.id === "H_demag") : [];
+  if (demagEntries.length !== 1) throw new Error("The live quantity catalog did not identify one H_demag entry");
+  const demagLabel = demagEntries[0].label || demagEntries[0].id;
+  await quantity.click();
+  const option = page.getByRole("option", { name: demagLabel, exact: true });
+  await option.waitFor({ state: "visible", timeout });
+  if ((await option.getAttribute("aria-disabled")) === "true") {
+    throw new Error("Airbox H_demag quantity is not available in the live field catalog");
+  }
+  if ((await option.getAttribute("aria-selected")) !== "true") {
+    await applyDisplayControl(() => option.click(), "Airbox H_demag");
+  } else {
+    await page.keyboard.press("Escape");
+  }
+
+  const vectors = airboxPanel.getByRole("button", { name: "Toggle vector field arrows", exact: true });
+  await vectors.waitFor({ state: "visible", timeout });
+  if ((await vectors.getAttribute("aria-pressed")) !== "true") {
+    await applyDisplayControl(() => vectors.click(), "Airbox vectors");
+  }
+  await page.waitForFunction(() =>
+    document.querySelector('.fm-inspector-panel button[aria-label="Toggle vector field arrows"]')
+      ?.getAttribute("aria-pressed") === "true",
+  null, { timeout });
+
+  const debugSelector = '[data-node-id="model:airbox:visualization:debug"]';
+  const debugNode = page.locator(debugSelector).first();
+  await debugNode.waitFor({ state: "visible", timeout });
+  await debugNode.scrollIntoViewIfNeeded();
+  await debugNode.click();
+  await page.waitForFunction((selector) =>
+    document.querySelector(selector)?.getAttribute("aria-selected") === "true",
+  debugSelector, { timeout });
+  await page.waitForFunction(readFemAirboxDebugDom, null, { timeout });
+  const debug = await page.evaluate(readFemAirboxDebugDom);
+  if (!debug || typeof debug !== "object") throw new Error("Airbox debug panel did not expose accepted FEM vector observations");
+
+  const matchingResponses = femAirboxVectorResponses.filter((entry) =>
+    entry.method === "GET" && entry.status === 200 && entry.same_origin === true &&
+    entry.quantity_id === "H_demag" && entry.component === "full" &&
+    entry.scope_kind === "airbox" && entry.scope_id === debug.scope_id,
+  );
+  if (matchingResponses.length === 0) {
+    throw new Error("No successful live scoped FEM H_demag Airbox vector response was observed");
+  }
+  const primaryAfter = await waitForLiveField(page, "m", false);
+  if (primaryBefore.quantity_id !== "m" || primaryAfter.quantity_id !== "m" ||
+      primaryAfter.solver_family !== "fem") {
+    throw new Error("Airbox H_demag selection changed or obscured the primary FEM magnetization quantity");
+  }
+  const canvas = await assertCanvas(page, "FEM Airbox H_demag vectors");
+  if (blockedMutations.length > 0) {
+    throw new Error(`FEM Airbox proof blocked unexpected non-display mutation requests: ${JSON.stringify(blockedMutations)}`);
+  }
+  const runIdentityAfter = await activeFemRunIdentity(page);
+  assertStableFemRunIdentity(initialRunIdentity, runIdentityAfter, "during Airbox visualization");
+  return {
+    schema: "fullmag.fem-airbox-vector-observation.v1",
+    health_disposition: debug.health_disposition,
+    solver_family: "fem",
+    session_run_identity_before: initialRunIdentity,
+    session_run_identity_after: runIdentityAfter,
+    primary_quantity_id_before: primaryBefore.quantity_id,
+    primary_quantity_id_after: primaryAfter.quantity_id,
+    primary_field_state_after: primaryAfter.field_state,
+    target_id: debug.target_id,
+    target_kind: debug.target_kind,
+    selection_kind: debug.selection_kind,
+    carrier_id: debug.carrier_id,
+    quantity_id: debug.quantity_id,
+    component: debug.component,
+    scope_kind: debug.scope_kind,
+    scope_id: debug.scope_id,
+    resource_key: debug.resource_key,
+    request: matchingResponses.at(-1),
+    field_resource_state: debug.field_resource_state,
+    payload_scope: debug.payload_scope,
+    payload_points: debug.payload_points,
+    payload_values: debug.payload_values,
+    payload_n_comp: debug.payload_n_comp,
+    field_buffer_state: debug.field_buffer_state,
+    adopted_field_buffer_id: debug.adopted_field_buffer_id,
+    adopted_resource_key: debug.adopted_resource_key,
+    vector_build_key: debug.vector_build_key,
+    rendered_vector_segment_count: debug.rendered_vector_segment_count,
+    vector_degradation: debug.vector_degradation,
+    display_state_patch_count: displayPatchRequestCount,
+    blocked_mutation_count: blockedMutations.length,
+    canvas,
+  };
 };
 
 const captureCanvasScreenshot = async (page, fallbackCanvas) => {
@@ -561,8 +855,18 @@ const main = async () => {
   if (!["0", "1"].includes(expectAirboxVectorsSetting)) {
     throw new Error("CONTROL_ROOM_BROWSER_QA_EXPECT_AIRBOX_VECTORS must be exactly 0 or 1");
   }
+  if (expectFemAirboxVectorsSetting !== undefined && !["0", "1"].includes(expectFemAirboxVectorsSetting)) {
+    throw new Error("CONTROL_ROOM_BROWSER_QA_EXPECT_FEM_AIRBOX_VECTORS must be exactly 0 or 1");
+  }
   if (expectAirboxVectors && !expectedLiveField) {
     throw new Error("FDM airbox-vector expectation requires a live-field quantity");
+  }
+  if (expectFemAirboxVectors && (!canvasOnly || expectedLiveField !== "m" || expectAirboxVectors ||
+      expectAmbiguousComputeFields || scenarioSetting !== "fem-airbox-vectors")) {
+    throw new Error("FEM Airbox vector QA requires its canvas-only m field scenario and excludes other mutations");
+  }
+  if (!expectFemAirboxVectors && scenarioSetting === "fem-airbox-vectors") {
+    throw new Error("FEM Airbox vector scenario is missing its explicit observation flag");
   }
   if (!["0", "1"].includes(expectAmbiguousComputeFieldsSetting)) {
     throw new Error("CONTROL_ROOM_BROWSER_QA_EXPECT_AMBIGUOUS_COMPUTE_FIELDS must be exactly 0 or 1");
@@ -602,6 +906,26 @@ const main = async () => {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 });
     page = await context.newPage();
     page.setDefaultTimeout(timeout);
+    if (expectFemAirboxVectors) {
+      await page.route("**/v2/**", async (route) => {
+        const request = route.request();
+        const method = request.method();
+        if (["GET", "HEAD", "OPTIONS"].includes(method)) return route.continue();
+        const url = new URL(request.url());
+        if (method === "PATCH" && url.origin === loopbackProxy.origin &&
+            url.pathname === "/v2/sessions/current/visualization/state") {
+          return route.continue();
+        }
+        if (blockedMutations.length < 16) blockedMutations.push({ method, path: url.pathname });
+        return route.abort("blockedbyclient");
+      });
+      page.on("request", (request) => {
+        if (request.method() !== "PATCH") return;
+        if (new URL(request.url()).pathname === "/v2/sessions/current/visualization/state") {
+          displayPatchRequestCount += 1;
+        }
+      });
+    }
     if (!canvasOnly) await installViewportPerformanceProbe(page);
     page.on("pageerror", (error) => collect(pageErrors, error));
     page.on("console", (message) => {
@@ -643,6 +967,19 @@ const main = async () => {
     });
     page.on("response", (response) => {
       const url = new URL(response.url());
+      if (url.pathname === "/v2/sessions/current/data/fields/H_demag/samples/vector" &&
+          femAirboxVectorResponses.length < 16) {
+        femAirboxVectorResponses.push({
+          method: response.request().method(),
+          status: response.status(),
+          same_origin: url.origin === new URL(page.url()).origin,
+          path: url.pathname,
+          quantity_id: "H_demag",
+          component: url.searchParams.get("component"),
+          scope_kind: url.searchParams.get("scope_kind"),
+          scope_id: url.searchParams.get("scope_id"),
+        });
+      }
       if (response.status() >= 400 && httpErrors.length < 32) {
         httpErrors.push({ url: response.url(), status: response.status() });
       }
@@ -663,6 +1000,14 @@ const main = async () => {
     }
     await page.locator("#fm-main-content.fm-workspace-body").waitFor({ state: "visible", timeout });
     const sessionBefore = await sessionIdentity(page);
+    const femRunIdentityBefore = expectFemAirboxVectors ? await activeFemRunIdentity(page) : null;
+    if (femRunIdentityBefore && (
+      femRunIdentityBefore.session_id !== sessionBefore.session_id ||
+      femRunIdentityBefore.session_epoch !== sessionBefore.session_epoch ||
+      femRunIdentityBefore.request_scope_epoch !== sessionBefore.request_scope_epoch
+    )) {
+      throw new Error("FEM Airbox status identity differs from the active session snapshot");
+    }
     let appearanceQa = null;
     let exportQa = null;
     let layoutQa = null;
@@ -795,6 +1140,9 @@ const main = async () => {
     if (expectedLiveField) {
       try {
         liveFieldBefore = await waitForLiveField(page, expectedLiveField, expectAirboxVectors);
+        if (expectFemAirboxVectors && liveFieldBefore.solver_family !== "fem") {
+          throw new Error("FEM Airbox vector proof received an FDM viewport readiness observation");
+        }
       } catch (error) {
         const current = await liveFieldObservation(page, expectedLiveField).catch(() => null);
         error.partialProof = {
@@ -863,6 +1211,21 @@ const main = async () => {
     }
     const sessionAfter = await sessionIdentity(page);
     if (JSON.stringify(sessionBefore) !== JSON.stringify(sessionAfter)) throw new Error("Active session identity changed during Home round trip");
+    const femRunIdentityAfterHome = expectFemAirboxVectors ? await activeFemRunIdentity(page) : null;
+    if (femRunIdentityBefore && femRunIdentityAfterHome) {
+      assertStableFemRunIdentity(femRunIdentityBefore, femRunIdentityAfterHome, "during the Home round trip");
+    }
+    let femAirboxObservation = null;
+    if (expectFemAirboxVectors) {
+      if (!femRunIdentityBefore || !liveFieldAfter || liveFieldAfter.solver_family !== "fem") {
+        throw new Error("FEM Airbox proof is missing stable run identity or the primary m field after Home");
+      }
+      if (blockedMutations.length > 0) {
+        throw new Error(`FEM Airbox proof blocked unexpected non-display mutation requests: ${JSON.stringify(blockedMutations)}`);
+      }
+      femAirboxObservation = await proveFemAirboxVectors(page, femRunIdentityBefore, liveFieldAfter);
+      partialProof.fem_airbox_observation = femAirboxObservation;
+    }
     if (pageErrors.length || consoleErrors.length || requestFailures.length || httpErrors.length) {
       throw new Error("Browser flow recorded page, console, transport, or HTTP failures");
     }
@@ -871,6 +1234,7 @@ const main = async () => {
       schema: resultSchema,
       state: "passed",
       qa_scope: expectAmbiguousComputeFields ? "canvas-home-ambiguous-compute-fields" :
+        expectFemAirboxVectors ? "canvas-home-fem-airbox-vectors" :
         expectAirboxVectors ? "canvas-home-live-field-airbox" :
         expectedLiveField ? "canvas-home-live-field" : canvasOnly ? "canvas-home-only" : "full-browser-qa",
       skipped_areas: canvasOnly ? canvasOnlySkippedAreas : [],
@@ -883,6 +1247,7 @@ const main = async () => {
       expect_live_field: expectedLiveField,
       expect_airbox_vectors: expectAirboxVectors,
       expect_ambiguous_compute_fields: expectAmbiguousComputeFields,
+      ...(expectFemAirboxVectors ? { expect_fem_airbox_vectors: true } : {}),
       home_round_trip: true,
       home: { section: "home", visible: true, session_label: homeText.match(/Simulation open:[^\n]*/)?.[0] ?? "Simulation open:" },
       session: sessionAfter,
@@ -901,6 +1266,7 @@ const main = async () => {
         },
         canvas_screenshot: await captureCanvasScreenshot(page, after),
       } : {}),
+      ...(expectFemAirboxVectors ? { fem_airbox_observation: femAirboxObservation } : {}),
       ...(expectAmbiguousComputeFields ? {
         ambiguous_command_submission: ambiguousCommandSubmission,
         canvas_after_compute_fields: canvasAfterComputeFields,
@@ -997,7 +1363,9 @@ try {
     expect_live_field: expectedLiveField,
     expect_airbox_vectors: expectAirboxVectors,
     expect_ambiguous_compute_fields: expectAmbiguousComputeFields,
+    ...(expectFemAirboxVectors ? { expect_fem_airbox_vectors: true } : {}),
     qa_scope: expectAmbiguousComputeFields ? "canvas-home-ambiguous-compute-fields" :
+      expectFemAirboxVectors ? "canvas-home-fem-airbox-vectors" :
       expectAirboxVectors ? "canvas-home-live-field-airbox" :
       expectedLiveField ? "canvas-home-live-field" : canvasOnly ? "canvas-home-only" : "full-browser-qa",
     skipped_areas: canvasOnly ? canvasOnlySkippedAreas : [],

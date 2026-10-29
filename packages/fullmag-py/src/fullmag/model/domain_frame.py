@@ -227,6 +227,11 @@ def build_domain_frame(
                 else None
             ),
         }
+        # Note 0107 air feature controls: copied only when authored.
+        for key in ("airbox_curvature_factor", "airbox_narrow_region_resolution"):
+            value = study_universe.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                declared_universe[key] = float(value)
         if declared_universe["mode"] == "manual" and declared_size is not None:
             effective_extent = declared_size
             effective_center = (

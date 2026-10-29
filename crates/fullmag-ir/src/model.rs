@@ -297,6 +297,19 @@ pub enum MaterialParameterNameIR {
     Dbulk,
 }
 
+impl MaterialParameterNameIR {
+    /// SI unit of field values; a unit label never rescales the payload.
+    pub fn canonical_unit(self) -> &'static str {
+        match self {
+            Self::Ms => "A/m",
+            Self::Aex => "J/m",
+            Self::Alpha | Self::AnisotropyAxis => "1",
+            Self::Ku1 | Self::Ku2 | Self::Kc1 | Self::Kc2 | Self::Kc3 => "J/m^3",
+            Self::Dind | Self::Dbulk => "J/m^2",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MaterialParameterFieldIR {
@@ -329,6 +342,29 @@ pub enum MaterialParameterFieldIR {
         location: MaterialFieldLocationIR,
         unit: String,
     },
+}
+
+impl MaterialParameterFieldIR {
+    /// Validate once the field is associated with a physical parameter.
+    pub fn validate_unit(&self, parameter: MaterialParameterNameIR) -> Result<(), String> {
+        let unit = match self {
+            Self::Constant { unit, .. } | Self::Linear { unit, .. } | Self::Radial { unit, .. } => {
+                unit.as_deref()
+            }
+            Self::Sampled { unit, .. } => Some(unit.as_str()),
+        };
+        let Some(unit) = unit else {
+            return Ok(());
+        };
+        let expected = parameter.canonical_unit();
+        if unit.trim() == expected || (expected == "1" && unit.trim() == "dimensionless") {
+            Ok(())
+        } else {
+            Err(format!(
+                "{parameter:?} field unit must be '{expected}' (SI), got '{unit}'; values are not converted automatically"
+            ))
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

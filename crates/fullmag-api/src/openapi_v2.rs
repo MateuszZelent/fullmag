@@ -676,6 +676,7 @@ use utoipa::OpenApi;
         crate::schemas::planar_fields::PlanarSampleSourceResource,
         crate::schemas::logs::EngineLogResource,
         crate::schemas::scalars::ScalarWindow,
+        crate::schemas::scalars::ScalarObservationSource,
         crate::schemas::tables::TableColumnMeta,
         crate::schemas::tables::TableListResource,
         crate::schemas::tables::TableResource,

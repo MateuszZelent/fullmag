@@ -685,6 +685,49 @@ fn v0_3_study_universe_airbox_migrates_without_mesh_workflow() {
 }
 
 #[test]
+fn v0_3_study_universe_air_feature_controls_migrate_to_canonical_airbox() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value["problem_meta"]["runtime_metadata"]["study_universe"] = serde_json::json!({
+        "mode": "manual",
+        "size": [400e-9, 240e-9, 240e-9],
+        "center": [0.0, 0.0, 0.0],
+        "airbox_hmax": 40e-9,
+        // The default geometric law needs a near-air size.
+        "airbox_hmin": 3e-9,
+        "airbox_curvature_factor": 0.3,
+        "airbox_narrow_region_resolution": 0.5
+    });
+    value["problem_meta"]["runtime_metadata"]
+        .as_object_mut()
+        .unwrap()
+        .remove("mesh_workflow");
+
+    migrate_v0_3_problem_ir_to_v0_4(&mut value).unwrap();
+    let decoded: ProblemIRV04 = serde_json::from_value(value).unwrap();
+    decoded.validate().unwrap();
+    let airbox = decoded.fem_mesh_policy().unwrap().airbox.as_ref().unwrap();
+    assert_eq!(airbox.far_element_size, 40e-9);
+    assert_eq!(airbox.curvature_factor, Some(0.3));
+    assert_eq!(airbox.narrow_region_resolution, Some(0.5));
+}
+
+#[test]
+fn v0_3_air_feature_controls_require_far_air_size() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value["problem_meta"]["runtime_metadata"]["study_universe"] = serde_json::json!({
+        "mode": "auto",
+        "airbox_curvature_factor": 0.3
+    });
+    value["problem_meta"]["runtime_metadata"]
+        .as_object_mut()
+        .unwrap()
+        .remove("mesh_workflow");
+
+    let error = migrate_v0_3_problem_ir_to_v0_4(&mut value).unwrap_err();
+    assert!(error.contains("far-air maximum is required"), "{error}");
+}
+
+#[test]
 fn v0_3_global_material_controls_apply_without_per_geometry_entries() {
     let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
     value["problem_meta"]["runtime_metadata"]["mesh_workflow"] = serde_json::json!({

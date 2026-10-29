@@ -19851,7 +19851,7 @@ fn multilayer_material_parameters_remain_object_local() {
 }
 
 #[test]
-fn fdm_rejects_material_dmi_bleed_and_omission() {
+fn fdm_material_dmi_rejects_bleed_and_preserves_uniform_material_value() {
     let mut ir = stacked_two_body_multilayer_problem();
     let mut other = ir.materials[0].clone();
     other.name = "no-dmi".into();
@@ -19860,10 +19860,13 @@ fn fdm_rejects_material_dmi_bleed_and_omission() {
     ir.materials[0].interfacial_dmi = Some(0.003);
     ir.materials.push(other);
     let error = plan(&ir).expect_err("different material DMI cannot become global");
-    assert!(error.reasons.iter().any(|e| e.contains("per-object interfacial material DMI")), "{:?}", error.reasons);
+    assert!(error.reasons.iter().any(|e| e.contains("material-owned interfacial")), "{:?}", error.reasons);
     ir.materials[1].interfacial_dmi = Some(0.003);
-    let error = plan(&ir).expect_err("material-only DMI cannot disappear");
-    assert!(error.reasons.iter().any(|e| e.contains("not represented by the FDM global energy term")), "{:?}", error.reasons);
+    let planned = plan(&ir).expect("uniform material-owned DMI lowers without an explicit term");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("expected multilayer FDM plan");
+    };
+    assert_eq!(multilayer.interfacial_dmi, Some(0.003));
 }
 
 

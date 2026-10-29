@@ -59,7 +59,14 @@ pub(crate) struct LiveScenePreparationReadModel {
 /// or replaces; session/run status and the accepted workspace binding cover
 /// lifecycle changes that must invalidate a prepared candidate.
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum AcceptedPreparationPublicationMode {
+    Active,
+    TerminalObservation(crate::development_accepted_restore::AcceptedRunReattachIdentity),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct AcceptedPreparationPublicationFence {
+    mode: AcceptedPreparationPublicationMode,
     session_id: String,
     run_id: String,
     session_epoch: u64,
@@ -89,8 +96,35 @@ impl AcceptedPreparationPublicationFence {
         context: &CurrentLiveRequestContext,
         session_epoch: u64,
     ) -> Result<Self, ApiError> {
+        Self::capture_with_mode(snapshot, context, session_epoch, AcceptedPreparationPublicationMode::Active)
+    }
+
+    fn capture_with_mode(
+        snapshot: &SessionStateResponse,
+        context: &CurrentLiveRequestContext,
+        session_epoch: u64,
+        mode: AcceptedPreparationPublicationMode,
+    ) -> Result<Self, ApiError> {
         crate::ensure_current_live_request_context(snapshot, context, session_epoch)?;
-        ensure_preparation_run_is_active(snapshot)?;
+        match &mode {
+            AcceptedPreparationPublicationMode::Active => ensure_preparation_run_is_active(snapshot)?,
+            AcceptedPreparationPublicationMode::TerminalObservation(identity) => {
+                let run = snapshot.run.as_ref().ok_or_else(|| ApiError::conflict(
+                    "terminal domain restoration requires an accepted run",
+                ))?;
+                let revision = snapshot.scene_document.as_ref().map(|scene| scene.revision);
+                if !matches!(run.status.as_str(), "completed" | "failed" | "cancelled")
+                    || !revision.is_some_and(|revision| identity.matches(
+                        &run.run_id, &snapshot.session.session_id, session_epoch, revision,
+                    ))
+                {
+                    return Err(ApiError::conflict_with_code(
+                        "accepted_terminal_domain_identity_mismatch",
+                        "terminal domain restoration requires the exact process-authenticated restored run",
+                    ));
+                }
+            }
+        }
         let run_id = snapshot
             .run
             .as_ref()
@@ -111,6 +145,7 @@ impl AcceptedPreparationPublicationFence {
             ApiError::internal(format!("failed to encode display projection: {error}"))
         })?;
         Ok(Self {
+            mode,
             session_id: snapshot.session.session_id.clone(),
             run_id,
             session_epoch,
@@ -159,8 +194,7 @@ impl AcceptedPreparationPublicationFence {
         session_epoch: u64,
     ) -> Result<(), ApiError> {
         crate::ensure_current_live_request_context(snapshot, context, session_epoch)?;
-        ensure_preparation_run_is_active(snapshot)?;
-        let current = Self::capture(snapshot, context, session_epoch)?;
+        let current = Self::capture_with_mode(snapshot, context, session_epoch, self.mode.clone())?;
         if &current != self {
             return Err(ApiError::conflict_with_code(
                 "accepted_preparation_current_state_changed",
@@ -1352,6 +1386,37 @@ pub(crate) async fn publish_accepted_task_preparation(
     step_id: &str,
     command_kind: &str,
 ) -> Result<PublishedLiveScenePreparation, ApiError> {
+    publish_accepted_task_preparation_with_mode(
+        state, context, run_id, step_id, command_kind, AcceptedPreparationPublicationMode::Active,
+    ).await
+}
+
+/// Reconstruct only the domain read-model of an authenticated terminal restore.
+/// The immutable accepted plan and native preparation receipts are still fully
+/// checked; this path never schedules work or authorizes Start.
+pub(crate) async fn restore_terminal_task_domain(
+    state: &Arc<AppState>,
+    context: &CurrentLiveRequestContext,
+    run_id: &str,
+    step_id: &str,
+) -> Result<PublishedLiveScenePreparation, ApiError> {
+    let identity = state.accepted_run_reattach_identity.read().await.clone()
+        .ok_or_else(|| ApiError::conflict("terminal domain restore has no process-local authority"))?;
+    publish_accepted_task_preparation_with_mode(
+        state, context, run_id, step_id, "accepted_projection_stage_preparation",
+        AcceptedPreparationPublicationMode::TerminalObservation(identity),
+    ).await
+}
+
+async fn publish_accepted_task_preparation_with_mode(
+    state: &Arc<AppState>,
+    context: &CurrentLiveRequestContext,
+    run_id: &str,
+    step_id: &str,
+    command_kind: &str,
+    mode: AcceptedPreparationPublicationMode,
+) -> Result<PublishedLiveScenePreparation, ApiError> {
+    let terminal_observation = matches!(&mode, AcceptedPreparationPublicationMode::TerminalObservation(_));
     let (fence, scene_revision, display_projection, preparation_revision, existing_preparation) = {
         let _transition = state.current_live_session_transition.lock().await;
         let current = state.current_live_state.read().await;
@@ -1371,11 +1436,14 @@ pub(crate) async fn publish_accepted_task_preparation(
                 "accepted_preparation_current_run_mismatch",
             ));
         }
-        let fence = AcceptedPreparationPublicationFence::capture(
-            snapshot,
-            context,
-            session_epoch,
-        )?;
+        let fence = match &mode {
+            AcceptedPreparationPublicationMode::Active =>
+                AcceptedPreparationPublicationFence::capture(snapshot, context, session_epoch)?,
+            AcceptedPreparationPublicationMode::TerminalObservation(_) =>
+                AcceptedPreparationPublicationFence::capture_with_mode(
+                    snapshot, context, session_epoch, mode.clone(),
+                )?,
+        };
         let scene_revision = fence.scene_revision;
         let display_projection = fence.display_projection.clone();
         let existing_preparation = snapshot.simulation_preparation.clone();
@@ -1597,11 +1665,15 @@ pub(crate) async fn publish_accepted_task_preparation(
             }
         }
     }
-    const READY_LOG: &str = "accepted task authored model preparation ready; Compute has not run";
+    let ready_log = if terminal_observation {
+        "verified accepted domain restored for terminal results; no solver was restarted"
+    } else {
+        "accepted task authored model preparation ready; Compute has not run"
+    };
     let mut preparation_log = existing_preparation.as_ref()
         .map(|existing| existing.log_tail.clone()).unwrap_or_default();
-    if !preparation_log.last().is_some_and(|entry| entry.stage_id == "ready" && entry.message == READY_LOG) {
-        preparation_log.push(canonical_ready_preparation_log(now, READY_LOG));
+    if !preparation_log.last().is_some_and(|entry| entry.stage_id == "ready" && entry.message == ready_log) {
+        preparation_log.push(canonical_ready_preparation_log(now, ready_log));
     }
     if preparation_log.len() > 128 {
         preparation_log.drain(..preparation_log.len() - 128);
@@ -1635,7 +1707,7 @@ pub(crate) async fn publish_accepted_task_preparation(
         snapshot.clone()
     };
     let (metadata, fem_mesh) = prepared_domain_publication(&prepared_snapshot, &read_model)?;
-    let session_status = preparation_session_status(&prepared_snapshot);
+    let session_status = if terminal_observation { None } else { preparation_session_status(&prepared_snapshot) };
     crate::session::apply_current_live_snapshot(
         &mut prepared_snapshot,
         CurrentLiveSnapshotRequest {
@@ -1661,8 +1733,13 @@ pub(crate) async fn publish_accepted_task_preparation(
             fem_mesh,
         },
     )?;
-    publish_prepared_initial_state(&mut prepared_snapshot, &read_model)?;
-    if let Some(store_root) = state.submit_store_root.as_deref() {
+    // A restored terminal run must never briefly publish prepared step0 over
+    // its completed solver clock. The output projector installs the verified
+    // final state and terminal quantity bundle after this domain publication.
+    if !terminal_observation {
+        publish_prepared_initial_state(&mut prepared_snapshot, &read_model)?;
+    }
+    if let Some(store_root) = state.submit_store_root.as_deref().filter(|_| !terminal_observation) {
         // Evaluated fields are optional: without them the prepared m stays the
         // only readable quantity until a run publishes its fields.
         if let Err(error) = crate::prepared_observation_adoption::adopt_prepared_observation(

@@ -686,6 +686,18 @@ Regionowa część mesh API jest wyczerpująco zmapowana poniżej:
 
 Public material names, every constructor argument, and every coupling argument are mapped below. Units on `unit` arguments are metadata strings (`1` as the string field itself); the physical field-value unit is fixed by the selected material name.
 
+Przypisanie pola do parametru sprawdza zgodność `unit` z jego jednostką SI:
+`Ms`: `A/m`; `Aex`: `J/m`; `Ku1`, `Ku2`, `Kc1..3`: `J/m^3`;
+`Dind`, `Dbulk`: `J/m^2`; `Alpha`, `AnisotropyAxis`: `1` (również
+dotychczasowy alias `dimensionless`). Otaczające spacje nie zmieniają znaczenia.
+Pominięte `unit` lub `null` dla pola analitycznego oznacza SI; sampled wymaga
+jawnej jednostki. Prefiksy takie jak `pJ/m` i `kA/m`, pusty napis i jednostka
+innego wymiaru są odrzucane przy przypisaniu w Python oraz walidacji sceny/IR.
+Wartości nie są przeliczane ani modyfikowane. Dotyczy to wszystkich czterech
+realizacji przed wyborem backendu; istniejące ograniczenia wykonania pól nadal
+obowiązują. Starszy model z błędną etykietą wymaga poprawienia etykiety albo
+liczb do SI; nie ma automatycznej migracji, która zgadywałaby intencję.
+
 | Python | Type | Default | SI unit | Validation / error | Meaning | Backend support | ProblemIR destination | Source |
 |---|---|---|---|---|---|---|---|---|
 | `MaterialParameterName.Ms` | `MaterialParameterField` | `authored assignment value` | $\mathrm{A/m}$ | constant scalar must be > 0; positivity of non-constant or vector payloads is not checked by the current Python assignment validator and remains a fail-closed planner/runtime requirement | typed Ms material-parameter selection | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterNameIR::Ms` | `packages/fullmag-py/src/fullmag/model/structure.py::_normalize_parameter_name` |
@@ -700,21 +712,21 @@ Public material names, every constructor argument, and every coupling argument a
 | `MaterialParameterName.Dind` | `MaterialParameterField` | `authored assignment value` | $\mathrm{J/m^2}$ | constant scalar must be finite; either sign is allowed; incompatible vector arity is a current validation limitation | typed Dind material-parameter selection | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterNameIR::Dind` | `packages/fullmag-py/src/fullmag/model/structure.py::_normalize_parameter_name` |
 | `MaterialParameterName.Dbulk` | `MaterialParameterField` | `authored assignment value` | $\mathrm{J/m^2}$ | constant scalar must be finite; either sign is allowed; incompatible vector arity is a current validation limitation | typed Dbulk material-parameter selection | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterNameIR::Dbulk` | `packages/fullmag-py/src/fullmag/model/structure.py::_normalize_parameter_name` |
 | `fm.fields.constant.value` | `float \| tuple[float, float, float]` | `required` | $\{\mathrm{A/m},\mathrm{J/m},1,\mathrm{J/m^3},\mathrm{J/m^2}\}$ | scalar must be finite; vector must contain exactly three finite components; otherwise ValueError | constant scalar/vector payload | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Constant.value` | `packages/fullmag-py/src/fullmag/fields.py::constant` |
-| `fm.fields.constant.unit` | `str \| None` | `None` | $1$ | when provided, must be non-empty; current Python code does not validate that the string matches the selected parameter SI unit | declared unit metadata | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Constant.unit` | `packages/fullmag-py/src/fullmag/fields.py::constant` |
+| `fm.fields.constant.unit` | `str \| None` | `None` | $1$ | opcjonalna jednostka SI parametru; zgodność sprawdzana przy przypisaniu pola | declared unit metadata | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Constant.unit` | `packages/fullmag-py/src/fullmag/fields.py::constant` |
 | `fm.fields.linear.base` | `float` | `required` | $\{\mathrm{A/m},\mathrm{J/m},1,\mathrm{J/m^3},\mathrm{J/m^2}\}$ | must be finite; otherwise ValueError | field value at the object-frame origin | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Linear.base` | `packages/fullmag-py/src/fullmag/fields.py::linear` |
 | `fm.fields.linear.gradient` | `tuple[float, float, float]` | `required` | $\{\mathrm{A/m^2},\mathrm{J/m^2},\mathrm{m^{-1}},\mathrm{J/m^4},\mathrm{J/m^3}\}$ | must contain exactly three finite components; otherwise ValueError | spatial gradient | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Linear.gradient` | `packages/fullmag-py/src/fullmag/fields.py::linear` |
 | `fm.fields.linear.frame` | `Literal["object", "world"]` | `"object"` | $1$ | case-normalized to object/world; any other token gives ValueError | coordinate frame | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Linear.frame` | `packages/fullmag-py/src/fullmag/fields.py::linear` |
-| `fm.fields.linear.unit` | `str \| None` | `None` | $1$ | when provided, must be non-empty; SI consistency with the target parameter is not currently machine-validated | declared base-value unit metadata | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Linear.unit` | `packages/fullmag-py/src/fullmag/fields.py::linear` |
+| `fm.fields.linear.unit` | `str \| None` | `None` | $1$ | opcjonalna jednostka SI parametru; zgodność sprawdzana przy przypisaniu pola | declared base-value unit metadata | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Linear.unit` | `packages/fullmag-py/src/fullmag/fields.py::linear` |
 | `fm.fields.radial.center` | `tuple[float, float, float]` | `required` | $\mathrm m$ | must contain exactly three finite components; otherwise ValueError | radial-field center | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Radial.center` | `packages/fullmag-py/src/fullmag/fields.py::radial` |
 | `fm.fields.radial.radius` | `float` | `required` | $\mathrm m$ | must be finite and > 0; otherwise ValueError | radial transition radius | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Radial.radius` | `packages/fullmag-py/src/fullmag/fields.py::radial` |
 | `fm.fields.radial.inside` | `float` | `required` | $\{\mathrm{A/m},\mathrm{J/m},1,\mathrm{J/m^3},\mathrm{J/m^2}\}$ | must be finite; otherwise ValueError | value inside the radius | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Radial.inside` | `packages/fullmag-py/src/fullmag/fields.py::radial` |
 | `fm.fields.radial.outside` | `float` | `required` | $\{\mathrm{A/m},\mathrm{J/m},1,\mathrm{J/m^3},\mathrm{J/m^2}\}$ | must be finite; otherwise ValueError | value outside the radius | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Radial.outside` | `packages/fullmag-py/src/fullmag/fields.py::radial` |
 | `fm.fields.radial.frame` | `Literal["object", "world"]` | `"object"` | $1$ | case-normalized to object/world; any other token gives ValueError | coordinate frame | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Radial.frame` | `packages/fullmag-py/src/fullmag/fields.py::radial` |
-| `fm.fields.radial.unit` | `str \| None` | `None` | $1$ | when provided, must be non-empty; SI consistency with the target parameter is not currently machine-validated | declared field-value unit metadata | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Radial.unit` | `packages/fullmag-py/src/fullmag/fields.py::radial` |
+| `fm.fields.radial.unit` | `str \| None` | `None` | $1$ | opcjonalna jednostka SI parametru; zgodność sprawdzana przy przypisaniu pola | declared field-value unit metadata | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Radial.unit` | `packages/fullmag-py/src/fullmag/fields.py::radial` |
 | `fm.fields.sampled.asset_id` | `str` | `required` | $1$ | must be non-empty; otherwise ValueError | sampled-field artifact identity | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Sampled.asset_id` | `packages/fullmag-py/src/fullmag/fields.py::sampled` |
 | `fm.fields.sampled.component_count` | `int \| float (runtime-coerced)` | `required` | $1$ | annotated as int, but the current runtime accepts real values >= 1 and stores int(component_count), truncating toward zero; for example 1.5 becomes 1; values < 1 give ValueError, while non-integral and bool inputs are not rejected before coercion | components per sample | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Sampled.component_count` | `packages/fullmag-py/src/fullmag/fields.py::sampled` |
 | `fm.fields.sampled.location` | `Literal["cell", "node", "element", "quadrature"]` | `required` | $1$ | case-normalized to the four listed tokens; any other token gives ValueError | sample association | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Sampled.location` | `packages/fullmag-py/src/fullmag/fields.py::sampled` |
-| `fm.fields.sampled.unit` | `str` | `required` | $1$ | must be non-empty; SI consistency with the selected parameter is not currently machine-validated | declared sampled-value unit metadata | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Sampled.unit` | `packages/fullmag-py/src/fullmag/fields.py::sampled` |
+| `fm.fields.sampled.unit` | `str` | `required` | $1$ | wymagana jednostka SI parametru; zgodność sprawdzana przy przypisaniu pola | declared sampled-value unit metadata | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Sampled.unit` | `packages/fullmag-py/src/fullmag/fields.py::sampled` |
 | `study.couplings.exchange.source` | `object \| ObjectRegion \| CouplingEndpoint \| str` | `required` | $1$ | must resolve to an object, ObjectRegion, CouplingEndpoint, or non-empty object name; otherwise TypeError/ValueError | source endpoint | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `CouplingIR.source` | `packages/fullmag-py/src/fullmag/world.py::StudyCouplingsHandle.exchange` |
 | `study.couplings.exchange.target` | `object \| ObjectRegion \| CouplingEndpoint \| str` | `required` | $1$ | must resolve to an object, ObjectRegion, CouplingEndpoint, or non-empty object name; otherwise TypeError/ValueError | target endpoint | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `CouplingIR.target` | `packages/fullmag-py/src/fullmag/world.py::StudyCouplingsHandle.exchange` |
 | `study.couplings.exchange.mode` | `Literal["harmonic_mean", "explicit", "disabled"]` | `"harmonic_mean"` | $1$ | invalid token gives ValueError; harmonic_mean forbids inter_exchange; explicit requires it; disabled requires scale=0 or None | exchange coupling policy | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `CouplingParametersIR::Exchange.mode` | `packages/fullmag-py/src/fullmag/world.py::StudyCouplingsHandle.exchange` |
@@ -919,6 +931,17 @@ FDM materializuje maski i pola na komórkach. FEM materializuje conformal domain
 markers albo jawnie raportowaną projekcję. Region mesh-only pozostaje polem
 rozmiaru i nie tworzy niezależnych stopni swobody magnetyzacji.
 
+Współczynniki skalarne DMI w starszym `MaterialIR` są odrębną drogą od
+regionalnych pól: `interfacial_dmi` i `bulk_dmi` muszą trafić do planu FDM
+single-grid. Jawny term energii ma pierwszeństwo (również przy D=0), bez
+sumowania z materiałem. Dla multilayer brak D w materiale oznacza zero;
+obecny descriptor o jednym skalarze wymaga identycznych efektywnych D we
+wszystkich ciałach. Rozbieżność jest jawnym błędem, a zgodny BulkD przechodzi
+przez istniejący guard braku wykonania multilayer. Wybór CPU/CUDA, normalne
+i odrębne brzegi ciał nadal podlegają dotychczasowym ograniczeniom.
+Fizyka pozostaje opisana w [iDMI](0404-interfacial-dmi.md) oraz
+[Bulk DMI](0405-bulk-dmi.md); testy descriptorów nie są kwalifikacją GPU.
+
 (material-regions-round-trip-and-failure-semantics)=
 ### 4.6 Round-trip and failure semantics
 
@@ -1061,3 +1084,8 @@ must include:
 | FEM material core | `backends/fem/core/fem_element_quadrature_material.hpp` | `class ElementQuadratureMaterial` | element/quadrature material access |
 | Rejestry V04 | `crates/fullmag-ir/src/validation.rs` | `validate_physics_object_problem` | indeksowane błędy pustych/duplikowanych materiałów i regionów oraz właścicieli; źródła, bez kwalifikacji runtime |
 | Publiczna walidacja V04 | `crates/fullmag-ir/src/physics_object.rs` | `validate` | `validate()` egzekwuje istniejący kontrakt rejestrów, bez zmiany wire V03/V04 |
+| Walidacja jednostek | `crates/fullmag-ir/src/model.rs` | `validate_unit` | Zgodność etykiety z SI parametru bez przeliczania wartości; wspólna kontrola sceny oraz IR V03/V04. |
+| Walidacja jednostek | `packages/fullmag-py/src/fullmag/model/structure.py` | `_validate_material_parameter_field` | Walidacja jednostki po przypisaniu pola do parametru w Python. |
+| Walidacja jednostek | `crates/fullmag-ir/tests/material_field_units.rs` | `material_field_units_are_checked_in_v04_public_validation` | Regresja walidacji jednostek przed wykonaniem solvera. |
+| Materiały FDM | `crates/fullmag-plan/src/fdm.rs` | `resolve_multilayer_material_dmi_scalar` | Jednolite D materiałów lub jawny błąd descriptoru multilayer; explicit term ma pierwszeństwo. |
+| Materiały FDM | `crates/fullmag-plan/src/tests/material_audit_fdm.rs` | `single_grid_material_scalar_dmi_is_lowered_on_cpu_and_cuda` | Regresja descriptorów CPU/CUDA, bez dowodu wykonania urządzenia. |

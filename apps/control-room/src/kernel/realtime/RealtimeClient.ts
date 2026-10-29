@@ -20,7 +20,7 @@ interface MessageEventLike {
 }
 
 interface RealtimeBridge {
-  handleEvent(event: Record<string, unknown>): boolean;
+  handleEvent(event: Record<string, unknown>, requestScopeEpoch?: string | null): boolean;
 }
 
 interface RealtimeClientOptions {
@@ -118,7 +118,11 @@ export class RealtimeClient {
         status: null,
       });
       updateRealtimePolicyFromEvent(parsed);
-      this.bridge.handleEvent(parsed);
+      if (this.options.expectedRequestScopeEpoch) {
+        this.bridge.handleEvent(parsed, this.options.expectedRequestScopeEpoch);
+      } else {
+        this.bridge.handleEvent(parsed);
+      }
       this.recordSequence(parsed);
     } catch {
       this.options.diagnostics?.record({

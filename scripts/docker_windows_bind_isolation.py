@@ -19,12 +19,12 @@ import time
 from docker_build_control import BuildControlError, bounded_capture, canonical, docker_capture
 from docker_compose_identity import compose_project_identity, validate_source_labels
 
-SCHEMA = "fullmag.foreign-windows-bind-disjoint-proof.v1"
+SCHEMA = "fullmag.foreign-windows-bind-disjoint-proof.v2"
 NATIVE_SCHEMA = "fullmag.windows-bind-native-identity.v1"
 MAX_BYTES = 1024 * 1024
 MAX_DESCENDANT_ENTRIES = 100000
 DESCENDANT_BUDGET_MS = 15000
-INVENTORY_SCHEMA = "fullmag.windows-contained-topology.v1"
+INVENTORY_SCHEMA = "fullmag.windows-contained-topology.v2"
 MAX_RELATIVE_LINKS = 256
 MAX_RELATIVE_LINK_HOPS = 16
 SHA = re.compile(r"[0-9a-f]{64}\Z")
@@ -35,13 +35,28 @@ PROOF_FIELDS = {"schema", "decision", "container_id", "source_sha256",
                 "context", "before", "after", "provider_sha256"}
 OBSERVATION_FIELDS = {"engine", "backend", "foreign", "linux", "mapping", "native", "contained_links"}
 
+
+class WindowsBindObservationDrift(BuildControlError):
+    """Two individually valid observations differ; no proof was accepted."""
+
+    def __init__(self, differences):
+        self.differences = tuple(differences)
+        ordinary_inventory = {
+            "observation.native.candidate.descendants.entries",
+            "observation.native.candidate.descendants.directories",
+            "observation.native.candidate.descendants.files",
+            "observation.native.candidate.descendants.sha256",
+        }
+        self.ordinary_inventory_only = bool(self.differences) and set(self.differences) <= ordinary_inventory
+        super().__init__("Windows isolation identities drifted: " + ", ".join(self.differences))
+
 # No Add-Type, compilation, temporary files or candidate contents are used.
 # Microsoft: hard links cannot refer to files on different volumes.
 # https://learn.microsoft.com/en-us/windows/win32/fileio/hard-links-and-junctions
-# Candidate files and same-serial backing files require an exact single-link
-# inventory. Different-serial backings retain full identity but explicitly mark
-# link enumeration as unassessed (null); no fsutil failure is reinterpreted.
-WINDOWS_PROVIDER = r"""
+# Candidate files and same-serial backing files require native NumberOfLinks=1
+# on their exact file handle. Different-serial backings retain full identity but
+# mark link qualification as unassessed (null); no query failure is reinterpreted.
+WINDOWS_PATH_PROVIDER = r"""
 $ErrorActionPreference='Stop'
 [Console]::InputEncoding=[Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
@@ -64,14 +79,61 @@ function NoReparse($path) {
         if ($null -eq $parent) { $cursor=$null } else { $cursor=$parent.FullName }
     }
 }
-function FileId($path) {
-    $text=(& fsutil.exe file queryfileid $path | Out-String)
-    if ($LASTEXITCODE -ne 0) { throw 'file identity unavailable' }
-    $ids=[regex]::Matches($text,'0x[0-9A-Fa-f]{16,32}')
-    if ($ids.Count -ne 1) { throw 'ambiguous file identity' }
-    return '0x'+$ids[0].Value.Substring(2).PadLeft(32,'0').ToLowerInvariant()
+# Metadata-only handles: desired access 0, OPEN_EXISTING, share R/W/delete;
+# BACKUP_SEMANTICS opens directories and OPEN_REPARSE_POINT never follows leaf links.
+# https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_id_info
+# https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_standard_info
+$idAssemblyName=[Reflection.AssemblyName]::new('FullmagWindowsFileIdentity')
+$idAssembly=[AppDomain]::CurrentDomain.DefineDynamicAssembly($idAssemblyName,[Reflection.Emit.AssemblyBuilderAccess]::Run)
+$idModule=$idAssembly.DefineDynamicModule('FileIdentity')
+$idType=$idModule.DefineType('FullmagWindowsFileIdentity',[Reflection.TypeAttributes]'Public,Abstract,Sealed')
+$idFlags=[Reflection.MethodAttributes]'Public,Static,PinvokeImpl'
+$open=$idType.DefinePInvokeMethod('CreateFileW','kernel32.dll',$idFlags,
+    [Reflection.CallingConventions]::Standard,[IntPtr],
+    [Type[]]@([string],[uint32],[uint32],[IntPtr],[uint32],[uint32],[IntPtr]),
+    [Runtime.InteropServices.CallingConvention]::Winapi,[Runtime.InteropServices.CharSet]::Unicode)
+$open.SetImplementationFlags($open.GetMethodImplementationFlags() -bor [Reflection.MethodImplAttributes]::PreserveSig)
+$query=$idType.DefinePInvokeMethod('GetFileInformationByHandleEx','kernel32.dll',$idFlags,
+    [Reflection.CallingConventions]::Standard,[int],[Type[]]@([IntPtr],[int],[IntPtr],[uint32]),
+    [Runtime.InteropServices.CallingConvention]::Winapi,[Runtime.InteropServices.CharSet]::Unicode)
+$query.SetImplementationFlags($query.GetMethodImplementationFlags() -bor [Reflection.MethodImplAttributes]::PreserveSig)
+$closeId=$idType.DefinePInvokeMethod('CloseHandle','kernel32.dll',$idFlags,
+    [Reflection.CallingConventions]::Standard,[int],[Type[]]@([IntPtr]),
+    [Runtime.InteropServices.CallingConvention]::Winapi,[Runtime.InteropServices.CharSet]::Unicode)
+$closeId.SetImplementationFlags($closeId.GetMethodImplementationFlags() -bor [Reflection.MethodImplAttributes]::PreserveSig)
+$fileMetadata=$idType.CreateType()
+function ReadFileIdentity($path) {
+    if ($path.IndexOfAny([char[]]'"*?') -ge 0) { throw 'literal metadata path required' }
+    $buffer=[Runtime.InteropServices.Marshal]::AllocHGlobal(24)
+    $handle=[IntPtr]::new(-1)
+    try {
+        $handle=$fileMetadata::CreateFileW(('\\?\'+$path),0,7,[IntPtr]::Zero,3,0x02200000,[IntPtr]::Zero)
+        if ($handle -eq [IntPtr]::new(-1) -or $handle -eq [IntPtr]::Zero) { throw 'metadata handle unavailable' }
+        # Check the opened object itself, rather than relying only on earlier
+        # path checks if its leaf was replaced during the observation.
+        if ($fileMetadata::GetFileInformationByHandleEx($handle,9,$buffer,8) -eq 0) { throw 'native attributes unavailable' }
+        $attributes=[Runtime.InteropServices.Marshal]::ReadInt32($buffer,0)
+        if (($attributes -band 0x400) -ne 0) { throw 'opened metadata object is a reparse point' }
+        # FILE_ID_INFO: uint64 volume serial, then 16 opaque ID bytes (24 total).
+        if ($fileMetadata::GetFileInformationByHandleEx($handle,18,$buffer,24) -eq 0) { throw 'native file ID unavailable' }
+        $bytes=[byte[]]::new(16)
+        [Runtime.InteropServices.Marshal]::Copy([IntPtr]::Add($buffer,8),$bytes,0,16)
+        $id='0x'+([BitConverter]::ToString($bytes)).Replace('-','').ToLowerInvariant()
+        # FILE_STANDARD_INFO: two int64s, uint32 links, two BOOLEANs, padding.
+        if ($fileMetadata::GetFileInformationByHandleEx($handle,1,$buffer,24) -eq 0) { throw 'native link count unavailable' }
+        return @{file_id=$id;links=[Runtime.InteropServices.Marshal]::ReadInt32($buffer,16);
+            delete_pending=([Runtime.InteropServices.Marshal]::ReadByte($buffer,20) -ne 0);
+            directory=([Runtime.InteropServices.Marshal]::ReadByte($buffer,21) -ne 0)}
+    } finally {
+        try {
+            if ($handle -ne [IntPtr]::new(-1) -and $handle -ne [IntPtr]::Zero -and
+                $fileMetadata::CloseHandle($handle) -eq 0) { throw 'metadata handle close failed' }
+        } finally { [Runtime.InteropServices.Marshal]::FreeHGlobal($buffer) }
+    }
 }
-# FindFirstFile exposes the reparse tag without opening/dereferencing its target.
+function FileId($path) { return (ReadFileIdentity $path).file_id }
+"""
+WINDOWS_PROVIDER = WINDOWS_PATH_PROVIDER + r"""# FindFirstFile exposes the reparse tag without opening/dereferencing its target.
 # https://learn.microsoft.com/en-us/windows/win32/fileio/reparse-point-tags
 $assemblyName=[Reflection.AssemblyName]::new('FullmagWindowsMetadata')
 $assembly=[AppDomain]::CurrentDomain.DefineDynamicAssembly($assemblyName,[Reflection.Emit.AssemblyBuilderAccess]::Run)
@@ -107,8 +169,10 @@ function ReparseTag($path, $expectedAttributes) {
             ($attributes -band 0x410) -ne ($expectedAttributes -band 0x410)) {
             throw ('native reparse enumeration identity drifted: '+$path)
         }
-        if ($tag -ne [int]0xa000001d) { throw ('unknown descendant reparse tag refused: '+$path) }
-        return '0xa000001d'
+        if ($tag -eq [int]0xa000001d) { return '0xa000001d' }
+        if ($tag -eq [int]0xa0000003 -and ($attributes -band 0x10) -ne 0) { return '0xa0000003' }
+        if ($tag -eq [int]0xa000000c) { return '0xa000000c' }
+        throw ('unknown descendant reparse tag refused: tag='+$tag.ToString('x8')+' path='+$path)
     } finally {
         try {
             if ($handle -ne [IntPtr]::new(-1) -and $handle -ne [IntPtr]::Zero) {
@@ -132,6 +196,8 @@ function Descendants($root, $serial, $rootFileId) {
     $rows=New-Object 'System.Collections.Generic.List[string]'
     $links=New-Object 'System.Collections.Generic.List[string]'
     $linkKinds=@{}
+    $linkTags=@{}
+    $linkTargets=@{}
     $pendingDirs.Push($root)
     $entryCount=0
     $directoryCount=0
@@ -161,9 +227,34 @@ function Descendants($root, $serial, $rootFileId) {
             if (($relative.Split('\')).Length -gt 128) { throw 'descendant inventory depth budget exceeded' }
             if ($isLink) {
                 if ($links.Count -ge 256) { throw 'relative LX-link inventory exceeds its fixed bound' }
-                $null=ReparseTag $entry.FullName $attributes
+                $tag=ReparseTag $entry.FullName $attributes
+                $target=$null
+                if ($tag -ceq '0xa0000003') {
+                    $junction=Get-Item -Force -LiteralPath $entry.FullName
+                    $targets=@($junction.Target)
+                    if ($junction.LinkType -cne 'Junction' -or $targets.Count -ne 1) { throw 'ambiguous directory junction' }
+                    $target=Canonical $targets[0]
+                    if ($target -ine $root -and
+                        -not $target.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase)) {
+                        throw 'junction target escapes candidate root'
+                    }
+                } elseif ($tag -ceq '0xa000000c') {
+                    $symbolic=Get-Item -Force -LiteralPath $entry.FullName
+                    $targets=@($symbolic.Target)
+                    if ($symbolic.LinkType -cne 'SymbolicLink' -or $targets.Count -ne 1) { throw 'ambiguous symbolic link' }
+                    $target=[string]$targets[0]
+                    if ([IO.Path]::IsPathRooted($target) -or $target.Contains(':') -or
+                        $target.IndexOfAny([char[]]'"*?') -ge 0) { throw 'only relative native symbolic links are supported' }
+                    $resolved=Canonical (Join-Path ([IO.Directory]::GetParent($entry.FullName).FullName) $target)
+                    if ($resolved -ine $root -and
+                        -not $resolved.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase)) {
+                        throw 'symbolic link target escapes candidate root'
+                    }
+                }
                 $links.Add($relative)
                 $linkKinds[$relative]=$(if(($attributes -band 0x10) -ne 0){'directory'}else{'file'})
+                $linkTags[$relative]=$tag
+                $linkTargets[$relative]=$target
             }
             if (($attributes -band 0x10) -ne 0) {
                 $kind=$(if($isLink){'directory-link'}else{'directory'})
@@ -203,8 +294,8 @@ function Descendants($root, $serial, $rootFileId) {
     DescendantBudget $clock $entryCount $directoryCount $fileCount $pendingDirs.Count
     [string[]]$orderedLinks=@($links.ToArray())
     [Array]::Sort($orderedLinks,[StringComparer]::Ordinal)
-    $linkRecords=@($orderedLinks | ForEach-Object { @{path=$_;tag='0xa000001d';kind=$linkKinds[$_]} })
-    return @{schema='fullmag.windows-contained-topology.v1';entries=$entryCount;
+    $linkRecords=@($orderedLinks | ForEach-Object { @{path=$_;tag=$linkTags[$_];kind=$linkKinds[$_];target=$linkTargets[$_]} })
+    return @{schema='fullmag.windows-contained-topology.v2';entries=$entryCount;
         directories=$directoryCount;files=$fileCount;sha256=$digest;reparse_points=$links.Count;
         links=$linkRecords;max_entries=100000;budget_ms=15000}
 }
@@ -218,7 +309,11 @@ function Identity($value, $candidateSerial=$null) {
     $volume=$volumes[0]
     if ([int]$volume.DriveType -ne 3 -or $volume.FileSystem -notin @('NTFS','ReFS') -or
         $volume.VolumeSerialNumber -notmatch '^[0-9A-Fa-f]{8}$') { throw 'fixed native volume required' }
-    $fileId=FileId $path
+    $fileIdentity=ReadFileIdentity $path
+    $fileId=$fileIdentity.file_id
+    if ($fileIdentity.delete_pending -or $fileIdentity.directory -ne $item.PSIsContainer) {
+        throw 'native file kind changed or deletion is pending'
+    }
     $ancestorIds=@()
     $cursor=[IO.Directory]::GetParent($path)
     while ($null -ne $cursor) {
@@ -227,22 +322,13 @@ function Identity($value, $candidateSerial=$null) {
     }
     $links=@()
     if (-not $item.PSIsContainer) {
-        # Decide from native volume metadata before invoking hardlink enumeration.
+        # A different volume cannot hardlink this candidate. On the same volume,
+        # NumberOfLinks=1 and the exact canonical handle prove its sole path.
         if ($null -ne $candidateSerial -and
             $volume.VolumeSerialNumber.ToUpperInvariant() -ne $candidateSerial) {
             $links=$null
         } else {
-            $lines=@(& fsutil.exe hardlink list $path)
-            if ($LASTEXITCODE -ne 0) {
-                throw ('hardlink inventory unavailable for '+$path+': '+($lines -join ' | '))
-            }
-            foreach ($line in $lines) {
-                $name=$line.Trim()
-                if ($name.Length -eq 0) { continue }
-                if (-not $name.StartsWith('\') -or $name.StartsWith('\\')) { throw 'invalid hardlink name' }
-                $links+=Canonical ($drive+$name)
-            }
-            if ($links.Count -ne 1 -or $links[0] -ine $path) { throw 'hardlinked file refused' }
+            if ($fileIdentity.links -ne 1 -or (FileId $path) -cne $fileId) { throw 'hardlinked or replaced file refused' }
             $links=@($path)
         }
     }
@@ -272,8 +358,34 @@ $settingsBytes=[IO.File]::ReadAllBytes($settings)
 $settingsObject=([Text.Encoding]::UTF8.GetString($settingsBytes).TrimStart([char]0xFEFF) | ConvertFrom-Json)
 $known=@('AutoStart','DisplayedOnboarding','EnableDockerAI','EnableIntegrationWithDefaultWslDistro',
     'InferenceCanUseGPUVariant','IntegratedWslDistros','LastContainerdSnapshotterEnable',
-    'LicenseTermsVersion','SettingsVersion','UpdateInstallTime','UpdatePreviousVersion','UseContainerdSnapshotter')
-$keys=@($settingsObject.PSObject.Properties.Name | Sort-Object)
+    'LicenseTermsVersion','SettingsVersion','UpdateInstallTime','UpdatePreviousVersion','UseContainerdSnapshotter',
+    'BackupData','DataFolder','DiskFlush','DiskSizeMiB','DiskStats','DiskTRIM',
+    'DockerBinInstallPath','UseResourceSaver','WslDiskCompactionThresholdGb')
+[string[]]$keys=@($settingsObject.PSObject.Properties.Name)
+[Array]::Sort($keys,[StringComparer]::Ordinal)
+# Accept only typed non-location options and the legacy Hyper-V default in an
+# explicitly WSL-enabled configuration. Custom data roots remain unsupported;
+# the actual standard WSL disk/junction and all three backing IDs are checked.
+foreach ($name in @('BackupData','DiskTRIM','UseResourceSaver')) {
+    if ($keys -contains $name -and $settingsObject.$name -isnot [bool]) { throw 'invalid boolean resource setting' }
+}
+foreach ($name in @('DiskSizeMiB','WslDiskCompactionThresholdGb')) {
+    if ($keys -contains $name -and
+        (($settingsObject.$name -isnot [int] -and $settingsObject.$name -isnot [long]) -or
+         $settingsObject.$name -lt 0)) { throw 'invalid numeric resource setting' }
+}
+if ($keys -contains 'DiskFlush' -and $settingsObject.DiskFlush -cnotin @('','os')) { throw 'unsupported disk flush mode' }
+if ($keys -contains 'DiskStats' -and $settingsObject.DiskStats -cne '') { throw 'custom disk stats policy refused' }
+if ($keys -contains 'DockerBinInstallPath' -and
+    $settingsObject.DockerBinInstallPath -cnotin @('system','user')) { throw 'custom binary location refused' }
+if ($keys -contains 'DataFolder') {
+    $legacyDefault=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) 'DockerDesktop\vm-data'
+    if ($settingsObject.DataFolder -isnot [string] -or
+        $settingsObject.WslEngineEnabled -isnot [bool] -or -not $settingsObject.WslEngineEnabled -or
+        (Canonical $settingsObject.DataFolder) -ine (Canonical $legacyDefault)) {
+        throw 'custom Desktop data folder is unsupported'
+    }
+}
 foreach ($key in $keys) {
     if ($key -notin $known -and $key -match '(?i)(disk|data|vhd|path|location|folder|resource)') {
         throw 'unsupported Desktop resource path policy'
@@ -333,13 +445,29 @@ def _json(raw):
 def _windows_path(value):
     require(isinstance(value, str) and re.fullmatch(r"[A-Za-z]:[\\/].+", value) is not None,
             "Windows bind must be an absolute local non-root path")
-    require(not any(ord(char) < 32 or char in ',\x7f' for char in value)
+    require(not any(ord(char) < 32 or char in ',"*?\x7f' for char in value)
             and ":" not in value[2:] and not any(part in {".", ".."} or part.endswith((" ", "."))
                                                       for part in re.split(r"[\\/]", value)),
             "Windows bind path contains traversal, stream or control syntax")
     normalized = ntpath.normpath(value)
     require(normalized.rstrip("\\") != normalized[:2], "Whole-drive bind cannot be isolated")
     return normalized
+
+
+def _windows_source_path(value):
+    """Translate only Desktop's explicit drive aliases, retaining raw mount pins.
+
+    This is syntax normalization, not isolation evidence. Native Windows IDs,
+    reparse/hard-link checks and the independent DrvFs roundtrip remain required.
+    WSL hash aliases and whole-drive mounts are never accepted here.
+    """
+    if isinstance(value, str) and value.startswith("/"):
+        matched = re.fullmatch(r"(?:/run/desktop/mnt/host|/host_mnt|/mnt/host)/([A-Za-z])/(.+)", value)
+        require(matched is not None and "\\" not in value
+                and str(PurePosixPath(value)) == value,
+                "Desktop drive bind is not a canonical explicit drive alias")
+        value = matched.group(1).upper() + ":\\" + matched.group(2).replace("/", "\\")
+    return _windows_path(value)
 
 
 def _overlap(left, right):
@@ -359,6 +487,15 @@ def _native_link_relative(value):
     return "/".join(path.parts)
 
 
+def _native_relative_symlink_target(value):
+    require(isinstance(value, str) and value and not PureWindowsPath(value).root
+            and not PureWindowsPath(value).drive and not any(char in value for char in '"*?'),
+            "Native symbolic link must have an exact relative target")
+    target = value.replace("\\", "/")
+    _relative_link_target(target)
+    return target
+
+
 def _validate_descendants(value):
     require(isinstance(value, dict) and set(value) == {
         "schema", "entries", "directories", "files", "sha256", "reparse_points",
@@ -369,8 +506,14 @@ def _validate_descendants(value):
             "Directory file-link inventory exceeds its fixed bound")
     paths = []
     for link in links:
-        require(isinstance(link, dict) and set(link) == {"path", "tag", "kind"}
-                and link["tag"] == "0xa000001d" and link["kind"] in {"file", "directory"}, "Unknown descendant reparse tag")
+        require(isinstance(link, dict) and set(link) == {"path", "tag", "kind", "target"}
+                and link["kind"] in {"file", "directory"}
+                and ((link["tag"] == "0xa000001d" and link["target"] is None)
+                     or (link["tag"] == "0xa0000003" and link["kind"] == "directory"
+                         and _windows_path(link["target"]) == link["target"])
+                     or (link["tag"] == "0xa000000c"
+                         and _native_relative_symlink_target(link["target"]))),
+                "Unknown or unqualified descendant reparse tag")
         _native_link_relative(link["path"])
         paths.append(link["path"])
     require(len(paths) == len(set(paths))
@@ -433,7 +576,9 @@ def _validate_native(value, source, distro):
     known_settings = {"AutoStart", "DisplayedOnboarding", "EnableDockerAI",
         "EnableIntegrationWithDefaultWslDistro", "InferenceCanUseGPUVariant", "IntegratedWslDistros",
         "LastContainerdSnapshotterEnable", "LicenseTermsVersion", "SettingsVersion",
-        "UpdateInstallTime", "UpdatePreviousVersion", "UseContainerdSnapshotter"}
+        "UpdateInstallTime", "UpdatePreviousVersion", "UseContainerdSnapshotter",
+        "BackupData", "DataFolder", "DiskFlush", "DiskSizeMiB", "DiskStats", "DiskTRIM",
+        "DockerBinInstallPath", "UseResourceSaver", "WslDiskCompactionThresholdGb"}
     require(all(isinstance(key, str) and (key in known_settings or
                 re.search(r"(disk|data|vhd|path|location|folder|resource)", key, re.I) is None)
                 for key in value["settings_keys"]), "Unsupported Desktop custom resource path policy")
@@ -455,7 +600,7 @@ def _validate_native(value, source, distro):
             ntpath.normcase(ntpath.join(disk_root, "docker_data.vhdx")),
             "Docker data backing does not derive from the qualified default root")
     candidate = _native_identity(value["candidate"])
-    require(ntpath.normcase(candidate["path"]) == ntpath.normcase(_windows_path(source)),
+    require(ntpath.normcase(candidate["path"]) == ntpath.normcase(_windows_source_path(source)),
             "Native Windows identity does not bind the literal Docker source")
     records = value["registry"]
     require(isinstance(records, list) and len(records) == 2
@@ -492,7 +637,10 @@ def _validate_native(value, source, distro):
 
 def _capture(command, data=None):
     result = bounded_capture(command, data=data, timeout=40, maximum=MAX_BYTES)
-    require(result.returncode == 0, "Read-only Windows bind identity command failed")
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", "replace")[-1024:].strip()
+        raise BuildControlError("Read-only Windows bind identity command failed: exit_code="
+                                + str(result.returncode) + "; " + detail)
     require(isinstance(result.stdout, bytes) and len(result.stdout) <= MAX_BYTES,
             "Read-only Windows bind identity response exceeded its bound")
     return result.stdout
@@ -501,7 +649,7 @@ def _capture(command, data=None):
 def _native(source, distro):
     powershell = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
     raw = _capture([powershell, "-NoProfile", "-NonInteractive", "-Command", WINDOWS_PROVIDER],
-                   canonical({"path": source, "distro": distro}))
+                   canonical({"path": _windows_source_path(source), "distro": distro}))
     return _validate_native(_json(raw), source, distro)
 
 
@@ -571,6 +719,7 @@ def _linux_identity(source_root, reference_root):
 
 
 def _mapping(source):
+    source = _windows_source_path(source)
     translated = _capture(["wslpath", "-u", source]).decode("utf-8", "strict").strip()
     path = Path(translated)
     require(path.is_absolute() and str(path) == os.path.normpath(str(path))
@@ -700,7 +849,7 @@ def _link_paths(native):
     if inventory is None:
         return []
     _validate_descendants(inventory)
-    return [(item["path"], _native_link_relative(item["path"]), item["kind"])
+    return [(item["path"], _native_link_relative(item["path"]), item)
             for item in inventory["links"]]
 
 
@@ -728,6 +877,27 @@ def _resolve_link_target(relative, target):
     return "/".join(parts) or "."
 
 
+def _resolve_qualified_link(relative, target, record, mapping, native):
+    if record["tag"] == "0xa000001d":
+        return _resolve_link_target(relative, target)
+    if record["tag"] == "0xa000000c":
+        require(target == _native_relative_symlink_target(record["target"]),
+                "Native symbolic target differs from its exact relative DrvFs target")
+        return _resolve_link_target(relative, target)
+    # Only a native-attested directory junction may have an absolute DrvFs
+    # target. It must map exactly to its Windows target inside this same root.
+    require(record["tag"] == "0xa0000003" and record["kind"] == "directory",
+            "Unknown qualified reparse tag")
+    root = PureWindowsPath(_windows_path(native["candidate"]["path"]))
+    destination = PureWindowsPath(_windows_path(record["target"]))
+    require(destination == root or root in destination.parents, "Junction escapes native candidate root")
+    suffix = destination.relative_to(root)
+    mapped = Path(mapping["path"]).joinpath(*suffix.parts)
+    require(isinstance(target, str) and target == str(mapped),
+            "Native junction target differs from its exact contained DrvFs target")
+    return "/".join(suffix.parts) or "."
+
+
 def _file_identity(path):
     metadata = path.lstat()
     return {"device": metadata.st_dev, "inode": metadata.st_ino, "mode": metadata.st_mode}
@@ -751,9 +921,10 @@ def _validate_link_evidence(value, mapping, native):
     expected = _link_paths(native)
     require(isinstance(value, list) and len(value) == len(expected),
             "Qualified file-link list does not cover the exact native inventory")
-    allowed = {relative: kind for _, relative, kind in expected}
+    allowed = {relative: record for _, relative, record in expected}
     identity_fields = {"path", "device", "inode", "mode"}
-    for entry, (windows_path, relative, kind) in zip(value, expected):
+    for entry, (windows_path, relative, record) in zip(value, expected):
+        kind = record["kind"]
         require(isinstance(entry, dict) and set(entry) == {"path", "native_entry_kind", "target_kind", "hops", "final"}
                 and entry["path"] == windows_path and entry["native_entry_kind"] == kind
                 and entry["target_kind"] in {"file", "directory"} and isinstance(entry["hops"], list)
@@ -761,15 +932,16 @@ def _validate_link_evidence(value, mapping, native):
                 "Qualified file-link identity or hop bound differs")
         seen = set()
         for hop in entry["hops"]:
-            require(isinstance(hop, dict) and set(hop) == identity_fields | {"target", "native_entry_kind"}
+            require(isinstance(hop, dict) and set(hop) == identity_fields | {"target", "native_entry_kind", "native_reparse_tag"}
                     and hop["path"] == relative and relative in allowed
-                    and hop["native_entry_kind"] == allowed[relative] and relative not in seen
+                    and hop["native_entry_kind"] == allowed[relative]["kind"]
+                    and hop["native_reparse_tag"] == allowed[relative]["tag"] and relative not in seen
                     and type(hop["device"]) is int and hop["device"] == mapping["device"]
                     and type(hop["inode"]) is int and hop["inode"] > 0
                     and type(hop["mode"]) is int and stat.S_ISLNK(hop["mode"]),
                     "File-link hop is absent from native LX_SYMLINK inventory or lacks exact identity")
             seen.add(relative)
-            relative = _resolve_link_target(relative, hop["target"])
+            relative = _resolve_qualified_link(relative, hop["target"], allowed[relative], mapping, native)
         final = entry["final"]
         require(isinstance(final, dict) and set(final) == identity_fields
                 and final["path"] == relative and relative not in allowed
@@ -779,16 +951,21 @@ def _validate_link_evidence(value, mapping, native):
                 and ((entry["target_kind"] == "file" and stat.S_ISREG(final["mode"]))
                      or (entry["target_kind"] == "directory" and stat.S_ISDIR(final["mode"]))),
                 "Relative link does not end in a contained ordinary object of its qualified target kind on the same DrvFs")
+        require(not any(hop["native_reparse_tag"] == "0xa0000003" for hop in entry["hops"])
+                or entry["target_kind"] == "directory", "Directory junction does not end at an ordinary directory")
+        require(record["tag"] != "0xa000000c" or entry["target_kind"] == record["kind"],
+                "Native symbolic link target kind differs from its native entry")
     return value
 
 
 def _qualify_links(mapping, native):
     expected = _link_paths(native)
-    allowed = {relative: kind for _, relative, kind in expected}
+    allowed = {relative: record for _, relative, record in expected}
     root = Path(mapping["path"])
     deadline = time.monotonic() + DESCENDANT_BUDGET_MS / 1000
     result = []
-    for windows_path, initial_relative, kind in expected:
+    for windows_path, initial_relative, record in expected:
+        kind = record["kind"]
         relative = initial_relative
         hops = []
         seen = set()
@@ -815,8 +992,10 @@ def _qualify_links(mapping, native):
             require(_file_identity(current) == before and os.readlink(current) == target,
                     "File-link identity or raw target drifted during qualification")
             _link_parent_directories(root, current, mapping["device"])
-            hops.append({"path": relative, "native_entry_kind": allowed[relative], "target": target, **before})
-            relative = _resolve_link_target(relative, target)
+            record = allowed[relative]
+            hops.append({"path": relative, "native_entry_kind": record["kind"],
+                         "native_reparse_tag": record["tag"], "target": target, **before})
+            relative = _resolve_qualified_link(relative, target, record, mapping, native)
         else:
             raise BuildControlError("Relative file-link chain exceeds its fixed hop bound")
     require(not expected or time.monotonic() < deadline,
@@ -833,6 +1012,22 @@ def _observation(context, backend, foreign, source):
     return {"engine": engine, "backend": _container_pin(backend), "foreign": _container_pin(foreign),
             "linux": linux, "mapping": mapping, "native": native,
             "contained_links": _qualify_links(mapping, native)}
+
+
+def _observation_differences(left, right, prefix="observation", depth=0):
+    if left == right:
+        return []
+    if isinstance(left, dict) and isinstance(right, dict) and depth < 5:
+        changed = []
+        for key in sorted(set(left) | set(right)):
+            if key not in left or key not in right:
+                changed.append(prefix + "." + key)
+            else:
+                changed.extend(_observation_differences(left[key], right[key], prefix + "." + key, depth + 1))
+            if len(changed) >= 16:
+                break
+        return changed[:16]
+    return [prefix]
 
 
 def validate_windows_bind_disjoint_proof(proof, *, source, container_id):
@@ -855,9 +1050,16 @@ def validate_windows_bind_disjoint_proof(proof, *, source, container_id):
                     for key in ("project", "control_volume", "ledger_volume", "source_root", "reference_root"))
             and isinstance(context["control_namespace"], str),
             "Windows isolation registered group binding is incomplete")
-    require(proof["before"] == proof["after"] and isinstance(proof["before"], dict)
-            and set(proof["before"]) == OBSERVATION_FIELDS, "Windows isolation identities drifted")
-    observed = proof["before"]
+    for observed in (proof["before"], proof["after"]):
+        _validate_windows_bind_observation(observed, context, source=source, container_id=container_id)
+    if proof["before"] != proof["after"]:
+        raise WindowsBindObservationDrift(_observation_differences(proof["before"], proof["after"]))
+    return proof
+
+
+def _validate_windows_bind_observation(observed, context, *, source, container_id):
+    require(isinstance(observed, dict) and set(observed) == OBSERVATION_FIELDS,
+            "Windows isolation observation is incomplete")
     _validate_engine(observed["engine"])
     require(observed["foreign"].get("id") == container_id
             and observed["linux"].get("reference_root") == context.get("reference_root")
@@ -884,8 +1086,8 @@ def validate_windows_bind_disjoint_proof(proof, *, source, container_id):
     mapping = observed["mapping"]
     require(isinstance(mapping, dict) and mapping.get("mount", {}).get("fstype") in {"9p", "drvfs"}
             and mapping["mount"].get("fsroot") == "/"
-            and ntpath.normcase(str(mapping["mount"].get("source"))) == ntpath.normcase(source[:2] + chr(92))
-            and ntpath.normcase(_windows_path(mapping.get("roundtrip"))) == ntpath.normcase(_windows_path(source))
+            and ntpath.normcase(str(mapping["mount"].get("source"))) == ntpath.normcase(_windows_source_path(source)[:2] + chr(92))
+            and ntpath.normcase(_windows_path(mapping.get("roundtrip"))) == ntpath.normcase(_windows_source_path(source))
             and type(mapping.get("device")) is int and type(mapping.get("inode")) is int
             and mapping["inode"] > 0 and type(mapping.get("mode")) is int,
             "Windows isolation native/DrvFs mapping is malformed")
@@ -895,13 +1097,17 @@ def validate_windows_bind_disjoint_proof(proof, *, source, container_id):
             "Windows and WSL candidate object types differ")
     require(observed["mapping"]["device"] != observed["linux"]["root_device"],
             "DrvFs mapping is not physically separate from the WSL-native root")
+    target, path = Path(mapping["mount"].get("target", "")), Path(mapping.get("path", ""))
+    require(target.is_absolute() and path.is_absolute()
+            and ".." not in target.parts and ".." not in path.parts
+            and (path == target or target in path.parents),
+            "Windows proof mount does not contain its translated candidate")
     _validate_link_evidence(observed["contained_links"], mapping, observed["native"])
-    return proof
 
 
 def prove_windows_bind_disjoint(control, backend, container, source, reference_root):
     """Prove and archive one exact literal Windows bind, without entering a container."""
-    _windows_path(source)
+    _windows_source_path(source)
     first_backend, first_foreign = _inspect(backend["Id"]), _inspect(container["Id"])
     require(_container_pin(first_backend) == _container_pin(backend)
             and _container_pin(first_foreign) == _container_pin(container),

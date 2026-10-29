@@ -214,6 +214,9 @@ def _scale_airbox_options(
         center=center,
         maximum_element_size=maximum_element_size,
         minimum_element_size=minimum_element_size,
+        # Dimensionless controls: no coordinate scaling.
+        curvature_factor=airbox.curvature_factor,
+        narrow_region_resolution=airbox.narrow_region_resolution,
     )
 
 

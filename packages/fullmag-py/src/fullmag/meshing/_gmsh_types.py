@@ -9,12 +9,14 @@ import math
 import operator
 from pathlib import Path
 import struct
+from time import monotonic_ns
 from types import MappingProxyType
 from typing import Any, Iterator, Mapping
 from weakref import WeakSet
 import numpy as np
 from numpy.typing import NDArray
 
+from fullmag._progress import emit_progress
 from fullmag._validation import parse_bool, parse_finite_float, parse_integer
 from fullmag.model.discretization import _MESH_SIZE_PRESET_ALIASES
 
@@ -713,6 +715,11 @@ class AirboxOptions:
         boundary_marker: Gmsh physical group tag for the outer boundary Γ_out.
         maximum_element_size: Maximum element size for the airbox mesh (far field).
         minimum_element_size: Minimum element size for the airbox mesh (at interface).
+        curvature_factor: Air target ``c * R`` next to curved magnetic surfaces
+                          (note 0107); requires ``maximum_element_size``.
+        narrow_region_resolution: Element-count control across air gaps
+                                  between walls (note 0107); requires
+                                  ``maximum_element_size``.
     """
 
     padding_factor: float = 3.0
@@ -724,8 +731,30 @@ class AirboxOptions:
     center: tuple[float, float, float] | None = None
     maximum_element_size: float | None = None
     minimum_element_size: float | None = None
+    curvature_factor: float | None = None
+    narrow_region_resolution: float | None = None
+
+    @property
+    def has_feature_refinement(self) -> bool:
+        return self.curvature_factor is not None or self.narrow_region_resolution is not None
 
     def __post_init__(self) -> None:
+        for name in ("curvature_factor", "narrow_region_resolution"):
+            value = getattr(self, name)
+            if value is None:
+                continue
+            parsed = parse_finite_float(
+                value,
+                f"/study_universe/airbox_{name}",
+                positive=True,
+                allow_numeric_string=True,
+            )
+            object.__setattr__(self, name, float(parsed))
+        if self.has_feature_refinement and self.maximum_element_size is None:
+            raise ValueError(
+                "study_universe airbox curvature_factor/narrow_region_resolution "
+                "require the airbox maximum_element_size"
+            )
         # ``grading_ratio`` is a multiplicative layer-to-layer growth law for
         # the typed FEM airbox.  Values at or below one used to be accepted and
         # then silently disabled the field in the Gmsh builder, producing a
@@ -3827,6 +3856,7 @@ class MeshData:
         )
 
     def to_ir(self, mesh_name: str) -> dict[str, object]:
+        certification_started_ns = monotonic_ns()
         # Native mixed certification proves positive orientation, so avoid a
         # second Python pass over every cell merely to discover that no
         # reorientation is needed.  Uncertified/source-only meshes retain the
@@ -3835,6 +3865,11 @@ class MeshData:
         mesh = self if native_mixed_valid else self.oriented_copy()
         if not native_mixed_valid:
             mesh.validate_strict(require_positive_orientation=True)
+        emit_progress(
+            "MeshData.to_ir phase=certificate_fingerprint_validation "
+            f"elapsed_ms={(monotonic_ns() - certification_started_ns) / 1_000_000:.3f}"
+        )
+        conversion_started_ns = monotonic_ns()
         ir: dict[str, object] = {
             "mesh_name": mesh_name,
             "nodes": mesh.nodes.tolist(),
@@ -3893,6 +3928,10 @@ class MeshData:
         mesh_statistics = mesh.statistics_ir(mesh_name)
         if mesh_statistics is not None:
             ir["mesh_statistics"] = mesh_statistics
+        emit_progress(
+            "MeshData.to_ir phase=ir_conversion_statistics "
+            f"elapsed_ms={(monotonic_ns() - conversion_started_ns) / 1_000_000:.3f}"
+        )
         return ir
 
 

@@ -34,7 +34,6 @@ import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import type {
   CheckpointEntry,
   FrequencyDomainManifestResource,
-  JsonObject,
   LiveStatusResource,
   MeshPeriodicPairsResource,
   MeshSharedDomainManifestResource,
@@ -114,7 +113,6 @@ import {
 } from "./StudyGlobalAuthoringModel";
 import {
   buildStudyStagesMergePatch,
-  createStudyStageDraft,
   createDefaultStudyStageDraft,
   createStudyStageDrafts,
   validateStudyStageDraft,
@@ -122,6 +120,7 @@ import {
   type StudyStageDraftKind,
 } from "./StudyStageAuthoringModel";
 import { readStudyStageSource } from "@/shared/domain/study/studyStageSource";
+import { createPipelineStudyStageDrafts } from "./studyPipelineStageDrafts";
 import {
   resolveStudyInspectorModel,
   stageExecutionForCurrentScope,
@@ -890,17 +889,7 @@ export function useStudyInspectorPanelController(
     const rawStages = rawStudyStages(scene.data);
     const source = readStudyStageSource(asRecord(scene.data)?.study);
     const stageDrafts = source.kind === "flat" ? createStudyStageDrafts(rawStages)
-      : source.entries.map((entry, index): StudyStageDraft => ({
-        ...createStudyStageDraft(entry.stageKind === "antenna_field_solve" ? entry.payload : {
-          kind: "unsupported",
-        }, index),
-        kind: entry.stageKind === "antenna_field_solve" ? "antenna_field_solve" : "unsupported",
-        rawStage: structuredClone(entry.payload) as JsonObject,
-        stageId: entry.queueId ?? `stage-${index + 1}`,
-        pipelineNodeId: entry.queueId ?? undefined,
-        pipelineEnabled: entry.enabled,
-        pipelineGroupIds: [...entry.groupIds],
-      }));
+      : createPipelineStudyStageDrafts(source.entries);
     dispatch({
       type: "resetStageDrafts",
       drafts: stageDrafts,

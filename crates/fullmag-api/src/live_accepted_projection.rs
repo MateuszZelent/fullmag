@@ -188,6 +188,7 @@ struct DurableProjection {
     resolved_capabilities: Option<fullmag_runner::BackendCapabilities>,
     latest_state: Option<VerifiedOutput>,
     latest_total_energy: Option<fullmag_application::StudyScalarArtifact>,
+    terminal_stats: Option<fullmag_runner::StepStats>,
     latest_output_identity: Option<String>,
     live_observation: Option<(usize, crate::accepted_study_worker::AcceptedLiveObservation)>,
     live_observation_identity: Option<String>,
@@ -829,6 +830,37 @@ fn load_durable_projection(
         .filter(|output| output.data_kind == "state")
         .max_by(|left, right| compare_magnetization_outputs(left, right))
         .cloned();
+    // A fast worker can finish between two projector ticks. Its live sidecar
+    // then disappears from the active-task selection above, leaving prepared
+    // step0 in scalar history despite a verified final CAS state at step10.
+    // Recover only a physical row from that exact succeeded task/attempt whose
+    // solver clock agrees with the immutable final state; never relabel a
+    // previous stage's last row as this run's terminal observation.
+    let terminal_stats = if terminal_status {
+        latest_state.as_ref().and_then(|output| {
+            let fullmag_application::DecodedStudyArtifact::MagnetizationState(final_state) =
+                &output.decoded else { return None; };
+            let task = run_catalog.tasks.iter().find(|task| {
+                task.lifecycle == fullmag_session::FmsTaskLifecycle::Succeeded
+                    && task_order.get(&task.task_id) == Some(&output.task_order)
+            })?;
+            let (Some(attempt), Some(epoch)) = (task.attempt_id.as_deref(), task.ownership_epoch)
+                else { return None; };
+            let observed = match crate::accepted_study_worker::read_accepted_live_observation(
+                store_root, &context.run_id, &task.task_id, &output.step_id, attempt, epoch, None,
+            ) {
+                Ok(observed) => observed?,
+                Err(error) => {
+                    tracing::warn!(error = %error, "terminal scalar observation unavailable; final CAS state remains authoritative");
+                    return None;
+                }
+            };
+            let stats = observed.header.stats?;
+            (stats.kind.is_physical_observation() && stats.step == final_state.step
+                && stats.time == final_state.time_s && stats.dt == final_state.solver_dt_s)
+                .then_some(stats)
+        })
+    } else { None };
     let accepted_runtime_problem = if matches!(status, "completed" | "failed" | "cancelled") {
         latest_state.as_ref().and_then(|output| {
             accepted
@@ -971,6 +1003,7 @@ fn load_durable_projection(
         resolved_capabilities,
         latest_state,
         latest_total_energy,
+        terminal_stats,
         latest_output_identity,
         live_observation,
         live_observation_identity,
@@ -1955,9 +1988,12 @@ async fn ensure_stage_preparation_for_step(
     step_id: &str,
     accepted_state_ref: Option<&fullmag_quantities::AcceptedStateRef>,
 ) -> Result<PreparedProjectionDomain, ApiError> {
-    let existing = {
+    let (existing, terminal_restore) = {
         let current = state.current_live_state.read().await;
-        current.as_ref().and_then(|snapshot| {
+        let terminal_restore = context.allow_api_instance_rebind && current.as_ref()
+            .and_then(|snapshot| snapshot.run.as_ref())
+            .is_some_and(|run| matches!(run.status.as_str(), "completed" | "failed" | "cancelled"));
+        let existing = current.as_ref().and_then(|snapshot| {
             let workspace = snapshot.mesh_workspace.as_ref()?;
             if workspace.get("accepted_run_id").and_then(Value::as_str)
                 != Some(context.run_id.as_str())
@@ -1977,7 +2013,8 @@ async fn ensure_stage_preparation_for_step(
                 execution_plan,
                 plan_fingerprint: plan_fingerprint.to_owned(),
             })
-        })
+        });
+        (existing, terminal_restore)
     };
 
     let prepared = if let Some(existing) = existing {
@@ -1990,7 +2027,11 @@ async fn ensure_stage_preparation_for_step(
             session_epoch: context.session_epoch,
             request_scope_epoch: format!("{}:{}", context.api_instance_id, context.session_epoch),
         };
-        let published =
+        let published = if terminal_restore {
+            crate::live_scene_preparation::restore_terminal_task_domain(
+                state, &live_context, &context.run_id, step_id,
+            ).await?
+        } else {
             crate::live_scene_preparation::publish_accepted_task_preparation(
                 state,
                 &live_context,
@@ -1998,7 +2039,8 @@ async fn ensure_stage_preparation_for_step(
                 step_id,
                 "accepted_projection_stage_preparation",
             )
-            .await?;
+            .await?
+        };
         PreparedProjectionDomain {
             preparation_id: published.read_model.preparation_id,
             execution_plan: Arc::new(published.read_model.execution_plan),
@@ -2644,8 +2686,8 @@ async fn apply_projection(
             }
         }
     }
-    if let Some(stats) = projection.live_observation.as_ref()
-        .and_then(|(_, observation)| observation.header.stats.as_ref()) {
+    if let Some(stats) = projection.terminal_stats.as_ref().or_else(||
+        projection.live_observation.as_ref().and_then(|(_, observation)| observation.header.stats.as_ref())) {
         if stats.kind.is_physical_observation() {
             let row = crate::types::ScalarRow {
                 kind: stats.kind.clone(),
@@ -2696,6 +2738,13 @@ async fn apply_projection(
                     },
                 )?;
                 if next.scalar_revision != scalar_revision {
+                    next.latest_scalar_source = Some(crate::schemas::scalars::ScalarObservationSource {
+                        session_id: context.session_id.clone(),
+                        run_id: context.run_id.clone(),
+                        request_scope_epoch: format!("{}:{}", context.api_instance_id, context.session_epoch),
+                        source_step: stats.step,
+                        scalar_revision: next.scalar_revision,
+                    });
                     changed = true;
                     scalar_sample_advanced = true;
                 }

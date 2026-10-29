@@ -1821,18 +1821,9 @@ pub async fn get_solver_status(
             snapshot.metadata.as_deref(),
             &["execution_plan", "backend_plan", "kind"],
         ),
-        relaxation_algorithm: metadata_string(
+        relaxation_algorithm: crate::router_v2::handlers::sessions::status::relaxation_algorithm_from_metadata(
             snapshot.metadata.as_deref(),
-            &["relaxation_algorithm"],
-        )
-        .or_else(|| {
-            metadata_string(
-                snapshot.metadata.as_deref(),
-                &["execution_plan", "backend_plan", "relax_algorithm"],
-            )
-        })
-        .as_deref()
-        .and_then(RelaxationAlgorithm::parse),
+        ),
         integrator: metadata_string(
             snapshot.metadata.as_deref(),
             &["execution_plan", "backend_plan", "integrator"],

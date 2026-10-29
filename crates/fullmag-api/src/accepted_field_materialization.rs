@@ -22,6 +22,7 @@ struct AdmittedSource {
     session_id: String,
     scene_revision: Option<u64>,
     run_id: Option<String>,
+    allow_api_instance_rebind: bool,
 }
 
 /// Caller owns the transition fence. This path only reads CAS; it cannot solve,
@@ -79,10 +80,19 @@ async fn adopt_bundle(
         return Err(ApiError::conflict("bundle source differs"));
     }
     batch.clock.validate().map_err(|error| ApiError::conflict(error.to_string()))?;
+    let restored_identity = state.accepted_run_reattach_identity.read().await.clone();
+    let allow_api_instance_rebind = restored_identity.as_ref().is_some_and(|identity| {
+        before.scene_document.as_ref().is_some_and(|scene| identity.matches(
+            &run.run_id, &before.session.session_id,
+            state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire),
+            scene.revision,
+        ))
+    });
     let admitted = AdmittedSource {
         session_id: before.session.session_id.clone(),
         scene_revision: before.scene_document.as_ref().map(|scene| scene.revision),
         run_id: before.run.as_ref().map(|run| run.run_id.clone()),
+        allow_api_instance_rebind,
     };
     // Candidate construction (full-snapshot clone, frame application with
     // effective-source hashing, spatial-field resolution) is heavy on large
@@ -138,8 +148,9 @@ fn adopted_candidate(
     crate::live_execution_binding::validate_input_binding(&loaded.specification,
         &execution_input, scene.revision)?;
     let live = loaded.specification.pointer("/parameters/live_workspace");
-    if live.and_then(|value| value.get("api_instance_id")).and_then(Value::as_str)
-        != Some(state.request_scope_instance_id.as_str())
+    if (!admitted.allow_api_instance_rebind
+        && live.and_then(|value| value.get("api_instance_id")).and_then(Value::as_str)
+            != Some(state.request_scope_instance_id.as_str()))
         || live.and_then(|value| value.get("session_id")).and_then(Value::as_str)
             != Some(next.session.session_id.as_str())
         || live.and_then(|value| value.get("session_epoch")).and_then(Value::as_u64)

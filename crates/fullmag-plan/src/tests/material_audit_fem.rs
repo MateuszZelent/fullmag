@@ -77,6 +77,222 @@ fn disconnected_tets_mesh() -> fullmag_ir::MeshIR {
     }
 }
 
+fn touching_tets_mesh(
+    element_markers: [u32; 2],
+    include_material_interface: bool,
+) -> fullmag_ir::MeshIR {
+    let mut boundary_faces = vec![
+        [3, 0, 1],
+        [3, 1, 2],
+        [3, 2, 0],
+        [4, 0, 2],
+        [4, 2, 1],
+        [4, 1, 0],
+    ];
+    if include_material_interface {
+        boundary_faces.insert(0, [0, 1, 2]);
+    }
+    let mut facets = fullmag_ir::FemFacetConnectivityIR::from_tri3(boundary_faces);
+    let boundary_markers = if include_material_interface {
+        facets.roles[0] = fullmag_ir::FemFacetRoleIR::MaterialInterface;
+        vec![99, 10, 10, 10, 10, 10, 10]
+    } else {
+        vec![10; 6]
+    };
+    fullmag_ir::MeshIR {
+        mesh_name: "touching-conformal-regions".to_string(),
+        nodes: vec![
+            [1e-9, 0.0, 0.0],
+            [1e-9, 1e-9, 0.0],
+            [1e-9, 0.0, 1e-9],
+            [0.0, 0.0, 0.0],
+            [2e-9, 0.0, 0.0],
+        ],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[3, 0, 1, 2], [4, 0, 2, 1]]),
+        element_markers: element_markers.to_vec(),
+        facets,
+        boundary_markers,
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: std::collections::HashMap::new(),
+    }
+}
+
+fn distinct_owner_tets_mesh() -> fullmag_ir::MeshIR {
+    fullmag_ir::MeshIR {
+        mesh_name: "disjoint-magnetic-owners".to_string(),
+        nodes: vec![
+            [0.0, 0.0, 0.0],
+            [1e-9, 0.0, 0.0],
+            [0.0, 1e-9, 0.0],
+            [0.0, 0.0, 1e-9],
+            [3e-9, 0.0, 0.0],
+            [4e-9, 0.0, 0.0],
+            [3e-9, 1e-9, 0.0],
+            [3e-9, 0.0, 1e-9],
+        ],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
+        element_markers: vec![1, 2],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
+            [0, 1, 2],
+            [0, 1, 3],
+            [0, 2, 3],
+            [1, 2, 3],
+            [4, 5, 6],
+            [4, 5, 7],
+            [4, 6, 7],
+            [5, 6, 7],
+        ]),
+        boundary_markers: vec![1; 8],
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: std::collections::HashMap::new(),
+    }
+}
+
+fn absorber_layer(
+    frame: fullmag_ir::AbsorbingBoundaryFrameIR,
+) -> fullmag_ir::AbsorbingBoundaryLayerIR {
+    fullmag_ir::AbsorbingBoundaryLayerIR {
+        total_width_m: 0.75e-9,
+        ramp_width_m: 0.75e-9,
+        max_damping: 0.4,
+        faces: vec![fullmag_ir::AbsorbingBoundaryFaceIR::XPlus],
+        profile: fullmag_ir::AbsorbingBoundaryProfileIR::Linear,
+        frame,
+    }
+}
+
+fn set_stable_fem_test_timestep(problem: &mut ProblemIR) {
+    let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut problem.study else {
+        panic!("absorber regression uses a time-evolution study");
+    };
+    let fullmag_ir::DynamicsIR::Llg { fixed_timestep, .. } = dynamics;
+    *fixed_timestep = Some(1e-15);
+}
+
+fn conformal_absorber_problem(
+    split_regions: bool,
+    reverse_segments: bool,
+    frame: fullmag_ir::AbsorbingBoundaryFrameIR,
+) -> ProblemIR {
+    let mut ir = fem_minimal_test_ir();
+    ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
+    ir.magnets[0].absorbing_boundary = Some(absorber_layer(frame));
+    set_stable_fem_test_timestep(&mut ir);
+    ir.problem_meta.runtime_metadata.remove("study_universe");
+
+    let domain_asset = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .expect("minimal fixture has a shared-domain asset");
+    if split_regions {
+        let mut left = object_region("strip:left", "left");
+        left.realization_policy = fullmag_ir::RegionRealizationPolicyIR::Conformal;
+        let mut right = object_region("strip:right", "right");
+        right.realization_policy = fullmag_ir::RegionRealizationPolicyIR::Conformal;
+        ir.object_regions.extend([left, right]);
+
+        domain_asset.mesh = Some(touching_tets_mesh([2, 3], true));
+        domain_asset.object_region_markers = vec![
+            fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "strip:left".to_string(),
+                marker: 2,
+            },
+            fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "strip:right".to_string(),
+                marker: 3,
+            },
+        ];
+        if reverse_segments {
+            domain_asset.object_region_markers.reverse();
+        }
+    } else {
+        domain_asset.mesh = Some(touching_tets_mesh([1, 1], false));
+        domain_asset.object_region_markers.clear();
+    }
+    ir
+}
+
+fn distinct_owner_absorber_problem(
+    frame: fullmag_ir::AbsorbingBoundaryFrameIR,
+) -> ProblemIR {
+    let mut ir = fem_minimal_test_ir();
+    ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
+    ir.magnets[0].absorbing_boundary = Some(absorber_layer(frame));
+    set_stable_fem_test_timestep(&mut ir);
+    ir.problem_meta.runtime_metadata.remove("study_universe");
+    ir.geometry.entries.push(fullmag_ir::GeometryEntryIR::Box {
+        name: "second".to_string(),
+        size: [1.0, 1.0, 1.0],
+    });
+    ir.regions.push(fullmag_ir::RegionIR {
+        name: "second".to_string(),
+        geometry: "second".to_string(),
+    });
+    let second_material = ir.magnets[0].material.clone();
+    ir.magnets.push(fullmag_ir::MagnetIR {
+        object_id: None,
+        name: "second".to_string(),
+        region: "second".to_string(),
+        material: second_material,
+        initial_magnetization: Some(fullmag_ir::InitialMagnetizationIR::Uniform {
+            value: [0.0, 1.0, 0.0],
+        }),
+        absorbing_boundary: Some(absorber_layer(frame)),
+    });
+    let domain_asset = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .expect("minimal fixture has a shared-domain asset");
+    domain_asset.mesh = Some(distinct_owner_tets_mesh());
+    domain_asset.region_markers = vec![
+        fullmag_ir::FemDomainRegionMarkerIR {
+            geometry_name: "strip".to_string(),
+            marker: 1,
+        },
+        fullmag_ir::FemDomainRegionMarkerIR {
+            geometry_name: "second".to_string(),
+            marker: 2,
+        },
+    ];
+    ir
+}
+
+fn planned_fem_alpha_by_point(
+    problem: &ProblemIR,
+) -> (f64, std::collections::BTreeMap<[u64; 3], u64>) {
+    let planned = plan(problem).expect("absorbing-boundary FEM case should plan");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    let alpha = fem
+        .material
+        .alpha_field
+        .as_ref()
+        .expect("absorbing boundary should materialize an alpha field");
+    assert_eq!(alpha.len(), fem.mesh.nodes.len());
+    let values_by_point = fem
+        .mesh
+        .nodes
+        .iter()
+        .zip(alpha)
+        .map(|(point, value)| {
+            (
+                [
+                    point[0].to_bits(),
+                    point[1].to_bits(),
+                    point[2].to_bits(),
+                ],
+                value.to_bits(),
+            )
+        })
+        .collect();
+    (fem.material.damping, values_by_point)
+}
+
 #[test]
 fn fem_multibody_cubic_frame_contract_rejects_divergence_and_promotes_single_active_frame() {
     let mut ir = fem_minimal_test_ir();
@@ -435,4 +651,162 @@ fn disabled_canonical_region_id_cannot_be_reinterpreted_as_an_enabled_alias() {
             .region_id,
         "strip:enabled"
     );
+}
+
+#[test]
+fn fem_absorber_uses_the_union_of_conformal_owner_segments() {
+    for frame in [
+        fullmag_ir::AbsorbingBoundaryFrameIR::Object,
+        fullmag_ir::AbsorbingBoundaryFrameIR::Universe,
+    ] {
+        let (base_alpha, full_owner) =
+            planned_fem_alpha_by_point(&conformal_absorber_problem(false, false, frame));
+        let (_, left_then_right) =
+            planned_fem_alpha_by_point(&conformal_absorber_problem(true, false, frame));
+        let (_, right_then_left) =
+            planned_fem_alpha_by_point(&conformal_absorber_problem(true, true, frame));
+
+        assert_eq!(
+            left_then_right, right_then_left,
+            "segment order changed {frame:?} alpha samples"
+        );
+        assert_eq!(
+            left_then_right, full_owner,
+            "split conformal markers changed whole-owner {frame:?} bounds"
+        );
+        for interface_point in [
+            [1e-9, 0.0, 0.0],
+            [1e-9, 1e-9, 0.0],
+            [1e-9, 0.0, 1e-9],
+        ] {
+            let key = interface_point.map(f64::to_bits);
+            assert_eq!(
+                left_then_right.get(&key).copied(),
+                Some(base_alpha.to_bits()),
+                "the shared interface is internal to the {frame:?} absorber owner"
+            );
+        }
+        let outer_point = [2e-9, 0.0, 0.0].map(f64::to_bits);
+        assert_eq!(
+            left_then_right.get(&outer_point).copied(),
+            Some((base_alpha + 0.4).to_bits()),
+            "the actual x+ owner boundary should retain full damping"
+        );
+    }
+}
+
+#[test]
+fn fem_absorber_bounds_remain_separate_for_distinct_owners() {
+    for frame in [
+        fullmag_ir::AbsorbingBoundaryFrameIR::Object,
+        fullmag_ir::AbsorbingBoundaryFrameIR::Universe,
+    ] {
+        let (base_alpha, values) =
+            planned_fem_alpha_by_point(&distinct_owner_absorber_problem(frame));
+        for owner_boundary in [[1e-9, 0.0, 0.0], [4e-9, 0.0, 0.0]] {
+            let key = owner_boundary.map(f64::to_bits);
+            assert_eq!(
+                values.get(&key).copied(),
+                Some((base_alpha + 0.4).to_bits()),
+                "each distinct owner needs its own {frame:?} x+ bounds"
+            );
+        }
+    }
+}
+
+#[test]
+fn fem_conformal_segments_materialize_fields_at_every_owner_node() {
+    const MS_BASE: f64 = 700e3;
+    const MS_GRADIENT: f64 = 1e14;
+    const AEX_BASE: f64 = 9e-12;
+    const AEX_GRADIENT: f64 = 1e-3;
+    let linear_assignment = |assignment_id: &str,
+                            parameter: fullmag_ir::MaterialParameterNameIR,
+                            base: f64,
+                            gradient: f64,
+                            unit: &str| {
+        fullmag_ir::MaterialParameterAssignmentIR {
+            assignment_id: assignment_id.to_string(),
+            owner_object: "strip".to_string(),
+            region_id: None,
+            parameter,
+            value: fullmag_ir::MaterialParameterFieldIR::Linear {
+                base,
+                gradient: [gradient, 0.0, 0.0],
+                frame: fullmag_ir::RegionFrameIR::Object,
+                unit: Some(unit.to_string()),
+            },
+            priority: 10,
+            conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+        }
+    };
+
+    for reverse_segments in [false, true] {
+        let mut ir = conformal_absorber_problem(
+            true,
+            reverse_segments,
+            fullmag_ir::AbsorbingBoundaryFrameIR::Object,
+        );
+        ir.material_parameter_fields = vec![
+            linear_assignment(
+                "owner_linear_ms",
+                fullmag_ir::MaterialParameterNameIR::Ms,
+                MS_BASE,
+                MS_GRADIENT,
+                "A/m",
+            ),
+            linear_assignment(
+                "owner_linear_aex",
+                fullmag_ir::MaterialParameterNameIR::Aex,
+                AEX_BASE,
+                AEX_GRADIENT,
+                "J/m",
+            ),
+        ];
+
+        let planned = plan(&ir).expect("conformal owner-wide fields should plan");
+        let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+            panic!("expected FEM plan");
+        };
+        let ms = fem
+            .material
+            .ms_field
+            .as_ref()
+            .expect("owner-wide linear Ms must materialize at FEM nodes");
+        let aex = fem
+            .material
+            .a_field
+            .as_ref()
+            .expect("owner-wide linear Aex must materialize at FEM nodes");
+        assert_eq!(ms.len(), fem.mesh.nodes.len());
+        assert_eq!(aex.len(), fem.mesh.nodes.len());
+
+        for (index, point) in fem.mesh.nodes.iter().enumerate() {
+            let expected_ms = MS_BASE + MS_GRADIENT * point[0];
+            let expected_aex = AEX_BASE + AEX_GRADIENT * point[0];
+            assert!(
+                (ms[index] - expected_ms).abs() <= 1e-8,
+                "reverse_segments={reverse_segments} node {index} x={} Ms={} expected={expected_ms}",
+                point[0],
+                ms[index]
+            );
+            assert!(
+                (aex[index] - expected_aex).abs() <= 1e-25,
+                "reverse_segments={reverse_segments} node {index} x={} Aex={} expected={expected_aex}",
+                point[0],
+                aex[index]
+            );
+        }
+
+        for endpoint_x in [0.0, 2e-9] {
+            let index = fem
+                .mesh
+                .nodes
+                .iter()
+                .position(|point| point[0] == endpoint_x)
+                .expect("owner mesh contains both x endpoints");
+            assert_ne!(ms[index], fem.material.saturation_magnetisation);
+            assert_ne!(aex[index], fem.material.exchange_stiffness);
+        }
+    }
 }

@@ -135,6 +135,10 @@ describe("RealtimeClient", () => {
     }));
     socket.emit("message", JSON.stringify({ type: "resource.batch_changed" }));
     expect(handleEvent).toHaveBeenCalledTimes(2);
+    expect(handleEvent).toHaveBeenLastCalledWith(
+      { type: "resource.batch_changed" },
+      "api-instance:2",
+    );
     client.close();
   });
 

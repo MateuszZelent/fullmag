@@ -19,7 +19,7 @@ from pathlib import Path
 import re
 import time
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 from urllib.request import Request, urlopen
 
 import fullmag_storage as storage
@@ -79,6 +79,7 @@ LIVE_FIELD_OBSERVATION_NOTE = (
     "Quantity label data-ready and viewport datasets are DOM readiness observations only; "
     "they do not prove field payload presence or values."
 )
+FEM_AIRBOX_VECTOR_OBSERVATION_SCHEMA = "fullmag.fem-airbox-vector-observation.v1"
 
 DESKTOP_WSL_BIND_ALIAS_RE = re.compile(
     r"^/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/"
@@ -731,6 +732,7 @@ def _compose_document(
     airbox_inspector: bool = False,
     saved_playback_item_id: str | None = None,
     source_script_sha256: str | None = None,
+    expect_fem_airbox_vectors: bool | None = None,
 ) -> dict[str, object]:
     if saved_playback_item_id is not None:
         if not re.fullmatch(r"[0-9]{1,20}", saved_playback_item_id):
@@ -742,6 +744,7 @@ def _compose_document(
             or canvas_only is not None
             or expect_live_field is not None
             or expect_airbox_vectors is not None
+            or expect_fem_airbox_vectors is True
             or expect_ambiguous_compute_fields is not None
             or airbox_inspector
         ):
@@ -754,6 +757,16 @@ def _compose_document(
         raise BuildControlError("Live-field expectations require --canvas-only")
     if expect_airbox_vectors is True and not expect_live_field:
         raise BuildControlError("Airbox-vector expectation requires an expected live field")
+    if expect_fem_airbox_vectors is True and (
+        canvas_only is not True
+        or expect_live_field != "m"
+        or expect_airbox_vectors is True
+        or expect_ambiguous_compute_fields is True
+        or prepare_viewport_fixture
+    ):
+        raise BuildControlError(
+            "FEM Airbox-vector QA requires canvas-only m readiness and excludes other scenarios"
+        )
     if expect_ambiguous_compute_fields is True and canvas_only is not True:
         raise BuildControlError("Ambiguous Compute Fields QA requires --canvas-only")
     if airbox_inspector and (
@@ -761,6 +774,7 @@ def _compose_document(
         or canvas_only is not None
         or expect_live_field is not None
         or expect_airbox_vectors is not None
+        or expect_fem_airbox_vectors is not None
         or expect_ambiguous_compute_fields is not None
         or saved_playback_item_id is not None
     ):
@@ -797,6 +811,9 @@ def _compose_document(
     if expect_airbox_vectors is not None:
         environment["CONTROL_ROOM_BROWSER_QA_EXPECT_LIVE_FIELD"] = expect_live_field or ""
         environment["CONTROL_ROOM_BROWSER_QA_EXPECT_AIRBOX_VECTORS"] = "1" if expect_airbox_vectors else "0"
+    if expect_fem_airbox_vectors is True:
+        environment["CONTROL_ROOM_BROWSER_QA_SCENARIO"] = "fem-airbox-vectors"
+        environment["CONTROL_ROOM_BROWSER_QA_EXPECT_FEM_AIRBOX_VECTORS"] = "1"
     if expect_ambiguous_compute_fields is not None:
         environment["CONTROL_ROOM_BROWSER_QA_EXPECT_AMBIGUOUS_COMPUTE_FIELDS"] = (
             "1" if expect_ambiguous_compute_fields else "0"
@@ -880,6 +897,7 @@ def _validate_browser_helper(
     airbox_inspector: bool = False,
     saved_playback_item_id: str | None = None,
     source_script_sha256: str | None = None,
+    expect_fem_airbox_vectors: bool | None = None,
 ) -> None:
     try:
         validate_source_labels(document, identity)
@@ -937,6 +955,28 @@ def _validate_browser_helper(
             "/state/development/workspace/apps/control-room/scripts/verify-airbox-inspector.mjs",
         ]:
             raise ControlOutcomeUnknown("Browser helper did not run the selected Airbox Inspector harness")
+    raw_environment = config.get("Env") or []
+    fem_observation_environment = [
+        entry for entry in raw_environment
+        if entry.startswith("CONTROL_ROOM_BROWSER_QA_EXPECT_FEM_AIRBOX_VECTORS=")
+    ]
+    fem_scenario_environment = [
+        entry for entry in raw_environment
+        if entry.startswith("CONTROL_ROOM_BROWSER_QA_SCENARIO=fem-airbox-vectors")
+    ]
+    if expect_fem_airbox_vectors is True:
+        if (canvas_only is not True or expect_live_field != "m" or expect_airbox_vectors is not False):
+            raise ControlOutcomeUnknown("FEM Airbox helper expectations differ from the admitted canvas/m scenario")
+        if {
+            "CONTROL_ROOM_BROWSER_QA_SCENARIO=fem-airbox-vectors",
+            "CONTROL_ROOM_BROWSER_QA_EXPECT_FEM_AIRBOX_VECTORS=1",
+        } - environment:
+            raise ControlOutcomeUnknown("Browser helper FEM Airbox scenario identity differs")
+        if (fem_observation_environment != ["CONTROL_ROOM_BROWSER_QA_EXPECT_FEM_AIRBOX_VECTORS=1"]
+                or fem_scenario_environment != ["CONTROL_ROOM_BROWSER_QA_SCENARIO=fem-airbox-vectors"]):
+            raise ControlOutcomeUnknown("Browser helper FEM Airbox expectation is duplicated or malformed")
+    elif fem_observation_environment or fem_scenario_environment:
+        raise ControlOutcomeUnknown("Browser helper reported an unrequested FEM Airbox scenario")
     if canvas_only is not None:
         mode_environment = [
             entry for entry in environment
@@ -1146,6 +1186,98 @@ def _validate_live_field_observation(
             if (dataset["fdm_airbox_vectors_visible"] is not True
                     or dataset["fdm_airbox_vector_segment_count"] <= 0):
                 raise BuildControlError(f"Browser helper did not observe visible FDM airbox vectors: {key}")
+
+
+def _validate_fem_airbox_vector_observation(
+    value: object,
+    session: object,
+) -> None:
+    if not isinstance(value, Mapping) or value.get("schema") != FEM_AIRBOX_VECTOR_OBSERVATION_SCHEMA:
+        raise BuildControlError("Browser helper omitted the FEM Airbox vector observation schema")
+    if (value.get("solver_family") != "fem"
+            or value.get("health_disposition") != "ready"
+            or value.get("target_id") != "airbox"
+            or value.get("target_kind") != "airbox"
+            or value.get("selection_kind") != "airbox.visualization.debug"
+            or value.get("quantity_id") != "H_demag"
+            or value.get("component") != "full"
+            or value.get("scope_kind") != "airbox"):
+        raise BuildControlError("Browser helper FEM Airbox target identity differs")
+    scope_id = value.get("scope_id")
+    carrier_id = value.get("carrier_id")
+    resource_key = value.get("resource_key")
+    if (not isinstance(scope_id, str) or not scope_id or len(scope_id) > 512
+            or not isinstance(carrier_id, str) or not carrier_id or len(carrier_id) > 512
+            or not isinstance(resource_key, str) or not resource_key or len(resource_key) > 2048):
+        raise BuildControlError("Browser helper FEM Airbox resource identity is malformed")
+    parsed_key = urlsplit(resource_key)
+    query = parse_qs(parsed_key.query, keep_blank_values=True)
+    if (parsed_key.scheme or parsed_key.netloc
+            or parsed_key.path != "/v2/sessions/current/data/fields/H_demag/samples/vector"
+            or query.get("component") != ["full"]
+            or query.get("scope_kind") != ["airbox"]
+            or query.get("scope_id") != [scope_id]):
+        raise BuildControlError("Browser helper FEM Airbox canonical resource key differs")
+    request = value.get("request")
+    if (not isinstance(request, Mapping)
+            or request.get("method") != "GET"
+            or request.get("same_origin") is not True
+            or type(request.get("status")) is not int
+            or request.get("status") != 200
+            or request.get("path") != parsed_key.path
+            or request.get("quantity_id") != "H_demag"
+            or request.get("component") != "full"
+            or request.get("scope_kind") != "airbox"
+            or request.get("scope_id") != scope_id):
+        raise BuildControlError("Browser helper did not observe a successful scoped FEM H_demag HTTP response")
+    field_resource_state = value.get("field_resource_state")
+    if (not isinstance(field_resource_state, str)
+            or not field_resource_state.startswith("ready · data present · last-valid present")):
+        raise BuildControlError("Browser helper FEM Airbox field resource is not ready with accepted data")
+    if (value.get("payload_scope") != f"airbox:{scope_id}"
+            or type(value.get("payload_points")) is not int
+            or value["payload_points"] <= 0
+            or type(value.get("payload_values")) is not int
+            or value["payload_values"] <= 0
+            or type(value.get("payload_n_comp")) is not int
+            or value["payload_n_comp"] != 3
+            or value["payload_values"] != value["payload_points"] * value["payload_n_comp"]):
+        raise BuildControlError("Browser helper decoded FEM Airbox payload identity or dimensions differ")
+    adopted_field_buffer_id = value.get("adopted_field_buffer_id")
+    vector_build_key = value.get("vector_build_key")
+    if (value.get("field_buffer_state") != "ready"
+            or not isinstance(adopted_field_buffer_id, str)
+            or not adopted_field_buffer_id or len(adopted_field_buffer_id) > 512
+            or value.get("adopted_resource_key") != resource_key
+            or not isinstance(vector_build_key, str)
+            or not vector_build_key or len(vector_build_key) > 512
+            or type(value.get("rendered_vector_segment_count")) is not int
+            or value["rendered_vector_segment_count"] <= 0):
+        raise BuildControlError("Browser helper FEM vector field buffer was not adopted and rendered")
+    for key in ("session_run_identity_before", "session_run_identity_after"):
+        identity = value.get(key)
+        if (not isinstance(identity, Mapping)
+                or identity.get("discretization") != "fem"
+                or not all(isinstance(identity.get(field), str) and identity[field]
+                           for field in ("session_id", "session_epoch", "request_scope_epoch", "run_id"))):
+            raise BuildControlError(f"Browser helper FEM Airbox {key} is malformed")
+    if value["session_run_identity_before"] != value["session_run_identity_after"]:
+        raise BuildControlError("Browser helper FEM Airbox proof changed its active session/run identity")
+    if (not isinstance(session, Mapping)
+            or value["session_run_identity_after"].get("session_id") != session.get("session_id")
+            or value["session_run_identity_after"].get("session_epoch") != session.get("session_epoch")
+            or value["session_run_identity_after"].get("request_scope_epoch") != session.get("request_scope_epoch")):
+        raise BuildControlError("Browser helper FEM Airbox proof does not belong to the admitted active session")
+    if (value.get("primary_quantity_id_before") != "m"
+            or value.get("primary_quantity_id_after") != "m"
+            or value.get("primary_field_state_after") != "data-ready"):
+        raise BuildControlError("Browser helper Airbox display selection did not preserve primary FEM magnetization")
+    if (type(value.get("display_state_patch_count")) is not int
+            or not 0 <= value["display_state_patch_count"] <= 2
+            or type(value.get("blocked_mutation_count")) is not int
+            or value["blocked_mutation_count"] != 0):
+        raise BuildControlError("Browser helper observed a blocked non-display mutation during FEM Airbox QA")
+    _validate_canvas_result(value.get("canvas"), "FEM Airbox H_demag vectors")
 
 
 def _validate_canvas_screenshot(value: object) -> None:
@@ -1743,6 +1875,7 @@ def _parse_result(
     expect_live_field: str | None = None,
     expect_airbox_vectors: bool = False,
     expect_ambiguous_compute_fields: bool = False,
+    expect_fem_airbox_vectors: bool = False,
 ) -> dict[str, object]:
     text = output.decode("utf-8", "replace")
     payload = None
@@ -1776,6 +1909,9 @@ def _parse_result(
             or type(payload.get("expect_airbox_vectors")) is not bool
             or payload["expect_airbox_vectors"] is not expect_airbox_vectors):
         raise BuildControlError("Browser helper live-field expectation differs from the admitted operation")
+    fem_expectation = payload.get("expect_fem_airbox_vectors", False)
+    if type(fem_expectation) is not bool or fem_expectation is not expect_fem_airbox_vectors:
+        raise BuildControlError("Browser helper FEM Airbox expectation differs from the admitted operation")
     if "expect_ambiguous_compute_fields" not in payload:
         if expect_ambiguous_compute_fields:
             raise BuildControlError("Browser helper omitted the enabled ambiguous-command expectation")
@@ -1786,10 +1922,16 @@ def _parse_result(
         raise BuildControlError("Live-field result is outside the canvas-only QA scope")
     if expect_airbox_vectors and expect_live_field is None:
         raise BuildControlError("Airbox-vector result omitted its expected live field")
+    if expect_fem_airbox_vectors and (
+        not canvas_only or expect_live_field != "m" or expect_airbox_vectors
+        or expect_ambiguous_compute_fields
+    ):
+        raise BuildControlError("FEM Airbox result is outside its canvas-only primary-m scenario")
     if expect_ambiguous_compute_fields and not canvas_only:
         raise BuildControlError("Ambiguous Compute Fields result is outside canvas-only QA scope")
     expected_scope = (
         "canvas-home-ambiguous-compute-fields" if expect_ambiguous_compute_fields else
+        "canvas-home-fem-airbox-vectors" if expect_fem_airbox_vectors else
         "canvas-home-live-field-airbox" if expect_airbox_vectors else
         "canvas-home-live-field" if expect_live_field is not None else
         "canvas-home-only" if canvas_only else
@@ -1817,6 +1959,12 @@ def _parse_result(
         _validate_canvas_screenshot(payload.get("canvas_screenshot"))
     elif payload.get("live_field_observation") is not None or payload.get("canvas_screenshot") is not None:
         raise BuildControlError("Browser helper reported an unrequested live-field observation")
+    if expect_fem_airbox_vectors:
+        _validate_fem_airbox_vector_observation(
+            payload.get("fem_airbox_observation"), payload.get("session")
+        )
+    elif payload.get("fem_airbox_observation") is not None:
+        raise BuildControlError("Browser helper reported unrequested FEM Airbox vector evidence")
     ambiguous_submission = payload.get("ambiguous_command_submission")
     if expect_ambiguous_compute_fields:
         _validate_ambiguous_command_submission(ambiguous_submission, payload.get("session"))
@@ -1897,6 +2045,7 @@ def _run(
     airbox_inspector_script_sha256: str | None = None,
     saved_playback_item_id: str | None = None,
     source_script_sha256: str | None = None,
+    expect_fem_airbox_vectors: bool = False,
 ) -> None:
     root = operation["root"]
     helper_name = "fullmag-browser-qa-" + operation["receipt"]["attempt"][:12]
@@ -1947,6 +2096,7 @@ def _run(
         canvas_only=canvas_only,
         expect_live_field=expect_live_field if expect_live_field is not None else None,
         expect_airbox_vectors=expect_airbox_vectors if expect_live_field is not None else None,
+        expect_fem_airbox_vectors=(True if expect_fem_airbox_vectors else None),
         expect_ambiguous_compute_fields=(
             expect_ambiguous_compute_fields
             if not airbox_inspector and saved_playback_item_id is None
@@ -1955,6 +2105,8 @@ def _run(
         airbox_inspector=airbox_inspector,
         saved_playback_item_id=saved_playback_item_id,
         source_script_sha256=source_script_sha256)
+    if observed["Config"].get("Cmd") != document["services"]["browser-qa"]["command"]:
+        raise ControlOutcomeUnknown("Browser helper command differs from the admitted Compose harness")
     operation["receipt"]["browser_container_id"] = observed["Id"]
     control.write(root + "/receipt.json", operation["receipt"])
     raw = result.stdout
@@ -1981,7 +2133,8 @@ def _run(
         else:
             payload = _parse_result(raw, public_url, browser_url, canvas_only=canvas_only,
                 expect_live_field=expect_live_field, expect_airbox_vectors=expect_airbox_vectors,
-                expect_ambiguous_compute_fields=expect_ambiguous_compute_fields)
+                expect_ambiguous_compute_fields=expect_ambiguous_compute_fields,
+                expect_fem_airbox_vectors=expect_fem_airbox_vectors)
     except BuildControlError as error:
         control.write(root + "/result.json", {
             "schema": RESULT_SCHEMA,
@@ -2046,6 +2199,11 @@ def reconcile_browser_qa(control, selected, identity, args):
     scenario = inputs.get("scenario", "standard")
     if scenario not in {"standard", "airbox-inspector", "saved-playback"}:
         raise BuildControlError("QA reconciliation scenario is unsupported")
+    expect_fem_airbox_vectors_input = inputs.get("expect_fem_airbox_vectors", False)
+    if type(expect_fem_airbox_vectors_input) is not bool:
+        raise BuildControlError("QA reconciliation FEM Airbox-vector expectation must be boolean")
+    if expect_fem_airbox_vectors_input and scenario != "standard":
+        raise BuildControlError("QA reconciliation FEM Airbox-vector expectation has another scenario identity")
     saved_playback_item_id = None
     source_script_sha256 = None
     if scenario == "saved-playback":
@@ -2062,6 +2220,7 @@ def reconcile_browser_qa(control, selected, identity, args):
                 or inputs.get("canvas_only") is not False
                 or inputs.get("expect_live_field") is not None
                 or inputs.get("expect_airbox_vectors") is not False
+                or inputs.get("expect_fem_airbox_vectors", False) is not False
                 or inputs.get("expect_ambiguous_compute_fields") is not False):
             raise BuildControlError("QA reconciliation Saved Playback receipt includes another browser scenario")
     elif "saved_playback_item_id" in inputs or "source_script_sha256" in inputs:
@@ -2119,6 +2278,15 @@ def reconcile_browser_qa(control, selected, identity, args):
         # Older receipts did not pin the optional response-loss scenario.
         expect_ambiguous_command_input = False
         expect_ambiguous_command_compose_pin = None
+    expect_fem_airbox_compose_pin = True if expect_fem_airbox_vectors_input else None
+    if expect_fem_airbox_vectors_input and (
+        not canvas_only_input
+        or prepare_viewport_fixture
+        or expect_live_field_input != "m"
+        or expect_airbox_vectors_input
+        or expect_ambiguous_command_input
+    ):
+        raise BuildControlError("QA reconciliation FEM Airbox scenario does not match the primary-m canvas contract")
     if canvas_only_input and prepare_viewport_fixture:
         raise BuildControlError("Canvas-only browser QA receipt cannot prepare a viewport fixture")
     expected_document = _compose_document(selected, identity, inputs["browser_image"],
@@ -2127,6 +2295,9 @@ def reconcile_browser_qa(control, selected, identity, args):
         canvas_only=(None if scenario == "saved-playback" or airbox_inspector else canvas_only_compose_pin),
         expect_live_field=(None if scenario == "saved-playback" else expect_live_field_compose_pin),
         expect_airbox_vectors=(None if scenario == "saved-playback" else expect_airbox_compose_pin),
+        expect_fem_airbox_vectors=(
+            None if scenario != "standard" else expect_fem_airbox_compose_pin
+        ),
         expect_ambiguous_compute_fields=(
             None if scenario == "saved-playback" or airbox_inspector
             else expect_ambiguous_command_compose_pin
@@ -2185,6 +2356,9 @@ def reconcile_browser_qa(control, selected, identity, args):
         canvas_only=(None if scenario == "saved-playback" or airbox_inspector else canvas_only_compose_pin),
         expect_live_field=(None if scenario == "saved-playback" else expect_live_field_compose_pin),
         expect_airbox_vectors=(None if scenario == "saved-playback" else expect_airbox_compose_pin),
+        expect_fem_airbox_vectors=(
+            None if scenario != "standard" else expect_fem_airbox_compose_pin
+        ),
         expect_ambiguous_compute_fields=(
             None if scenario == "saved-playback" or airbox_inspector
             else expect_ambiguous_command_compose_pin
@@ -2280,6 +2454,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Also require visible FDM airbox vectors (requires --expect-live-field)",
     )
     parser.add_argument(
+        "--expect-fem-airbox-vectors",
+        action="store_true",
+        help="Select FEM Airbox H_demag vectors and require live render-adoption evidence (canvas-only, --expect-live-field m)",
+    )
+    parser.add_argument(
         "--expect-ambiguous-compute-fields",
         action="store_true",
         help="Exercise one real Compute Fields command with its accepted response dropped (canvas-only)",
@@ -2319,10 +2498,19 @@ def main(argv: list[str] | None = None) -> int:
                 or len(args.expect_live_field) > 512
                 or any(ord(character) < 32 or ord(character) == 127 for character in args.expect_live_field)):
             raise BuildControlError("--expect-live-field requires a bounded, non-empty quantity id")
-    if (args.expect_live_field is not None or args.expect_airbox_vectors) and not args.canvas_only:
-        raise BuildControlError("--expect-live-field and --expect-airbox-vectors require --canvas-only")
+    if (args.expect_live_field is not None or args.expect_airbox_vectors or args.expect_fem_airbox_vectors) and not args.canvas_only:
+        raise BuildControlError("Focused live-field and Airbox-vector expectations require --canvas-only")
     if args.expect_airbox_vectors and args.expect_live_field is None:
         raise BuildControlError("--expect-airbox-vectors requires --expect-live-field")
+    if args.expect_fem_airbox_vectors and (
+        args.expect_live_field != "m"
+        or args.expect_airbox_vectors
+        or args.expect_ambiguous_compute_fields
+        or args.prepare_viewport_fixture
+    ):
+        raise BuildControlError(
+            "--expect-fem-airbox-vectors requires --expect-live-field m and excludes FDM vectors, fixture, and command scenarios"
+        )
     if args.expect_ambiguous_compute_fields and not args.canvas_only:
         raise BuildControlError("--expect-ambiguous-compute-fields requires --canvas-only")
     if args.airbox_inspector and (
@@ -2330,6 +2518,7 @@ def main(argv: list[str] | None = None) -> int:
         or args.canvas_only
         or args.expect_live_field is not None
         or args.expect_airbox_vectors
+        or args.expect_fem_airbox_vectors
         or args.expect_ambiguous_compute_fields
     ):
         raise BuildControlError("--airbox-inspector cannot be combined with other browser QA scenarios")
@@ -2341,6 +2530,7 @@ def main(argv: list[str] | None = None) -> int:
             or args.canvas_only
             or args.expect_live_field is not None
             or args.expect_airbox_vectors
+            or args.expect_fem_airbox_vectors
             or args.expect_ambiguous_compute_fields
             or args.airbox_inspector
         ):
@@ -2390,6 +2580,7 @@ def main(argv: list[str] | None = None) -> int:
         canvas_only=(None if args.airbox_inspector or args.saved_playback_item_id is not None else args.canvas_only),
         expect_live_field=args.expect_live_field,
         expect_airbox_vectors=(args.expect_airbox_vectors if args.expect_live_field is not None else None),
+        expect_fem_airbox_vectors=(True if args.expect_fem_airbox_vectors else None),
         expect_ambiguous_compute_fields=(
             None if args.airbox_inspector or args.saved_playback_item_id is not None
             else args.expect_ambiguous_compute_fields
@@ -2433,6 +2624,8 @@ def main(argv: list[str] | None = None) -> int:
         ),
         "airbox_inspector_script_sha256": airbox_inspector_script_sha256,
     }
+    if args.expect_fem_airbox_vectors:
+        inputs["expect_fem_airbox_vectors"] = True
     if args.saved_playback_item_id is not None:
         inputs["saved_playback_item_id"] = args.saved_playback_item_id
         inputs["source_script_sha256"] = source_script_sha256
@@ -2462,6 +2655,7 @@ def main(argv: list[str] | None = None) -> int:
             airbox_inspector_script_sha256,
             args.saved_playback_item_id,
             source_script_sha256,
+            args.expect_fem_airbox_vectors,
         )
     return 0
 
