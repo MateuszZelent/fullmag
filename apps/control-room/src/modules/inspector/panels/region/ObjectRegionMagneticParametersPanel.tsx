@@ -500,6 +500,17 @@ function useObjectRegionMagneticParametersPanelView({
         ) : null}
 
         {draft.materialOverrides.map((override, index) => {
+          if (override.preservedOverride) {
+            return (
+              <div className="fm-region-override fm-section-separator" key={`override:${index}`}>
+                <FieldRow label={`Override ${index + 1}`} value={`${override.preservedOverride.parameter} · ${override.preservedOverride.value.kind}`} />
+                <p>This profile is preserved unchanged. Edit it in the Python script.</p>
+                <Button size="sm" type="button" variant="ghost" onClick={() => removeMaterialOverride(index)}>
+                  Remove Override
+                </Button>
+              </div>
+            );
+          }
           const parentInfo = getParentParamInfo(
             override.parameter,
             model.objectId,
