@@ -55,3 +55,24 @@ z nową osobą oraz pełna kwalifikacja naukowa pozostają odrębnymi zadaniami.
 [Pełne dowody, identyfikatory, pomiary i hashe](2026-10-29-r6-live-workspace-docking.evidence.json).
 
 [UI podczas pracy solvera](/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/r6-live-docking-20261029/resize-final/panels-during-solve.png).
+
+
+## Powtórka po scaleniu mastera — runtime acb0330ea
+
+Odtworzono runtime c2810c89… po kontrolowanym archiwum historycznego OWNER
+(zachowany SHA-256). Przywrócone signed15 i mod Gamma są widoczne w aktualnym UI.
+Następnie uruchomiono NOWĄ Gamma frequency_window (aktywacja db0bdb00…,
+run ffe91832…). Przygotowany przed aktywacją obserwator wykonał wszystkie
+14 operacji: każdy before/after miał running i identyczny run ID, zero
+pageerror oraz numerycznych mutacji. Dotyczy to także drag/edge dock wszystkich
+trzech paneli i zmiany rozmiaru zadokowanego podziału.
+
+Status powtórki: **niezaliczona jeszcze końcowo** — trwa naturalne obliczenie
+Gamma, potrzebne completed i spectrum tego samego runu. Żywy proces natywny
+potwierdzono bezpośrednio przez Docker (PID 29195, czas CPU rośnie). Nie
+przerywano ani nie wydłużano sztucznie obliczenia. Poprzedni PASS w dwóch
+przebiegach pozostaje historycznym dowodem o opisanym powyżej zakresie.
+
+Aktualna powtórka i hash pliku z 14 operacjami są w polu
+current_generation_recheck istniejącego evidence JSON. Pełny bieżący stan:
+[raport integracji](2026-10-29-eigensolve-final-integration.md).

@@ -318,3 +318,46 @@ Przed operacją potwierdzono odtwarzalne archiwum signed15:
 size=158456496, SHA-256=2338882b585bc40f9911ec3334676e672cb23c2a55448d4945e711533b57b6cf, ZIP entries=349, integralność PASS.
 Po starcie wymagane jest przywrócenie tego modelu/importu, a następnie nowe
 obliczenia i R6; pusty backend ani sam stary import nie zamykają celu.
+
+
+## Bieżący runtime i rzeczywiste UI — dowód 29.10
+
+Canonical fresh-state zakończył się SUCCEEDED: recreate 447b8d642dcb4682b5b783c0b5b90b91,
+nowy development c2810c89e195482eac664f37379919a2, config
+0b0db2898ea73851e0d8f659364832f624bfba43edd3dd9cb78207aec15aa2e7.
+Runtime źródeł acb0330ea, snapshot d58fc8162ba1ecfea790ea422941e9df502aaba1609e4b99dbb4cff712c98fbc.
+Nowy OWNER Ready potwierdza ten build i host c281; historyczny OWNER ma w
+runtime-archives/447b… dokładnie ten sam SHA-256 fe65… co przed archiwizacją.
+Nie dodawano kolejnej ścieżki recovery ani nie edytowano ręcznie OWNER.
+
+Rzeczywisty import UI zwrócił HTTP 200: odzyskane 15 próbek, Γ=9,299249697 GHz.
+Browser pokazał signed dyspersję z dwiema referencjami oraz rzeczywisty mod Γ
+z widocznym samym filmem 40x40x10 nm. Fit mode działa; poprzedni skrypt używał
+nieaktualnego Fit view. Weryfikacja końcowa: PASS, zero pageerror/HTTP failure,
+WebGL contextLost=false, bufor 888x573. To odtworzone dane, nie nowe obliczenie.
+Screeny i proof: final-integration-20261029/restored-runtime w katalogu artefaktów.
+
+Nowa aktywacja Gamma frequency_window db0bdb00b71244ffb6c3528c6a43a811: succeeded,
+run ffe91832… / request eigensolve-gamma-window-r6-acb0330ea-20261029-1.
+Obserwator R6 zaliczył 14/14 operacji na tym samym running runie przed/po,
+zero pageerror i numerycznych mutacji. RUN NADAL TRWA; nie zaliczono jeszcze
+końcowego R6 bez completed i widma. Żywy worker PID 29195 potwierdzono w Dockerze
+(17 min elapsed, ponad 22 min CPU); sam status API nie był podstawą czekania.
+
+CI acb0330ea: Rust, Control Room i cały browser fixture smoke SUCCESS.
+Dwie bramki dokumentacji odrzuciły brak tabeli source-code index dla ośmiu
+nowych mapowań i niejednoznaczny bare symbol C++. Uzupełniono tabelę i prefiks
+void definicji; rzeczywisty statyczny walidator 0600 PASS, bez zmiany walidatora.
+
+Native CTest 40877529745: 20/21 PASS — refill poprawiony. Pozostałe FAIL dotyczy
+wyłącznie błędnego żądania true_probe_attempt_count=0. Status error=4, stop reason,
+failure-only serializer i callback są poprawne; licznik ma sześć prób i jawny
+zakres całego EPS. Produkcyjny callback nie resetuje historii i ma prawidłową
+bramkę nonpositive-default. Istniejący bezpośredni test KSP sprawdza breakdown
+przed jakąkolwiek próbą oraz positive-default/build-breakdown z attempts>0.
+Test C ABI wymaga teraz ścisłej spójności scope/liczników/ordinal i positive
+default dla zapisanej próby; końcowy nonpositive callback nie może dodawać próby.
+Zachowano error/stop reason, null norms i pozostałe asercje. Brak zmiany solvera,
+macierzy lub tolerancji. Nowa asercja wymaga ponowienia CTest w GitHub Actions.
+
+[Strukturalny checkpoint i dokładne identyfikatory](2026-10-29-eigensolve-final-integration.evidence.json).

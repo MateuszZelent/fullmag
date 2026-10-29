@@ -1,0 +1,72 @@
+{
+  "scope": "current-runtime recovery, restored result UI, source CI and active Gamma R6; not complete science qualification",
+  "runtime": {
+    "attempt": "c2810c89e195482eac664f37379919a2",
+    "config_sha256": "0b0db2898ea73851e0d8f659364832f624bfba43edd3dd9cb78207aec15aa2e7",
+    "source_commit": "acb0330ea4f051d1f4bb3cc6181529ef9ba09851",
+    "source_snapshot_sha256": "d58fc8162ba1ecfea790ea422941e9df502aaba1609e4b99dbb4cff712c98fbc",
+    "state": "succeeded",
+    "backend_container": "b26f28adf4b4e3f6367660a72452a7625b19c153f246550644da3274c6976a5e",
+    "frontend_container": "b285ae1e7e66c73065872223fd1c834c1e72b7bc76e6f3a629c712e99e3276b6"
+  },
+  "preservation": {
+    "archive_attempt": "447b8d642dcb4682b5b783c0b5b90b91",
+    "archived_owner_sha256": "fe65b122ce8c13be9364b408c0f5d0a771734bde03de79e35497f51245eb0585",
+    "archived_owner_hash_verified_equal": true,
+    "active_reservations_before": 0,
+    "released_host_reservations": 20,
+    "released_local_leases": 20,
+    "released_observation_sha256": "5ae150bf14d1e6e71ee0d51b73d4dcf08e26da60e99c6f4a1b1f227193a52ed0"
+  },
+  "restored_model": {
+    "archive_sha256": "2338882b585bc40f9911ec3334676e672cb23c2a55448d4945e711533b57b6cf",
+    "archive_bytes": 158456496,
+    "zip_entries": 349,
+    "import_http": 200,
+    "sample_count": 15,
+    "gamma_hz": 9299249697.073517,
+    "numerical_origin": "retained older run; not the new Gamma run",
+    "browser_status": "passed",
+    "webgl": {
+      "contextLost": false,
+      "width": 888,
+      "height": 573
+    },
+    "proof_path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/final-integration-20261029/restored-runtime/live-ui.json"
+  },
+  "gamma": {
+    "request_id": "eigensolve-gamma-window-r6-acb0330ea-20261029-1",
+    "activation_attempt": "db0bdb00b71244ffb6c3528c6a43a811",
+    "run_id": "run-live-ffe91832f1f9a883c7ac8f0b227e89bbed56580f3304d119a6bfdef7734720be",
+    "activation_state": "succeeded",
+    "last_observed_state": "running",
+    "new_frequency_hz": null,
+    "r6_action_count": 14,
+    "all_actions_same_running_run_before_after": true,
+    "numeric_mutations": [],
+    "completion_and_spectrum_required": true,
+    "progress_sha256": "c4685f64f9885a5f968595a882504c039a3bfd6036efb0c702fb21e9c88b5c01",
+    "progress_path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/final-integration-20261029/gamma-r6/progress.json"
+  },
+  "ci": {
+    "source_commit": "acb0330ea4f051d1f4bb3cc6181529ef9ba09851",
+    "bootstrap_run": 40877267658,
+    "rust_contracts": "success",
+    "control_room_contracts": "success",
+    "browser_fixture_smoke": "success",
+    "native_run": 40877529745,
+    "native_tests_passed": 20,
+    "native_tests_total": 21,
+    "native_failure": "nearest hard KSP fixture incorrectly requires zero EPS-lifetime probe attempts; actual six attempts have declared positive-default scope; correction pending hosted verification",
+    "scientific_source_map": "static validator PASS after adding source-code index and unique C++ declaration; remote rerun pending"
+  },
+  "open": [
+    "I1 semantic integration inventory",
+    "native CTest corrected-history recheck",
+    "current Gamma completion and spectrum",
+    "current full signed15 replay",
+    "I6 remaining native tracking provider",
+    "I7 completeness, convergence, serial/adaptive, COMSOL A1",
+    "PR/master/local WIP-safe integration and cleanup"
+  ]
+}

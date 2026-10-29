@@ -571,5 +571,19 @@
     "uptime_seconds": 1793253064,
     "api_contract_version": "1.0.0",
     "active_session": true
+  },
+  "current_generation_recheck": {
+    "source_commit": "acb0330ea4f051d1f4bb3cc6181529ef9ba09851",
+    "runtime_attempt": "c2810c89e195482eac664f37379919a2",
+    "activation_attempt": "db0bdb00b71244ffb6c3528c6a43a811",
+    "run_id": "run-live-ffe91832f1f9a883c7ac8f0b227e89bbed56580f3304d119a6bfdef7734720be",
+    "case": "examples/fem_eigen_mode_ui_de_gamma_window.py",
+    "actions_passed": 14,
+    "errors": [],
+    "numerical_mutations": [],
+    "completion": "pending; actual native worker still live",
+    "status": "not_yet_qualified",
+    "action_progress_path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/final-integration-20261029/gamma-r6/progress.json",
+    "action_progress_sha256": "c4685f64f9885a5f968595a882504c039a3bfd6036efb0c702fb21e9c88b5c01"
   }
 }

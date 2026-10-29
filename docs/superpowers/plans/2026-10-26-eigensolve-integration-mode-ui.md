@@ -29,8 +29,8 @@ Nie usuwamy niezintegrowanych worktree, wyników, cache ani aktywnych zasobów. 
 | I2: podpisane osie i tożsamość punktu | Kod wypchnięty; CI UI i browser fixture PASS | Wybór osi kx/ky/kz/path, SI, brak wymyślania znaku, stabilna próbka/mod po zmianie osi; aktualne typecheck/lint/CI |
 | I3: właściciel pola i akcja punkt → mod | Owner-bound JSON/meta/binary i pięć rzeczywistych przejść punkt → mod (próbki 0/3/7/11/14) PASS; import FMS cold oraz visualization_only PASS, końcowy strict i bieżący runtime otwarte | Run/stage/sample/mode/equilibrium oraz generacja artefaktu spójne; odrzucenie brakujących/sprzecznych powiązań |
 | I4: rzeczywisty mod w UI | Gamma nearest i ±10: rzeczywiste pola, Real/Imag/Abs/Phase, WebGL2, animacja i zrzut samego magnetyka PASS; pełny sweep pozostaje w I7 | Import wyniku/FMS lub przypięta mała symulacja; widoczny mod, real/imag/abs/phase, faza i animacja; WebGL bez utraty kontekstu i niezerowy buffer |
-| I5: review, PR, master i cleanup | Master 2c67d8f9 scalany na branch zadania; 12 konfliktów rozwiązane, commit/CI w toku; publikacja master/cleanup otwarte | Wymagane CI/review, merge PR, lokalny fast-forward bez naruszania WIP; cleanup tylko potwierdzonego, czystego i nieużywanego worktree |
-| I6: pozostała integracja solvera | Otwarte | Projekcja zespolona/transport bazy/periodyczne węzły, guards, artefakty, worker identity/journals, tracking; każda zmiana osobno zweryfikowana |
+| I5: review, PR, master i cleanup | Master 6caa3e226 scalony bez konfliktów jako 2bf23f6ff; naprawy na branchu PR #262; CI Rust/Control Room/browser dla acb0330ea PASS; source-map poprawiony lokalnie, native 20/21 i nowa regresja do ponowienia; publikacja master i cleanup otwarte | Wymagane CI/review, merge PR, lokalny fast-forward bez naruszania WIP; cleanup tylko potwierdzonego, czystego i nieużywanego worktree |
+| I6: pozostała integracja solvera | Pusty selektor Floqueta, otwarte osie k, panic resolvera osi i pełny cel refill poprawione; Rust CI PASS, native refill PASS. Korekta zakresu historycznych liczników KSP oczekuje CI; native tracking i pozostałe disposition otwarte | Projekcja zespolona/transport bazy/periodyczne węzły, guards, artefakty, worker identity/journals, tracking; każda zmiana osobno zweryfikowana |
 | I7: kwalifikacja naukowa | 15/15 z Gamma window zachowane w FMS i potwierdzone po imporcie; kompletność, zbieżność, serial/adaptive i COMSOL nadal NOT VERIFIED | Gamma + signed sweep, residuale, kompletność okna, serial/adaptive, zbieżność i COMSOL A1 ≤0,5% |
 
 Nie podajemy zbiorczego procentu: liczba commitów poza masterem nie mierzy ukończenia funkcji. S00–S12 oraz U1–U7 nie są zamknięte przez ten checkpoint.
@@ -354,3 +354,23 @@ CI 40612294926 dla 0a02ca809: default-feature runner 1821 PASS oraz osobny, jawn
 Master `2c67d8f904b1dede9268bbbc8bf6257cbe33aa4f` scalono w `060cb0c7910d92880f1002c39e3594662ea5775e` i wypchnięto na branch zadania. Wszystkie odrębne workflowy tego SHA przeszły, w tym pełny bootstrap, metody, UI, API i konsumenci dyspersji. Czternaście cudzych plików WIP zachowano. Szczegóły i adresy CI: [decyzje integracji](../../audits/2026-10-28-eigensolve-master-merge-resolution.md).
 
 Pozostaje wdrożenie i końcowy odbiór po przywróceniu Dockera (aktualnie socket i UI niedostępne). Nie oznacza to integracji do mastera ani zamknięcia I0/I1/I6/I7. Wcześniejsze wyniki 15 próbek i wykresy są zachowane; nie ponowiono Solve.
+
+
+## Bieżący checkpoint — 29.10, po masterze 6caa3e226
+
+Runtime c2810c89… działa na źródłach acb0330ea; stary OWNER i ledger zachowano
+w całości. Po potwierdzeniu zwolnienia 20/20 zasobów użyto istniejącego fresh-state,
+a następnie rzeczywisty UI import odtworzył signed15. Dyspersja z analityką i
+mod Gamma (sam magnetyk, WebGL bez utraty kontekstu) mają aktualne screeny.
+To powtórna prezentacja zachowanych danych, nie nowy sweep.
+
+Nowa Gamma frequency_window: aktywacja db0bdb00… accepted, run ffe91832… running.
+R6 ma 14/14 gestów z running przed/po na tym samym runie i bez numerycznych
+mutacji; końcowy PASS wymaga completed i opublikowanego widma, nadal oczekiwanych.
+Następnie powtórzyć signed15 na obecnej fizyce i porównać z finite-Dirichlet n=0;
+nie zastępować go samym importem. I7 kompletność, zbieżność, serial/adaptive
+oraz A1 ≤0,5% pozostają otwarte.
+
+Dokładne bieżące wyniki source CI, native 20/21, korekta metodologii probe
+oraz plan zamknięcia są w [raporcie integracji](../../../audits/2026-10-29-eigensolve-final-integration.md).
+Chronione 14 plików nie jest zatwierdzone, kasowane ani nadpisywane bez review.
