@@ -8,6 +8,7 @@ import {
 import type { LayoutController } from "@/kernel/layout/LayoutController";
 import { sharedResourceRuntimeStore } from "@/kernel/resources/ResourceRuntimeStore";
 import type { ResourceKey } from "@/kernel/resources/resourceTypes";
+import type { LayoutState } from "@/kernel/layout/layoutTypes";
 
 interface ResourcePauseRuntimeStore {
   beginPauseMatching(predicate: (resourceKey: ResourceKey) => boolean): () => void;
@@ -29,6 +30,13 @@ function isPlanarFieldResourceKey(resourceKey: ResourceKey): boolean {
 
 function resourcePath(resourceKey: ResourceKey): string {
   return resourceKey.split("?")[0];
+}
+
+function isViewport3DVisible(layoutState: LayoutState): boolean {
+  return (
+    layoutState.activeViewportMainModuleId === VIEWPORT_3D_MODULE_ID ||
+    layoutState.viewportCompanion?.moduleId === VIEWPORT_3D_MODULE_ID
+  );
 }
 
 export function isViewport3DExclusiveResourceKey(
@@ -62,8 +70,8 @@ export function createViewport3DInactiveResourcePauseController({
   let releasePause: (() => void) | null = null;
   let releasePlanarPause: (() => void) | null = null;
 
-  const sync = (activeViewportMainModuleId: string): void => {
-    const shouldPause = activeViewportMainModuleId !== VIEWPORT_3D_MODULE_ID;
+  const sync = (layoutState: LayoutState): void => {
+    const shouldPause = !isViewport3DVisible(layoutState);
     if (shouldPause && !releasePause) {
       releasePause = runtimeStore.beginPauseMatching(
         isViewport3DExclusiveResourceKey,
@@ -74,7 +82,7 @@ export function createViewport3DInactiveResourcePauseController({
     }
 
     const shouldPausePlanar =
-      activeViewportMainModuleId !== FIELD_MAP_MODULE_ID;
+      layoutState.activeViewportMainModuleId !== FIELD_MAP_MODULE_ID;
     if (shouldPausePlanar && !releasePlanarPause) {
       releasePlanarPause = runtimeStore.beginPauseMatching((resourceKey) =>
         isPlanarFieldResourceKey(resourceKey),
@@ -85,10 +93,8 @@ export function createViewport3DInactiveResourcePauseController({
     }
   };
 
-  sync(layout.get().activeViewportMainModuleId);
-  const unsubscribe = layout.subscribe((state) =>
-    sync(state.activeViewportMainModuleId),
-  );
+  sync(layout.get());
+  const unsubscribe = layout.subscribe(sync);
 
   return () => {
     unsubscribe();
