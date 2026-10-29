@@ -2611,10 +2611,8 @@ fn segment_node_indices(
 
 fn materialize_fem_spin_torque_target_masks(
     target: &fullmag_ir::RegionRefIR,
-    node_count: usize,
-    element_count: usize,
+    mesh: &fullmag_ir::MeshIR,
     object_segments: &[fullmag_ir::FemObjectSegmentIR],
-    mesh_parts: &[fullmag_ir::FemMeshPartIR],
 ) -> Result<(Vec<bool>, Vec<bool>), PlanError> {
     if let Some(region_id) = target.region_id.as_deref() {
         return Err(PlanError {
@@ -2641,23 +2639,23 @@ fn materialize_fem_spin_torque_target_masks(
         });
     }
 
-    let mut node_mask = vec![false; node_count];
-    let mut element_mask = vec![false; element_count];
+    let mut node_mask = vec![false; mesh.nodes.len()];
+    let mut element_mask = vec![false; mesh.cell_count()];
     for segment in matching {
-        for node in segment_node_indices(mesh_parts, segment, node_count)? {
-            node_mask[node] = true;
-        }
         let start = segment.element_start as usize;
         let end = start.saturating_add(segment.element_count as usize);
-        if end > element_count {
+        if end > mesh.cell_count() {
             return Err(PlanError {
                 reasons: vec![format!(
                     "FEM spin-torque target object '{}' element range {}..{} exceeds mesh element count {}",
-                    target.object_id, start, end, element_count
+                    target.object_id, start, end, mesh.cell_count()
                 )],
             });
         }
         element_mask[start..end].fill(true);
+        for node in segment_element_node_indices(mesh, segment)? {
+            node_mask[node] = true;
+        }
     }
     if !node_mask.iter().any(|selected| *selected) || !element_mask.iter().any(|selected| *selected)
     {
@@ -2674,6 +2672,29 @@ fn materialize_fem_spin_torque_target_masks(
 #[cfg(test)]
 mod spin_torque_target_tests {
     use super::*;
+
+    fn mesh_with_two_tets() -> fullmag_ir::MeshIR {
+        fullmag_ir::MeshIR {
+            mesh_name: "two-disjoint-tets".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [3.0, 0.0, 0.0],
+                [4.0, 0.0, 0.0],
+                [3.0, 1.0, 0.0],
+                [3.0, 0.0, 1.0],
+            ],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
+            element_markers: vec![1, 2],
+            facets: fullmag_ir::FemFacetConnectivityIR::empty(),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: std::collections::HashMap::new(),
+        }
+    }
 
     fn segment(
         object_id: &str,
@@ -2701,10 +2722,10 @@ mod spin_torque_target_tests {
             region_id: None,
         };
         let segments = vec![segment("fixed", 0, 4, 0, 1), segment("free", 4, 4, 1, 1)];
+        let mesh = mesh_with_two_tets();
 
-        let (nodes, elements) =
-            materialize_fem_spin_torque_target_masks(&target, 8, 2, &segments, &[])
-                .expect("resolved FEM object target");
+        let (nodes, elements) = materialize_fem_spin_torque_target_masks(&target, &mesh, &segments)
+            .expect("resolved FEM object target");
 
         assert_eq!(
             nodes,
@@ -2719,12 +2740,11 @@ mod spin_torque_target_tests {
             object_id: "free".to_string(),
             region_id: Some("contact".to_string()),
         };
+        let mesh = mesh_with_two_tets();
         let err = materialize_fem_spin_torque_target_masks(
             &target,
-            4,
-            1,
+            &mesh,
             &[segment("free", 0, 4, 0, 1)],
-            &[],
         )
         .expect_err("FEM region target must not broaden silently to its object");
         assert!(err.reasons.iter().any(|reason| {
@@ -3489,6 +3509,8 @@ fn gather_fem_material_field_plans(
     problem: &ProblemIR,
     material: &fullmag_ir::MaterialIR,
     node_count: usize,
+    ms_element_field: Option<&[f64]>,
+    a_element_field: Option<&[f64]>,
 ) -> Vec<fullmag_ir::MaterialFieldPlan> {
     let mut material_field_plans = Vec::new();
     let is_extended =
@@ -3554,18 +3576,27 @@ fn gather_fem_material_field_plans(
                     }
                 }
             }
-            let (values, fallback) = match plan.parameter {
+            let (nodal_values, element_values, fallback) = match plan.parameter {
                 fullmag_ir::MaterialParameterNameIR::Ms => (
                     material.ms_field.as_deref(),
+                    ms_element_field,
                     material.saturation_magnetisation,
                 ),
-                fullmag_ir::MaterialParameterNameIR::Aex => {
-                    (material.a_field.as_deref(), material.exchange_stiffness)
-                }
+                fullmag_ir::MaterialParameterNameIR::Aex => (
+                    material.a_field.as_deref(),
+                    a_element_field,
+                    material.exchange_stiffness,
+                ),
                 fullmag_ir::MaterialParameterNameIR::Alpha => {
-                    (material.alpha_field.as_deref(), material.damping)
+                    (material.alpha_field.as_deref(), None, material.damping)
                 }
-                _ => (None, 0.0),
+                _ => (None, None, 0.0),
+            };
+            let values = element_values.or(nodal_values);
+            plan.realization_location = if element_values.is_some() {
+                fullmag_ir::MaterialFieldLocationIR::Element
+            } else {
+                fullmag_ir::MaterialFieldLocationIR::Node
             };
             let (sample_count, min, max, mean) = if let Some(values) = values {
                 let min = values.iter().copied().fold(f64::INFINITY, f64::min);
@@ -3576,7 +3607,9 @@ fn gather_fem_material_field_plans(
                 (node_count, fallback, fallback, fallback)
             };
             plan.realization_method = Some(
-                if plan
+                if element_values.is_some() {
+                    "conformal_domain_element_sampling"
+                } else if plan
                     .warnings
                     .iter()
                     .any(|warning| warning.contains("projected approximation"))
@@ -4486,10 +4519,8 @@ pub(crate) fn plan_fem(
         Some(target) => {
             let (nodes, elements) = materialize_fem_spin_torque_target_masks(
                 target,
-                mesh.nodes.len(),
-                mesh.cell_count(),
+                &mesh,
                 &object_segments,
-                &resolved_mesh_parts,
             )?;
             (Some(nodes), Some(elements))
         }
@@ -4522,10 +4553,8 @@ pub(crate) fn plan_fem(
         .map(|target| {
             materialize_fem_spin_torque_target_masks(
                 target,
-                mesh.nodes.len(),
-                mesh.cell_count(),
+                &mesh,
                 &object_segments,
-                &resolved_mesh_parts,
             )
             .map(|(nodes, _elements)| nodes)
         })
@@ -4876,8 +4905,13 @@ pub(crate) fn plan_fem(
     if let Some(note) = universe_note {
         provenance_notes.push(note);
     }
-    let material_field_plans =
-        gather_fem_material_field_plans(problem, &fem_plan.material, n_nodes);
+    let material_field_plans = gather_fem_material_field_plans(
+        problem,
+        &fem_plan.material,
+        n_nodes,
+        fem_plan.ms_element_field.as_deref(),
+        fem_plan.a_element_field.as_deref(),
+    );
     for field_plan in &material_field_plans {
         if let Some(statistics) = &field_plan.statistics {
             provenance_notes.push(format!(
@@ -6040,8 +6074,13 @@ pub(crate) fn plan_fem_eigen(
         "study: eigenmodes operator={:?} count={} normalization={:?} damping_policy={:?}",
         fem_plan.operator.kind, fem_plan.count, fem_plan.normalization, fem_plan.damping_policy
     );
-    let material_field_plans =
-        gather_fem_material_field_plans(problem, &fem_plan.material, fem_plan.mesh.nodes.len());
+    let material_field_plans = gather_fem_material_field_plans(
+        problem,
+        &fem_plan.material,
+        fem_plan.mesh.nodes.len(),
+        None,
+        None,
+    );
     let mut provenance_notes = vec![
         if resolved_domain_mesh_asset.is_some() {
             "Bootstrap FEM eigen planner using study-level shared-domain mesh asset".to_string()

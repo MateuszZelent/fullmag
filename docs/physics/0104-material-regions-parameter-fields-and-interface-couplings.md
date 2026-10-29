@@ -632,6 +632,15 @@ the resolved material realization and its provenance unambiguous. Different
 coefficients may use different legal locations, including exchange-only
 `A_e` with scalar or nodal `Ms`.
 
+Metadane `MaterialFieldPlan` opisują rzeczywiście rozwiązaną reprezentację.
+Jeżeli plan FEM zawiera `a_element_field` lub `ms_element_field`, odpowiednia
+lokalizacja to `Element`, metoda to `conformal_domain_element_sampling`, a
+statystyki liczą elementy i wartości tego samego wektora. Pola węzłowe oraz
+plan eigen zachowują lokalizację `Node`. Writer artefaktów wybiera wektor na
+podstawie tej lokalizacji; nie może pomijać DG0 przez szukanie nieistniejącego
+wektora węzłowego. Regresje sprawdzają metadane i serializację artefaktu,
+bez rozszerzania obsługi współczynników DG0 ani kwalifikacji CPU/GPU.
+
 When executable, resolved provenance must state
 `material_realization=element_quadrature`, quadrature/mass order, element-map
 digest, resolved CPU/GPU lane, and every consuming owner. Older artifacts lack
@@ -1089,3 +1098,6 @@ must include:
 | Walidacja jednostek | `crates/fullmag-ir/tests/material_field_units.rs` | `material_field_units_are_checked_in_v04_public_validation` | Regresja walidacji jednostek przed wykonaniem solvera. |
 | Materiały FDM | `crates/fullmag-plan/src/fdm.rs` | `resolve_multilayer_material_dmi_scalar` | Jednolite D materiałów lub jawny błąd descriptoru multilayer; explicit term ma pierwszeństwo. |
 | Materiały FDM | `crates/fullmag-plan/src/tests/material_audit_fdm.rs` | `single_grid_material_scalar_dmi_is_lowered_on_cpu_and_cuda` | Regresja descriptorów CPU/CUDA, bez dowodu wykonania urządzenia. |
+| Metadane FEM | `crates/fullmag-plan/src/fem.rs` | `gather_fem_material_field_plans` | Lokalizacja i statystyki zgodne z rozwiązaną reprezentacją współczynnika. |
+| Metadane FEM | `crates/fullmag-plan/src/tests/material_audit_fem.rs` | `fem_material_field_metadata_tracks_resolved_element_coefficients` | Regresja lokalizacji i statystyk DG0 niezależnie od kolejności regionów. |
+| Metadane FEM | `crates/fullmag-runner/src/artifacts.rs` | `fem_element_material_artifact_preserves_location_and_values` | Zapis współczynnika elementowego bez pominięcia ani projekcji węzłowej. |
