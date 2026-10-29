@@ -14,6 +14,10 @@ import {
   patchObjectTransaction,
   primitiveDraftOverlayStore,
 } from "@/kernel/authoring/geometryLifecycleCommands";
+import {
+  primitiveDraftBaseName,
+  resolveDraftObjectName,
+} from "@/kernel/authoring/uniqueObjectName";
 import { useKernel } from "@/kernel/KernelContext";
 import { useObjectEditSelector } from "@/kernel/authoring/object-edit/useObjectEditSelector";
 import {
@@ -432,6 +436,11 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     }
 
     const objectId = createDraftObjectId(submittedDraft);
+    const createName = resolveDraftObjectName(
+      submittedDraft.name.trim() || objectId,
+      primitiveDraftBaseName(selection.nodeId),
+      scene.data,
+    );
     const sceneMutationToken = objectEditSession.beginSceneMutation(
       currentSessionScopeKey,
       objectId,
@@ -450,13 +459,13 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
         : undefined;
       const response = await runAuthoringMutationWithHistory(
         historyContext,
-        `Create ${submittedDraft.name.trim() || objectId}`,
+        `Create ${createName}`,
         async () => {
           const created = await createObjectTransaction(api, {
             base_revision: baseRevision,
             geometry: geometryPayload,
             material_ref: optionalRef(submittedDraft.material),
-            name: submittedDraft.name.trim() || objectId,
+            name: createName,
             object_id: objectId,
             region_name: optionalRef(submittedDraft.region),
             transform: transformPayload,
