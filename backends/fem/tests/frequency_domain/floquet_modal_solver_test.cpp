@@ -1851,6 +1851,17 @@ void refills_native_floquet_nev_before_tangent_mass_cap()
     const double expected_second_refill_frequency_hz =
         refill_spectral_center_hz + refill_frequency_offsets_hz[4u];
     constexpr double expected_refill_frequency_tolerance_hz = 1.0e-3;
+    for (double expected_frequency : {
+             expected_first_refill_frequency_hz, expected_second_refill_frequency_hz}) {
+        check(std::any_of(
+                  two_mode_goal_result.accepted_modes.begin(),
+                  two_mode_goal_result.accepted_modes.end(),
+                  [=](const fd::SLEPcModalAcceptedMode &mode) {
+                      return std::abs(mode.frequency_hz - expected_frequency) <=
+                          expected_refill_frequency_tolerance_hz;
+                  }),
+              "explicit full refill goal retains both independently known physical frequencies");
+    }
     bool saw_expected_first_refill_frequency = false;
     bool saw_expected_second_refill_frequency = false;
     bool refill_residuals_accepted = refill_result.accepted_modes.size() == 2u;

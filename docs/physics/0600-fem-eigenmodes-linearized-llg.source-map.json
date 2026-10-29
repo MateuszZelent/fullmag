@@ -74,7 +74,13 @@
         "source-native-production-cpu-k-guard",
         "source-native-floquet-admission-test",
         "source-native-floquet-cabi-route-test",
-        "source-native-floquet-direct-entry-test"
+        "source-native-floquet-direct-entry-test",
+        "source-rust-floquet-pair-selector",
+        "source-rust-floquet-k-axis-guard",
+        "source-rust-modal-v6-axis-resolver",
+        "source-rust-floquet-axis-admission-test",
+        "source-rust-modal-v6-axis-resolver-test",
+        "source-rust-floquet-pair-selector-test"
       ]
     },
     {
@@ -759,6 +765,54 @@
       "path": "crates/fullmag-runner/src/fem/eigen_tests.rs",
       "symbol": "reference_mode_publication_rejects_materialized_equilibrium_mismatch",
       "responsibility": "Prepared executor regression rejecting materialized periodic equilibrium mismatch; execution NOT VERIFIED."
+    },
+    {
+      "id": "source-rust-floquet-pair-selector",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "eigen_policy_floquet_pair_sets_match",
+      "responsibility": "Define the empty-selector means all mesh pairs contract used by native shared-domain planning."
+    },
+    {
+      "id": "source-rust-floquet-k-axis-guard",
+      "path": "crates/fullmag-runner/src/fem/eigen_capability.rs",
+      "symbol": "native_cpu_modal_window_has_floquet_dynamic_demag_path",
+      "responsibility": "Admit finite signed and mixed-axis k only along periodic axes, using the v6 certificate axis resolver and planner-compatible pair selection."
+    },
+    {
+      "id": "source-rust-modal-v6-axis-resolver",
+      "path": "crates/fullmag-runner/src/fem/eigen_certificate.rs",
+      "symbol": "modal_v6_pair_axis_mask",
+      "responsibility": "Resolve an axis hint or one finite nonzero translation axis without indexing an empty list; reject ambiguous translation fallback."
+    },
+    {
+      "id": "source-rust-floquet-axis-admission-test",
+      "path": "crates/fullmag-runner/src/fem/eigen_tests.rs",
+      "symbol": "floquet_dynamic_demag_provider_preserves_signed_mixed_k_and_rejects_open_axes",
+      "responsibility": "Regress signed/mixed k, Gamma-containing paths, exact open-axis rejection and nonfinite inputs without rewriting requested coordinates."
+    },
+    {
+      "id": "source-rust-modal-v6-axis-resolver-test",
+      "path": "crates/fullmag-runner/src/fem/eigen_tests.rs",
+      "symbol": "modal_v6_pair_axis_mask_rejects_missing_zero_oblique_and_nonfinite_translation",
+      "responsibility": "Regress missing/zero/oblique/nonfinite translation fallback and signed axis translations without panic."
+    },
+    {
+      "id": "source-rust-floquet-pair-selector-test",
+      "path": "crates/fullmag-runner/src/fem/eigen_tests.rs",
+      "symbol": "floquet_dynamic_demag_provider_requires_exact_requested_pair_set",
+      "responsibility": "Regress empty selector acceptance, exact all-pair selection, selector duplicates, unknown/subset IDs and incomplete mesh pair metadata."
+    },
+    {
+      "id": "source-native-floquet-explicit-full-refill-goal",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "solve_floquet_shared_domain_sparse_modal_spectrum",
+      "responsibility": "Treat the explicit full selected-mode count as the same goal as the implicit default, preserving residual certification, mass deduplication, EPS diagnostics, smaller best-effort guards and cancellation."
+    },
+    {
+      "id": "source-native-floquet-explicit-full-refill-goal-test",
+      "path": "backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp",
+      "symbol": "refills_native_floquet_nev_before_tangent_mass_cap",
+      "responsibility": "Regress explicit/implicit count parity with the same operator, initial search space, original residual threshold and two independently known physical frequencies; do not infer window completeness."
     }
   ],
   "public_api": {

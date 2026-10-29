@@ -9436,8 +9436,14 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     const bool hard_candidate_failure =
         saw_phi_failure || saw_eigenpair_evaluation_failure ||
         saw_mode_vector_failure || saw_descriptor_failure;
+    // An explicit full publication goal is equivalent to the implicit
+    // requested_mode_count goal. In both cases accept only the independently
+    // certified, mass-deduplicated modes above; the EPS stop reason remains
+    // diagnostic and does not certify completeness of a larger search pool.
+    // A smaller best-effort goal retains its stricter converged-pool gate.
     const bool explicit_refill_target_can_finish =
         spectral_request.certified_refill_target == 0 ||
+        spectral_request.certified_refill_target == spectral_request.requested_mode_count ||
         (converged_reason > 0 && converged_reason != EPS_CONVERGED_USER &&
          !hard_candidate_failure);
     const PetscInt requested_certified_modes =

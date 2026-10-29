@@ -1,3 +1,4 @@
+use super::eigen_certificate::modal_v6_pair_axis_mask;
 use super::eigen_constants::GAMMA_K_TOLERANCE_RAD_PER_M;
 use super::eigen_constants::SHARED_DOMAIN_K0_RUNTIME_UNAVAILABLE_REASON;
 use super::eigen_policy::{
@@ -112,9 +113,21 @@ pub(crate) fn native_cpu_modal_window_has_floquet_dynamic_demag_path(
         return false;
     }
 
+    let Some(periodic_axes) = plan.mesh.periodic_boundary_pairs.iter().try_fold(
+        0_u32,
+        |mask, pair| modal_v6_pair_axis_mask(pair).map(|axis| mask | axis),
+    ) else {
+        return false;
+    };
+    let k_supported = |k: &[f64; 3]| {
+        k.iter().enumerate().all(|(axis, value)| {
+            value.is_finite() && (periodic_axes & (1_u32 << axis) != 0 || *value == 0.0)
+        })
+    };
+
     match plan.k_sampling.as_ref() {
         Some(fullmag_ir::KSamplingIR::Single { k_vector }) => {
-            k_vector.iter().all(|value| value.is_finite())
+            k_supported(k_vector)
                 && k_vector
                     .iter()
                     .any(|value| value.abs() > GAMMA_K_TOLERANCE_RAD_PER_M)
@@ -123,7 +136,7 @@ pub(crate) fn native_cpu_modal_window_has_floquet_dynamic_demag_path(
             !points.is_empty()
                 && points
                     .iter()
-                    .all(|point| point.k_vector.iter().all(|value| value.is_finite()))
+                    .all(|point| k_supported(&point.k_vector))
                 && points.iter().any(|point| {
                     point
                         .k_vector
@@ -142,10 +155,12 @@ fn native_floquet_pair_sets_match(plan: &FemEigenPlanIR) -> bool {
         .map(|pair| pair.pair_id.as_str()).collect::<BTreeSet<_>>();
     let boundary_set = plan.mesh.periodic_boundary_pairs.iter()
         .map(|pair| pair.pair_id.as_str()).collect::<BTreeSet<_>>();
-    !requested_set.is_empty()
+    // Match the planner: an empty selector means every mesh periodic pair.
+    // Explicit proper subsets still require a different assembly realization.
+    !node_set.is_empty()
+        && node_set == boundary_set
         && requested_set.len() == requested.len()
-        && requested_set == node_set
-        && requested_set == boundary_set
+        && (requested_set.is_empty() || requested_set == node_set)
 }
 
 /// The native Floquet Schur operator supports two spectral selection modes:

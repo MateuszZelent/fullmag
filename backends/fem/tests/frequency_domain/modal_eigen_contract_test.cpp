@@ -9866,7 +9866,8 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
             hard_ksp_nearest_result =
                 fullmag_fem_modal_eigen_solve(&hard_ksp_nearest_request);
         }
-        check(hard_ksp_nearest_result.status == FULLMAG_FEM_FD_SOLVE_ERROR &&
+        const bool nearest_hard_ksp_contract =
+            hard_ksp_nearest_result.status == FULLMAG_FEM_FD_SOLVE_ERROR &&
                   contains(hard_ksp_nearest_result.diagnostics_json,
                            "\"stop_reason\":\"floquet_slepc_solve_failed\"") &&
                   contains(hard_ksp_nearest_result.diagnostics_json,
@@ -9874,7 +9875,22 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
                   contains(hard_ksp_nearest_result.diagnostics_json,
                            "\"callback_count\":") &&
                   contains(hard_ksp_nearest_result.diagnostics_json,
-                           "\"true_probe_attempt_count\":0"),
+                           "\"true_probe_attempt_count\":0");
+        if (!nearest_hard_ksp_contract) {
+            const char *json = hard_ksp_nearest_result.diagnostics_json;
+            const char *stop = json == nullptr ? nullptr : std::strstr(json, "\"stop_reason\":");
+            const char *attempts = json == nullptr ? nullptr : std::strstr(json, "\"true_probe_attempt_count\":");
+            std::fprintf(stderr,
+                "DIAG: nearest hard KSP status=%d expected_error=%d probe_present=%d "
+                "callback_present=%d stop=%.160s attempts=%.80s\n",
+                static_cast<int>(hard_ksp_nearest_result.status),
+                static_cast<int>(FULLMAG_FEM_FD_SOLVE_ERROR),
+                contains(json, "\"shifted_ksp_failure_probe\":{\"schema_version\":\"shifted_ksp_failure_probe.v1\"") ? 1 : 0,
+                contains(json, "\"callback_count\":") ? 1 : 0,
+                stop == nullptr ? "absent" : stop,
+                attempts == nullptr ? "absent" : attempts);
+        }
+        check(nearest_hard_ksp_contract,
               "nearest hard KSP failure preserves its stop reason and failure-only scalar callback probe");
         check(extract_json_number(
                   hard_ksp_nearest_result.diagnostics_json,

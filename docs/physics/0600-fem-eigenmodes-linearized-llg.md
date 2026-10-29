@@ -54,7 +54,7 @@ The executable reference path currently retains the following field contribution
 - bulk DMI
 - surface anisotropy (boundary-face mass term)
 
-Spin torques and Bloch-periodic complex operators remain future work.
+Spin torques remain future work. The bounded CPU Floquet lane already contains a real-split Bloch operator with dynamic demag; its implementation, verification limits and GPU boundary are specified below.
 
 ## Operator variants
 
@@ -156,6 +156,35 @@ Payload selection retains the existing request contract: a nonnull raw pointer w
 A zero-length raw slice is omitted even when its pointer is nonnull, as can occur for Rust `Some(&[])`; its storage is never dereferenced. If a fixed-size vector is declared, the existing fallback selects it; otherwise the request retains implicit $\Gamma$ behavior.
 
 This threshold controls native CPU admission and routing only. It does not round, replace, or rewrite the requested components in diagnostics or operator inputs. Existing physical squared-wave-number finite and overflow checks continue to use those requested components. The generic Floquet airbox operator remains usable at $\Gamma$; the nonzero-$k$ admission gate does not wrap its mathematical domain.
+
+The shared-domain CPU Floquet admission guard uses the same pair-selector
+contract as the planner: an empty selector means all periodic mesh pairs.
+An explicit selector must contain each mesh pair exactly once; a proper subset,
+an unknown or repeated selector ID, an empty actual pair set, or disagreement
+between node-pair and boundary-pair IDs is rejected.
+
+The bounded lane is axis aligned. Its admission guard and v6 certificate
+producer share one axis resolver: a valid `x`/`y`/`z` hint takes precedence;
+otherwise a finite lattice translation must have exactly one component above
+the existing geometric cutoff of $10^{-15}\,\mathrm{m}$ in absolute value.
+Missing, zero or oblique translations without a valid hint are unsupported.
+Open-direction components of the requested wavevector must be exactly zero,
+including components smaller than the Gamma routing threshold. This restriction
+applies to every point of a path, which may include Gamma together with signed
+or mixed-axis nonzero points. Admission does not rewrite their coordinates.
+These checks establish input compatibility, not numerical or scientific
+qualification of the CPU/GPU solver lanes.
+
+A selected-mode publication goal equal to `requested_mode_count` has identical
+semantics whether `certified_refill_target` is omitted or explicitly equal to
+that count. Only independently residual-certified, positive-mass-deduplicated
+modes count toward that goal. The larger internal EPS search pool may stop at
+its iteration budget after enough individually converged modes are available;
+its stop reason and iteration counts remain diagnostics. Fulfilling the selected
+publication count does not certify completeness of the requested frequency
+window. A smaller explicit best-effort goal retains its converged-pool gate;
+Stop/Pause, hard solve errors, residual checks and the global iteration budget
+remain unchanged.
 
 For a Bloch/Floquet modal problem with nonzero wavevector `k`, the tangent
 operator is partitioned as

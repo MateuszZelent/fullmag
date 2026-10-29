@@ -6772,7 +6772,14 @@ fn native_nonzero_floquet_diagnostics_bind_floquet_boundary_without_k0_claim() {
 fn floquet_dynamic_demag_provider_requires_exact_requested_pair_set() {
     let base = bounded_floquet_dynamic_demag_execution_plan();
     assert!(native_cpu_modal_window_has_floquet_dynamic_demag_path(&base));
-    for requested in [vec![], vec!["x_faces", "x_faces"], vec!["x_faces", "unknown_faces"]] {
+    let mut all_pairs = base.clone();
+    let SpinWaveBoundaryConditionIR::Config(config) = &mut all_pairs.spin_wave_bc else {
+        panic!("fixture must have explicit Floquet configuration");
+    };
+    config.boundary_pair_id = None;
+    config.pair_ids.clear();
+    assert!(native_cpu_modal_window_has_floquet_dynamic_demag_path(&all_pairs));
+    for requested in [vec!["x_faces", "x_faces"], vec!["x_faces", "unknown_faces"]] {
         let mut plan = base.clone();
         let SpinWaveBoundaryConditionIR::Config(config) = &mut plan.spin_wave_bc else {
             panic!("fixture must have explicit Floquet configuration");
@@ -6804,6 +6811,104 @@ fn floquet_dynamic_demag_provider_requires_exact_requested_pair_set() {
     let mut incomplete_nodes = base.clone();
     incomplete_nodes.mesh.periodic_node_pairs.retain(|pair| pair.pair_id != "x_faces");
     assert!(!native_cpu_modal_window_has_floquet_dynamic_demag_path(&incomplete_nodes));
+}
+
+#[test]
+fn floquet_dynamic_demag_provider_preserves_signed_mixed_k_and_rejects_open_axes() {
+    let base = bounded_floquet_dynamic_demag_execution_plan();
+    for k in [[1.0e7, 0.0, 0.0], [-1.0e7, 0.0, 0.0], [1.0e7, -1.0e7, 0.0]] {
+        let mut plan = base.clone();
+        plan.k_sampling = Some(KSamplingIR::Single { k_vector: k });
+        assert!(native_cpu_modal_window_has_floquet_dynamic_demag_path(
+            &plan
+        ));
+        let Some(KSamplingIR::Single { k_vector }) = plan.k_sampling else {
+            unreachable!()
+        };
+        assert_eq!(
+            k_vector, k,
+            "admission must not rewrite the requested vector"
+        );
+    }
+    for k in [
+        [1.0e7, 0.0, 1.0],
+        [1.0e7, 0.0, 1.0e-15],
+        [0.0, 0.0, 1.0e7],
+        [f64::NAN, 0.0, 0.0],
+        [0.0, f64::INFINITY, 0.0],
+    ] {
+        let mut plan = base.clone();
+        plan.k_sampling = Some(KSamplingIR::Single { k_vector: k });
+        assert!(!native_cpu_modal_window_has_floquet_dynamic_demag_path(
+            &plan
+        ));
+    }
+    let mut path = base;
+    path.k_sampling = Some(KSamplingIR::Path {
+        points: vec![
+            KPointIR::gamma(),
+            KPointIR {
+                label: Some("mixed".to_owned()),
+                k_vector: [-1.0e7, 1.0e7, 0.0],
+            },
+        ],
+        samples_per_segment: vec![1],
+        closed: false,
+    });
+    assert!(native_cpu_modal_window_has_floquet_dynamic_demag_path(
+        &path
+    ));
+    let Some(KSamplingIR::Path { points, .. }) = path.k_sampling.as_mut() else {
+        unreachable!()
+    };
+    points[1].k_vector[2] = 1.0e-15;
+    assert!(!native_cpu_modal_window_has_floquet_dynamic_demag_path(
+        &path
+    ));
+}
+
+#[test]
+fn floquet_dynamic_demag_provider_uses_certificate_translation_axes() {
+    let mut plan = bounded_floquet_dynamic_demag_execution_plan();
+    for pair in &mut plan.mesh.periodic_boundary_pairs {
+        pair.axis_hint = None;
+    }
+    assert!(native_cpu_modal_window_has_floquet_dynamic_demag_path(
+        &plan
+    ));
+    plan.mesh.periodic_boundary_pairs[0].translation = Some([0.0; 3]);
+    assert!(!native_cpu_modal_window_has_floquet_dynamic_demag_path(
+        &plan
+    ));
+}
+
+#[test]
+fn modal_v6_pair_axis_mask_rejects_missing_zero_oblique_and_nonfinite_translation() {
+    let mut pair = bounded_floquet_dynamic_demag_execution_plan()
+        .mesh
+        .periodic_boundary_pairs[0]
+        .clone();
+    pair.axis_hint = None;
+    for translation in [
+        None,
+        Some([0.0; 3]),
+        Some([1.0e-6, 1.0e-6, 0.0]),
+        Some([f64::NAN, 0.0, 0.0]),
+        Some([f64::INFINITY, 0.0, 0.0]),
+    ] {
+        pair.translation = translation;
+        assert_eq!(modal_v6_pair_axis_mask(&pair), None);
+    }
+    for (translation, expected) in [
+        ([1.0e-6, 0.0, 0.0], 1),
+        ([0.0, -1.0e-6, 0.0], 2),
+        ([0.0, 0.0, 1.0e-6], 4),
+    ] {
+        pair.translation = Some(translation);
+        assert_eq!(modal_v6_pair_axis_mask(&pair), Some(expected));
+    }
+    pair.axis_hint = Some("x".to_owned());
+    assert_eq!(modal_v6_pair_axis_mask(&pair), Some(1));
 }
 
 #[test]
