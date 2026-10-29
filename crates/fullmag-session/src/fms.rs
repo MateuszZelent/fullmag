@@ -4127,54 +4127,6 @@ mod tests {
         }
     }
 
-    fn portable_solution(object_ref: String, byte_length: u64) -> SolutionSet {
-        let digest = |character: char| format!("sha256:{}", character.to_string().repeat(64));
-        SolutionSet {
-            schema_version: SOLUTION_SET_SCHEMA_VERSION.to_string(),
-            solution_set_id: "solution:portable".to_string(),
-            revision: 1,
-            run_id: "run:portable".to_string(),
-            manifest_state: SolutionSetManifestState::Closed,
-            execution_status: SolutionExecutionStatus::Succeeded,
-            scientific_assessment: ScientificAssessment {
-                status: ScientificAssessmentStatus::Unassessed,
-                reason: Some("not assessed".to_string()),
-                evidence_artifact_ids: Vec::new(),
-            },
-            provenance: SolutionSetProvenance {
-                run_spec_digest: digest('a'),
-                model_digest: digest('b'),
-                physics_digest: digest('c'),
-                discretization_digest: digest('d'),
-                resolved_plan_digest: digest('e'),
-                acquisition_digest: digest('f'),
-                seed_digest: None,
-            },
-            members: vec![SolutionMember {
-                member_id: "member:portable".to_string(),
-                task_id: "task:portable".to_string(),
-                attempt_id: "attempt:portable".to_string(),
-                ownership_epoch: 1,
-                case_id: None,
-                stage_id: "stage:portable".to_string(),
-                execution_status: SolutionExecutionStatus::Succeeded,
-                scientific_assessment: ScientificAssessment {
-                    status: ScientificAssessmentStatus::Unassessed,
-                    reason: Some("not assessed".to_string()),
-                    evidence_artifact_ids: Vec::new(),
-                },
-                artifacts: vec![SolutionArtifactRef {
-                    artifact_id: "artifact:portable".to_string(),
-                    kind: SolutionArtifactKind::State,
-                    schema_id: "fullmag.state.test.v1".to_string(),
-                    object_ref,
-                    byte_length,
-                    accepted_state: None,
-                }],
-            }],
-            coverage: Vec::new(),
-        }
-    }
 
     #[test]
     fn staged_preflight_rejects_unknown_project_files_and_removes_only_owned_staging() {

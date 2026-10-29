@@ -3503,7 +3503,6 @@ pub fn run_planned_problem_with_artifact_identity(
         output_dir,
         Some(artifact_identity),
         None,
-        None,
     )
 }
 
@@ -4067,7 +4066,6 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity_and_relax_handoff
         field_every_n,
         relax_handoff,
         on_step,
-        None,
         None,
         None,
     )
@@ -4642,6 +4640,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         on_step,
         None,
         None,
+        None,
     )
 }
 
@@ -4675,6 +4674,7 @@ pub fn run_planned_problem_with_live_preview_and_artifact_identity(
         initial_snapshot,
         on_step,
         Some(artifact_identity),
+        None,
         None,
     )
 }

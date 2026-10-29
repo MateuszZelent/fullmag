@@ -5990,7 +5990,7 @@ mod tests {
     ) -> Result<ReachabilityReport> {
         if archive {
             let mut walker = ArchiveWalker {
-                documents: ArchiveDocuments::Memory(documents), cas_root: None, mode: ReachabilityMode::Export,
+                documents: ArchiveDocuments::Memory(documents), cas_root: None, external_cas: None, mode: ReachabilityMode::Export,
                 report: ReachabilityReport::new(), seen_checkpoints: HashSet::new(), tensor_descriptor_cache: None,
                 namespace_files: HashSet::new(), unclassified_paths: HashSet::new(),
             };

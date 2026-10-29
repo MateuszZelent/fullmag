@@ -410,7 +410,6 @@ function securityHeaders() {
 export const CONTROL_ROOM_SYNC_COMMAND_PROXY_TIMEOUT_MS = (30 + 90 + 1800) * 1000 + 250;
 
 const nextConfig: NextConfig = {
-  experimental: { proxyTimeout: CONTROL_ROOM_SYNC_COMMAND_PROXY_TIMEOUT_MS },
   allowedDevOrigins,
   distDir,
   env: {
@@ -424,7 +423,7 @@ const nextConfig: NextConfig = {
   // binary routes count actual bytes; ordinary JSON retains its 128 MiB cap.
   ...(staticExport ? {} : { experimental: {
     proxyClientMaxBodySize: MAX_FMS_FILE_BYTES,
-    proxyTimeout: FMS_PROXY_TIMEOUT_MS,
+    proxyTimeout: Math.max(FMS_PROXY_TIMEOUT_MS, CONTROL_ROOM_SYNC_COMMAND_PROXY_TIMEOUT_MS),
   } }),
   ...(staticExport
     ? {

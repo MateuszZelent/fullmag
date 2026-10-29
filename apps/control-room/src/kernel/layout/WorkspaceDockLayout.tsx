@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { Button } from "@/shared/ui/Button";
 import { PanelChrome, PanelFrame, type PanelModeRequest, type PanelMoveEvent } from "@/shared/ui/PanelFrame";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/shared/ui/Resizable";
@@ -106,6 +106,20 @@ function WorkspaceWindow({ id, title, visible, drawer, drawerShared, bounds, req
 }
 interface DockTarget { edge: DockEdge; target: WorkspacePaneId | null; bounds: DockBounds; title: string }
 
+function readWorkspacePreference(key: string): string | null {
+  try { return typeof window === "undefined" ? null : window.localStorage.getItem(key); }
+  catch { return null; }
+}
+const subscribeHydration = () => () => {};
+const clientReady = () => true;
+const serverReady = () => false;
+const browserWidth = () => window.innerWidth;
+const serverWidth = () => 1440;
+function subscribeBrowserWidth(onChange: () => void) {
+  window.addEventListener("resize", onChange);
+  return () => window.removeEventListener("resize", onChange);
+}
+
 export function WorkspaceDockLayout() {
   const kernel = useKernel();
   const playbackSelection = useSavedResultsPlaybackSelection();
@@ -113,10 +127,10 @@ export function WorkspaceDockLayout() {
   const projectOnly = useWorkspaceContentScope() === "project";
   const panelVisible = useLayoutSelector(layout => layout.panelVisible);
   const hasAux = !projectOnly && !playbackOnly && kernel.modules.forSlot("viewport-aux").length > 0;
-  const [tree, setTree] = useState<WorkspaceDockTree>(defaultWorkspaceTree);
-  const [explicitDocked, setExplicitDocked] = useState<WorkspacePaneId[]>([]);
-  const [restored, setRestored] = useState(false);
-  const [windowWidth, setWindowWidth] = useState(1440);
+  const [tree, setTree] = useState<WorkspaceDockTree>(() => restoreWorkspaceTree(readWorkspacePreference(WORKSPACE_TREE_KEY)));
+  const [explicitDocked, setExplicitDocked] = useState<WorkspacePaneId[]>(() => restoreExplicitDocked(readWorkspacePreference(WORKSPACE_EXPLICIT_DOCK_KEY)));
+  const restored = useSyncExternalStore(subscribeHydration, clientReady, serverReady);
+  const windowWidth = useSyncExternalStore(subscribeBrowserWidth, browserWidth, serverWidth);
   const [docked, setDocked] = useState<Partial<Record<WorkspacePaneId, boolean>>>({});
   const [bounds, setBounds] = useState<Record<string, DockBounds>>({});
   const [requests, setRequests] = useState<Partial<Record<WorkspacePaneId, PanelModeRequest>>>({});
@@ -133,12 +147,9 @@ export function WorkspaceDockLayout() {
   const activeTree = filterWorkspaceTree(tree, kept);
 
   useEffect(() => {
-    try { setTree(restoreWorkspaceTree(localStorage.getItem(WORKSPACE_TREE_KEY))); setExplicitDocked(restoreExplicitDocked(localStorage.getItem(WORKSPACE_EXPLICIT_DOCK_KEY))); } catch { /* Optional layout preference. */ }
-    setRestored(true);
     const reset = () => { setTree(defaultWorkspaceTree()); setExplicitDocked([]); setRequests({}); setDocked({}); setPreview(null); };
-    const resize = () => setWindowWidth(window.innerWidth);
-    resize();window.addEventListener("resize", resize);window.addEventListener(WORKSPACE_LAYOUT_RESTORED_EVENT, reset);
-    return () => { window.removeEventListener("resize", resize);window.removeEventListener(WORKSPACE_LAYOUT_RESTORED_EVENT, reset); };
+    window.addEventListener(WORKSPACE_LAYOUT_RESTORED_EVENT, reset);
+    return () => window.removeEventListener(WORKSPACE_LAYOUT_RESTORED_EVENT, reset);
   }, []);
   useEffect(() => { if (restored) { try { localStorage.setItem(WORKSPACE_TREE_KEY, JSON.stringify(tree)); } catch { /* Optional preference. */ } } }, [tree, restored]);
   useEffect(() => { if (restored) { try { localStorage.setItem(WORKSPACE_EXPLICIT_DOCK_KEY, JSON.stringify(explicitDocked)); } catch { /* Optional preference. */ } } }, [explicitDocked, restored]);

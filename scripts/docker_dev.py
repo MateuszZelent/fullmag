@@ -2634,7 +2634,6 @@ def _parser() -> argparse.ArgumentParser:
     idle_restart.add_argument("--port", type=int, required=True)
     idle_restart.add_argument("--saved-authoring-checkpoint")
     idle_restart.add_argument("--saved-authoring-checkpoint-sha256")
-    idle_restart.add_argument("--stop-only", action="store_true", help="Drain and stop the pinned backend without restarting it")
     idle_restart.add_argument(
         "--allow-prepared-session", action="store_true",
         help="allow graceful drain with never-started manual Studies, including held queue entries after a terminal task; retain accepted inputs and never release Solve",

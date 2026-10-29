@@ -59,3 +59,16 @@ Uwaga o współbieżności: podczas etapu zewnętrzny writer zmienił lokalny
 zachowana, a bieżący plik mastera nie był przez ten wątek zapisywany.
 Staged diff merge'a zawiera też wcześniejsze whitespace w dokumentach
 pochodzących z mastera; nie przerabiano historycznych plików patch.
+
+
+## Pierwsze pełne CI po merge
+
+UI: 1459 testów PASS / 1 FAIL — ujawniono ciche nadpisanie budżetu proxy
+przez transport FMS. Naprawa łączy oba ograniczenia w jednej konfiguracji.
+Pełny lint ujawnił synchroniczne odtwarzanie preferencji w efekcie; użyto
+leniwego odczytu i useSyncExternalStore z serwerowym snapshotem hydracji.
+Rust: uzgodniono brakujące/nadmiarowe argumenty łączące Relax i Frozen Spins,
+identyczny helper fixture'u FMS zduplikowany przez scalanie testów oraz nowy
+opcjonalny external_cas w fixture ArchiveWalker. Python: usunięto podwójne
+zadeklarowanie --stop-only. Nie osłabiono oczekiwań, progów ani testów.
+Kompilowane testy pozostają wyłącznie w GitHub Actions.
