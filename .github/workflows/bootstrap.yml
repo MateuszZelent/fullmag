@@ -242,6 +242,7 @@ jobs:
         run: |
           cargo test --locked -p fullmag-engine --lib spatial_ms_anisotropy_tests
           cargo test --locked -p fullmag-plan --lib fem_aex_field_uniformity_uses_relative_si_tolerance
+          cargo test --locked -p fullmag-runner --lib fdm::cpu::reference::tests::torque_
 
       - name: Run typed active eigen Stop and Pause contracts
         run: |

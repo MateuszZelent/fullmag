@@ -31,7 +31,11 @@ use super::spin_transport::{
 };
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder, CpuAdaptiveAttemptBatch};
 use crate::constraints::{FrozenSpinsCheckpointV1, FROZEN_SPINS_CHECKPOINT_SCHEMA};
-use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
+use crate::derived_fields::{
+    compute_torque_field_with_damping, max_torque_residual_apm_from_field,
+};
+#[cfg(test)]
+use crate::derived_fields::compute_torque_field;
 use crate::fdm::{artifacts::select_state_observable_field, validate_single_grid_budget};
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::preview::{
@@ -4053,6 +4057,19 @@ pub(crate) fn observe_state(
     observe_state_with_antenna_field(problem, state, None)
 }
 
+fn compute_reference_torque_field(
+    problem: &ExchangeLlgProblem,
+    magnetization: &[[f64; 3]],
+    effective_field: &[[f64; 3]],
+) -> Vec<Vector3> {
+    compute_torque_field_with_damping(
+        magnetization,
+        effective_field,
+        |cell| problem.alpha_at(cell),
+        problem.dynamics.precession_enabled,
+    )
+}
+
 fn observe_state_with_antenna_field(
     problem: &ExchangeLlgProblem,
     state: &ExchangeLlgState,
@@ -4099,11 +4116,10 @@ fn observe_state_with_antenna_field(
     let rotated_dmi_energy =
         problem.rotated_interfacial_dmi_energy_from_vectors(state.magnetization());
 
-    let torque_field = compute_torque_field(
+    let torque_field = compute_reference_torque_field(
+        problem,
         &observables.magnetization,
         &effective_field,
-        problem.material.damping,
-        problem.dynamics.precession_enabled,
     );
     let max_torque_all_apm =
         max_torque_residual_apm_from_field(&observables.magnetization, &effective_field);
@@ -4713,11 +4729,10 @@ impl<'a> DirectFieldSnapshotCache<'a> {
         if self.torque_field.is_none() {
             let torque = {
                 let h_eff = self.observable_effective_field(name)?.to_vec();
-                compute_torque_field(
+                compute_reference_torque_field(
+                    self.problem,
                     self.state.magnetization(),
                     &h_eff,
-                    self.problem.material.damping,
-                    self.problem.dynamics.precession_enabled,
                 )
             };
             self.torque_field = Some(torque);
@@ -8149,6 +8164,167 @@ mod tests {
                 .iter()
                 .map(|value| [value[2], 0.0, 0.0])
                 .collect::<Vec<_>>()
+        );
+    }
+
+    fn torque_material_test_problem(
+        alpha_field: Option<Vec<f64>>,
+        precession_enabled: bool,
+    ) -> (ExchangeLlgProblem, ExchangeLlgState) {
+        let problem = ExchangeLlgProblem::with_terms(
+            GridShape::new(2, 1, 1).expect("valid torque test grid"),
+            CellSize::new(1.0e-9, 1.0e-9, 1.0e-9).expect("valid torque test cell size"),
+            MaterialParameters::new(800.0e3, 13.0e-12, 0.1).expect("valid torque test material"),
+            LlgConfig::new(2.211e5, TimeIntegrator::Heun)
+                .expect("valid torque test LLG config")
+                .with_precession_enabled(precession_enabled),
+            EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                external_field: Some([0.0, 0.0, 2.0]),
+                ..Default::default()
+            },
+        )
+        .with_spatial_fields(None, None, alpha_field)
+        .expect("valid torque test spatial damping");
+        let state = problem
+            .new_state(vec![[1.0, 0.0, 0.0]; 2])
+            .expect("valid torque test state");
+        (problem, state)
+    }
+
+    fn expected_precessional_torque_tesla(alpha: f64) -> [f64; 3] {
+        let induction = crate::MU0 * 2.0;
+        let denominator = 1.0 + alpha * alpha;
+        [0.0, induction / denominator, alpha * induction / denominator]
+    }
+
+    fn assert_torque_vectors_match_tesla_oracle(actual: &[[f64; 3]], expected: &[[f64; 3]]) {
+        assert_eq!(actual.len(), expected.len());
+        let tolerance = crate::MU0 * 2.0 * 1.0e-12;
+        for (cell, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+            for component in 0..3 {
+                assert!(
+                    (actual[component] - expected[component]).abs() <= tolerance,
+                    "cell {cell} component {component}: expected Tesla-space torque {:.17e}, got {:.17e}",
+                    expected[component],
+                    actual[component]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn torque_due_outputs_use_cellwise_alpha_for_precessional_llg() {
+        let (problem, state) = torque_material_test_problem(Some(vec![0.1, 0.4]), true);
+        let expected = [
+            expected_precessional_torque_tesla(0.1),
+            expected_precessional_torque_tesla(0.4),
+        ];
+        let observed = observe_state(&problem, &state).expect("state observables should assemble");
+        assert_torque_vectors_match_tesla_oracle(&observed.torque_field, &expected);
+
+        let mut field_schedules = vec![OutputSchedule {
+            name: "torque".to_string(),
+            every_seconds: 1.0,
+            next_time: 0.0,
+            last_sampled_time: None,
+        }];
+        let mut scalar_schedules = Vec::<OutputSchedule>::new();
+        let mut steps = Vec::new();
+        let mut artifacts = ArtifactRecorder::in_memory(ExecutionProvenance {
+            execution_engine: "cpu_reference".to_string(),
+            precision: "double".to_string(),
+            ..Default::default()
+        });
+
+        record_due_outputs(
+            &problem,
+            &state,
+            None,
+            1,
+            1.0e-14,
+            0,
+            None,
+            &mut scalar_schedules,
+            &mut field_schedules,
+            &mut steps,
+            &mut artifacts,
+        )
+        .expect("due torque output should be recorded");
+
+        let (field_snapshots, field_snapshot_count, _) = artifacts.finish();
+        assert_eq!(field_snapshot_count, 1);
+        assert_eq!(field_snapshots[0].name, "torque");
+        assert_torque_vectors_match_tesla_oracle(
+            &field_snapshots[0]
+                .vec3_values()
+                .expect("torque snapshot should contain vectors"),
+            &expected,
+        );
+    }
+
+    #[test]
+    fn torque_snapshot_preview_uses_cellwise_alpha_for_precessional_llg() {
+        let (problem, state) = torque_material_test_problem(Some(vec![0.1, 0.4]), true);
+        let preview = snapshot_preview_from_state(
+            &problem,
+            &state,
+            &LivePreviewRequest {
+                quantity: "torque".to_string(),
+                auto_scale_enabled: false,
+                max_points: 0,
+                ..Default::default()
+            },
+            [2, 1, 1],
+            None,
+        )
+        .expect("torque preview should materialize");
+        let actual = preview
+            .vector_field_values
+            .chunks_exact(3)
+            .map(|value| [value[0], value[1], value[2]])
+            .collect::<Vec<_>>();
+        let expected = [
+            expected_precessional_torque_tesla(0.1),
+            expected_precessional_torque_tesla(0.4),
+        ];
+
+        assert_eq!(preview.quantity, "torque");
+        assert_eq!(preview.preview_grid, [2, 1, 1]);
+        assert_eq!(preview.vector_field_values.len(), expected.len() * 3);
+        assert_torque_vectors_match_tesla_oracle(&actual, &expected);
+    }
+
+    #[test]
+    fn torque_scalar_fallback_and_no_precession_ignore_local_alpha() {
+        let (uniform_problem, uniform_state) = torque_material_test_problem(None, true);
+        let mut uniform_snapshot = DirectFieldSnapshotCache::new(&uniform_problem, &uniform_state);
+        let uniform_torque = uniform_snapshot
+            .select("torque")
+            .expect("uniform scalar-damping torque should materialize");
+        let uniform_expected = [
+            expected_precessional_torque_tesla(0.1),
+            expected_precessional_torque_tesla(0.1),
+        ];
+        assert_torque_vectors_match_tesla_oracle(&uniform_torque, &uniform_expected);
+
+        let (local_problem, local_state) =
+            torque_material_test_problem(Some(vec![0.1, 0.4]), false);
+        let (scalar_problem, scalar_state) = torque_material_test_problem(None, false);
+        let mut local_snapshot = DirectFieldSnapshotCache::new(&local_problem, &local_state);
+        let mut scalar_snapshot = DirectFieldSnapshotCache::new(&scalar_problem, &scalar_state);
+        let local_torque = local_snapshot
+            .select("torque")
+            .expect("overdamped torque should materialize with local alpha");
+        let scalar_torque = scalar_snapshot
+            .select("torque")
+            .expect("overdamped torque should materialize with scalar alpha");
+
+        assert_eq!(local_torque, scalar_torque);
+        assert_torque_vectors_match_tesla_oracle(
+            &local_torque,
+            &[[0.0, 0.0, crate::MU0 * 2.0]; 2],
         );
     }
 
