@@ -1,0 +1,57 @@
+{
+  "recorded_at": "2026-10-29T07:11:07.745039+00:00",
+  "source_base": "5a15ea73046487bc05c05b5ead860e44d687d09c",
+  "state": "uncommitted implementation; final managed capture and API tests not verified",
+  "files": {
+    "crates/fullmag-api/src/accepted_project_storage.rs": "12c87823fdb7a73b42c99d799861ccba63bc7c42718ae6baad50e10bbd125c75",
+    "crates/fullmag-api/src/accepted_study_worker.rs": "938ab534d4a9a8b4ebdb2c1ba11c153c7fb601f17abf53aa54042e7e32a3c1b5",
+    "crates/fullmag-runner/src/project_storage.rs": "ba92d31bcb406a88c4551c537296a040c7b34fecf8ad5ff93c2fc4782d70e208",
+    "crates/fullmag-runner/src/artifacts.rs": "2f2309bb36f62046680e68ff04aef669b586751120a225a4c0283a310ffb8ea8",
+    "crates/fullmag-runner/src/artifact_pipeline.rs": "1acd6c17ee620624d8bfd09f10d6fd447c521cfed706985466e9eaa41e033971"
+  },
+  "first_build": {
+    "attempt": "a9b8c97f2ed74e2fad184c42227bc62e",
+    "state": "succeeded",
+    "log": "/tmp/results-public-root-build.log",
+    "scope": "before final autosave-only gate and formatting"
+  },
+  "provenance_test": {
+    "passed": 1,
+    "failed": 0,
+    "filter": "separate_stage_autosave_root_is_recorded_for_final_provenance",
+    "log": "/opt/fullmag/control/backend/results-public-root-provenance-tests.log",
+    "scope": "artifact_pipeline.rs and artifacts.rs unchanged after test"
+  },
+  "final_capture": {
+    "state": "observation timeout; daemon outcome must be reconciled",
+    "log": "/tmp/results-public-root-final-build.log",
+    "error": "docker-dev: Docker observation exceeded its time/output budget during docker_capture (timeout=90s); daemon resources retained\nerror: recipe `docker-dev-restart-idle` failed on line 89 with exit code 2"
+  },
+  "docker_observation": {
+    "docker_ps": "timeout 12s, exit 124",
+    "ports": {
+      "3298": "connection refused",
+      "3198": "connection refused",
+      "3201": "connection refused"
+    }
+  },
+  "not_verified": [
+    "accepted_project_storage tests (7 cases authored)",
+    "final-source managed build",
+    "fresh FEM run and public watermark observation",
+    "browser playback and Return to live on this WIP",
+    "current-run API incremental resolver",
+    "CI and merge"
+  ],
+  "retention": {
+    "action": "retain",
+    "reason": "Docker unavailable; consumers and receipts cannot be reconciled",
+    "preserved": [
+      "results",
+      "receipts",
+      "logs",
+      "active cache",
+      "current and rollback packages"
+    ]
+  }
+}

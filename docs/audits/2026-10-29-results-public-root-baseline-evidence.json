@@ -1,0 +1,708 @@
+{
+  "scope": "Successful public-root FEM and completed-folder UI baseline before pending retry/global-exit refinements; no in-progress Current API/UI qualification",
+  "runtime": {
+    "qualification": "real successful FEM public-root baseline; before pending finalization retry fix; does not qualify streaming current API/UI",
+    "development": {
+      "attempt": "4ee5f6657f5d4ebd959f76a16d307be2",
+      "state": "succeeded",
+      "config_sha256": "0d54d28a8c2b5406059e885da3d2110fd932b1442642c66eccea8e954a9aa810",
+      "source_commit": "5a15ea73046487bc05c05b5ead860e44d687d09c",
+      "source_snapshot_sha256": "1ebb4e0bc60a1eac53608dc4e450e385d709201a1fa9bf3cbc4042f4d9897554",
+      "backend_container": "7385385f7561d3fe4aa3eaf616e77d680ff81aad7b39d74d14a77590e4ca2cb9",
+      "frontend_container": "88513481ad6c247608d4d6d1e9abd29951c4b8ac145a507d543db792edf5a0e3"
+    },
+    "run_id": "run-live-ac5c1552ae2cde97a70c427ba4763559115542be763a7e4508c49a104eb64764",
+    "root": "/user-data/results-browser-fem/run-live-ac5c1552ae2cde97a70c427ba4763559115542be763a7e4508c49a104eb64764/propagate-attempt-1",
+    "publication": {
+      "accepted_run_id": "run-live-ac5c1552ae2cde97a70c427ba4763559115542be763a7e4508c49a104eb64764",
+      "attempt_id": "attempt-5d532f33394e4db5b7fa9852989872ab",
+      "output_identity": "ad947f14-369c-4e89-9622-051c772de0c8",
+      "ownership_epoch": 1,
+      "sample_policy": "fullmag.zarr.sample_publication.v1",
+      "schema": "fullmag.accepted_results_publication.v1",
+      "specification_fingerprint": "d28b95f1e7fbb0fe0f4f1f80b59ad911ea3dc9c92c0a7acc19746aa1c50b355f",
+      "step_id": "propagate",
+      "task_id": "task-87e5347f92c3d6ca79101f2970141c22c1e2c97e24fc12d474d3058631dd3854"
+    },
+    "manifest_status": "completed",
+    "resolved": {
+      "backend": "fem",
+      "device": "cpu",
+      "mode": "strict",
+      "precision": "double"
+    },
+    "requested": {
+      "backend": "fem",
+      "device": "cpu",
+      "minimum_resources": {
+        "cpu_millis": 1000,
+        "gpu_memory_bytes": 0,
+        "memory_bytes": 1,
+        "storage_bytes": 1
+      },
+      "mode": "strict",
+      "precision": "double"
+    },
+    "storage_state": "succeeded",
+    "active_marker_exists": false,
+    "preterminal_watermarks": {
+      "results_browser.zarr/stages/stage_0000_propagate/fields/H_eff": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "results_browser.zarr/stages/stage_0000_propagate/fields/m": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "results_browser.zarr/stages/stage_0000_propagate/table": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ]
+    },
+    "watermarks_sha256": "04af589321aba90c38a9d7df4185646fbf187425609c5cd13b2d61fd0aecbd2d",
+    "arrays": {
+      "results_browser.zarr/stages/stage_0000_propagate/fields/H_eff": {
+        "marker": {
+          "committed_samples": 6,
+          "coordinate_bytes": 187,
+          "schema_version": "fullmag.zarr.sample_publication.v1"
+        },
+        "zarray": {
+          "chunks": [
+            1,
+            1383
+          ],
+          "compressor": null,
+          "dimension_separator": ".",
+          "dtype": "<f8",
+          "fill_value": null,
+          "filters": null,
+          "order": "C",
+          "shape": [
+            6,
+            1383
+          ],
+          "zarr_format": 2
+        }
+      },
+      "results_browser.zarr/stages/stage_0000_propagate/fields/m": {
+        "marker": {
+          "committed_samples": 6,
+          "coordinate_bytes": 187,
+          "schema_version": "fullmag.zarr.sample_publication.v1"
+        },
+        "zarray": {
+          "chunks": [
+            1,
+            1383
+          ],
+          "compressor": null,
+          "dimension_separator": ".",
+          "dtype": "<f8",
+          "fill_value": null,
+          "filters": null,
+          "order": "C",
+          "shape": [
+            6,
+            1383
+          ],
+          "zarr_format": 2
+        }
+      },
+      "results_browser.zarr/stages/stage_0000_propagate/table": {
+        "marker": {
+          "committed_samples": 6,
+          "coordinate_bytes": 200,
+          "schema_version": "fullmag.zarr.sample_publication.v1"
+        },
+        "zarray": {
+          "chunks": [
+            1,
+            6
+          ],
+          "compressor": null,
+          "dimension_separator": ".",
+          "dtype": "<f8",
+          "fill_value": null,
+          "filters": null,
+          "order": "C",
+          "shape": [
+            6,
+            6
+          ],
+          "zarr_format": 2
+        }
+      }
+    }
+  },
+  "browser": {
+    "airbox_draft_cancel_preserved": true,
+    "airbox_draft_discard_verified": true,
+    "airbox_draft_saved_folder_guarded": true,
+    "browser_gpu_mode": "swiftshader-webgl-requested",
+    "camera_stable": true,
+    "canvas_visible": true,
+    "changed_canvas": true,
+    "closed_values_preview_no_sample_request": true,
+    "context_lost": false,
+    "current_run_id": "run-live-ac5c1552ae2cde97a70c427ba4763559115542be763a7e4508c49a104eb64764-1",
+    "current_run_results_verified": true,
+    "delayed_sample_index": 1,
+    "drawing_buffer": [
+      649,
+      565
+    ],
+    "errors": [],
+    "evidence_image_formats": {
+      "compact_screenshot_base64": "jpeg",
+      "dark_screenshot_base64": "jpeg",
+      "live_screenshot_base64": "jpeg",
+      "model_context_screenshot_base64": "jpeg",
+      "no_session_screenshot_base64": "jpeg",
+      "pending_snapshot_screenshot_base64": "jpeg",
+      "publication_waiting_screenshot_base64": "jpeg",
+      "sample_error_screenshot_base64": "jpeg",
+      "screenshot_base64": "png",
+      "terminal_live_screenshot_base64": "png"
+    },
+    "failed_sample_index": 4,
+    "field_payloads_verified": true,
+    "frame_count": 6,
+    "frame_indices": [
+      0,
+      2,
+      5
+    ],
+    "frame_sha256": [
+      "18d232ee5b5b18e5b6c98132ffbfd41344c371b2d81a4929cd69971a51031a09",
+      "5c6204501221f3f4e6931aafdfdc684b772ea4543a0959e844dabbfcf16f0b11",
+      "6e6db50daaa588a2fd418f6d46b14cd7523581e04fd924102ad956e9f6ac6912"
+    ],
+    "geometry_kind": "fem",
+    "hook_errors": [],
+    "inspector_stable": true,
+    "item_id": "9",
+    "layout_checks": [
+      {
+        "height": 900,
+        "primary_controls": [
+          {
+            "center_visible": true,
+            "label": "Saved sample index"
+          },
+          {
+            "center_visible": true,
+            "label": "Visualization component"
+          }
+        ],
+        "reachable_controls": [
+          {
+            "center_visible": true,
+            "label": "Saved sample index"
+          },
+          {
+            "center_visible": true,
+            "label": "Visualization component"
+          }
+        ],
+        "results_tree_boxes": [
+          {
+            "clientWidth": 228,
+            "label": "Saved result outputs",
+            "scrollLeft": 0,
+            "scrollWidth": 228,
+            "width": 228.390625,
+            "x": 12
+          },
+          {
+            "clientWidth": 204,
+            "label": "Result output entries",
+            "scrollLeft": 0,
+            "scrollWidth": 204,
+            "width": 204.390625,
+            "x": 24
+          }
+        ],
+        "scrollWidth": 1280,
+        "scrolled_elements": [],
+        "tree_labels": [
+          {
+            "clientWidth": 102,
+            "scrollWidth": 102,
+            "text": "H_eff"
+          },
+          {
+            "clientWidth": 102,
+            "scrollWidth": 102,
+            "text": "m"
+          },
+          {
+            "clientWidth": 115,
+            "scrollWidth": 115,
+            "text": "table"
+          }
+        ],
+        "width": 1280
+      },
+      {
+        "height": 900,
+        "primary_controls": [
+          {
+            "center_visible": true,
+            "label": "Saved sample index"
+          },
+          {
+            "center_visible": true,
+            "label": "Visualization component"
+          }
+        ],
+        "reachable_controls": [
+          {
+            "center_visible": true,
+            "label": "Saved sample index"
+          },
+          {
+            "center_visible": true,
+            "label": "Visualization component"
+          }
+        ],
+        "results_tree_boxes": [
+          {
+            "clientWidth": 217,
+            "label": "Saved result outputs",
+            "scrollLeft": 0,
+            "scrollWidth": 217,
+            "width": 216.9375,
+            "x": 12
+          },
+          {
+            "clientWidth": 193,
+            "label": "Result output entries",
+            "scrollLeft": 0,
+            "scrollWidth": 193,
+            "width": 192.9375,
+            "x": 24
+          }
+        ],
+        "scrollWidth": 1024,
+        "scrolled_elements": [],
+        "tree_labels": [
+          {
+            "clientWidth": 91,
+            "scrollWidth": 91,
+            "text": "H_eff"
+          },
+          {
+            "clientWidth": 91,
+            "scrollWidth": 91,
+            "text": "m"
+          },
+          {
+            "clientWidth": 104,
+            "scrollWidth": 104,
+            "text": "table"
+          }
+        ],
+        "width": 1024
+      },
+      {
+        "height": 900,
+        "primary_controls": [
+          {
+            "center_visible": true,
+            "label": "Saved sample index"
+          },
+          {
+            "center_visible": true,
+            "label": "Visualization component"
+          }
+        ],
+        "reachable_controls": [
+          {
+            "center_visible": true,
+            "label": "Saved sample index"
+          },
+          {
+            "center_visible": true,
+            "label": "Visualization component"
+          }
+        ],
+        "results_tree_boxes": [
+          {
+            "clientWidth": 216,
+            "label": "Saved result outputs",
+            "scrollLeft": 0,
+            "scrollWidth": 216,
+            "width": 216,
+            "x": 12
+          },
+          {
+            "clientWidth": 192,
+            "label": "Result output entries",
+            "scrollLeft": 0,
+            "scrollWidth": 192,
+            "width": 192,
+            "x": 24
+          }
+        ],
+        "scrollWidth": 768,
+        "scrolled_elements": [],
+        "tree_labels": [
+          {
+            "clientWidth": 90,
+            "scrollWidth": 90,
+            "text": "H_eff"
+          },
+          {
+            "clientWidth": 90,
+            "scrollWidth": 90,
+            "text": "m"
+          },
+          {
+            "clientWidth": 103,
+            "scrollWidth": 103,
+            "text": "table"
+          }
+        ],
+        "width": 768
+      },
+      {
+        "height": 1080,
+        "primary_controls": [
+          {
+            "center_visible": true,
+            "label": "Saved sample index"
+          },
+          {
+            "center_visible": true,
+            "label": "Visualization component"
+          }
+        ],
+        "reachable_controls": [
+          {
+            "center_visible": true,
+            "label": "Saved sample index"
+          },
+          {
+            "center_visible": true,
+            "label": "Visualization component"
+          }
+        ],
+        "results_tree_boxes": [
+          {
+            "clientWidth": 577,
+            "label": "Saved result outputs",
+            "scrollLeft": 0,
+            "scrollWidth": 577,
+            "width": 576.640625,
+            "x": 12
+          },
+          {
+            "clientWidth": 553,
+            "label": "Result output entries",
+            "scrollLeft": 0,
+            "scrollWidth": 553,
+            "width": 552.640625,
+            "x": 24
+          }
+        ],
+        "scrollWidth": 1920,
+        "scrolled_elements": [],
+        "tree_labels": [
+          {
+            "clientWidth": 357,
+            "scrollWidth": 357,
+            "text": "H_eff"
+          },
+          {
+            "clientWidth": 357,
+            "scrollWidth": 357,
+            "text": "m"
+          },
+          {
+            "clientWidth": 382,
+            "scrollWidth": 382,
+            "text": "table"
+          }
+        ],
+        "width": 1920
+      },
+      {
+        "height": 1000,
+        "primary_controls": [
+          {
+            "center_visible": true,
+            "label": "Saved sample index"
+          },
+          {
+            "center_visible": true,
+            "label": "Visualization component"
+          }
+        ],
+        "reachable_controls": [
+          {
+            "center_visible": true,
+            "label": "Saved sample index"
+          },
+          {
+            "center_visible": true,
+            "label": "Visualization component"
+          }
+        ],
+        "results_tree_boxes": [
+          {
+            "clientWidth": 390,
+            "label": "Saved result outputs",
+            "scrollLeft": 0,
+            "scrollWidth": 390,
+            "width": 389.6875,
+            "x": 12
+          },
+          {
+            "clientWidth": 366,
+            "label": "Result output entries",
+            "scrollLeft": 0,
+            "scrollWidth": 366,
+            "width": 365.6875,
+            "x": 24
+          }
+        ],
+        "scrollWidth": 1500,
+        "scrolled_elements": [],
+        "tree_labels": [
+          {
+            "clientWidth": 170,
+            "scrollWidth": 170,
+            "text": "H_eff"
+          },
+          {
+            "clientWidth": 170,
+            "scrollWidth": 170,
+            "text": "m"
+          },
+          {
+            "clientWidth": 195,
+            "scrollWidth": 195,
+            "text": "table"
+          }
+        ],
+        "width": 1500
+      }
+    ],
+    "live_drawing_buffer": [
+      516,
+      495
+    ],
+    "live_return_verified": true,
+    "live_view_source": "current",
+    "live_visualization_unchanged": true,
+    "model_inspector_historical_context_verified": true,
+    "no_session_browser_only_close_verified": true,
+    "no_session_close_to_home_verified": true,
+    "no_session_evidence": "browser-session-discovery-fixture-with-real-result-data",
+    "no_session_legacy_inspector_close_verified": true,
+    "object_draft_cancel_preserved": true,
+    "object_draft_discard_verified": true,
+    "object_draft_saved_folder_guarded": true,
+    "output_count": 38,
+    "output_inspector_continuous_sections_verified": true,
+    "payload_evidence": "application_body_reads",
+    "pending_snapshot_retained_verified": true,
+    "per_snapshot_settings_retained": true,
+    "playwright_version": "1.62.1",
+    "probe_url": "http://frontend:8080",
+    "public_url": "http://127.0.0.1:3298",
+    "publication_catalog_arrival_verified": true,
+    "publication_evidence": "browser-availability-fixture-with-real-published-catalog",
+    "publication_failure_distinct_verified": true,
+    "publication_poll_count": 4,
+    "publication_waiting_ui_verified": true,
+    "results_browser_verified": true,
+    "results_canvas_changed": true,
+    "results_navigation_state_retained": true,
+    "results_sample_indices": [
+      0,
+      2,
+      5
+    ],
+    "results_sample_sha256": [
+      "b9446203a1b90c6ac762ca4a1f9b2ae742afd37282042873df537b5fd961335b",
+      "a66b8a4046e5d057e6bbcc423bff3152724dd82b8e78c59e93ad90c753d6b531",
+      "aca0f253fae53a994dfe72b2051fdb0b2ea2b67e6bd5a739bc4a1bdd44f33bfb"
+    ],
+    "results_saved_folder_entry_verified": true,
+    "return_live_pending_sample_verified": true,
+    "return_live_preserves_model_draft": true,
+    "sample_read_error_reselection_recovered": true,
+    "sample_read_error_retained_verified": true,
+    "sample_reselection_verified": true,
+    "saved_camera_fit_verified": true,
+    "saved_camera_reset_verified": true,
+    "saved_folder_float_dock_verified": true,
+    "saved_panels_hide_restore_verified": true,
+    "scenario": "saved-playback",
+    "schema": "fullmag.docker-dev-saved-playback-result.v1",
+    "script_sha256": "9fbcf9e9dd3e4f2e50d255f2a26e861ca380dfc7f91500db582a170617c9eed9",
+    "source_details_disclosure_verified": true,
+    "startup_camera_initialization": null,
+    "state": "passed",
+    "table_columns_verified": [
+      "t",
+      "step",
+      "mx",
+      "my",
+      "mz",
+      "e_total"
+    ],
+    "table_sample_indices": [
+      0,
+      5
+    ],
+    "terminal_live_observation_frame": {
+      "domain_generation_id": "6002390632978672749",
+      "observation_frame_id": "obs:docker-startup-6aa021d40b8eb7e0c9683ba8f424866ac186010892603e155134474bd5543fed@1793271269197:6002390632978672749:2:101:3ddb7cdfd9d7bdbb",
+      "session_epoch": "docker-startup-6aa021d40b8eb7e0c9683ba8f424866ac186010892603e155134474bd5543fed@1793271269197",
+      "source_step": 101,
+      "source_time_seconds": 1e-10,
+      "topology_revision": "2"
+    },
+    "terminal_live_scalar_revision": 4,
+    "terminal_live_scalars_verified": true,
+    "terminal_live_step": 101,
+    "terminal_live_time_s": 1e-10,
+    "visualization_trace": [
+      {
+        "camera": {
+          "fov_degrees": 45,
+          "orthographic_scale": null,
+          "position": [
+            1.2586030213332585e-07,
+            9.06194175359946e-08,
+            1.2586030213332585e-07
+          ],
+          "projection": "perspective",
+          "target": [
+            0,
+            0,
+            0
+          ],
+          "up": [
+            0,
+            0,
+            1
+          ]
+        },
+        "method": "GET",
+        "phase": "initial-home",
+        "revision": 1
+      }
+    ],
+    "images": {
+      "compact_screenshot_base64": {
+        "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/6b16e7b9727f405ea8a6515cef7c46e9-compact_screenshot.jpeg",
+        "sha256": "2a34a205d79ba2f5d9c6ff0b979b888dfa9584d4b9b3088f6d6cece787847657",
+        "bytes": 109287
+      },
+      "dark_screenshot_base64": {
+        "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/6b16e7b9727f405ea8a6515cef7c46e9-dark_screenshot.jpeg",
+        "sha256": "7e4b964662d3143f4adc7e688f8c0e2d834ba0461d27028579e007b02b41888b",
+        "bytes": 147095
+      },
+      "live_screenshot_base64": {
+        "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/6b16e7b9727f405ea8a6515cef7c46e9-live_screenshot.jpeg",
+        "sha256": "5cdef5ee9558a103bf79bd461f39238380f6c218d86960b1dbd56467bf9e8cbc",
+        "bytes": 133769
+      },
+      "model_context_screenshot_base64": {
+        "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/6b16e7b9727f405ea8a6515cef7c46e9-model_context_screenshot.jpeg",
+        "sha256": "3012300d65ed2be7472ae0879ef8fada49ce36b53e9ea3837d95a6d147ea7a3b",
+        "bytes": 146415
+      },
+      "no_session_screenshot_base64": {
+        "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/6b16e7b9727f405ea8a6515cef7c46e9-no_session_screenshot.jpeg",
+        "sha256": "8667f7bc3a65a377e445694685884216558aaccf5cad8f80bb9bf3509c6eecaa",
+        "bytes": 104737
+      },
+      "pending_snapshot_screenshot_base64": {
+        "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/6b16e7b9727f405ea8a6515cef7c46e9-pending_snapshot_screenshot.jpeg",
+        "sha256": "28eeee90d5cfb19b81ea08514403773447095d015fc94d742f9c3d9d1ffb3930",
+        "bytes": 24219
+      },
+      "publication_waiting_screenshot_base64": {
+        "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/6b16e7b9727f405ea8a6515cef7c46e9-publication_waiting_screenshot.jpeg",
+        "sha256": "3445b0a63ef3c135ea49146037d59aefbc35872ee92e25881c692239aa4261d5",
+        "bytes": 5892
+      },
+      "sample_error_screenshot_base64": {
+        "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/6b16e7b9727f405ea8a6515cef7c46e9-sample_error_screenshot.jpeg",
+        "sha256": "8c8924101454e3510dda61fdeb732bb673d948583750c117b153d2522161c9f6",
+        "bytes": 22897
+      },
+      "screenshot_base64": {
+        "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/6b16e7b9727f405ea8a6515cef7c46e9-screenshot.png",
+        "sha256": "b987ec0ef6bcab23f7543627bc88aa01dfbd57d5baa31a3026646b15542d9891",
+        "bytes": 243916
+      },
+      "terminal_live_screenshot_base64": {
+        "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/6b16e7b9727f405ea8a6515cef7c46e9-terminal_live_screenshot.png",
+        "sha256": "e49ad802bad5d53abd8458a4a96b9ab7ce46ed87faa902dad3e32e1ba51955be",
+        "bytes": 229927
+      }
+    },
+    "managed_attempt": "6b16e7b9727f405ea8a6515cef7c46e9",
+    "managed_result_bytes": 1565902
+  },
+  "tests_before_retry_fix": {
+    "snapshot": "e759e272ebf7553727abbcba294a87697fab16af266ddfcd72304896f0d5de99",
+    "accepted_project_storage": {
+      "passed": 7,
+      "failed": 0,
+      "log": "control/backend/results-public-root-storage-tests.log"
+    },
+    "workspace_results_api": {
+      "passed": 5,
+      "failed": 0,
+      "log": "control/backend/results-public-root-api-tests.log"
+    }
+  },
+  "bootstrap_identity_recovery": {
+    "failed_resume": "ccb002aac12e4ba2a351a997cc3b5009",
+    "identity_iteration": "a9b8c97f2ed74e2fad184c42227bc62e",
+    "stop_operation": "a836f77535f941089f56c02bf82ba12e",
+    "owner_sha256_before_and_after": "cfbc407dc5fec04146f1da0b29e428679561dbfad8ead7ba8209c4c5b39339c9",
+    "focused_tests_passed": 9,
+    "binding_negative_cases": 24,
+    "independent_review": "no Critical/Required blockers; exact runtime stop subsequently succeeded"
+  },
+  "browser_attempts": [
+    {
+      "attempt": "791411fa28494468b47378392f39d064",
+      "state": "failed-confirmed",
+      "reason": "cold frontend public probe timed out; browser not started"
+    },
+    {
+      "attempt": "3ed98ee151524c4dba6cc3dbf24d07f5",
+      "state": "failed-confirmed",
+      "runner_exit_code": 0,
+      "reason": "evidence exceeded fixed 2 MiB; not accepted as PASS"
+    },
+    {
+      "attempt": "6b16e7b9727f405ea8a6515cef7c46e9",
+      "state": "succeeded",
+      "report_bytes": 1565902,
+      "report_encoding": "secondary native JPEG80; principal Saved/terminal-Live and pixel hashes PNG; assertions and 2 MiB cap retained"
+    }
+  ]
+}

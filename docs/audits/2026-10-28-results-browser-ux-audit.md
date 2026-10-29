@@ -1,10 +1,10 @@
 # Audyt UX przeglądarki wyników, Inspectora i przejścia live ↔ preview
 
-Data: 2026-10-28, aktualizacja 2026-10-29. Status: **REQUEST CHANGES dla całej funkcji — końcowy audyt nawigacji, snapshotów m, tabel i powrotu do Live przeszedł; pozostałe formaty i bramki kwalifikacji pozostają otwarte**.
+Data: 2026-10-28, aktualizacja 2026-10-29. Status: **REQUEST CHANGES dla całej funkcji — podstawowy scenariusz nawigacji, snapshotów m, tabel i powrotu do Live przeszedł; pozostałe formaty i bramki kwalifikacji pozostają otwarte**.
 
 ## Aktualny stan audytu
 
-Poniższa tabela jest bieżącym podsumowaniem. Szczegółowe ustalenia UX-01–18 poniżej opisują także stan sprzed napraw; ich historyczne brzmienie nie oznacza, że każde pozostaje otwartym defektem.
+Poniższa tabela jest bieżącym podsumowaniem. Szczegółowe ustalenia UX-01–23 poniżej opisują także stan sprzed napraw; ich historyczne brzmienie nie oznacza, że każde pozostaje otwartym defektem.
 
 | Obszar | Aktualny wynik i zakres | Pozostała praca |
 |---|---|---|
@@ -15,7 +15,7 @@ Poniższa tabela jest bieżącym podsumowaniem. Szczegółowe ustalenia UX-01–
 | Results / nawigacja | Wspólny filtr/collapse/focus, widoczny zakres wyszukiwania, klawiatura, wejście Saved | Kolejność folderów i Source details mają dowód browser; duże katalogi/strony i długi run pozostają otwarte |
 | Tabele i metadane | Nazwy sześciu kolumn, odczyt pierwszej/ostatniej próbki, tekstowe preview | Pełne możliwości analiz dla tabel/modów/eigensolve |
 | FDM/FEM i wszystkie quantity | Katalog odczytuje faktyczne wpisy; FEM m ma kwalifikowane 3D | H_eff FEM wymaga per-quantity geometry binding; nowa regresja FDM/YIG i wiele etapów |
-| Monitoring | Revision-pinned reader i polling widocznego panelu | Managed run publikuje current output dopiero na końcu; aktywny autosave nie jest zakwalifikowany |
+| Monitoring | Rzeczywisty FEM opublikował watermarki 1–6 dla m, H_eff i tabeli przed terminalizacją; reader ma sample commit | Current API nadal terminal-only; monitoring UI, FDM i wiele etapów nie są przez ten dowód zakwalifikowane |
 | Dostępność i czytelność | Klawiatura drzewa, osiągalne kontrolki po scrollu, motywy, brak poziomego overflow w badanym zakresie | Wspólne tokeny dark/light przeszły check:design; brak pełnej kwalifikacji czytnika ekranu i wszystkich rzeczywistych zestawień kolorów |
 | Integracja | Commity i draft [PR #332](https://github.com/MateuszZelent/fullmag/pull/332), grupa 3298 zachowana | CI, końcowe review i merge; React Doctor hook nie ukończył analizy parsera |
 
@@ -534,3 +534,93 @@ Harness rejestruje teraz żądania wszystkich stron kontekstu i ograniczony śla
 **UX-18 pozostaje otwarty:** dane nadal są publikowane do publicznego leafu przy terminalizacji, resolver nie agreguje wielu etapów, a geometria H_eff nie jest opisana przez producer. Nowy marker jest kontraktem jednej tablicy, nie dowodem własności runu ani dostępności autosave przed końcem. Brak kwalifikacji długiej serii, pełnego FDM/YIG i całego UI. Nie scalono PR ani nie zadeklarowano zielonego CI.
 
 Retencja: zachowano nowe wyniki, dowody QA, logi i aktywny cache/pakiet przypisanej grupy. Nie wykonano ręcznego usuwania danych ani cleanupu cudzych zasobów.
+
+
+## Kontynuacja 29.10 — publiczny folder autosave, WIP i niedostępny Docker
+
+Przygotowano drugi etap UX-18 opisany w [planie](../plans/active/results-incremental-publication.md#drugi-etap--implementacja-właściciela-publicznego-outputu-wip). Publiczne próbki Zarr zachowują się po cancelled/failed; końcowa publikacja nie kopiuje ich ponownie. Własność jest sprawdzana przed przekazaniem katalogu oraz finalizacją. Manifest runu zapisuje się przed zwolnieniem lease, a finalizator provenance nie modyfikuje dokumentów należących do storage ani commitów próbek. Pozostałe workflow zachowują staging.
+
+Managed build `a9b8c97f2ed74e2fad184c42227bc62e` przeszedł. Test `separate_stage_autosave_root_is_recorded_for_final_provenance`: **1 passed / 0 failed**. Te dwa pliki nie zmieniły się po teście. Następnie doprecyzowano warunek autosave-only, dodano test starej ścieżki i sformatowano dwa pliki storage. Końcowy build nie został potwierdzony: `Docker observation exceeded its time/output budget during docker_capture (timeout=90s); daemon resources retained`. Odczyt `docker ps` również przekroczył 12 s, a porty 3298, 3198 i 3201 odmawiały połączeń. Nie ustalono przyczyny niedostępności wspólnego silnika; nie wykonano globalnego restartu, nie usunięto lease ani nie ponowiono nieznanej operacji.
+
+[Dowód WIP i hashe](2026-10-29-results-public-root-wip-evidence.json). **Testy accepted storage, świeży run oraz audyt UI tej wersji: NOT VERIFIED.** Poprzedni pozytywny test snapshot → Live pozostaje dowodem wersji `5a15ea7`, nie nowego storage. API current nadal czeka na terminalizację; agregacja etapów i bieżące bindingi FEM pozostają otwarte. Zmian nie commitowano ani nie scalono przed wymaganymi testami. Zachowano wszystkie wyniki, logi, receipty i cache; cleanup wymaga ponownego odczytu konsumentów po powrocie Dockera.
+
+
+## Kontynuacja 29.10 — ocena wizualna i odzyskanie środowiska
+
+Ponownie obejrzano obrazy z QA `d45f2cc6a05e47869eca368fdaace792`, następnie prześledzono ich przyczyny w źródłach. To nowe ustalenia na zachowanym renderze, nie świeży test przeglądarki. [Dowód i hashe obrazów](2026-10-29-results-visual-finish-evidence.json). Kopie obrazów odzyskano z receipt QA po zniknięciu plików `/tmp`; są w `user-data` grupy, `audits/results-ui-20261029`.
+
+### UX-19 · P2 · Cztery równoległe przyciski powrotu do Live
+
+Na ekranie Saved widać identyczną akcję w globalnym nagłówku, nad drzewem, w podpisie viewportu i w Inspectorze. Powtórzenia konkurują z główną akcją „Load into 3D” i sugerują różne zakresy działania. Źródła w `apps/control-room/src`: `kernel/layout/WorkspaceShellClient.tsx:149`, `modules/results-navigator/ResultsOutputTree.tsx:434`, `modules/viewport-3d/ResultsSnapshotViewport.tsx:465`, `modules/inspector/panels/ResultsOutputInspector.tsx:378`.
+
+Kierunek: jedno nadrzędne wyjście z historii w danym układzie; lokalne wyjście tylko tam, gdzie globalne nie jest dostępne. Kryteria: Saved, Current-history, no-session, ukryty Inspector/Explorer i odłączone panele; wyjście zawsze osiągalne klawiaturą, bez identycznych konkurujących akcji. Zachować odrzucanie późnej odpowiedzi po powrocie i ochronę draftów. **Otwarte; przycisków jeszcze nie zmieniono.**
+
+### UX-20 · P2 · Nagłówek Saved zajmuje wysokość pełnego ribbonu
+
+Obraz 1500×1000 pokazuje szeroki pas pustej przestrzeni nad panelami. `SavedResultsWorkspaceShell` wstawia krótki nagłówek jako drugi bezpośredni element `.fm-workspace-shell`, a `design/styles/layout.css:15` wymusza w tym wierszu `minmax(var(--fm-ribbon-height), max-content)`. Przyczyną jest nadrzędny grid, nie padding nagłówka.
+
+Dodano regułę specyficzną dla bezpośredniego nagłówka Saved: drugi wiersz ma wysokość `auto`; tokeny tekstu, odstępów i kontrolek zachowano. **WIP: source review i diff check, bez renderu po poprawce.** Kryteria: nowy zrzut tego samego układu; większy obszar pracy bez ucięcia tytułu i wyjścia; długa nazwa folderu; 320/768/1024/1440/1920 px i 200% zoom; przywrócenie pełnego ribbonu w Live. Dotychczasowe testy szerokości nie dowodzą tej poprawki.
+
+### UX-21 · P2 · Pliki pomocnicze Zarr przesłaniają quantity
+
+Domyślnie rozwinięte drzewo (`kernel/results-browser/ResultsBrowserUiController.ts:29`, `modules/results-navigator/ResultsOutputTree.tsx:137`) pokazuje `.zattrs`, `.zgroup`, `index.jsonl` i commit próbki przed kolejnymi quantity. Na zachowanym ekranie m i tabela wypadają poniżej widocznego obszaru. To prawdziwe eksporty i muszą pozostać dostępne zgodnie z wymaganiem użytkownika.
+
+Kierunek: etapy i quantity czytelne w pierwszej kolejności; pliki pomocnicze datasetu pod jawną, domyślnie zwiniętą sekcją. Nie usuwać ich z katalogu i nie udawać semantycznej obsługi nieznanych formatów. Kryteria: m, H_eff i tabela osiągalne bez przewijania przez pliki pomocnicze; wyszukanie `.zattrs` ujawnia wynik; fokus, collapse i wybór zachowane przy rewizjach oraz stronicowaniu. **Otwarte.**
+
+### UX-22 · P2 · Etykiety mieszają indeks i numer próbki
+
+Viewport pokazuje „index 0”, a Inspector „Sample index 1 / 6” (`ResultsSnapshotViewport.tsx:462`, `ResultsOutputInspector.tsx:396`). Mapowanie danych jest poprawne, lecz nazwy utrudniają ocenę, czy wybrana i wyświetlana klatka są zgodne. Kierunek: wspólna użytkowa numeracja „Sample 1 of 6” i czas; techniczny indeks w metadanych. Przy opóźnieniu nadal rozróżniać displayed/requested, nie zmieniając indeksowania API. Kryteria: pierwsza/środkowa/ostatnia próbka, accepted-step bez czasu, błąd i opóźniona odpowiedź. **Otwarte.**
+
+Dodatkowa obserwacja: m ma „Unit not recorded”. Viewer uczciwie odzwierciedla brak w eksporcie; jednostkę należy zapisać u producenta zgodnie z kanonicznym katalogiem quantity (`crates/fullmag-quantities/src/catalog.rs:36`: dimensionless), nie zgadywać jej w UI.
+
+Docker/WSL początkowo nadal był niedostępny, następnie CLI i serwer wróciły. Bieżący odczyt potwierdził oba stare kontenery 3298 w stanie exited 255, bez OOM i z Pid 0. `iteration/current.json` nadal wskazuje succeeded `a9b8c97f2ed74e2fad184c42227bc62e`, snapshot `7881f9924df5ebcb508cbe88abbe4bf40c3ca0279aaf34a8d43bea2ee7fdaa39`; aktywnego markera operacji brak. Nie uruchamiano ręcznie serwisów. Następny krok to managed resume przypięte do istniejącego development attempt, następnie testy WIP i nowy render. Cała funkcja nadal wymaga zmian.
+
+
+## Checkpoint 29.10 — działający runtime, publiczny autosave i browser PASS
+
+[Zbiorczy dowód](2026-10-29-results-public-root-baseline-evidence.json) rozdziela snapshoty, zakres testów, błędne próby i udaną kwalifikację. Nie jest dowodem nowszych, nieprzetestowanych zmian retry ani globalnego wyjścia.
+
+- Końcowy capture po powrocie Dockera dał snapshot `e759e272ebf7553727abbcba294a87697fab16af266ddfcd72304896f0d5de99`; 7 testów accepted storage i 5 testów API Results przeszło. Runtime zatrzymał admission na historycznym native ownerze z innym buildem.
+- Naprawiono brak możliwości użycia tożsamości kontenerów z poprawnej iteracji, gdy pierwotny failed DEV terminal nie miał tych identyfikatorów. Nowe `stop-bootstrap --iteration-attempt` korzysta z istniejącego walidatora linked continuation, przypina bieżący identyczny receipt i ponawia kontrolę pod lease oraz po stop. Bieżący czas startu nadal pochodzi z failed resume. 9 testów, w tym 24 przypadki błędnych powiązań, przeszło; niezależny reviewer nie znalazł blockerów. Realny stop `a836f77535f941089f56c02bf82ba12e` potwierdził niezmienione bajty ownera. Nie edytowano ręcznie lease ani receipt.
+- Managed fresh recreation zachowała poprzedni runtime w archiwum. `/user-data` i katalog workspace pozostały. Nowy development `4ee5f6657f5d4ebd959f76a16d307be2`, config `0d54d28a8c2b5406059e885da3d2110fd932b1442642c66eccea8e954a9aa810`, snapshot `1ebb4e0bc60a1eac53608dc4e450e385d709201a1fa9bf3cbc4042f4d9897554`: succeeded, API i native service Ready.
+- Rzeczywisty FEM `run-live-ac5c1552ae2cde97a70c427ba4763559115542be763a7e4508c49a104eb64764`, CPU/double/strict, zakończył się jako completed; storage succeeded i marker aktywny usunięty. Monitor widział po sześć rosnących commitów 1–6 dla m, H_eff i tabeli przy manifestach running oraz nieobecnym terminal receipt przed i po każdym odczycie. To dowód publikacji plików przed końcem, **nie** dowód odczytu tych watermarków przez Current API/UI. Folder dodano jako workspace item 9.
+- Browser QA `6b16e7b9727f405ea8a6515cef7c46e9`: PASS. Rzeczywiste klatki 0/2/5, zgodne payloady, zmienny canvas, WebGL bez utraty kontekstu, stabilna kamera/Inspector, per-snapshot appearance, opóźniony odczyt i błąd/recovery, Return to live w trakcie odczytu, Model/Airbox draft guards, terminalne statystyki i brak mutacji naukowych w badanym przepływie. No-session i arrival/waiting używają jawnych fixtures przeglądarkowych z rzeczywistymi danymi wynikowymi. SwiftShader nie kwalifikuje sprzętowego GPU ani fizyki solvera.
+- Pierwsza próba UI nie ruszyła przeglądarki przez 30 s cold-compile frontend. Druga zakończyła runner kodem 0, ale została odrzucona przez limit raportu. Zamiast podnosić 2 MiB lub usuwać asercje, pomocnicze obrazy przechwytywane są natywnie w JPEG80; dwa główne obrazy i pixel-hashe pozostają PNG. Zaakceptowany raport ma 1 565 902 B. Format każdego obrazu jest jawny; raport błędu zachowuje końcowy obraz i trace.
+
+Obejrzany główny zrzut potwierdza poprawę wysokości nagłówka Saved z UX-20. Pełna macierz 320 px/200% nadal nie jest zaliczona. Na obrazie nadal widać cztery wyjścia, metadane wypychające quantity i różną numerację. Naprawy UX-19/22 są teraz w implementacji; UX-21 pozostaje otwarty.
+
+Review storage wykrył rzeczywistą lukę: błąd terminalnego manifestu zwalniał lease i blokował retry. Wprowadzono WIP z zachowaniem markera niepewności, immutable outcome, idempotentnym cleanup i jednorazowym przygotowaniem danych/manifestu. Przygotowanie deskryptora ma terminalizować swój błąd. **Nowe przypadki błędów nie były jeszcze skompilowane/testowane na chwili tego checkpointu.** Kwalifikacja sukcesu powyżej nie zamyka tej bramki.
+
+### UX-23 · P2 · Powtarzana identyfikacja folderu zajmuje miejsce wyników
+
+Na zrzucie QA 6b16e7 globalny nagłówek i Explorer już podają nazwę folderu; wcześniejsza sekcja „Saved result folder / Name / Workspace item” zabiera kolejne wiersze nad rzeczywistym katalogiem. `WorkspaceDockLayout.tsx` przenosi te informacje do natywnego, domyślnie zamkniętego **Folder details** pod Explorerem, zachowując dane, aria-label i identyfikator sekcji. **WIP: wymaga testu/renderu po zmianie.** Kryteria: quantity ma pierwszeństwo, szczegóły pozostają dostępne myszą i klawiaturą, hide/restore i panele odpięte zachowują działanie.
+
+
+## Checkpoint 29.10 — retry storage i scenariusz UI 3df588
+
+[Dowód](2026-10-29-results-public-root-retry-evidence.json) zawiera dokładny snapshot, run, publikację, testy, hashe plików i natywne obrazy. Backend storage zapisano osobno jako `ba76afc3f`; naprawa bootstrap identity jako `f4ea712d9`. Nie scalono PR #332.
+
+- Snapshot `33d0eaba`, iteration `cf232a8305a24e36b75e584edb2c8679`: runner storage 2/2, accepted storage 10/10, workspace results 5/5 PASS. Realny FEM `run-live-5e4873…` zakończył się poprawnie i opublikował sześć preterminalnych próbek każdego pola/tabeli. Nie jest to jeszcze dowód aktywnego Current API/UI.
+- QA `3df588c9d44d4eb3887842352a1825ef`, item 10: PASS. Próbki pierwsza/środkowa/ostatnia zweryfikowane hashem payloadu; przewijanie, per-snapshot appearance, pending/error retention, tabele, dirty guards, no-session oraz powrót do Live działają w tym scenariuszu.
+- UX-19: jedno nadrzędne wyjście potwierdzone w Saved i Current-history. Dodatkowo Current-history → Live działa po schowaniu obu paneli i przełączeniu na Live Charts; przy 320 px przycisk ma x=68, szerokość 118 i przechodzi hit-test. To nie jest kwalifikacja całego układu przy 320 px.
+- UX-20: oglądnięty render potwierdza usunięcie pustego wysokiego ribbonu w Saved i przywrócenie go w Live. Pełne 320 px/200% zoom pozostaje otwarte.
+- UX-21: tablice domyślnie zwinięte; wyszukanie metadanych rozwija ich przodków, a wyczyszczenie filtra zachowuje poprzednie rozwinięcie. Sterowanie jest ograniczone do 512 wpisów na źródło, najnowsza akcja usuwa najstarsze nadmiarowe ustawienie. Testy jednostkowe i browser potwierdzają kontrakt; oględziny obrazu ujawniły poniższy UX-24.
+- UX-22: Inspector i viewport używają „Sample N of M”; indeks API pozostaje 0-based. Nowsze aria-valuetext na natywnym suwaku i Radix Thumb oraz opis latentnego wyboru 3D przeszły 20 testów w 4 plikach i typecheck, lecz ten receipt browser ich nie obejmuje.
+- UX-23: Folder details jest zamknięte domyślnie, pod katalogiem; otwieranie klawiaturą i osiągalność po rozwinięciu tablic potwierdzone. Podsumowanie ma własny overflow scroll.
+
+Cztery wcześniejsze próby nowego harnessu zakończyły się failed: zła rola searchbox, nieodseparowana poprawna ochrona dirty draft, automatyczne otwarcie Inspectora przez Live Charts i niejednoznaczny nagłówek. Zachowano receipty; poprawiono selektory/kolejność bez osłabiania asercji. Żaden failed nie został przeklasyfikowany na PASS.
+
+### UX-24 · P2 · Zagnieżdżone quantity niewidoczne w zachowanym renderze Saved
+
+Na principal/compact screenshot QA 3df588 widać początek rozwiniętej grupy Zarr, po czym pliki poziomu root. m/H_eff/table są wizualnie ucięte; Live screenshot pokazuje pełne zagnieżdżenie. Automatyczny PASS nie zamyka tej obserwacji. Trwa diagnoza layoutu; potrzebny jest test geometrii/hit-testu wierszy i nowy render. Nie uznajemy całego UI za ukończone.
+
+
+### UX-24 — poprawka i końcowa kwalifikacja tego etapu
+
+Próba `646d826a4008476daee4a7fab930d5e2` potwierdziła regresję: ostatni wiersz potomny Zarr kończył się na y=831,97 px, a kolejny root sibling zaczynał na y=379,31 px. `overflow-hidden` na treeitem zerował minimalną wysokość w gridzie, a `overflow-x-hidden` wrapperów tworzył także pionowy scroll context. Wrappery używają teraz `overflow-x-clip`; treeitem i grupy zachowują wysokość potomków. Truncation etykiet pozostało.
+
+QA **`6ff37f3256bf45939ae570606758dc41` PASS**, raport 1 552 634 B, [dowód](2026-10-29-results-browser-ui-refinements-evidence.json). Wszystkie row boxes są monotoniczne; m, H_eff i tabela mają wysokość 28 px oraz poprawny pointer hit-test. Folder details pozostaje osiągalne przy scrollHeight 1437/clientHeight 628. Obejrzano principal i compact render: quantity są widoczne, zaznaczenie m jest czytelne. Dodatkowo rzeczywiste Radix/native slidery ogłaszają „Sample N of M”; cały wcześniejszy scenariusz scrubbing/Live/no-session przeszedł ponownie.
+
+Frontend zapisano jako `c96d3bee5`; 32 pliki zachowały hashe od startu do końca QA. Po QA usunięto wyłącznie pustą linię na końcu testu, co jawnie zapisano w dowodzie. Focused tree suite: 26 niezmienionych testów PASS i 11/11 w poprawionym pliku po aktualizacji oczekiwania z hidden na clip; a11y 20/20; typecheck i check:design PASS. Wcześniejsze failed pozostały w receiptach. Zainstalowany, nieblokujący hook React Doctor zgłosił błąd parsera oxlint `Unexpected discriminant 7 for TSTypeName`; nie traktujemy tego jako zaliczonego review ani CI.
+
+Pozostają: Current API podczas runu, kolekcja etapów/prób, wczesne bindingi FEM, świeży FDM/YIG, szersza kwalifikacja tabel/modes/eigensolve, pełne 320 px/200%, problem inicjalizacji kamery wielu klientów i integracja PR. Automatyczny PASS oraz poprawiony render tego etapu nie zamykają tych punktów.
