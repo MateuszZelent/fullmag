@@ -16,7 +16,7 @@ use super::field_resolution::{
     fem_nodal_visualization_projection_allowed, field_value_count_matches_current_domain,
     flatten_current_field_values, is_fdm_snapshot, json_field_grid, json_field_value_count,
 };
-use crate::artifacts::read_json_artifact_value;
+use crate::artifacts::{read_json_artifact_value, try_resolve_artifact_path};
 use crate::error::ApiError;
 use crate::router_v2::handlers::sessions::status::{
     domain_generation_revision, fdm_grid_geometry, fdm_grid_shape,
@@ -1390,6 +1390,23 @@ pub(crate) fn planned_fdm_multilayer_native_layer_membership(
     Ok(Some(carrier))
 }
 
+/// Persisted copy of an artifact the execution-plan layout already declares.
+/// The plan is the authority and the runner writes this copy from its private
+/// attempt output, so a live run declares it before the run artifact root
+/// holds it: an absent copy is not yet published, a present one must parse.
+fn published_planned_layer_artifact(
+    snapshot: &SessionStateResponse,
+    relative_path: &str,
+) -> Result<Option<serde_json::Value>, ApiError> {
+    let Some(artifact_dir) = current_artifact_dir(snapshot) else {
+        return Ok(None);
+    };
+    if try_resolve_artifact_path(&artifact_dir, relative_path)?.is_none() {
+        return Ok(None);
+    }
+    read_json_artifact_value(&artifact_dir, relative_path).map(Some)
+}
+
 fn persisted_native_layer<'a>(
     snapshot: &'a SessionStateResponse,
     layer_id: &str,
@@ -1499,15 +1516,15 @@ fn cross_check_planned_membership(
             "multilayer FDM membership mask and legend refer to different artifacts",
         ));
     }
-    let artifact_dir = current_artifact_dir(snapshot).ok_or_else(|| {
-        ApiError::conflict("declared native multilayer membership has no artifact root")
-    })?;
-    let payload = read_json_artifact_value(&artifact_dir, membership_path).map_err(|_| {
+    let Some(payload) = published_planned_layer_artifact(snapshot, membership_path).map_err(|_| {
         ApiError::conflict(format!(
-            "declared native membership artifact is missing or corrupt for layer '{}'",
+            "declared native membership artifact is corrupt for layer '{}'",
             carrier.layer_id
         ))
-    })?;
+    })?
+    else {
+        return Ok(());
+    };
     validate_layer_payload_identity(
         &payload,
         "fdm_multilayer_region_membership.v1",
@@ -1597,18 +1614,16 @@ fn cross_check_planned_material(
     else {
         return Ok(());
     };
-    let artifact_dir = current_artifact_dir(snapshot).ok_or_else(|| {
-        ApiError::conflict(format!(
-            "declared multilayer material field '{quantity_id}' has no artifact root"
-        ))
-    })?;
     let material_path = required_string(descriptor, "artifact_path", "material descriptor")?;
-    let payload = read_json_artifact_value(&artifact_dir, material_path).map_err(|_| {
+    let Some(payload) = published_planned_layer_artifact(snapshot, material_path).map_err(|_| {
         ApiError::conflict(format!(
-            "declared multilayer material field '{quantity_id}' artifact is missing or corrupt for layer '{}'",
+            "declared multilayer material field '{quantity_id}' artifact is corrupt for layer '{}'",
             carrier.layer_id
         ))
-    })?;
+    })?
+    else {
+        return Ok(());
+    };
     validate_layer_payload_identity(
         &payload,
         "fdm_multilayer_material_field.v1",

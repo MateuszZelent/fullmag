@@ -35409,7 +35409,9 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
             "artifact_path": material_path
         });
     }
-    let missing_declared_material = app
+    // A live run declares the copy before the runner publishes it to the run
+    // artifact root; the plan-derived values stay authoritative until then.
+    let unpublished_declared_material = app
         .clone()
         .oneshot(
             Request::builder()
@@ -35419,7 +35421,7 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
         )
         .await
         .unwrap();
-    assert_eq!(missing_declared_material.status(), StatusCode::CONFLICT);
+    assert_eq!(unpublished_declared_material.status(), StatusCode::OK);
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1]["material_fields"] =
             serde_json::json!({});
