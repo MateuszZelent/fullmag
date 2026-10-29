@@ -657,6 +657,7 @@ pub(crate) fn test_app_state() -> Arc<AppState> {
     let (control_events_tx, _rx) = watch::channel(0u64);
 
     Arc::new(AppState {
+        api_started_at: std::time::Instant::now(),
         development_admission: Default::default(),
         development_restored_authoring: Default::default(),
         development_backend: crate::router_v2::handlers::platform::development_backend::DevelopmentBackendConfig::Disabled,
@@ -780,6 +781,7 @@ pub(crate) async fn test_app_state_with_live_session() -> Arc<AppState> {
         simulation_preparation: None,
         scene_document: None,
         scalar_rows: Vec::new(),
+        latest_scalar_source: None,
         engine_log: Vec::new(),
         solver_profile: crate::schemas::diagnostics::SolverProfileResource::default(),
         quantities: Vec::new(),
@@ -3097,6 +3099,7 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
         simulation_preparation: None,
         scene_document: None,
         scalar_rows: Vec::new(),
+        latest_scalar_source: None,
         engine_log: Vec::new(),
         solver_profile: crate::schemas::diagnostics::SolverProfileResource::default(),
         quantities: Vec::new(),
@@ -3154,6 +3157,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
     let (control_events_tx, _rx) = watch::channel(0u64);
 
     let state = Arc::new(AppState {
+        api_started_at: std::time::Instant::now(),
         development_admission: Default::default(),
         development_restored_authoring: Default::default(),
         development_backend: crate::router_v2::handlers::platform::development_backend::DevelopmentBackendConfig::Disabled,
@@ -3308,6 +3312,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         simulation_preparation: None,
         scene_document: None,
         scalar_rows: Vec::new(),
+        latest_scalar_source: None,
         engine_log: Vec::new(),
         solver_profile: crate::schemas::diagnostics::SolverProfileResource::default(),
         quantities: Vec::new(),
@@ -12847,6 +12852,8 @@ async fn mesh_build_command_enqueues_remesh_via_mesh_family() {
             airbox_hmin: Some(2.0e-9),
             airbox_growth_rate: Some(1.4),
             airbox_grading: Some("linear".to_string()),
+            airbox_curvature_factor: Some(0.3),
+            airbox_narrow_region_resolution: Some(0.5),
         };
         scene.study.universe_mesh = Some(universe_mesh.clone());
         scene.universe = Some(universe_mesh);
@@ -12994,6 +13001,21 @@ async fn mesh_build_command_enqueues_remesh_via_mesh_family() {
             .and_then(|value| value.get("airbox_grading"))
             .and_then(serde_json::Value::as_str),
         Some("linear")
+    );
+    let universe_patch = mesh_options
+        .get("scene_problem_patch")
+        .and_then(|value| value.get("universe"));
+    assert_eq!(
+        universe_patch
+            .and_then(|value| value.get("airbox_curvature_factor"))
+            .and_then(serde_json::Value::as_f64),
+        Some(0.3)
+    );
+    assert_eq!(
+        universe_patch
+            .and_then(|value| value.get("airbox_narrow_region_resolution"))
+            .and_then(serde_json::Value::as_f64),
+        Some(0.5)
     );
     drop(queue);
 
@@ -17044,7 +17066,9 @@ async fn mesh_universe_config_put_commits_scene_projection() {
                             "airbox_hmax": 8.0e-9,
                             "airbox_hmin": 2.0e-9,
                             "airbox_growth_rate": 1.4,
-                            "airbox_grading": "linear"
+                            "airbox_grading": "linear",
+                            "curvature_factor": 0.3,
+                            "airbox_narrow_region_resolution": 0.5
                         }
                     })
                     .to_string(),
@@ -17056,6 +17080,10 @@ async fn mesh_universe_config_put_commits_scene_projection() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
+    // Audit 26: the air feature controls survive the policy write.
+    assert_eq!(json["config"]["airbox_curvature_factor"], 0.3);
+    assert_eq!(json["config"]["airbox_narrow_region_resolution"], 0.5);
+    assert!(json["config"].get("curvature_factor").is_none());
     assert_eq!(json["config"]["mode"], "box");
     assert_eq!(json["config"]["size"][0], 4.0);
     assert_eq!(json["config"]["airbox_hmax"], 8.0e-9);
@@ -17080,6 +17108,8 @@ async fn mesh_universe_config_put_commits_scene_projection() {
     assert_eq!(universe.airbox_hmin, Some(2.0e-9));
     assert_eq!(universe.airbox_growth_rate, Some(1.4));
     assert_eq!(universe.airbox_grading.as_deref(), Some("linear"));
+    assert_eq!(universe.airbox_curvature_factor, Some(0.3));
+    assert_eq!(universe.airbox_narrow_region_resolution, Some(0.5));
     assert_eq!(committed.universe.as_ref(), Some(universe));
 }
 
@@ -21248,7 +21278,7 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
 }
 
 #[tokio::test]
-async fn material_field_data_resource_returns_realized_samples() {
+async fn material_field_data_resource_does_not_relabel_global_samples_as_region_assignment() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
     scene.revision = 31;
@@ -21331,7 +21361,7 @@ async fn material_field_data_resource_returns_realized_samples() {
         list["fields"][0]["href"],
         "/v2/sessions/current/data/material-fields/body_core_ms_gradient"
     );
-    assert_eq!(list["fields"][0]["sample_count"], 4);
+    assert_eq!(list["fields"][0]["sample_count"], 0);
 
     let detail_response = app
         .oneshot(
@@ -21353,14 +21383,14 @@ async fn material_field_data_resource_returns_realized_samples() {
     assert_eq!(detail["parameter"], "ms");
     assert_eq!(detail["unit"], "A/m");
     assert_eq!(detail["frame"], "object");
-    assert_eq!(detail["realization_status"], "realized");
-    assert_eq!(detail["sample_count"], 4);
-    assert_eq!(detail["min"], 760000.0);
-    assert_eq!(detail["max"], 790000.0);
-    assert_eq!(detail["mean"], 775000.0);
+    assert_eq!(detail["realization_status"], "authored_pending_realization");
+    assert_eq!(detail["sample_count"], 0);
+    assert!(detail["min"].is_null());
+    assert!(detail["max"].is_null());
+    assert!(detail["mean"].is_null());
     assert_eq!(
         detail["values"],
-        serde_json::json!([760000.0, 770000.0, 780000.0, 790000.0])
+        serde_json::json!([])
     );
 }
 

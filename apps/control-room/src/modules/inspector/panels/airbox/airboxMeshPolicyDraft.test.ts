@@ -238,6 +238,29 @@ describe("Airbox mesh policy draft", () => {
     });
   });
 
+  it("round-trips air curvature and narrow-region controls under canonical keys", () => {
+    for (const config of [
+      { airbox_hmax: 4e-8, airbox_curvature_factor: 0.3, airbox_narrow_region_resolution: 0.5 },
+      { airbox_hmax: 4e-8, curvature_factor: 0.3, narrow_region_resolution: 0.5 },
+    ]) {
+      const draft = draftFromUniverseMeshPolicyResource({ config, revision: 3 });
+      expect(draft.curvatureFactor).toBe("0.3");
+      expect(draft.narrowRegionResolution).toBe("0.5");
+
+      const result = buildAirboxMeshPolicyReplaceRequest(draft);
+      expect(result).toEqual({
+        request: {
+          config: {
+            airbox_curvature_factor: 0.3,
+            airbox_hmax: 4e-8,
+            airbox_narrow_region_resolution: 0.5,
+          },
+          expected_revision: 3,
+        },
+      });
+    }
+  });
+
   it("keeps an empty automatic domain policy free of zero-filled bounds", () => {
     const draft = {
       ...draftFromUniverseMeshPolicyResource({ config: null, revision: 1 }),

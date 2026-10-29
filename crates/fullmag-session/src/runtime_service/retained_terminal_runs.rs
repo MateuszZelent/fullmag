@@ -17,7 +17,8 @@ use crate::types::{
     FmsArtifactCatalog, FmsArtifactStatus, FmsCoordinatorJournalDirection,
     FmsCoordinatorJournalEntry, FmsPreparationResourceLease, FmsResourceLease,
     FmsResourceLeaseState, FmsRunCatalog, FmsRunIntent, FmsTaskAdmissionRecord,
-    FmsTaskCatalogEntry, FmsTaskLifecycle, FmsWorkerProcessExitReceipt,
+    FmsTaskCatalogEntry, FmsTaskLifecycle, FmsTaskPreparationReceipt, FmsTaskPreparedObservation,
+    FmsTaskPreparedObservationOutcome, FmsWorkerProcessExitReceipt,
 };
 use crate::FmsWorkerInboxRecord;
 
@@ -72,7 +73,7 @@ pub fn validate_retained_terminal_runs(
     if pins.is_empty() || pins.len() > retained_cancelled_runs::MAX_RETAINED_CANCELLED_RUN_PINS {
         bail!("retained terminal-run pin count must be between 1 and 128");
     }
-    let mut budget = ReadBudget::default();
+    let mut budget = ReadBudget::for_terminal_prepared();
     let actual = retained_cancelled_runs::list_run_inventory(store, &mut budget)?;
     let expected = pins
         .iter()
@@ -250,6 +251,15 @@ pub(super) fn validate_terminal_runs_subset_with_histories(
         }
         let solver_leases = read_solver_leases(store, &run_id, &tasks, budget)?;
         read_preparation_leases(store, &run_id, &current_tasks, budget)?;
+        validate_task_prepared_observations(
+            store,
+            &run_id,
+            &intent,
+            &catalog,
+            &current_tasks,
+            referenced_object_refs,
+            budget,
+        )?;
         validate_cancellation_intents(store, &run_id, &current_tasks, catalog.revision, budget)?;
         validate_task_admissions(
             store,
@@ -476,6 +486,83 @@ fn read_preparation_leases(
             if lease.state != FmsResourceLeaseState::Released {
                 bail!("retained terminal run `{run_id}` has an active preparation lease");
             }
+        }
+    }
+    Ok(())
+}
+
+fn validate_task_prepared_observations(
+    store: &SessionStore,
+    run_id: &str,
+    intent: &FmsRunIntent,
+    catalog: &FmsRunCatalog,
+    tasks: &BTreeMap<String, FmsTaskCatalogEntry>,
+    referenced_object_refs: &mut BTreeSet<String>,
+    budget: &mut ReadBudget,
+) -> Result<()> {
+    let relative = format!("runs/{run_id}/task_prepared_observations");
+    let Some(directory) = retained_cancelled_runs::optional_directory(store.root(), &relative)?
+    else {
+        return Ok(());
+    };
+    let mut seen = BTreeSet::new();
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        budget.observe_entry()?;
+        reject_link(&entry.path())?;
+        if !entry.file_type()?.is_file() {
+            bail!("terminal-run prepared observation namespace contains a non-file entry");
+        }
+        let name = entry.file_name().into_string().map_err(|_| {
+            anyhow::anyhow!("terminal-run prepared observation filename is not UTF-8")
+        })?;
+        let task_id = name
+            .strip_suffix(".json")
+            .context("terminal-run prepared observation filename must end in .json")?;
+        validate_store_id(task_id)?;
+        if !tasks.contains_key(task_id) || !seen.insert(task_id.to_owned()) {
+            bail!("terminal-run prepared observation refers to an unlisted or duplicate task");
+        }
+        let observation_relative = format!("{relative}/{name}");
+        let maximum = crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES as usize;
+        budget.observe_file(store.root(), &observation_relative, maximum)?;
+        let bytes = read_bounded_regular_file(store.root(), &observation_relative, maximum)?;
+        let observation: FmsTaskPreparedObservation = serde_json::from_slice(&bytes)
+            .context("parsing terminal-run prepared observation")?;
+        observation.validate()?;
+        if observation.run_id != run_id
+            || observation.task_id != task_id
+            || observation.relative_path()? != observation_relative
+        {
+            bail!("terminal-run prepared observation differs from its task or path");
+        }
+
+        let receipt_relative = format!("runs/{run_id}/task_preparation_receipts/{task_id}.json");
+        budget.observe_file(store.root(), &receipt_relative, maximum)?;
+        let receipt_bytes = read_bounded_regular_file(store.root(), &receipt_relative, maximum)?;
+        let receipt: FmsTaskPreparationReceipt = serde_json::from_slice(&receipt_bytes)
+            .context("parsing terminal-run task preparation receipt")?;
+        // Authenticate against the already pinned, typed run inputs without
+        // rereading those documents for every observation. Preparation precedes
+        // compute admission, so no solver attempt belongs in this fence.
+        receipt.validate_for_catalog(catalog)?;
+        receipt.validate_for_run_intent(intent)?;
+        if receipt.relative_path()? != receipt_relative
+            || receipt.run_id != observation.run_id
+            || receipt.task_id != observation.task_id
+            || receipt.step_id != observation.step_id
+            || receipt.preparation_id != observation.preparation_id
+            || receipt.plan_fingerprint != observation.plan_fingerprint
+        {
+            bail!("terminal-run prepared observation differs from its task preparation receipt");
+        }
+        if let FmsTaskPreparedObservationOutcome::Published {
+            bundle_object_ref,
+            object_refs,
+        } = observation.outcome
+        {
+            referenced_object_refs.insert(bundle_object_ref);
+            referenced_object_refs.extend(object_refs);
         }
     }
     Ok(())

@@ -108,6 +108,8 @@ pub(crate) enum MeshCommandTarget {
 
 #[derive(Debug, Clone)]
 pub(crate) struct AppState {
+    /// Monotonic API bootstrap clock, independent of session lifecycle.
+    pub api_started_at: std::time::Instant,
     /// Private pre-listener provenance. HTTP snapshots never carry this marker.
     pub development_restored_authoring: Arc<std::sync::OnceLock<
         crate::router_v2::handlers::platform::development_restore_input::RestoredAuthoringIdentity,
@@ -845,6 +847,10 @@ pub(crate) struct SessionStateResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scene_document: Option<SceneDocument>,
     pub scalar_rows: Vec<ScalarRow>,
+    /// Bound at accepted scalar publication, never inferred by read handlers
+    /// or deserialized from imported snapshots.
+    #[serde(skip)]
+    pub latest_scalar_source: Option<crate::schemas::scalars::ScalarObservationSource>,
     pub engine_log: Vec<EngineLogEntry>,
     pub solver_profile: SolverProfileResource,
     pub quantities: Vec<QuantityDescriptor>,
@@ -2349,6 +2355,7 @@ mod tests {
             simulation_preparation: None,
             scene_document: Some(scene_document),
             scalar_rows: Vec::new(),
+            latest_scalar_source: None,
             engine_log: Vec::new(),
             solver_profile: SolverProfileResource::default(),
             quantities: Vec::new(),

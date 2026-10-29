@@ -213,9 +213,13 @@
     "compute_issued": false,
     "preview": "ready-for-explicit-apply",
     "plan_sha256": "d94a5fcbacdbbc5f96cc91d310e38044a65bee1c9595defd24e85f4891437f60",
-    "applied": false,
-    "qualification": "NOT VERIFIED",
-    "operator_tests": "hosted execution pending"
+    "applied": true,
+    "qualification": "OWN HELPER RELEASE AND BACKEND DRAIN VERIFIED; FRESH ARCHIVE AND RESTART PENDING",
+    "operator_tests": "PASS GitHub Actions 40938573256",
+    "terminal_sha256": "d1830625c287701bcccebc2540d5df7662d01148bf3d06486c0a0429de609ee0",
+    "backend_exit_code": 0,
+    "active_lease_released": true,
+    "original_records_preserved": true
   },
   "planning_gate_7f378d65f": {
     "run_id": 40935795721,

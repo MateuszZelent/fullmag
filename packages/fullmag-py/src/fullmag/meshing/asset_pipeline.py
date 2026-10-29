@@ -190,6 +190,7 @@ from ._gmsh_extraction import (
     extract_per_domain_quality,
 )
 from .mesh_build_report import _build_mesh_operation_statuses, _build_shared_domain_build_report
+from ._airbox_feature_fields import require_no_airbox_feature_refinement
 from ._mesh_targets import (
     _canonicalize_geometry_owner_mapping as _canonicalize_geometry_owner_mapping,
     _coerce_positive_float as _coerce_positive_float,
@@ -215,6 +216,15 @@ from ._size_field_plan import (
 
 _DEFAULT_AIRBOX_GROWTH_RATE = 1.3
 _DEFAULT_AIRBOX_GRADING = "geometric"
+# Build modes whose air layers come from explicit level sets (note 0107).
+_AIRBOX_FEATURE_UNSUPPORTED_BUILD_MODES = frozenset(
+    {
+        "multi_geometry_geo_mixed_v2",
+        "single_geometry_geo_mixed",
+        "single_geometry_geo_ring",
+        "single_geometry_geo_layered_box",
+    }
+)
 _SIZE_DISTRIBUTION_HISTOGRAM_BINS = 30
 _FROZEN_MAGNETIC_SUBMESH_MODE = "generated_frozen_magnetic_submesh"
 _PREEMPTIVE_IMPORTED_STL_FALLBACK = "single_imported_stl_preemptive_fallback"
@@ -1690,6 +1700,11 @@ def _study_universe_airbox_options(
             "study_universe.airbox_growth_rate must be greater than 1.0; "
             "use null to disable explicit grading"
         )
+    # Note 0107: air-scoped feature controls are dimensionless.
+    resolved_airbox_curvature_factor = study_universe.get("airbox_curvature_factor")
+    resolved_airbox_narrow_region_resolution = study_universe.get(
+        "airbox_narrow_region_resolution"
+    )
     raw_airbox_grading = study_universe.get("airbox_grading")
     resolved_airbox_grading: str | None = None
     if isinstance(raw_airbox_grading, str) and raw_airbox_grading.strip():
@@ -1722,6 +1737,8 @@ def _study_universe_airbox_options(
                     else _DEFAULT_AIRBOX_GROWTH_RATE
                 ),
                 grading_mode=resolved_airbox_grading or _DEFAULT_AIRBOX_GRADING,
+                curvature_factor=resolved_airbox_curvature_factor,
+                narrow_region_resolution=resolved_airbox_narrow_region_resolution,
             )
         return None
 
@@ -1757,6 +1774,8 @@ def _study_universe_airbox_options(
             else _DEFAULT_AIRBOX_GROWTH_RATE
         ),
         grading_mode=resolved_airbox_grading or _DEFAULT_AIRBOX_GRADING,
+        curvature_factor=resolved_airbox_curvature_factor,
+        narrow_region_resolution=resolved_airbox_narrow_region_resolution,
     )
 
 
@@ -3195,6 +3214,8 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             planned_build_mode = "concatenated_stl_fallback"
         else:
             planned_build_mode = "component_aware"
+        if planned_build_mode in _AIRBOX_FEATURE_UNSUPPORTED_BUILD_MODES:
+            require_no_airbox_feature_refinement(airbox, route=planned_build_mode)
         if planned_build_mode in {"conformal_occ", "single_geometry_occ"} and component_aware_mesh_options:
             body_clamp_fields = _study_default_body_clamp_fields(
                 geometries,

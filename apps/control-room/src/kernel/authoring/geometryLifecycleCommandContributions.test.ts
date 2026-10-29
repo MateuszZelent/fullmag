@@ -1381,6 +1381,62 @@ describe("geometry lifecycle command contributions", () => {
     });
   });
 
+  it("opens a second sphere draft under the next free default name", async () => {
+    const registry = registryWithLifecycleCommands();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+
+    await registry.execute("geometry.add-sphere", {
+      resourceData: {
+        [MODEL_SCENE_PATH]: {
+          objects: [{ id: "sphere_a", name: "New sphere" }],
+          revision: 4,
+        },
+      },
+      selection,
+      source: "test",
+    });
+
+    expect(selection.get()).toMatchObject({
+      kind: "builder.primitive",
+      label: "New sphere 2",
+      nodeId: "geometry:draft:sphere",
+    });
+  });
+
+  it("renames a stale default draft name that the scene already took", async () => {
+    const registry = registryWithLifecycleCommands();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    selection.set(
+      {
+        kind: "builder.primitive",
+        label: "New sphere",
+        nodeId: "geometry:draft:sphere",
+        objectId: null,
+        ref: null,
+      },
+      "test",
+    );
+    const commitTransaction = vi.fn(async () => {
+      throw new Error("stop after request");
+    });
+
+    await registry.execute("geometry.commit-object-draft", {
+      api: { model: { commitTransaction } } as never,
+      resourceData: {
+        [MODEL_SCENE_PATH]: {
+          objects: [{ id: "sphere_a", name: "New sphere", region_name: "New sphere" }],
+          revision: 21,
+        },
+      },
+      selection,
+      source: "test",
+    });
+
+    expect(commitTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "create_object", name: "New sphere 2" }),
+    );
+  });
+
   it("fails closed without a canonical scene revision", async () => {
     const registry = registryWithLifecycleCommands();
     const selection = new SelectionController(new EventBus<KernelEventMap>());

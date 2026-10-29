@@ -559,3 +559,22 @@ w pobranym masterze; nie przepisujemy ich równolegle. Dwa nasze fixture'y FEM
 preparation nie zadawały wymaganych wyjść widmowych — poprawiono źródła testów,
 zachowując produkcyjne guardy i obsługę FemEigen/FemFrequencyResponse.
 Nowe wykonanie CI i scalenie nowszego mastera pozostają konieczne.
+
+
+### Wynik zastosowania recovery
+
+Hosted workflow [40938573256](https://github.com/MateuszZelent/fullmag/actions/runs/40938573256)
+przeszedł, w tym nowe behawioralne regresje wygenerowanych bloków probe'a.
+Zastosowano dokładny plan d94a5f… po ponownej walidacji. Operator zakończony
+kodem 0: backend b26f… exited=0, OOM=false; oryginalny helper zwolnił lease,
+oryginalne rekordy są zachowane. Stan `stopped-awaiting-fresh-archive`,
+restart policy `fresh-state-only`: to potwierdzenie drain i zamknięcia lease,
+jeszcze nie potwierdzenie ponownie działającego API lub obliczeń.
+Publiczne, zredagowane dowody: [recovery evidence](2026-10-29-eigensolve-cancel-before-start-recovery.evidence.json).
+
+Pobrano master 9f70be04f8e60a55c5c321d26c2e2fde41798d4c i połączono
+z dotychczasowym checkpointem 5a17e1925. Jedyny konflikt fixture browser QA
+rozwiązano przez kanoniczny `metadata_cache_key` i metadane next.config.mjs
+z upstream, zachowując asercje owned labels. Pozostałe 14 chronionych plików
+pozostało identyczne; source-map przeszła statyczny validator. Finalne review,
+commit merge, hosted CI i świeża aplikacja następują po tym checkpointcie.

@@ -2632,6 +2632,7 @@ async fn main() {
         bootstrap_started.elapsed().as_millis()
     );
     let state = Arc::new(AppState {
+        api_started_at: bootstrap_started,
         development_admission: Default::default(),
         development_restored_authoring: Default::default(),
         development_backend: router_v2::handlers::platform::development_backend::DevelopmentBackendConfig::from_environment(),

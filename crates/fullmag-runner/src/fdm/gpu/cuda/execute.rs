@@ -1571,7 +1571,8 @@ pub(crate) fn execute_cuda_fdm(
 #[cfg(all(test, feature = "cuda"))]
 mod adaptive_batch_tests {
     use super::{
-        adaptive_batch_target, execute_cuda_fdm, resolve_observation_policy, OutputSchedule,
+        adaptive_batch_target, cap_cuda_target_to_drive_event, cuda_drive_event_schedule,
+        execute_cuda_fdm, resolve_observation_policy, OutputSchedule,
     };
     use crate::fdm::gpu::cuda::{canonical_fdm_time, canonical_fdm_waveform_time};
     use crate::fdm::gpu::cuda::native::NativeStatsMode;

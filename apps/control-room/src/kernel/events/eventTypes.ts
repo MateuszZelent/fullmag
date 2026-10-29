@@ -173,6 +173,8 @@ export interface KernelEventMap {
     status: number | null;
   };
   "telemetry:scalar-sample": {
+    /** Scope accepted by the producing connection; null for an unscoped producer. */
+    requestScopeEpoch: string | null;
     revision: string | number;
     row: Record<string, number>;
     runId: string | null;

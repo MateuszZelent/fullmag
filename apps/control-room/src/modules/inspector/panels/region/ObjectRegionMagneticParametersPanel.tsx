@@ -509,72 +509,84 @@ function useObjectRegionMagneticParametersPanelView({
           );
           return (
             <div className="fm-region-override fm-section-separator" key={`override:${index}`}>
-              <FormField
-                label={`Override ${index + 1}`}
-                type="select"
-                value={override.parameter}
-                onChange={(event: ChangeEvent<HTMLSelectElement>) =>
-                  updateMaterialOverride(index, {
-                    parameter: event.target.value as RegionMaterialParameter,
-                  })
-                }
-              >
-                <option value="ms">Ms</option>
-                <option value="aex">Aex</option>
-                <option value="alpha">alpha</option>
-                <option value="ku1">Ku1</option>
-              </FormField>
-              <FieldRow
-                label="Inherited parent"
-                value={`${parentInfo.value} ${parentInfo.unit}`.trim()}
-              />
-              <PhysicalScalarField
-                label="Local override"
-                unit={override.unit}
-                value={override.value}
-                onValueChange={(next) => updateMaterialOverride(index, { value: next })}
-              />
-              <FormField
-                label="Unit"
-                mono={false}
-                type="text"
-                value={override.unit}
-                onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                  updateMaterialOverride(index, { unit: event.target.value })
-                }
-              />
-              <FormField
-                label="Override priority"
-                type="number"
-                step={1}
-                value={String(override.priority)}
-                onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                  updateMaterialOverride(index, { priority: Number(event.target.value) })
-                }
-              />
-              <FormField
-                label="Conflict"
-                type="select"
-                value={override.conflictPolicy}
-                onChange={(event: ChangeEvent<HTMLSelectElement>) =>
-                  updateMaterialOverride(index, {
-                    conflictPolicy: event.target.value as RegionMaterialConflictPolicy,
-                  })
-                }
-              >
-                <option value="error">Error</option>
-                <option value="higher_priority_wins">Higher Priority Wins</option>
-              </FormField>
-              <div className="fm-inspector-toolbar fm-toolbar-top">
-                <Button
-                  size="sm"
-                  type="button"
-                  variant="ghost"
-                  onClick={() => removeMaterialOverride(index)}
-                >
-                  Remove Override
-                </Button>
-              </div>
+              {override.preservedOverride ? (
+                <>
+                  <FieldRow label={`Override ${index + 1}`} value={`${override.preservedOverride.parameter} · ${override.preservedOverride.value.kind}`} />
+                  <p>This profile is preserved unchanged. Edit it in the Python script.</p>
+                  <Button size="sm" type="button" variant="ghost" onClick={() => removeMaterialOverride(index)}>
+                    Remove Override
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <FormField
+                    label={`Override ${index + 1}`}
+                    type="select"
+                    value={override.parameter}
+                    onChange={(event: ChangeEvent<HTMLSelectElement>) =>
+                      updateMaterialOverride(index, {
+                        parameter: event.target.value as RegionMaterialParameter,
+                      })
+                    }
+                  >
+                    <option value="ms">Ms</option>
+                    <option value="aex">Aex</option>
+                    <option value="alpha">alpha</option>
+                    <option value="ku1">Ku1</option>
+                  </FormField>
+                  <FieldRow
+                    label="Inherited parent"
+                    value={`${parentInfo.value} ${parentInfo.unit}`.trim()}
+                  />
+                  <PhysicalScalarField
+                    label="Local override"
+                    unit={override.unit}
+                    value={override.value}
+                    onValueChange={(next) => updateMaterialOverride(index, { value: next })}
+                  />
+                  <FormField
+                    label="Unit"
+                    mono={false}
+                    type="text"
+                    value={override.unit}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                      updateMaterialOverride(index, { unit: event.target.value })
+                    }
+                  />
+                  <FormField
+                    label="Override priority"
+                    type="number"
+                    step={1}
+                    value={String(override.priority)}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                      updateMaterialOverride(index, { priority: Number(event.target.value) })
+                    }
+                  />
+                  <FormField
+                    label="Conflict"
+                    type="select"
+                    value={override.conflictPolicy}
+                    onChange={(event: ChangeEvent<HTMLSelectElement>) =>
+                      updateMaterialOverride(index, {
+                        conflictPolicy: event.target.value as RegionMaterialConflictPolicy,
+                      })
+                    }
+                  >
+                    <option value="error">Error</option>
+                    <option value="higher_priority_wins">Higher Priority Wins</option>
+                  </FormField>
+                  <div className="fm-inspector-toolbar fm-toolbar-top">
+                    <Button
+                      size="sm"
+                      type="button"
+                      variant="ghost"
+                      onClick={() => removeMaterialOverride(index)}
+                    >
+                      Remove Override
+                    </Button>
+                  </div>
+                </>
+              )}
             </div>
           );
         })}

@@ -174,6 +174,18 @@ pub async fn get_scalars(
         })
         .collect();
 
+    // A source pin is useful only for the exact current accepted row. A
+    // multi-row history may cross run lineages and must not acquire one run
+    // identity merely because it was read through the current-session route.
+    let current_observation = snapshot.latest_scalar_source.as_ref().filter(|source| {
+        source.session_id == snapshot.session.session_id
+            && source.run_id == snapshot.run.as_ref().map(|run| run.run_id.as_str()).unwrap_or("")
+            && source.request_scope_epoch == request_context.request_scope_epoch
+            && source.scalar_revision == revision
+            && window.len() == 1 && window[0].step == source.source_step
+            && snapshot.scalar_rows.last().is_some_and(|last| std::ptr::eq(window[0], last))
+    }).cloned();
+
     Ok(Json(ScalarWindow {
         revision,
         total_rows: total,
@@ -181,5 +193,6 @@ pub async fn get_scalars(
         columns: columns.into_iter().map(str::to_string).collect(),
         rows,
         observation_frames,
+        current_observation,
     }))
 }

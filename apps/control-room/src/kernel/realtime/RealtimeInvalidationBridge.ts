@@ -497,7 +497,7 @@ export class RealtimeInvalidationBridge {
     this.invalidateSessionScope(`realtime:reconnect:${Date.now()}`);
   }
 
-  handleEvent(event: unknown): boolean {
+  handleEvent(event: unknown, requestScopeEpoch: string | null = null): boolean {
     const sessionHandled = this.handleSessionEnvelope(event);
 
     if (isRealtimeResyncRequiredEvent(event)) {
@@ -514,6 +514,7 @@ export class RealtimeInvalidationBridge {
     if (isRealtimeScalarSampleEvent(event)) {
       const row = scalarSampleRow(event.payload.row);
       this.options.bus?.emit("telemetry:scalar-sample", {
+        requestScopeEpoch,
         revision: event.payload.revision,
         row,
         runId: event.run_id ?? null,

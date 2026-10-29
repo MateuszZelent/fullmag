@@ -32,6 +32,7 @@ const MAX_OBSERVED_ENTRIES: usize = 32_768;
 const MAX_OBSERVED_FILES: usize = 16_384;
 const MAX_OBSERVED_FILE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_MANUAL_HELD_V4_AGGREGATE_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_TERMINAL_PREPARED_AGGREGATE_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_CAS_PIN_BYTES: usize = 4096;
 const MAX_TASK_CANCELLATION_INTENT_BYTES: usize = 256 * 1024;
 const MAX_TASK_ADMISSION_RECORD_BYTES: usize = 1024 * 1024;
@@ -75,6 +76,16 @@ impl Default for ReadBudget {
 }
 
 impl ReadBudget {
+    /// Terminal-run preservation includes prepared observation CAS objects.
+    /// This bounds aggregate preservation I/O, not simulation memory; the
+    /// individual CAS object limit remains 128 MiB.
+    pub(super) fn for_terminal_prepared() -> Self {
+        Self {
+            aggregate_limit: MAX_TERMINAL_PREPARED_AGGREGATE_BYTES,
+            ..Self::default()
+        }
+    }
+
     /// Native v4 only: operator JSON cannot select this budget. Per-object
     /// reads remain bounded by the unchanged 128 MiB CAS limit below.
     pub(super) fn for_manual_held_v4() -> Self {

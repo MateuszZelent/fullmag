@@ -1277,6 +1277,20 @@ pub(crate) fn validate_physics_object_problem(problem: &ProblemIRV04) -> Result<
         .iter()
         .map(|region| (region.owner_object.as_str(), region.region_id.as_str()))
         .collect();
+    for (index, region) in problem.object_regions.iter().enumerate() {
+        for (override_index, value) in region.material_overrides.iter().enumerate() {
+            if let Err(error) = value.value.validate_unit(value.parameter) {
+                errors.push(format!(
+                    "object_regions[{index}].material_overrides[{override_index}]: {error}"
+                ));
+            }
+        }
+    }
+    for (index, assignment) in problem.material_parameter_fields.iter().enumerate() {
+        if let Err(error) = assignment.value.validate_unit(assignment.parameter) {
+            errors.push(format!("material_parameter_fields[{index}]: {error}"));
+        }
+    }
     let mut assignment_ids = BTreeSet::new();
     for (index, assignment) in problem.material_assignments.iter().enumerate() {
         if assignment.schema_version != OBJECT_MATERIAL_ASSIGNMENT_SCHEMA_VERSION {

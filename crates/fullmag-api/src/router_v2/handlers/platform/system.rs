@@ -34,10 +34,7 @@ pub async fn get_health(State(state): State<Arc<AppState>>) -> Json<HealthRespon
     } else {
         state.current_live_state.read().await.is_some()
     };
-    let uptime = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let uptime = state.api_started_at.elapsed().as_secs();
 
     Json(HealthResponse {
         status: if runtime_failure { "degraded" } else { "ok" }.into(),

@@ -513,6 +513,45 @@ pub(crate) struct SharedDomainRegionEntry {
     pub marker: u32,
 }
 
+/// Resolve a FEM object-region marker using canonical identity before the
+/// human-facing alias. Region names are only usable when they identify one
+/// enabled region; choosing one by iteration order would redirect material
+/// coefficients when a display name collides with an ID or another name.
+pub(crate) fn resolve_object_region_marker<'a>(
+    problem: &'a ProblemIR,
+    marker_key: &str,
+) -> Result<Option<&'a fullmag_ir::ObjectRegionIR>, String> {
+    let mut id_matches = problem
+        .object_regions
+        .iter()
+        .filter(|region| region.region_id.as_str() == marker_key);
+    let id_match = id_matches.next();
+    if id_matches.next().is_some() {
+        return Err(format!(
+            "FEM object-region marker '{}' matches more than one canonical region_id",
+            marker_key
+        ));
+    }
+    if id_match.is_some() {
+        // A disabled canonical ID is still an identity, never a display alias
+        // for some other enabled region.
+        return Ok(id_match.filter(|region| region.enabled));
+    }
+
+    let mut name_matches = problem
+        .object_regions
+        .iter()
+        .filter(|region| region.enabled && region.name.as_str() == marker_key);
+    let name_match = name_matches.next();
+    if name_matches.next().is_some() {
+        return Err(format!(
+            "FEM object-region marker '{}' is an ambiguous display alias for enabled regions",
+            marker_key
+        ));
+    }
+    Ok(name_match)
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct SharedInterfaceFace {
     pub facet_global_ordinal: u64,
@@ -1276,9 +1315,7 @@ fn rebind_mixed_v2_certificate_after_packing(
             .body_material_fields
             .iter_mut()
             .find(|field| field.object_id.as_str() == object_id.as_str())
-            .ok_or_else(|| {
-                format!("mixed v2 packed body '{object_id}' has no material field")
-            })?;
+            .ok_or_else(|| format!("mixed v2 packed body '{object_id}' has no material field"))?;
         field.node_order_digest = fullmag_ir::mixed_v2_node_order_digest(nodes);
         field.field_digest = fullmag_ir::mixed_v2_body_material_field_digest(
             field,
@@ -1332,7 +1369,7 @@ fn shared_domain_region_entries_for_problem(
     mesh: &MeshIR,
     problem: &ProblemIR,
     asset: &FemDomainMeshAssetIR,
-) -> Vec<SharedDomainRegionEntry> {
+) -> Result<Vec<SharedDomainRegionEntry>, String> {
     let object_id_for_geometry = |geometry_name: &str| {
         problem
             .regions
@@ -1366,11 +1403,11 @@ fn shared_domain_region_entries_for_problem(
         if !mesh_markers.contains(&marker.marker) {
             continue;
         }
-        let Some(region) = problem.object_regions.iter().find(|region| {
-            region.enabled
-                && (marker.geometry_name == region.region_id || marker.geometry_name == region.name)
-        }) else {
-            continue;
+        let Some(region) = resolve_object_region_marker(problem, &marker.geometry_name)? else {
+            return Err(format!(
+                "FEM object-region marker '{}' does not resolve to an enabled region",
+                marker.geometry_name
+            ));
         };
         entries.push(SharedDomainRegionEntry {
             object_id: region.owner_object.clone(),
@@ -1378,7 +1415,7 @@ fn shared_domain_region_entries_for_problem(
             marker: marker.marker,
         });
     }
-    entries
+    Ok(entries)
 }
 
 fn validate_domain_object_region_identity(
@@ -1398,26 +1435,24 @@ fn validate_domain_object_region_identity(
         })
         .map(|region| region.region_id.as_str())
         .collect::<BTreeSet<_>>();
-    let known_regions = problem
-        .object_regions
-        .iter()
-        .filter(|region| region.enabled)
-        .flat_map(|region| [region.region_id.as_str(), region.name.as_str()])
-        .collect::<BTreeSet<_>>();
     let mut seen_ids = BTreeSet::new();
+    let mut seen_conformal_ids = BTreeSet::new();
     let mut seen_markers = BTreeSet::new();
     for marker in &asset.object_region_markers {
-        if !known_regions.contains(marker.geometry_name.as_str()) {
+        let Some(region) = resolve_object_region_marker(problem, &marker.geometry_name)? else {
             return Err(format!(
                 "FEM object-region marker '{}' is not an enabled object region in the current ProblemIR",
                 marker.geometry_name
             ));
-        }
-        if !seen_ids.insert(marker.geometry_name.as_str()) {
+        };
+        if !seen_ids.insert(region.region_id.as_str()) {
             return Err(format!(
-                "FEM object-region marker '{}' is duplicated",
-                marker.geometry_name
+                "FEM object-region '{}' is referenced by more than one marker",
+                region.region_id
             ));
+        }
+        if region.realization_policy == fullmag_ir::RegionRealizationPolicyIR::Conformal {
+            seen_conformal_ids.insert(region.region_id.as_str());
         }
         if !seen_markers.insert(marker.marker) {
             return Err(format!(
@@ -1432,11 +1467,14 @@ fn validate_domain_object_region_identity(
             ));
         }
     }
-    if !expected.is_empty() && seen_ids.len() != expected.len() {
+    if seen_conformal_ids != expected {
+        let missing = expected
+            .difference(&seen_conformal_ids)
+            .copied()
+            .collect::<Vec<_>>();
         return Err(format!(
-            "FEM object-region marker coverage is incomplete: realized={} expected={} enabled conformal regions",
-            seen_ids.len(),
-            expected.len()
+            "FEM object-region marker coverage is incomplete: missing enabled conformal region IDs {:?}",
+            missing
         ));
     }
     if let Some(report) = asset.build_report.as_ref() {
@@ -1445,6 +1483,68 @@ fn validate_domain_object_region_identity(
                 "FEM object-region marker map disagrees with the current shared-domain build report"
                     .to_string(),
             );
+        }
+    }
+    Ok(())
+}
+
+fn reject_distinct_magnetic_object_face_contacts(
+    mesh: &MeshIR,
+    analysis: &SharedDomainAnalysis,
+) -> Result<(), String> {
+    let mut object_by_marker = BTreeMap::<u32, &str>::new();
+    for region in &analysis.ordered_regions {
+        if let Some(previous) = object_by_marker.insert(region.marker, region.object_id.as_str()) {
+            if previous != region.object_id.as_str() {
+                return Err(format!(
+                    "fem_shared_domain_marker_owner_ambiguous: marker {} resolves to both '{}' and '{}'",
+                    region.marker, previous, region.object_id
+                ));
+            }
+        }
+    }
+    let object_ids = object_by_marker.values().copied().collect::<BTreeSet<_>>();
+    if object_ids.len() < 2 {
+        return Ok(());
+    }
+    let has_cross_object_shared_node =
+        analysis.shared_interface_nodes.iter().any(|(_, markers)| {
+            markers
+                .iter()
+                .filter_map(|marker| object_by_marker.get(marker).copied())
+                .collect::<BTreeSet<_>>()
+                .len()
+                > 1
+        });
+    if !has_cross_object_shared_node {
+        return Ok(());
+    }
+
+    let mut face_markers = BTreeMap::<Vec<u32>, BTreeSet<u32>>::new();
+    for cell in mesh.cells.iter() {
+        let marker = mesh.element_markers[cell.ordinal];
+        if marker == AIR_REGION_MARKER {
+            continue;
+        }
+        for face in cell_facets(cell.cell_type, cell.nodes) {
+            face_markers
+                .entry(sorted_face_key(&face))
+                .or_default()
+                .insert(marker);
+        }
+    }
+
+    for (face, markers) in face_markers {
+        let object_ids = markers
+            .iter()
+            .filter_map(|marker| object_by_marker.get(marker).copied())
+            .collect::<BTreeSet<_>>();
+        if object_ids.len() > 1 {
+            return Err(format!(
+                "fem_shared_domain_object_contact_unsupported: face {:?} joins distinct magnetic objects {:?}; node splitting has no accepted native typed-facet/space contract",
+                face,
+                object_ids
+            ));
         }
     }
     Ok(())
@@ -1777,9 +1877,10 @@ fn mixed_v2_body_material_matches_problem(
         .and_then(Value::as_array)
         .is_some_and(|axis| {
             axis.len() == 3
-                && axis.iter().enumerate().all(|(index, value)| {
-                    close_axis(value.as_f64(), expected_axis[index])
-                })
+                && axis
+                    .iter()
+                    .enumerate()
+                    .all(|(index, value)| close_axis(value.as_f64(), expected_axis[index]))
         });
     close_scalar(
         mixed_v2_scalar_field_value(field, "Ms"),
@@ -1835,7 +1936,10 @@ fn mixed_p1_v2_scope_failed_predicates(
                     fullmag_ir::RequestedFemDemagIR::Auto
                         | fullmag_ir::RequestedFemDemagIR::PoissonRobin
                         | fullmag_ir::RequestedFemDemagIR::PoissonDirichlet
-                ) => demag_count += 1,
+                ) =>
+            {
+                demag_count += 1
+            }
             fullmag_ir::EnergyTermIR::InterfacialDmi { .. }
             | fullmag_ir::EnergyTermIR::BulkDmi { .. }
             | fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { .. }
@@ -1893,9 +1997,8 @@ fn mixed_p1_v2_scope_failed_predicates(
             .body_material_fields
             .iter()
             .find(|field| field.object_id == region.object_id);
-        if field.is_none_or(|field| {
-            !mixed_v2_body_material_matches_problem(problem, region, field)
-        }) {
+        if field.is_none_or(|field| !mixed_v2_body_material_matches_problem(problem, region, field))
+        {
             failed.push("v2_body_material_field_differs_from_problem");
             break;
         }
@@ -2089,8 +2192,9 @@ pub(crate) fn resolve_fem_domain_mesh_asset(
     let mesh = load_fem_domain_mesh_asset(asset)?;
     validate_domain_object_region_identity(&mesh, problem, asset)?;
     reject_unsupported_mixed_topology(problem, &mesh, asset.build_report.as_ref())?;
-    let region_entries = shared_domain_region_entries_for_problem(&mesh, problem, asset);
+    let region_entries = shared_domain_region_entries_for_problem(&mesh, problem, asset)?;
     let analysis = analyze_shared_domain_mesh_with_entries(&mesh, region_entries)?;
+    reject_distinct_magnetic_object_face_contacts(&mesh, &analysis)?;
     validate_packing_constraints(&analysis, &mesh.mesh_name, solver_supports_conformal)?;
     let source_certificate = asset
         .build_report
@@ -2166,11 +2270,8 @@ pub(crate) fn resolve_fem_domain_mesh_asset(
                     "fem_mixed_p1_v2_packed_certificate_rejected: {error}; fallback=none"
                 )
             })?;
-        fullmag_ir::validate_mixed_layer_topology_certificate_v2_against_mesh(
-            &mesh,
-            certificate,
-        )
-        .map_err(|reasons| {
+        fullmag_ir::validate_mixed_layer_topology_certificate_v2_against_mesh(&mesh, certificate)
+            .map_err(|reasons| {
             format!(
                 "fem_mixed_p1_v2_packed_certificate_rejected: {}; fallback=none",
                 reasons.join("; ")
@@ -2536,11 +2637,32 @@ pub(crate) fn compatible_fem_material(
     a: &fullmag_ir::MaterialIR,
     b: &fullmag_ir::MaterialIR,
 ) -> bool {
+    let b_has_active_cubic_anisotropy = [
+        b.cubic_anisotropy_kc1,
+        b.cubic_anisotropy_kc2,
+        b.cubic_anisotropy_kc3,
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value.abs() > 1e-30)
+        || [&b.kc1_field, &b.kc2_field, &b.kc3_field]
+            .into_iter()
+            .flatten()
+            .any(|values| values.iter().any(|value| value.abs() > 1e-30));
+    // The selected material supplies the plan-wide cubic frame. Any active
+    // candidate must either use that frame or trigger template promotion;
+    // the FEM ABI cannot carry a separate frame for each object.
+    let cubic_axes_compatible = !b_has_active_cubic_anisotropy
+        || (a.cubic_anisotropy_axis1.unwrap_or([1.0, 0.0, 0.0])
+            == b.cubic_anisotropy_axis1.unwrap_or([1.0, 0.0, 0.0])
+            && a.cubic_anisotropy_axis2.unwrap_or([0.0, 1.0, 0.0])
+                == b.cubic_anisotropy_axis2.unwrap_or([0.0, 1.0, 0.0]));
     a.saturation_magnetisation == b.saturation_magnetisation
         && a.exchange_stiffness == b.exchange_stiffness
         && a.damping == b.damping
         && a.uniaxial_anisotropy == b.uniaxial_anisotropy
         && a.anisotropy_axis == b.anisotropy_axis
+        && cubic_axes_compatible
 }
 
 fn merged_fem_element_markers(mesh: &MeshIR) -> Result<Vec<u32>, String> {

@@ -1,0 +1,15 @@
+{
+  "schema": "fullmag.cancelled-activation-recovery.v1",
+  "state": "stopped-awaiting-fresh-archive",
+  "backend_container": "b26f28adf4b4e3f6367660a72452a7625b19c153f246550644da3274c6976a5e",
+  "backend_exit_code": 0,
+  "active_lease_released": true,
+  "original_records_preserved": true,
+  "execution_state": "not-started",
+  "archive_present": false,
+  "restart_policy": "fresh-state-only",
+  "recovery_terminal_path": "verification/cancelled-activation-e603ca28017940beb9f171ca6da8ba00/terminal.json",
+  "recovery_sha256": "d1830625c287701bcccebc2540d5df7662d01148bf3d06486c0a0429de609ee0",
+  "activation_terminal_path": "activation/attempts/e603ca28017940beb9f171ca6da8ba00/terminal.json",
+  "activation_terminal_sha256": "d44fa213db26b0495083a8cd1a48b96a533eb84a1894cddd1ba6b09e40801505"
+}

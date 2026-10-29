@@ -78,6 +78,7 @@ class _Control:
     project = PROJECT
     volume = VOLUME
     namespace = ""
+    namespace_registry = None
     namespace_registry_sha256 = None
     namespace_registry = None
 

@@ -1375,6 +1375,7 @@ mod tests {
         f.stage.field_sampling_domain = FieldTargetIR::Object {
             object_id: "device-object".into(),
         };
+        f.stage.target_refs = vec![f.stage.field_sampling_domain.clone()];
         f.stage.outputs = vec![fullmag_ir::AntennaNamedOutputIR {
             id: "inspection-output".into(),
             quantity: "H_ant_basis".into(),
@@ -1770,6 +1771,9 @@ mod tests {
         problem.antenna_field_solve_stages[0].field_sampling_domain = FieldTargetIR::Object {
             object_id: "signal-object".into(),
         };
+        problem.antenna_field_solve_stages[0].target_refs = vec![
+            problem.antenna_field_solve_stages[0].field_sampling_domain.clone(),
+        ];
         let fullmag_ir::CurrentModuleIR::CurrentTransport {
             definition: Some(definition),
             ..

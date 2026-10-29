@@ -677,6 +677,41 @@
       "symbol": "DOC-ANCHOR:material-regions-v04-registry-identities",
       "responsibility": "Existing exact-name, global region identity and owner semantics shared by all four backend lanes; execution qualification remains separate.",
       "evidence_status": "planned_contract"
+    },
+    {
+      "id": "material-field-unit-validation",
+      "path": "crates/fullmag-ir/src/model.rs",
+      "symbol": "validate_unit",
+      "responsibility": "Zgodność etykiety z SI parametru bez przeliczania wartości; wspólna kontrola sceny oraz IR V03/V04.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "material-field-python-unit-validation",
+      "path": "packages/fullmag-py/src/fullmag/model/structure.py",
+      "symbol": "_validate_material_parameter_field",
+      "responsibility": "Walidacja jednostki po przypisaniu pola do parametru w Python.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "material-field-unit-regression",
+      "path": "crates/fullmag-ir/tests/material_field_units.rs",
+      "symbol": "material_field_units_are_checked_in_v04_public_validation",
+      "responsibility": "Regresja walidacji jednostek przed wykonaniem solvera.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-material-scalar-lowering",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "resolve_multilayer_material_dmi_scalar",
+      "responsibility": "Jednolite D materiałów lub jawny błąd descriptoru multilayer; explicit term ma pierwszeństwo.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-material-scalar-regression",
+      "path": "crates/fullmag-plan/src/tests/material_audit_fdm.rs",
+      "symbol": "single_grid_material_scalar_dmi_is_lowered_on_cpu_and_cuda",
+      "responsibility": "Regresja descriptorów CPU/CUDA, bez dowodu wykonania urządzenia.",
+      "evidence_status": "implemented"
     }
   ],
   "public_api": {
@@ -862,7 +897,7 @@
         "type": "str | None",
         "default": "None",
         "si_unit": "1",
-        "validation": "when provided, must be non-empty; current Python code does not validate that the string matches the selected parameter SI unit",
+        "validation": "opcjonalna jednostka SI parametru; zgodność sprawdzana przy przypisaniu pola",
         "meaning": "declared unit metadata",
         "backend_support": "authored IR on FDM/FEM CPU/GPU; runtime capability-gated",
         "problem_ir": "MaterialParameterFieldIR::Constant.unit",
@@ -906,7 +941,7 @@
         "type": "str | None",
         "default": "None",
         "si_unit": "1",
-        "validation": "when provided, must be non-empty; SI consistency with the target parameter is not currently machine-validated",
+        "validation": "opcjonalna jednostka SI parametru; zgodność sprawdzana przy przypisaniu pola",
         "meaning": "declared base-value unit metadata",
         "backend_support": "authored IR on FDM/FEM CPU/GPU; runtime capability-gated",
         "problem_ir": "MaterialParameterFieldIR::Linear.unit",
@@ -972,7 +1007,7 @@
         "type": "str | None",
         "default": "None",
         "si_unit": "1",
-        "validation": "when provided, must be non-empty; SI consistency with the target parameter is not currently machine-validated",
+        "validation": "opcjonalna jednostka SI parametru; zgodność sprawdzana przy przypisaniu pola",
         "meaning": "declared field-value unit metadata",
         "backend_support": "authored IR on FDM/FEM CPU/GPU; runtime capability-gated",
         "problem_ir": "MaterialParameterFieldIR::Radial.unit",
@@ -1016,7 +1051,7 @@
         "type": "str",
         "default": "required",
         "si_unit": "1",
-        "validation": "must be non-empty; SI consistency with the selected parameter is not currently machine-validated",
+        "validation": "wymagana jednostka SI parametru; zgodność sprawdzana przy przypisaniu pola",
         "meaning": "declared sampled-value unit metadata",
         "backend_support": "authored IR on FDM/FEM CPU/GPU; runtime capability-gated",
         "problem_ir": "MaterialParameterFieldIR::Sampled.unit",
