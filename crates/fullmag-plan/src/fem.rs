@@ -2991,9 +2991,10 @@ fn build_region_materials(
 }
 
 fn values_differ(values: &[f64], reference: f64) -> bool {
-    values
-        .iter()
-        .any(|value| (*value - reference).abs() > 1e-18)
+    values.iter().any(|value| {
+        let scale = value.abs().max(reference.abs());
+        (*value - reference).abs() > 64.0 * f64::EPSILON * scale
+    })
 }
 
 fn axes_differ(values: &[[f64; 3]], reference: [f64; 3]) -> bool {

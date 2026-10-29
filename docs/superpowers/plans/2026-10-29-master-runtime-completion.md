@@ -480,3 +480,22 @@ niepełny. Raport końcowy oddziela źródła, build, runtime, render i fizykę.
   zachowano kontrolę dokładnych zatrzymanych inkarnacji i atomowe archiwum
   starego runtime/ledgera/danych. Python AST/diff przechodzi; ponowne wykonanie
   tej zarządzanej ścieżki i nowy build nadal oczekują na odbiór.
+
+- Jawne archiwum `88b6a68101a342c4ac2e13b48fe8d9c8` zakończyło się
+  succeeded i zachowało stary katalog CoFeB z tym samym SHA-256. Obrazy
+  toolchain/development/backend były cache hit. Kolejny start zatrzymał się
+  przed stworzeniem nowego backendu: walidator retirement wymagał sukcesu
+  pierwotnego development `1123...`, mimo rzeczywistego udanego resume `a2f0...`.
+  Nie zmieniono historycznego failed-confirmed ani gotowego archiwum.
+- Walidacja dopuszcza teraz dokładny udany, niezmienny resume: zgodny
+  parent/config, source/provenance, namespace/volume, state root i oba
+  usunięte container ID. Enumeracja jest ograniczona do 256 rekordów,
+  mount control jest readonly, terminal musi odpowiadać canonical receipt.
+  Pozostałe piny archiwum oraz genuine native drain nadal są sprawdzane.
+  Ścieżka pierwotnego succeeded nie zmienia zachowania. Niezależne review
+  wykryło nieobsługiwany argument helpera; poprawiono go na istniejący
+  adapter readonly i ponowne review zakończyło się PASS źródła.
+- Rzeczywisty odczyt archiwum i powiązanego resume przeszedł bez mutacji;
+  startup i nowe przebiegi nadal wymagają dalszego odbioru. Nie powtarzać
+  fresh-state ani usuwania kontenerów archiwum `88b6...`: stary runtime
+  jest już zachowany, a kolejny krok to zwykły zarządzany start nowej sesji.

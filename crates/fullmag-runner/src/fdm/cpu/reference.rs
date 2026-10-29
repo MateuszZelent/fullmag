@@ -1564,9 +1564,17 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
     if terminal.is_some() && coupled_checkpoint.is_some() {
         return Err(RunError { message: "terminal publication context cannot authorize checkpoint resume".into() });
     }
-    if !until_seconds.is_finite() || until_seconds <= 0.0 {
+    // Relaxation runs to convergence or its step limit, so an unbounded
+    // horizon is legitimate there (the accepted worker passes +inf); every
+    // other stage needs a finite positive endpoint.
+    let unbounded_relaxation = until_seconds == f64::INFINITY && plan.relaxation.is_some();
+    if until_seconds.is_nan()
+        || until_seconds <= 0.0
+        || (!until_seconds.is_finite() && !unbounded_relaxation)
+    {
         return Err(RunError {
-            message: "until_seconds must be finite and positive".to_string(),
+            message: "until_seconds must be finite and positive (unbounded only for relaxation)"
+                .to_string(),
         });
     }
     if plan.precision != ExecutionPrecision::Double {
