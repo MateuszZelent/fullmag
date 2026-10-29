@@ -10,6 +10,7 @@ import subprocess
 import time
 import uuid
 from docker_worker_cgroup import CGROUP_FAILURE_SCHEMA
+from docker_volume_failed_stop import SCHEMA as FAILED_STOP_SCHEMA
 from docker_build_control import (BuildControl, BuildControlError, MAX_DOCUMENT_BYTES,
     bounded_capture, canonical, control_read_script, docker_capture, toolchain_configuration)
 
@@ -70,18 +71,21 @@ def validate_request(request):
     terminal_prestart = isinstance(request, dict) and request.get("schema") == TERMINAL_PRESTART_SCHEMA
     prestart = isinstance(request, dict) and request.get("schema") in (PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA)
     cgroup = isinstance(request, dict) and request.get("schema") == CGROUP_FAILURE_SCHEMA
-    failed = isinstance(request, dict) and request.get("schema") in (FAILED_BUILD_SCHEMA, PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA, CGROUP_FAILURE_SCHEMA)
+    failed_stop = isinstance(request, dict) and request.get("schema") == FAILED_STOP_SCHEMA
+    failed = isinstance(request, dict) and request.get("schema") in (FAILED_BUILD_SCHEMA, PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA, CGROUP_FAILURE_SCHEMA, FAILED_STOP_SCHEMA)
     expected = {"schema", "attempt", "compose_project", "source_root", "port", "config_sha256",
         "unknown_receipt_sha256", "controller_sha256", "containers", "package_documents"}
     if failed:
         expected = (expected - {"package_documents"}) | {"failure"}
     if cgroup:
         expected.add("package_documents")
+    if failed_stop:
+        expected.add("failed_stop_helper_sha256")
     if prestart:
         expected.add("prestart_helper_sha256")
     if terminal_prestart:
         expected.update({"history_baseline", "observation", "prior_publication"})
-    require(isinstance(request, dict) and set(request) == expected and request["schema"] in (SCHEMA, FAILED_BUILD_SCHEMA, PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA, CGROUP_FAILURE_SCHEMA),
+    require(isinstance(request, dict) and set(request) == expected and request["schema"] in (SCHEMA, FAILED_BUILD_SCHEMA, PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA, CGROUP_FAILURE_SCHEMA, FAILED_STOP_SCHEMA),
             "Reconciliation request schema/keys differ")
     require(isinstance(request["attempt"], str) and TOKEN.fullmatch(request["attempt"]), "Invalid iteration attempt")
     for key in ("config_sha256", "unknown_receipt_sha256", "controller_sha256"):
@@ -115,6 +119,12 @@ def validate_request(request):
         require(isinstance(request["prestart_helper_sha256"], str) and SHA.fullmatch(request["prestart_helper_sha256"]), "Invalid prestart helper digest")
         validate_failure_pin(request["failure"])
         return
+    if failed_stop:
+        from docker_volume_failed_stop import validate_failure_pin
+        require(isinstance(request["failed_stop_helper_sha256"], str)
+                and SHA.fullmatch(request["failed_stop_helper_sha256"]), "Invalid failed-stop helper digest")
+        validate_failure_pin(request["failure"])
+        return
     if failed and not cgroup:
         proof = request["failure"]
         require(isinstance(proof, dict) and set(proof) == {
@@ -145,7 +155,7 @@ def inspect_pins(request, *, frontend_running=True):
     for name, pin in request["containers"].items():
         records = json.loads(docker_capture("inspect", pin["id"]).stdout)
         require(len(records) == 1, "Ambiguous container inspection")
-        validate_incarnation(records[0], pin, request["compose_project"], running=(False if name != "lease" and request["schema"] in (PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA) else
+        validate_incarnation(records[0], pin, request["compose_project"], running=(False if name != "lease" and request["schema"] in (PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA, FAILED_STOP_SCHEMA) else
                 False if name == "frontend" and request["schema"] == FRONTEND_FROZEN_SCHEMA else
                 frontend_running if name == "frontend" else not (name == "backend" and request["schema"] == FAILED_BUILD_SCHEMA)))
         result[name] = records[0]
@@ -218,6 +228,9 @@ def validate_failed_build_state(actual, failure, log):
 def validate_failed_build(control, root, request, original, actual, state):
     import docker_volume_dev as dev
     from docker_volume_stop_unadmitted import _read_terminal_process_receipt
+    if request["schema"] == FAILED_STOP_SCHEMA:
+        from docker_volume_failed_stop import validate_failure
+        return validate_failure(control, root, request, original, actual, state)
     if request["schema"] == FRONTEND_FROZEN_SCHEMA:
         from docker_volume_frontend_frozen_recovery import validate_failure
         return validate_failure(control, root, request, original, actual, state)
@@ -299,12 +312,17 @@ def commit_script(control, root, request, journal_relative, result_sha, current_
     frozen = phase == "resume" and not publish_verified and request.get("schema") == FRONTEND_FROZEN_SCHEMA
     require(activation or toolchain or frozen or (phase, publish_verified) in (("iteration", True), ("iteration", False), ("boris-reference", False)), "Closed reconciliation phase required")
     require(phase != "iteration" or publish_verified
-            or request.get("schema") in (FAILED_BUILD_SCHEMA, PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA, CGROUP_FAILURE_SCHEMA), "Failure-only publication requires its explicit schema")
-    require(not publish_verified or request.get("schema") not in (FAILED_BUILD_SCHEMA, PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA, CGROUP_FAILURE_SCHEMA, FRONTEND_FROZEN_SCHEMA),
+            or request.get("schema") in (FAILED_BUILD_SCHEMA, PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA, CGROUP_FAILURE_SCHEMA, FAILED_STOP_SCHEMA), "Failure-only publication requires its explicit schema")
+    require(not publish_verified or request.get("schema") not in (FAILED_BUILD_SCHEMA, PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA, CGROUP_FAILURE_SCHEMA, FAILED_STOP_SCHEMA, FRONTEND_FROZEN_SCHEMA),
             "A failed iteration cannot publish a verified success")
+    require(request.get("schema") != FAILED_STOP_SCHEMA or (phase, publish_verified) == ("iteration", False),
+            "Failed-stop publication is scoped to a failed iteration only")
     phase = control.path(phase)
     targets = f"'{path}/receipt.json' '{phase}/current.json' " + (f"'{phase}/verified.json' " if publish_verified else "") + f"'{path}/terminal.json'"
     marker_commit = ""
+    if request.get("schema") == FAILED_STOP_SCHEMA:
+        from docker_volume_failed_stop import commit_fences
+        marker_commit = commit_fences(control, root, request)
     if activation:
         require(SHA.fullmatch(request.get("started_marker_sha256", "")) is not None,
                 "Exact started marker digest required")
@@ -389,7 +407,8 @@ def reconcile(args):
     terminal_prestart = isinstance(request, dict) and request.get("schema") == TERMINAL_PRESTART_SCHEMA
     prestart = isinstance(request, dict) and request.get("schema") in (PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA)
     cgroup = isinstance(request, dict) and request.get("schema") == CGROUP_FAILURE_SCHEMA
-    typed_failure = frontend_frozen or prestart or cgroup or (isinstance(request, dict) and request.get("schema") == FAILED_BUILD_SCHEMA)
+    failed_stop = isinstance(request, dict) and request.get("schema") == FAILED_STOP_SCHEMA
+    typed_failure = frontend_frozen or prestart or cgroup or failed_stop or (isinstance(request, dict) and request.get("schema") == FAILED_BUILD_SCHEMA)
     require(typed_failure or not getattr(args, "preview", False), "Preview is scoped to a typed failure reconciliation")
     if not typed_failure:
         _require_native_windows()
@@ -397,10 +416,13 @@ def reconcile(args):
         from docker_boris_volume import reconcile_preproducer
         return reconcile_preproducer(args, control, selected, request, request_raw)
     validate_request(request)
-    failed_build = frontend_frozen or request["schema"] in (FAILED_BUILD_SCHEMA, PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA, CGROUP_FAILURE_SCHEMA)
+    failed_build = frontend_frozen or request["schema"] in (FAILED_BUILD_SCHEMA, PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA, CGROUP_FAILURE_SCHEMA, FAILED_STOP_SCHEMA)
     require(request["source_root"] == str(selected) and request["compose_project"] == control.project
             and request["port"] == args.port, "Selected checkout/group/port differs")
     require(digest(Path(__file__).read_bytes()) == request["controller_sha256"], "Controller code differs from reviewed request")
+    if failed_stop:
+        require(digest(Path(__file__).with_name("docker_volume_failed_stop.py").read_bytes())
+                == request["failed_stop_helper_sha256"], "Failed-stop helper differs from reviewed request")
     phase = "resume" if frontend_frozen else "iteration"
     root = phase + "/attempts/" + request["attempt"]
     journal_root = root + "/reconciliation"
@@ -415,7 +437,7 @@ def reconcile(args):
             and original.get("control_volume") == control.volume, "Only the exact unknown iteration is admissible")
     require(failed_build or not original.get("saved_authoring_restore_required"),
             "Saved-authoring success requires its completion gate; retained for dedicated recovery")
-    require(prestart or original.get("backend_started_at") == request["containers"]["backend"]["started_at"], "Recorded backend start differs")
+    require(prestart or failed_stop or original.get("backend_started_at") == request["containers"]["backend"]["started_at"], "Recorded backend start differs")
     require(original.get("helper_container") == "fullmag-control-" + request["attempt"], "Recorded lease owner differs")
     base_attempt = original.get("inputs", {}).get("attempt")
     require(isinstance(base_attempt, str) and TOKEN.fullmatch(base_attempt), "Missing original development attempt")
@@ -541,7 +563,7 @@ def reconcile(args):
         require(control._line(claim) == "OBSERVING", "Observer BEGIN outcome unknown; resources retained")
         if failed_build:
             actual = inspect_pins(request)
-            result["frontend_frozen_failure_proof" if frontend_frozen else "cgroup_failure_proof" if cgroup else "terminal_prestart_failure_proof" if terminal_prestart
+            result["failed_stop_failure_proof" if failed_stop else "frontend_frozen_failure_proof" if frontend_frozen else "cgroup_failure_proof" if cgroup else "terminal_prestart_failure_proof" if terminal_prestart
                    else "prestart_failure_proof" if prestart else "failed_build_proof"] = validate_failed_build(control, root, request, original, actual, state)
             if frontend_frozen:
                 proof = result["frontend_frozen_failure_proof"]
@@ -555,7 +577,12 @@ def reconcile(args):
                 image, git_common, ledger_profile, args.port)
             require(result.get("state") == "succeeded", "Existing finish gates did not succeed")
             validate_package(request)
-        inspect_pins(request)
+        final_actual = inspect_pins(request)
+        if failed_stop:
+            require(digest(Path(__file__).read_bytes()) == request["controller_sha256"]
+                    and digest(Path(__file__).with_name("docker_volume_failed_stop.py").read_bytes())
+                    == request["failed_stop_helper_sha256"], "Reviewed failed-stop controller sources changed")
+            validate_failed_build(control, root, request, original, final_actual, state)
         require(claim.poll() is None, "Observer exclusion lease disappeared")
         result["finished_at"] = time.time()
         result["filesystem_after"] = control.space()

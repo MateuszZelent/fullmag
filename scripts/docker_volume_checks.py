@@ -26,7 +26,9 @@ OPTIONAL_IMPLEMENTATIONS = ('docker_helper_source', 'docker_volume_activation_re
                             'docker_volume_pending_continuation', 'docker_volume_native_init_successor',
                             'docker_volume_drained_successor', 'docker_volume_reconcile',
                             'docker_volume_prestart_recovery', 'docker_volume_terminal_prestart_recovery',
-                            'docker_volume_network_failure_reconcile')
+                            'docker_volume_network_failure_reconcile', 'docker_volume_failed_stop',
+                            'docker_prepare_container_recovery', 'docker_volume_container_recovery',
+                            'docker_bind_overlap_probe')
 
 
 _ORACLE_WHEEL_ROOT = Path('/opt/fullmag/control/verification')
