@@ -18,7 +18,7 @@ import sys
 import time
 
 import fullmag_storage as storage
-from docker_build_control import (BuildControl, BuildControlError, canonical, control_read_script, docker_capture,
+from docker_build_control import (BuildControl, BuildControlError, DockerObservationBudgetExceeded, canonical, control_read_script, docker_capture,
                                   compose_capture, build_volume_toolchain, build_volume_runtime_images, bounded_capture,
                                   mirror_console)
 from docker_dev_host import docker_argv, require_host, local_volume, validate_host_path
@@ -2449,6 +2449,29 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
 
 
 
+def _read_publication_observation(read, *, deadline):
+    """Retry only a bounded, side-effect-free read of the same startup.
+
+    Callers must never pass start/stop, publication, cgroup or Solve actions.
+    Ownership/integrity errors retain their normal fail-closed behavior.
+    """
+    for attempt in range(3):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise DockerObservationBudgetExceeded(
+                "Backend publication read observation timed out; resources retained"
+            )
+        try:
+            return read(min(90, remaining))
+        except DockerObservationBudgetExceeded:
+            if attempt == 2:
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            time.sleep(min(attempt + 1, remaining))
+
+
 def _wait_for_publication(control, operation, backend_id, *, timeout=14400, publication_pins=None):
     """A previous succeeded package is not evidence that this start finished."""
     import fullmag_docker_runtime as runtime
@@ -2457,7 +2480,8 @@ def _wait_for_publication(control, operation, backend_id, *, timeout=14400, publ
     handoff_seen = False
     last_report = 0.0
     while time.monotonic() < deadline:
-        actual = json.loads(docker_text("inspect", backend_id))[0]
+        actual = json.loads(_read_publication_observation(
+            lambda budget: docker_text("inspect", backend_id, timeout=budget), deadline=deadline))[0]
         current_start = actual.get("State", {}).get("StartedAt")
         if started_at is None:
             started_at = current_start
@@ -2465,19 +2489,24 @@ def _wait_for_publication(control, operation, backend_id, *, timeout=14400, publ
         elif current_start != started_at:
             raise BuildControlError("Backend incarnation changed during build observation")
         if not actual["State"]["Running"]:
-            logs = docker_text("logs", "--since", started_at, "--tail", "200", backend_id, combined=True)
+            logs = _read_publication_observation(lambda budget: docker_text(
+                "logs", "--since", started_at, "--tail", "200", backend_id,
+                combined=True, timeout=budget), deadline=deadline)
             control.write(operation["root"] + "/backend-failure-log.json",
                           {"started_at": started_at, "log": logs})
             raise BuildControlError("Backend exited during build; logs and volumes retained: " + logs[-4000:])
         if not handoff_seen:
-            logs = docker_text("logs", "--since", started_at, "--tail", "200", backend_id, combined=True)
+            logs = _read_publication_observation(lambda budget: docker_text(
+                "logs", "--since", started_at, "--tail", "200", backend_id,
+                combined=True, timeout=budget), deadline=deadline)
             handoff_seen = "phase=start state=handoff" in logs
             if handoff_seen:
                 operation["receipt"]["backend_package_cache_hit"] = "phase=start state=cache-hit" in logs
                 control.write(operation["root"] + "/handoff-log.json", {"started_at": started_at, "log": logs})
         if handoff_seen:
-            raw = docker_capture("exec", backend_id, "/usr/local/bin/python3", "-c",
-                runtime._BACKEND_BUILD_DOCUMENTS_SCRIPT)
+            raw = _read_publication_observation(lambda budget: docker_capture(
+                "exec", backend_id, "/usr/local/bin/python3", "-c",
+                runtime._BACKEND_BUILD_DOCUMENTS_SCRIPT, timeout=budget), deadline=deadline)
             observed = json.loads(raw.stdout)
             receipt, provenance = observed["receipt"]["value"], observed["provenance"]["value"]
             if (receipt.get("state") != "succeeded" or provenance.get("state") != "succeeded"
@@ -2491,7 +2520,7 @@ def _wait_for_publication(control, operation, backend_id, *, timeout=14400, publ
             mirror_console("Backend startup is in progress (build, package validation or runtime handoff); see backend service logs. Docker data retained.\n")
             last_report = time.monotonic()
         time.sleep(3)
-    raise BuildControlError("Backend publication observation timed out; services and volumes retained")
+    raise DockerObservationBudgetExceeded("Backend publication observation timed out; services and volumes retained")
 
 
 def _finish(control, operation, document, backend_id, frontend_id, selected, state,
