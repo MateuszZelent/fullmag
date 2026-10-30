@@ -88,6 +88,7 @@ pub use artifacts::fem_p1_magnetization_field_semantics;
 pub mod autosave_hdf5;
 pub mod autosave_storage;
 pub mod autosave_txt;
+mod autosave_fem_geometry;
 pub mod autosave_zarr;
 pub mod capabilities;
 pub mod constraints;

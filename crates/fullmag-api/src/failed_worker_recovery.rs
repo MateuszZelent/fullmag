@@ -1,4 +1,7 @@
 //! Explicit operator finalization of one reaped failure with applied Start and no pending effect.
+#[path = "accepted_worker_execution_receipt.rs"]
+mod accepted_worker_execution_receipt;
+
 use super::*;
 use fullmag_application::{
     CoordinatorPhase, TaskClaim, WorkerCommand, WorkerEvent, WorkerEventEnvelope,
@@ -552,10 +555,8 @@ fn validate_attempt(
     // Canonical accepted worker owner: completed execution is persisted in
     // this exact attempt before any study output publication. Absence of the
     // artifact catalog alone does not exclude that earlier completion fence.
-    match std::fs::symlink_metadata(attempt.join("worker_execution_completed.v1.json")) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-        Ok(_) => bail!("reaped-worker recovery found a completed execution receipt"),
+    if accepted_worker_execution_receipt::has_completed_worker_receipt(&attempt)? {
+        bail!("reaped-worker recovery found a completed execution receipt");
     }
     let started = fullmag_session::repository_path::read_bounded_regular_file(
         &attempt,
@@ -1320,31 +1321,33 @@ mod tests {
 
     #[test]
     fn reaped_failure_rejects_completed_receipt_even_without_artifact_catalog() {
-        let fixture = fixture();
-        std::fs::write(
-            fixture.attempt.join("worker_execution_completed.v1.json"),
-            b"incomplete or completed publication evidence",
-        )
-        .unwrap();
-        assert!(fixture
-            .store
-            .read_artifact_catalog("run")
-            .unwrap()
-            .is_none());
-        let error = validate_attempt(&fixture.request, &fixture.store)
-            .err()
+        for receipt_name in ["worker_execution_completed.v1.json", "worker_execution_completed.v2.json"] {
+            let fixture = fixture();
+            std::fs::write(
+                fixture.attempt.join(receipt_name),
+                b"incomplete or completed publication evidence",
+            )
             .unwrap();
-        assert!(error.to_string().contains("completed execution receipt"));
-        assert_eq!(
-            fixture
+            assert!(fixture
                 .store
-                .read_run_catalog("run")
+                .read_artifact_catalog("run")
                 .unwrap()
-                .unwrap()
-                .tasks[0]
-                .lifecycle,
-            FmsTaskLifecycle::Running
-        );
+                .is_none());
+            let error = validate_attempt(&fixture.request, &fixture.store)
+                .err()
+                .unwrap();
+            assert!(error.to_string().contains("completed execution receipt"));
+            assert_eq!(
+                fixture
+                    .store
+                    .read_run_catalog("run")
+                    .unwrap()
+                    .unwrap()
+                    .tasks[0]
+                    .lifecycle,
+                FmsTaskLifecycle::Running
+            );
+        }
     }
 
     #[test]

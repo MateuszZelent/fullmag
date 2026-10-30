@@ -247,7 +247,8 @@ pub struct WorkspacePlaybackFrameQuery {
 /// Revision-pinned binary topology/support selection for saved FEM playback.
 #[derive(Debug, Clone, Deserialize, IntoParams, ToSchema)]
 pub struct WorkspacePlaybackGeometryQuery {
-    /// Exact revision returned by `GET /v2/workspace/items/{id}/playback`.
+    /// Exact revision returned by the selected playback or results-array
+    /// metadata endpoint.
     pub revision: String,
     /// `topology` returns FMMT v2; `support` returns FMSP v1.
     pub part: String,

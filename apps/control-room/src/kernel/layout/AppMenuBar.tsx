@@ -12,6 +12,7 @@ import {
 } from "@/kernel/api/apiPaths";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
+import { ResultsHistoryExitAction } from "@/kernel/visualization/ResultsHistoryExitAction";
 import { useRuntimeCommandControlResourceData } from "@/kernel/resources/studyRuntimeResources";
 import { readDetailedRuntimeState } from "@/kernel/runtime/runtimeStateDisplay";
 import {
@@ -755,6 +756,8 @@ function SessionAppMenuBar() {
         isCommandDisabled={isCommandDisabled}
         onCommand={runCommand}
       />
+
+      <ResultsHistoryExitAction kernel={kernel} />
 
       {/* Home shows neither document edits nor simulation transport. */}
       {homeOpen ? null : (

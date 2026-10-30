@@ -452,11 +452,21 @@ describe("flattenVisibleExplorerRows", () => {
     expect(css).toContain("width: var(--fm-control-height-compact);");
     expect(explorerModuleSource).toContain('className="fm-explorer-filter-row"');
     expect(explorerModuleSource).not.toContain("<footer className=\"fm-explorer-toolbar\"");
-    expect(explorerModuleSource).toContain('aria-label="Expand all explorer nodes"');
-    expect(explorerModuleSource).toContain('aria-label="Collapse all explorer nodes"');
     expect(explorerModuleSource).toContain(
-      'aria-label="Reset explorer filter and expand nodes"',
+      'aria-label={activeTab === "results" ? "Expand all analysis nodes" : "Expand all explorer nodes"}',
     );
+    expect(explorerModuleSource).toContain("Expand all analysis nodes");
+    expect(explorerModuleSource).toContain("Expand all explorer nodes");
+    expect(explorerModuleSource).toContain(
+      'aria-label={activeTab === "results" ? "Collapse all analysis nodes" : "Collapse all explorer nodes"}',
+    );
+    expect(explorerModuleSource).toContain("Collapse all analysis nodes");
+    expect(explorerModuleSource).toContain("Collapse all explorer nodes");
+    expect(explorerModuleSource).toContain(
+      'aria-label={activeTab === "results" ? "Reset analysis filter and expand nodes" : "Reset explorer filter and expand nodes"}',
+    );
+    expect(explorerModuleSource).toContain("Reset analysis filter and expand nodes");
+    expect(explorerModuleSource).toContain("Reset explorer filter and expand nodes");
   });
 
   it("renders active analysis fields as a separate explorer row state", () => {

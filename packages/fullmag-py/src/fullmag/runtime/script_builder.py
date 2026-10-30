@@ -245,6 +245,7 @@ def _builder_base_problem(loaded: LoadedProblem) -> Problem:
 
 def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
     base_problem = _builder_base_problem(loaded)
+    study_pipeline = _scene_study_pipeline_document(loaded, base_problem)
     authored_problem = loaded.workspace_problem or loaded.problem
     relax_stage = _first_relax_stage(loaded)
     source_root = loaded.source_path.parent
@@ -343,7 +344,7 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
             _export_stage_draft_with_identity(stage)
             for stage in _builder_stage_sequence(loaded)
         ],
-        "study_pipeline": export_study_pipeline_document(loaded),
+        "study_pipeline": study_pipeline,
         "table_autosave": _export_table_autosave(base_problem),
         "output_storage": _export_output_storage(base_problem),
         "initial_state": _export_initial_state(base_problem),
@@ -1354,6 +1355,17 @@ _ANTENNA_SCENE_COLLECTIONS = (
     "antenna_port_modes", "antenna_field_solve_stages", "antenna_target_projections",
     "solved_antenna_drives", "antenna_spectrum_requests",
 )
+# SceneDocument renders a strict subset of Rust Run fields. In particular,
+# output_every_seconds is accepted by Rust but has no lossless Scene renderer.
+_SCENE_RENDERABLE_RUN_PIPELINE_PAYLOAD_FIELDS = frozenset(
+    {
+        "entrypoint_kind",
+        "kind",
+        "stage_id",
+        "until_seconds",
+        "autosave",
+    }
+)
 
 
 def _scene_antenna_stage_sequence(builder: Mapping[str, object]) -> list[dict[str, object]]:
@@ -1392,8 +1404,20 @@ def _scene_antenna_stage_sequence(builder: Mapping[str, object]) -> list[dict[st
                     payload = node.get("payload")
                     if not isinstance(payload, Mapping):
                         raise ValueError("primitive pipeline node requires payload")
+                    stage_kind = node["stage_kind"]
+                    if stage_kind == "run":
+                        unsupported = sorted(
+                            str(key)
+                            for key in payload
+                            if key not in _SCENE_RENDERABLE_RUN_PIPELINE_PAYLOAD_FIELDS
+                        )
+                        if unsupported:
+                            raise ValueError(
+                                "scene_document_run_pipeline_payload_unrendered_fields: "
+                                + ", ".join(unsupported)
+                            )
                     stage = dict(payload)
-                    stage["kind"] = node["stage_kind"]
+                    stage["kind"] = stage_kind
                     stage.setdefault("stage_id", node["id"])
                     stages.append(stage)
                 else:
@@ -1551,7 +1575,11 @@ def _enabled_scene_stages(stages: list[object]) -> list[object]:
             raise ValueError(
                 f"SceneDocument stages[{index}].enabled must be a boolean"
             )
-        if flag:
+        # Pipeline node activation was already checked during traversal.
+        # For output actions, payload.enabled=False is an instruction to clear
+        # a policy, not an instruction to omit the action itself.
+        is_output_action = stage.get("kind") in {"autosave", "table_autosave"}
+        if flag or is_output_action:
             enabled.append(stage)
     return enabled
 
@@ -2748,13 +2776,233 @@ def export_study_pipeline_document(loaded: LoadedProblem) -> dict[str, object] |
     stages = _builder_stage_sequence(loaded)
     if not stages:
         return None
+    base_problem = _builder_base_problem(loaded)
     return {
         "version": "study_pipeline.v1",
         "nodes": [
-            _export_study_pipeline_node(stage, index=index)
+            _export_study_pipeline_node(
+                stage,
+                index=index,
+                base_problem=base_problem,
+            )
             for index, stage in enumerate(stages)
         ],
     }
+
+
+def _scene_study_pipeline_document(
+    loaded: LoadedProblem,
+    base_problem: Problem,
+) -> dict[str, object] | None:
+    """Encode representable base outputs as Scene-only autosave prefix actions."""
+    pipeline = export_study_pipeline_document(loaded)
+    if isinstance(pipeline, dict):
+        pipeline = copy.deepcopy(pipeline)
+
+    base_study = base_problem.study
+    if isinstance(pipeline, dict):
+        _normalize_scene_run_sampling_snapshots(
+            loaded,
+            base_study=base_study,
+            pipeline=pipeline,
+        )
+
+    original_nodes = pipeline.get("nodes") if isinstance(pipeline, dict) else []
+    prefix_nodes = _scene_base_output_action_nodes(base_study, original_nodes)
+    if not prefix_nodes:
+        return pipeline
+
+    if pipeline is None:
+        pipeline = {"version": "study_pipeline.v1", "nodes": []}
+    nodes = pipeline.get("nodes")
+    if not isinstance(nodes, list):
+        raise ValueError(
+            "scene_document_base_output_prefix_requires_pipeline_nodes: "
+            "the existing study pipeline must contain a nodes list"
+        )
+    pipeline["nodes"] = [*prefix_nodes, *nodes]
+    return pipeline
+
+
+def _scene_base_output_action_nodes(
+    base_study: object,
+    existing_nodes: object,
+) -> list[dict[str, object]]:
+    if not isinstance(base_study, TimeEvolution):
+        return []
+    outputs = list(_study_outputs(base_study))
+    if not outputs:
+        return []
+
+    from fullmag.world import _periodic_output
+
+    occupied_ids = _scene_pipeline_node_ids(existing_nodes)
+    seen_quantities: set[str] = set()
+    prefix: list[dict[str, object]] = []
+    for index, output in enumerate(outputs):
+        if not isinstance(output, (SaveField, SaveScalar)):
+            raise ValueError(
+                "scene_document_time_evolution_base_outputs_unrepresentable: "
+                f"base output {type(output).__name__} cannot be represented by an "
+                "autosave action; replace base study.save(...), study.snapshot(...), "
+                "or TimeEvolution(outputs=...) declarations with supported "
+                "SaveField/SaveScalar autosave actions"
+            )
+
+        quantity = _periodic_output_name(output)
+        if quantity is None:
+            raise ValueError(
+                "scene_document_time_evolution_base_outputs_unrepresentable: "
+                "a base periodic output has no DSL quantity name"
+            )
+        if quantity in seen_quantities:
+            raise ValueError(
+                "scene_document_time_evolution_base_outputs_unrepresentable: "
+                f"duplicate quantity policy {quantity!r} cannot be preserved by "
+                "replacement autosave actions"
+            )
+        seen_quantities.add(quantity)
+
+        try:
+            reconstructed = _periodic_output(quantity, output.every)
+            output_ir = output.to_ir()
+            reconstructed_ir = reconstructed.to_ir()
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "scene_document_time_evolution_base_outputs_unrepresentable: "
+                f"quantity {quantity!r} cannot be recreated through the public "
+                "autosave DSL; use a DSL-compatible output quantity"
+            ) from exc
+        if reconstructed_ir != output_ir:
+            raise ValueError(
+                "scene_document_time_evolution_base_outputs_unrepresentable: "
+                f"autosave DSL reconstruction changes the output IR for "
+                f"{quantity!r}; use a DSL-compatible output quantity"
+            )
+
+        stem = f"scene-base-autosave-{index + 1}"
+        stage_id = stem
+        collision_index = 1
+        while stage_id in occupied_ids:
+            stage_id = f"{stem}-{collision_index}"
+            collision_index += 1
+        occupied_ids.add(stage_id)
+
+        payload: dict[str, object] = {
+            "kind": "autosave",
+            "entrypoint_kind": "flat_autosave",
+            "stage_id": stage_id,
+            "enabled": True,
+            "quantity": quantity,
+            "output": reconstructed_ir,
+        }
+        prefix.append(
+            {
+                "id": stage_id,
+                "label": _study_pipeline_stage_label(
+                    payload,
+                    stage_kind="autosave",
+                    index=index,
+                ),
+                "enabled": True,
+                "source": "script_imported",
+                "node_kind": "primitive",
+                "stage_kind": "autosave",
+                "payload": payload,
+            }
+        )
+    return prefix
+
+
+def _scene_pipeline_node_ids(nodes: object) -> set[str]:
+    result: set[str] = set()
+
+    def visit(items: object) -> None:
+        if not isinstance(items, list):
+            return
+        for node in items:
+            if not isinstance(node, Mapping):
+                continue
+            node_id = node.get("id")
+            if isinstance(node_id, str):
+                result.add(node_id)
+            payload = node.get("payload")
+            if isinstance(payload, Mapping):
+                stage_id = payload.get("stage_id")
+                if isinstance(stage_id, str):
+                    result.add(stage_id)
+            visit(node.get("children"))
+
+    visit(nodes)
+    return result
+
+
+def _normalize_scene_run_sampling_snapshots(
+    loaded: LoadedProblem,
+    *,
+    base_study: object,
+    pipeline: dict[str, object],
+) -> None:
+    if isinstance(loaded.problem.runtime_metadata.get("study_pipeline"), dict):
+        return
+
+    stages = _builder_stage_sequence(loaded)
+    nodes = pipeline.get("nodes")
+    if not isinstance(nodes, list) or len(nodes) != len(stages):
+        return
+    if not isinstance(base_study, TimeEvolution):
+        return
+
+    baseline_sampling = base_study.to_ir().get("sampling")
+    if not isinstance(baseline_sampling, Mapping):
+        return
+
+    active_outputs = list(_study_outputs(base_study))
+    active_table = baseline_sampling.get("table_autosave")
+    for stage, node in zip(stages, nodes):
+        if not isinstance(node, dict):
+            continue
+        action = stage.action
+        if isinstance(action, dict) and action.get("kind") == "autosave":
+            output = action.get("output")
+            enabled = action.get("enabled") is True
+            if not enabled or isinstance(output, Mapping):
+                every = (
+                    _requested_sampling_period_from_ir(output, "every_seconds")
+                    if isinstance(output, Mapping)
+                    else None
+                )
+                active_outputs = _apply_autosave_output_action(
+                    active_outputs,
+                    enabled=enabled,
+                    quantity=action.get("quantity"),
+                    output_name=(output.get("name") if isinstance(output, Mapping) else None),
+                    output_kind=(output.get("kind") if isinstance(output, Mapping) else None),
+                    every=every,
+                )
+        elif isinstance(action, dict) and action.get("kind") == "table_autosave":
+            table = action.get("table_autosave")
+            active_table = (
+                copy.deepcopy(dict(table))
+                if action.get("enabled") is True and isinstance(table, Mapping)
+                else None
+            )
+
+        payload = node.get("payload")
+        if node.get("stage_kind") != "run" or not isinstance(payload, dict):
+            continue
+        if "sampling" not in payload or not isinstance(stage.problem.study, TimeEvolution):
+            continue
+
+        expected_sampling = copy.deepcopy(dict(baseline_sampling))
+        expected_sampling["outputs"] = [output.to_ir() for output in active_outputs]
+        if active_table is None:
+            expected_sampling.pop("table_autosave", None)
+        else:
+            expected_sampling["table_autosave"] = copy.deepcopy(active_table)
+        actual_sampling = stage.problem.study.to_ir().get("sampling")
+        if actual_sampling == expected_sampling:
+            payload.pop("sampling", None)
 
 
 def _export_stage_draft_with_identity(stage: LoadedStage) -> dict[str, object]:
@@ -2768,9 +3016,20 @@ def _export_stage_draft_with_identity(stage: LoadedStage) -> dict[str, object]:
     return payload
 
 
-def _export_study_pipeline_node(stage: LoadedStage, *, index: int) -> dict[str, object]:
+def _export_study_pipeline_node(
+    stage: LoadedStage,
+    *,
+    index: int,
+    base_problem: Problem,
+) -> dict[str, object]:
     draft = _export_stage_draft_with_identity(stage)
     stage_kind = _infer_pipeline_stage_kind(draft)
+    if stage_kind == "run":
+        draft = _project_run_pipeline_payload(
+            stage,
+            draft,
+            base_problem=base_problem,
+        )
     if stage_kind == "antenna_field_solve":
         definition = cast(dict[str, object], draft["definition"])
         # The executor resolves the definition from the canonical problem model.
@@ -2789,6 +3048,55 @@ def _export_study_pipeline_node(stage: LoadedStage, *, index: int) -> dict[str, 
         "stage_kind": stage_kind,
         "payload": draft,
     }
+
+
+def _project_run_pipeline_payload(
+    stage: LoadedStage,
+    draft: dict[str, object],
+    *,
+    base_problem: Problem,
+) -> dict[str, object]:
+    """Project one Run into the strict shared pipeline contract.
+
+    Solver, sampling and response settings belong to independent study/action
+    stages.  A Run node carries only its horizon and explicit output policy.
+    Keep a differing captured setting in the payload so the Rust materializer
+    rejects an unsupported stage-local configuration instead of silently
+    dropping user intent.
+    """
+
+    payload = {
+        key: draft[key]
+        for key in (
+            "kind",
+            "entrypoint_kind",
+            "stage_id",
+            "until_seconds",
+            "output_every_seconds",
+            "table_autosave",
+            "autosave",
+        )
+        if key in draft
+    }
+
+    stage_study = stage.problem.study
+    base_study = base_problem.study
+    stage_study_ir = stage_study.to_ir()
+    base_study_ir = base_study.to_ir()
+    if stage_study_ir.get("dynamics") != base_study_ir.get("dynamics"):
+        for key in ("integrator", "fixed_timestep", "demag_interval_s"):
+            if key in draft:
+                payload[key] = draft[key]
+    if stage_study_ir.get("sampling") != base_study_ir.get("sampling"):
+        if "sampling" in draft:
+            payload["sampling"] = draft["sampling"]
+    if stage.problem.runtime_metadata.get("spin_wave_response") != base_problem.runtime_metadata.get(
+        "spin_wave_response"
+    ):
+        if "spin_wave_response" in draft:
+            payload["spin_wave_response"] = draft["spin_wave_response"]
+
+    return payload
 
 
 def _infer_pipeline_stage_kind(stage_draft: dict[str, object]) -> str:

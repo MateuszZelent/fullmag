@@ -42,6 +42,7 @@ const CURRENT_RUN_FIXTURE_PATH = "/v2/sessions/current/simulation/runs/current";
 const POSTPROCESSING_DEFINITIONS_FIXTURE_PATH = "/v2/sessions/current/analysis/postprocessing/definitions";
 const ANALYTIC_REFERENCE_MODELS_FIXTURE_PATH = "/v2/sessions/current/analysis/references/analytic-models";
 const DATA_ARTIFACTS_FIXTURE_PATH = "/v2/sessions/current/data/artifacts";
+const DATA_RESULTS_CATALOG_FIXTURE_PATH = "/v2/sessions/current/data/results";
 const DATA_OBSERVATION_FRAMES_FIXTURE_PATH = "/v2/sessions/current/data/observation-frames";
 const ROWS_BIN_PATTERN =
   /^\/v2\/sessions\/current\/data\/tables\/[^/]+\/rows\.bin(?:\?|$)/;
@@ -940,6 +941,17 @@ function createReferenceImportFixture() {
   };
 }
 
+async function openAnalysisResultsAccordion(page) {
+  const trigger = page.getByRole("button", {
+    exact: true,
+    name: "Analysis results",
+  });
+  await trigger.waitFor({ state: "visible", timeout: timeoutMs });
+  if ((await trigger.getAttribute("aria-expanded")) !== "true") {
+    await trigger.click({ timeout: timeoutMs });
+  }
+}
+
 async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseUrl) {
   const page = await browser.newPage({ viewport: { height: 1000, width: 1440 } });
   const fixture = createReferenceImportFixture();
@@ -999,6 +1011,7 @@ async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseU
     if (await resultsTab.getAttribute("aria-selected") !== "true") {
       await resultsTab.click({ timeout: timeoutMs });
     }
+    await openAnalysisResultsAccordion(page);
 
     async function expandResultsNode(nodeId) {
       const selector = ".fm-explorer [role=\"treeitem\"][data-node-id=\"" + nodeId + "\"]";
@@ -2328,6 +2341,28 @@ async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture 
     }
     if (request.method() !== "GET") {
       await route.fulfill({ body: "", headers: cors, status: 204 });
+      return;
+    }
+    if (url.pathname === DATA_RESULTS_CATALOG_FIXTURE_PATH) {
+      await route.fulfill({
+        body: JSON.stringify({
+          can_read_values: false,
+          can_visualize_3d: false,
+          entries: [],
+          next_cursor: null,
+          resource_binding: "current",
+          revision: String(revision),
+          root_label: "Run outputs",
+          run_id: referenceImportEnabled ? REFERENCE_FIXTURE_RUN_ID : null,
+          schema: "fullmag.results-catalog.v1",
+          status: "ready",
+          total_count: 0,
+          truncated: false,
+        }),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
       return;
     }
     if (referenceImportEnabled && url.pathname === CURRENT_RUN_FIXTURE_PATH) {

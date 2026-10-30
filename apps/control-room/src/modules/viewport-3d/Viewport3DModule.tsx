@@ -1,6 +1,10 @@
 "use client";
 import { useSavedResultsPlaybackSelection } from "@/kernel/saved-results/useSavedResultsPlayback";
+import { useResultsHistoryExitOwner } from "@/kernel/visualization/ResultsHistoryExitOwnerContext";
+import { returnResultsToLive } from "@/kernel/visualization/returnResultsToLive";
+import { useSnapshotVisualization } from "@/kernel/visualization/useSnapshotVisualization";
 import SavedResultsPlaybackViewport from "./SavedResultsPlaybackViewport";
+import ResultsSnapshotViewport from "./ResultsSnapshotViewport";
 import { hasViewport3DQuantityData } from "./model/viewport3DQuantityData";
 import { Viewport3DFieldLabel } from "./Viewport3DFieldLabel";
 import { artifactRenderedSurfaceRanges } from "./model/artifactFieldOverlayModel";
@@ -1514,7 +1518,31 @@ interface Viewport3DFrameProps
 
 export default function Viewport3DModule(props: ModuleProps) {
   const saved = useSavedResultsPlaybackSelection();
+  const snapshot = useSnapshotVisualization();
+  if (snapshot.activeKey !== null) return <ResultsSnapshotViewport />;
+  if (saved?.browserOnly) return <BrowserOnlyResultsViewport kernel={props.kernel} />;
   return saved ? <SavedResultsPlaybackViewport /> : <LiveViewport3DModule {...props} />;
+}
+
+function BrowserOnlyResultsViewport({ kernel }: Pick<ModuleProps, "kernel">) {
+  const resultsHistoryExitOwner = useResultsHistoryExitOwner();
+  const sessionIdentity = useSessionResourceIdentity();
+  return (
+    <section
+      aria-label="Results 3D viewport"
+      className="fm-results-snapshot-viewport grid min-h-80 place-content-center gap-3 p-4 text-center"
+      data-results-snapshot-status="idle"
+    >
+      <p className="m-0 text-fm-sm text-fm-muted" role="status">
+        Select an output in Results and load into 3D.
+      </p>
+      {resultsHistoryExitOwner === null ? (
+        <Button size="sm" type="button" variant="secondary" onClick={() => returnResultsToLive(kernel)}>
+          {sessionIdentity ? "Return to live" : "Close results"}
+        </Button>
+      ) : null}
+    </section>
+  );
 }
 
 function LiveViewport3DModule({

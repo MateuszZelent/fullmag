@@ -46858,6 +46858,7 @@ fn openapi_v2_exposes_professional_session_tree() {
             "visualization",
             "workspace",
             "workspace_items",
+            "workspace_results",
             "analysis",
             "persistence",
             "diagnostics",
@@ -55217,6 +55218,9 @@ mod session_scope;
 
 #[path = "tests/workspace_items.rs"]
 mod workspace_items;
+
+#[path = "tests/workspace_results.rs"]
+mod workspace_results;
 
 #[path = "tests/antenna_inspection.rs"]
 mod antenna_inspection;

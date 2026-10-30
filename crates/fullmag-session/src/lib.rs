@@ -43,6 +43,7 @@ pub mod runtime_service;
 pub mod runtime_service_host;
 pub mod runtime_service_startup;
 pub mod solution_field_geometry;
+pub mod saved_fem_nodal;
 pub mod solution_scalar_source;
 pub mod solution_set_catalog;
 pub mod solution_tensor_field;

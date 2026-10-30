@@ -1,0 +1,31 @@
+{
+  "recorded_at": "2026-10-29T10:18:13.490714+00:00",
+  "scope": "retained browser render and source audit; CSS fix not browser verified",
+  "browser_attempt": "d45f2cc6a05e47869eca368fdaace792",
+  "images": [
+    {
+      "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/screenshot-before.png",
+      "sha256": "b995cdb20f4fd156b2c31bd4de953d3146f62ade3db50b94ab40ef141f06a40d",
+      "bytes": 233898
+    },
+    {
+      "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/terminal_live_screenshot-before.png",
+      "sha256": "2862017c7ca7712d0e7727775086291e7be882519e3f9680eddf0531f30b1443",
+      "bytes": 225792
+    }
+  ],
+  "findings": [
+    "UX-19 duplicate exit actions",
+    "UX-20 inherited ribbon height",
+    "UX-21 technical metadata crowding",
+    "UX-22 index and ordinal ambiguity"
+  ],
+  "css_wip_sha256": "c73519de3726f80606948da6f08c35339719c34dd55a0c144b915e29dd630cb5",
+  "runtime_recovery": {
+    "iteration": "a9b8c97f2ed74e2fad184c42227bc62e",
+    "snapshot": "7881f9924df5ebcb508cbe88abbe4bf40c3ca0279aaf34a8d43bea2ee7fdaa39",
+    "active_marker": false,
+    "backend": "exited 255; same ID; Pid 0; no OOM",
+    "frontend": "exited 255; same ID; Pid 0; no OOM"
+  }
+}

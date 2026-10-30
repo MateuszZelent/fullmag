@@ -1,4 +1,5 @@
 "use client";
+import { returnResultsToLive } from "../visualization/returnResultsToLive";
 
 import { useCallback, useEffect, useRef } from "react";
 
@@ -29,6 +30,8 @@ import { sessionRequestScopeKey } from "../resources/sessionResourceIdentity";
 import { homeView, useHomeViewOpen } from "./homeView";
 import { useLayoutSelector } from "./useLayout";
 import { useRealtimeConnection } from "../realtime/useRealtimeConnection";
+import { ResultsHistoryExitOwnerProvider } from "../visualization/ResultsHistoryExitOwnerContext";
+import { useSnapshotVisualization } from "../visualization/useSnapshotVisualization";
 
 export function WorkspaceShellClient() {
   const savedPlayback = useSavedResultsPlaybackSelection();
@@ -110,7 +113,7 @@ export function WorkspaceShellClient() {
     homeView.close();
   }, [sessionScopeKey, startOwnsPage]);
 
-  if (savedPlayback) return <SavedResultsWorkspaceShell />;
+  if (savedPlayback) return <SavedResultsWorkspaceShell liveDiagnosticsAvailable={sessionState === "ready" && identity !== null} />;
 
   if (sessionState !== "ready" && project.state === "ready") {
     return <ProjectWorkspaceShell sessionState={sessionState} onRetry={onRetry} />;
@@ -131,37 +134,40 @@ export function WorkspaceShellClient() {
   return <ActiveWorkspaceShell />;
 }
 
-function SavedResultsWorkspaceShell() {
+function SavedResultsWorkspaceShell({ liveDiagnosticsAvailable }: { liveDiagnosticsAvailable: boolean }) {
   const kernel = useKernel();
   const selection = useSavedResultsPlaybackSelection();
+  const exitLabel = liveDiagnosticsAvailable ? "Return to live" : "Close results";
   if (!selection) return null;
 
   return (
-    <WorkspaceContentScopeProvider scope="session">
-      <SlotHost slotId="app-menu" />
-      <section
-        aria-label="Saved results playback"
-        className="fm-saved-results-playback-shell__header"
-        data-saved-results-playback="read-only"
-      >
-        <div className="fm-saved-results-playback-shell__identity">
-          <h1 className="fm-saved-results-playback-shell__title">Saved results · read only</h1>
-          <p className="fm-saved-results-playback-shell__name" title={selection.name}>{selection.name}</p>
-        </div>
-        <Button
-          className="fm-saved-results-playback-shell__close"
-          onClick={() => kernel.savedResultsPlayback?.close()}
-          type="button"
-          variant="secondary"
+    <ResultsHistoryExitOwnerProvider owner="saved">
+      <WorkspaceContentScopeProvider scope="session">
+        <SlotHost slotId="app-menu" />
+        <section
+          aria-label="Saved results playback"
+          className="fm-saved-results-playback-shell__header"
+          data-saved-results-playback="read-only"
         >
-          Close playback
-        </Button>
-      </section>
-      <WorkspaceRenderProfiler id="WorkspaceDockLayout">
-        <WorkspaceDockLayout />
-      </WorkspaceRenderProfiler>
-      <CommandFeedbackPresenter />
-    </WorkspaceContentScopeProvider>
+          <div className="fm-saved-results-playback-shell__identity">
+            <h1 className="fm-saved-results-playback-shell__title">Saved results · read only</h1>
+            <p className="fm-saved-results-playback-shell__name" title={selection.name}>{selection.name}</p>
+          </div>
+          <Button
+            className="fm-saved-results-playback-shell__close"
+            onClick={() => returnResultsToLive(kernel)}
+            type="button"
+            variant="secondary"
+          >
+            {exitLabel}
+          </Button>
+        </section>
+        <WorkspaceRenderProfiler id="WorkspaceDockLayout">
+          <WorkspaceDockLayout liveDiagnosticsAvailable={liveDiagnosticsAvailable} />
+        </WorkspaceRenderProfiler>
+        <CommandFeedbackPresenter />
+      </WorkspaceContentScopeProvider>
+    </ResultsHistoryExitOwnerProvider>
   );
 }
 
@@ -289,9 +295,11 @@ function StartScreenLoadingFallback({
 function ActiveWorkspaceShell() {
   const startupState = useSimulationStartupOverlayState();
   const homeOpen = useHomeViewOpen();
+  const snapshotVisualization = useSnapshotVisualization();
+  const exitOwner = snapshotVisualization.activeKey === null ? null : "current";
 
   return (
-    <>
+    <ResultsHistoryExitOwnerProvider owner={exitOwner}>
       <SlotHost slotId="app-menu" />
       <SlotHost slotId="ribbon" />
       <RuntimeDegradedBanner hasWorkspaceDiagnostics />
@@ -305,7 +313,7 @@ function ActiveWorkspaceShell() {
         <SimulationStartupOverlayView state={startupState} />
       </div>
       <CommandFeedbackPresenter />
-    </>
+    </ResultsHistoryExitOwnerProvider>
   );
 }
 

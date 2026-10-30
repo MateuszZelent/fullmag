@@ -83,6 +83,100 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual(self.control.records, {})
         self.assertFalse(self.control.leased)
 
+    def test_v3_terminal_only_preview_forwards_exact_pins_without_publication(self):
+        terminal = [{
+            'run_id': 'completed-run',
+            'run_intent_sha256': 'a' * 64,
+            'run_catalog_sha256': 'b' * 64,
+            'artifact_catalog_sha256': 'c' * 64,
+        }]
+        proof = {
+            'schema': module.recovery.ABRUPT_PROOF_SCHEMA,
+            'retained_terminal_runs': copy.deepcopy(terminal),
+        }
+        self.builder.return_value = proof
+
+        result = module.prepare(self.control, self.pins, {}, retained_terminal_runs=terminal)
+
+        self.assertEqual(result['state'], 'validated-read-only')
+        self.builder.assert_called_once()
+        self.assertEqual(self.builder.call_args.kwargs['retained_terminal_runs'], terminal)
+        self.assertIsNone(self.builder.call_args.kwargs['retained_held_manual_runs'])
+        self.assertNotIn('retained_held_manual_runs', proof)
+        self.assertNotIn('retained_cancelled_runs', proof)
+        self.assertEqual(self.control.events, [])
+        self.assertEqual(self.control.records, {})
+        self.assertFalse(result['application_started'])
+        self.assertFalse(result['compute_started'])
+
+    def test_v3_terminal_only_publication_reobserves_exact_pins_without_held_fields(self):
+        terminal = [{
+            'run_id': 'completed-run',
+            'run_intent_sha256': 'a' * 64,
+            'run_catalog_sha256': 'b' * 64,
+            'artifact_catalog_sha256': None,
+        }]
+
+        def observe(*args, **kwargs):
+            if self.builder.call_count == 2:
+                self.assertTrue(self.control.leased)
+            return {
+                'schema': module.recovery.ABRUPT_PROOF_SCHEMA,
+                'retained_terminal_runs': copy.deepcopy(kwargs['retained_terminal_runs']),
+            }
+
+        self.builder.side_effect = observe
+        result = module.prepare(
+            self.control, self.pins, {}, retained_terminal_runs=terminal, publish=True
+        )
+
+        self.assertEqual(self.builder.call_count, 2)
+        for call in self.builder.call_args_list:
+            self.assertEqual(call.kwargs['retained_terminal_runs'], terminal)
+            self.assertIsNone(call.kwargs['retained_held_manual_runs'])
+        proof = json.loads(self.control.records[result['proof_path']])
+        self.assertEqual(proof['schema'], module.recovery.ABRUPT_PROOF_SCHEMA)
+        self.assertEqual(proof['retained_terminal_runs'], terminal)
+        self.assertNotIn('retained_held_manual_runs', proof)
+        self.assertNotIn('retained_cancelled_runs', proof)
+        self.assertEqual(result['state'], 'prepared-awaiting-explicit-start')
+        self.assertFalse(result['application_started'])
+        self.assertFalse(result['compute_started'])
+
+    def test_v3_terminal_only_observation_drift_under_lease_blocks_publication(self):
+        terminal = [{
+            'run_id': 'completed-run',
+            'run_intent_sha256': 'a' * 64,
+            'run_catalog_sha256': 'b' * 64,
+            'artifact_catalog_sha256': None,
+        }]
+        first = {
+            'schema': module.recovery.ABRUPT_PROOF_SCHEMA,
+            'retained_terminal_runs': copy.deepcopy(terminal),
+            'storage_proof': {'inventory_sha256': 'c' * 64},
+        }
+        drifted = {
+            **first,
+            'storage_proof': {'inventory_sha256': 'd' * 64},
+        }
+
+        def observe(*args, **kwargs):
+            if self.builder.call_count == 2:
+                self.assertTrue(self.control.leased)
+            return (first, drifted)[self.builder.call_count - 1]
+
+        self.builder.side_effect = observe
+
+        with self.assertRaisesRegex(BuildControlError, 'changed before publication'):
+            module.prepare(
+                self.control, self.pins, {}, retained_terminal_runs=terminal, publish=True
+            )
+
+        self.assertEqual(self.builder.call_count, 2)
+        self.assertEqual(self.control.records, {})
+        self.assertFalse(self.control.leased)
+        self.proof_validator.assert_not_called()
+
     def test_v4_forwards_paired_terminal_and_held_pins_without_new_operator_fields(self):
         terminal=[]
         held=[{'run_id':'held-run','run_intent_sha256':'a'*64,'run_catalog_sha256':'b'*64,'start_release':'absent'}]

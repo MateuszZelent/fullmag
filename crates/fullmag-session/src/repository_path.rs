@@ -113,6 +113,19 @@ pub fn checked_path(root: &Path, relative: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// A regular metadata file exceeds the caller's byte limit. Distinct from
+/// path/type/I/O failures so readers can report resource limits accurately.
+#[derive(Debug)]
+pub struct MetadataByteBudgetExceeded;
+
+impl std::fmt::Display for MetadataByteBudgetExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("operational metadata exceeds its byte budget")
+    }
+}
+
+impl std::error::Error for MetadataByteBudgetExceeded {}
+
 /// Read bounded operational metadata from a regular file on a supported local FS.
 /// The root and its ancestors must remain trusted, as with `checked_path`.
 /// Unix nonblocking/no-follow flags prevent a replaced FIFO or final symlink
@@ -135,8 +148,11 @@ fn read_bounded_regular_file_once(root: &Path, relative: &str, maximum: usize) -
     crate::writer::require_local_filesystem(root)?;
     let path = checked_path(root, relative)?;
     let metadata = fs::symlink_metadata(&path)?;
-    if !metadata.is_file() || metadata.len() > maximum as u64 {
+    if !metadata.is_file() {
         bail!("operational metadata must be a regular file within its byte budget");
+    }
+    if metadata.len() > maximum as u64 {
+        return Err(MetadataByteBudgetExceeded.into());
     }
     let mut options = fs::OpenOptions::new();
     options.read(true);
@@ -160,13 +176,16 @@ fn read_bounded_regular_file_once(root: &Path, relative: &str, maximum: usize) -
     };
     #[cfg(not(windows))]
     let reparse = false;
-    if !opened.is_file() || reparse || opened.len() > maximum as u64 {
+    if !opened.is_file() || reparse {
         bail!("opened operational metadata is not a bounded regular file");
+    }
+    if opened.len() > maximum as u64 {
+        return Err(MetadataByteBudgetExceeded.into());
     }
     let mut bytes = Vec::new();
     file.take(limit as u64).read_to_end(&mut bytes)?;
     if bytes.len() > maximum {
-        bail!("operational metadata exceeds its byte budget");
+        return Err(MetadataByteBudgetExceeded.into());
     }
     Ok(bytes)
 }
@@ -213,9 +232,22 @@ mod tests {
             read_bounded_regular_file(directory.path(), "metadata.json", 2).unwrap(),
             b"{}"
         );
-        assert!(read_bounded_regular_file(directory.path(), "metadata.json", 1).is_err());
+        assert!(
+            read_bounded_regular_file(directory.path(), "metadata.json", 1)
+                .unwrap_err()
+                .is::<MetadataByteBudgetExceeded>()
+        );
+        assert!(
+            !read_bounded_regular_file(directory.path(), "missing.json", 1)
+                .unwrap_err()
+                .is::<MetadataByteBudgetExceeded>()
+        );
         fs::create_dir(directory.path().join("not-a-file")).unwrap();
-        assert!(read_bounded_regular_file(directory.path(), "not-a-file", 100).is_err());
+        assert!(
+            !read_bounded_regular_file(directory.path(), "not-a-file", 1)
+                .unwrap_err()
+                .is::<MetadataByteBudgetExceeded>()
+        );
         assert_eq!(
             fs::read(directory.path().join("metadata.json")).unwrap(),
             b"{}"
@@ -237,7 +269,9 @@ mod tests {
             directory.path().join("link.json"),
         )
         .unwrap();
-        assert!(read_bounded_regular_file(directory.path(), "link.json", 100).is_err());
+        assert!(!read_bounded_regular_file(directory.path(), "link.json", 1)
+            .unwrap_err()
+            .is::<MetadataByteBudgetExceeded>());
     }
 
     #[test]

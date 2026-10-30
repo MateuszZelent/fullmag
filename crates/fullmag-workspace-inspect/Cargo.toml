@@ -19,5 +19,10 @@ serde_json.workspace = true
 sha2 = "0.10"
 utoipa = { version = "5", optional = true }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
+fullmag-ir = { path = "../fullmag-ir" }
+fullmag-quantities = { path = "../fullmag-quantities" }
 tempfile = "3"

@@ -188,3 +188,38 @@ fn binary_query_requires_three_canonical_roots() {
         );
     }
 }
+
+#[test]
+fn bounded_support_identity_keeps_oversized_masks_metadata_only() {
+    let small = bounded_support_binary_identity(&[true, false, true])
+        .unwrap()
+        .unwrap();
+    assert_eq!(small.0.len(), FMSP_HEADER_LEN + 1);
+    assert_eq!(small.1, sha256_hex(&small.0));
+    let largest_node_count = (MAX_SAVED_FIELD_SUPPORT_BINARY_BYTES as usize - FMSP_HEADER_LEN) * 8;
+    assert!(
+        bounded_support_binary_identity(&vec![true; largest_node_count + 1])
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn nodal_mesh_transport_matches_shared_topology_identity() {
+    let fixture = mixed_topology_fixture();
+    let mesh = fullmag_ir::MeshIR {
+        mesh_name: fixture.mesh_name,
+        nodes: fixture.nodes,
+        cells: fixture.cells,
+        element_markers: fixture.element_markers,
+        facets: fixture.facets,
+        boundary_markers: fixture.boundary_markers,
+        ..Default::default()
+    };
+    let identity = mesh_topology_binary_identity(&mesh).unwrap().unwrap();
+    let body = encode_saved_mesh_topology(mesh).unwrap();
+    assert_eq!(body.len(), identity.0);
+    assert_eq!(sha256_hex(&body), identity.1);
+    assert_eq!(&body[..4], b"FMMT");
+    assert_eq!(body[4], 2);
+}

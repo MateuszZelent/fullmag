@@ -1,6 +1,6 @@
 """Regressions for restoring one exact OOM-stopped DEV frontend."""
 import copy
-from contextlib import contextmanager, nullcontext, redirect_stdout
+from contextlib import ExitStack, contextmanager, nullcontext, redirect_stdout
 import io
 import json
 from pathlib import Path
@@ -131,10 +131,16 @@ class FrontendRecoveryTests(unittest.TestCase):
 
 
 class LegacyFrontendRecoveryTests(unittest.TestCase):
-    def run_legacy(self, fault=None):
+    def run_legacy(self, fault=None, *, ledger_profile='host-ledger-v1', recover_oom=True):
         control = mock.Mock(spec=build_control.BuildControl)
         control.project, control.volume, control.namespace = 'own', 'control', ''
-        control.operation = build_control.BuildControl.operation.__get__(control)
+        control._active_operation = None
+        control.read_bytes.side_effect = lambda path, *, optional=False, maximum=None: (
+            None if path == 'development/current.json' and optional else
+            (_ for _ in ()).throw(dev.BuildControlError('Unexpected fixture byte read: ' + path)))
+        control._pin_operation_helper.return_value = 'c' * 64
+        operation = mock.Mock(wraps=build_control.BuildControl.operation.__get__(control))
+        control.operation = operation
         control.path.side_effect = lambda path: '/control/' + path
         control.space.return_value = {'available_bytes': 64 * 1024**3}
         control._line.side_effect = ['READY', 'LOGGED']
@@ -144,7 +150,6 @@ class LegacyFrontendRecoveryTests(unittest.TestCase):
         logger.stdin.close.side_effect = lambda: setattr(logger.stdin, 'closed', True)
         writes = {}
         control.write.side_effect = lambda path, value: writes.__setitem__(path, copy.deepcopy(value))
-        control.read.return_value = {'retained': 'same'}
         backend_image, frontend_image = 'sha256:' + '1'*64, 'sha256:' + '2'*64
         backend = {'Id': 'b'*64, 'Image': backend_image,
                    'State': {'StartedAt': 'backend-start', 'Running': True, 'Health': {'Status': 'healthy'}}}
@@ -160,6 +165,82 @@ class LegacyFrontendRecoveryTests(unittest.TestCase):
                                              'environment': {'FULLMAG_FRONTEND_HOST_PORT': '3202'},
                                              'tmpfs': ['/tmp:rw,size=512m']}},
                     'volumes': {'frontend-build': {'name': 'old-volume'}, 'backend-cache': {'name': 'same'}}}
+        document['name'] = 'own'
+        if ledger_profile == 'group-ledger-v1':
+            import docker_group_ledger as group_ledger
+            daemon_sha = 'd' * 64
+            group_volume = group_ledger.VOLUME_PREFIX + 'e' * 64
+            group_profile = group_ledger.profile(daemon_sha, 'own', group_volume, backend_image)
+            document['services']['backend']['environment'] = group_profile['environment']
+            document['volumes'][group_ledger.COMPOSE_VOLUME] = group_profile['compose_volume']
+            group_record = {
+                'schema': 'fullmag.docker-group-ledger.v1',
+                'profile': group_ledger.PROFILE,
+                'daemon_id_sha256': daemon_sha,
+                'compose_project': 'own',
+                'volume_name': group_volume,
+                'host_id': group_profile['environment'][group_ledger.HOST_ID_ENV],
+            }
+            if fault == 'wrong-group-identity':
+                group_record['host_id'] = 'f' * 64
+            elif fault == 'wrong-group-schema':
+                group_record['schema'] = 'fullmag.docker-group-ledger.v2'
+            elif fault == 'wrong-group-profile':
+                group_record['profile'] = 'host-ledger-v1'
+            elif fault == 'wrong-group-daemon':
+                group_record['daemon_id_sha256'] = 'f' * 64
+            elif fault == 'wrong-group-project':
+                group_record['compose_project'] = 'other-group'
+            retained_documents = {
+                'development/attempts/old/backend-cache.json': {'cache': 'retained'},
+                'development/attempts/old/group-ledger.json': group_record,
+            }
+        else:
+            document['services']['backend']['environment'] = {
+                'FULLMAG_HOST_LEDGER_PROFILE': 'host-ledger-v1',
+                'FULLMAG_HOST_LEDGER_ROOT': '/host-ledger/ledger',
+                'FULLMAG_HOST_LEDGER_MOUNT_ROOT': '/srv/fullmag/host-ledger',
+                'FULLMAG_HOST_LEDGER_PROJECT_ID': 'legacy-project',
+                'FULLMAG_HOST_LEDGER_BACKING_IMAGE': 'sha256:' + '3' * 64,
+            }
+            retained_documents = {
+                'development/attempts/old/backend-cache.json': {'cache': 'retained'},
+                'development/attempts/old/host-ledger.json': {'host-ledger': 'retained'},
+                'development/attempts/old/ledger-maintenance-compose.json': {
+                    'maintenance-compose': 'retained'},
+            }
+        if fault == 'missing-group-ledger':
+            retained_documents.pop('development/attempts/old/group-ledger.json', None)
+        if fault == 'missing-host-ledger':
+            retained_documents.pop('development/attempts/old/host-ledger.json', None)
+        if fault == 'missing-maintenance-compose':
+            retained_documents.pop(
+                'development/attempts/old/ledger-maintenance-compose.json', None)
+        if fault == 'missing-backend-cache':
+            retained_documents.pop('development/attempts/old/backend-cache.json', None)
+        read_paths = []
+        read_counts = {}
+        group_ledger_reads = {}
+
+        def read(path, *, optional=False):
+            read_paths.append(path)
+            if path == 'frontend/development-inputs.json':
+                return {'frontend-inputs': 'retained'}
+            if path not in retained_documents:
+                raise dev.BuildControlError('Missing test fixture document: ' + path)
+            if path.endswith('/backend-cache.json'):
+                read_counts[path] = read_counts.get(path, 0) + 1
+                if fault == 'backend-cache-changed-under-lease' and read_counts[path] == 2:
+                    return {'cache': 'changed'}
+            value = copy.deepcopy(retained_documents[path])
+            if path.endswith('/group-ledger.json'):
+                group_ledger_reads[path] = group_ledger_reads.get(path, 0) + 1
+                if (fault == 'group-ledger-changed-under-lease'
+                        and group_ledger_reads[path] == 4):
+                    value['schema'] = 'fullmag.docker-group-ledger.v2'
+            return value
+
+        control.read.side_effect = read
         before = copy.deepcopy(document)
         args = SimpleNamespace(port=3202, attempt='a'*32, config_sha256='c'*64)
         previous = {'inputs': {'image_id': backend_image}, 'state_root': '/state',
@@ -175,6 +256,11 @@ class LegacyFrontendRecoveryTests(unittest.TestCase):
             if argv[:2] == ('image', 'inspect'):
                 self.assertEqual(argv[2], frontend_image)
                 return json.dumps([{'Config': {'new': 'helper'}}])
+            if argv[0] == 'exec':
+                self.assertEqual(argv[:5], ('exec', backend['Id'], '/usr/local/bin/python3', '-B', '-c'))
+                self.assertEqual(len(argv), 6)
+                self.assertIn('Frontend refresh requires an empty healthy API', argv[5])
+                return json.dumps({'status': 'ok', 'active_session': False})
             self.assertEqual(argv[0], 'inspect')
             return json.dumps([backend if argv[1] == backend['Id'] else
                                old_frontend if argv[1] == old_frontend['Id'] else new_frontend])
@@ -222,38 +308,46 @@ class LegacyFrontendRecoveryTests(unittest.TestCase):
                 new_frontend['State']['Running'] = False
             return {'files': []}
 
-        with mock.patch.object(build_control.subprocess, 'Popen', return_value=logger), \
-             mock.patch.object(fullmag_storage, 'validate_path', return_value=Path('/state')), \
-             mock.patch.object(dev, '_session_host', return_value=windows_folder_host), \
-             mock.patch.object(windows_folder_host, 'read_owned_regular', return_value=b'{"owner":"same"}'), \
-             mock.patch.object(dev, '_retained_startup_enabled', return_value=False), \
-             mock.patch.object(dev, 'docker_text', side_effect=text), \
-             mock.patch.object(dev, 'docker_capture') as stopped, \
-             mock.patch.object(dev, '_assert_private_restart_network'), \
-             mock.patch.object(reconcile, 'fingerprint', side_effect=lambda doc: doc['Id']), \
-             mock.patch.object(dev, '_verified_frontend_recovery_image', side_effect=verified_image), \
-             mock.patch.object(dev, '_frontend_recovery_backend_observation', side_effect=observation), \
-             mock.patch.object(codegen, '_backend_documents', side_effect=documents), \
-             mock.patch.object(codegen, '_validate_backend', return_value=(source, 'p', 'b')), \
-             mock.patch.object(codegen, '_probe_source', side_effect=AssertionError('native source qualification forbidden')), \
-             mock.patch.object(frontend_inputs, 'describe', return_value=seed), \
-             mock.patch.object(frontend_inputs, 'frontend_view', side_effect=view), \
-             mock.patch.object(dev, '_frontend', side_effect=seeded), \
-             mock.patch.object(dev, 'compose_capture', side_effect=compose), \
-             mock.patch.object(dev, '_validate_retained_service'):
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(build_control.subprocess, 'Popen', return_value=logger))
+            stack.enter_context(mock.patch.object(fullmag_storage, 'validate_path', return_value=Path('/state')))
+            stack.enter_context(mock.patch.object(dev, '_session_host', return_value=windows_folder_host))
+            stack.enter_context(mock.patch.object(
+                windows_folder_host, 'read_owned_regular', return_value=b'{"owner":"same"}'))
+            stack.enter_context(mock.patch.object(dev, '_retained_startup_enabled', return_value=False))
+            stack.enter_context(mock.patch.object(dev, 'docker_text', side_effect=text))
+            stopped = stack.enter_context(mock.patch.object(dev, 'docker_capture'))
+            stack.enter_context(mock.patch.object(dev, '_assert_private_restart_network'))
+            stack.enter_context(mock.patch.object(reconcile, 'fingerprint', side_effect=lambda doc: doc['Id']))
+            stack.enter_context(mock.patch.object(dev, '_verified_frontend_recovery_image', side_effect=verified_image))
+            stack.enter_context(mock.patch.object(
+                dev, '_frontend_recovery_backend_observation', side_effect=observation))
+            stack.enter_context(mock.patch.object(codegen, '_backend_documents', side_effect=documents))
+            stack.enter_context(mock.patch.object(codegen, '_validate_backend', return_value=(source, 'p', 'b')))
+            stack.enter_context(mock.patch.object(
+                codegen, '_probe_source',
+                side_effect=AssertionError('native source qualification forbidden')))
+            stack.enter_context(mock.patch.object(frontend_inputs, 'describe', return_value=seed))
+            stack.enter_context(mock.patch.object(frontend_inputs, 'frontend_view', side_effect=view))
+            stack.enter_context(mock.patch.object(dev, '_frontend', side_effect=seeded))
+            stack.enter_context(mock.patch.object(dev, 'compose_capture', side_effect=compose))
+            stack.enter_context(mock.patch.object(dev, '_validate_retained_service'))
+            failure = None
             try:
                 dev._refresh_frontend_services(control, args, 'development/attempts/old', previous,
                     document, Path('/selected'), {'runtime_root': '/runtime'}, observed,
-                    {'backend': backend['Id'], 'frontend': old_frontend['Id']}, backend_image, {}, recover_oom=True)
-            except (dev.BuildControlError, codegen.CodegenError):
+                    {'backend': backend['Id'], 'frontend': old_frontend['Id']}, backend_image, {},
+                    recover_oom=recover_oom)
+            except (dev.BuildControlError, codegen.CodegenError) as error:
                 if fault is None:
                     raise
+                failure = error
             stopped.assert_not_called()
         self.assertEqual(document, before)
-        return writes, recreated, logger
+        return writes, recreated, logger, read_paths, stopped, retained_documents, failure, operation
 
     def test_legacy_recreation_uses_new_frontend_image_and_preserves_old_backend_and_active_scene(self):
-        writes, recreated, logger = self.run_legacy()
+        writes, recreated, logger, _, _, retained_documents, _, operation = self.run_legacy()
         terminal = next(v for k, v in writes.items() if k.endswith('/terminal.json'))
         self.assertEqual(terminal['state'], 'succeeded')
         self.assertEqual(terminal['inputs']['image_id'], 'sha256:' + '1'*64)
@@ -264,17 +358,22 @@ class LegacyFrontendRecoveryTests(unittest.TestCase):
         self.assertEqual(terminal['backend_observation']['session'], 'same')
         self.assertEqual(len(recreated), 1)
         self.assertTrue(any(k.endswith('/rollback-compose.json') for k in writes))
+        for name in ('backend-cache.json', 'host-ledger.json',
+                     'ledger-maintenance-compose.json'):
+            copied = [value for path, value in writes.items() if path.endswith('/' + name)]
+            self.assertEqual(copied, [retained_documents['development/attempts/old/' + name]])
         logger.wait.assert_called_once()
+        operation.assert_called_once()
 
     def test_non_oom_is_refused_without_seeding_or_lifecycle(self):
-        writes, recreated, logger = self.run_legacy('not-oom')
+        writes, recreated, logger, *_ = self.run_legacy('not-oom')
         self.assertEqual(writes, {})
         self.assertEqual(recreated, [])
 
     def test_oom_cas_image_or_backend_package_drift_refuses_before_recreation(self):
         for fault in ('old-restarted', 'image-drift', 'package-before-recreate'):
             with self.subTest(fault=fault):
-                writes, recreated, logger = self.run_legacy(fault)
+                writes, recreated, logger, *_ = self.run_legacy(fault)
                 self.assertEqual(recreated, [])
                 self.assertFalse(any(k.endswith('/terminal.json') for k in writes))
                 logger.wait.assert_not_called()
@@ -282,12 +381,87 @@ class LegacyFrontendRecoveryTests(unittest.TestCase):
     def test_unknown_or_post_recreation_drift_retains_real_control_lease(self):
         for fault in ('unknown-recreate', 'backend-pid-drift', 'package-after-recreate', 'new-restarted', 'new-exited', 'memory-drift'):
             with self.subTest(fault=fault):
-                writes, recreated, logger = self.run_legacy(fault)
+                writes, recreated, logger, *_ = self.run_legacy(fault)
                 self.assertEqual(len(recreated), 1)
                 self.assertFalse(any(k.endswith('/terminal.json') for k in writes))
                 receipt = next(v for k, v in writes.items() if k.endswith('/receipt.json'))
                 self.assertEqual(receipt['state'], 'outcome-unknown-resources-retained')
                 logger.wait.assert_not_called()
+
+    def test_group_ledger_refresh_copies_its_record_without_reading_legacy_documents(self):
+        writes, recreated, logger, read_paths, _, retained_documents, failure, operation = self.run_legacy(
+            ledger_profile='group-ledger-v1')
+        self.assertEqual(len(recreated), 1)
+        self.assertIsNone(failure)
+        copied_group_records = [value for path, value in writes.items()
+                                if path.endswith('/group-ledger.json')]
+        self.assertEqual(
+            copied_group_records,
+            [retained_documents['development/attempts/old/group-ledger.json']])
+        self.assertTrue(any(path.endswith('/backend-cache.json') for path in writes))
+        for legacy_name in ('host-ledger.json', 'ledger-maintenance-compose.json'):
+            self.assertFalse(any(path.endswith('/' + legacy_name) for path in read_paths))
+            self.assertFalse(any(path.endswith('/' + legacy_name) for path in writes))
+        logger.wait.assert_called_once()
+        operation.assert_called_once()
+
+    def test_group_ledger_requires_its_exact_retained_record_before_operation(self):
+        for fault in ('missing-group-ledger', 'wrong-group-identity', 'wrong-group-schema',
+                      'wrong-group-profile', 'wrong-group-daemon', 'wrong-group-project'):
+            with self.subTest(fault=fault):
+                writes, recreated, _, read_paths, stopped, _, failure, operation = self.run_legacy(
+                    fault, ledger_profile='group-ledger-v1')
+                self.assertIsInstance(failure, dev.BuildControlError)
+                self.assertEqual(writes, {})
+                self.assertEqual(recreated, [])
+                for legacy_name in ('host-ledger.json', 'ledger-maintenance-compose.json'):
+                    self.assertFalse(any(path.endswith('/' + legacy_name) for path in read_paths))
+                stopped.assert_not_called()
+                operation.assert_not_called()
+
+    def test_host_ledger_still_requires_legacy_receipts_and_backend_cache_before_operation(self):
+        for fault in ('missing-backend-cache', 'missing-host-ledger',
+                      'missing-maintenance-compose'):
+            with self.subTest(fault=fault):
+                writes, recreated, _, _, stopped, _, failure, operation = self.run_legacy(fault)
+                self.assertIsInstance(failure, dev.BuildControlError)
+                self.assertEqual(writes, {})
+                self.assertEqual(recreated, [])
+                stopped.assert_not_called()
+                operation.assert_not_called()
+
+    def test_retained_documents_are_rechecked_under_lease_before_frontend_stop(self):
+        writes, recreated, _, read_paths, stopped, _, failure, operation = self.run_legacy(
+            'backend-cache-changed-under-lease',
+            ledger_profile='group-ledger-v1',
+            recover_oom=False)
+        self.assertIsInstance(failure, dev.BuildControlError)
+        self.assertIn('changed under the operation lease', str(failure))
+        self.assertEqual(
+            sum(path.endswith('/backend-cache.json') for path in read_paths), 2)
+        self.assertTrue(any(path.endswith('/receipt.json') for path in writes))
+        self.assertFalse(any(path.endswith('/backend-cache.json') for path in writes))
+        self.assertFalse(any(path.endswith('/rollback-compose.json') for path in writes))
+        self.assertEqual(recreated, [])
+        stopped.assert_not_called()
+        operation.assert_called_once()
+
+    def test_group_record_is_rechecked_under_lease_before_frontend_stop(self):
+        writes, recreated, _, read_paths, stopped, _, failure, operation = self.run_legacy(
+            'group-ledger-changed-under-lease',
+            ledger_profile='group-ledger-v1',
+            recover_oom=False)
+        self.assertIsInstance(failure, dev.BuildControlError)
+        self.assertIn('group ledger record differs', str(failure))
+        self.assertEqual(
+            sum(path.endswith('/group-ledger.json') for path in read_paths), 4)
+        self.assertTrue(any(path.endswith('/receipt.json') for path in writes))
+        self.assertFalse(any(path.endswith('/group-ledger.json') for path in writes))
+        self.assertFalse(any(path.endswith('/backend-cache.json') for path in writes))
+        self.assertFalse(any(path.endswith('/rollback-compose.json') for path in writes))
+        self.assertEqual(recreated, [])
+        stopped.assert_not_called()
+        operation.assert_called_once()
 
 
 class FrontendRecoveryImageTests(unittest.TestCase):
@@ -363,7 +537,7 @@ class FrontendRecoveryDispatchTests(unittest.TestCase):
         backend_image, frontend_image = 'sha256:' + '1'*64, 'sha256:' + ('1' if legacy else '2')*64
         source = Path('/selected')
         document = {'name': 'own', 'services': {
-            'backend': {'image': backend_image},
+            'backend': {'image': backend_image, 'environment': {}},
             'frontend': {'image': frontend_image, 'tmpfs': [] if legacy else [
                 dev._FRONTEND_OWNER_TMPFS + ':rw,nosuid,nodev,noexec,size=1m,uid=65532,gid=65532,mode=0700']}}}
         previous = {'state': 'succeeded', 'compose_project': 'own',
@@ -391,6 +565,8 @@ class FrontendRecoveryDispatchTests(unittest.TestCase):
                  'services': {'fem-gpu-toolchain': {'build': {'args': {'FULLMAG_CUDA_BASE_IMAGE': 'helper'}}}}}), \
              mock.patch.object(dev, 'BuildControl', return_value=control), \
              mock.patch.object(dev, '_operator_probe_record_from_retained', return_value={}), \
+             mock.patch('docker_volume_cancelled_activation_guard.require_fresh_recreation', return_value=None) as cancellation_guard, \
+             mock.patch('docker_volume_preparation_abort.require_fresh_archive', return_value=None) as preparation_guard, \
              mock.patch.object(dev, 'compose_capture', side_effect=lambda doc, *argv: (
                  'b'*64 if argv[-1] == 'backend' else 'f'*64).encode()), \
              mock.patch.object(dev, 'docker_text', side_effect=text), \
@@ -402,6 +578,12 @@ class FrontendRecoveryDispatchTests(unittest.TestCase):
                     dev._retained_operation(args, recreate_services=False)
             else:
                 dev._retained_operation(args, recreate_services=False)
+            # These dispatch cases have no cancellation or aborted preparation.
+            # Their independent guards must still be invoked before dispatch.
+            cancellation_guard.assert_called_once_with(
+                control, args, previous, recreate_services=False)
+            preparation_guard.assert_called_once_with(
+                control, args, previous, document, recreate_services=False)
             return validate, refresh, resume, backend_image, frontend_image
 
     def test_legacy_resume_is_only_dispatched_to_controlled_recreation(self):

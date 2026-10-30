@@ -70,6 +70,7 @@ import { FmrResponseSweepInspectorPanel } from "./panels/frequency-domain/FmrRes
 import { FieldQuantityInspectorPanel } from "./panels/FieldQuantityInspectorPanel";
 import { AnalysisResultInspectorPanel } from "./panels/analysis-results/AnalysisResultInspectorPanel";
 import { MaterializedDatasetInspectorPanel } from "./panels/MaterializedDatasetInspectorPanel";
+import { ResultsOutputInspectorContainer } from "./ResultsOutputInspectorContainer";
 import { FrozenSpinsInspectorPanel } from "./panels/constraint/FrozenSpinsInspectorPanel";
 import { MeshPartVisualizationPanel } from "./panels/MeshPartVisualizationPanel";
 import { ModeVisualizationOverviewPanel } from "./panels/mode-visualization/ModeVisualizationOverviewPanel";
@@ -1536,6 +1537,12 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
     title: "Field Quantity",
     selectionKinds: ["results.field_quantity"],
     component: FieldQuantityInspectorPanel,
+  },
+  {
+    id: "results-output-entry",
+    title: "Result output",
+    selectionKinds: ["results.output.entry"],
+    component: ResultsOutputInspectorContainer,
   },
 ];
 

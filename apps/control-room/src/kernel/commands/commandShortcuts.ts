@@ -123,12 +123,16 @@ export function dispatchShortcutCommand(
   if (event.defaultPrevented) {
     return false;
   }
-  if (isEditableShortcutTarget(event.target ?? null)) {
-    return false;
-  }
+  const editableTarget = isEditableShortcutTarget(event.target ?? null);
 
   const enabledCommands = commands
     .all()
+    .filter(
+      (command) =>
+        !editableTarget ||
+        (command.id === "workspace.command-palette" &&
+          command.scope === "global"),
+    )
     .filter((command) => commands.isEnabled(command.id, context));
   const command = findShortcutCommand(enabledCommands, event);
   if (!command) {

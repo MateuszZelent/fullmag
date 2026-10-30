@@ -147,11 +147,11 @@ docker-dev-script-pinned attempt config_sha256 source_root script request_id="":
 
 # Restart a pinned healthy backend only when its API confirms no active session.
 # Replace only the frontend generation; backend/source correspondence is required.
-docker-dev-refresh-frontend attempt config_sha256 source_root port="3197" frozen_resume="" frozen_resume_sha256="":
-    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" refresh-frontend-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} {{if frozen_resume == "" { if frozen_resume_sha256 == "" { "" } else { error("frozen frontend recovery requires both pins") } } else if frozen_resume_sha256 == "" { error("frozen frontend recovery requires both pins") } else { "--frontend-frozen-resume " + quote(frozen_resume) + " --frontend-frozen-resume-sha256 " + quote(frozen_resume_sha256) } }}
+docker-dev-refresh-frontend attempt config_sha256 source_root port="3197" frozen_resume="" frozen_resume_sha256="" preflight_rejection="" preflight_rejection_sha256="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" refresh-frontend-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} {{if frozen_resume == "" { if frozen_resume_sha256 == "" { "" } else { error("frozen frontend recovery requires both pins") } } else if frozen_resume_sha256 == "" { error("frozen frontend recovery requires both pins") } else { "--frontend-frozen-resume " + quote(frozen_resume) + " --frontend-frozen-resume-sha256 " + quote(frozen_resume_sha256) } }}{{if preflight_rejection == "" { if preflight_rejection_sha256 == "" { "" } else { error("frontend preflight recovery requires both pins") } } else if preflight_rejection_sha256 == "" { error("frontend preflight recovery requires both pins") } else { " --frontend-preflight-rejection " + quote(preflight_rejection) + " --frontend-preflight-rejection-sha256 " + quote(preflight_rejection_sha256) } }}
 
-docker-dev-restart-idle attempt config_sha256 source_root port="3197" allow_prepared_session="false":
-    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" restart-idle-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}}{{if allow_prepared_session == "true" { " --allow-prepared-session" } else if allow_prepared_session == "false" { "" } else { error("allow_prepared_session must be true or false") } }}
+docker-dev-restart-idle attempt config_sha256 source_root port="3197" allow_prepared_session="false" preflight_rejection="" preflight_rejection_sha256="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" restart-idle-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}}{{if allow_prepared_session == "true" { " --allow-prepared-session" } else if allow_prepared_session == "false" { "" } else { error("allow_prepared_session must be true or false") } }}{{if preflight_rejection == "" { if preflight_rejection_sha256 == "" { "" } else { error("frontend preflight recovery requires both pins") } } else if preflight_rejection_sha256 == "" { error("frontend preflight recovery requires both pins") } else { " --frontend-preflight-rejection " + quote(preflight_rejection) + " --frontend-preflight-rejection-sha256 " + quote(preflight_rejection_sha256) } }}
 
 # Read-only pins for a pre-owner startup-fenced API; never stop or recover it.
 docker-dev-inspect-startup-diagnostic source_root backend_container_id image_id report:
@@ -194,6 +194,10 @@ docker-dev-recover-isolated source_root operator_pins recovery_id terminal_runs 
 # authorization are all required; no ordinary recreation fallback is allowed.
 docker-dev-recover-container old_attempt config_sha256 source_root port recovery_authorization:
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" recreate-volume --attempt {{quote(old_attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --recovery-authorization {{quote(recovery_authorization)}}
+
+# Preview terminal-only abrupt-stop recovery evidence; publish only under the group lease.
+docker-dev-prepare-container-recovery source_root operator_pins terminal_runs publish="false":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_prepare_container_recovery.py" --repo-root "{{repo_root}}" --source-root {{quote(source_root)}} --operator-pins {{quote(operator_pins)}} --retained-terminal-runs {{quote(terminal_runs)}} {{if publish == "true" { "--publish" } else if publish == "false" { "" } else { error("publish must be true or false") } }}
 
 # Controlled recreation of one terminal failed direct-development run.  The
 # receipt and config digest are mandatory; this is not unknown-owner recovery.

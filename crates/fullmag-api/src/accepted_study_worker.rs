@@ -33,6 +33,8 @@ pub(crate) mod completed_inspection_recovery;
 #[path = "accepted_worker_execution_receipt.rs"]
 mod accepted_worker_execution_receipt;
 use accepted_worker_execution_receipt::{
+    has_completed_worker_receipt, WORKER_EXECUTION_COMPLETED_RECEIPT,
+    WORKER_EXECUTION_COMPLETED_RECEIPT_V2,
     worker_execution_identity_from_plan, WorkerExecutionReceiptIdentity,
     WorkerExecutionStartedReceipt, WORKER_EXECUTION_RECEIPT_SCHEMA,
     WORKER_EXECUTION_STARTED_RECEIPT,
@@ -41,7 +43,9 @@ use accepted_worker_execution_receipt::{
 const RUNNER_INITIAL_STATE_FILE: &str = "m_initial.json";
 pub(crate) const RUNNER_FINAL_STATE_FILE: &str = "m_final.json";
 const WORKER_PRELAUNCH_FAILED_RECEIPT: &str = "worker_prelaunch_failed.v1.json";
-const WORKER_EXECUTION_COMPLETED_RECEIPT: &str = "worker_execution_completed.v1.json";
+
+const WORKER_EXECUTION_COMPLETION_SCHEMA_V2: &str = "fullmag.accepted_worker_execution.v2";
+const WORKER_EXECUTION_COMPLETION_SCHEMA_V3: &str = "fullmag.accepted_worker_execution.v3";
 
 // Live observation channel (accepted worker -> current-live projector).
 //
@@ -332,9 +336,9 @@ impl AcceptedLiveObservationWriter {
     /// Remove the live field payload after the solver returned. The durable
     /// output manifest is the only source of the final accepted state.
     ///
-    /// A scalar-only header of the last step is kept: a run that ends between
-    /// two projector ticks would otherwise publish no scalar row at all, and
-    /// the projector recovers its final row only from this header.
+    /// Keep the latest physical scalar header available while durable terminal
+    /// publication is pending. Once the run is terminal, the projector accepts
+    /// only its pinned terminal scalar artifact, never this live sidecar.
     pub(crate) fn finish(mut self) {
         let payload = self.current_magnetization.take();
         let final_stats = self.last_stats.take();
@@ -768,6 +772,46 @@ pub(crate) fn read_accepted_live_observation(
     }))
 }
 
+/// Read the immutable terminal StepStats for one exact succeeded worker
+/// attempt. This never reads the live sidecar and never accepts a different
+/// run/task/attempt/ownership epoch as a source for the current projection.
+pub(crate) fn read_completed_worker_final_step_stats(
+    store_root: &Path,
+    run_id: &str,
+    task_id: &str,
+    attempt_id: &str,
+    ownership_epoch: u64,
+    expected_case_id: &str,
+    expected_accepted_state_ref: Option<&AcceptedStateRef>,
+) -> Result<Option<fullmag_runner::StepStats>> {
+    for value in [run_id, task_id, attempt_id, expected_case_id] {
+        fullmag_session::repository_path::validate_store_id(value)
+            .context("completed worker final-statistics identity is invalid")?;
+    }
+    if ownership_epoch == 0 {
+        bail!("completed worker final-statistics ownership epoch is invalid");
+    }
+    let attempt_dir = store_root
+        .join("runs")
+        .join(run_id)
+        .join("worker-attempts")
+        .join(task_id)
+        .join(attempt_id)
+        .join(format!("epoch-{ownership_epoch}"));
+    let receipt = read_completed_worker_receipt(&attempt_dir)?;
+    if !matches!(receipt.status(), RunStatus::Completed)
+        || receipt.identity().claim.run_id.as_str() != run_id
+        || receipt.identity().claim.task_id.as_str() != task_id
+        || receipt.identity().claim.attempt_id.as_str() != attempt_id
+        || receipt.identity().claim.ownership_epoch.value() != ownership_epoch
+        || receipt.identity().case_id.as_str() != expected_case_id
+        || receipt.accepted_state_ref() != expected_accepted_state_ref
+    {
+        bail!("completed worker final-statistics receipt belongs to another attempt");
+    }
+    Ok(receipt.terminal_stats())
+}
+
 #[allow(dead_code)]
 fn read_live_magnetization(
     attempt_dir: &Path,
@@ -938,6 +982,27 @@ struct WorkerExecutionCompletedReceipt {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct WorkerExecutionFinalStatsReceiptV2 {
+    schema_version: String,
+    identity: WorkerExecutionReceiptIdentity,
+    status: RunStatus,
+    completed_step_count: usize,
+    outputs: Vec<WorkerExecutionOutputReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    accepted_state_ref: Option<AcceptedStateRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    observation_source: Option<WorkerObservationSourceReference>,
+    /// The authoritative terminal physical row from `RunResult.steps.last()`.
+    /// It is absent only for legacy/zero-step or non-solver completions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    final_step_stats: Option<fullmag_runner::StepStats>,
+}
+
+// The canonical completion slot keeps its historical .v1 filename. Its
+// schema discriminant versions the payload; the separate stats-V2 file is
+// read-only compatibility for earlier Results runs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct WorkerExecutionCompletedReceiptV2 {
     schema_version: String,
     identity: WorkerExecutionReceiptIdentity,
@@ -951,7 +1016,6 @@ struct WorkerExecutionCompletedReceiptV2 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WorkerExecutionCompletedReceiptV3 {
-    #[serde(deserialize_with = "deserialize_completed_worker_receipt_v3_schema")]
     schema_version: String,
     identity: WorkerExecutionReceiptIdentity,
     status: RunStatus,
@@ -963,40 +1027,159 @@ struct WorkerExecutionCompletedReceiptV3 {
     observation_source: Option<WorkerObservationSourceReference>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     terminal_publication: Option<fullmag_runtime_control::PreparedTerminalPublicationV4>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "terminal_stats",
+        alias = "final_step_stats",
+    )]
     terminal_stats: Option<fullmag_runner::StepStats>,
 }
 
-fn deserialize_completed_worker_receipt_v3_schema<'de, D>(
-    deserializer: D,
-) -> std::result::Result<String, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let version = String::deserialize(deserializer)?;
-    if version != "fullmag.accepted_worker_execution.v3" {
-        return Err(serde::de::Error::custom("expected completed worker receipt v3"));
-    }
-    Ok(version)
-}
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum WorkerExecutionCompletedReceiptWire {
+#[derive(Debug)]
+enum CompletedWorkerReceipt {
+    Legacy(WorkerExecutionCompletedReceipt),
+    LegacyStatsV2(WorkerExecutionFinalStatsReceiptV2),
+    TerminalV2(WorkerExecutionCompletedReceiptV2),
     V3(WorkerExecutionCompletedReceiptV3),
-    V1(WorkerExecutionCompletedReceipt),
-    V2(WorkerExecutionCompletedReceiptV2),
+    LegacyStatsV3(WorkerExecutionCompletedReceiptV3),
 }
 
-struct RecoveredWorkerExecutionReceipt {
-    schema_version: String,
-    identity: WorkerExecutionReceiptIdentity,
-    status: RunStatus,
-    completed_step_count: usize,
-    outputs: Vec<WorkerExecutionOutputReference>,
-    accepted_state_ref: Option<AcceptedStateRef>,
-    observation_source: Option<WorkerObservationSourceReference>,
-    terminal_stats: Option<fullmag_runner::StepStats>,
+impl CompletedWorkerReceipt {
+    fn validate_schema(&self) -> Result<()> {
+        let expected = match self {
+            Self::Legacy(_) => WORKER_EXECUTION_RECEIPT_SCHEMA,
+            Self::LegacyStatsV2(_) | Self::TerminalV2(_) => WORKER_EXECUTION_COMPLETION_SCHEMA_V2,
+            Self::V3(_) | Self::LegacyStatsV3(_) => WORKER_EXECUTION_COMPLETION_SCHEMA_V3,
+        };
+        if self.schema_version() != expected {
+            bail!("completed worker receipt has unsupported schema");
+        }
+        if self.identity().schema_version != WORKER_EXECUTION_RECEIPT_SCHEMA {
+            bail!("completed worker receipt identity has unsupported schema");
+        }
+        if let Some(terminal) = self.terminal_publication() {
+            if self.status() != RunStatus::Completed || self.completed_step_count() == 0
+                || self.observation_source().is_some()
+                || self.accepted_state_ref() != Some(&terminal.manifest.accepted_state_ref)
+            {
+                bail!("completed worker terminal publication has an incompatible binding");
+            }
+        }
+        let terminal_stats = self.terminal_stats();
+        if self.completed_step_count() == 0 && terminal_stats.is_some() {
+            bail!("completed worker zero-step receipt has terminal StepStats");
+        }
+        if self.requires_final_step_stats()
+            && self.completed_step_count() > 0
+            && self.outputs().iter().any(|output| output.data_kind == "state" || output.data_kind == "scalar")
+            && terminal_stats.is_none()
+        {
+            bail!("legacy completed worker statistics receipt has no final StepStats");
+        }
+        if let Some(stats) = terminal_stats.as_ref() {
+            if self.status() != RunStatus::Completed {
+                bail!("completed worker terminal statistics are attached to a non-completed result");
+            }
+            validate_final_step_stats(stats)?;
+            // Historical stats receipts allowed absent or input-state references.
+            // Recovery still checks their exact claim, expected reference and
+            // durable output clocks/values. They are never a projector source.
+            // New canonical V3 rows must bind the final accepted state itself.
+            if !matches!(self, Self::LegacyStatsV2(_) | Self::LegacyStatsV3(_)) {
+                let reference = self.accepted_state_ref()
+                    .context("completed worker terminal statistics have no accepted state reference")?;
+                validate_terminal_stats_binding(stats, reference, &self.identity().claim)?;
+                if serde_json::to_vec(stats)?.len() as u64 > 256 * 1024 {
+                    bail!("completed worker terminal statistics exceed their bounded receipt budget");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn schema_version(&self) -> &str {
+        match self {
+            Self::Legacy(receipt) => receipt.schema_version.as_str(),
+            Self::LegacyStatsV2(receipt) => receipt.schema_version.as_str(),
+            Self::TerminalV2(receipt) => receipt.schema_version.as_str(),
+            Self::V3(receipt) | Self::LegacyStatsV3(receipt) => receipt.schema_version.as_str(),
+        }
+    }
+
+    fn identity(&self) -> &WorkerExecutionReceiptIdentity {
+        match self {
+            Self::Legacy(receipt) => &receipt.identity,
+            Self::LegacyStatsV2(receipt) => &receipt.identity,
+            Self::TerminalV2(receipt) => &receipt.identity,
+            Self::V3(receipt) | Self::LegacyStatsV3(receipt) => &receipt.identity,
+        }
+    }
+
+    fn status(&self) -> RunStatus {
+        match self {
+            Self::Legacy(receipt) => receipt.status,
+            Self::LegacyStatsV2(receipt) => receipt.status,
+            Self::TerminalV2(receipt) => receipt.status,
+            Self::V3(receipt) | Self::LegacyStatsV3(receipt) => receipt.status,
+        }
+    }
+
+    fn completed_step_count(&self) -> usize {
+        match self {
+            Self::Legacy(receipt) => receipt.completed_step_count,
+            Self::LegacyStatsV2(receipt) => receipt.completed_step_count,
+            Self::TerminalV2(receipt) => receipt.completed_step_count,
+            Self::V3(receipt) | Self::LegacyStatsV3(receipt) => receipt.completed_step_count,
+        }
+    }
+
+    fn outputs(&self) -> &[WorkerExecutionOutputReference] {
+        match self {
+            Self::Legacy(receipt) => &receipt.outputs,
+            Self::LegacyStatsV2(receipt) => &receipt.outputs,
+            Self::TerminalV2(receipt) => &receipt.outputs,
+            Self::V3(receipt) | Self::LegacyStatsV3(receipt) => &receipt.outputs,
+        }
+    }
+
+    fn accepted_state_ref(&self) -> Option<&AcceptedStateRef> {
+        match self {
+            Self::Legacy(receipt) => receipt.accepted_state_ref.as_ref(),
+            Self::LegacyStatsV2(receipt) => receipt.accepted_state_ref.as_ref(),
+            Self::TerminalV2(receipt) => Some(&receipt.accepted_state_ref),
+            Self::V3(receipt) | Self::LegacyStatsV3(receipt) => receipt.accepted_state_ref.as_ref(),
+        }
+    }
+
+    fn observation_source(&self) -> Option<&WorkerObservationSourceReference> {
+        match self {
+            Self::Legacy(receipt) => receipt.observation_source.as_ref(),
+            Self::LegacyStatsV2(receipt) => receipt.observation_source.as_ref(),
+            Self::TerminalV2(_) => None,
+            Self::V3(receipt) | Self::LegacyStatsV3(receipt) => receipt.observation_source.as_ref(),
+        }
+    }
+
+    fn terminal_publication(&self) -> Option<&fullmag_runtime_control::PreparedTerminalPublicationV4> {
+        match self {
+            Self::TerminalV2(receipt) => Some(&receipt.terminal_publication),
+            Self::V3(receipt) | Self::LegacyStatsV3(receipt) => receipt.terminal_publication.as_ref(),
+            Self::Legacy(_) | Self::LegacyStatsV2(_) => None,
+        }
+    }
+
+    fn terminal_stats(&self) -> Option<fullmag_runner::StepStats> {
+        match self {
+            Self::LegacyStatsV2(receipt) => receipt.final_step_stats.clone(),
+            Self::V3(receipt) | Self::LegacyStatsV3(receipt) => receipt.terminal_stats.clone(),
+            Self::Legacy(_) | Self::TerminalV2(_) => None,
+        }
+    }
+
+    fn requires_final_step_stats(&self) -> bool {
+        matches!(self, Self::LegacyStatsV2(_) | Self::LegacyStatsV3(_))
+    }
 }
 
 /// Reserve one private runner output directory for the exact active task
@@ -1447,6 +1630,9 @@ pub(crate) fn write_immutable_attempt_receipt<T: Serialize>(
 ) -> Result<()> {
     let path = attempt_output_dir.join(file_name);
     let bytes = serde_json::to_vec_pretty(receipt).context("serialize worker execution receipt")?;
+    if u64::try_from(bytes.len())? > fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES {
+        bail!("worker receipt exceeds existing control-document metadata budget");
+    }
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -1483,6 +1669,234 @@ pub(crate) fn read_attempt_receipt<T: serde::de::DeserializeOwned>(
     let receipt = serde_json::from_slice(&bytes)
         .with_context(|| format!("parse worker receipt `{}`", path.display()))?;
     Ok(Some(receipt))
+}
+
+
+fn reject_duplicate_v3_terminal_stats_names(wire: &serde_json::Value) -> Result<()> {
+    let object = wire
+        .as_object()
+        .context("completed worker V3 receipt must be a JSON object")?;
+    if object.contains_key("terminal_stats") && object.contains_key("final_step_stats") {
+        bail!("completed worker V3 receipt contains both terminal statistics field names");
+    }
+    Ok(())
+}
+
+fn read_completed_worker_receipt(attempt_output_dir: &Path) -> Result<CompletedWorkerReceipt> {
+    // A present legacy stats commit marker must never fall back after a
+    // malformed/failed read. The two V2 shapes have distinct filenames.
+    let receipt = match fs::symlink_metadata(
+        attempt_output_dir.join(WORKER_EXECUTION_COMPLETED_RECEIPT_V2),
+    ) {
+        Ok(_) => {
+            let legacy = CompletedWorkerReceipt::LegacyStatsV2(
+                read_attempt_receipt(attempt_output_dir, WORKER_EXECUTION_COMPLETED_RECEIPT_V2)?
+                    .context("worker V2 completion receipt disappeared during read")?,
+            );
+            legacy.validate_schema()?;
+            // No supported producer writes both commit markers. Never mask
+            // a newer (possibly corrupt) canonical receipt with old stats.
+            match fs::symlink_metadata(attempt_output_dir.join(WORKER_EXECUTION_COMPLETED_RECEIPT)) {
+                Ok(_) => bail!("worker completion is ambiguous: both receipt slots are present"),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+                Err(error) => return Err(error).context("inspect canonical worker completion receipt"),
+            }
+            legacy
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let wire: serde_json::Value = read_attempt_receipt(
+                attempt_output_dir, WORKER_EXECUTION_COMPLETED_RECEIPT,
+            )?.context("worker outcome is unknown because no completed receipt exists; refusing to rerun")?;
+            // Dispatch by schema, not untagged shape: optional V3 fields can
+            // all be absent in a legal zero-step/non-solver completion.
+            match wire.get("schema_version").and_then(serde_json::Value::as_str) {
+                Some(WORKER_EXECUTION_RECEIPT_SCHEMA) =>
+                    CompletedWorkerReceipt::Legacy(serde_json::from_value(wire)?),
+                Some(WORKER_EXECUTION_COMPLETION_SCHEMA_V2) =>
+                    CompletedWorkerReceipt::TerminalV2(serde_json::from_value(wire)?),
+                Some(WORKER_EXECUTION_COMPLETION_SCHEMA_V3) => {
+                    reject_duplicate_v3_terminal_stats_names(&wire)?;
+                    if wire.get("final_step_stats").is_some() {
+                        CompletedWorkerReceipt::LegacyStatsV3(serde_json::from_value(wire)?)
+                    } else {
+                        CompletedWorkerReceipt::V3(serde_json::from_value(wire)?)
+                    }
+                }
+                _ => bail!("completed worker receipt has unsupported schema"),
+            }
+        }
+        Err(error) => return Err(error).context("inspect worker V2 completion receipt"),
+    };
+    receipt.validate_schema()?;
+    Ok(receipt)
+}
+
+pub(crate) fn final_physical_step_stats(
+    result: &RunResult,
+) -> Result<Option<fullmag_runner::StepStats>> {
+    let Some(stats) = result.steps.last().cloned() else {
+        // Initial-only and other legal zero-step completions have no physical
+        // terminal row to publish. Never synthesize one from a step counter.
+        return Ok(None);
+    };
+    validate_final_step_stats(&stats)?;
+    Ok(Some(stats))
+}
+
+/// Capture optional diagnostics without making their absence or invalidity a
+/// physical Solve failure. Durable receipt validation remains strict for any
+/// row that survives this best-effort production filter.
+pub(crate) fn capture_optional_final_step_stats(
+    result: &RunResult,
+) -> Option<fullmag_runner::StepStats> {
+    match final_physical_step_stats(result) {
+        Ok(stats) => stats,
+        Err(error) => {
+            tracing::warn!(error = %error, "terminal scalar diagnostics omitted; physical result remains complete");
+            None
+        }
+    }
+}
+
+fn validate_final_step_stats(stats: &fullmag_runner::StepStats) -> Result<()> {
+    if !stats.is_physical_observation() {
+        bail!("completed worker final StepStats is not a physical observation");
+    }
+    if !stats.time.is_finite() || stats.time < 0.0 {
+        bail!("completed worker final StepStats has an invalid solver clock");
+    }
+    if !stats.dt.is_finite() || stats.dt < 0.0 {
+        bail!("completed worker final StepStats has an invalid solver dt");
+    }
+    for (name, value) in [
+        ("time", stats.time),
+        ("dt", stats.dt),
+        ("mx", stats.mx),
+        ("my", stats.my),
+        ("mz", stats.mz),
+        ("e_ex", stats.e_ex),
+        ("e_demag", stats.e_demag),
+        ("e_ext", stats.e_ext),
+        ("e_drive", stats.e_drive),
+        ("e_ani", stats.e_ani),
+        ("e_dmi", stats.e_dmi),
+        ("e_rotated_dmi", stats.e_rotated_dmi),
+        ("e_total", stats.e_total),
+        ("max_dm_dt", stats.max_dm_dt),
+        ("max_rhs_norm_per_s", stats.max_rhs_norm_per_s),
+        ("max_rhs_all_norm_per_s", stats.max_rhs_all_norm_per_s),
+        ("max_h_eff", stats.max_h_eff),
+        ("max_h_demag", stats.max_h_demag),
+        ("max_torque_Apm", stats.max_torque_Apm),
+        ("max_torque_all_Apm", stats.max_torque_all_Apm),
+        ("max_torque_T", stats.max_torque_T),
+        ("frozen_reference_max_drift", stats.frozen_reference_max_drift),
+        (
+            "demag_variational_energy_joules",
+            stats.demag_variational_energy_joules,
+        ),
+        (
+            "demag_recovered_field_energy_joules",
+            stats.demag_recovered_field_energy_joules,
+        ),
+        ("demag_amg_strength_threshold", stats.demag_amg_strength_threshold),
+        ("poisson_final_residual", stats.poisson_final_residual),
+    ] {
+        if !value.is_finite() {
+            bail!("completed worker final StepStats has non-finite `{name}`");
+        }
+    }
+    for (name, value) in [
+        ("pseudo_time_s", stats.pseudo_time_s),
+        ("accepted_energy_delta_j", stats.accepted_energy_delta_j),
+        (
+            "accepted_energy_roundoff_bound_j",
+            stats.accepted_energy_roundoff_bound_j,
+        ),
+        (
+            "accepted_energy_delta_upper_j",
+            stats.accepted_energy_delta_upper_j,
+        ),
+        ("armijo_increment_rhs_j", stats.armijo_increment_rhs_j),
+        ("error_estimate", stats.error_estimate),
+        ("max_error", stats.max_error),
+        ("dt_suggested", stats.dt_suggested),
+    ] {
+        if value.is_some_and(|value| !value.is_finite()) {
+            bail!("completed worker final StepStats has non-finite `{name}`");
+        }
+    }
+    for (object_id, values) in &stats.per_object_scalars {
+        for (metric_id, value) in values {
+            if !value.is_finite() {
+                bail!(
+                    "completed worker final StepStats has non-finite per-object scalar `{object_id}.{metric_id}`"
+                );
+            }
+        }
+    }
+    for attempt in &stats.solver_attempts {
+        for (name, value) in [
+            ("time", attempt.time),
+            ("dt_attempt", attempt.dt_attempt),
+            ("eta", attempt.eta),
+            ("dt_next", attempt.dt_next),
+            ("demag_residual", attempt.demag_residual),
+        ] {
+            if !value.is_finite() {
+                bail!("completed worker final solver attempt has non-finite `{name}`");
+            }
+        }
+        for (name, value) in [
+            ("active_measure", attempt.active_measure),
+            ("normalization_denominator", attempt.normalization_denominator),
+            ("max_scaled_error", attempt.max_scaled_error),
+            ("weighted_rms_error", attempt.weighted_rms_error),
+            ("max_norm_defect", attempt.max_norm_defect),
+            ("max_spin_rotation", attempt.max_spin_rotation),
+        ] {
+            if value.is_some_and(|value| !value.is_finite()) {
+                bail!("completed worker final solver attempt has non-finite `{name}`");
+            }
+        }
+    }
+    // Keep the receipt serialization check, but do not treat serde_json's
+    // conversion of non-finite f64 values to JSON null as a finite-value
+    // validation; the explicit checks above own that contract.
+    serde_json::to_vec(stats).context("serialize completed worker final StepStats")?;
+    Ok(())
+}
+
+/// Bind the terminal row to the same decoded artifacts before publication,
+/// rather than waiting for the live projection to discover a mismatch.
+fn validate_final_stats_output(
+    stats: &fullmag_runner::StepStats,
+    port_id: &str,
+    data_kind: &str,
+    decoded: &DecodedStudyArtifact,
+) -> Result<()> {
+    let state = match decoded {
+        DecodedStudyArtifact::MagnetizationState(state) if data_kind == "state" => Some(state),
+        DecodedStudyArtifact::FrozenMagnetizationState(state) if data_kind == "state" => Some(&state.state),
+        _ => None,
+    };
+    if let Some(state) = state {
+        if stats.step != state.step || stats.time.to_bits() != state.time_s.to_bits() {
+            bail!("completed worker final StepStats differs from durable state output");
+        }
+        if state.solver_dt_s > 0.0 && stats.dt.to_bits() != state.solver_dt_s.to_bits() {
+            bail!("completed worker final StepStats differs from durable state solver dt");
+        }
+    }
+    if let DecodedStudyArtifact::Scalar(scalar) = decoded {
+        if port_id == "total_energy" && (stats.step != scalar.step
+            || stats.time.to_bits() != scalar.time_s.to_bits()
+            || stats.e_total.to_bits() != scalar.value_si.to_bits())
+        {
+            bail!("completed worker final StepStats differs from durable E_total output");
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn worker_execution_receipt_identity(
@@ -1921,7 +2335,7 @@ fn persist_completed_worker_execution(
     accepted_state_ref: Option<&AcceptedStateRef>,
     observation_source: Option<&ObservationSourcePayload>,
     terminal_stats: Option<&fullmag_runner::StepStats>,
-) -> Result<()> {
+) -> Result<Option<fullmag_runner::StepStats>> {
     persist_completed_worker_execution_with_terminal(store,attempt_output_dir,identity,declared_outputs,
         status,completed_step_count,outputs,accepted_state_ref,observation_source,None,terminal_stats)
 }
@@ -1938,7 +2352,12 @@ fn persist_completed_worker_execution_with_terminal(
     observation_source: Option<&ObservationSourcePayload>,
     terminal_publication: Option<&fullmag_runtime_control::PreparedTerminalPublicationV4>,
     terminal_stats: Option<&fullmag_runner::StepStats>,
-) -> Result<()> {
+) -> Result<Option<fullmag_runner::StepStats>> {
+    // The immutable writer still uses create_new for the canonical slot.
+    // Also fence the separate legacy stats marker before touching CAS.
+    if has_completed_worker_receipt(attempt_output_dir)? {
+        bail!("worker completion receipt already exists; refusing to replace it");
+    }
     let mut declared = BTreeMap::new();
     for port in declared_outputs {
         if declared.insert(port.port_id.as_str(), port).is_some() {
@@ -1971,25 +2390,22 @@ fn persist_completed_worker_execution_with_terminal(
             );
         }
     }
-    let terminal_stats = terminal_stats.and_then(|stats| {
-        let validation = accepted_state_ref
-            .context("terminal scalar statistics require an accepted state reference")
-            .and_then(|reference| validate_terminal_stats_binding(stats, reference, &identity.claim))
-            .and_then(|()| {
-                let length = serde_json::to_vec(stats)?.len() as u64;
-                if length > 256 * 1024 {
-                    bail!("terminal scalar statistics exceed their bounded receipt budget");
-                }
-                Ok(())
-            });
-        match validation {
-            Ok(()) => Some(stats),
-            Err(error) => {
-                tracing::warn!(error = %error, "accepted terminal scalar statistics omitted; physical result remains complete");
-                None
-            }
+    let mut terminal_stats = terminal_stats.cloned();
+    if status != RunStatus::Completed || completed_step_count == 0 {
+        if terminal_stats.take().is_some() {
+            tracing::warn!("terminal scalar statistics omitted for a non-physical completion");
         }
-    });
+    } else if let Some(stats) = terminal_stats.as_ref() {
+        let recordable = accepted_state_ref.is_some_and(|reference| {
+            terminal_stats_is_recordable(stats, reference, &identity.claim)
+        });
+        if !recordable {
+            if accepted_state_ref.is_none() {
+                tracing::warn!("terminal scalar statistics omitted without an accepted state reference");
+            }
+            terminal_stats = None;
+        }
+    }
     let unique_byte_count = unique_object_sizes
         .values()
         .try_fold(0_u64, |total, size| total.checked_add(*size))
@@ -2013,6 +2429,15 @@ fn persist_completed_worker_execution_with_terminal(
                 && !frozen_output_binding(port, &output.codec_id, &output.codec_version))
         {
             bail!("accepted worker output codec version is not registered");
+        }
+        if let Some(stats) = terminal_stats.as_ref() {
+            let decoded = fullmag_application::decode_study_artifact_bytes(
+                data_kind, &output.codec_id, &output.codec_version, &output.bytes,
+            ).with_context(|| format!("validate completed worker output `{}`", output.port_id))?;
+            if let Err(error) = validate_final_stats_output(stats, &output.port_id, data_kind, &decoded) {
+                tracing::warn!(error = %error, "terminal scalar statistics omitted because they differ from completed outputs");
+                terminal_stats = None;
+            }
         }
         let object_ref = retry_store_writer_busy(|| store.cas().put(&output.bytes))?;
         output_refs.push(WorkerExecutionOutputReference {
@@ -2048,11 +2473,13 @@ fn persist_completed_worker_execution_with_terminal(
         })
         .transpose()?;
     if let Some(terminal) = terminal_publication {
-        if status != RunStatus::Completed || observation_source.is_some()
-            || accepted_state_ref != Some(&terminal.manifest.accepted_state_ref) {
+        if status != RunStatus::Completed || completed_step_count == 0
+            || observation_source.is_some()
+            || accepted_state_ref != Some(&terminal.manifest.accepted_state_ref)
+        {
             bail!("terminal completed receipt has incompatible legacy observation fields");
         }
-        if let Some(stats) = terminal_stats {
+        if let Some(stats) = terminal_stats.as_ref() {
             let receipt = WorkerExecutionCompletedReceiptV3 {
                 schema_version: "fullmag.accepted_worker_execution.v3".into(),
                 identity: identity.clone(), status, completed_step_count, outputs: output_refs,
@@ -2062,7 +2489,8 @@ fn persist_completed_worker_execution_with_terminal(
             if serde_json::to_vec_pretty(&receipt)?.len() as u64 > fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES {
                 bail!("terminal completed receipt exceeds the existing bounded metadata owner");
             }
-            return write_immutable_attempt_receipt(attempt_output_dir, WORKER_EXECUTION_COMPLETED_RECEIPT, &receipt);
+            return write_immutable_attempt_receipt(attempt_output_dir, WORKER_EXECUTION_COMPLETED_RECEIPT, &receipt)
+                .map(|()| terminal_stats.clone());
         }
         let receipt = WorkerExecutionCompletedReceiptV2 {
             schema_version: "fullmag.accepted_worker_execution.v2".into(), identity: identity.clone(), status,
@@ -2072,9 +2500,10 @@ fn persist_completed_worker_execution_with_terminal(
         if serde_json::to_vec_pretty(&receipt)?.len() as u64 > fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES {
             bail!("terminal completed receipt exceeds the existing bounded metadata owner");
         }
-        return write_immutable_attempt_receipt(attempt_output_dir, WORKER_EXECUTION_COMPLETED_RECEIPT, &receipt);
+        return write_immutable_attempt_receipt(attempt_output_dir, WORKER_EXECUTION_COMPLETED_RECEIPT, &receipt)
+                .map(|()| terminal_stats.clone());
     }
-    if let Some(stats) = terminal_stats {
+    if let Some(stats) = terminal_stats.as_ref() {
         let receipt = WorkerExecutionCompletedReceiptV3 {
             schema_version: "fullmag.accepted_worker_execution.v3".into(),
             identity: identity.clone(), status, completed_step_count, outputs: output_refs,
@@ -2084,7 +2513,8 @@ fn persist_completed_worker_execution_with_terminal(
         if serde_json::to_vec_pretty(&receipt)?.len() as u64 > fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES {
             bail!("completed worker receipt exceeds the existing bounded metadata owner");
         }
-        return write_immutable_attempt_receipt(attempt_output_dir, WORKER_EXECUTION_COMPLETED_RECEIPT, &receipt);
+        return write_immutable_attempt_receipt(attempt_output_dir, WORKER_EXECUTION_COMPLETED_RECEIPT, &receipt)
+                .map(|()| terminal_stats.clone());
     }
     let receipt = WorkerExecutionCompletedReceipt {
         schema_version: WORKER_EXECUTION_RECEIPT_SCHEMA.into(),
@@ -2099,7 +2529,7 @@ fn persist_completed_worker_execution_with_terminal(
         attempt_output_dir,
         WORKER_EXECUTION_COMPLETED_RECEIPT,
         &receipt,
-    )
+    ).map(|()| None)
 }
 
 fn validate_terminal_stats_binding(
@@ -2133,7 +2563,8 @@ fn terminal_stats_is_recordable(
     accepted_state_ref: &AcceptedStateRef,
     claim: &fullmag_application::TaskClaim,
 ) -> bool {
-    let validation = validate_terminal_stats_binding(stats, accepted_state_ref, claim)
+    let validation = validate_final_step_stats(stats)
+        .and_then(|()| validate_terminal_stats_binding(stats, accepted_state_ref, claim))
         .and_then(|()| {
             if serde_json::to_vec(stats)?.len() as u64 > 256 * 1024 {
                 bail!("terminal scalar statistics exceed their bounded receipt budget");
@@ -2201,65 +2632,25 @@ fn recover_completed_worker_execution(
     if !started.identity.matches_same_attempt(expected_identity) {
         bail!("existing worker start receipt belongs to another command or claim");
     }
-    let wire: WorkerExecutionCompletedReceiptWire =
-        read_attempt_receipt(attempt_output_dir, WORKER_EXECUTION_COMPLETED_RECEIPT)?.context(
-            "worker outcome is unknown because no completed receipt exists; refusing to rerun",
-        )?;
-    let (completed, terminal_publication) = match wire {
-        WorkerExecutionCompletedReceiptWire::V1(receipt) => (
-            RecoveredWorkerExecutionReceipt {
-                schema_version: receipt.schema_version, identity: receipt.identity, status: receipt.status,
-                completed_step_count: receipt.completed_step_count, outputs: receipt.outputs,
-                accepted_state_ref: receipt.accepted_state_ref, observation_source: receipt.observation_source,
-                terminal_stats: None,
-            },
-            None,
-        ),
-        WorkerExecutionCompletedReceiptWire::V2(receipt) => (
-            RecoveredWorkerExecutionReceipt {
-                schema_version: receipt.schema_version, identity: receipt.identity, status: receipt.status,
-                completed_step_count: receipt.completed_step_count, outputs: receipt.outputs,
-                accepted_state_ref: Some(receipt.accepted_state_ref), observation_source: None,
-                terminal_stats: None,
-            },
-            Some(receipt.terminal_publication),
-        ),
-        WorkerExecutionCompletedReceiptWire::V3(receipt) => (
-            RecoveredWorkerExecutionReceipt {
-                schema_version: receipt.schema_version, identity: receipt.identity, status: receipt.status,
-                completed_step_count: receipt.completed_step_count, outputs: receipt.outputs,
-                accepted_state_ref: receipt.accepted_state_ref, observation_source: receipt.observation_source,
-                terminal_stats: receipt.terminal_stats,
-            },
-            receipt.terminal_publication,
-        ),
-    };
-    let terminal_receipt = terminal_publication.as_ref();
-    let version_valid = match terminal_receipt {
-        Some(terminal) => matches!(completed.schema_version.as_str(),
-                "fullmag.accepted_worker_execution.v2" | "fullmag.accepted_worker_execution.v3")
-            && completed.observation_source.is_none() && expected_observation_grid.is_none()
+    let completed = read_completed_worker_receipt(attempt_output_dir)?;
+    let terminal_publication = completed.terminal_publication().cloned();
+    let binding_valid = match terminal_publication.as_ref() {
+        Some(terminal) => completed.observation_source().is_none()
+            && expected_observation_grid.is_none()
             && expected_accepted_state_ref.is_none()
-            && completed.accepted_state_ref.as_ref() == Some(&terminal.manifest.accepted_state_ref),
-        None => matches!(completed.schema_version.as_str(),
-                WORKER_EXECUTION_RECEIPT_SCHEMA | "fullmag.accepted_worker_execution.v3")
-            && completed.accepted_state_ref.as_ref() == expected_accepted_state_ref,
+            && completed.accepted_state_ref() == Some(&terminal.manifest.accepted_state_ref)
+            && completed.completed_step_count() > 0,
+        None => completed.accepted_state_ref() == expected_accepted_state_ref,
     };
-    if !version_valid
-        || !completed.identity.matches_same_attempt(expected_identity)
-        || completed.status != RunStatus::Completed
-        || completed.completed_step_count == 0
+    if !binding_valid
+        || !completed.identity().matches_same_attempt(expected_identity)
+        || completed.status() != RunStatus::Completed
+        || (completed.completed_step_count() == 0
+            && completed.outputs().iter().any(|output| output.data_kind == "scalar"))
     {
         bail!("completed worker receipt is invalid for the current accepted Start");
     }
-    if let Some(stats) = completed.terminal_stats.as_ref() {
-        let reference = completed.accepted_state_ref.as_ref()
-            .context("completed worker terminal statistics have no accepted state reference")?;
-        validate_terminal_stats_binding(stats, reference, &expected_identity.claim)?;
-        if serde_json::to_vec(stats)?.len() as u64 > 256 * 1024 {
-            bail!("completed worker terminal statistics exceed their bounded receipt budget");
-        }
-    }
+    let terminal_stats = completed.terminal_stats();
 
     let mut declared = BTreeMap::new();
     for port in declared_outputs {
@@ -2270,7 +2661,7 @@ fn recover_completed_worker_execution(
             );
         }
     }
-    if completed.outputs.len() != declared.len() {
+    if completed.outputs().len() != declared.len() {
         bail!("completed worker receipt has an incomplete output set");
     }
     // Enforce the aggregate budget before materializing any recovered payload.
@@ -2283,7 +2674,7 @@ fn recover_completed_worker_execution(
         }
         Ok(())
     };
-    for output in &completed.outputs {
+    for output in completed.outputs() {
         if output.codec_id == "fullmag.antenna.inspection_package"
             && output.byte_count > u64::try_from(
                 fullmag_antenna_artifacts::package::ANTENNA_INSPECTION_PACKAGE_MAX_BYTES,
@@ -2293,7 +2684,7 @@ fn recover_completed_worker_execution(
         }
         record_size(&output.object_ref, output.byte_count)?;
     }
-    if let Some(source) = &completed.observation_source {
+    if let Some(source) = completed.observation_source() {
         record_size(&source.snapshot_object_ref, source.snapshot_byte_count)?;
         record_size(&source.state_object_ref, source.state_byte_count)?;
     }
@@ -2308,17 +2699,17 @@ fn recover_completed_worker_execution(
     let mut unique_object_sizes = BTreeMap::new();
     let mut planned_bytes=0u64;
     let mut planned_objects=BTreeSet::new();
-    for output in &completed.outputs {
+    for output in completed.outputs() {
         if planned_objects.insert(&output.object_ref) { planned_bytes=planned_bytes.checked_add(output.byte_count).context("receipt bytes overflow")?; }
     }
-    if let Some(source)=&completed.observation_source {
+    if let Some(source)=completed.observation_source() {
         for (hash,size) in [(&source.snapshot_object_ref,source.snapshot_byte_count),(&source.state_object_ref,source.state_byte_count)] {
             if planned_objects.insert(hash) { planned_bytes=planned_bytes.checked_add(size).context("receipt observation bytes overflow")?; }
         }
     }
     if planned_bytes>max_output_bytes { bail!("completed receipt exceeds caller artifact byte budget"); }
-    let mut outputs = Vec::with_capacity(completed.outputs.len());
-    for output in &completed.outputs {
+    let mut outputs = Vec::with_capacity(completed.outputs().len());
+    for output in completed.outputs() {
         if !seen.insert(output.port_id.as_str()) {
             bail!(
                 "completed worker receipt duplicates output `{}`",
@@ -2358,13 +2749,16 @@ fn recover_completed_worker_execution(
                 output.port_id
             );
         }
-        fullmag_application::decode_study_artifact_bytes(
+        let decoded = fullmag_application::decode_study_artifact_bytes(
             data_kind,
             &output.codec_id,
             &output.codec_version,
             &bytes,
         )
         .with_context(|| format!("validate recovered worker output `{}`", output.port_id))?;
+        if let Some(stats) = terminal_stats.as_ref() {
+            validate_final_stats_output(stats, &output.port_id, data_kind, &decoded)?;
+        }
         outputs.push(StudyOutputPayload {
             port_id: output.port_id.clone(),
             case_id: output.case_id.clone(),
@@ -2379,7 +2773,7 @@ fn recover_completed_worker_execution(
     if seen.len() != declared.len() {
         bail!("completed worker receipt omits an accepted output port");
     }
-    let observation_source = match (&completed.observation_source, expected_observation_grid) {
+    let observation_source = match (completed.observation_source(), expected_observation_grid) {
         (Some(source), Some(grid_cells)) => {
             if Some(&source.accepted_state_ref) != expected_accepted_state_ref
                 || source.grid_cells != grid_cells
@@ -2432,14 +2826,14 @@ fn recover_completed_worker_execution(
     }
     Ok(AcceptedRunnerExecution {
         terminal_publication,
-        status: completed.status,
-        completed_step_count: completed.completed_step_count,
+        status: completed.status(),
+        completed_step_count: completed.completed_step_count(),
         outputs,
         attempt_output_dir: attempt_output_dir.to_path_buf(),
         recovered_from_receipt: true,
-        accepted_state_ref: completed.accepted_state_ref,
+        accepted_state_ref: completed.accepted_state_ref().cloned(),
         observation_source,
-        terminal_stats: completed.terminal_stats,
+        terminal_stats,
     })
 }
 
@@ -2843,7 +3237,7 @@ fn execute_accepted_worker_start_with_snapshot(
         let runner_result = if let Some(context) = &frozen {
             fullmag_runner::run_planned_problem_with_live_preview_and_frozen_stage_context_and_observer(
                 &problem, &execution_plan, until_seconds, &attempt_output_dir,
-                storage.as_ref().map(|value| value.data_root()).unwrap_or(&attempt_output_dir),
+                storage.as_ref().map(|value| value.data_root()).transpose()?.unwrap_or(&attempt_output_dir),
                 interrupt_requested, &context.frozen, context.source_frozen_plan.as_ref(),
                 field_sampling_interval, |update| {
                     live_observation.observe(&update);
@@ -2856,7 +3250,7 @@ fn execute_accepted_worker_start_with_snapshot(
             None,
             until_seconds,
             &attempt_output_dir,
-            storage.as_ref().map(|value| value.data_root()).unwrap_or(&attempt_output_dir),
+            storage.as_ref().map(|value| value.data_root()).transpose()?.unwrap_or(&attempt_output_dir),
             field_sampling_interval,
             &display_selection,
             interrupt_requested,
@@ -2891,7 +3285,7 @@ fn execute_accepted_worker_start_with_snapshot(
                 request.device
             );
         }
-        let terminal_stats = result.steps.last().cloned();
+        let terminal_stats = capture_optional_final_step_stats(&result);
         let lifecycle = if frozen.is_some() {
             let bytes = read_explicit_runner_artifact(&attempt_output_dir,
                 "solver/frozen_output_lifecycle.v1.json", 64 * 1024 * 1024)?;
@@ -2926,7 +3320,7 @@ fn execute_accepted_worker_start_with_snapshot(
         if let Some(storage) = &mut storage {
             storage.finish(true, &attempt_output_dir)?;
         }
-        persist_completed_worker_execution_with_terminal(
+        let terminal_stats = persist_completed_worker_execution_with_terminal(
             store,
             &attempt_output_dir,
             &receipt_identity,
@@ -3148,7 +3542,7 @@ fn execute_accepted_closed_loop_worker_start(
             elapsed_seconds: operation_started.elapsed().as_secs_f64(),
         });
         let output=StudyOutputPayload {port_id:"inspection".into(),case_id:case_id.into(),codec_id:fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID.into(),codec_version:fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_VERSION.into(),bytes};
-        let root=storage.as_ref().map(|value|value.data_root()).unwrap_or(&attempt);
+        let root=storage.as_ref().map(|value|value.data_root()).transpose()?.unwrap_or(&attempt);
         // One owned framing file; no untrusted payload path is extracted to the filesystem.
         let mut file=OpenOptions::new().write(true).create_new(true).open(root.join("antenna-inspection.bundle"))?;
         file.write_all(&output.bytes)?;file.sync_all()?;drop(file);
@@ -3263,6 +3657,7 @@ fn execute_accepted_fem_worker_start(
             storage
                 .as_ref()
                 .map(|value| value.data_root())
+                .transpose()?
                 .unwrap_or(&attempt_output_dir),
             interrupt_requested,
         )
@@ -3291,7 +3686,7 @@ fn execute_accepted_fem_worker_start(
                 if let Some(storage) = &mut storage {
                     storage.finish(true, &execution.attempt_output_dir)?;
                 }
-                persist_completed_worker_execution(
+                let terminal_stats = persist_completed_worker_execution(
                     store,
                     &execution.attempt_output_dir,
                     &receipt_identity,
@@ -3437,7 +3832,7 @@ fn execute_accepted_antenna_worker_start(
         if status == RunStatus::Completed {
             if let Some(storage) = &mut storage {
                 crate::accepted_antenna_inspection_worker::stage_project_output(
-                    storage.data_root(),
+                    storage.data_root()?,
                     &outputs[0].bytes,
                     &prepared.execution_plan,
                 )?;
@@ -3508,6 +3903,7 @@ fn prepare_accepted_project_storage(
         &accepted_step.claim,
         &accepted_step.step_id,
         manifest,
+        attempt,
     ) {
         Ok(storage) => Ok(storage),
         Err(error) => {
@@ -3882,6 +4278,7 @@ fn apply_accepted_start_effect(
         || durable_execution.outputs != execution.outputs
         || durable_execution.accepted_state_ref != execution.accepted_state_ref
         || durable_execution.terminal_publication != execution.terminal_publication
+        || durable_execution.completed_step_count != execution.completed_step_count
         || terminal_stats_identity(durable_execution.terminal_stats.as_ref())?
             != terminal_stats_identity(execution.terminal_stats.as_ref())?
     {
@@ -5135,6 +5532,960 @@ mod accepted_worker_claim_retry_tests {
     }
 }
 
+#[cfg(test)]
+mod accepted_final_step_stats_tests {
+    use super::*;
+
+    fn test_identity() -> WorkerExecutionReceiptIdentity {
+        WorkerExecutionReceiptIdentity {
+            schema_version: WORKER_EXECUTION_RECEIPT_SCHEMA.into(),
+            claim: fullmag_application::TaskClaim {
+                run_id: fullmag_application::RunId::parse("run-final-stats").unwrap(),
+                task_id: fullmag_application::TaskId::parse("task-final-stats").unwrap(),
+                attempt_id: fullmag_application::AttemptId::parse("attempt-final-stats").unwrap(),
+                ownership_epoch: fullmag_application::OwnershipEpoch::new(1).unwrap(),
+                lease: fullmag_application::ResourceLease {
+                    resource_id: "resource-final-stats".into(),
+                    kind: fullmag_application::ResourceKind::Cpu,
+                    budget: fullmag_application::ResourceBudget {
+                        cpu_millis: 100,
+                        memory_bytes: 1024,
+                        gpu_memory_bytes: 0,
+                        storage_bytes: 1024,
+                    },
+                    lease_token: fullmag_application::LeaseToken::parse("lease-final-stats")
+                        .unwrap(),
+                    heartbeat_sequence: 1,
+                },
+            },
+            start_message_id: "start-final-stats".into(),
+            start_sequence: 1,
+            case_id: "case-final-stats".into(),
+            plan_fingerprint: "plan-final-stats".into(),
+        }
+    }
+
+    fn test_state_ref() -> fullmag_quantities::AcceptedStateRef {
+        let clock = fullmag_quantities::ObservationClock {
+            accepted_step: 101,
+            time_seconds: 1.01e-10,
+            dt_seconds: Some(1.0e-12),
+        };
+        fullmag_quantities::AcceptedStateRef {
+            id: fullmag_quantities::AcceptedStateId {
+                run_id: "run-final-stats".into(),
+                stage_id: Some("stage-final-stats".into()),
+                accepted_step: 101,
+                clock_digest: clock.digest().unwrap(),
+                state_digest: format!("sha256:{}", "b".repeat(64)),
+                domain_digest: format!("sha256:{}", "c".repeat(64)),
+                plan_digest: format!("sha256:{}", "d".repeat(64)),
+            },
+            generation: fullmag_quantities::AcceptedStateGeneration {
+                runtime_epoch: 1,
+                accepted_revision: 1,
+            },
+        }
+    }
+
+    fn test_output(case_id: &str) -> WorkerExecutionOutputReference {
+        WorkerExecutionOutputReference {
+            port_id: "total_energy".into(),
+            case_id: case_id.into(),
+            data_kind: "scalar".into(),
+            codec_id: "test.scalar".into(),
+            codec_version: "v1".into(),
+            object_ref: "object-final-stats".into(),
+            byte_count: 0,
+        }
+    }
+
+    fn test_stats() -> fullmag_runner::StepStats {
+        fullmag_runner::StepStats {
+            step: 101,
+            time: 1.01e-10,
+            dt: 1.0e-12,
+            e_total: -4.5,
+            ..Default::default()
+        }
+    }
+
+    fn v2_receipt(
+        identity: WorkerExecutionReceiptIdentity,
+        accepted_state_ref: Option<fullmag_quantities::AcceptedStateRef>,
+        final_step_stats: Option<fullmag_runner::StepStats>,
+    ) -> WorkerExecutionFinalStatsReceiptV2 {
+        WorkerExecutionFinalStatsReceiptV2 {
+            schema_version: WORKER_EXECUTION_COMPLETION_SCHEMA_V2.into(),
+            outputs: vec![test_output(&identity.case_id)],
+            completed_step_count: if final_step_stats.is_some() { 1 } else { 0 },
+            identity,
+            status: RunStatus::Completed,
+            accepted_state_ref,
+            observation_source: None,
+            final_step_stats,
+        }
+    }
+
+    fn legacy_receipt(
+        identity: WorkerExecutionReceiptIdentity,
+        accepted_state_ref: Option<fullmag_quantities::AcceptedStateRef>,
+    ) -> WorkerExecutionCompletedReceipt {
+        WorkerExecutionCompletedReceipt {
+            schema_version: WORKER_EXECUTION_RECEIPT_SCHEMA.into(),
+            outputs: vec![test_output(&identity.case_id)],
+            completed_step_count: 1,
+            identity,
+            status: RunStatus::Completed,
+            accepted_state_ref,
+            observation_source: None,
+        }
+    }
+
+    fn attempt_dir(root: &std::path::Path, identity: &WorkerExecutionReceiptIdentity) -> std::path::PathBuf {
+        root.join("runs")
+            .join(identity.claim.run_id.as_str())
+            .join("worker-attempts")
+            .join(identity.claim.task_id.as_str())
+            .join(identity.claim.attempt_id.as_str())
+            .join(format!("epoch-{}", identity.claim.ownership_epoch.value()))
+    }
+
+    fn write_v2_at(
+        root: &std::path::Path,
+        path_identity: &WorkerExecutionReceiptIdentity,
+        receipt: &WorkerExecutionFinalStatsReceiptV2,
+    ) {
+        let dir = attempt_dir(root, path_identity);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(WORKER_EXECUTION_COMPLETED_RECEIPT_V2),
+            serde_json::to_vec(receipt).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn write_v2(root: &std::path::Path, receipt: &WorkerExecutionFinalStatsReceiptV2) {
+        write_v2_at(root, &receipt.identity, receipt);
+    }
+
+    fn write_legacy(root: &std::path::Path, receipt: &WorkerExecutionCompletedReceipt) {
+        let dir = attempt_dir(root, &receipt.identity);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(WORKER_EXECUTION_COMPLETED_RECEIPT),
+            serde_json::to_vec(receipt).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn write_v3_with_field(
+        root: &Path,
+        identity: &WorkerExecutionReceiptIdentity,
+        stats: bool,
+        stats_field: &str,
+    ) -> PathBuf {
+        let old = v2_receipt(identity.clone(), Some(test_state_ref()), stats.then(test_stats));
+        let mut wire = serde_json::to_value(old).unwrap();
+        let object = wire.as_object_mut().unwrap();
+        if let Some(stats) = object.remove("final_step_stats") {
+            object.insert(stats_field.to_owned(), stats);
+        }
+        wire["schema_version"] = WORKER_EXECUTION_COMPLETION_SCHEMA_V3.into();
+        wire["completed_step_count"] = 1.into();
+        let dir = attempt_dir(root, identity);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(WORKER_EXECUTION_COMPLETED_RECEIPT), serde_json::to_vec(&wire).unwrap()).unwrap();
+        dir
+    }
+
+    fn write_v3(root: &Path, identity: &WorkerExecutionReceiptIdentity, stats: bool) -> PathBuf {
+        write_v3_with_field(root, identity, stats, "terminal_stats")
+    }
+
+    #[test]
+    fn canonical_v3_roundtrips_terminal_physical_stats() {
+        let directory = tempfile::tempdir().unwrap();
+        let identity = test_identity();
+        let dir = write_v3(directory.path(), &identity, true);
+        let wire: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(dir.join(WORKER_EXECUTION_COMPLETED_RECEIPT)).unwrap(),
+        ).unwrap();
+        assert!(wire.get("terminal_stats").is_some());
+        assert!(wire.get("final_step_stats").is_none());
+        let receipt = read_completed_worker_receipt(&dir).unwrap();
+        assert!(matches!(&receipt, CompletedWorkerReceipt::V3(_)));
+        let stats = read_completed_worker_final_step_stats(
+            directory.path(), identity.claim.run_id.as_str(), identity.claim.task_id.as_str(),
+            identity.claim.attempt_id.as_str(), identity.claim.ownership_epoch.value(),
+            &identity.case_id, receipt.accepted_state_ref(),
+        ).unwrap().unwrap();
+        assert_eq!(stats.step, test_stats().step);
+        assert_eq!(stats.e_total, test_stats().e_total);
+    }
+
+    #[test]
+    fn canonical_v3_empty_optional_fields_do_not_downgrade_to_v1() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut wire = serde_json::to_value(legacy_receipt(test_identity(), None)).unwrap();
+        wire["schema_version"] = WORKER_EXECUTION_COMPLETION_SCHEMA_V3.into();
+        wire["completed_step_count"] = 0.into();
+        wire["outputs"] = serde_json::json!([]);
+        std::fs::write(directory.path().join(WORKER_EXECUTION_COMPLETED_RECEIPT), serde_json::to_vec(&wire).unwrap()).unwrap();
+        let receipt = read_completed_worker_receipt(directory.path()).unwrap();
+        assert!(matches!(&receipt, CompletedWorkerReceipt::V3(_)));
+        assert!(!receipt.requires_final_step_stats());
+        assert!(receipt.terminal_stats().is_none());
+    }
+
+    #[test]
+    fn canonical_v3_physical_completion_allows_absent_optional_stats() {
+        let directory = tempfile::tempdir().unwrap();
+        let identity = test_identity();
+        let dir = write_v3(directory.path(), &identity, false);
+        let receipt = read_completed_worker_receipt(&dir).unwrap();
+        assert!(matches!(&receipt, CompletedWorkerReceipt::V3(_)));
+        assert!(read_completed_worker_final_step_stats(
+            directory.path(), identity.claim.run_id.as_str(), identity.claim.task_id.as_str(),
+            identity.claim.attempt_id.as_str(), identity.claim.ownership_epoch.value(),
+            &identity.case_id, receipt.accepted_state_ref(),
+        ).unwrap().is_none());
+    }
+
+    #[test]
+    fn deployed_v3_final_step_stats_alias_is_read() {
+        let directory = tempfile::tempdir().unwrap();
+        let identity = test_identity();
+        let dir = write_v3_with_field(directory.path(), &identity, true, "final_step_stats");
+        let receipt = read_completed_worker_receipt(&dir).unwrap();
+        let stats = receipt.terminal_stats().expect("deployed alias carries terminal stats");
+        assert_eq!(stats.step, test_stats().step);
+        assert_eq!(stats.e_total, test_stats().e_total);
+    }
+
+    #[test]
+    fn legacy_stats_preserve_absent_and_input_references_without_canonical_downgrade() {
+        let identity = test_identity();
+        let stats = test_stats();
+        let mut input_reference = test_state_ref();
+        input_reference.id.accepted_step = 1;
+        input_reference.id.clock_digest = fullmag_quantities::ObservationClock {
+            accepted_step: 1, time_seconds: 1.0e-12, dt_seconds: Some(1.0e-12),
+        }.digest().unwrap();
+        for reference in [None, Some(input_reference)] {
+            for v3_alias in [false, true] {
+                let directory = tempfile::tempdir().unwrap();
+                let receipt = v2_receipt(identity.clone(), reference.clone(), Some(stats.clone()));
+                let mut wire = serde_json::to_value(&receipt).unwrap();
+                let file_name = if v3_alias {
+                    wire["schema_version"] = WORKER_EXECUTION_COMPLETION_SCHEMA_V3.into();
+                    WORKER_EXECUTION_COMPLETED_RECEIPT
+                } else { WORKER_EXECUTION_COMPLETED_RECEIPT_V2 };
+                let dir = attempt_dir(directory.path(), &identity);
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join(file_name), serde_json::to_vec(&wire).unwrap()).unwrap();
+                let actual = read_completed_worker_final_step_stats(
+                    directory.path(), identity.claim.run_id.as_str(), identity.claim.task_id.as_str(),
+                    identity.claim.attempt_id.as_str(), identity.claim.ownership_epoch.value(),
+                    &identity.case_id, reference.as_ref(),
+                ).unwrap().unwrap();
+                assert_eq!(actual.step, stats.step);
+                assert_eq!(actual.e_total, stats.e_total);
+                if v3_alias {
+                    let value = wire.as_object_mut().unwrap().remove("final_step_stats").unwrap();
+                    wire["terminal_stats"] = value;
+                    std::fs::write(dir.join(file_name), serde_json::to_vec(&wire).unwrap()).unwrap();
+                    assert!(read_completed_worker_receipt(&dir).is_err(),
+                        "canonical V3 must not borrow the legacy reference exception");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn v3_rejects_both_terminal_stats_names_even_when_values_are_null() {
+        let directory = tempfile::tempdir().unwrap();
+        let identity = test_identity();
+        let dir = write_v3(directory.path(), &identity, true);
+        let path = dir.join(WORKER_EXECUTION_COMPLETED_RECEIPT);
+        let base: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let stats = base["terminal_stats"].clone();
+        for (canonical, alias) in [
+            (serde_json::Value::Null, serde_json::Value::Null),
+            (stats.clone(), serde_json::Value::Null),
+            (serde_json::Value::Null, stats.clone()),
+            (stats.clone(), stats.clone()),
+        ] {
+            let mut wire = base.clone();
+            wire["terminal_stats"] = canonical;
+            wire["final_step_stats"] = alias;
+            std::fs::write(&path, serde_json::to_vec(&wire).unwrap()).unwrap();
+            let error = read_completed_worker_receipt(&dir).unwrap_err();
+            assert!(format!("{error:#}").contains("both terminal statistics field names"));
+        }
+    }
+
+    #[test]
+    fn v3_unknown_schema_is_rejected_without_shape_fallback() {
+        let directory = tempfile::tempdir().unwrap();
+        let identity = test_identity();
+        let dir = write_v3(directory.path(), &identity, false);
+        let path = dir.join(WORKER_EXECUTION_COMPLETED_RECEIPT);
+        let mut wire: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        wire["schema_version"] = "fullmag.accepted_worker_execution.v9".into();
+        std::fs::write(&path, serde_json::to_vec(&wire).unwrap()).unwrap();
+        let error = read_completed_worker_receipt(&dir).unwrap_err();
+        assert!(format!("{error:#}").contains("unsupported schema"));
+    }
+
+    #[test]
+    fn v2_wire_name_remains_final_step_stats_and_physical_stats_remain_required() {
+        let identity = test_identity();
+        let with_stats = serde_json::to_value(v2_receipt(
+            identity.clone(), Some(test_state_ref()), Some(test_stats()),
+        )).unwrap();
+        assert!(with_stats.get("final_step_stats").is_some());
+        assert!(with_stats.get("terminal_stats").is_none());
+        assert_eq!(with_stats["schema_version"], WORKER_EXECUTION_COMPLETION_SCHEMA_V2);
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut without_stats = v2_receipt(identity, Some(test_state_ref()), None);
+        without_stats.completed_step_count = 1;
+        write_v2(directory.path(), &without_stats);
+        let error = read_completed_worker_receipt(&attempt_dir(directory.path(), &without_stats.identity))
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("legacy completed worker statistics receipt has no final StepStats"));
+    }
+
+    #[test]
+    fn bad_or_missing_optional_diagnostics_do_not_fail_completed_solve() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let state_ref = test_state_ref();
+        let port = StudyOutputPort { port_id: "total_energy".into(), data_kind: StudyPortDataKind::Scalar };
+        let expected = test_stats();
+        let output = StudyOutputPayload {
+            port_id: port.port_id.clone(),
+            case_id: test_identity().case_id,
+            codec_id: fullmag_application::STUDY_SCALAR_CODEC_ID.into(),
+            codec_version: fullmag_application::STUDY_SCALAR_CODEC_VERSION.into(),
+            bytes: fullmag_application::encode_study_scalar_artifact(
+                "E_total", "J", expected.e_total, expected.step, expected.time,
+            ).unwrap(),
+        };
+
+        for (attempt_name, diagnostics_present) in [("missing", false), ("mismatched", true)] {
+            let mut identity = test_identity();
+            identity.claim.lease.budget.storage_bytes = 1024 * 1024;
+            let attempt = directory.path().join(attempt_name);
+            std::fs::create_dir(&attempt).unwrap();
+            write_immutable_attempt_receipt(&attempt, WORKER_EXECUTION_STARTED_RECEIPT,
+                &WorkerExecutionStartedReceipt { identity: identity.clone() }).unwrap();
+            let mut stats = expected.clone();
+            if diagnostics_present {
+                stats.e_total += 1.0;
+            }
+            let persisted_stats = persist_completed_worker_execution(
+                &store, &attempt, &identity, std::slice::from_ref(&port), RunStatus::Completed,
+                1, std::slice::from_ref(&output), Some(&state_ref), None,
+                diagnostics_present.then_some(&stats),
+            ).unwrap();
+            assert!(persisted_stats.is_none());
+            let receipt = read_completed_worker_receipt(&attempt).unwrap();
+            assert!(receipt.terminal_stats().is_none());
+            let recovered = recover_completed_worker_execution(
+                &store, &attempt, &identity, std::slice::from_ref(&port), 1024 * 1024,
+                Some(&state_ref), None,
+            ).unwrap();
+            assert!(recovered.terminal_stats.is_none());
+        }
+    }
+
+    #[test]
+    fn terminal_stats_are_bound_to_the_exact_accepted_clock() {
+        let reference = test_state_ref();
+        let stats = test_stats();
+        assert!(terminal_stats_is_recordable(&stats, &reference, &test_identity().claim));
+        for changed in [
+            fullmag_runner::StepStats { step: stats.step + 1, ..stats.clone() },
+            fullmag_runner::StepStats { time: stats.time + 1.0e-12, ..stats.clone() },
+            fullmag_runner::StepStats { dt: stats.dt + 1.0e-12, ..stats.clone() },
+        ] {
+            assert!(!terminal_stats_is_recordable(&changed, &reference, &test_identity().claim));
+        }
+    }
+
+    #[test]
+    fn valid_legacy_stats_cannot_mask_a_second_completion_marker() {
+        for canonical in [b"{}".as_slice(), b"{".as_slice()] {
+            let directory = tempfile::tempdir().unwrap();
+            let identity = test_identity();
+            write_v2(directory.path(), &v2_receipt(identity.clone(), Some(test_state_ref()), Some(test_stats())));
+            let dir = attempt_dir(directory.path(), &identity);
+            std::fs::write(dir.join(WORKER_EXECUTION_COMPLETED_RECEIPT), canonical).unwrap();
+            let error = read_completed_worker_receipt(&dir).err().expect("dual receipts must fail closed");
+            assert!(format!("{error:#}").contains("both receipt slots"));
+        }
+    }
+
+    #[test]
+    fn completion_writer_fences_both_existing_receipt_slots() {
+        for name in [WORKER_EXECUTION_COMPLETED_RECEIPT, WORKER_EXECUTION_COMPLETED_RECEIPT_V2] {
+            let directory = tempfile::tempdir().unwrap();
+            let store = SessionStore::open(directory.path().join("store")).unwrap();
+            let attempt = directory.path().join("attempt");
+            std::fs::create_dir(&attempt).unwrap();
+            std::fs::write(attempt.join(name), b"existing marker").unwrap();
+            let error = persist_completed_worker_execution(
+                &store, &attempt, &test_identity(), &[], RunStatus::Completed,
+                0, &[], None, None, None,
+            ).unwrap_err();
+            assert!(format!("{error:#}").contains("completion receipt already exists"));
+            assert_eq!(std::fs::read(attempt.join(name)).unwrap(), b"existing marker");
+            if name == WORKER_EXECUTION_COMPLETED_RECEIPT_V2 {
+                assert!(!attempt.join(WORKER_EXECUTION_COMPLETED_RECEIPT).exists());
+            }
+        }
+    }
+
+    #[test]
+    fn oversized_final_stats_receipt_leaves_no_completion_marker() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut stats = test_stats();
+        stats.per_object_scalars.insert(
+            "x".repeat(fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES as usize),
+            std::collections::HashMap::from([("mx".into(), 0.1)]),
+        );
+        let mut receipt = serde_json::to_value(v2_receipt(test_identity(), None, Some(stats))).unwrap();
+        receipt["schema_version"] = WORKER_EXECUTION_COMPLETION_SCHEMA_V3.into();
+        let error = write_immutable_attempt_receipt(directory.path(), WORKER_EXECUTION_COMPLETED_RECEIPT, &receipt).unwrap_err();
+        assert!(format!("{error:#}").contains("metadata budget"));
+        assert!(!has_completed_worker_receipt(directory.path()).unwrap());
+    }
+
+    #[test]
+    fn recovery_rejects_tampered_final_stats_before_publication() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let attempt = directory.path().join("attempt");
+        std::fs::create_dir(&attempt).unwrap();
+        let mut identity = test_identity();
+        identity.claim.lease.budget.storage_bytes = 1024 * 1024;
+        let port = StudyOutputPort { port_id: "total_energy".into(), data_kind: StudyPortDataKind::Scalar };
+        let stats = test_stats();
+        let output = StudyOutputPayload {
+            port_id: port.port_id.clone(), case_id: identity.case_id.clone(),
+            codec_id: fullmag_application::STUDY_SCALAR_CODEC_ID.into(),
+            codec_version: fullmag_application::STUDY_SCALAR_CODEC_VERSION.into(),
+            bytes: fullmag_application::encode_study_scalar_artifact("E_total", "J", stats.e_total, stats.step, stats.time).unwrap(),
+        };
+        write_immutable_attempt_receipt(&attempt, WORKER_EXECUTION_STARTED_RECEIPT,
+            &WorkerExecutionStartedReceipt { identity: identity.clone() }).unwrap();
+        let state_ref = test_state_ref();
+        persist_completed_worker_execution(&store, &attempt, &identity, std::slice::from_ref(&port),
+            RunStatus::Completed, 1, &[output], Some(&state_ref), None, Some(&stats)).unwrap();
+        assert!(recover_completed_worker_execution(&store, &attempt, &identity,
+            std::slice::from_ref(&port), 1024 * 1024, Some(&state_ref), None).is_ok());
+        let path = attempt.join(WORKER_EXECUTION_COMPLETED_RECEIPT);
+        let original: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        for key in ["step", "time", "e_total"] {
+            let mut corrupted = original.clone();
+            corrupted["terminal_stats"][key] = if key == "step" { 999.into() } else { 0.125.into() };
+            std::fs::write(&path, serde_json::to_vec(&corrupted).unwrap()).unwrap();
+            let error = recover_completed_worker_execution(&store, &attempt, &identity,
+                std::slice::from_ref(&port), 1024 * 1024, Some(&state_ref), None).err().expect("tampered terminal row must fail before publication");
+            let detail = format!("{error:#}");
+            if key == "e_total" {
+                assert!(detail.contains("differs from durable E_total output"));
+            } else {
+                assert!(detail.contains("exact accepted state clock"));
+            }
+        }
+        // Deployed V3 used the old spelling and permitted no accepted-state ref.
+        // Its diagnostics must still agree with the actual immutable output.
+        let mut legacy = original;
+        let old_stats = legacy.as_object_mut().unwrap().remove("terminal_stats").unwrap();
+        legacy["final_step_stats"] = old_stats;
+        legacy["accepted_state_ref"] = serde_json::Value::Null;
+        std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let recovered = recover_completed_worker_execution(&store, &attempt, &identity,
+            std::slice::from_ref(&port), 1024 * 1024, None, None).unwrap();
+        assert_eq!(recovered.terminal_stats.unwrap().step, stats.step);
+        legacy["final_step_stats"]["e_total"] = (stats.e_total + 1.0).into();
+        std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let error = recover_completed_worker_execution(&store, &attempt, &identity,
+            std::slice::from_ref(&port), 1024 * 1024, None, None)
+            .err().expect("legacy diagnostics must remain bound to durable E_total");
+        assert!(format!("{error:#}").contains("differs from durable E_total output"));
+    }
+
+    #[test]
+    fn state_only_terminal_stats_require_the_same_clock() {
+        let stats = test_stats();
+        let mut state = fullmag_application::MagnetizationStateArtifact {
+            step: stats.step, time_s: stats.time, solver_dt_s: stats.dt,
+            space_fingerprint: "test-space".into(), layout: serde_json::json!({}),
+            provenance: serde_json::json!({}), values: vec![[1.0, 0.0, 0.0]],
+            native_state_snapshot: None, native_node_map: None,
+        };
+        assert!(validate_final_stats_output(&stats, "final_state", "state", &DecodedStudyArtifact::MagnetizationState(state.clone())).is_ok());
+        state.step += 1;
+        assert!(validate_final_stats_output(&stats, "final_state", "state", &DecodedStudyArtifact::MagnetizationState(state.clone())).is_err());
+        state.step = stats.step;
+        state.time_s += 1.0;
+        assert!(validate_final_stats_output(&stats, "final_state", "state", &DecodedStudyArtifact::MagnetizationState(state)).is_err());
+    }
+
+    #[test]
+    fn completion_and_recovery_preserve_distinct_initial_and_terminal_clocks() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let attempt = directory.path().join("attempt");
+        std::fs::create_dir(&attempt).unwrap();
+        let mut identity = test_identity();
+        identity.claim.lease.budget.storage_bytes = 1024 * 1024;
+        let stats = test_stats();
+        let ports = [
+            StudyOutputPort { port_id: "initial_state".into(), data_kind: StudyPortDataKind::InitialState },
+            StudyOutputPort { port_id: "final_state".into(), data_kind: StudyPortDataKind::State },
+        ];
+        let layout = serde_json::json!({"backend":"fdm", "origin_m":[0.0,0.0,0.0],
+            "grid_cells":[1,1,2], "cell_size":[1e-9,1e-9,1e-9], "total_cell_count":2,
+            "grid_fingerprint":"a".repeat(64)});
+        let layout_hash = fullmag_application::study_state_layout_sha256(&layout).unwrap();
+        let outputs: Vec<_> = ports.iter().zip([(0, 0.0), (stats.step, stats.time)]).map(|(port, (step, time))| StudyOutputPayload {
+            port_id: port.port_id.clone(), case_id: identity.case_id.clone(),
+            codec_id: fullmag_application::STUDY_MAGNETIZATION_CODEC_ID.into(),
+            codec_version: fullmag_application::STUDY_MAGNETIZATION_CODEC_VERSION.into(),
+            bytes: serde_json::to_vec(&serde_json::json!({
+                "observable":"m", "unit":"1", "step":step, "time":time, "solver_dt":stats.dt,
+                "layout":layout, "provenance":{"execution_resolution":{"requested":"fdm"}},
+                "state_identity":{"schema_version":fullmag_application::MAGNETIZATION_STATE_IDENTITY_SCHEMA,
+                    "backend":"fdm", "layout_sha256":layout_hash, "sample_count":2},
+                "values":[[1.0,0.0,0.0],[0.0,1.0,0.0]],
+            })).unwrap(),
+        }).collect();
+        write_immutable_attempt_receipt(&attempt, WORKER_EXECUTION_STARTED_RECEIPT,
+            &WorkerExecutionStartedReceipt { identity: identity.clone() }).unwrap();
+        let state_ref = test_state_ref();
+        persist_completed_worker_execution(&store, &attempt, &identity, &ports,
+            RunStatus::Completed, 1, &outputs, Some(&state_ref), None, Some(&stats)).unwrap();
+        let recovered = recover_completed_worker_execution(&store, &attempt, &identity,
+            &ports, 1024 * 1024, Some(&state_ref), None).unwrap();
+        assert_eq!(recovered.outputs, outputs);
+        assert_eq!(recovered.terminal_stats.unwrap().step, stats.step);
+
+        // Exercise the deployed V3 spelling and absent reference against the
+        // real state objects in CAS. The final state's positive dt is durable
+        // evidence and must agree with the persisted legacy stats row.
+        let receipt_path = attempt.join(WORKER_EXECUTION_COMPLETED_RECEIPT);
+        let mut legacy: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&receipt_path).unwrap()).unwrap();
+        let stats_value = legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("terminal_stats")
+            .unwrap();
+        legacy["final_step_stats"] = stats_value;
+        legacy["accepted_state_ref"] = serde_json::Value::Null;
+        std::fs::write(&receipt_path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let matching = recover_completed_worker_execution(
+            &store, &attempt, &identity, &ports, 1024 * 1024, None, None,
+        )
+        .unwrap();
+        assert_eq!(matching.terminal_stats.unwrap().dt.to_bits(), stats.dt.to_bits());
+
+        legacy["final_step_stats"]["dt"] = (stats.dt * 2.0).into();
+        std::fs::write(&receipt_path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let error = recover_completed_worker_execution(
+            &store, &attempt, &identity, &ports, 1024 * 1024, None, None,
+        )
+        .err()
+        .expect("legacy dt mismatch must be rejected");
+        assert!(format!("{error:#}").contains("differs from durable state solver dt"));
+
+        // Historical state artifacts use zero when no solver dt was recorded;
+        // that sentinel remains unspecified and does not reject legacy rows.
+        let final_state_payload = outputs
+            .iter()
+            .find(|output| output.port_id == "final_state")
+            .unwrap();
+        let mut state_wire: serde_json::Value =
+            serde_json::from_slice(&final_state_payload.bytes).unwrap();
+        state_wire["solver_dt"] = 0.0.into();
+        let zero_dt_bytes = serde_json::to_vec(&state_wire).unwrap();
+        let zero_dt_object = store.cas().put(&zero_dt_bytes).unwrap();
+        let final_state_reference = legacy["outputs"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|output| output["port_id"] == "final_state")
+            .unwrap();
+        final_state_reference["object_ref"] = zero_dt_object.into();
+        final_state_reference["byte_count"] = (zero_dt_bytes.len() as u64).into();
+        std::fs::write(&receipt_path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let legacy_without_dt = recover_completed_worker_execution(
+            &store, &attempt, &identity, &ports, 1024 * 1024, None, None,
+        )
+        .unwrap();
+        assert_eq!(
+            legacy_without_dt.terminal_stats.unwrap().dt.to_bits(),
+            (stats.dt * 2.0).to_bits(),
+        );
+    }
+
+    #[test]
+    fn canonical_terminal_v2_wire_keeps_its_distinct_schema_and_state_binding() {
+        // This fixture exercises wire dispatch only. Publication admission
+        // separately validates every carrier and CAS object in the manifest.
+        let directory = tempfile::tempdir().unwrap();
+        let state = test_state_ref();
+        let mut wire = serde_json::to_value(legacy_receipt(test_identity(), Some(state.clone()))).unwrap();
+        wire["schema_version"] = WORKER_EXECUTION_COMPLETION_SCHEMA_V2.into();
+        wire["terminal_publication"] = serde_json::json!({"entries":[], "manifest":{
+            "schema_version":"study_output_manifest.v4", "run_id":"run-final-stats",
+            "task_id":"task-final-stats", "step_id":"stage-final-stats", "attempt_id":"attempt-final-stats",
+            "ownership_epoch":1, "accepted_state_ref":state, "outputs":[], "publication_kind":"completed",
+            "historical_prefix":null, "histories":[],
+            "observation_source":{
+                "schema_version":"observation_source.v2", "adapter_id":"fdm_cpu_observation.v2",
+                "accepted_state_ref":state, "snapshot_schema_version":"fullmag.fdm.cpu.accepted-state-snapshot.v2",
+                "snapshot_artifact_id":"snapshot", "snapshot_object_ref":"a".repeat(64),
+                "state_codec_id":"test.state", "state_codec_version":"v1", "state_artifact_id":"state",
+                "state_object_ref":"b".repeat(64), "grid_cells":[1,1,1], "quantity_ids":["m"], "primary_carriers":[]
+            },
+            "coverage":{"schema_version":"study_output_coverage.v1", "origin_s":0.0,
+                "configuration_sha256":"c".repeat(64), "scalar_schedules":[], "field_schedules":[],
+                "default_scalar_last_sampled_time_s":null, "initial_sample_committed":false,
+                "final_sample_committed":false, "streams":[]}
+        }});
+        let path = directory.path().join(WORKER_EXECUTION_COMPLETED_RECEIPT);
+        std::fs::write(&path, serde_json::to_vec(&wire).unwrap()).unwrap();
+        let decoded = read_completed_worker_receipt(directory.path()).unwrap();
+        assert!(matches!(&decoded, CompletedWorkerReceipt::TerminalV2(_)));
+        assert!(!decoded.requires_final_step_stats());
+        assert!(decoded.terminal_stats().is_none());
+        wire["terminal_publication"]["manifest"]["accepted_state_ref"]["id"]["accepted_step"] = 999.into();
+        std::fs::write(&path, serde_json::to_vec(&wire).unwrap()).unwrap();
+        let error = read_completed_worker_receipt(directory.path()).err().expect("V2 state rebinding must fail");
+        assert!(format!("{error:#}").contains("incompatible binding"));
+    }
+
+    #[test]
+    fn terminal_stats_are_the_last_physical_runner_observation() {
+        let mut first = fullmag_runner::StepStats {
+            step: 3,
+            time: 3.0e-12,
+            e_total: -1.0,
+            ..Default::default()
+        };
+        first
+            .per_object_scalars
+            .insert("free".into(), std::collections::HashMap::from([
+                ("mx".into(), 0.1),
+            ]));
+        let last = fullmag_runner::StepStats {
+            step: 7,
+            time: 7.0e-12,
+            e_total: -2.0,
+            ..first.clone()
+        };
+        let result = RunResult {
+            status: RunStatus::Completed,
+            steps: vec![first, last.clone()],
+            final_magnetization: vec![[1.0, 0.0, 0.0]],
+            completion: None,
+        };
+
+        let terminal = final_physical_step_stats(&result)
+            .unwrap()
+            .expect("a physical runner step must be preserved");
+        assert_eq!(terminal.step, last.step);
+        assert_eq!(terminal.time, last.time);
+        assert_eq!(terminal.e_total, last.e_total);
+        assert_eq!(terminal.per_object_scalars, last.per_object_scalars);
+    }
+
+    #[test]
+    fn legal_zero_step_completion_does_not_invent_terminal_stats() {
+        let result = RunResult {
+            status: RunStatus::Completed,
+            steps: Vec::new(),
+            final_magnetization: vec![[1.0, 0.0, 0.0]],
+            completion: None,
+        };
+        assert!(final_physical_step_stats(&result).unwrap().is_none());
+        assert!(capture_optional_final_step_stats(&result).is_none());
+    }
+
+    #[test]
+    fn invalid_optional_diagnostics_are_dropped_without_failing_completed_result() {
+        let mut stats = fullmag_runner::StepStats::default();
+        stats.e_total = f64::NAN;
+        let result = RunResult {
+            status: RunStatus::Completed,
+            steps: vec![stats],
+            final_magnetization: Vec::new(),
+            completion: None,
+        };
+        assert!(capture_optional_final_step_stats(&result).is_none());
+    }
+
+    #[test]
+    fn solver_progress_cannot_be_published_as_terminal_physical_stats() {
+        let mut stats = fullmag_runner::StepStats::default();
+        stats.kind = fullmag_quantities::StepDataKind::SolverProgress;
+        stats.solver_progress = Some(fullmag_quantities::SolverProgress::FemEigen {
+            metrics: std::collections::HashMap::new(),
+        });
+        let result = RunResult {
+            status: RunStatus::Completed,
+            steps: vec![stats],
+            final_magnetization: Vec::new(),
+            completion: None,
+        };
+        assert!(final_physical_step_stats(&result).is_err());
+    }
+
+    #[test]
+    fn physical_observation_with_solver_progress_is_not_terminal_physics() {
+        let mut stats = fullmag_runner::StepStats::default();
+        stats.kind = fullmag_quantities::StepDataKind::PhysicalObservation;
+        stats.solver_progress = Some(fullmag_quantities::SolverProgress::FemEigen {
+            metrics: std::collections::HashMap::new(),
+        });
+        assert!(!stats.is_physical_observation());
+
+        let result = RunResult {
+            status: RunStatus::Completed,
+            steps: vec![stats],
+            final_magnetization: Vec::new(),
+            completion: None,
+        };
+        assert!(final_physical_step_stats(&result).is_err());
+    }
+
+    #[test]
+    fn nonfinite_physical_and_per_object_metrics_fail_closed() {
+        let mut nonfinite_energy = fullmag_runner::StepStats::default();
+        nonfinite_energy.e_total = f64::NAN;
+        let result = RunResult {
+            status: RunStatus::Completed,
+            steps: vec![nonfinite_energy],
+            final_magnetization: Vec::new(),
+            completion: None,
+        };
+        let error = final_physical_step_stats(&result).unwrap_err();
+        assert!(format!("{error:#}").contains("e_total"));
+
+        let mut nonfinite_object = fullmag_runner::StepStats::default();
+        nonfinite_object.per_object_scalars.insert(
+            "free".into(),
+            std::collections::HashMap::from([("mx".into(), f64::INFINITY)]),
+        );
+        let result = RunResult {
+            status: RunStatus::Completed,
+            steps: vec![nonfinite_object],
+            final_magnetization: Vec::new(),
+            completion: None,
+        };
+        let error = final_physical_step_stats(&result).unwrap_err();
+        assert!(format!("{error:#}").contains("free.mx"));
+    }
+
+    #[test]
+    fn malformed_v2_receipt_never_falls_back_to_legacy_receipt() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory
+                .path()
+                .join(WORKER_EXECUTION_COMPLETED_RECEIPT),
+            b"{}",
+        )
+        .unwrap();
+        std::fs::write(
+            directory
+                .path()
+                .join(WORKER_EXECUTION_COMPLETED_RECEIPT_V2),
+            b"{",
+        )
+        .unwrap();
+
+        let error = match read_completed_worker_receipt(directory.path()) {
+            Ok(_) => panic!("malformed V2 receipt must fail closed"),
+            Err(error) => error,
+        };
+        let detail = format!("{error:#}");
+        assert!(detail.contains(WORKER_EXECUTION_COMPLETED_RECEIPT_V2));
+        assert!(!detail.contains(WORKER_EXECUTION_COMPLETED_RECEIPT));
+    }
+
+    #[test]
+    fn terminal_reader_roundtrips_v2_and_legacy_has_no_fabricated_stats() {
+        let directory = tempfile::tempdir().unwrap();
+        let identity = test_identity();
+        let expected_state_ref = test_state_ref();
+        let expected_stats = test_stats();
+        let v2 = v2_receipt(
+            identity.clone(),
+            Some(expected_state_ref.clone()),
+            Some(expected_stats.clone()),
+        );
+        write_v2(directory.path(), &v2);
+        let actual = read_completed_worker_final_step_stats(
+            directory.path(),
+            identity.claim.run_id.as_str(),
+            identity.claim.task_id.as_str(),
+            identity.claim.attempt_id.as_str(),
+            identity.claim.ownership_epoch.value(),
+            &identity.case_id,
+            Some(&expected_state_ref),
+        )
+        .unwrap()
+        .expect("v2 receipt carries terminal stats");
+        assert_eq!(actual.step, expected_stats.step);
+        assert_eq!(actual.time, expected_stats.time);
+        assert_eq!(actual.e_total, expected_stats.e_total);
+
+        let legacy_dir = tempfile::tempdir().unwrap();
+        let legacy = legacy_receipt(identity.clone(), Some(expected_state_ref.clone()));
+        write_legacy(legacy_dir.path(), &legacy);
+        assert!(read_completed_worker_final_step_stats(
+            legacy_dir.path(),
+            identity.claim.run_id.as_str(),
+            identity.claim.task_id.as_str(),
+            identity.claim.attempt_id.as_str(),
+            identity.claim.ownership_epoch.value(),
+            &identity.case_id,
+            Some(&expected_state_ref),
+        )
+        .unwrap()
+        .is_none());
+    }
+
+    #[test]
+    fn terminal_reader_rejects_unknown_v2_schema_without_legacy_fallback() {
+        let directory = tempfile::tempdir().unwrap();
+        let identity = test_identity();
+        let mut v2 = v2_receipt(identity.clone(), None, Some(test_stats()));
+        v2.schema_version = "fullmag.accepted_worker_execution.v9".into();
+        write_v2(directory.path(), &v2);
+        write_legacy(directory.path(), &legacy_receipt(identity.clone(), None));
+
+        let error = read_completed_worker_final_step_stats(
+            directory.path(),
+            identity.claim.run_id.as_str(),
+            identity.claim.task_id.as_str(),
+            identity.claim.attempt_id.as_str(),
+            identity.claim.ownership_epoch.value(),
+            &identity.case_id,
+            None,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("unsupported schema"));
+    }
+
+    #[test]
+    fn terminal_reader_rejects_unknown_receipt_identity_schema() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut identity = test_identity();
+        identity.schema_version = "fullmag.accepted_worker_execution.identity.v9".into();
+        write_v2(
+            directory.path(),
+            &v2_receipt(identity.clone(), None, Some(test_stats())),
+        );
+
+        let error = read_completed_worker_final_step_stats(
+            directory.path(),
+            identity.claim.run_id.as_str(),
+            identity.claim.task_id.as_str(),
+            identity.claim.attempt_id.as_str(),
+            identity.claim.ownership_epoch.value(),
+            &identity.case_id,
+            None,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("identity has unsupported schema"));
+    }
+
+    #[test]
+    fn terminal_reader_enforces_all_attempt_and_state_fences() {
+        let directory = tempfile::tempdir().unwrap();
+        let identity = test_identity();
+        let expected_state_ref = test_state_ref();
+        let receipt = v2_receipt(
+            identity.clone(),
+            Some(expected_state_ref.clone()),
+            Some(test_stats()),
+        );
+        write_v2(directory.path(), &receipt);
+
+        let mut mismatched_run = receipt.clone();
+        mismatched_run.identity.claim.run_id =
+            fullmag_application::RunId::parse("other-run").unwrap();
+        write_v2_at(directory.path(), &identity, &mismatched_run);
+        assert!(read_completed_worker_final_step_stats(
+            directory.path(),
+            identity.claim.run_id.as_str(),
+            identity.claim.task_id.as_str(),
+            identity.claim.attempt_id.as_str(),
+            identity.claim.ownership_epoch.value(),
+            &identity.case_id,
+            Some(&expected_state_ref),
+        )
+        .is_err());
+
+        let mismatches: [fn(&mut WorkerExecutionFinalStatsReceiptV2); 5] = [
+            |receipt: &mut WorkerExecutionFinalStatsReceiptV2| {
+                receipt.identity.claim.task_id =
+                    fullmag_application::TaskId::parse("other-task").unwrap();
+            },
+            |receipt: &mut WorkerExecutionFinalStatsReceiptV2| {
+                receipt.identity.claim.attempt_id =
+                    fullmag_application::AttemptId::parse("other-attempt").unwrap();
+            },
+            |receipt: &mut WorkerExecutionFinalStatsReceiptV2| {
+                receipt.identity.claim.ownership_epoch =
+                    fullmag_application::OwnershipEpoch::new(2).unwrap();
+            },
+            |receipt: &mut WorkerExecutionFinalStatsReceiptV2| {
+                receipt.identity.case_id = "other-case".into();
+            },
+            |receipt: &mut WorkerExecutionFinalStatsReceiptV2| {
+                receipt.accepted_state_ref = Some(fullmag_quantities::AcceptedStateRef {
+                    id: fullmag_quantities::AcceptedStateId {
+                        run_id: "run-final-stats".into(),
+                        stage_id: Some("other-stage".into()),
+                        accepted_step: 1,
+                        clock_digest: format!("sha256:{}", "e".repeat(64)),
+                        state_digest: format!("sha256:{}", "f".repeat(64)),
+                        domain_digest: format!("sha256:{}", "1".repeat(64)),
+                        plan_digest: format!("sha256:{}", "2".repeat(64)),
+                    },
+                    generation: fullmag_quantities::AcceptedStateGeneration {
+                        runtime_epoch: 1,
+                        accepted_revision: 1,
+                    },
+                });
+            },
+        ];
+        for mutate in mismatches {
+            let mut mismatched = receipt.clone();
+            mutate(&mut mismatched);
+            write_v2_at(directory.path(), &identity, &mismatched);
+            assert!(read_completed_worker_final_step_stats(
+                directory.path(),
+                identity.claim.run_id.as_str(),
+                identity.claim.task_id.as_str(),
+                identity.claim.attempt_id.as_str(),
+                identity.claim.ownership_epoch.value(),
+                &identity.case_id,
+                Some(&expected_state_ref),
+            )
+            .is_err());
+        }
+    }
+}
 
 #[cfg(test)]
 mod native_failure_protocol_tests {

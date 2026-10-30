@@ -1,3 +1,4 @@
+import type { SnapshotVisualizationController } from "./visualization/SnapshotVisualizationController";
 import type { SavedResultsPlaybackController } from "./saved-results/SavedResultsPlaybackController";
 import type { ComponentType } from "react";
 
@@ -30,6 +31,7 @@ import type { ModeCompositionController } from "./visualization/ModeCompositionC
 import type { VisualizationDebugController } from "./visualization/VisualizationDebugController";
 import type { VisualizationRegistrySyncController } from "./visualization/VisualizationRegistrySyncController";
 import type { ProjectDocumentController } from "./persistence/ProjectDocumentController";
+import type { ResultsBrowserUiController } from "./results-browser/ResultsBrowserUiController";
 
 export type SlotId =
   | "app-menu"
@@ -74,6 +76,7 @@ export interface ModuleManifest {
 
 export interface KernelApi {
   readonly savedResultsPlayback?: SavedResultsPlaybackController;
+  readonly snapshotVisualizations?: SnapshotVisualizationController;
   readonly api: ControlRoomApi;
   readonly analysisFieldOverlay: AnalysisFieldOverlayController;
   readonly authoringHistory?: AuthoringHistoryController;
@@ -94,6 +97,7 @@ export interface KernelApi {
   readonly realtime: RealtimeInvalidationBridge;
   readonly realtimeConnection: RealtimeConnectionController;
   readonly resources: ResourceInvalidationController;
+  readonly resultsBrowserUi: ResultsBrowserUiController;
   readonly selection: SelectionController;
   readonly visualization: ObjectVisualizationController;
   readonly visualizationDebug: VisualizationDebugController;

@@ -2087,10 +2087,10 @@ def _parse_saved_playback_result(
     if geometry_kind not in {"fdm", "fem"}:
         raise BuildControlError("Saved Playback geometry kind is unsupported")
     expected_indices = [0, 400, 800]
-    if geometry_kind == "fem":
+    if geometry_kind == "fem" or "frame_count" in payload:
         frame_count = payload.get("frame_count")
         if type(frame_count) is not int or not 3 <= frame_count <= 100_000:
-            raise BuildControlError("Saved FEM Playback frame count is invalid")
+            raise BuildControlError("Saved Playback frame count is invalid")
         expected_indices = [0, (frame_count - 1) // 2, frame_count - 1]
     if payload.get("frame_indices") != expected_indices:
         raise BuildControlError("Saved Playback helper did not inspect first, midpoint, and last frames")
@@ -2109,7 +2109,10 @@ def _parse_saved_playback_result(
             or payload.get("field_payloads_verified") is not True
             or payload.get("changed_canvas") is not True
             or payload.get("inspector_stable") is not True
-            or payload.get("camera_stable") is not True):
+            or payload.get("camera_stable") is not True
+            or payload.get("results_browser_verified") is not True
+            or payload.get("per_snapshot_settings_retained") is not True
+            or payload.get("live_return_verified") is not True):
         raise BuildControlError("Saved Playback helper omitted the required visible canvas and data-plane evidence")
     for key in ("hook_errors", "errors"):
         value = payload.get(key)

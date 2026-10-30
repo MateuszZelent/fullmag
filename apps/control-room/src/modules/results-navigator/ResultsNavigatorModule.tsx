@@ -12,6 +12,9 @@ import {
 import type {
   AnalysisResultDatasetManifestResource,
   AnalysisResultPageQuery,
+  CurrentRunResource,
+  FrequencyDomainManifestResource,
+  StageExecutionResource,
 } from "@/kernel/api/apiTypes";
 import {
   useCurrentRunResource,
@@ -30,6 +33,7 @@ import {
 } from "@/kernel/resources/studyRuntimeResources";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import type { ModuleProps } from "@/kernel/types";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/shared/ui/Accordion";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
   analysisResultFieldOverlayAdapter,
@@ -38,6 +42,7 @@ import {
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
 
 import { ResultsNavigatorTree } from "./ResultsNavigatorTree";
+import { ResultsOutputExplorer } from "./ResultsOutputExplorer";
 import { ResultDatasetBrowser } from "./ResultDatasetBrowser";
 import { SavedResultsBrowser } from "./SavedResultsBrowser";
 import { useWorkspaceContentScope } from "@/kernel/layout/WorkspaceContentScope";
@@ -79,6 +84,8 @@ import {
   kernelSelectionForResultsNavigatorNode,
 } from "./resultsNavigatorSelection";
 
+const CURRENT_RESULTS_SOURCE = Object.freeze({ kind: "current" as const });
+
 function activeStageId(
   activeStageIndex: number | null | undefined,
   stages: readonly { index: number; stage_id: string }[] | undefined,
@@ -87,19 +94,116 @@ function activeStageId(
   return stages.find((stage) => stage.index === activeStageIndex)?.stage_id ?? null;
 }
 
-function resolveIdentity({
+type IdentityField = {
+  valid: boolean;
+  present: boolean;
+  value?: string;
+};
+
+function identityField(source: unknown, key: string): IdentityField {
+  if (source == null) return { valid: true, present: false };
+  if (typeof source !== "object" || Array.isArray(source)) {
+    return { valid: false, present: false };
+  }
+  const value = (source as Record<string, unknown>)[key];
+  if (value == null) return { valid: true, present: false };
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return { valid: false, present: true };
+  }
+  return { valid: true, present: true, value };
+}
+
+function sameIdentity(left: IdentityField, right: IdentityField): boolean {
+  return (
+    left.valid &&
+    right.valid &&
+    (!left.present || !right.present || left.value === right.value)
+  );
+}
+
+/**
+ * Resolves the legacy Results tree identity without inferring a completed stage
+ * from stage ordering. Once the active index clears, the ready result manifest
+ * must explicitly bind the artifact to the current run/session and name its stage.
+ */
+export function resolveResultsNavigatorIdentity({
   currentRun,
   stageExecution,
+  manifest,
 }: {
-  currentRun: ReturnType<typeof useCurrentRunResource>["data"];
-  stageExecution: ReturnType<typeof useStageExecutionResource>["data"];
+  currentRun: CurrentRunResource | null | undefined;
+  stageExecution: StageExecutionResource | null | undefined;
+  manifest: FrequencyDomainManifestResource | null | undefined;
 }): NavigatorIdentity | null {
-  if (!currentRun || !stageExecution) return null;
-  const stageId = activeStageId(
-    currentRun.active_stage_index ?? stageExecution.active_stage_index,
-    stageExecution.stages,
-  );
+  if (!currentRun) return null;
+
+  if (
+    typeof currentRun.run_id !== "string" ||
+    currentRun.run_id.trim().length === 0 ||
+    typeof currentRun.session_id !== "string" ||
+    currentRun.session_id.trim().length === 0
+  ) {
+    return null;
+  }
+
+  if (stageExecution) {
+    const executionRun = identityField(stageExecution, "run_id");
+    const executionSession = identityField(stageExecution, "session_id");
+    if (
+      !executionRun.valid ||
+      !executionSession.valid ||
+      executionRun.value !== currentRun.run_id ||
+      executionSession.value !== currentRun.session_id
+    ) {
+      return null;
+    }
+  }
+
+  const activeStageIndex =
+    currentRun.active_stage_index ?? stageExecution?.active_stage_index;
+  if (activeStageIndex != null) {
+    if (!stageExecution) return null;
+    const stageId = activeStageId(activeStageIndex, stageExecution.stages);
+    if (!stageId) return null;
+    return { runId: currentRun.run_id, stageId };
+  }
+
+  const artifact = manifest?.result_manifest;
+  if (!artifact || artifact.status !== "ready") return null;
+
+  const envelopeRun = identityField(artifact, "run_id");
+  const envelopeSession = identityField(artifact, "session_id");
+  const payloadRun = identityField(artifact.payload, "run_id");
+  const payloadSession = identityField(artifact.payload, "session_id");
+  const envelopeStage = identityField(artifact, "stage_id");
+  const payloadStage = identityField(artifact.payload, "stage_id");
+  if (
+    !envelopeRun.valid ||
+    !envelopeSession.valid ||
+    !payloadRun.valid ||
+    !payloadSession.valid ||
+    !envelopeStage.valid ||
+    !payloadStage.valid ||
+    !envelopeRun.present ||
+    !envelopeSession.present ||
+    envelopeRun.value !== currentRun.run_id ||
+    envelopeSession.value !== currentRun.session_id ||
+    (payloadRun.present && payloadRun.value !== currentRun.run_id) ||
+    (payloadSession.present && payloadSession.value !== currentRun.session_id) ||
+    !sameIdentity(envelopeStage, payloadStage)
+  ) {
+    return null;
+  }
+  const stageId = envelopeStage.value ?? payloadStage.value;
   if (!stageId) return null;
+
+  if (stageExecution?.stages.length) {
+    const matchingStages = stageExecution.stages.filter(
+      (stage) => stage.stage_id === stageId,
+    );
+    if (matchingStages.length !== 1) return null;
+  }
+
   return {
     runId: currentRun.run_id,
     stageId,
@@ -428,11 +532,12 @@ function CurrentResultsNavigator({
 
   const identity = useMemo(
     () =>
-      resolveIdentity({
+      resolveResultsNavigatorIdentity({
         currentRun: currentRun.data,
         stageExecution: stageExecution.data,
+        manifest: manifest.data,
       }),
-    [currentRun.data, stageExecution.data],
+    [currentRun.data, stageExecution.data, manifest.data],
   );
   // 204/null stage execution: the runtime does not publish stage progress.
   const stageExecutionUnpublished =
@@ -739,10 +844,19 @@ function CurrentResultsNavigator({
     <section aria-label="Results" className="fm-results-navigator">
       <header className="fm-results-navigator__header">
         <h2>Results</h2>
-        <span data-status={nodes[0]?.status ?? "missing"}>
-          {nodes[0]?.status ?? "missing"}
-        </span>
       </header>
+      <div aria-label="Results output files" className="fm-results-navigator__output-files">
+        <ResultsOutputExplorer source={CURRENT_RESULTS_SOURCE} watch />
+      </div>
+      <Accordion
+        className="fm-results-navigator__analysis"
+        collapsible
+        defaultValue=""
+        type="single"
+      >
+        <AccordionItem value="analysis">
+          <AccordionTrigger>Modes &amp; analysis</AccordionTrigger>
+          <AccordionContent>
       {resultDatasetBrowserVisible ? (
         <ResultDatasetBrowser
           branchesPage={verifiedResultBranches}
@@ -807,8 +921,7 @@ function CurrentResultsNavigator({
               className="fm-results-navigator__compatibility-status"
               role="status"
             >
-              Typed result index has no published datasets; showing the bounded
-              legacy frequency-domain compatibility view.
+              No analysis datasets are published; showing the available analysis view.
             </p>
           ) : null}
           <ResultsNavigatorTree
@@ -818,6 +931,9 @@ function CurrentResultsNavigator({
           />
         </>
       )}
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
     </section>
   );
 }

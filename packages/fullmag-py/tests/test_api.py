@@ -6241,11 +6241,14 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(draft["stages"][1]["kind"], "run")
         self.assertEqual(draft["stages"][1]["until_seconds"], "4e-12")
         self.assertEqual(draft["study_pipeline"]["version"], "study_pipeline.v1")
-        self.assertEqual(len(draft["study_pipeline"]["nodes"]), 2)
-        self.assertEqual(draft["study_pipeline"]["nodes"][0]["stage_kind"], "relax")
-        self.assertEqual(draft["study_pipeline"]["nodes"][0]["payload"]["max_steps"], "25")
-        self.assertEqual(draft["study_pipeline"]["nodes"][1]["stage_kind"], "run")
-        self.assertEqual(draft["study_pipeline"]["nodes"][1]["payload"]["until_seconds"], "4e-12")
+        nodes = draft["study_pipeline"]["nodes"]
+        self.assertEqual([node["stage_kind"] for node in nodes], ["autosave", "relax", "run"])
+        self.assertTrue(nodes[0]["enabled"])
+        self.assertTrue(nodes[0]["payload"]["enabled"])
+        self.assertEqual(nodes[0]["payload"]["quantity"], "m")
+        self.assertEqual(nodes[0]["payload"]["output"], loaded.problem.study.outputs[0].to_ir())
+        self.assertEqual(nodes[1]["payload"]["max_steps"], "25")
+        self.assertEqual(nodes[2]["payload"]["until_seconds"], "4e-12")
 
     def test_builder_rewrite_preserves_frequency_response_stage_and_output(self) -> None:
         problem = replace(

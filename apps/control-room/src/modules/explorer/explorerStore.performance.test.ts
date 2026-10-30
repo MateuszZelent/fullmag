@@ -33,4 +33,17 @@ describe("explorer store subscription performance contracts", () => {
       "enabled: activeTab === \"results\" || modeVisualizationResourceActive",
     );
   });
+
+  it("keeps output folders first and analysis behind a shared collapsed primitive", () => {
+    const outputIndex = explorerModuleSource.indexOf(
+      '<div aria-label="Results output files"',
+    );
+    const analysisIndex = explorerModuleSource.indexOf("<Accordion");
+
+    expect(outputIndex).toBeGreaterThanOrEqual(0);
+    expect(analysisIndex).toBeGreaterThan(outputIndex);
+    expect(explorerModuleSource).toContain('defaultValue=""');
+    expect(explorerModuleSource).toContain(">Analysis results</AccordionTrigger>");
+    expect(explorerModuleSource).not.toContain("<details");
+  });
 });

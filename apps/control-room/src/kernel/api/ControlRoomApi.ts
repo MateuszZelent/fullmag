@@ -1,3 +1,5 @@
+import { DATA_RESULTS_GEOMETRY_PATH,WORKSPACE_RESULTS_GEOMETRY_PATH,DATA_RESULTS_CATALOG_PATH,DATA_RESULTS_ARRAY_PATH,DATA_RESULTS_SAMPLE_PATH,DATA_RESULTS_ENTRY_PATH,WORKSPACE_RESULTS_CATALOG_PATH,WORKSPACE_RESULTS_ARRAY_PATH,WORKSPACE_RESULTS_SAMPLE_PATH,WORKSPACE_RESULTS_ENTRY_PATH } from "./apiPaths";
+import { normalizeResultsCatalog,normalizeResultsArray,normalizeResultsPreview,type ResultsSource,type ResultsCatalogWire,type ResultsArrayWire,type ResultsEntryPreviewWire } from "./resultsBrowser";
 import { WORKSPACE_ITEM_PLAYBACK_PATH, WORKSPACE_ITEM_PLAYBACK_FRAME_PATH, WORKSPACE_ITEM_PLAYBACK_GEOMETRY_PATH } from "./apiPaths";
 import type { SavedPlaybackResource } from "./savedResultsPlayback";
 import { artifactFieldResponseIdentityError } from "./artifactFieldResponseIdentity";
@@ -1131,6 +1133,27 @@ export class ControlRoomApi {
       status: (options?: RequestOptions) =>
         this.requestJson<LiveStatusResource>(SESSION_STATUS_PATH, options),
     },
+  };
+
+  /** Revision-pinned output folder resources shared by live runs and saved folders. */
+  readonly results = {
+    catalog: async (source:ResultsSource,cursor:string|null=null,options?:RequestOptions) => {
+      const wire=await this.requestJson<ResultsCatalogWire>(source.kind==="current"?DATA_RESULTS_CATALOG_PATH:WORKSPACE_RESULTS_CATALOG_PATH,options,
+        {path:source.kind==="workspace"?{id:source.itemId}:{},query:{limit:200,...(cursor?{cursor}:{})}});
+      return normalizeResultsCatalog(wire);
+    },
+    array: async (source:ResultsSource,arrayId:string,revision:string,options?:RequestOptions) =>
+      normalizeResultsArray(await this.requestJson<ResultsArrayWire>(source.kind==="current"?DATA_RESULTS_ARRAY_PATH:WORKSPACE_RESULTS_ARRAY_PATH,options,
+        {path:{...(source.kind==="workspace"?{id:source.itemId}:{}),array_id:arrayId},query:{revision}})),
+    sample: (source:ResultsSource,arrayId:string,sampleIndex:number,revision:string,options?:BinaryRequestOptions) =>
+      this.requestBinaryBytes(source.kind==="current"?DATA_RESULTS_SAMPLE_PATH:WORKSPACE_RESULTS_SAMPLE_PATH,{...options,maxResponseBytes:64*1024*1024},
+        {...(source.kind==="workspace"?{id:source.itemId}:{}),array_id:arrayId,sample_index:String(sampleIndex)},{revision}),
+    geometry: (source:ResultsSource,arrayId:string,revision:string,part:"topology"|"support",options?:BinaryRequestOptions) =>
+      this.requestBinaryBytes(source.kind==="current"?DATA_RESULTS_GEOMETRY_PATH:WORKSPACE_RESULTS_GEOMETRY_PATH,{...options,maxResponseBytes:part==="support"?1024*1024:64*1024*1024},
+        {...(source.kind==="workspace"?{id:source.itemId}:{}),array_id:arrayId},{revision,part}),
+    preview: async (source:ResultsSource,entryId:string,revision:string,options?:RequestOptions) =>
+      normalizeResultsPreview(await this.requestJson<ResultsEntryPreviewWire>(source.kind==="current"?DATA_RESULTS_ENTRY_PATH:WORKSPACE_RESULTS_ENTRY_PATH,options,
+        {path:{...(source.kind==="workspace"?{id:source.itemId}:{}),entry_id:entryId},query:{revision}})),
   };
 
   /**

@@ -19,6 +19,9 @@ const fakes = vi.hoisted(() => ({
 vi.mock("@/kernel/persistence/ProjectDocumentStatus", () => ({
   useProjectDocumentSnapshot: () => ({ state: "ready", resource: { project_id: "project" } }),
 }));
+vi.mock("./WorkspaceResultsFolders", () => ({
+  WorkspaceResultsFolders: () => null,
+}));
 vi.mock("@/kernel/resources/projectRunResources", () => ({
   useProjectRunsResource: () => ({ status: "ready", data: { runs: [{ run_id: "run", catalog_state: "materialized" }] }, refetch() {} }),
   useProjectRunResource: () => ({ status: "ready", data: { tasks: [] }, refetch() {} }),

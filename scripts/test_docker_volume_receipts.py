@@ -1,5 +1,6 @@
 """Interpreted regressions for Docker-managed receipt boundaries; no native build."""
 from pathlib import Path
+from contextlib import ExitStack
 import tempfile
 import unittest
 import sys
@@ -1048,14 +1049,24 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
     def run_refresh(self, fault=None, *, linux=False):
         import copy,json,types
         import docker_volume_dev as dev
+        import docker_volume_frontend_preflight_rejection as preflight_rejection
         import docker_dev_codegen as codegen
         import docker_development_inputs as frontend_inputs
+        import docker_group_ledger as group_ledger
         import windows_folder_host,linux_native_host,fullmag_storage,docker_volume_reconcile,docker_build_control
         host = linux_native_host if linux else windows_folder_host
         certificate_name = Path(host.HOST_CERT_PATH).name
         control=mock.Mock(spec=BuildControl);control.project='own';control.volume='control';control.namespace=''
         control._active_operation=None
-        control.operation=types.MethodType(BuildControl.operation,control)
+        control.read_bytes.side_effect=lambda path,*,optional=False,maximum=None: (
+            None if path == 'development/current.json' and optional else
+            (_ for _ in ()).throw(BuildControlError('Unexpected fixture byte read: ' + path)))
+        operation_calls=[]
+        actual_operation=types.MethodType(BuildControl.operation,control)
+        def operation(*args,**kwargs):
+            operation_calls.append(args[0] if args else kwargs.get('phase'))
+            return actual_operation(*args,**kwargs)
+        control.operation=operation
         control._pin_operation_helper=types.MethodType(BuildControl._pin_operation_helper,control)
         control._inspect_operation_helper.return_value='e'*64
         control.path.side_effect=lambda value:'/control/'+value
@@ -1067,15 +1078,34 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
         def write(path,value):
             if fault=='last-proof' and path.endswith('/frontend-source-view.json'):raise OSError('proof write failed')
             writes[path]=copy.deepcopy(value)
-        control.write.side_effect=write;control.read.return_value={'retained':'same'}
+        control.write.side_effect=write
         backend={'Id':'b'*64,'State':{'StartedAt':'same','Running':True,'Health':{'Status':'healthy'}}}
         frontend={'Id':'f'*64,'Image':'image','State':{'StartedAt':'new','Running':True,'Health':{'Status':'healthy'}}}
         frontend['HostConfig']={'Memory':6*1024**3 if fault=='memory-drift' else 8*1024**3}
-        document={'services':{'backend':{'same':'declaration'},'frontend':{'environment':{'FULLMAG_FRONTEND_HOST_PORT':'3202'},'mem_limit':'6442450944'}},
-                  'volumes':{'frontend-build':{'name':'old'}}}
+        daemon_sha='d'*64
+        group_volume=group_ledger.VOLUME_PREFIX+'e'*64
+        group_profile=group_ledger.profile(daemon_sha,control.project,group_volume,'image')
+        backend_declaration={'same':'declaration',**group_profile['backend']}
+        document={'name':control.project,
+                  'services':{'backend':backend_declaration,'frontend':{'environment':{'FULLMAG_FRONTEND_HOST_PORT':'3202'},'mem_limit':'6442450944'}},
+                  'volumes':{'frontend-build':{'name':'old'},group_ledger.COMPOSE_VOLUME:group_profile['compose_volume']}}
+        group_record={'schema':'fullmag.docker-group-ledger.v1','profile':group_ledger.PROFILE,
+                      'daemon_id_sha256':daemon_sha,'compose_project':control.project,
+                      'volume_name':group_volume,
+                      'host_id':group_profile['environment'][group_ledger.HOST_ID_ENV]}
+        retained_documents={
+            'development/attempts/old/backend-cache.json':{'cache':'retained'},
+            'development/attempts/old/group-ledger.json':group_record,
+        }
+        def read(path,*,optional=False):
+            if path=='frontend/development-inputs.json':return {'retained':'same'}
+            return copy.deepcopy(retained_documents[path])
+        control.read.side_effect=read
         old={'backend':backend,'frontend':{**frontend,'Id':'o'*64,'HostConfig':{'Memory':6*1024**3}}}
         args=types.SimpleNamespace(port=3202,attempt='a'*32,config_sha256='c'*64)
-        previous={'inputs':{'attempt':'old','config_sha256':'old'},'state_root':'/state','backend_volumes':{'same':'cache'},'frontend_volume':'old'}
+        previous={'inputs':{'attempt':'old','config_sha256':'old'},'state_root':'/state',
+                  'backend_volumes':{'same':'cache',group_ledger.COMPOSE_VOLUME:group_volume},
+                  'frontend_volume':'old'}
         seed={'files':[],'source_commit':'commit'}
         source={'commit':'commit','source_digest':'digest','snapshot':'snapshot'}
         stopped=[]
@@ -1087,6 +1117,8 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
         def text(*argv):
             if argv[:2]==('image','inspect'):return json.dumps([{'Config':{}}])
             if argv[0]=='inspect':return json.dumps([backend if argv[1]=='b'*64 else old['frontend'] if argv[1]=='o'*64 else frontend])
+            if fault=='pre-operation-health' and argv[0]=='exec':
+                raise BuildControlError('Frontend refresh requires an empty healthy API')
             if stopped and fault=='post-quiesce-health':raise BuildControlError('API accepted session before quiescence')
             return json.dumps({'status':'ok','active_session':False})
         def compose(doc,*argv,**kwargs):return b'f'*64 if argv[0]=='ps' else b''
@@ -1099,36 +1131,54 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
                     or (fault=='owner-drift' and name==host.OWNER_NAME)):
                 raw+=b' '
             return raw
-        with mock.patch.object(docker_build_control.subprocess,'Popen',return_value=logger), \
-             mock.patch.object(fullmag_storage,'validate_path',return_value=Path('/state')), \
-             mock.patch.object(dev,'_session_host',return_value=host), \
-             mock.patch.object(host,'read_owned_regular',side_effect=read_owner), \
-             mock.patch.object(dev,'_retained_startup_enabled',return_value=False), \
-             mock.patch.object(dev,'docker_text',side_effect=text), \
-             mock.patch.object(dev,'docker_capture',side_effect=stop) as stopped_call, \
-             mock.patch.object(dev,'_assert_private_restart_network'), \
-             mock.patch.object(docker_volume_reconcile,'fingerprint',return_value='pin'), \
-             mock.patch.object(codegen,'_backend_documents',return_value=({}, {}, 'receipt','binary')), \
-             mock.patch.object(codegen,'_validate_backend',return_value=(source,'p','b')), \
-             mock.patch.object(codegen,'_probe_source',side_effect=codegen.CodegenError('unknown',reconciliation_required=True)
-                               if fault=='unknown-source' else None,return_value=({},'probe')), \
-             mock.patch.object(codegen,'_source_matches',return_value=fault!='source-mismatch'), \
-             mock.patch.object(frontend_inputs,'describe',return_value=seed), \
-             mock.patch.object(frontend_inputs,'frontend_view',return_value={'files':[]}), \
-             mock.patch.object(dev,'_frontend',return_value=(seed,'new-volume')) as seeded, \
-             mock.patch.object(dev,'compose_capture',side_effect=compose) as composed, \
-             mock.patch.object(dev,'_validate_retained_service'):
+        validation_calls=[]
+        def validate_preflight(*_args,operation=None,**_kwargs):
+            validation_calls.append(operation)
+            if fault=='preflight-under-lease' and operation is not None:
+                raise BuildControlError('Frontend preflight proof drifted under lease')
+            if fault=='preflight-under-lease':
+                return {'schema':'fullmag.docker-frontend-preflight-rejection.v1','sha256':'p'*64}
+            return None
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(docker_build_control.subprocess, 'Popen', return_value=logger))
+            stack.enter_context(mock.patch.object(fullmag_storage, 'validate_path', return_value=Path('/state')))
+            stack.enter_context(mock.patch.object(dev, '_session_host', return_value=host))
+            stack.enter_context(mock.patch.object(host, 'read_owned_regular', side_effect=read_owner))
+            stack.enter_context(mock.patch.object(dev, '_retained_startup_enabled', return_value=False))
+            stack.enter_context(mock.patch.object(dev, 'docker_text', side_effect=text))
+            stopped_call = stack.enter_context(mock.patch.object(dev, 'docker_capture', side_effect=stop))
+            stack.enter_context(mock.patch.object(dev, '_assert_private_restart_network'))
+            stack.enter_context(mock.patch.object(docker_volume_reconcile, 'fingerprint', return_value='pin'))
+            stack.enter_context(mock.patch.object(codegen, '_backend_documents', return_value=({}, {}, 'receipt', 'binary')))
+            stack.enter_context(mock.patch.object(codegen, '_validate_backend', return_value=(source, 'p', 'b')))
+            stack.enter_context(mock.patch.object(codegen, '_probe_source', side_effect=codegen.CodegenError('unknown', reconciliation_required=True) if fault == 'unknown-source' else None, return_value=({}, 'probe')))
+            stack.enter_context(mock.patch.object(codegen, '_source_matches', return_value=fault != 'source-mismatch'))
+            stack.enter_context(mock.patch.object(frontend_inputs, 'describe', return_value=seed))
+            stack.enter_context(mock.patch.object(frontend_inputs, 'frontend_view', return_value={'files': []}))
+            stack.enter_context(mock.patch.object(preflight_rejection, 'validate', side_effect=validate_preflight))
+            seeded = stack.enter_context(mock.patch.object(dev, '_frontend', return_value=(seed, 'new-volume')))
+            composed = stack.enter_context(mock.patch.object(dev, 'compose_capture', side_effect=compose))
+            stack.enter_context(mock.patch.object(dev, '_validate_retained_service'))
             try:
                 dev._refresh_frontend_services(control,args,'development/attempts/old',previous,document,
                     Path('/selected'),{'runtime_root':'/runtime'},old,{'backend':'b'*64,'frontend':'o'*64},'image',{})
             except (BuildControlError,codegen.CodegenError,OSError):
                 if fault is None:raise
-        if fault=='source-mismatch' or fault=='unknown-source':stopped_call.assert_not_called()
+        if fault in ('source-mismatch','unknown-source','pre-operation-health','preflight-under-lease'):
+            stopped_call.assert_not_called()
         else:stopped_call.assert_called_once_with('stop','--time','60','o'*64,timeout=90)
-        return writes,seeded,composed,logger
+        if fault=='pre-operation-health':
+            self.assertEqual(operation_calls,[])
+            self.assertEqual(writes,{})
+            self.assertEqual(validation_calls,[None])
+        if fault=='preflight-under-lease':
+            self.assertEqual(len(validation_calls),2)
+            self.assertIsNone(validation_calls[0])
+            self.assertIsNotNone(validation_calls[1])
+        return writes,seeded,composed,logger,backend_declaration
 
     def test_successful_handoff_recreates_only_frontend_and_retains_backend(self):
-        writes,seeded,composed,logger=self.run_refresh()
+        writes,seeded,composed,logger,backend_declaration=self.run_refresh()
         terminal=next(value for path,value in writes.items() if path.endswith('/terminal.json'))
         self.assertEqual(terminal['state'],'succeeded')
         self.assertEqual(terminal['backend_container'],'b'*64)
@@ -1140,12 +1190,12 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
             source_root='/selected',image='image',config_sha256=terminal['config_sha256']),[terminal])
         lifecycle=composed.call_args_list[0]
         self.assertEqual(lifecycle.args[1:],('up','--detach','--no-build','--pull','never','--no-deps','--force-recreate','frontend'))
-        self.assertEqual(lifecycle.args[0]['services']['backend'],{'same':'declaration'})
+        self.assertEqual(lifecycle.args[0]['services']['backend'],backend_declaration)
         self.assertEqual(lifecycle.args[0]['services']['frontend']['mem_limit'],'8589934592')
         self.assertTrue(any(path.endswith('/rollback-compose.json') for path in writes))
 
     def test_linux_refresh_uses_native_certificate_and_preserves_backend(self):
-        writes,seeded,composed,logger=self.run_refresh(linux=True)
+        writes,seeded,composed,logger,_backend_declaration=self.run_refresh(linux=True)
         terminal=next(value for path,value in writes.items() if path.endswith('/terminal.json'))
         self.assertEqual(terminal['state'],'succeeded')
         self.assertEqual(terminal['backend_container'],'b'*64)
@@ -1154,21 +1204,31 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
     def test_linux_refresh_retains_control_on_certificate_or_owner_byte_drift(self):
         for fault in ('certificate-drift','owner-drift'):
             with self.subTest(fault=fault):
-                writes,seeded,composed,logger=self.run_refresh(fault,linux=True)
+                writes,seeded,composed,logger,_backend_declaration=self.run_refresh(fault,linux=True)
                 self.assertFalse(any(path.endswith('/terminal.json') for path in writes))
                 receipt=next(value for path,value in writes.items() if path.endswith('/receipt.json'))
                 self.assertEqual(receipt['state'],'outcome-unknown-resources-retained')
                 logger.wait.assert_not_called()
 
     def test_source_mismatch_refuses_before_seeding_or_lifecycle(self):
-        writes,seeded,composed,logger=self.run_refresh('source-mismatch')
+        writes,seeded,composed,logger,_backend_declaration=self.run_refresh('source-mismatch')
         seeded.assert_not_called();composed.assert_not_called()
         self.assertEqual(next(value for path,value in writes.items() if path.endswith('/terminal.json'))['state'],'failed-confirmed')
+
+    def test_healthy_idle_failure_precedes_development_operation_admission(self):
+        writes,seeded,composed,logger,_backend_declaration=self.run_refresh('pre-operation-health')
+        self.assertEqual(writes,{})
+        seeded.assert_not_called();composed.assert_not_called()
+
+    def test_preflight_proof_is_rechecked_under_lease_before_frontend_stop(self):
+        writes,seeded,composed,logger,_backend_declaration=self.run_refresh('preflight-under-lease')
+        self.assertFalse(any(path.endswith('/rollback-compose.json') for path in writes))
+        seeded.assert_not_called();composed.assert_not_called()
 
     def test_unknown_probe_or_late_proof_failure_retains_real_control_lease(self):
         for fault in ('unknown-source','unknown-stop','post-quiesce-health','last-proof','certificate-drift','owner-drift','memory-drift'):
             with self.subTest(fault=fault):
-                writes,seeded,composed,logger=self.run_refresh(fault)
+                writes,seeded,composed,logger,_backend_declaration=self.run_refresh(fault)
                 self.assertFalse(any(path.endswith('/terminal.json') for path in writes))
                 receipt=next(value for path,value in writes.items() if path.endswith('/receipt.json'))
                 self.assertEqual(receipt['state'],'outcome-unknown-resources-retained')

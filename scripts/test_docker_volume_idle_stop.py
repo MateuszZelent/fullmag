@@ -28,19 +28,23 @@ FRONTEND_ID = "d" * 64
 
 
 class _Operation:
-    def __init__(self, events):
+    def __init__(self, events, control):
         self.events = events
+        self.control = control
         self.value = {
             "root": "development/attempts/" + ATTEMPT + "/iteration",
-            "receipt": {"attempt": ATTEMPT},
+            "receipt": {"attempt": ATTEMPT, "phase": "iteration"},
+            "lease_ready": True,
         }
 
     def __enter__(self):
+        self.control._active_operation = self.value
         self.events.append(("enter", None))
         return self.value
 
     def __exit__(self, exception_type, exception, traceback):
         self.events.append(("exit", dict(self.value["receipt"])))
+        self.control._active_operation = None
         return False
 
 
@@ -89,9 +93,13 @@ class IdleStopFixture:
         self.control = Mock(
             project=PROJECT, volume="fullmag-control-master", identity=self.identity, namespace="",
         )
+        self.control._active_operation = None
         self.control.read.side_effect = self.read
+        self.control.read_bytes.side_effect = lambda relative, *, optional=False, maximum=None: (
+            None if relative == "development/current.json" and optional else
+            (_ for _ in ()).throw(AssertionError("unexpected fixture byte read: " + relative)))
         self.control.write.side_effect = self.write
-        self.control.operation.side_effect = lambda *args, **kwargs: _Operation(self.events)
+        self.control.operation.side_effect = lambda *args, **kwargs: _Operation(self.events, self.control)
 
     def read(self, relative, optional=False):
         self.events.append(("read", relative))
@@ -292,6 +300,37 @@ class DockerVolumeIdleStopTests(unittest.TestCase):
         first_stop = next(index for index, event in enumerate(fixture.events) if event[0] == "stop")
         self.assertLess(inspect_index, enter_index)
         self.assertLess(enter_index, first_stop)
+
+    def test_restart_idle_rechecks_frontend_rejection_under_lease_before_stop(self):
+        import docker_volume_frontend_preflight_rejection as preflight_rejection
+
+        fixture = IdleStopFixture()
+        fixture.args.config_sha256 = hashlib.sha256(dev.canonical(fixture.document)).hexdigest()
+        fixture.args.script = None
+        fixture.args.fresh_state = False
+        fixture.args.restart_backend = False
+        validation_calls = []
+
+        def validate(_control, _args, _selected, *, operation=None, **_kwargs):
+            validation_calls.append(operation)
+            if operation is None:
+                return {"schema": "fullmag.docker-frontend-preflight-rejection.v1", "sha256": "p" * 64}
+            raise docker_build_control.BuildControlError("Frontend preflight proof drifted under lease")
+
+        patches = self._patches(fixture, (b'{"state":"stopped"}\n', {"state": "stopped"}))
+        with ExitStack() as stack:
+            for patcher in patches:
+                stack.enter_context(patcher)
+            stack.enter_context(patch.object(preflight_rejection, "validate", side_effect=validate))
+            with self.assertRaisesRegex(dev.BuildControlError, "proof drifted under lease"):
+                dev.restart_idle(fixture.args)
+
+        self.assertEqual(len(validation_calls), 2)
+        self.assertIsNone(validation_calls[0])
+        self.assertIsNotNone(validation_calls[1])
+        self.assertTrue(fixture.control.operation.called)
+        self.assertTrue(any(event[0] == "enter" for event in fixture.events))
+        self.assertFalse(any(event[0] == "stop" for event in fixture.events))
 
     def test_invalid_runtime_control_namespace_fails_before_lease_or_stop(self):
         fixture = IdleStopFixture()

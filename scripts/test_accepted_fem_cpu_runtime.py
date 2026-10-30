@@ -91,6 +91,82 @@ def test_verify_real_fixture_cas_hashes(tmp_path):
     assert runtime.validate_completed_outputs(tmp_path, attempt, state, 'task-fixture', lease) == receipt
 
 
+def test_accept_v3_physical_final_step_stats_with_zero_time(tmp_path):
+    attempt, receipt, state, lease = completed_fixture(tmp_path)
+    receipt['schema_version'] = 'fullmag.accepted_worker_execution.v3'
+    receipt['final_step_stats'] = {
+        'step': 1,
+        'kind': 'physical_observation',
+        'solver_progress': None,
+        'time': 0.0,
+    }
+    write_json(attempt / 'worker_execution_completed.v1.json', receipt)
+
+    assert runtime.validate_completed_outputs(tmp_path, attempt, state, 'task-fixture', lease) == receipt
+
+
+def test_reject_v3_missing_final_step_stats(tmp_path):
+    attempt, receipt, state, lease = completed_fixture(tmp_path)
+    receipt['schema_version'] = 'fullmag.accepted_worker_execution.v3'
+    write_json(attempt / 'worker_execution_completed.v1.json', receipt)
+
+    with pytest.raises(ValueError):
+        runtime.validate_completed_outputs(tmp_path, attempt, state, 'task-fixture', lease)
+
+
+@pytest.mark.parametrize('case', ['kind', 'solver_progress', 'step', 'negative_step', 'boolean_step', 'terminal_publication'])
+def test_reject_v3_mismatched_final_step_stats(tmp_path, case):
+    attempt, receipt, state, lease = completed_fixture(tmp_path)
+    receipt['schema_version'] = 'fullmag.accepted_worker_execution.v3'
+    receipt['final_step_stats'] = {
+        'step': 1,
+        'kind': 'physical_observation',
+        'solver_progress': None,
+        'time': 0.0,
+    }
+    if case == 'kind':
+        receipt['final_step_stats']['kind'] = 'solver_progress'
+    elif case == 'solver_progress':
+        receipt['final_step_stats']['solver_progress'] = {'kind': 'fem_eigen'}
+    elif case == 'step':
+        receipt['final_step_stats']['step'] = 2
+    elif case == 'negative_step':
+        receipt['final_step_stats']['step'] = -1
+    elif case == 'boolean_step':
+        receipt['final_step_stats']['step'] = True
+    else:
+        receipt['terminal_publication'] = {}
+    write_json(attempt / 'worker_execution_completed.v1.json', receipt)
+
+    with pytest.raises(ValueError):
+        runtime.validate_completed_outputs(tmp_path, attempt, state, 'task-fixture', lease)
+
+
+@pytest.mark.parametrize('time', [-1.0, float('inf'), float('nan')])
+def test_reject_v3_invalid_final_step_time(tmp_path, time):
+    attempt, receipt, state, lease = completed_fixture(tmp_path)
+    receipt['schema_version'] = 'fullmag.accepted_worker_execution.v3'
+    receipt['final_step_stats'] = {
+        'step': 1,
+        'kind': 'physical_observation',
+        'solver_progress': None,
+        'time': time,
+    }
+    write_json(attempt / 'worker_execution_completed.v1.json', receipt)
+
+    with pytest.raises(ValueError):
+        runtime.validate_completed_outputs(tmp_path, attempt, state, 'task-fixture', lease)
+
+
+def test_reject_unknown_completion_schema(tmp_path):
+    attempt, receipt, state, lease = completed_fixture(tmp_path)
+    receipt['schema_version'] = 'fullmag.accepted_worker_execution.v99'
+    write_json(attempt / 'worker_execution_completed.v1.json', receipt)
+
+    with pytest.raises(ValueError):
+        runtime.validate_completed_outputs(tmp_path, attempt, state, 'task-fixture', lease)
+
+
 @pytest.mark.parametrize('case', ['cas_bytes', 'missing_output', 'codec', 'case', 'epoch', 'lease', 'accepted', 'steps'])
 def test_reject_inconsistent_completed_output(tmp_path, case):
     attempt, receipt, state, lease = completed_fixture(tmp_path)

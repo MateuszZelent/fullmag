@@ -12,6 +12,9 @@ const fakes = vi.hoisted(() => ({
 vi.mock("@/kernel/persistence/ProjectDocumentStatus", () => ({
   useProjectDocumentSnapshot: fakes.project,
 }));
+vi.mock("./WorkspaceResultsFolders", () => ({
+  WorkspaceResultsFolders: () => null,
+}));
 vi.mock("@/kernel/resources/projectRunResources", () => ({
   useProjectRunsResource: fakes.runs,
   useProjectRunResource: fakes.run,

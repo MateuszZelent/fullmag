@@ -23,6 +23,7 @@ from pathlib import PurePosixPath
 
 from docker_build_control import BuildControlError, bounded_capture, canonical, docker_capture
 import docker_dev_host
+import docker_compose_identity
 from docker_foreign_bind_identity import WSL_ALIAS
 import docker_wsl_bind
 
@@ -672,19 +673,30 @@ def _safe_alias(value):
 
 
 def _backend_image(control, backend):
-    if getattr(control, "project", None) != "fullmag-master":
-        raise BuildControlError("bind overlap probe is limited to the registered master group")
     if not isinstance(backend, Mapping):
         raise BuildControlError("backend inspect record is missing")
+    project = getattr(control, "project", None)
+    if project != "fullmag-master":
+        identity = getattr(control, "identity", None)
+        if (not isinstance(project, str) or not isinstance(identity, Mapping)
+                or identity.get("project_name") != project
+                or identity.get("checkout_kind") != "worktree"):
+            raise BuildControlError(
+                "bind overlap probe requires the selected registered worktree identity")
+        try:
+            docker_compose_identity.validate_source_labels(backend, identity)
+        except (TypeError, ValueError) as error:
+            raise BuildControlError(
+                "bind overlap probe backend source identity is invalid") from error
     image = backend.get("Image")
     if not isinstance(image, str) or _IMAGE_ID.fullmatch(image) is None:
         raise BuildControlError("bind overlap probe requires the exact immutable backend image ID")
     config = backend.get("Config")
     labels = config.get("Labels") if isinstance(config, Mapping) else None
     if (not isinstance(labels, Mapping)
-            or labels.get("com.docker.compose.project") != control.project
+            or labels.get("com.docker.compose.project") != project
             or labels.get("com.docker.compose.service") != "backend"):
-        raise BuildControlError("bind overlap probe backend is not the selected master backend")
+        raise BuildControlError("bind overlap probe backend is not the selected backend")
     return image
 
 
@@ -771,14 +783,14 @@ def _backend_mount(backend, destination):
     return matches[0]
 
 
-def _validate_master_probe_backend(control, backend):
+def _validate_probe_backend(control, backend):
     image = _backend_image(control, backend)
     identifier = backend.get("Id")
     if not isinstance(identifier, str) or re.fullmatch(r"[0-9a-f]{64}", identifier) is None:
-        raise BuildControlError("selected master backend has no exact full container ID")
+        raise BuildControlError("selected backend has no exact full container ID")
     state = _backend_mount(backend, "/state")
     if state.get("Type") != "bind" or not isinstance(state.get("Source"), str):
-        raise BuildControlError("selected master backend state must be a bind mount")
+        raise BuildControlError("selected backend state must be a bind mount")
     _safe_alias(state["Source"])
     control_mount = _backend_mount(backend, "/opt/fullmag/control")
     ledger_mount = _backend_mount(backend, "/host-ledger")
@@ -791,7 +803,7 @@ def _validate_master_probe_backend(control, backend):
     return image, identifier, control_mount["Name"], ledger_mount["Name"]
 
 
-def _foreign_container_pin(container, alias):
+def _foreign_container_pin(container, alias, *, selected_project="fullmag-master"):
     if not isinstance(container, Mapping):
         raise BuildControlError("foreign bind consumer inspect record is missing")
     identifier = container.get("Id")
@@ -802,20 +814,19 @@ def _foreign_container_pin(container, alias):
     config = container.get("Config")
     labels = config.get("Labels") if isinstance(config, Mapping) else None
     if (isinstance(labels, Mapping)
-            and labels.get("com.docker.compose.project") == "fullmag-master"
+            and labels.get("com.docker.compose.project") == selected_project
             and labels.get("com.docker.compose.service") in {"backend", "frontend"}):
-        raise BuildControlError("selected master application container cannot use foreign-alias fallback")
+        raise BuildControlError("selected application container cannot use foreign-alias fallback")
     mounts = container.get("Mounts")
     if not isinstance(mounts, list) or any(not isinstance(item, Mapping) for item in mounts):
         raise BuildControlError("foreign bind consumer has no complete Mounts inventory")
     if not any(item.get("Type") == "bind" and item.get("Source") == alias for item in mounts):
         raise BuildControlError("foreign bind alias is absent from the exact container Mounts")
     host_config = container.get("HostConfig")
-    # Engine's HostConfig.Mounts is tagged omitempty. Binds-based containers
-    # therefore legitimately omit it; keep the explicit Binds inventory and
-    # all resolved mounts, lifecycle pins and physical disjointness proof.
     if not isinstance(host_config, Mapping) or "Binds" not in host_config:
         raise BuildControlError("foreign bind consumer HostConfig is missing")
+    # Moby HostConfig.Mounts has json:",omitempty"; Binds has no omission tag.
+    # Keep validating effective Mounts above and every supplied mount spec below.
     host_mounts = host_config.get("Mounts")
     binds = host_config.get("Binds")
     if ((host_mounts is not None and (not isinstance(host_mounts, list)
@@ -934,12 +945,13 @@ def validate_foreign_alias_disjoint_proof(proof, *, alias, container_id):
 
 def prove_foreign_alias_disjoint(control, backend, container, alias, reference_root):
     """Kernel-prove one unknown alias and pin the foreign incarnation around it."""
-    image, backend_id, control_volume, ledger_volume = _validate_master_probe_backend(
+    image, backend_id, control_volume, ledger_volume = _validate_probe_backend(
         control, backend)
     selected_alias = _safe_alias(alias)
     if not isinstance(container, Mapping) or container.get("Id") == backend_id:
-        raise BuildControlError("selected master backend cannot be treated as a foreign consumer")
-    before = _foreign_container_pin(container, selected_alias)
+        raise BuildControlError("selected backend cannot be treated as a foreign consumer")
+    before = _foreign_container_pin(
+        container, selected_alias, selected_project=control.project)
     for mount in container["Mounts"]:
         if (mount.get("Type") == "volume"
                 and mount.get("Name") in {control_volume, ledger_volume}):
@@ -966,7 +978,8 @@ def prove_foreign_alias_disjoint(control, backend, container, alias, reference_r
             ) from error
         if not isinstance(documents, list) or len(documents) != 1:
             raise BuildControlError("fresh foreign consumer inspect is not one exact container")
-        after = _foreign_container_pin(documents[0], selected_alias)
+        after = _foreign_container_pin(
+            documents[0], selected_alias, selected_project=control.project)
         if after == before:
             break
         changed = sorted(key for key in before if key != "sha256" and before[key] != after[key])
@@ -978,10 +991,8 @@ def prove_foreign_alias_disjoint(control, backend, container, alias, reference_r
             raise BuildControlError(
                 f"foreign consumer {before['id']} lifecycle remained unstable during overlap proof"
             )
-        # The inventory can precede slow Windows proofs. A sibling's ordinary
-        # lifecycle transition requires a NEW physical proof, not a relabelled
-        # old result. Identity/image/all mount metadata must remain exact, and
-        # the new before/after lifecycle pins must agree before publication.
+        # A lifecycle transition requires a new physical proof. The registered
+        # selected worktree, foreign image and mount identity remain pinned.
         before = after
     proof = {
         "schema": FOREIGN_PROOF_SCHEMA,

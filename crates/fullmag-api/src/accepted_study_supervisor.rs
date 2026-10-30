@@ -2429,10 +2429,8 @@ fn reported_nonretryable_failure(
     if !accepted_worker_attempt_reserved(store, claim)? {
         bail!("reported native failure has no reserved execution attempt");
     }
-    match fs::symlink_metadata(attempt.join("worker_execution_completed.v1.json")) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-        Ok(_) => bail!("reported native failure conflicts with a completed execution"),
+    if accepted_worker_execution_receipt::has_completed_worker_receipt(&attempt)? {
+        bail!("reported native failure conflicts with a completed execution");
     }
     if store.read_artifact_catalog(claim.run_id.as_str())?
         .is_some_and(|catalog| catalog.entries.iter().any(|entry|

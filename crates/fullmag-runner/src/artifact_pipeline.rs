@@ -10,6 +10,7 @@ use crate::artifacts::field_unit;
 use crate::artifacts::{
     write_field_snapshot_artifact, write_scalar_row, write_scalars_csv_header, FieldArtifactContext,
 };
+use crate::autosave_fem_geometry::PreparedFemAutosaveGeometry;
 use crate::autosave_storage::{
     AutosaveTargetState, AutosaveTargetWriter, ContinuousIndexEntry, StageManifest,
     StageSampleCoordinate,
@@ -83,6 +84,33 @@ pub(crate) struct ArtifactPipelineSummary {
     /// solver returns, so the caller must finalize this tree after the writer
     /// thread has flushed it.
     pub autosave_root: Option<PathBuf>,
+    /// Target name and accepted physical times for the FEM `m` autosave
+    /// samples.  These are captured at the producer append boundary instead
+    /// of reconstructed from node counts or array order later.
+    pub autosave_target: Option<String>,
+    pub fem_autosave_samples: Vec<FemAutosaveSample>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct FemAutosaveSample {
+    pub stage_id: String,
+    pub time_s: f64,
+    pub field_layout: FemAutosaveFieldLayout,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FemAutosaveFieldLayout {
+    AosNodeMajor,
+    SoaComponentMajor,
+}
+
+impl FemAutosaveFieldLayout {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::AosNodeMajor => "aos_node_major",
+            Self::SoaComponentMajor => "soa_component_major",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -619,21 +647,25 @@ impl ArtifactPipeline {
         field_context: FieldArtifactContext,
         capacity: usize,
     ) -> Result<Self, RunError> {
-        let stage_autosave = problem
-            .study
-            .sampling()
-            .stage_autosave
-            .clone()
-            .map(|policy| StageAutosavePipelineConfig {
-                stage_id: problem
-                    .problem_meta
-                    .runtime_metadata
-                    .get("active_stage_id")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or(&problem.problem_meta.entrypoint_kind)
-                    .to_string(),
-                policy,
-            });
+        let stage_autosave = match problem.study.sampling().stage_autosave.clone() {
+            Some(policy) => {
+                let fem_geometry = PreparedFemAutosaveGeometry::from_plan(plan, &policy)
+                    .map_err(|message| RunError { message })?
+                    .map(Arc::new);
+                Some(StageAutosavePipelineConfig {
+                    stage_id: problem
+                        .problem_meta
+                        .runtime_metadata
+                        .get("active_stage_id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or(&problem.problem_meta.entrypoint_kind)
+                        .to_string(),
+                    policy,
+                    fem_geometry,
+                })
+            }
+            None => None,
+        };
         let physics_execution_context =
             crate::physics_graph_execution::PhysicsGraphExecutionContext::from_problem_and_plan(
                 problem, plan,
@@ -781,6 +813,7 @@ impl ArtifactPipeline {
 struct StageAutosavePipelineConfig {
     stage_id: String,
     policy: fullmag_ir::StageAutosaveIR,
+    fem_geometry: Option<Arc<PreparedFemAutosaveGeometry>>,
 }
 
 enum StageAutosaveWriter {
@@ -835,10 +868,14 @@ impl AutosaveTargetWriter for StageAutosaveWriter {
 }
 
 struct StageAutosaveRuntime {
+    stage_id: String,
     state: AutosaveTargetState,
     writer: StageAutosaveWriter,
+    fem_geometry: Option<Arc<PreparedFemAutosaveGeometry>>,
     table: Option<TableStore>,
     fields: std::collections::BTreeMap<String, FieldCadenceState>,
+    field_layouts: std::collections::BTreeMap<String, FemAutosaveFieldLayout>,
+    zarr_stage_path: Option<PathBuf>,
     relaxation_clock: bool,
     last_stats: Option<StepStats>,
 }
@@ -857,7 +894,11 @@ impl StageAutosaveRuntime {
     }
 
     fn new(output_dir: &Path, config: StageAutosavePipelineConfig) -> Result<Self, String> {
+        let stage_id = config.stage_id.clone();
         let policy = config.policy;
+        let fem_geometry = config.fem_geometry;
+        let zarr_target =
+            (policy.format == fullmag_ir::AutosaveFormatIR::Zarr).then(|| policy.target.clone());
         let writer = match policy.format {
             fullmag_ir::AutosaveFormatIR::Txt => {
                 StageAutosaveWriter::Txt(crate::autosave_txt::TxtAutosaveWriter::new(output_dir))
@@ -912,10 +953,14 @@ impl StageAutosaveRuntime {
             })
             .collect();
         let mut runtime = Self {
+            stage_id,
             state: AutosaveTargetState::resume(output_dir, &policy.target)?,
             writer,
+            fem_geometry,
             table,
             fields,
+            field_layouts: std::collections::BTreeMap::new(),
+            zarr_stage_path: None,
             relaxation_clock,
             last_stats: None,
         };
@@ -931,7 +976,18 @@ impl StageAutosaveRuntime {
                 .map(|field| field.quantity.clone())
                 .collect(),
         )?;
+        if let Some(target) = zarr_target {
+            runtime.zarr_stage_path = Some(resolve_zarr_stage_path(
+                output_dir,
+                &target,
+                &runtime.stage_id,
+            )?);
+        }
         Ok(runtime)
+    }
+
+    fn stage_id(&self) -> &str {
+        &self.stage_id
     }
 
     fn append_scalar(&mut self, stats: &StepStats) -> Result<(), String> {
@@ -953,7 +1009,11 @@ impl StageAutosaveRuntime {
         Ok(())
     }
 
-    fn append_field(&mut self, snapshot: &FieldSnapshot) -> Result<(), String> {
+    fn append_field(
+        &mut self,
+        snapshot: &FieldSnapshot,
+        field_layout: FemAutosaveFieldLayout,
+    ) -> Result<bool, String> {
         let values = snapshot.values.clone();
         self.append_field_values(
             &snapshot.name,
@@ -961,6 +1021,7 @@ impl StageAutosaveRuntime {
             snapshot.time,
             snapshot.solver_dt,
             &values,
+            field_layout,
         )
     }
 
@@ -971,9 +1032,10 @@ impl StageAutosaveRuntime {
         time: f64,
         solver_dt: f64,
         values: &[f64],
-    ) -> Result<(), String> {
+        field_layout: FemAutosaveFieldLayout,
+    ) -> Result<bool, String> {
         let Some(cadence) = self.fields.get_mut(name) else {
-            return Ok(());
+            return Ok(false);
         };
         let due = if cadence.every_steps.is_some() {
             true
@@ -990,9 +1052,17 @@ impl StageAutosaveRuntime {
             false
         };
         if !due || cadence.last_step == Some(step) {
-            return Ok(());
+            return Ok(false);
         }
         cadence.last_step = Some(step);
+        if let StageAutosaveWriter::Zarr(writer) = &mut self.writer {
+            writer.prepare_field(
+                name,
+                field_layout.as_str(),
+                values.len(),
+                self.fem_geometry.as_deref(),
+            )?;
+        }
         self.state.append_field_sample(
             &mut self.writer,
             coordinate(
@@ -1007,6 +1077,56 @@ impl StageAutosaveRuntime {
             name,
             values,
         )?;
+        self.mark_field_layout(name, field_layout)?;
+        Ok(true)
+    }
+
+    fn mark_field_layout(
+        &mut self,
+        quantity: &str,
+        field_layout: FemAutosaveFieldLayout,
+    ) -> Result<(), String> {
+        if let Some(existing) = self.field_layouts.get(quantity) {
+            if *existing != field_layout {
+                return Err(format!(
+                    "stage autosave field '{quantity}' changed storage layout from '{}' to '{}'",
+                    existing.as_str(),
+                    field_layout.as_str()
+                ));
+            }
+            return Ok(());
+        }
+        let Some(stage_path) = self.zarr_stage_path.as_ref() else {
+            self.field_layouts
+                .insert(quantity.to_string(), field_layout);
+            return Ok(());
+        };
+        let attrs_path = stage_path.join("fields").join(quantity).join(".zattrs");
+        if !attrs_path.is_file() {
+            return Err(format!(
+                "stage autosave field '{quantity}' did not create attrs at '{}'",
+                attrs_path.display()
+            ));
+        }
+        let mut attrs: serde_json::Value =
+            serde_json::from_slice(&fs::read(&attrs_path).map_err(|error| error.to_string())?)
+                .map_err(|error| format!("stage autosave field attrs are malformed: {error}"))?;
+        for key in ["storage_layout", "field_layout"] {
+            if let Some(existing) = attrs.get(key).and_then(serde_json::Value::as_str) {
+                if existing != field_layout.as_str() {
+                    return Err(format!(
+                        "stage autosave field '{quantity}' attrs key '{key}' declares '{}' but producer supplied '{}'",
+                        existing,
+                        field_layout.as_str()
+                    ));
+                }
+            }
+        }
+        attrs["storage_layout"] = serde_json::Value::String(field_layout.as_str().into());
+        attrs["field_layout"] = serde_json::Value::String(field_layout.as_str().into());
+        crate::autosave_zarr::write_json_atomic(&attrs_path, &attrs)?;
+        self.field_layouts
+            .insert(quantity.to_string(), field_layout);
         Ok(())
     }
 
@@ -1030,6 +1150,52 @@ impl StageAutosaveRuntime {
             }
         }
         self.state.finish_stage(&mut self.writer).map(|_| ())
+    }
+}
+
+fn resolve_zarr_stage_path(
+    autosave_root: &Path,
+    target: &str,
+    stage_id: &str,
+) -> Result<PathBuf, String> {
+    let manifest_path = autosave_root.join(format!("{target}.autosave.json"));
+    let manifest: crate::autosave_storage::AutosaveArtifactManifest =
+        serde_json::from_slice(&fs::read(&manifest_path).map_err(|error| error.to_string())?)
+            .map_err(|error| format!("stage autosave manifest is malformed: {error}"))?;
+    let stage = manifest
+        .stages
+        .iter()
+        .filter(|stage| stage.stage_id == stage_id)
+        .max_by_key(|stage| stage.stage_index)
+        .ok_or_else(|| format!("stage autosave manifest has no stage '{stage_id}'"))?;
+    Ok(autosave_root.join(format!(
+        "{target}.zarr/stages/stage_{:04}_{}",
+        stage.stage_index, stage.stage_id
+    )))
+}
+
+fn record_fem_autosave_sample(
+    summary: &mut ArtifactPipelineSummary,
+    runtime: &StageAutosaveRuntime,
+    field_context: &FieldArtifactContext,
+    name: &str,
+    time_s: f64,
+    field_layout: FemAutosaveFieldLayout,
+    appended: bool,
+) {
+    if appended
+        && name == "m"
+        && field_context
+            .layout
+            .get("backend")
+            .and_then(serde_json::Value::as_str)
+            == Some("fem")
+    {
+        summary.fem_autosave_samples.push(FemAutosaveSample {
+            stage_id: runtime.stage_id().to_string(),
+            time_s,
+            field_layout,
+        });
     }
 }
 
@@ -1136,24 +1302,48 @@ impl ArtifactRecorder {
         due
     }
 
-    pub(crate) fn begin_terminal_history(&mut self, outputs: &[fullmag_ir::OutputIR]) -> Result<(), RunError> {
+    pub(crate) fn begin_terminal_history(
+        &mut self,
+        outputs: &[fullmag_ir::OutputIR],
+    ) -> Result<(), RunError> {
         let pipeline = self.pipeline.as_ref().ok_or_else(|| RunError {
             message: "terminal history requires the existing streaming writer".into(),
         })?;
-        if self.terminal_history_enabled { return Err(RunError { message: "terminal history already enabled".into() }); }
+        if self.terminal_history_enabled {
+            return Err(RunError {
+                message: "terminal history already enabled".into(),
+            });
+        }
         let header = serde_json::json!({"kind": "header", "schema_version": "fullmag.runner.output_inventory.v1", "outputs": outputs});
-        if header.to_string().len() > 128 * 1024 { return Err(RunError { message: "terminal output configuration exceeds metadata budget".into() }); }
+        if header.to_string().len() > 128 * 1024 {
+            return Err(RunError {
+                message: "terminal output configuration exceeds metadata budget".into(),
+            });
+        }
         pipeline.push(ArtifactJob::TerminalHistory(header))?;
         self.terminal_history_enabled = true;
         Ok(())
     }
 
-    pub(crate) fn record_history_schedule_causes(&self, step: u64, time: f64,
-        collection: &str, schedules: &[crate::schedules::OutputSchedule]) -> Result<(), RunError> {
-        if !self.terminal_history_enabled { return Ok(()); }
-        let pipeline = self.pipeline.as_ref().expect("terminal history requires a writer");
-        for (index, schedule) in schedules.iter().enumerate()
-            .filter(|(_, schedule)| crate::schedules::is_due(time, schedule.next_time)) {
+    pub(crate) fn record_history_schedule_causes(
+        &self,
+        step: u64,
+        time: f64,
+        collection: &str,
+        schedules: &[crate::schedules::OutputSchedule],
+    ) -> Result<(), RunError> {
+        if !self.terminal_history_enabled {
+            return Ok(());
+        }
+        let pipeline = self
+            .pipeline
+            .as_ref()
+            .expect("terminal history requires a writer");
+        for (index, schedule) in schedules
+            .iter()
+            .enumerate()
+            .filter(|(_, schedule)| crate::schedules::is_due(time, schedule.next_time))
+        {
             pipeline.push(ArtifactJob::TerminalHistory(serde_json::json!({
                 "kind": "cause", "step": step, "time_s": time, "collection": collection,
                 "schedule_index": index, "name": schedule.name, "cause": "scheduled",
@@ -1162,9 +1352,16 @@ impl ArtifactRecorder {
         Ok(())
     }
 
-    pub(crate) fn record_history_field_cause(&self, step: u64, time: f64, schedule_index: usize, name: &str)
-        -> Result<(), RunError> {
-        if !self.terminal_history_enabled { return Ok(()); }
+    pub(crate) fn record_history_field_cause(
+        &self,
+        step: u64,
+        time: f64,
+        schedule_index: usize,
+        name: &str,
+    ) -> Result<(), RunError> {
+        if !self.terminal_history_enabled {
+            return Ok(());
+        }
         self.pipeline.as_ref().expect("terminal history requires a writer").push(ArtifactJob::TerminalHistory(
             serde_json::json!({"kind": "cause", "step": step, "time_s": time, "collection": "field",
                 "schedule_index": schedule_index, "name": name, "cause": "scheduled"})))?;
@@ -1172,7 +1369,9 @@ impl ArtifactRecorder {
     }
 
     pub(crate) fn record_history_final_cause(&self, step: u64, time: f64) -> Result<(), RunError> {
-        if !self.terminal_history_enabled { return Ok(()); }
+        if !self.terminal_history_enabled {
+            return Ok(());
+        }
         self.pipeline.as_ref().expect("terminal history requires a writer").push(
             ArtifactJob::TerminalHistory(serde_json::json!({"kind": "cause", "step": step,
                 "time_s": time, "collection": "all", "schedule_index": null, "name": null, "cause": "final"})))?;
@@ -1730,7 +1929,10 @@ fn zarr_dtype(scalar_type: NativeSnapshotScalarType) -> &'static str {
     }
 }
 
-fn write_terminal_history_line(writer: &mut BufWriter<File>, value: &serde_json::Value) -> Result<(), String> {
+fn write_terminal_history_line(
+    writer: &mut BufWriter<File>,
+    value: &serde_json::Value,
+) -> Result<(), String> {
     serde_json::to_writer(&mut *writer, value).map_err(|error| error.to_string())?;
     writer.write_all(b"\n").map_err(|error| error.to_string())
 }
@@ -1767,6 +1969,9 @@ fn writer_loop(
         autosave_root: stage_autosave_config
             .as_ref()
             .map(|_| autosave_root.to_path_buf()),
+        autosave_target: stage_autosave_config
+            .as_ref()
+            .map(|config| config.policy.target.clone()),
         ..ArtifactPipelineSummary::default()
     };
     let mut scalar_writer: Option<BufWriter<File>> = None;
@@ -1802,22 +2007,42 @@ fn writer_loop(
         match job {
             ArtifactJob::TerminalHistory(mut value) => {
                 if value.get("kind").and_then(serde_json::Value::as_str) == Some("cause") {
-                    let ordinal = match value.get("collection").and_then(serde_json::Value::as_str) {
-                        Some("scalar") => Some(history_ordinals.get("scalar-row").copied().unwrap_or(0)),
-                        Some("field") => value.get("name").and_then(serde_json::Value::as_str)
-                            .map(|name| history_ordinals.get(&format!("field:{name}")).copied().unwrap_or(0)),
-                        _ => None,
-                    };
+                    let ordinal =
+                        match value.get("collection").and_then(serde_json::Value::as_str) {
+                            Some("scalar") => {
+                                Some(history_ordinals.get("scalar-row").copied().unwrap_or(0))
+                            }
+                            Some("field") => value
+                                .get("name")
+                                .and_then(serde_json::Value::as_str)
+                                .map(|name| {
+                                    history_ordinals
+                                        .get(&format!("field:{name}"))
+                                        .copied()
+                                        .unwrap_or(0)
+                                }),
+                            _ => None,
+                        };
                     value["sample_ordinal"] = serde_json::json!(ordinal);
                 }
                 if value.get("kind").and_then(serde_json::Value::as_str) == Some("header") {
-                    if terminal_history.is_some() || summary.scalar_rows_written != 0 || summary.field_snapshots_written != 0 {
+                    if terminal_history.is_some()
+                        || summary.scalar_rows_written != 0
+                        || summary.field_snapshots_written != 0
+                    {
                         return Err("terminal history must begin once before output samples".into());
                     }
-                    terminal_history = Some(BufWriter::new(std::fs::OpenOptions::new().write(true).create_new(true)
-                        .open(output_dir.join("terminal-output-inventory.v1.jsonl")).map_err(|error| error.to_string())?));
+                    terminal_history = Some(BufWriter::new(
+                        std::fs::OpenOptions::new()
+                            .write(true)
+                            .create_new(true)
+                            .open(output_dir.join("terminal-output-inventory.v1.jsonl"))
+                            .map_err(|error| error.to_string())?,
+                    ));
                 }
-                let writer = terminal_history.as_mut().ok_or("terminal history event has no header")?;
+                let writer = terminal_history
+                    .as_mut()
+                    .ok_or("terminal history event has no header")?;
                 write_terminal_history_line(writer, &value)?;
             }
             ArtifactJob::ScalarRow(stats) => {
@@ -1844,10 +2069,17 @@ fn writer_loop(
                     let mut row = Vec::with_capacity(512);
                     write_scalar_row(&mut row, &stats).map_err(|error| error.to_string())?;
                     row
-                } else { Vec::new() };
-                let writer = scalar_writer.as_mut().expect("scalar writer initialized before row write");
-                (if terminal_history.is_some() { writer.write_all(&scalar_row) }
-                    else { write_scalar_row(writer, &stats) })
+                } else {
+                    Vec::new()
+                };
+                let writer = scalar_writer
+                    .as_mut()
+                    .expect("scalar writer initialized before row write");
+                (if terminal_history.is_some() {
+                    writer.write_all(&scalar_row)
+                } else {
+                    write_scalar_row(writer, &stats)
+                })
                 .map_err(|error| {
                     format!(
                         "failed to append scalar trace row to '{}': {}",
@@ -1858,16 +2090,23 @@ fn writer_loop(
                 if let Some(writer) = terminal_history.as_mut() {
                     let stream = "scalar-row".to_string();
                     let ordinal = history_ordinals.entry(stream.clone()).or_default();
-                    write_terminal_history_line(writer, &serde_json::json!({
-                        "kind": "sample", "stream_id": stream, "ordinal": *ordinal,
-                        "collection": "scalar", "quantity_id": null,
-                        "step": stats.step, "time_s": stats.time, "solver_dt_s": stats.dt,
-                        "relative_path": "scalars.csv", "byte_offset": scalar_byte_offset,
-                        "writer_byte_count": scalar_row.len(), "payload_codec_id": "fullmag.runner.scalar_csv_row", "payload_codec_version": "v1",
-                    }))?;
-                    *ordinal = ordinal.checked_add(1).ok_or("terminal scalar ordinal overflow")?;
+                    write_terminal_history_line(
+                        writer,
+                        &serde_json::json!({
+                            "kind": "sample", "stream_id": stream, "ordinal": *ordinal,
+                            "collection": "scalar", "quantity_id": null,
+                            "step": stats.step, "time_s": stats.time, "solver_dt_s": stats.dt,
+                            "relative_path": "scalars.csv", "byte_offset": scalar_byte_offset,
+                            "writer_byte_count": scalar_row.len(), "payload_codec_id": "fullmag.runner.scalar_csv_row", "payload_codec_version": "v1",
+                        }),
+                    )?;
+                    *ordinal = ordinal
+                        .checked_add(1)
+                        .ok_or("terminal scalar ordinal overflow")?;
                 }
-                scalar_byte_offset = scalar_byte_offset.checked_add(scalar_row.len() as u64).ok_or("scalar byte offset overflow")?;
+                scalar_byte_offset = scalar_byte_offset
+                    .checked_add(scalar_row.len() as u64)
+                    .ok_or("scalar byte offset overflow")?;
                 if let Some(runtime) = stage_autosave.as_mut() {
                     runtime.append_scalar(&stats)?;
                 }
@@ -1909,15 +2148,22 @@ fn writer_loop(
                         if let Some(writer) = terminal_history.as_mut() {
                             let stream = format!("field:{}", snapshot.name);
                             let ordinal = history_ordinals.entry(stream.clone()).or_default();
-                            let count = fs::metadata(output_dir.join(&relative)).map_err(|error| error.to_string())?.len();
-                            write_terminal_history_line(writer, &serde_json::json!({
-                                "kind": "sample", "stream_id": stream, "ordinal": *ordinal,
-                                "collection": "field", "quantity_id": snapshot.name,
-                                "step": snapshot.step, "time_s": snapshot.time, "solver_dt_s": snapshot.solver_dt,
-                                "relative_path": relative, "byte_offset": 0, "writer_byte_count": count,
-                                "payload_codec_id": "fullmag.runner.field_snapshot_json", "payload_codec_version": "v1",
-                            }))?;
-                            *ordinal = ordinal.checked_add(1).ok_or("terminal field ordinal overflow")?;
+                            let count = fs::metadata(output_dir.join(&relative))
+                                .map_err(|error| error.to_string())?
+                                .len();
+                            write_terminal_history_line(
+                                writer,
+                                &serde_json::json!({
+                                    "kind": "sample", "stream_id": stream, "ordinal": *ordinal,
+                                    "collection": "field", "quantity_id": snapshot.name,
+                                    "step": snapshot.step, "time_s": snapshot.time, "solver_dt_s": snapshot.solver_dt,
+                                    "relative_path": relative, "byte_offset": 0, "writer_byte_count": count,
+                                    "payload_codec_id": "fullmag.runner.field_snapshot_json", "payload_codec_version": "v1",
+                                }),
+                            )?;
+                            *ordinal = ordinal
+                                .checked_add(1)
+                                .ok_or("terminal field ordinal overflow")?;
                         }
                         frames_index.record(
                             &snapshot.name,
@@ -1972,18 +2218,40 @@ fn writer_loop(
                 }
                 if let Some(runtime) = stage_autosave.as_mut() {
                     match field_storage {
-                        FieldArtifactStorage::Json => runtime.append_field(&snapshot)?,
+                        FieldArtifactStorage::Json => {
+                            let appended = runtime
+                                .append_field(&snapshot, FemAutosaveFieldLayout::AosNodeMajor)?;
+                            record_fem_autosave_sample(
+                                &mut summary,
+                                runtime,
+                                &field_context,
+                                &snapshot.name,
+                                snapshot.time,
+                                FemAutosaveFieldLayout::AosNodeMajor,
+                                appended,
+                            );
+                        }
                         FieldArtifactStorage::Zarr => {
                             #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
                             if let Some(writer) = zarr_writers.get(&snapshot.name) {
                                 let values = writer.last_chunk_values_f64()?;
-                                runtime.append_field_values(
+                                let appended = runtime.append_field_values(
                                     &snapshot.name,
                                     snapshot.step,
                                     snapshot.time,
                                     snapshot.solver_dt,
                                     &values,
+                                    FemAutosaveFieldLayout::SoaComponentMajor,
                                 )?;
+                                record_fem_autosave_sample(
+                                    &mut summary,
+                                    runtime,
+                                    &field_context,
+                                    &snapshot.name,
+                                    snapshot.time,
+                                    FemAutosaveFieldLayout::SoaComponentMajor,
+                                    appended,
+                                );
                             }
                         }
                     }
@@ -2022,18 +2290,32 @@ fn writer_loop(
                     &snapshot.name,
                     snapshot.step,
                     snapshot.time,
-                    crate::frames_index::snapshot_relative_path(&snapshot.name, snapshot.step, false),
+                    crate::frames_index::snapshot_relative_path(
+                        &snapshot.name,
+                        snapshot.step,
+                        false,
+                    ),
                     None,
                 )?;
                 if let Some(runtime) = stage_autosave.as_mut() {
                     let values = writer.last_chunk_values_f64()?;
-                    runtime.append_field_values(
+                    let appended = runtime.append_field_values(
                         &snapshot.name,
                         snapshot.step,
                         snapshot.time,
                         snapshot.solver_dt,
                         &values,
+                        FemAutosaveFieldLayout::SoaComponentMajor,
                     )?;
+                    record_fem_autosave_sample(
+                        &mut summary,
+                        runtime,
+                        &field_context,
+                        &snapshot.name,
+                        snapshot.time,
+                        FemAutosaveFieldLayout::SoaComponentMajor,
+                        appended,
+                    );
                 }
                 summary.field_snapshots_written += 1;
                 record_writer_job_time(
@@ -2072,18 +2354,32 @@ fn writer_loop(
                     &snapshot.name,
                     snapshot.step,
                     snapshot.time,
-                    crate::frames_index::snapshot_relative_path(&snapshot.name, snapshot.step, false),
+                    crate::frames_index::snapshot_relative_path(
+                        &snapshot.name,
+                        snapshot.step,
+                        false,
+                    ),
                     None,
                 )?;
                 if let Some(runtime) = stage_autosave.as_mut() {
                     let values = writer.last_chunk_values_f64()?;
-                    runtime.append_field_values(
+                    let appended = runtime.append_field_values(
                         &snapshot.name,
                         snapshot.step,
                         snapshot.time,
                         snapshot.solver_dt,
                         &values,
+                        FemAutosaveFieldLayout::SoaComponentMajor,
                     )?;
+                    record_fem_autosave_sample(
+                        &mut summary,
+                        runtime,
+                        &field_context,
+                        &snapshot.name,
+                        snapshot.time,
+                        FemAutosaveFieldLayout::SoaComponentMajor,
+                        appended,
+                    );
                 }
                 summary.field_snapshots_written += 1;
                 record_writer_job_time(
@@ -2133,12 +2429,17 @@ fn writer_loop(
     }
 
     if let Some(mut writer) = terminal_history {
-        write_terminal_history_line(&mut writer, &serde_json::json!({
-            "kind": "seal", "schema_version": "fullmag.runner.output_inventory_seal.v1",
-            "streams": history_ordinals, "scalar_rows_written": summary.scalar_rows_written,
-            "field_snapshots_written": summary.field_snapshots_written,
-        }))?;
-        writer.flush().map_err(|error| format!("terminal history drain failed: {error}"))?;
+        write_terminal_history_line(
+            &mut writer,
+            &serde_json::json!({
+                "kind": "seal", "schema_version": "fullmag.runner.output_inventory_seal.v1",
+                "streams": history_ordinals, "scalar_rows_written": summary.scalar_rows_written,
+                "field_snapshots_written": summary.field_snapshots_written,
+            }),
+        )?;
+        writer
+            .flush()
+            .map_err(|error| format!("terminal history drain failed: {error}"))?;
     }
     if let Some(mut writer) = scalar_writer {
         writer.flush().map_err(|error| {
@@ -2933,6 +3234,7 @@ mod tests {
         };
         let stage_autosave = StageAutosavePipelineConfig {
             stage_id: "relax".into(),
+            fem_geometry: None,
             policy: fullmag_ir::StageAutosaveIR {
                 kind: "stage_autosave".into(),
                 target: "state".into(),
@@ -2993,8 +3295,23 @@ mod tests {
             fallback_occurred: false,
             fallback_reason: None,
         };
+        let owner_documents = ["run.json", "fullmag-run.json", "output-storage.json"];
+        for name in owner_documents {
+            fs::write(autosave_root.join(name), br#"{"owner":"storage"}"#).unwrap();
+        }
+        let commit_path =
+            autosave_root.join("state.zarr/stages/stage_0000_relax/fields/m/.fullmag-samples.json");
+        let committed_before = fs::read(&commit_path).unwrap();
         crate::artifacts::finalize_stage_autosave_provenance(&autosave_root, &resolution)
             .expect("finalize separate stage autosave provenance");
+
+        for name in owner_documents {
+            assert_eq!(
+                fs::read(autosave_root.join(name)).unwrap(),
+                br#"{"owner":"storage"}"#
+            );
+        }
+        assert_eq!(fs::read(commit_path).unwrap(), committed_before);
 
         let root_zattrs: serde_json::Value = serde_json::from_slice(
             &fs::read(autosave_root.join("state.zarr/.zattrs")).expect("read root zattrs"),
@@ -3020,8 +3337,300 @@ mod tests {
             field_zattrs["provenance"]["execution_resolution"],
             serde_json::to_value(&resolution).expect("serialize resolution")
         );
+        assert_eq!(field_zattrs["storage_layout"], "aos_node_major");
+        assert_eq!(field_zattrs["field_layout"], "aos_node_major");
         fs::remove_dir_all(output_dir).expect("remove autosave output fixture");
         fs::remove_dir_all(autosave_root).expect("remove autosave provenance fixture");
+    }
+
+    #[test]
+    fn stage_autosave_marks_soa_layout_at_append_boundary() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let autosave_root = std::env::temp_dir().join(format!(
+            "fullmag-autosave-layout-marker-{}-{unique}",
+            std::process::id()
+        ));
+        let config = StageAutosavePipelineConfig {
+            stage_id: "relax".into(),
+            fem_geometry: None,
+            policy: fullmag_ir::StageAutosaveIR {
+                kind: "stage_autosave".into(),
+                target: "state".into(),
+                layout: fullmag_ir::AutosaveLayoutIR::Separate,
+                format: fullmag_ir::AutosaveFormatIR::Zarr,
+                table: None,
+                fields: vec![fullmag_ir::FieldAutosaveIR {
+                    kind: "field_autosave".into(),
+                    quantity: "m".into(),
+                    every_seconds: None,
+                    sample_period_policy: None,
+                    every_steps: Some(1),
+                }],
+            },
+        };
+        let mut runtime = StageAutosaveRuntime::new(&autosave_root, config)
+            .expect("start direct stage autosave runtime");
+        assert!(runtime
+            .append_field_values(
+                "m",
+                1,
+                1.0e-13,
+                1.0e-13,
+                &[1.0, 0.0, 0.0],
+                FemAutosaveFieldLayout::SoaComponentMajor,
+            )
+            .expect("append SoA field sample"));
+        runtime
+            .finish()
+            .expect("finish direct stage autosave runtime");
+
+        let attrs: serde_json::Value = serde_json::from_slice(
+            &fs::read(autosave_root.join("state.zarr/stages/stage_0000_relax/fields/m/.zattrs"))
+                .expect("read SoA field attrs"),
+        )
+        .expect("decode SoA field attrs");
+        assert_eq!(attrs["storage_layout"], "soa_component_major");
+        assert_eq!(attrs["field_layout"], "soa_component_major");
+        fs::remove_dir_all(autosave_root).expect("remove layout marker fixture");
+    }
+
+    #[test]
+    fn fem_nodal_binding_is_published_before_first_zarr_sample() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let autosave_root = std::env::temp_dir().join(format!(
+            "fullmag-fem-nodal-binding-{}-{unique}",
+            std::process::id()
+        ));
+        let mesh = fullmag_ir::MeshIR::from_legacy_tet4(
+            "mixed-support-tet".into(),
+            vec![
+                [0., 0., 0.],
+                [1., 0., 0.],
+                [0., 1., 0.],
+                [0., 0., 1.],
+                [0., 0., -1.],
+            ],
+            vec![[0, 1, 2, 3], [0, 2, 1, 4]],
+            vec![0, 1],
+            vec![
+                [0, 1, 3],
+                [1, 2, 3],
+                [2, 0, 3],
+                [0, 2, 4],
+                [2, 1, 4],
+                [1, 0, 4],
+            ],
+            vec![1; 6],
+            vec![],
+            vec![],
+            std::collections::HashMap::new(),
+        );
+        let plan = fullmag_ir::ExecutionPlanIR {
+            common: fullmag_ir::CommonPlanMeta {
+                ir_version: "v0".into(),
+                requested_backend: fullmag_ir::BackendTarget::Fem,
+                resolved_backend: fullmag_ir::BackendTarget::Fem,
+                execution_mode: fullmag_ir::ExecutionMode::Strict,
+                material_field_plans: Vec::new(),
+            },
+            backend_plan: fullmag_ir::BackendPlanIR::Fem(fullmag_ir::FemPlanIR {
+                mesh,
+                fe_order: 1,
+                ..fullmag_ir::FemPlanIR::default()
+            }),
+            output_plan: fullmag_ir::OutputPlanIR {
+                outputs: Vec::new(),
+            },
+            provenance: fullmag_ir::ProvenancePlanIR::default(),
+        };
+        let policy = fullmag_ir::StageAutosaveIR {
+            kind: "stage_autosave".into(),
+            target: "state".into(),
+            layout: fullmag_ir::AutosaveLayoutIR::Separate,
+            format: fullmag_ir::AutosaveFormatIR::Zarr,
+            table: None,
+            fields: ["m", "H_eff"]
+                .into_iter()
+                .map(|quantity| fullmag_ir::FieldAutosaveIR {
+                    kind: "field_autosave".into(),
+                    quantity: quantity.into(),
+                    every_seconds: None,
+                    sample_period_policy: None,
+                    every_steps: Some(1),
+                })
+                .collect(),
+        };
+        let prepared = PreparedFemAutosaveGeometry::from_plan(&plan, &policy)
+            .expect("prepare FEM autosave geometry")
+            .expect("M and H_eff require FEM nodal bindings");
+        let mut runtime = StageAutosaveRuntime::new(
+            &autosave_root,
+            StageAutosavePipelineConfig {
+                stage_id: "relax".into(),
+                policy,
+                fem_geometry: Some(Arc::new(prepared)),
+            },
+        )
+        .expect("start FEM stage autosave runtime");
+        let values = vec![1.0; 15];
+        assert!(runtime
+            .append_field_values(
+                "m",
+                1,
+                1.0e-13,
+                1.0e-13,
+                &values,
+                FemAutosaveFieldLayout::AosNodeMajor,
+            )
+            .expect("append M sample"));
+        assert!(runtime
+            .append_field_values(
+                "H_eff",
+                1,
+                1.0e-13,
+                1.0e-13,
+                &values,
+                FemAutosaveFieldLayout::SoaComponentMajor,
+            )
+            .expect("append H_eff sample"));
+
+        let store = autosave_root.join("state.zarr");
+        let stage = store.join("stages/stage_0000_relax");
+        let read_binding = |quantity: &str| {
+            let field = stage.join("fields").join(quantity);
+            let attrs: serde_json::Value = serde_json::from_slice(
+                &fs::read(field.join(".zattrs")).expect("read first-sample field attrs"),
+            )
+            .expect("decode field attrs");
+            let publication: serde_json::Value = serde_json::from_slice(
+                &fs::read(field.join(".fullmag-samples.json"))
+                    .expect("read first-sample publication"),
+            )
+            .expect("decode publication marker");
+            assert_eq!(publication["committed_samples"], 1);
+            let binding: fullmag_session::saved_fem_nodal::SavedFemNodalArrayBinding =
+                serde_json::from_value(attrs["fem_nodal_binding"].clone())
+                    .expect("decode FEM nodal binding");
+            (attrs, binding)
+        };
+        let (m_attrs, m_binding) = read_binding("m");
+        let (h_attrs, h_binding) = read_binding("H_eff");
+        assert_eq!(m_attrs["unit"], "1");
+        assert_eq!(h_attrs["unit"], "A/m");
+        assert_eq!(m_attrs["field_layout"], "aos_node_major");
+        assert_eq!(h_attrs["field_layout"], "soa_component_major");
+        assert_eq!(m_binding.mesh, h_binding.mesh);
+        assert_ne!(m_binding.semantics, h_binding.semantics);
+
+        let mesh_path = store.join(
+            fullmag_session::saved_fem_nodal::object_relative_path(&m_binding.mesh)
+                .expect("resolve shared mesh object"),
+        );
+        let m_semantics_path = store.join(
+            fullmag_session::saved_fem_nodal::object_relative_path(&m_binding.semantics)
+                .expect("resolve M semantics object"),
+        );
+        let h_semantics_path = store.join(
+            fullmag_session::saved_fem_nodal::object_relative_path(&h_binding.semantics)
+                .expect("resolve H_eff semantics object"),
+        );
+        let original_mesh_bytes = fs::read(&mesh_path).expect("read shared mesh object");
+        let original_m_semantics_bytes =
+            fs::read(&m_semantics_path).expect("read M semantics object");
+        let original_h_semantics_bytes =
+            fs::read(&h_semantics_path).expect("read H_eff semantics object");
+
+        runtime.finish().expect("finish FEM stage autosave runtime");
+        let request = || crate::types::ExecutionRequestProvenance {
+            backend: "fem".into(),
+            device: "cpu".into(),
+            precision: "double".into(),
+            mode: "strict".into(),
+        };
+        let resolution = crate::types::FinalExecutionResolutionProvenance {
+            authored_request: request(),
+            effective_request: request(),
+            resolved_execution: request(),
+            resolution_mode: "exact".into(),
+            fallback_occurred: false,
+            fallback_reason: None,
+        };
+        crate::artifacts::finalize_stage_autosave_provenance(&autosave_root, &resolution)
+            .expect("finalize FEM stage autosave provenance");
+
+        let mesh_bytes = fs::read(&mesh_path).expect("read finalized shared mesh object");
+        let m_semantics_bytes =
+            fs::read(&m_semantics_path).expect("read finalized M semantics object");
+        let h_semantics_bytes =
+            fs::read(&h_semantics_path).expect("read finalized H_eff semantics object");
+        assert_eq!(mesh_bytes, original_mesh_bytes);
+        assert_eq!(m_semantics_bytes, original_m_semantics_bytes);
+        assert_eq!(h_semantics_bytes, original_h_semantics_bytes);
+        for (bytes, reference) in [
+            (&mesh_bytes, &m_binding.mesh),
+            (&m_semantics_bytes, &m_binding.semantics),
+            (&h_semantics_bytes, &h_binding.semantics),
+        ] {
+            assert_eq!(bytes.len() as u64, reference.byte_length);
+            assert_eq!(fullmag_session::hex_sha256(bytes), reference.object_ref);
+        }
+
+        let (saved_mesh, m_semantics) = m_binding
+            .parse_payloads(&mesh_bytes, &m_semantics_bytes)
+            .expect("parse finalized M geometry and semantics");
+        let (h_saved_mesh, h_semantics) = h_binding
+            .parse_payloads(&mesh_bytes, &h_semantics_bytes)
+            .expect("parse finalized H_eff geometry and semantics");
+        assert_eq!(saved_mesh, h_saved_mesh);
+
+        let expected_resolution =
+            serde_json::to_value(&resolution).expect("serialize final execution resolution");
+        let root_attrs_after: serde_json::Value = serde_json::from_slice(
+            &fs::read(store.join(".zattrs")).expect("read finalized root attrs"),
+        )
+        .expect("decode finalized root attrs");
+        let stage_manifest_after: serde_json::Value = serde_json::from_slice(
+            &fs::read(stage.join("manifest.json")).expect("read finalized stage manifest"),
+        )
+        .expect("decode finalized stage manifest");
+        let m_attrs_after: serde_json::Value = serde_json::from_slice(
+            &fs::read(stage.join("fields/m/.zattrs")).expect("read finalized M field attrs"),
+        )
+        .expect("decode finalized M field attrs");
+        let h_attrs_after: serde_json::Value = serde_json::from_slice(
+            &fs::read(stage.join("fields/H_eff/.zattrs"))
+                .expect("read finalized H_eff field attrs"),
+        )
+        .expect("decode finalized H_eff field attrs");
+        assert_eq!(
+            root_attrs_after["provenance"]["execution_resolution"],
+            expected_resolution,
+        );
+        assert_eq!(
+            stage_manifest_after["provenance"]["execution_resolution"],
+            expected_resolution,
+        );
+        assert_eq!(
+            m_attrs_after["provenance"]["execution_resolution"],
+            expected_resolution,
+        );
+        assert_eq!(
+            h_attrs_after["provenance"]["execution_resolution"],
+            expected_resolution,
+        );
+        assert_eq!(
+            m_semantics.active_node_mask,
+            vec![true, true, true, false, true]
+        );
+        assert_eq!(h_semantics.active_node_mask, vec![true; 5]);
+
+        fs::remove_dir_all(autosave_root).expect("remove FEM nodal binding fixture");
     }
 
     #[cfg(feature = "fem-gpu")]
@@ -3050,6 +3659,7 @@ mod tests {
         };
         let stage_autosave = StageAutosavePipelineConfig {
             stage_id: "relax".into(),
+            fem_geometry: None,
             policy: fullmag_ir::StageAutosaveIR {
                 kind: "stage_autosave".into(),
                 target: "state".into(),

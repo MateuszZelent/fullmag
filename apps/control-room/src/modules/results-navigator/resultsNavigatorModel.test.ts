@@ -1178,6 +1178,18 @@ describe("results navigator model", () => {
     expect(source).not.toContain("navigatorFmrFromResource(response.data)");
   });
 
+  it("keeps output folders first and analysis behind a shared collapsed primitive", () => {
+    const source = readFileSync(resultsNavigatorModuleUrl, "utf8");
+    const outputIndex = source.indexOf('<div aria-label="Results output files"');
+    const analysisIndex = source.indexOf("<Accordion");
+
+    expect(outputIndex).toBeGreaterThanOrEqual(0);
+    expect(analysisIndex).toBeGreaterThan(outputIndex);
+    expect(source).toContain('defaultValue=""');
+    expect(source).toContain("Modes &amp; analysis");
+    expect(source).not.toContain("<details");
+  });
+
   it("reads stable identities directly from the generated frequency-domain payload union", () => {
     const source = readFileSync(new URL("./resultsNavigatorTypes.ts", import.meta.url), "utf8");
 

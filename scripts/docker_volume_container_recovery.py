@@ -1976,7 +1976,7 @@ def _retained_compose_state_root(backend, compose, *, project="fullmag-master"):
 
 def _prove_foreign_alias_for_abrupt(control, backend, container, alias, compose):
     from docker_bind_overlap_probe import prove_foreign_alias_disjoint
-    state_root = _retained_compose_state_root(backend, compose)
+    state_root = _retained_compose_state_root(backend, compose, project=control.project)
     return prove_foreign_alias_disjoint(control, backend, container, alias, state_root)
 
 

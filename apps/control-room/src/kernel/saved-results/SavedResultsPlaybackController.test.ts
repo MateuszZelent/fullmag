@@ -9,6 +9,13 @@ describe("saved result selection", () => {
     expect(c.getServerSnapshot()).toBeNull();
     c.close(); expect(c.getSnapshot()).toBeNull();
   });
+  it("opens an output-only folder independently of the legacy magnetization player", () => {
+    const controller = new SavedResultsPlaybackController();
+    controller.open({itemId:"12", name:"Output", browserOnly:true});
+    expect(controller.getSnapshot()?.browserOnly).toBe(true);
+    controller.close();
+    expect(controller.getSnapshot()).toBeNull();
+  });
   it("rejects invalid frame positions and color ranges", () => {
     const c = new SavedResultsPlaybackController(); c.open({itemId:"a",name:"A"});
     for (const v of [-1,NaN,Infinity,1.5]) { c.selectFrame(v); c.setColorLimit(v); }

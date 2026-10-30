@@ -607,6 +607,100 @@ def _validate_snapshot(snapshot: Mapping[str, Any], lane: Lane, accepted_ref: Ma
     return {"schema": snapshot["schema_version"], "clock": clock, "state_digest": snapshot["state_digest"], "gpu_uuid": gpu_uuid, "native_map_digest": snapshot["native_node_map_sha256"], "native_geometry_digest": snapshot["native_indexed_geometry_sha256"]}
 
 
+def _validate_worker_execution_completion(completed: Mapping[str, Any], backend: str) -> str:
+    schema = completed.get("schema_version")
+    if schema not in {
+        "fullmag.accepted_worker_execution.v1",
+        "fullmag.accepted_worker_execution.v3",
+    }:
+        raise ProofError("worker completion receipt has an unsupported schema")
+    identity = _require_mapping(completed.get("identity"), "worker completion identity")
+    if identity.get("schema_version") != "fullmag.accepted_worker_execution.v1":
+        raise ProofError("worker completion identity has an unsupported schema")
+    if (
+        completed.get("status") != "completed"
+        or type(completed.get("completed_step_count")) is not int
+        or completed["completed_step_count"] <= 0
+    ):
+        raise ProofError("worker completion receipt does not prove terminal successful execution")
+    if schema == "fullmag.accepted_worker_execution.v3":
+        stats = _require_mapping(completed.get("final_step_stats"), "worker final StepStats")
+        accepted_state = _require_mapping(completed.get("accepted_state_ref"), "worker accepted_state_ref")
+        state_id = _require_mapping(accepted_state.get("id"), "worker accepted_state_ref.id")
+        accepted_step = state_id.get("accepted_step")
+        stats_step = stats.get("step")
+        if (
+            type(accepted_step) is not int
+            or accepted_step < 0
+            or type(stats_step) is not int
+            or stats_step < 0
+            or stats_step != accepted_step
+        ):
+            raise ProofError("worker final StepStats step differs from its accepted state")
+        if stats.get("kind") != "physical_observation" or stats.get("solver_progress") is not None:
+            raise ProofError("worker final StepStats is not a physical observation")
+        stats_time = stats.get("time")
+        try:
+            valid_time = type(stats_time) in (int, float) and math.isfinite(stats_time) and stats_time >= 0
+        except OverflowError:
+            valid_time = False
+        if not valid_time:
+            raise ProofError("worker final StepStats time is not finite and nonnegative")
+        if backend == "fem" and completed.get("terminal_publication") is not None:
+            raise ProofError("FEM worker completion unexpectedly contains a terminal publication")
+    return schema
+
+
+_CONTAINER_COMPLETION_VALIDATOR = r"""
+def validate_worker_execution_completion(completed, backend):
+    import math
+
+    if not isinstance(completed, dict):
+        raise RuntimeError("worker completion receipt is not an object")
+    schema = completed.get("schema_version")
+    if schema not in (
+        "fullmag.accepted_worker_execution.v1",
+        "fullmag.accepted_worker_execution.v3",
+    ):
+        raise RuntimeError("worker completion receipt has an unsupported schema")
+    identity = completed.get("identity")
+    if not isinstance(identity, dict) or identity.get("schema_version") != "fullmag.accepted_worker_execution.v1":
+        raise RuntimeError("worker completion identity has an unsupported schema")
+    if (
+        completed.get("status") != "completed"
+        or type(completed.get("completed_step_count")) is not int
+        or completed["completed_step_count"] <= 0
+    ):
+        raise RuntimeError("worker completion receipt does not prove terminal successful execution")
+    if schema == "fullmag.accepted_worker_execution.v3":
+        stats = completed.get("final_step_stats")
+        accepted_state = completed.get("accepted_state_ref")
+        state_id = accepted_state.get("id") if isinstance(accepted_state, dict) else None
+        accepted_step = state_id.get("accepted_step") if isinstance(state_id, dict) else None
+        stats_step = stats.get("step") if isinstance(stats, dict) else None
+        if (
+            type(accepted_step) is not int
+            or accepted_step < 0
+            or type(stats_step) is not int
+            or stats_step < 0
+            or stats_step != accepted_step
+        ):
+            raise RuntimeError("worker final StepStats step differs from its accepted state")
+        if stats.get("kind") != "physical_observation" or stats.get("solver_progress") is not None:
+            raise RuntimeError("worker final StepStats is not a physical observation")
+        stats_time = stats.get("time")
+        try:
+            valid_time = type(stats_time) in (int, float) and math.isfinite(stats_time) and stats_time >= 0
+        except OverflowError:
+            valid_time = False
+        if not valid_time:
+            raise RuntimeError("worker final StepStats time is not finite and nonnegative")
+        if backend == "fem" and completed.get("terminal_publication") is not None:
+            raise RuntimeError("FEM worker completion unexpectedly contains a terminal publication")
+    return schema
+"""
+
+
 def _container_artifact_probe(container: str, run_id: str, task: Mapping[str, Any], lane: Lane, log_root: Path) -> dict[str, Any]:
     task_id = _require_string(task.get("task_id"), "task.task_id")
     attempt_id = _require_string(task.get("attempt_id"), "task.attempt_id")
@@ -616,10 +710,10 @@ def _container_artifact_probe(container: str, run_id: str, task: Mapping[str, An
     for value, label in ((run_id, "run_id"), (task_id, "task_id"), (attempt_id, "attempt_id")):
         if not ID_RE.fullmatch(value):
             raise ProofError(f"unsafe {label} returned by API")
-    probe = r'''
+    probe = _CONTAINER_COMPLETION_VALIDATOR + r'''
 import json, os, pathlib, sys
 
-run_id, task_id, attempt_id, epoch, snapshot_file = sys.argv[1:]
+run_id, task_id, attempt_id, epoch, snapshot_file, backend = sys.argv[1:]
 base = pathlib.Path('/state/.fullmag/runs') / run_id / 'worker-attempts' / task_id / attempt_id / ('epoch-' + epoch)
 MAX = 16 * 1024 * 1024
 def reject_link(path):
@@ -660,6 +754,7 @@ reject_ancestor_links(base, state_root)
 if not base.is_dir() or base.is_symlink():
     raise RuntimeError('worker attempt directory is missing or linked')
 completed = read_json(base / 'worker_execution_completed.v1.json')
+validate_worker_execution_completion(completed, backend)
 final = read_json(base / 'm_final.json')
 snapshot = read_json(base / snapshot_file)
 def find_provenance(value):
@@ -709,15 +804,14 @@ if not leases:
     raise RuntimeError('accepted run has no durable resource lease evidence')
 print(json.dumps({'base': str(base), 'completed': summary(completed), 'final': summary(final), 'snapshot': summary(snapshot), 'execution_provenance': summary(find_provenance(final)), 'leases': leases}, sort_keys=True, separators=(',', ':')))
 '''
-    result = runtime._docker_exec(container, ("/usr/local/bin/python3", "-c", probe, run_id, task_id, attempt_id, str(epoch), lane.snapshot_file), timeout=60.0, log_root=log_root, log_name=f"{lane.name}-artifact-probe")
+    result = runtime._docker_exec(container, ("/usr/local/bin/python3", "-c", probe, run_id, task_id, attempt_id, str(epoch), lane.snapshot_file, lane.backend), timeout=60.0, log_root=log_root, log_name=f"{lane.name}-artifact-probe")
     value = runtime._parse_json_bytes(result.stdout, f"{lane.name} container artifact probe", maximum=MAX_CONTAINER_JSON_BYTES)
     return _require_mapping(value, f"{lane.name} container artifact probe")
 
 
 def _validate_artifacts(probe: Mapping[str, Any], lane: Lane, task: Mapping[str, Any], accepted_ref: Mapping[str, Any]) -> dict[str, Any]:
     completed = _require_mapping(probe.get("completed"), "worker completion receipt")
-    if completed.get("schema_version") != "fullmag.accepted_worker_execution.v1" or completed.get("status") != "completed" or not isinstance(completed.get("completed_step_count"), int) or completed["completed_step_count"] <= 0:
-        raise ProofError("worker completion receipt does not prove terminal successful execution")
+    _validate_worker_execution_completion(completed, lane.backend)
     if completed.get("accepted_state_ref") != accepted_ref:
         raise ProofError("worker completion receipt accepted_state_ref differs from API resource")
     final = _require_mapping(probe.get("final"), "final magnetization artifact")

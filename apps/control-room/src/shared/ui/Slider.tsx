@@ -8,6 +8,7 @@ import { cn } from "@/shared/utils/className";
 function Slider({
   "aria-label": ariaLabel,
   "aria-labelledby": ariaLabelledBy,
+  "aria-valuetext": ariaValueText,
   className,
   ref,
   ...props
@@ -25,6 +26,7 @@ function Slider({
         <SliderPrimitive.Thumb
           aria-label={ariaLabel}
           aria-labelledby={ariaLabelledBy}
+          aria-valuetext={ariaValueText}
           className="fm-slider__thumb"
           key={i}
         />

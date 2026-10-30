@@ -1,0 +1,809 @@
+{
+  "schema": "fullmag.docker-dev-saved-playback-result.v1",
+  "state": "passed",
+  "scenario": "saved-playback",
+  "item_id": "10",
+  "public_url": "http://127.0.0.1:3298",
+  "probe_url": "http://frontend:8080",
+  "playwright_version": "1.62.1",
+  "browser_gpu_mode": "swiftshader-webgl-requested",
+  "script_sha256": "891dbf86c9de47bbb0cc944711215db17f7658d6dc70a4970fc1f89d2d2447d7",
+  "geometry_kind": "fem",
+  "frame_count": 6,
+  "frame_indices": [
+    0,
+    2,
+    5
+  ],
+  "frame_sha256": [
+    "18d232ee5b5b18e5b6c98132ffbfd41344c371b2d81a4929cd69971a51031a09",
+    "5c6204501221f3f4e6931aafdfdc684b772ea4543a0959e844dabbfcf16f0b11",
+    "6e6db50daaa588a2fd418f6d46b14cd7523581e04fd924102ad956e9f6ac6912"
+  ],
+  "canvas_visible": true,
+  "context_lost": false,
+  "drawing_buffer": [
+    649,
+    565
+  ],
+  "source_details_disclosure_verified": true,
+  "saved_tree_layout": {
+    "rows": [
+      {
+        "label": "Select results_browser.zarr",
+        "y": 333.96875,
+        "bottom": 361.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/continuous",
+        "y": 361.96875,
+        "bottom": 389.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/continuous/.zattrs",
+        "y": 389.96875,
+        "bottom": 417.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/continuous/.zgroup",
+        "y": 419.96875,
+        "bottom": 447.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/continuous/index.jsonl",
+        "y": 449.96875,
+        "bottom": 477.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/stages",
+        "y": 479.96875,
+        "bottom": 507.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/stages/stage_0000_propagate",
+        "y": 507.96875,
+        "bottom": 535.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/stages/stage_0000_propagate/fields",
+        "y": 535.96875,
+        "bottom": 563.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/stages/stage_0000_propagate/fields/H_eff",
+        "y": 563.96875,
+        "bottom": 591.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/stages/stage_0000_propagate/fields/m",
+        "y": 593.96875,
+        "bottom": 621.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/stages/stage_0000_propagate/fields/.zgroup",
+        "y": 623.96875,
+        "bottom": 651.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/stages/stage_0000_propagate/table",
+        "y": 653.96875,
+        "bottom": 681.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/stages/stage_0000_propagate/.zgroup",
+        "y": 683.96875,
+        "bottom": 711.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/stages/stage_0000_propagate/manifest.json",
+        "y": 713.96875,
+        "bottom": 741.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/stages/.zgroup",
+        "y": 743.96875,
+        "bottom": 771.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/.zattrs",
+        "y": 773.96875,
+        "bottom": 801.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.zarr/.zgroup",
+        "y": 803.96875,
+        "bottom": 831.96875,
+        "height": 28
+      },
+      {
+        "label": "Select .fullmag-run-manifest.writer.lock",
+        "y": 833.96875,
+        "bottom": 861.96875,
+        "height": 28
+      },
+      {
+        "label": "Select .zattrs",
+        "y": 863.96875,
+        "bottom": 891.96875,
+        "height": 28
+      },
+      {
+        "label": "Select .zgroup",
+        "y": 893.96875,
+        "bottom": 921.96875,
+        "height": 28
+      },
+      {
+        "label": "Select fullmag-run.json",
+        "y": 923.96875,
+        "bottom": 951.96875,
+        "height": 28
+      },
+      {
+        "label": "Select geometry.json",
+        "y": 953.96875,
+        "bottom": 981.96875,
+        "height": 28
+      },
+      {
+        "label": "Select output-storage.json",
+        "y": 983.96875,
+        "bottom": 1011.96875,
+        "height": 28
+      },
+      {
+        "label": "Select playback.json",
+        "y": 1013.96875,
+        "bottom": 1041.96875,
+        "height": 28
+      },
+      {
+        "label": "Select results_browser.autosave.json",
+        "y": 1043.96875,
+        "bottom": 1071.96875,
+        "height": 28
+      },
+      {
+        "label": "Select run.json",
+        "y": 1073.96875,
+        "bottom": 1101.96875,
+        "height": 28
+      }
+    ],
+    "groups": [
+      {
+        "height": 470,
+        "client_height": 470,
+        "scroll_height": 470,
+        "overflow_x": "visible",
+        "overflow_y": "visible"
+      },
+      {
+        "height": 88,
+        "client_height": 88,
+        "scroll_height": 88,
+        "overflow_x": "visible",
+        "overflow_y": "visible"
+      },
+      {
+        "height": 264,
+        "client_height": 264,
+        "scroll_height": 264,
+        "overflow_x": "visible",
+        "overflow_y": "visible"
+      },
+      {
+        "height": 206,
+        "client_height": 206,
+        "scroll_height": 206,
+        "overflow_x": "visible",
+        "overflow_y": "visible"
+      },
+      {
+        "height": 88,
+        "client_height": 88,
+        "scroll_height": 88,
+        "overflow_x": "visible",
+        "overflow_y": "visible"
+      }
+    ]
+  },
+  "saved_tree_rows_reachable": [
+    {
+      "label": "Select results_browser.zarr/stages/stage_0000_propagate/fields/H_eff",
+      "height": 28,
+      "center_visible": true
+    },
+    {
+      "label": "Select results_browser.zarr/stages/stage_0000_propagate/fields/m",
+      "height": 28,
+      "center_visible": true
+    },
+    {
+      "label": "Select results_browser.zarr/stages/stage_0000_propagate/table",
+      "height": 28,
+      "center_visible": true
+    }
+  ],
+  "array_metadata_default_collapsed": true,
+  "metadata_search_preserves_expansion": true,
+  "folder_details_keyboard_verified": true,
+  "folder_details_reachability": {
+    "y": 710.96875,
+    "bottom": 729.15625,
+    "panel_y": 125.796875,
+    "panel_bottom": 784.28125,
+    "scroll_height": 1437,
+    "client_height": 628,
+    "scroll_top": 809
+  },
+  "output_inspector_continuous_sections_verified": true,
+  "closed_values_preview_no_sample_request": true,
+  "pending_snapshot_retained_verified": true,
+  "delayed_sample_index": 1,
+  "sample_read_error_retained_verified": true,
+  "sample_read_error_reselection_recovered": true,
+  "failed_sample_index": 4,
+  "results_browser_verified": true,
+  "output_count": 38,
+  "per_snapshot_settings_retained": true,
+  "saved_panels_hide_restore_verified": true,
+  "saved_folder_float_dock_verified": true,
+  "layout_checks": [
+    {
+      "width": 1280,
+      "height": 900,
+      "scrollWidth": 1280,
+      "results_tree_boxes": [
+        {
+          "label": "Saved result outputs",
+          "x": 12,
+          "width": 228.390625,
+          "scrollWidth": 228,
+          "clientWidth": 228,
+          "scrollLeft": 0
+        },
+        {
+          "label": "Result output entries",
+          "x": 24,
+          "width": 204.390625,
+          "scrollWidth": 204,
+          "clientWidth": 204,
+          "scrollLeft": 0
+        }
+      ],
+      "primary_controls": [
+        {
+          "label": "Saved sample",
+          "center_visible": true
+        },
+        {
+          "label": "Visualization component",
+          "center_visible": true
+        }
+      ],
+      "tree_labels": [
+        {
+          "text": "H_eff",
+          "clientWidth": 102,
+          "scrollWidth": 102
+        },
+        {
+          "text": "m",
+          "clientWidth": 102,
+          "scrollWidth": 102
+        },
+        {
+          "text": "table",
+          "clientWidth": 115,
+          "scrollWidth": 115
+        }
+      ],
+      "scrolled_elements": [],
+      "reachable_controls": [
+        {
+          "label": "Saved sample",
+          "center_visible": true
+        },
+        {
+          "label": "Visualization component",
+          "center_visible": true
+        }
+      ]
+    },
+    {
+      "width": 1024,
+      "height": 900,
+      "scrollWidth": 1024,
+      "results_tree_boxes": [
+        {
+          "label": "Saved result outputs",
+          "x": 12,
+          "width": 216.9375,
+          "scrollWidth": 217,
+          "clientWidth": 217,
+          "scrollLeft": 0
+        },
+        {
+          "label": "Result output entries",
+          "x": 24,
+          "width": 192.9375,
+          "scrollWidth": 193,
+          "clientWidth": 193,
+          "scrollLeft": 0
+        }
+      ],
+      "primary_controls": [
+        {
+          "label": "Saved sample",
+          "center_visible": true
+        },
+        {
+          "label": "Visualization component",
+          "center_visible": true
+        }
+      ],
+      "tree_labels": [
+        {
+          "text": "H_eff",
+          "clientWidth": 91,
+          "scrollWidth": 91
+        },
+        {
+          "text": "m",
+          "clientWidth": 91,
+          "scrollWidth": 91
+        },
+        {
+          "text": "table",
+          "clientWidth": 104,
+          "scrollWidth": 104
+        }
+      ],
+      "scrolled_elements": [],
+      "reachable_controls": [
+        {
+          "label": "Saved sample",
+          "center_visible": true
+        },
+        {
+          "label": "Visualization component",
+          "center_visible": true
+        }
+      ]
+    },
+    {
+      "width": 768,
+      "height": 900,
+      "scrollWidth": 768,
+      "results_tree_boxes": [
+        {
+          "label": "Saved result outputs",
+          "x": 12,
+          "width": 216,
+          "scrollWidth": 216,
+          "clientWidth": 216,
+          "scrollLeft": 0
+        },
+        {
+          "label": "Result output entries",
+          "x": 24,
+          "width": 192,
+          "scrollWidth": 192,
+          "clientWidth": 192,
+          "scrollLeft": 0
+        }
+      ],
+      "primary_controls": [
+        {
+          "label": "Saved sample",
+          "center_visible": true
+        },
+        {
+          "label": "Visualization component",
+          "center_visible": true
+        }
+      ],
+      "tree_labels": [
+        {
+          "text": "H_eff",
+          "clientWidth": 90,
+          "scrollWidth": 90
+        },
+        {
+          "text": "m",
+          "clientWidth": 90,
+          "scrollWidth": 90
+        },
+        {
+          "text": "table",
+          "clientWidth": 103,
+          "scrollWidth": 103
+        }
+      ],
+      "scrolled_elements": [],
+      "reachable_controls": [
+        {
+          "label": "Saved sample",
+          "center_visible": true
+        },
+        {
+          "label": "Visualization component",
+          "center_visible": true
+        }
+      ]
+    },
+    {
+      "width": 1920,
+      "height": 1080,
+      "scrollWidth": 1920,
+      "results_tree_boxes": [
+        {
+          "label": "Saved result outputs",
+          "x": 12,
+          "width": 576.640625,
+          "scrollWidth": 577,
+          "clientWidth": 577,
+          "scrollLeft": 0
+        },
+        {
+          "label": "Result output entries",
+          "x": 24,
+          "width": 552.640625,
+          "scrollWidth": 553,
+          "clientWidth": 553,
+          "scrollLeft": 0
+        }
+      ],
+      "primary_controls": [
+        {
+          "label": "Saved sample",
+          "center_visible": false
+        },
+        {
+          "label": "Visualization component",
+          "center_visible": false
+        }
+      ],
+      "tree_labels": [
+        {
+          "text": "H_eff",
+          "clientWidth": 357,
+          "scrollWidth": 357
+        },
+        {
+          "text": "m",
+          "clientWidth": 357,
+          "scrollWidth": 357
+        },
+        {
+          "text": "table",
+          "clientWidth": 382,
+          "scrollWidth": 382
+        }
+      ],
+      "scrolled_elements": [],
+      "reachable_controls": [
+        {
+          "label": "Saved sample",
+          "center_visible": true
+        },
+        {
+          "label": "Visualization component",
+          "center_visible": true
+        }
+      ]
+    },
+    {
+      "width": 1500,
+      "height": 1000,
+      "scrollWidth": 1500,
+      "results_tree_boxes": [
+        {
+          "label": "Saved result outputs",
+          "x": 12,
+          "width": 389.6875,
+          "scrollWidth": 390,
+          "clientWidth": 390,
+          "scrollLeft": 0
+        },
+        {
+          "label": "Result output entries",
+          "x": 24,
+          "width": 365.6875,
+          "scrollWidth": 366,
+          "clientWidth": 366,
+          "scrollLeft": 0
+        }
+      ],
+      "primary_controls": [
+        {
+          "label": "Saved sample",
+          "center_visible": true
+        },
+        {
+          "label": "Visualization component",
+          "center_visible": true
+        }
+      ],
+      "tree_labels": [
+        {
+          "text": "H_eff",
+          "clientWidth": 170,
+          "scrollWidth": 170
+        },
+        {
+          "text": "m",
+          "clientWidth": 170,
+          "scrollWidth": 170
+        },
+        {
+          "text": "table",
+          "clientWidth": 195,
+          "scrollWidth": 195
+        }
+      ],
+      "scrolled_elements": [],
+      "reachable_controls": [
+        {
+          "label": "Saved sample",
+          "center_visible": true
+        },
+        {
+          "label": "Visualization component",
+          "center_visible": true
+        }
+      ]
+    }
+  ],
+  "saved_camera_fit_verified": true,
+  "live_return_verified": true,
+  "live_view_source": "current",
+  "live_drawing_buffer": [
+    516,
+    495
+  ],
+  "results_sample_indices": [
+    0,
+    2,
+    5
+  ],
+  "results_sample_sha256": [
+    "b9446203a1b90c6ac762ca4a1f9b2ae742afd37282042873df537b5fd961335b",
+    "a66b8a4046e5d057e6bbcc423bff3152724dd82b8e78c59e93ad90c753d6b531",
+    "aca0f253fae53a994dfe72b2051fdb0b2ea2b67e6bd5a739bc4a1bdd44f33bfb"
+  ],
+  "results_canvas_changed": true,
+  "object_draft_cancel_preserved": true,
+  "object_draft_saved_folder_guarded": true,
+  "object_draft_discard_verified": true,
+  "airbox_draft_cancel_preserved": true,
+  "airbox_draft_saved_folder_guarded": true,
+  "airbox_draft_discard_verified": true,
+  "model_inspector_historical_context_verified": true,
+  "return_live_preserves_model_draft": true,
+  "current_exit_without_panels_or_3d_verified": true,
+  "current_exit_at_320": {
+    "x": 68,
+    "width": 118,
+    "viewport": 320
+  },
+  "sample_reselection_verified": true,
+  "table_columns_verified": [
+    "t",
+    "step",
+    "mx",
+    "my",
+    "mz",
+    "e_total"
+  ],
+  "table_sample_indices": [
+    0,
+    5
+  ],
+  "saved_camera_reset_verified": true,
+  "return_live_pending_sample_verified": true,
+  "current_run_results_verified": true,
+  "current_run_id": "run-live-5e4873fbf48773da8360849b4d88c86c77635d527f08509492adda4fabcc8ff7-1",
+  "results_navigation_state_retained": true,
+  "results_saved_folder_entry_verified": true,
+  "terminal_live_scalars_verified": true,
+  "terminal_live_step": 101,
+  "terminal_live_time_s": 1e-10,
+  "terminal_live_scalar_revision": 3,
+  "terminal_live_observation_frame": {
+    "observation_frame_id": "obs:docker-startup-0e75c8b8719c7ec1c5111ade4028db62256c633478a54ffb9f6aac2c424fa930@1793276049066:6002390632978672749:2:101:3ddb7cdfd9d7bdbb",
+    "session_epoch": "docker-startup-0e75c8b8719c7ec1c5111ade4028db62256c633478a54ffb9f6aac2c424fa930@1793276049066",
+    "domain_generation_id": "6002390632978672749",
+    "topology_revision": "2",
+    "source_step": 101,
+    "source_time_seconds": 1e-10
+  },
+  "publication_waiting_ui_verified": true,
+  "publication_failure_distinct_verified": true,
+  "publication_catalog_arrival_verified": true,
+  "publication_evidence": "browser-availability-fixture-with-real-published-catalog",
+  "publication_poll_count": 4,
+  "no_session_close_to_home_verified": true,
+  "no_session_legacy_inspector_close_verified": true,
+  "no_session_browser_only_close_verified": true,
+  "no_session_evidence": "browser-session-discovery-fixture-with-real-result-data",
+  "field_payloads_verified": true,
+  "changed_canvas": true,
+  "inspector_stable": true,
+  "camera_stable": true,
+  "visualization_trace": [
+    {
+      "phase": "initial-home",
+      "method": "GET",
+      "revision": 1,
+      "camera": {
+        "projection": "perspective",
+        "position": [
+          1.2586030213332585e-07,
+          9.06194175359946e-08,
+          1.2586030213332585e-07
+        ],
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "up": [
+          0,
+          0,
+          1
+        ],
+        "fov_degrees": 45,
+        "orthographic_scale": null
+      }
+    }
+  ],
+  "payload_evidence": "application_body_reads",
+  "live_visualization_unchanged": true,
+  "startup_camera_initialization": null,
+  "hook_errors": [],
+  "errors": [],
+  "evidence_image_formats": {
+    "screenshot_base64": "png",
+    "terminal_live_screenshot_base64": "png",
+    "pending_snapshot_screenshot_base64": "jpeg",
+    "sample_error_screenshot_base64": "jpeg",
+    "compact_screenshot_base64": "jpeg",
+    "live_screenshot_base64": "jpeg",
+    "model_context_screenshot_base64": "jpeg",
+    "dark_screenshot_base64": "jpeg",
+    "publication_waiting_screenshot_base64": "jpeg",
+    "no_session_screenshot_base64": "jpeg"
+  },
+  "images": {
+    "pending_snapshot_screenshot_base64": {
+      "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/6ff37f3256bf45939ae570606758dc41-pending_snapshot_screenshot.jpeg",
+      "sha256": "ac85240d0e87a956db7897033db6ed4ddd8aa2fdb17e19d8160db8b0a90d3359",
+      "bytes": 24199
+    },
+    "sample_error_screenshot_base64": {
+      "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/6ff37f3256bf45939ae570606758dc41-sample_error_screenshot.jpeg",
+      "sha256": "588b8bcb522835c0173f1a79f3a9722dfde83c7f63be23828fc8e9f5b3b60b58",
+      "bytes": 22880
+    },
+    "compact_screenshot_base64": {
+      "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/6ff37f3256bf45939ae570606758dc41-compact_screenshot.jpeg",
+      "sha256": "6d76ce746e93baa65bb51cc6577c2f4071ce6f517d07cbe9ef810ddea1f32ad8",
+      "bytes": 106779
+    },
+    "live_screenshot_base64": {
+      "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/6ff37f3256bf45939ae570606758dc41-live_screenshot.jpeg",
+      "sha256": "c39a63fa52756c286bf3783a17f3301a593446c9c248649fef7497d3e1f59d0e",
+      "bytes": 133849
+    },
+    "model_context_screenshot_base64": {
+      "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/6ff37f3256bf45939ae570606758dc41-model_context_screenshot.jpeg",
+      "sha256": "32332980f62e8ae8ec7c2124603207c2cf3816c5a0e2bdcf37bef7bc35a581ba",
+      "bytes": 147022
+    },
+    "dark_screenshot_base64": {
+      "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/6ff37f3256bf45939ae570606758dc41-dark_screenshot.jpeg",
+      "sha256": "8ad34096f963e3d394258aca1d5c81d088dc716a2c10a1a3670a9d9ff1b34ea7",
+      "bytes": 147323
+    },
+    "terminal_live_screenshot_base64": {
+      "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/6ff37f3256bf45939ae570606758dc41-terminal_live_screenshot.png",
+      "sha256": "09f7b2e0707c4296b5e4246fc5c6e26b12626e15653a5de6f9905374c56191d6",
+      "bytes": 227683
+    },
+    "publication_waiting_screenshot_base64": {
+      "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/6ff37f3256bf45939ae570606758dc41-publication_waiting_screenshot.jpeg",
+      "sha256": "3445b0a63ef3c135ea49146037d59aefbc35872ee92e25881c692239aa4261d5",
+      "bytes": 5892
+    },
+    "no_session_screenshot_base64": {
+      "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/6ff37f3256bf45939ae570606758dc41-no_session_screenshot.jpeg",
+      "sha256": "18b551118d72f90bba57f7192d9137d2533158f45e50e4d89c31bdca2ca3fa05",
+      "bytes": 101196
+    },
+    "screenshot_base64": {
+      "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/6ff37f3256bf45939ae570606758dc41-screenshot.png",
+      "sha256": "b7132664faafba7e23475d94e6438b7535991434688a2b9fbb353e70773561c6",
+      "bytes": 238502
+    }
+  },
+  "managed_attempt": "6ff37f3256bf45939ae570606758dc41",
+  "managed_result_bytes": 1552634,
+  "frontend_source": {
+    "base_commit": "ba76afc3f392bc6b5e79d00490a2a1fae9e719ea",
+    "files": {
+      "apps/control-room/scripts/check-saved-playback-browser.mjs": "891dbf86c9de47bbb0cc944711215db17f7658d6dc70a4970fc1f89d2d2447d7",
+      "apps/control-room/src/design/styles/header.css": "b229ec868113a32f3010f5007e13f1ae4cfdd72faa16c3bb9f028a4d2547808b",
+      "apps/control-room/src/design/styles/layout.css": "c73519de3726f80606948da6f08c35339719c34dd55a0c144b915e29dd630cb5",
+      "apps/control-room/src/design/styles/saved-results-playback.css": "26634e41007892069e8d33cacf0490abc490046ce9f6e18675f89a9d33f895fc",
+      "apps/control-room/src/kernel/layout/AppMenuBar.tsx": "65bfaccd74b36770a0d3d6eb4ac5c4aa7795552908550f670648621d3e14c4e0",
+      "apps/control-room/src/kernel/layout/WorkspaceDockLayout.tsx": "42dd12442d8bd09ea16dae5ca313c64afeb4584998a651cdad46ab6633bb1f7c",
+      "apps/control-room/src/kernel/layout/WorkspaceShellClient.test.tsx": "d88c2b6f3376dfded9b7754f547457a1a0781584fbe10b3ed401ede363620d1c",
+      "apps/control-room/src/kernel/layout/WorkspaceShellClient.tsx": "fa65e6dead5f3de2d9ee5fad73789d0ad72fd09d4104a970ed8f339a1d9fcecd",
+      "apps/control-room/src/kernel/results-browser/ResultsBrowserUiController.test.ts": "e3098825fd0fd4d4eee43a9392362b07ca269143e32f8eb687e4a540171d83a3",
+      "apps/control-room/src/kernel/results-browser/ResultsBrowserUiController.ts": "c559a8c4f7b128719ad9c5fc65f978da16ac851d1a85e90e33830b9b8befb78f",
+      "apps/control-room/src/kernel/results-browser/resultsSampleLabels.test.ts": "3e03a4da4737ab6769a7f10c138cda66d8f1aa6a1735765310d5a0f69ed8d28d",
+      "apps/control-room/src/kernel/results-browser/resultsSampleLabels.ts": "26a882d1d3774128acb7d255d26b00c76c47400e3d302abf2e0b076abc66145b",
+      "apps/control-room/src/kernel/visualization/ResultsHistoryExitAction.test.tsx": "da218f1b9552456c104cbf52bd16acbc2db8d66ba470529a30914a8b9039faa1",
+      "apps/control-room/src/kernel/visualization/ResultsHistoryExitAction.tsx": "b671b36c0f6347aef06cdf4fc970f8bb117acb0fd75414ad6fa5b18a6ebcf1f3",
+      "apps/control-room/src/kernel/visualization/ResultsHistoryExitOwnerContext.tsx": "9e3cdbc8f8a617f243e92686c3657eb857c18d8a41a4e7182ed12efa2eb567a4",
+      "apps/control-room/src/modules/inspector/InspectorModule.test.tsx": "a258b2563e234d6b857ceac67bb23c29bcc9b862f088f1a82be9fa7ab8df2bbe",
+      "apps/control-room/src/modules/inspector/InspectorModule.tsx": "9e433b4b55c7dd7e37c209cdb9736231bffe06728ec3af4f73a623b00cf3c9aa",
+      "apps/control-room/src/modules/inspector/ResultsOutputInspectorContainer.test.tsx": "4f7de8b6d59ff8dd0bc4aec958d2be1bc74cd2127dbc05ef665746fb73a5d41a",
+      "apps/control-room/src/modules/inspector/ResultsOutputInspectorContainer.tsx": "86640df5472f11e3d82197eb40e90d9e2186db56962c45bfbf6b02ff00cc3f0a",
+      "apps/control-room/src/modules/inspector/panels/ResultsOutputInspector.test.tsx": "130ef7960d8524901d086aa2eea523fe7db1e045434df06f709de0de7f3d5e26",
+      "apps/control-room/src/modules/inspector/panels/ResultsOutputInspector.tsx": "e44481895a2f9ddac8bf4aae3b4eaf7d2d28b69f433484c5956dcb3218718e2c",
+      "apps/control-room/src/modules/inspector/panels/SavedResultsPlaybackInspector.test.tsx": "d8cb878f15d2424f46e0517e060be0f84844bb84e1d53378a294ac33e25bdb2e",
+      "apps/control-room/src/modules/inspector/panels/SavedResultsPlaybackInspector.tsx": "447c4f9ab43ca9940b0cfa536eb7787fa0a67609e0b095d42813b746b68301a7",
+      "apps/control-room/src/modules/results-navigator/ResultsOutputExplorer.test.tsx": "ee0ee88dc5e5888504f8a9cd24092011128ce5cd732969970ac1029c08e44464",
+      "apps/control-room/src/modules/results-navigator/ResultsOutputExplorer.tsx": "3b45352e4e9ff80a6549eaf169499a8797a6a43cb33ee0465fee2df2765fda7d",
+      "apps/control-room/src/modules/results-navigator/ResultsOutputTree.test.tsx": "6396d86252772593618d53e671473ecd6939224346af02c18903bafae93a798c",
+      "apps/control-room/src/modules/results-navigator/ResultsOutputTree.tsx": "2cb57cbfbb7e7dd754e4269454503e65fb5a46da10461f770fb4b6dc890767a3",
+      "apps/control-room/src/modules/viewport-3d/ResultsSnapshotViewport.tsx": "1bb0a95a88513078e81a959fe13469ce0889e203babfdb3f5584a43036100a60",
+      "apps/control-room/src/modules/viewport-3d/Viewport3DModule.tsx": "8c068bfccca3b5bce3dcc399ff73513e6a6b1d83ae70dd53ba4eafa2c40e1c79",
+      "apps/control-room/src/modules/viewport-3d/model/resultsSnapshotViewport.test.tsx": "9a556e31d1e9aa7b991f76c94036b6cc6a56e9350309b46179bffce0db394785",
+      "apps/control-room/src/shared/ui/Slider.test.tsx": "2b1972f3059f223e0b7785249b4ecd9596590a2d3dd928b1773f59a3d3a7d151",
+      "apps/control-room/src/shared/ui/Slider.tsx": "2131533dd898d94a5933f39f921dadc1713b666265825989099aca57eba1d593"
+    }
+  },
+  "qualified_frontend_commit": "c96d3bee504dbe40e4e5b4d4e4cacca7b46fc557",
+  "post_qa_nonfunctional_changes": [
+    {
+      "path": "apps/control-room/src/kernel/visualization/ResultsHistoryExitAction.test.tsx",
+      "change": "Removed one blank line at EOF for git diff --check; product and harness bytes unchanged.",
+      "commit_sha256": "1f6230606765f000d10961bf310cceb01e5d8b7d90e889784033d1c930aac809"
+    }
+  ],
+  "backend_evidence": "2026-10-29-results-public-root-retry-evidence.json",
+  "scope": "Completed FEM Saved/Current playback and UX19-24; not active-run streaming, full 320px/200% accessibility, GPU or scientific qualification.",
+  "regression_attempts": [
+    {
+      "attempt": "646d826a4008476daee4a7fab930d5e2",
+      "state": "failed-confirmed",
+      "reason": "New row geometry regression reproduced the product bug: last nested row bottom831.97px, next root row y379.31px."
+    },
+    {
+      "attempt": "151ec3e3f3784f848c1f0267b916023d",
+      "state": "failed-confirmed",
+      "reason": "Geometry passed after fix; new harness hit-test referenced an out-of-scope catalog variable. Corrected to scoped rendered array rows."
+    }
+  ],
+  "advisory_hook": "Post-stage React Doctor hook could not parse oxlint output: Unexpected discriminant 7 for TSTypeName. Commit succeeded because installed hook is nonblocking. Not counted as a passing review or CI gate."
+}

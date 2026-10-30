@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import { createCommandContext } from "@/kernel/commands/commandContext";
+import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import { useSavedResultsPlaybackSelection } from "@/kernel/saved-results/useSavedResultsPlayback";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import { useWorkspaceContentScope } from "@/kernel/layout/WorkspaceContentScope";
@@ -12,6 +13,10 @@ import {
   selectionSnapshotEquals,
   useSelectionSelector,
 } from "@/kernel/selection/useSelection";
+import { returnResultsToLive } from "@/kernel/visualization/returnResultsToLive";
+import { useResultsHistoryExitOwner } from "@/kernel/visualization/ResultsHistoryExitOwnerContext";
+import { useSnapshotVisualization } from "@/kernel/visualization/useSnapshotVisualization";
+import { Button } from "@/shared/ui/Button";
 
 import { InspectorDirtySelectionGuard } from "./InspectorDirtySelectionGuard";
 import {
@@ -75,7 +80,61 @@ function PendingFormBridge() {
 
 export default function InspectorModule() {
   const savedPlayback = useSavedResultsPlaybackSelection();
+  const selectionRef = useSelectionSelector((state) => state.ref);
+  const hasResultOutputSelection = selectionRef?.type === "result-output";
+  if (hasResultOutputSelection) return <LiveInspectorModule />;
+  if (savedPlayback?.browserOnly) return <BrowserOnlyResultsInspector />;
   return savedPlayback ? <SavedResultsPlaybackInspector /> : <LiveInspectorModule />;
+}
+
+function BrowserOnlyResultsInspector() {
+  const kernel = useKernel();
+  const resultsHistoryExitOwner = useResultsHistoryExitOwner();
+  const sessionIdentity = useSessionResourceIdentity();
+  return (
+    <section
+      aria-label="Results output Inspector"
+      className="fm-inspector-panel grid min-w-0 gap-3 p-3"
+    >
+      <h2 className="m-0 text-fm-md font-semibold text-fm-primary">Results output</h2>
+      <p className="m-0 text-fm-xs text-fm-muted" role="status">
+        Select an output in Results to inspect its metadata and load it into 3D.
+      </p>
+      {resultsHistoryExitOwner === null ? (
+        <Button size="sm" type="button" variant="secondary" onClick={() => returnResultsToLive(kernel)}>
+          {sessionIdentity ? "Return to live" : "Close results"}
+        </Button>
+      ) : null}
+    </section>
+  );
+}
+
+function HistoricalViewportNotice({ enabled }: { enabled: boolean }) {
+  const kernel = useKernel();
+  const resultsHistoryExitOwner = useResultsHistoryExitOwner();
+  const snapshot = useSnapshotVisualization();
+  if (!enabled || snapshot.activeKey === null) return null;
+  return (
+    <section
+      aria-label="Historical viewport context"
+      className="grid min-w-0 gap-2 border-b border-fm-subtle p-3 text-fm-sm"
+    >
+      <p className="m-0 text-fm-muted" role="status">
+        A saved 3D snapshot is selected. This Inspector belongs to the current workspace.
+      </p>
+      {resultsHistoryExitOwner === null ? (
+        <Button
+          className="justify-self-start"
+          size="sm"
+          type="button"
+          variant="secondary"
+          onClick={() => returnResultsToLive(kernel)}
+        >
+          Return to live
+        </Button>
+      ) : null}
+    </section>
+  );
 }
 
 function LiveInspectorModule() {
@@ -107,9 +166,9 @@ function LiveInspectorModule() {
     <WorkspaceRenderProfiler id="InspectorModule">
       <InspectorEditSessionProvider>
         <PendingFormBridge />
-        <InspectorDirtySelectionGuard controller={kernel.selection} selection={projectOnly && selection.ref?.type !== "materialized-dataset" ? EMPTY_SELECTION : selection}>
+        <InspectorDirtySelectionGuard controller={kernel.selection} selection={projectOnly && selection.ref?.type !== "materialized-dataset" && selection.ref?.type !== "result-output" ? EMPTY_SELECTION : selection}>
         {(guardedSelection) => {
-          const canInspect = !projectOnly || guardedSelection.ref?.type === "materialized-dataset";
+          const canInspect = !projectOnly || guardedSelection.ref?.type === "materialized-dataset" || guardedSelection.ref?.type === "result-output";
           const panel = canInspect ? resolveInspectorPanel(guardedSelection) : null;
           const fallbackPanel = canInspect && guardedSelection.kind
             ? resolveUnknownInspectorRoute().contribution
@@ -126,10 +185,11 @@ function LiveInspectorModule() {
               onFocus={handleFocus}
               focusDisabled={projectOnly}
               onSelectBreadcrumb={(next) => {
-                if (!projectOnly || next.ref?.type === "materialized-dataset") kernel.selection.set(next, "inspector");
+                if (!projectOnly || next.ref?.type === "materialized-dataset" || next.ref?.type === "result-output") kernel.selection.set(next, "inspector");
               }}
               onToggleVisibility={handleToggleVisibility}
             >
+              <HistoricalViewportNotice enabled={Boolean(Panel) && guardedSelection.ref?.type !== "result-output"} />
               {Panel ? (
                 <Panel selection={guardedSelection} />
               ) : (

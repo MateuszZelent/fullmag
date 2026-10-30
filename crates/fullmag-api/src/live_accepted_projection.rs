@@ -164,6 +164,10 @@ struct ProjectionCursor {
 struct VerifiedOutput {
     task_order: usize,
     step_id: String,
+    task_id: String,
+    attempt_id: String,
+    ownership_epoch: u64,
+    case_id: String,
     object_ref: String,
     data_kind: String,
     accepted_state_ref: Option<fullmag_quantities::AcceptedStateRef>,
@@ -882,7 +886,7 @@ fn load_durable_projection(
                 .map(|entry| entry.problem().clone())
         })
     };
-    let latest_total_energy = verified
+    let latest_total_energy_output = verified
         .iter()
         .filter_map(|output| match &output.decoded {
             fullmag_application::DecodedStudyArtifact::Scalar(scalar)
@@ -893,6 +897,9 @@ fn load_durable_projection(
             _ => None,
         })
         .max_by(|left, right| compare_scalar_outputs(left, right))
+        .cloned();
+    let latest_total_energy = latest_total_energy_output
+        .as_ref()
         .and_then(|output| match &output.decoded {
             fullmag_application::DecodedStudyArtifact::Scalar(scalar) => Some(scalar.clone()),
             _ => None,
@@ -1644,6 +1651,59 @@ fn compare_scalar_outputs(left: &VerifiedOutput, right: &VerifiedOutput) -> std:
         .then_with(|| scalar_identity(left_scalar).cmp(&scalar_identity(right_scalar)))
 }
 
+fn same_projected_scalar_sample(left: &crate::types::ScalarRow, right: &crate::types::ScalarRow) -> bool {
+    // The session binds the observation frame after admission. Compare the
+    // complete scientific row so changed diagnostics at the same step survive.
+    let mut previous = left.clone();
+    previous.observation_frame = None;
+    let mut candidate = right.clone();
+    candidate.observation_frame = None;
+    match (serde_json::to_value(previous), serde_json::to_value(candidate)) {
+        (Ok(previous), Ok(candidate)) => previous == candidate,
+        _ => false,
+    }
+}
+
+fn scalar_row_from_step_stats(stats: &fullmag_runner::StepStats) -> Option<crate::types::ScalarRow> {
+    if !stats.is_physical_observation() {
+        return None;
+    }
+    let row = crate::types::ScalarRow {
+        kind: stats.kind,
+        solver_progress: stats.solver_progress.clone(),
+        observation_frame: None,
+        step: stats.step,
+        time: stats.time,
+        solver_dt: stats.dt,
+        error_estimate: stats.error_estimate,
+        max_error: stats.max_error,
+        dt_suggested: stats.dt_suggested,
+        rejected_attempts: stats.rejected_attempts,
+        pseudo_time_s: stats.pseudo_time_s,
+        active_runtime_s: None,
+        mx: stats.mx,
+        my: stats.my,
+        mz: stats.mz,
+        e_ex: stats.e_ex,
+        e_demag: stats.e_demag,
+        e_ext: stats.e_ext,
+        e_ani: stats.e_ani,
+        e_dmi: stats.e_dmi,
+        e_rotated_dmi: Some(stats.e_rotated_dmi),
+        e_total: stats.e_total,
+        max_dm_dt: stats.max_dm_dt,
+        max_h_eff: stats.max_h_eff,
+        max_h_demag: stats.max_h_demag,
+        max_torque_Apm: stats.max_torque_Apm,
+        max_torque_T: stats.max_torque_T,
+        // These metrics are part of the authoritative runner row. Unknown
+        // expression values remain absent rather than being fabricated.
+        per_object_scalars: stats.per_object_scalars.clone(),
+        table_expressions: Vec::new(),
+    };
+    row.is_physical_observation().then_some(row)
+}
+
 fn scalar_identity(scalar: &fullmag_application::StudyScalarArtifact) -> String {
     format!(
         "scalar:{}:{}:{}",
@@ -1922,6 +1982,10 @@ fn load_verified_outputs(
             outputs.push(VerifiedOutput {
                 task_order,
                 step_id: step_id.clone(),
+                task_id: task.task_id.clone(),
+                attempt_id: attempt_id.to_owned(),
+                ownership_epoch,
+                case_id: output.case_id.clone(),
                 object_ref,
                 data_kind: output.data_kind,
                 accepted_state_ref: accepted_state_ref.clone(),
@@ -2635,6 +2699,25 @@ async fn apply_projection(
                 changed = true;
             }
         }
+        if let Some(stats) = projection.terminal_stats.as_ref() {
+            if stats.time.is_finite()
+                && stats.time >= 0.0
+                && run.final_time != Some(stats.time)
+            {
+                run.final_time = Some(stats.time);
+                changed = true;
+            }
+            // A state-only accepted output has no durable E_total artifact,
+            // but the terminal runner row still carries the authoritative
+            // value. Never override a pinned scalar artifact above.
+            if projection.latest_total_energy.is_none()
+                && stats.e_total.is_finite()
+                && run.final_e_total != Some(stats.e_total)
+            {
+                run.final_e_total = Some(stats.e_total);
+                changed = true;
+            }
+        }
     }
     let public_status =
         session_status_after_projection(projection.status, projection.interactive_command);
@@ -2760,62 +2843,33 @@ async fn apply_projection(
             }
         }
     }
-    let scalar_stats = if matches!(projection.status, "completed" | "failed" | "cancelled") {
+    // Terminal samples come only from the pinned artifact. A stale live
+    // sidecar must not supply a replacement when terminal diagnostics are absent.
+    let scalar_stats = if terminal {
         projection.terminal_stats.as_ref()
     } else {
-        projection.live_observation.as_ref().and_then(|(_, observation)| observation.header.stats.as_ref())
+        projection.live_observation.as_ref()
+            .and_then(|(_, observation)| observation.header.stats.as_ref())
     };
     if let Some(stats) = scalar_stats {
-        if stats.kind.is_physical_observation() {
-            let row = crate::types::ScalarRow {
-                kind: stats.kind.clone(),
-                solver_progress: stats.solver_progress.clone(),
-                observation_frame: None,
-                step: stats.step,
-                time: stats.time,
-                solver_dt: stats.dt,
-                error_estimate: stats.error_estimate,
-                max_error: stats.max_error,
-                dt_suggested: stats.dt_suggested,
-                rejected_attempts: stats.rejected_attempts,
-                pseudo_time_s: stats.pseudo_time_s,
-                active_runtime_s: None,
-                mx: stats.mx,
-                my: stats.my,
-                mz: stats.mz,
-                e_ex: stats.e_ex,
-                e_demag: stats.e_demag,
-                e_ext: stats.e_ext,
-                e_ani: stats.e_ani,
-                e_dmi: stats.e_dmi,
-                e_rotated_dmi: Some(stats.e_rotated_dmi),
-                e_total: stats.e_total,
-                max_dm_dt: stats.max_dm_dt,
-                max_h_eff: stats.max_h_eff,
-                max_h_demag: stats.max_h_demag,
-                max_torque_Apm: stats.max_torque_Apm,
-                max_torque_T: stats.max_torque_T,
-                per_object_scalars: stats.per_object_scalars.clone(),
-                table_expressions: Vec::new(),
-            };
-            // A worker header may repeat its latest physical stats across steps
-            // whose diagnostics were not observed; the same sample is no change.
-            let already_projected = next.scalar_rows.last().is_some_and(|last| {
-                last.step == row.step
-                    && last.time.to_bits() == row.time.to_bits()
-                    && last.e_total.to_bits() == row.e_total.to_bits()
-                    && last.mx.to_bits() == row.mx.to_bits()
-                    && last.my.to_bits() == row.my.to_bits()
-                    && last.mz.to_bits() == row.mz.to_bits()
+        if let Some(row) = scalar_row_from_step_stats(stats) {
+            let request_scope_epoch = format!("{}:{}", context.api_instance_id, context.session_epoch);
+            let same_lineage = next.latest_scalar_source.as_ref().is_some_and(|source| {
+                source.session_id == context.session_id
+                    && source.run_id == context.run_id
+                    && source.request_scope_epoch == request_scope_epoch
             });
-            if row.is_physical_observation() && !already_projected {
+            let already_projected = same_lineage
+                && next.latest_scalar_source.as_ref().is_some_and(|source| {
+                    source.scalar_revision == next.scalar_revision && source.source_step == stats.step
+                })
+                && next.scalar_rows.last()
+                    .is_some_and(|last| same_projected_scalar_sample(last, &row));
+            if !already_projected {
                 let scalar_revision = next.scalar_revision;
-                // A run's latest durable row never moves backwards, so an
-                // earlier step means a new step lineage: a run started from a
-                // fresh model in the same session (fm.reset(), a sweep point).
-                // The append-only table would reject every row of that run and
-                // keep reporting the previous run's final state.
-                if next.scalar_rows.last().is_some_and(|last| row.step < last.step) {
+                // Identical values from another run are a new observation.
+                // Do not relabel a history whose source is absent or foreign.
+                if !same_lineage || next.scalar_rows.last().is_some_and(|last| row.step < last.step) {
                     next.scalar_rows.clear();
                 }
                 crate::session::apply_current_live_scalar_frame(
@@ -2829,7 +2883,7 @@ async fn apply_projection(
                     next.latest_scalar_source = Some(crate::schemas::scalars::ScalarObservationSource {
                         session_id: context.session_id.clone(),
                         run_id: context.run_id.clone(),
-                        request_scope_epoch: format!("{}:{}", context.api_instance_id, context.session_epoch),
+                        request_scope_epoch,
                         source_step: stats.step,
                         scalar_revision: next.scalar_revision,
                     });
@@ -4285,6 +4339,10 @@ mod tests {
             VerifiedOutput {
                 task_order,
                 step_id: "step".into(),
+                task_id: format!("task-{task_order}"),
+                attempt_id: format!("attempt-{task_order}"),
+                ownership_epoch: 1,
+                case_id: format!("case-{task_order}"),
                 object_ref: object_ref.into(),
                 data_kind: "state".into(),
                 accepted_state_ref: None,
@@ -4512,6 +4570,255 @@ mod tests {
             "stage-2",
             "sha256:other",
         ));
+    }
+
+    #[test]
+    fn terminal_step_stats_use_shared_scalar_mapping_without_fabricated_expressions() {
+        let mut stats = fullmag_runner::StepStats {
+            step: 9,
+            time: 9.0e-12,
+            dt: 1.0e-12,
+            error_estimate: Some(0.25),
+            max_error: Some(0.5),
+            dt_suggested: Some(2.0e-12),
+            rejected_attempts: 2,
+            e_total: -3.0,
+            ..Default::default()
+        };
+        stats.per_object_scalars.insert(
+            "free".into(),
+            std::collections::HashMap::from([("mx".into(), 0.7)]),
+        );
+
+        let row = scalar_row_from_step_stats(&stats).expect("physical stats map to a scalar row");
+        assert_eq!(row.step, 9);
+        assert_eq!(row.time, 9.0e-12);
+        assert_eq!(row.error_estimate, Some(0.25));
+        assert_eq!(row.rejected_attempts, 2);
+        assert_eq!(row.per_object_scalars["free"]["mx"], 0.7);
+        assert!(row.table_expressions.is_empty());
+
+        let mut rows = Vec::new();
+        assert!(crate::session::upsert_scalar_row(&mut rows, row.clone()));
+        assert!(crate::session::upsert_scalar_row(&mut rows, row));
+        assert_eq!(rows.len(), 1, "replaying one durable terminal sample must not append");
+    }
+
+    #[test]
+    fn scalar_dedup_preserves_changed_diagnostics_at_the_same_sample() {
+        let stats = fullmag_runner::StepStats {
+            step: 9,
+            time: 9.0e-12,
+            error_estimate: Some(0.25),
+            ..Default::default()
+        };
+        let row = scalar_row_from_step_stats(&stats).unwrap();
+        let mut published = row.clone();
+        published.observation_frame = Some(crate::schemas::common::AcceptedObservationFrameRef::for_snapshot(
+            "session", 1, "domain", 0, row.step, Some(row.time),
+        ));
+        assert!(same_projected_scalar_sample(&published, &row));
+        let mut corrected = row.clone();
+        corrected.error_estimate = Some(0.5);
+        assert!(!same_projected_scalar_sample(&published, &corrected));
+        corrected = row.clone();
+        corrected.per_object_scalars.insert("free".into(),
+            std::collections::HashMap::from([("mx".into(), 0.7)]));
+        assert!(!same_projected_scalar_sample(&published, &corrected));
+    }
+
+    #[test]
+    fn solver_progress_is_not_lowered_to_a_physical_scalar_row() {
+        let mut stats = fullmag_runner::StepStats::default();
+        stats.kind = fullmag_quantities::StepDataKind::SolverProgress;
+        stats.solver_progress = Some(fullmag_quantities::SolverProgress::FemEigen {
+            metrics: std::collections::HashMap::new(),
+        });
+        assert!(scalar_row_from_step_stats(&stats).is_none());
+    }
+
+    fn terminal_projection_fixture(stats: Option<fullmag_runner::StepStats>, revision: u64) -> DurableProjection {
+        DurableProjection {
+            run_catalog_revision: revision,
+            artifact_catalog_revision: Some(revision),
+            terminal_without_outputs: false,
+            preclaim_cancellations: Vec::new(),
+            solver_profile: None,
+            stage_journal_details: StageJournalDetailsCache::new(),
+            status: "completed",
+            accepted_runtime_capabilities: None,
+            accepted_runtime_mode: None,
+            accepted_runtime_problem: None,
+            command_id: None,
+            interactive_command: false,
+            resolved_capabilities: None,
+            latest_state: None,
+            latest_total_energy: None,
+            terminal_stats: stats,
+            latest_output_identity: None,
+            live_observation: None,
+            live_observation_identity: None,
+            live_observation_sequence: None,
+            live_magnetization_sequence: None,
+            stage_execution: crate::session::accepted_stage_execution_state(
+                Vec::new(),
+                crate::types::RuntimeLifecycleState::Completed,
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn terminal_projection_publishes_step_101_after_stale_step_5_with_frame() {
+        let state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        state
+            .current_live_session_epoch
+            .store(4, std::sync::atomic::Ordering::Release);
+        {
+            let mut current = state.current_live_state.write().await;
+            let snapshot = current.as_mut().expect("live session fixture");
+            snapshot.run = Some(crate::types::RunManifest {
+                run_id: "test-run".into(),
+                session_id: "test-session".into(),
+                status: "running".into(),
+                total_steps: 101,
+                final_time: None,
+                final_e_ex: None,
+                final_e_demag: None,
+                final_e_ext: None,
+                final_e_ani: None,
+                final_e_dmi: None,
+                final_e_rotated_dmi: None,
+                final_e_total: None,
+                artifact_dir: ".".into(),
+            });
+            let mut scene = fullmag_authoring::SceneDocument::default();
+            scene.revision = 7;
+            snapshot.scene_document = Some(scene);
+            let mut stale = fullmag_runner::StepStats {
+                step: 5,
+                time: 5.0e-12,
+                e_total: -1.0,
+                ..Default::default()
+            };
+            stale.per_object_scalars.insert(
+                "free".into(),
+                std::collections::HashMap::from([("mx".into(), 0.1)]),
+            );
+            crate::session::apply_current_live_scalar_frame(
+                snapshot,
+                crate::types::CurrentLiveScalarFrameRequest {
+                    session_id: "test-session".into(),
+                    latest_scalar_row: scalar_row_from_step_stats(&stale),
+                },
+            )
+            .expect("stale scalar fixture should be admitted");
+            snapshot.latest_scalar_source = Some(crate::schemas::scalars::ScalarObservationSource {
+                session_id: "test-session".into(), run_id: "test-run".into(),
+                request_scope_epoch: format!("{}:4", state.request_scope_instance_id),
+                source_step: stale.step, scalar_revision: snapshot.scalar_revision,
+            });
+        }
+
+        let final_stats = fullmag_runner::StepStats {
+            step: 101,
+            time: 1.01e-10,
+            dt: 1.0e-12,
+            e_total: -4.5,
+            ..Default::default()
+        };
+        let context = ProjectionContext {
+            session_id: "test-session".into(),
+            run_id: "test-run".into(),
+            session_epoch: 4,
+            scene_revision: 7,
+            execution_input: None,
+            api_instance_id: state.request_scope_instance_id.clone(),
+            allow_api_instance_rebind: false,
+        };
+        apply_projection(
+            &state,
+            &context,
+            terminal_projection_fixture(Some(final_stats.clone()), 1),
+        )
+        .await
+        .expect("terminal projection should publish final scalar row");
+
+        {
+            let current = state.current_live_state.read().await;
+            let snapshot = current.as_ref().expect("published live session");
+            assert_eq!(snapshot.scalar_rows.len(), 2);
+            assert_eq!(snapshot.scalar_rows[0].step, 5);
+            let final_row = snapshot.scalar_rows.last().expect("final scalar row");
+            assert_eq!(final_row.step, 101);
+            assert_eq!(final_row.time, 1.01e-10);
+            assert_eq!(final_row.e_total, -4.5);
+            let final_frame = final_row
+                .observation_frame
+                .as_ref()
+                .expect("final scalar row observation frame");
+            assert_eq!(final_frame.source_step, 101);
+            assert_eq!(final_frame.source_time_seconds, Some(1.01e-10));
+            assert_eq!(
+                final_frame.session_epoch,
+                format!(
+                    "test-session@{}",
+                    snapshot.session.started_at_unix_ms
+                )
+            );
+            assert_eq!(
+                state
+                    .current_live_session_epoch
+                    .load(std::sync::atomic::Ordering::Acquire),
+                4
+            );
+        }
+
+        // Without a pinned terminal scalar artifact, replaying the projection
+        // must not infer a new sample from the terminal step counter.
+        {
+            let mut current = state.current_live_state.write().await;
+            let snapshot = current.as_mut().expect("live session fixture");
+            snapshot.scalar_rows.truncate(1);
+            snapshot.run.as_mut().unwrap().status = "running".into();
+        }
+        apply_projection(
+            &state,
+            &context,
+            terminal_projection_fixture(None, 2),
+        )
+        .await
+        .expect("legacy terminal projection should remain valid");
+        let current = state.current_live_state.read().await;
+        let snapshot = current.as_ref().expect("published live session");
+        assert_eq!(snapshot.scalar_rows.len(), 1);
+        assert_eq!(snapshot.scalar_rows[0].step, 5);
+        drop(current);
+
+        apply_projection(&state, &context, terminal_projection_fixture(Some(final_stats.clone()), 3))
+            .await.expect("restore the pinned terminal sample");
+        let revision = state.current_live_state.read().await.as_ref().unwrap().scalar_revision;
+        apply_projection(&state, &context, terminal_projection_fixture(Some(final_stats.clone()), 3))
+            .await.expect("repeat of the same observation is idempotent");
+        assert_eq!(state.current_live_state.read().await.as_ref().unwrap().scalar_revision, revision);
+
+        let rerun = ProjectionContext { run_id: "test-run-rerun".into(), ..context.clone() };
+        {
+            let mut current = state.current_live_state.write().await;
+            let snapshot = current.as_mut().unwrap();
+            snapshot.run.as_mut().unwrap().run_id = rerun.run_id.clone();
+            snapshot.run.as_mut().unwrap().status = "running".into();
+        }
+        apply_projection(&state, &rerun, terminal_projection_fixture(Some(final_stats), 1))
+            .await.expect("identical values in a new run must get new provenance");
+        let current = state.current_live_state.read().await;
+        let snapshot = current.as_ref().unwrap();
+        assert_eq!(snapshot.scalar_rows.len(), 1, "foreign run history must not be relabelled");
+        assert_eq!(snapshot.scalar_rows[0].step, 101);
+        assert!(snapshot.scalar_revision > revision);
+        let source = snapshot.latest_scalar_source.as_ref().unwrap();
+        assert_eq!(source.run_id, rerun.run_id);
+        assert_eq!(source.scalar_revision, snapshot.scalar_revision);
+        assert_eq!(source.source_step, 101);
     }
 }
 

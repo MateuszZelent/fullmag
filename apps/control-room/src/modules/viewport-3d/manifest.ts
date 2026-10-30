@@ -275,7 +275,9 @@ export const viewport3dManifest: ModuleManifest = {
         category: "Viewport",
         scope: "viewport",
         run: (context) => {
-          viewport3dStore.resetCamera();
+          if (viewport3dStore.resetCamera()) {
+            return { status: "completed" };
+          }
           if (!isSavedMaterializedDatasetSelection(context)) {
             context.cameraRegistry?.patchCamera(DEFAULT_CAMERA_REGISTRY_STATE);
           }

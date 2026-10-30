@@ -19,8 +19,10 @@ from verify_resource_discovery_runtime import (
 def validate_worker_publication(started, completed, owner, lease, start_commands):
     """Bind the HTTP publication to one completed, nonmagnetic worker attempt."""
     schema = 'fullmag.accepted_worker_execution.v1'
+    completion_schema = completed.get('schema_version')
     identity = completed.get('identity', {})
-    require(completed.get('schema_version') == schema and identity.get('schema_version') == schema
+    require(completion_schema in (schema, 'fullmag.accepted_worker_execution.v3')
+            and identity.get('schema_version') == schema
             and started.get('identity') == identity, 'Antenna Start/completed identity mismatch')
     claim = identity.get('claim', {})
     for key in ('run_id', 'task_id', 'attempt_id', 'ownership_epoch'):
@@ -52,6 +54,10 @@ def validate_worker_publication(started, completed, owner, lease, start_commands
             and completed.get('accepted_state_ref') is None
             and completed.get('observation_source') is None,
             'Antenna receipt is incomplete or contains a magnetic observation/state')
+    if completion_schema == 'fullmag.accepted_worker_execution.v3':
+        require(completed.get('final_step_stats') is None
+                and completed.get('terminal_publication') is None,
+                'Antenna non-solver receipt contains solver statistics or a terminal publication')
     outputs = completed.get('outputs', [])
     require(isinstance(outputs, list) and len(outputs) == 1 and isinstance(outputs[0], dict),
             'Antenna worker must publish exactly one inspection output')

@@ -1,3 +1,4 @@
+import type { ResultsSource,ResultsEntry } from "../api/resultsBrowser";
 import type { ModuleId } from "../types";
 import type { CrossSectionQualityMetric, ResourceRevision } from "../api/apiTypes";
 import type {
@@ -279,6 +280,7 @@ export type FdmDomainSelectionScope =
   | "universe-outside-support";
 
 export type SelectionRef =
+  | {type:"result-output";kind:"results.output.entry";nodeId:string;source:ResultsSource;entry:ResultsEntry;revision:string;runId:string|null}
   | LiveChartSelectionRef
   | LiveChartPointSelectionRef
   | AnalysisResultSelectionRef
@@ -924,6 +926,8 @@ export function selectionRefEquals(
         left.nodeId === right.nodeId &&
         left.runId === right.runId
       );
+    case "result-output":
+      return right.type==="result-output" && left.nodeId===right.nodeId && left.entry.id===right.entry.id && left.revision===right.revision && left.runId===right.runId && left.source.kind===right.source.kind && (left.source.kind!=="workspace" || (right.source.kind==="workspace" && left.source.itemId===right.source.itemId));
     case "analysis-result":
       return (
         right.type === "analysis-result" &&

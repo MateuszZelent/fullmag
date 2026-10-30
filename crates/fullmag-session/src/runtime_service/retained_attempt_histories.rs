@@ -146,7 +146,7 @@ fn validate_namespace(relative: &str, directory: bool) -> Result<()> {
         let base = parts.iter().skip(1).take(2).all(|id| validate_store_id(id).is_ok());
         let epoch = parts.get(3).is_none_or(|value| value.strip_prefix("epoch-").and_then(|n| n.parse::<u64>().ok()).is_some_and(|n| n > 0));
         base && epoch && ((directory && parts.len() <= 4)
-            || (!directory && parts.len() == 5 && (matches!(parts[4], "worker_execution_started.v1.json" | "worker_execution_completed.v1.json") || (parts[4].ends_with(".bundle") && validate_store_id(parts[4]).is_ok()))))
+            || (!directory && parts.len() == 5 && (matches!(parts[4], "worker_execution_started.v1.json" | "worker_execution_completed.v1.json" | "worker_execution_completed.v2.json") || (parts[4].ends_with(".bundle") && validate_store_id(parts[4]).is_ok()))))
     } else { false };
     if !valid { bail!("v5 history contains an unknown or invalid run namespace: {relative}"); }
     Ok(())
@@ -264,6 +264,14 @@ mod tests {
     fn pin() -> RetainedAttemptHistoryPin {
         RetainedAttemptHistoryPin { run_id: "run-history".into(), run_evidence_sha256: "a".repeat(64),
             attempts: vec![RetainedAttemptPin { task_id: "task-history".into(), attempt_id: "attempt-old".into(), ownership_epoch: 1, resource_id: "compute-cpu".into() }] }
+    }
+
+    #[test]
+    fn completion_namespaces_preserve_canonical_and_legacy_stats_receipts() {
+        for name in ["worker_execution_completed.v1.json", "worker_execution_completed.v2.json"] {
+            assert!(validate_namespace(&format!("worker-attempts/task/attempt/epoch-1/{name}"), false).is_ok());
+        }
+        assert!(validate_namespace("worker-attempts/task/attempt/epoch-1/worker_execution_completed.v99.json", false).is_err());
     }
 
     #[test]

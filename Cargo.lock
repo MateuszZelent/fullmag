@@ -1261,8 +1261,8 @@ version = "0.1.0"
 name = "fullmag-cli"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
  "anyhow",
+ "base64 0.22.1",
  "clap",
  "fullmag-application",
  "fullmag-authoring",
@@ -1483,8 +1483,11 @@ name = "fullmag-workspace-inspect"
 version = "0.1.0"
 dependencies = [
  "fullmag-application",
+ "fullmag-ir",
+ "fullmag-quantities",
  "fullmag-session",
  "fullmag-workspace",
+ "libc",
  "serde",
  "serde_json",
  "sha2",

@@ -1,0 +1,644 @@
+{
+  "scope": "Managed FEM publication/finalization plus completed-results browser qualification. Active Current streaming, collection of stages and scientific qualification remain open.",
+  "workspace_item_id": "10",
+  "runtime": {
+    "attempt": "cf232a8305a24e36b75e584edb2c8679",
+    "state": "succeeded",
+    "source_commit": "f4ea712d967e3bc18d9e9105cddaa7f449581c02",
+    "source_snapshot_sha256": "33d0eaba7106290ee8a7235547aabdbdfbd7a3092366f96f8b287f3c63b4a1da",
+    "backend_container": "7385385f7561d3fe4aa3eaf616e77d680ff81aad7b39d74d14a77590e4ca2cb9",
+    "frontend_container": "88513481ad6c247608d4d6d1e9abd29951c4b8ac145a507d543db792edf5a0e3"
+  },
+  "root": "/user-data/results-browser-fem/run-live-5e4873fbf48773da8360849b4d88c86c77635d527f08509492adda4fabcc8ff7/propagate-attempt-1",
+  "run_id": "run-live-5e4873fbf48773da8360849b4d88c86c77635d527f08509492adda4fabcc8ff7",
+  "publication": {
+    "accepted_run_id": "run-live-5e4873fbf48773da8360849b4d88c86c77635d527f08509492adda4fabcc8ff7",
+    "attempt_id": "attempt-a49c5cfce422400db294937983b92839",
+    "output_identity": "89d4e040-da96-4641-94d6-23ae100f3630",
+    "ownership_epoch": 1,
+    "sample_policy": "fullmag.zarr.sample_publication.v1",
+    "schema": "fullmag.accepted_results_publication.v1",
+    "specification_fingerprint": "ba9f7760c34a007a9e35c5143455f44381293c87b9278dcb6f1c5161208bfded",
+    "step_id": "propagate",
+    "task_id": "task-e5734319d6c01ad1d8c4c3e072b68442219f5a89ec644da23009084671ac74e0"
+  },
+  "manifest_status": "completed",
+  "resolved": {
+    "backend": "fem",
+    "device": "cpu",
+    "mode": "strict",
+    "precision": "double"
+  },
+  "storage_state": "succeeded",
+  "active_marker_exists": false,
+  "preterminal_watermarks": {
+    "results_browser.zarr/stages/stage_0000_propagate/fields/H_eff": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "results_browser.zarr/stages/stage_0000_propagate/fields/m": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "results_browser.zarr/stages/stage_0000_propagate/table": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ]
+  },
+  "tests": {
+    "runner": {
+      "summary": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1808 filtered out; finished in 0.00s"
+      ],
+      "sha256": "2e0bf0fbef9d10ea084beffe47c8e9236ea469389df7fe20b485d0b479abacea"
+    },
+    "api": {
+      "summary": [
+        "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 1705 filtered out; finished in 0.04s"
+      ],
+      "sha256": "1c21e56d503aa51bbcac14eae60f66bf01a469cf743a6c487555986eee027c12"
+    },
+    "reader": {
+      "summary": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1710 filtered out; finished in 0.03s"
+      ],
+      "sha256": "6c72444235828f0e80cf5aefbc3b35cf6cd31a83a8233cea21d012a8dc8543ff"
+    }
+  },
+  "backend_commit": "ba76afc3f392bc6b5e79d00490a2a1fae9e719ea",
+  "browser": {
+    "schema": "fullmag.docker-dev-saved-playback-result.v1",
+    "state": "passed",
+    "scenario": "saved-playback",
+    "item_id": "10",
+    "public_url": "http://127.0.0.1:3298",
+    "probe_url": "http://frontend:8080",
+    "playwright_version": "1.62.1",
+    "browser_gpu_mode": "swiftshader-webgl-requested",
+    "script_sha256": "1063ff706c83a34da37fce6a7ac96603cc0b3c507cf6fbc113b30863216a0732",
+    "geometry_kind": "fem",
+    "frame_count": 6,
+    "frame_indices": [
+      0,
+      2,
+      5
+    ],
+    "frame_sha256": [
+      "18d232ee5b5b18e5b6c98132ffbfd41344c371b2d81a4929cd69971a51031a09",
+      "5c6204501221f3f4e6931aafdfdc684b772ea4543a0959e844dabbfcf16f0b11",
+      "6e6db50daaa588a2fd418f6d46b14cd7523581e04fd924102ad956e9f6ac6912"
+    ],
+    "canvas_visible": true,
+    "context_lost": false,
+    "drawing_buffer": [
+      649,
+      565
+    ],
+    "source_details_disclosure_verified": true,
+    "array_metadata_default_collapsed": true,
+    "metadata_search_preserves_expansion": true,
+    "folder_details_keyboard_verified": true,
+    "folder_details_reachability": {
+      "y": 711.3125,
+      "bottom": 729.5,
+      "panel_y": 125.796875,
+      "panel_bottom": 784.28125,
+      "scroll_height": 628,
+      "client_height": 628,
+      "scroll_top": 0
+    },
+    "output_inspector_continuous_sections_verified": true,
+    "closed_values_preview_no_sample_request": true,
+    "pending_snapshot_retained_verified": true,
+    "delayed_sample_index": 1,
+    "sample_read_error_retained_verified": true,
+    "sample_read_error_reselection_recovered": true,
+    "failed_sample_index": 4,
+    "results_browser_verified": true,
+    "output_count": 38,
+    "per_snapshot_settings_retained": true,
+    "saved_panels_hide_restore_verified": true,
+    "saved_folder_float_dock_verified": true,
+    "layout_checks": [
+      {
+        "width": 1280,
+        "height": 900,
+        "scrollWidth": 1280,
+        "results_tree_boxes": [
+          {
+            "label": "Saved result outputs",
+            "x": 12,
+            "width": 228.390625,
+            "scrollWidth": 228,
+            "clientWidth": 228,
+            "scrollLeft": 0
+          },
+          {
+            "label": "Result output entries",
+            "x": 24,
+            "width": 204.390625,
+            "scrollWidth": 204,
+            "clientWidth": 204,
+            "scrollLeft": 0
+          }
+        ],
+        "primary_controls": [
+          {
+            "label": "Saved sample",
+            "center_visible": true
+          },
+          {
+            "label": "Visualization component",
+            "center_visible": true
+          }
+        ],
+        "tree_labels": [
+          {
+            "text": "H_eff",
+            "clientWidth": 102,
+            "scrollWidth": 102
+          },
+          {
+            "text": "m",
+            "clientWidth": 102,
+            "scrollWidth": 102
+          },
+          {
+            "text": "table",
+            "clientWidth": 115,
+            "scrollWidth": 115
+          }
+        ],
+        "scrolled_elements": [],
+        "reachable_controls": [
+          {
+            "label": "Saved sample",
+            "center_visible": true
+          },
+          {
+            "label": "Visualization component",
+            "center_visible": true
+          }
+        ]
+      },
+      {
+        "width": 1024,
+        "height": 900,
+        "scrollWidth": 1024,
+        "results_tree_boxes": [
+          {
+            "label": "Saved result outputs",
+            "x": 12,
+            "width": 216.9375,
+            "scrollWidth": 217,
+            "clientWidth": 217,
+            "scrollLeft": 0
+          },
+          {
+            "label": "Result output entries",
+            "x": 24,
+            "width": 192.9375,
+            "scrollWidth": 193,
+            "clientWidth": 193,
+            "scrollLeft": 0
+          }
+        ],
+        "primary_controls": [
+          {
+            "label": "Saved sample",
+            "center_visible": true
+          },
+          {
+            "label": "Visualization component",
+            "center_visible": true
+          }
+        ],
+        "tree_labels": [
+          {
+            "text": "H_eff",
+            "clientWidth": 91,
+            "scrollWidth": 91
+          },
+          {
+            "text": "m",
+            "clientWidth": 91,
+            "scrollWidth": 91
+          },
+          {
+            "text": "table",
+            "clientWidth": 104,
+            "scrollWidth": 104
+          }
+        ],
+        "scrolled_elements": [],
+        "reachable_controls": [
+          {
+            "label": "Saved sample",
+            "center_visible": true
+          },
+          {
+            "label": "Visualization component",
+            "center_visible": true
+          }
+        ]
+      },
+      {
+        "width": 768,
+        "height": 900,
+        "scrollWidth": 768,
+        "results_tree_boxes": [
+          {
+            "label": "Saved result outputs",
+            "x": 12,
+            "width": 216,
+            "scrollWidth": 216,
+            "clientWidth": 216,
+            "scrollLeft": 0
+          },
+          {
+            "label": "Result output entries",
+            "x": 24,
+            "width": 192,
+            "scrollWidth": 192,
+            "clientWidth": 192,
+            "scrollLeft": 0
+          }
+        ],
+        "primary_controls": [
+          {
+            "label": "Saved sample",
+            "center_visible": true
+          },
+          {
+            "label": "Visualization component",
+            "center_visible": true
+          }
+        ],
+        "tree_labels": [
+          {
+            "text": "H_eff",
+            "clientWidth": 90,
+            "scrollWidth": 90
+          },
+          {
+            "text": "m",
+            "clientWidth": 90,
+            "scrollWidth": 90
+          },
+          {
+            "text": "table",
+            "clientWidth": 103,
+            "scrollWidth": 103
+          }
+        ],
+        "scrolled_elements": [],
+        "reachable_controls": [
+          {
+            "label": "Saved sample",
+            "center_visible": true
+          },
+          {
+            "label": "Visualization component",
+            "center_visible": true
+          }
+        ]
+      },
+      {
+        "width": 1920,
+        "height": 1080,
+        "scrollWidth": 1920,
+        "results_tree_boxes": [
+          {
+            "label": "Saved result outputs",
+            "x": 12,
+            "width": 576.640625,
+            "scrollWidth": 577,
+            "clientWidth": 577,
+            "scrollLeft": 0
+          },
+          {
+            "label": "Result output entries",
+            "x": 24,
+            "width": 552.640625,
+            "scrollWidth": 553,
+            "clientWidth": 553,
+            "scrollLeft": 0
+          }
+        ],
+        "primary_controls": [
+          {
+            "label": "Saved sample",
+            "center_visible": false
+          },
+          {
+            "label": "Visualization component",
+            "center_visible": false
+          }
+        ],
+        "tree_labels": [
+          {
+            "text": "H_eff",
+            "clientWidth": 357,
+            "scrollWidth": 357
+          },
+          {
+            "text": "m",
+            "clientWidth": 357,
+            "scrollWidth": 357
+          },
+          {
+            "text": "table",
+            "clientWidth": 382,
+            "scrollWidth": 382
+          }
+        ],
+        "scrolled_elements": [],
+        "reachable_controls": [
+          {
+            "label": "Saved sample",
+            "center_visible": true
+          },
+          {
+            "label": "Visualization component",
+            "center_visible": true
+          }
+        ]
+      },
+      {
+        "width": 1500,
+        "height": 1000,
+        "scrollWidth": 1500,
+        "results_tree_boxes": [
+          {
+            "label": "Saved result outputs",
+            "x": 12,
+            "width": 389.6875,
+            "scrollWidth": 390,
+            "clientWidth": 390,
+            "scrollLeft": 0
+          },
+          {
+            "label": "Result output entries",
+            "x": 24,
+            "width": 365.6875,
+            "scrollWidth": 366,
+            "clientWidth": 366,
+            "scrollLeft": 0
+          }
+        ],
+        "primary_controls": [
+          {
+            "label": "Saved sample",
+            "center_visible": true
+          },
+          {
+            "label": "Visualization component",
+            "center_visible": true
+          }
+        ],
+        "tree_labels": [
+          {
+            "text": "H_eff",
+            "clientWidth": 170,
+            "scrollWidth": 170
+          },
+          {
+            "text": "m",
+            "clientWidth": 170,
+            "scrollWidth": 170
+          },
+          {
+            "text": "table",
+            "clientWidth": 195,
+            "scrollWidth": 195
+          }
+        ],
+        "scrolled_elements": [],
+        "reachable_controls": [
+          {
+            "label": "Saved sample",
+            "center_visible": true
+          },
+          {
+            "label": "Visualization component",
+            "center_visible": true
+          }
+        ]
+      }
+    ],
+    "saved_camera_fit_verified": true,
+    "live_return_verified": true,
+    "live_view_source": "current",
+    "live_drawing_buffer": [
+      516,
+      495
+    ],
+    "results_sample_indices": [
+      0,
+      2,
+      5
+    ],
+    "results_sample_sha256": [
+      "b9446203a1b90c6ac762ca4a1f9b2ae742afd37282042873df537b5fd961335b",
+      "a66b8a4046e5d057e6bbcc423bff3152724dd82b8e78c59e93ad90c753d6b531",
+      "aca0f253fae53a994dfe72b2051fdb0b2ea2b67e6bd5a739bc4a1bdd44f33bfb"
+    ],
+    "results_canvas_changed": true,
+    "object_draft_cancel_preserved": true,
+    "object_draft_saved_folder_guarded": true,
+    "object_draft_discard_verified": true,
+    "airbox_draft_cancel_preserved": true,
+    "airbox_draft_saved_folder_guarded": true,
+    "airbox_draft_discard_verified": true,
+    "model_inspector_historical_context_verified": true,
+    "return_live_preserves_model_draft": true,
+    "current_exit_without_panels_or_3d_verified": true,
+    "current_exit_at_320": {
+      "x": 68,
+      "width": 118,
+      "viewport": 320
+    },
+    "sample_reselection_verified": true,
+    "table_columns_verified": [
+      "t",
+      "step",
+      "mx",
+      "my",
+      "mz",
+      "e_total"
+    ],
+    "table_sample_indices": [
+      0,
+      5
+    ],
+    "saved_camera_reset_verified": true,
+    "return_live_pending_sample_verified": true,
+    "current_run_results_verified": true,
+    "current_run_id": "run-live-5e4873fbf48773da8360849b4d88c86c77635d527f08509492adda4fabcc8ff7-1",
+    "results_navigation_state_retained": true,
+    "results_saved_folder_entry_verified": true,
+    "terminal_live_scalars_verified": true,
+    "terminal_live_step": 101,
+    "terminal_live_time_s": 1e-10,
+    "terminal_live_scalar_revision": 3,
+    "terminal_live_observation_frame": {
+      "observation_frame_id": "obs:docker-startup-0e75c8b8719c7ec1c5111ade4028db62256c633478a54ffb9f6aac2c424fa930@1793276049066:6002390632978672749:2:101:3ddb7cdfd9d7bdbb",
+      "session_epoch": "docker-startup-0e75c8b8719c7ec1c5111ade4028db62256c633478a54ffb9f6aac2c424fa930@1793276049066",
+      "domain_generation_id": "6002390632978672749",
+      "topology_revision": "2",
+      "source_step": 101,
+      "source_time_seconds": 1e-10
+    },
+    "publication_waiting_ui_verified": true,
+    "publication_failure_distinct_verified": true,
+    "publication_catalog_arrival_verified": true,
+    "publication_evidence": "browser-availability-fixture-with-real-published-catalog",
+    "publication_poll_count": 4,
+    "no_session_close_to_home_verified": true,
+    "no_session_legacy_inspector_close_verified": true,
+    "no_session_browser_only_close_verified": true,
+    "no_session_evidence": "browser-session-discovery-fixture-with-real-result-data",
+    "field_payloads_verified": true,
+    "changed_canvas": true,
+    "inspector_stable": true,
+    "camera_stable": true,
+    "visualization_trace": [
+      {
+        "phase": "initial-home",
+        "method": "GET",
+        "revision": 1,
+        "camera": {
+          "projection": "perspective",
+          "position": [
+            1.2586030213332585e-07,
+            9.06194175359946e-08,
+            1.2586030213332585e-07
+          ],
+          "target": [
+            0,
+            0,
+            0
+          ],
+          "up": [
+            0,
+            0,
+            1
+          ],
+          "fov_degrees": 45,
+          "orthographic_scale": null
+        }
+      }
+    ],
+    "payload_evidence": "application_body_reads",
+    "live_visualization_unchanged": true,
+    "startup_camera_initialization": null,
+    "hook_errors": [],
+    "errors": [],
+    "evidence_image_formats": {
+      "screenshot_base64": "png",
+      "terminal_live_screenshot_base64": "png",
+      "pending_snapshot_screenshot_base64": "jpeg",
+      "sample_error_screenshot_base64": "jpeg",
+      "compact_screenshot_base64": "jpeg",
+      "live_screenshot_base64": "jpeg",
+      "model_context_screenshot_base64": "jpeg",
+      "dark_screenshot_base64": "jpeg",
+      "publication_waiting_screenshot_base64": "jpeg",
+      "no_session_screenshot_base64": "jpeg"
+    },
+    "images": {
+      "pending_snapshot_screenshot_base64": {
+        "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/3df588c9d44d4eb3887842352a1825ef-pending_snapshot_screenshot.jpeg",
+        "sha256": "ac85240d0e87a956db7897033db6ed4ddd8aa2fdb17e19d8160db8b0a90d3359",
+        "bytes": 24199
+      },
+      "sample_error_screenshot_base64": {
+        "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/3df588c9d44d4eb3887842352a1825ef-sample_error_screenshot.jpeg",
+        "sha256": "588b8bcb522835c0173f1a79f3a9722dfde83c7f63be23828fc8e9f5b3b60b58",
+        "bytes": 22880
+      },
+      "compact_screenshot_base64": {
+        "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/3df588c9d44d4eb3887842352a1825ef-compact_screenshot.jpeg",
+        "sha256": "8450bcb2027accc6142b032fe413ea4b7bf7468611e5ad4fb2e438e1b38e825e",
+        "bytes": 111790
+      },
+      "live_screenshot_base64": {
+        "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/3df588c9d44d4eb3887842352a1825ef-live_screenshot.jpeg",
+        "sha256": "77be1bf09a11eb0dbc2bbc4802c8fc2644ff9e6f09dc6f4a2046c393c198f670",
+        "bytes": 133879
+      },
+      "model_context_screenshot_base64": {
+        "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/3df588c9d44d4eb3887842352a1825ef-model_context_screenshot.jpeg",
+        "sha256": "535ed76b42333d9a31f261b3d3a7764eb700c7e831702103c9606bc8d99b0182",
+        "bytes": 147168
+      },
+      "dark_screenshot_base64": {
+        "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/3df588c9d44d4eb3887842352a1825ef-dark_screenshot.jpeg",
+        "sha256": "5ca340e539958d0f60159d5663d9532d1d43529d72615b55318f9caf104b6fde",
+        "bytes": 147155
+      },
+      "terminal_live_screenshot_base64": {
+        "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/3df588c9d44d4eb3887842352a1825ef-terminal_live_screenshot.png",
+        "sha256": "906769a666b418f41dde2a2e104d8531bdb472ce9ab6d94dfe6ef3c174a1ab5c",
+        "bytes": 227447
+      },
+      "publication_waiting_screenshot_base64": {
+        "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/3df588c9d44d4eb3887842352a1825ef-publication_waiting_screenshot.jpeg",
+        "sha256": "3445b0a63ef3c135ea49146037d59aefbc35872ee92e25881c692239aa4261d5",
+        "bytes": 5892
+      },
+      "no_session_screenshot_base64": {
+        "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/3df588c9d44d4eb3887842352a1825ef-no_session_screenshot.jpeg",
+        "sha256": "c2e4e81638e3ca2b54d793ca08ffec4622611e6df601613485720d9d81ae46ed",
+        "bytes": 105147
+      },
+      "screenshot_base64": {
+        "path": "/home/kkingstoun/git/fullmag/storage/user-data/fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f/audits/results-ui-20261029/3df588c9d44d4eb3887842352a1825ef-screenshot.png",
+        "sha256": "07f59f9fc89009c9a2b968f66677058149452803b8bdf0991e58713240604f50",
+        "bytes": 247496
+      }
+    },
+    "managed_attempt": "3df588c9d44d4eb3887842352a1825ef",
+    "managed_result_bytes": 1572769,
+    "harness_sha256": "1063ff706c83a34da37fce6a7ac96603cc0b3c507cf6fbc113b30863216a0732"
+  },
+  "frontend_source_boundary": "QA 3df588 validates the then-current live frontend WIP, including UX19-23. Later aria-valuetext/notice edits are separately unit tested; they are not covered by this browser receipt.",
+  "visual_followup": "Saved Explorer nested rows appear clipped in the principal/compact screenshots; source investigation pending despite automated PASS.",
+  "backend_source_sha256": {
+    "crates/fullmag-api/src/accepted_project_storage.rs": "cfd86e6f3f1f0eeaa4b192b62ed261a01f97e2523ae2aa4f979631591dd319da",
+    "crates/fullmag-api/src/accepted_study_worker.rs": "938ab534d4a9a8b4ebdb2c1ba11c153c7fb601f17abf53aa54042e7e32a3c1b5",
+    "crates/fullmag-runner/src/project_storage.rs": "0d8eb438c6d9136f3fa29c01a4757c514569f9a66ca0e19f16878ede345b5e1c",
+    "crates/fullmag-runner/src/artifact_pipeline.rs": "1acd6c17ee620624d8bfd09f10d6fd447c521cfed706985466e9eaa41e033971",
+    "crates/fullmag-runner/src/artifacts.rs": "2f2309bb36f62046680e68ff04aef669b586751120a225a4c0283a310ffb8ea8"
+  },
+  "failed_browser_attempts": [
+    {
+      "attempt": "209ea77cd6b74da391e1c0b9a3c5ee01",
+      "reason": "Harness used textbox for search input; corrected to searchbox."
+    },
+    {
+      "attempt": "e3bea048eb1f4c25b6bd1cfd944bda7c",
+      "reason": "Harness combined dirty draft with surface switch; valid draft guard hid background controls. Split the two acceptance cases."
+    },
+    {
+      "attempt": "a6f00031f2c24658a6133f1a8e7b7242",
+      "reason": "Live Charts automatically opened Inspector; harness incorrectly expected a Restore button. Hide panels after selecting Live Charts."
+    },
+    {
+      "attempt": "098ca8e67571422b9fe50c7bd743e65c",
+      "reason": "Harness heading selector was ambiguous; constrained to Inspector h2."
+    }
+  ]
+}

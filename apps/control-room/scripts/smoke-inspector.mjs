@@ -2398,6 +2398,7 @@ async function qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles, f
     .locator(".fm-explorer .fm-tabs-trigger")
     .filter({ hasText: /^Results$/ });
   await resultsTab.click();
+  await openInspectorAnalysisResults(page);
   const resultRootId = "results:run:inspector-run";
   const resonanceRootId = `${resultRootId}:resonance`;
   const drivenStageId = `${resonanceRootId}:stage:frequency-response:driven_response`;
@@ -2727,6 +2728,7 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
         .filter({ hasText: /^Results$/ });
       await resultsTab.waitFor({ state: "visible", timeout: 60_000 });
       await resultsTab.click();
+      await openInspectorAnalysisResults(page);
       const resultRootId = "results:run:inspector-run";
       const resonanceRootId = `${resultRootId}:resonance`;
       const stageId =
@@ -3017,6 +3019,7 @@ async function qualifyModalDispersionAndPostprocessing(page, inspector, screensh
     { timeout: 60_000 },
   );
   await resultsTab.click();
+  await openInspectorAnalysisResults(page);
   const resultRootId = "results:run:inspector-run";
   const dispersionRootId = `${resultRootId}:k-resolved`;
   const modalStageId = `${dispersionRootId}:stage:eigen-dispersion:modal_eigen`;
@@ -3335,6 +3338,7 @@ async function qualifyMatchedRunBModalArtifact(
   if ((await resultsTab.getAttribute("aria-selected")) !== "true") {
     await resultsTab.click();
   }
+  await openInspectorAnalysisResults(page);
   diagnostic.phase = "wait-run-b-dispersion-response";
   await runBResponse;
   diagnostic.phase = "wait-run-b-request-quiet";
@@ -3470,6 +3474,7 @@ async function qualifyMatchedRunBModalArtifact(
   if ((await resultsTab.getAttribute("aria-selected")) !== "true") {
     await resultsTab.click();
   }
+  await openInspectorAnalysisResults(page);
   await selectInspectorResultBranch(page, inspector, resultRootId, dispersionRootId, modalStageId);
 }
 
@@ -3488,6 +3493,7 @@ async function selectInspectorResultBranch(
     if ((await resultsTab.getAttribute("aria-selected")) !== "true") {
       await resultsTab.click();
     }
+    await openInspectorAnalysisResults(page);
     await expandInspectorNode(page, resultRootId);
     await expandInspectorNode(page, dispersionRootId);
     await expandInspectorNode(page, modalStageId);
@@ -4002,6 +4008,20 @@ async function expandInspectorNode(page, nodeId, fixtureState = fixture) {
     }));
     throw new Error(`Explorer node ${nodeId} did not expand: ${JSON.stringify(state)}. ${error}`);
   }
+}
+
+async function openInspectorAnalysisResults(page) {
+  const trigger = page.getByRole("button", {
+    exact: true,
+    name: "Analysis results",
+  });
+  await trigger.waitFor({ state: "visible", timeout: 60_000 });
+  if ((await trigger.getAttribute("aria-expanded")) !== "true") {
+    await trigger.click();
+  }
+  await page
+    .locator('.fm-explorer-results-analysis [data-node-id="results:run:inspector-run"]')
+    .waitFor({ state: "visible", timeout: 60_000 });
 }
 
 function recordInspectorSceneResponse(
@@ -5101,6 +5121,25 @@ async function installInspectorFixtureApi(page, fixture) {
       return fulfillJson(route, { entries: [], revision: 1, total: 0 });
     }
     if (path === "/v2/sessions/current/data/artifacts") return fulfillJson(route, []);
+    if (
+      request.method() === "GET" &&
+      path === "/v2/sessions/current/data/results"
+    ) {
+      return fulfillJson(route, {
+        can_read_values: false,
+        can_visualize_3d: false,
+        entries: [],
+        next_cursor: null,
+        resource_binding: "current",
+        revision: "inspector-results-catalog",
+        root_label: "Run outputs",
+        run_id: "inspector-run",
+        schema: "fullmag.results-catalog.v1",
+        status: "ready",
+        total_count: 0,
+        truncated: false,
+      });
+    }
     if (path === "/v2/sessions/current/data/scalars") return fulfillJson(route, {
       columns: (url.searchParams.get("columns") ?? "").split(",").filter(Boolean),
       returned_rows: 0,

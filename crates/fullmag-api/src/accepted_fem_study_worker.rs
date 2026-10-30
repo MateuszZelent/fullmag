@@ -177,7 +177,7 @@ pub(crate) fn execute_accepted_fem_attempt(
     if result.status != RunStatus::Completed {
         bail!("accepted FEM {} runner did not complete successfully", prepared.resolved_device);
     }
-    let terminal_stats = result.steps.last().cloned();
+    let terminal_stats = crate::accepted_study_worker::capture_optional_final_step_stats(&result);
 
     // The shared output collector performs the metadata-size preflight before
     // allocating each explicit artifact. Reuse its owned state bytes instead
@@ -713,6 +713,8 @@ mod source_contract_tests {
             "recover_completed_worker_execution",
             "WORKER_EXECUTION_STARTED_RECEIPT",
             "WORKER_EXECUTION_COMPLETED_RECEIPT",
+            "final_physical_step_stats",
+            "final_step_stats",
         ] {
             assert!(source.contains(needle), "missing lifecycle fence: {needle}");
         }

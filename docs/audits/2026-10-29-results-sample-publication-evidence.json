@@ -1,0 +1,1655 @@
+{
+  "scope": "array-local publication commit and completed FEM playback; not in-progress public output qualification",
+  "source_base": "c41ecf5810cb1d14946b8db8b8658b6fc73099a6",
+  "runtime_snapshot": "13dd771d83f7dda9d18fd9ec9d9e057a2f3281fef37a8514be214be5d68ecd1d",
+  "runtime_iteration": "097da4a7cbdc4488a09616cd3e40b650",
+  "files": {
+    "crates/fullmag-runner/src/autosave_zarr.rs": "1c7bbc046b111196897af5f8b983e5c5c402165f2275a70bee00a0bbb688b7f0",
+    "crates/fullmag-workspace-inspect/src/results.rs": "14dcf74d9f08532d3bb597f32a0ae37fa899ff1fae7fdd9527693f63241afe63",
+    "apps/control-room/scripts/check-saved-playback-browser.mjs": "f04db44d7101eb18b56675c44f87783ebfb2e79902abc285239f4b39c96d8c64"
+  },
+  "tests": {
+    "workspace_inspect": {
+      "passed": 91,
+      "failed": 0,
+      "log": "/opt/fullmag/control/backend/results-sample-publication-reader-tests-final.log"
+    },
+    "zarr_writer": {
+      "passed": 4,
+      "failed": 0,
+      "log": "/opt/fullmag/control/backend/results-sample-publication-writer-tests.log"
+    },
+    "harness_eslint": "passed"
+  },
+  "first_fem_run": {
+    "run_id": "run-live-56b1f8abca4b1224e47cd0c94ef95d609ca66df7482a74e0e3d73f5204530fa6",
+    "stage_index": 0,
+    "stage_label": "",
+    "stage_count": 1,
+    "started_at": "1793254707126",
+    "solver_steps": 101,
+    "solver_time": 1e-10,
+    "requested_device": "cpu",
+    "resolved_device": "cpu",
+    "selection_reason": "explicit_device_request"
+  },
+  "first_fem_arrays": [
+    {
+      "path": "results_browser.zarr/stages/stage_0000_propagate/fields/H_eff",
+      "sample_count": 6,
+      "coordinates": [
+        {
+          "sample_index": 0,
+          "kind": "physical_time",
+          "value": 0.0
+        },
+        {
+          "sample_index": 1,
+          "kind": "physical_time",
+          "value": 2e-11
+        },
+        {
+          "sample_index": 2,
+          "kind": "physical_time",
+          "value": 4.000000000000003e-11
+        },
+        {
+          "sample_index": 3,
+          "kind": "physical_time",
+          "value": 6.000000000000008e-11
+        },
+        {
+          "sample_index": 4,
+          "kind": "physical_time",
+          "value": 8.000000000000001e-11
+        },
+        {
+          "sample_index": 5,
+          "kind": "physical_time",
+          "value": 9.999999999999994e-11
+        }
+      ],
+      "can_read_values": true,
+      "can_visualize_3d": false,
+      "reason": "array has no explicit persisted 3-D geometry mapping"
+    },
+    {
+      "path": "results_browser.zarr/stages/stage_0000_propagate/fields/m",
+      "sample_count": 6,
+      "coordinates": [
+        {
+          "sample_index": 0,
+          "kind": "physical_time",
+          "value": 0.0
+        },
+        {
+          "sample_index": 1,
+          "kind": "physical_time",
+          "value": 2e-11
+        },
+        {
+          "sample_index": 2,
+          "kind": "physical_time",
+          "value": 4.000000000000003e-11
+        },
+        {
+          "sample_index": 3,
+          "kind": "physical_time",
+          "value": 6.000000000000008e-11
+        },
+        {
+          "sample_index": 4,
+          "kind": "physical_time",
+          "value": 8.000000000000001e-11
+        },
+        {
+          "sample_index": 5,
+          "kind": "physical_time",
+          "value": 9.999999999999994e-11
+        }
+      ],
+      "can_read_values": true,
+      "can_visualize_3d": true,
+      "reason": null
+    },
+    {
+      "path": "results_browser.zarr/stages/stage_0000_propagate/table",
+      "sample_count": 6,
+      "coordinates": [
+        {
+          "sample_index": 0,
+          "kind": "physical_time",
+          "value": 1e-12
+        },
+        {
+          "sample_index": 1,
+          "kind": "physical_time",
+          "value": 2e-11
+        },
+        {
+          "sample_index": 2,
+          "kind": "physical_time",
+          "value": 4.000000000000003e-11
+        },
+        {
+          "sample_index": 3,
+          "kind": "physical_time",
+          "value": 6.000000000000008e-11
+        },
+        {
+          "sample_index": 4,
+          "kind": "physical_time",
+          "value": 8.000000000000001e-11
+        },
+        {
+          "sample_index": 5,
+          "kind": "physical_time",
+          "value": 9.999999999999994e-11
+        }
+      ],
+      "can_read_values": true,
+      "can_visualize_3d": false,
+      "reason": "array has no supported explicit scalar/vector storage layout"
+    }
+  ],
+  "array_commits": [
+    {
+      "path": "results_browser.zarr/stages/stage_0000_propagate/fields/H_eff/.fullmag-samples.json",
+      "value": {
+        "committed_samples": 6,
+        "coordinate_bytes": 187,
+        "provenance": {
+          "execution_resolution": {
+            "authored_request": {
+              "backend": "fem",
+              "device": "cpu",
+              "mode": "strict",
+              "precision": "double"
+            },
+            "effective_request": {
+              "backend": "fem",
+              "device": "cpu",
+              "mode": "strict",
+              "precision": "double"
+            },
+            "fallback_occurred": false,
+            "fallback_reason": null,
+            "resolution_mode": "exact",
+            "resolved_execution": {
+              "backend": "fem",
+              "device": "cpu",
+              "mode": "strict",
+              "precision": "double"
+            }
+          }
+        },
+        "schema_version": "fullmag.zarr.sample_publication.v1"
+      }
+    },
+    {
+      "path": "results_browser.zarr/stages/stage_0000_propagate/fields/m/.fullmag-samples.json",
+      "value": {
+        "committed_samples": 6,
+        "coordinate_bytes": 187,
+        "provenance": {
+          "execution_resolution": {
+            "authored_request": {
+              "backend": "fem",
+              "device": "cpu",
+              "mode": "strict",
+              "precision": "double"
+            },
+            "effective_request": {
+              "backend": "fem",
+              "device": "cpu",
+              "mode": "strict",
+              "precision": "double"
+            },
+            "fallback_occurred": false,
+            "fallback_reason": null,
+            "resolution_mode": "exact",
+            "resolved_execution": {
+              "backend": "fem",
+              "device": "cpu",
+              "mode": "strict",
+              "precision": "double"
+            }
+          }
+        },
+        "schema_version": "fullmag.zarr.sample_publication.v1"
+      }
+    },
+    {
+      "path": "results_browser.zarr/stages/stage_0000_propagate/table/.fullmag-samples.json",
+      "value": {
+        "committed_samples": 6,
+        "coordinate_bytes": 200,
+        "provenance": {
+          "execution_resolution": {
+            "authored_request": {
+              "backend": "fem",
+              "device": "cpu",
+              "mode": "strict",
+              "precision": "double"
+            },
+            "effective_request": {
+              "backend": "fem",
+              "device": "cpu",
+              "mode": "strict",
+              "precision": "double"
+            },
+            "fallback_occurred": false,
+            "fallback_reason": null,
+            "resolution_mode": "exact",
+            "resolved_execution": {
+              "backend": "fem",
+              "device": "cpu",
+              "mode": "strict",
+              "precision": "double"
+            }
+          }
+        },
+        "schema_version": "fullmag.zarr.sample_publication.v1"
+      }
+    }
+  ],
+  "fresh_fem": {
+    "run": {
+      "run_id": "run-live-4901d9094a83d35875013f679964a51ed3d30d9a7074a127be70dd7a3e1efac3",
+      "stage_index": 0,
+      "stage_label": "",
+      "stage_count": 1,
+      "started_at": "1793255461458",
+      "solver_steps": 101,
+      "solver_time": 1e-10,
+      "requested_device": "cpu",
+      "resolved_device": "cpu",
+      "selection_reason": "explicit_device_request"
+    },
+    "item": {
+      "id": "8",
+      "kind": "result",
+      "path": "/user-data/results-browser-fem/run-live-4901d9094a83d35875013f679964a51ed3d30d9a7074a127be70dd7a3e1efac3/propagate-attempt-1",
+      "name": "propagate-attempt-1",
+      "first_seen_at": "2026-10-29T06:31:41.742Z",
+      "last_used_at": "2026-10-29T06:31:41.742Z",
+      "use_count": 1,
+      "pinned": false,
+      "status": "ready",
+      "size_bytes": 483863,
+      "modified_at": "2026-10-29T06:31:16.212Z",
+      "meta": {
+        "finished_at": "2026-10-29T06:31:16.202Z",
+        "format": "zarr",
+        "frames": 12,
+        "has_manifest": true,
+        "run_id": "run-live-4901d9094a83d35875013f679964a51ed3d30d9a7074a127be70dd7a3e1efac3-1",
+        "source": {
+          "kind": "project",
+          "path": "",
+          "project_id": "project-live-682974e591a5833bb11012bff616377dd011910060cd3d4ec2599860db54a9f0",
+          "sha256": "a67265234acec9f469beb44b0869741b4a0a0d7cdea17d5fe55063c1224bf8db"
+        },
+        "stages": 1,
+        "started_at": "2026-10-29T06:31:14.794Z",
+        "status": "completed"
+      },
+      "has_thumbnail": false
+    }
+  },
+  "browser_runs": [
+    {
+      "attempt": "3c2b27757d764db1bc9d5559826e5afd",
+      "result": {
+        "drawing_buffer": [
+          649,
+          509
+        ],
+        "source_details_disclosure_verified": true,
+        "output_inspector_continuous_sections_verified": true,
+        "closed_values_preview_no_sample_request": true,
+        "pending_snapshot_retained_verified": true,
+        "delayed_sample_index": 1,
+        "sample_read_error_retained_verified": true,
+        "sample_read_error_reselection_recovered": true,
+        "failed_sample_index": 4,
+        "results_browser_verified": true,
+        "output_count": 38,
+        "per_snapshot_settings_retained": true,
+        "saved_panels_hide_restore_verified": true,
+        "saved_folder_float_dock_verified": true,
+        "layout_checks": [
+          {
+            "width": 1280,
+            "height": 900,
+            "scrollWidth": 1280,
+            "results_tree_boxes": [
+              {
+                "label": "Saved result outputs",
+                "x": 12,
+                "width": 228.390625,
+                "scrollWidth": 228,
+                "clientWidth": 228,
+                "scrollLeft": 0
+              },
+              {
+                "label": "Result output entries",
+                "x": 24,
+                "width": 204.390625,
+                "scrollWidth": 204,
+                "clientWidth": 204,
+                "scrollLeft": 0
+              }
+            ],
+            "primary_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": false
+              }
+            ],
+            "tree_labels": [
+              {
+                "text": "H_eff",
+                "clientWidth": 102,
+                "scrollWidth": 102
+              },
+              {
+                "text": "m",
+                "clientWidth": 102,
+                "scrollWidth": 102
+              },
+              {
+                "text": "table",
+                "clientWidth": 115,
+                "scrollWidth": 115
+              }
+            ],
+            "scrolled_elements": [],
+            "reachable_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ]
+          },
+          {
+            "width": 1024,
+            "height": 900,
+            "scrollWidth": 1024,
+            "results_tree_boxes": [
+              {
+                "label": "Saved result outputs",
+                "x": 12,
+                "width": 216.9375,
+                "scrollWidth": 217,
+                "clientWidth": 217,
+                "scrollLeft": 0
+              },
+              {
+                "label": "Result output entries",
+                "x": 24,
+                "width": 192.9375,
+                "scrollWidth": 193,
+                "clientWidth": 193,
+                "scrollLeft": 0
+              }
+            ],
+            "primary_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ],
+            "tree_labels": [
+              {
+                "text": "H_eff",
+                "clientWidth": 91,
+                "scrollWidth": 91
+              },
+              {
+                "text": "m",
+                "clientWidth": 91,
+                "scrollWidth": 91
+              },
+              {
+                "text": "table",
+                "clientWidth": 104,
+                "scrollWidth": 104
+              }
+            ],
+            "scrolled_elements": [],
+            "reachable_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ]
+          },
+          {
+            "width": 768,
+            "height": 900,
+            "scrollWidth": 768,
+            "results_tree_boxes": [
+              {
+                "label": "Saved result outputs",
+                "x": 12,
+                "width": 216,
+                "scrollWidth": 216,
+                "clientWidth": 216,
+                "scrollLeft": 0
+              },
+              {
+                "label": "Result output entries",
+                "x": 24,
+                "width": 192,
+                "scrollWidth": 192,
+                "clientWidth": 192,
+                "scrollLeft": 0
+              }
+            ],
+            "primary_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ],
+            "tree_labels": [
+              {
+                "text": "H_eff",
+                "clientWidth": 90,
+                "scrollWidth": 90
+              },
+              {
+                "text": "m",
+                "clientWidth": 90,
+                "scrollWidth": 90
+              },
+              {
+                "text": "table",
+                "clientWidth": 103,
+                "scrollWidth": 103
+              }
+            ],
+            "scrolled_elements": [],
+            "reachable_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ]
+          },
+          {
+            "width": 1920,
+            "height": 1080,
+            "scrollWidth": 1920,
+            "results_tree_boxes": [
+              {
+                "label": "Saved result outputs",
+                "x": 12,
+                "width": 576.640625,
+                "scrollWidth": 577,
+                "clientWidth": 577,
+                "scrollLeft": 0
+              },
+              {
+                "label": "Result output entries",
+                "x": 24,
+                "width": 552.640625,
+                "scrollWidth": 553,
+                "clientWidth": 553,
+                "scrollLeft": 0
+              }
+            ],
+            "primary_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ],
+            "tree_labels": [
+              {
+                "text": "H_eff",
+                "clientWidth": 357,
+                "scrollWidth": 357
+              },
+              {
+                "text": "m",
+                "clientWidth": 357,
+                "scrollWidth": 357
+              },
+              {
+                "text": "table",
+                "clientWidth": 382,
+                "scrollWidth": 382
+              }
+            ],
+            "scrolled_elements": [],
+            "reachable_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ]
+          },
+          {
+            "width": 1500,
+            "height": 1000,
+            "scrollWidth": 1500,
+            "results_tree_boxes": [
+              {
+                "label": "Saved result outputs",
+                "x": 12,
+                "width": 389.6875,
+                "scrollWidth": 390,
+                "clientWidth": 390,
+                "scrollLeft": 0
+              },
+              {
+                "label": "Result output entries",
+                "x": 24,
+                "width": 365.6875,
+                "scrollWidth": 366,
+                "clientWidth": 366,
+                "scrollLeft": 0
+              }
+            ],
+            "primary_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ],
+            "tree_labels": [
+              {
+                "text": "H_eff",
+                "clientWidth": 170,
+                "scrollWidth": 170
+              },
+              {
+                "text": "m",
+                "clientWidth": 170,
+                "scrollWidth": 170
+              },
+              {
+                "text": "table",
+                "clientWidth": 195,
+                "scrollWidth": 195
+              }
+            ],
+            "scrolled_elements": [],
+            "reachable_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ]
+          }
+        ],
+        "saved_camera_fit_verified": true,
+        "live_return_verified": true,
+        "live_view_source": "current",
+        "live_drawing_buffer": [
+          516,
+          495
+        ],
+        "results_sample_indices": [
+          0,
+          2,
+          5
+        ],
+        "results_sample_sha256": [
+          "b9446203a1b90c6ac762ca4a1f9b2ae742afd37282042873df537b5fd961335b",
+          "a66b8a4046e5d057e6bbcc423bff3152724dd82b8e78c59e93ad90c753d6b531",
+          "aca0f253fae53a994dfe72b2051fdb0b2ea2b67e6bd5a739bc4a1bdd44f33bfb"
+        ],
+        "results_canvas_changed": true,
+        "object_draft_cancel_preserved": true,
+        "object_draft_saved_folder_guarded": true,
+        "object_draft_discard_verified": true,
+        "airbox_draft_cancel_preserved": true,
+        "airbox_draft_saved_folder_guarded": true,
+        "airbox_draft_discard_verified": true,
+        "model_inspector_historical_context_verified": true,
+        "return_live_preserves_model_draft": true,
+        "sample_reselection_verified": true,
+        "table_columns_verified": [
+          "t",
+          "step",
+          "mx",
+          "my",
+          "mz",
+          "e_total"
+        ],
+        "table_sample_indices": [
+          0,
+          5
+        ],
+        "saved_camera_reset_verified": true,
+        "return_live_pending_sample_verified": true,
+        "current_run_results_verified": true,
+        "current_run_id": "run-live-56b1f8abca4b1224e47cd0c94ef95d609ca66df7482a74e0e3d73f5204530fa6-1",
+        "results_navigation_state_retained": true,
+        "results_saved_folder_entry_verified": true,
+        "terminal_live_scalars_verified": true,
+        "terminal_live_step": 101,
+        "terminal_live_time_s": 1e-10,
+        "terminal_live_scalar_revision": 2,
+        "terminal_live_observation_frame": {
+          "observation_frame_id": "obs:docker-startup-9c91a875e2d50307459fcf30c8b0b474dbfc15261573bcb933f4cfddab9aea97@1793254707126:6002390632978672749:2:101:3ddb7cdfd9d7bdbb",
+          "session_epoch": "docker-startup-9c91a875e2d50307459fcf30c8b0b474dbfc15261573bcb933f4cfddab9aea97@1793254707126",
+          "domain_generation_id": "6002390632978672749",
+          "topology_revision": "2",
+          "source_step": 101,
+          "source_time_seconds": 1e-10
+        },
+        "schema": "fullmag.docker-dev-saved-playback-result.v1",
+        "state": "failed",
+        "scenario": "saved-playback",
+        "item_id": "7",
+        "session_mutations": [],
+        "startup_camera_initialization": {
+          "path": "/v2/sessions/current/visualization/state",
+          "method": "PATCH",
+          "phase": "initial-home",
+          "body": "{\"camera\":{\"fov_degrees\":45,\"orthographic_scale\":null,\"position\":[1.2586030213332585e-7,9.06194175359946e-8,1.2586030213332585e-7],\"projection\":\"perspective\",\"target\":[0,0,0],\"up\":[0,0,1]}}",
+          "revision_before": 0,
+          "revision_after": 1
+        },
+        "errors": [
+          "AssertionError [ERR_ASSERTION]: Playback changed persisted live visualization state.\n+ actual - expected\n... Skipped lines\n\n  {\n    active_quantity_id: 'm',\n    auto_contrast: true,\n    camera: {\n      fov_degrees: 45,\n      orthographic_scale: null,\n      position: [\n+       1.453468243118921e-7,\n+       1.0464971350456231e-7,\n+       1.453468243118921e-7\n-       1.2586030213332585e-7,\n-       9.06194175359946e-8,\n-       1.2586030213332585e-7\n      ],\n      projection: 'perspective',\n      target: [\n        0,\n        0,\n...\n    },\n+   revision: 2,\n-   revision: 1,\n    sampling: {\n      max_bytes: null,\n      max_glyphs: 16384,\n      max_points: 16384,\n      profile: 'balanced',\n\n    at file:///state/development/workspace/apps/control-room/scripts/check-saved-playback-browser.mjs:819:10"
+        ],
+        "network_trace": [
+          {
+            "event": "request",
+            "url": "http://127.0.0.1:3298/v2/workspace/items/7/playback/frames/0?stage_id=propagate&revision=e1f5d3eb82b7e6d93d215ee059f08593146ca70936fe2eeac2cfc16e15f0680b"
+          },
+          {
+            "event": "response",
+            "url": "http://127.0.0.1:3298/v2/workspace/items/7/playback/frames/0?stage_id=propagate&revision=e1f5d3eb82b7e6d93d215ee059f08593146ca70936fe2eeac2cfc16e15f0680b"
+          },
+          {
+            "event": "requestfinished",
+            "url": "http://127.0.0.1:3298/v2/workspace/items/7/playback/frames/0?stage_id=propagate&revision=e1f5d3eb82b7e6d93d215ee059f08593146ca70936fe2eeac2cfc16e15f0680b"
+          },
+          {
+            "event": "request",
+            "url": "http://127.0.0.1:3298/v2/workspace/items/7/playback/frames/3?stage_id=propagate&revision=e1f5d3eb82b7e6d93d215ee059f08593146ca70936fe2eeac2cfc16e15f0680b"
+          },
+          {
+            "event": "response",
+            "url": "http://127.0.0.1:3298/v2/workspace/items/7/playback/frames/3?stage_id=propagate&revision=e1f5d3eb82b7e6d93d215ee059f08593146ca70936fe2eeac2cfc16e15f0680b"
+          },
+          {
+            "event": "requestfailed",
+            "url": "http://127.0.0.1:3298/v2/workspace/items/7/playback/frames/3?stage_id=propagate&revision=e1f5d3eb82b7e6d93d215ee059f08593146ca70936fe2eeac2cfc16e15f0680b"
+          },
+          {
+            "event": "request",
+            "url": "http://127.0.0.1:3298/v2/workspace/items/7/playback/frames/2?stage_id=propagate&revision=e1f5d3eb82b7e6d93d215ee059f08593146ca70936fe2eeac2cfc16e15f0680b"
+          },
+          {
+            "event": "response",
+            "url": "http://127.0.0.1:3298/v2/workspace/items/7/playback/frames/2?stage_id=propagate&revision=e1f5d3eb82b7e6d93d215ee059f08593146ca70936fe2eeac2cfc16e15f0680b"
+          },
+          {
+            "event": "requestfinished",
+            "url": "http://127.0.0.1:3298/v2/workspace/items/7/playback/frames/2?stage_id=propagate&revision=e1f5d3eb82b7e6d93d215ee059f08593146ca70936fe2eeac2cfc16e15f0680b"
+          },
+          {
+            "event": "request",
+            "url": "http://127.0.0.1:3298/v2/workspace/items/7/playback/frames/5?stage_id=propagate&revision=e1f5d3eb82b7e6d93d215ee059f08593146ca70936fe2eeac2cfc16e15f0680b"
+          },
+          {
+            "event": "response",
+            "url": "http://127.0.0.1:3298/v2/workspace/items/7/playback/frames/5?stage_id=propagate&revision=e1f5d3eb82b7e6d93d215ee059f08593146ca70936fe2eeac2cfc16e15f0680b"
+          },
+          {
+            "event": "requestfinished",
+            "url": "http://127.0.0.1:3298/v2/workspace/items/7/playback/frames/5?stage_id=propagate&revision=e1f5d3eb82b7e6d93d215ee059f08593146ca70936fe2eeac2cfc16e15f0680b"
+          },
+          {
+            "event": "request",
+            "url": "http://127.0.0.1:3298/v2/workspace/items/7/playback/frames/0?stage_id=propagate&revision=e1f5d3eb82b7e6d93d215ee059f08593146ca70936fe2eeac2cfc16e15f0680b"
+          },
+          {
+            "event": "response",
+            "url": "http://127.0.0.1:3298/v2/workspace/items/7/playback/frames/0?stage_id=propagate&revision=e1f5d3eb82b7e6d93d215ee059f08593146ca70936fe2eeac2cfc16e15f0680b"
+          },
+          {
+            "event": "requestfinished",
+            "url": "http://127.0.0.1:3298/v2/workspace/items/7/playback/frames/0?stage_id=propagate&revision=e1f5d3eb82b7e6d93d215ee059f08593146ca70936fe2eeac2cfc16e15f0680b"
+          }
+        ]
+      }
+    },
+    {
+      "attempt": "fa4bb73be904456ea9d856f21d1c9138",
+      "result": {
+        "schema": "fullmag.docker-dev-saved-playback-result.v1",
+        "state": "passed",
+        "scenario": "saved-playback",
+        "item_id": "7",
+        "public_url": "http://127.0.0.1:3298",
+        "probe_url": "http://frontend:8080",
+        "playwright_version": "1.62.1",
+        "browser_gpu_mode": "swiftshader-webgl-requested",
+        "script_sha256": "8f787e49319f3625b997949fa8c255f7899a8ca7811edbb38bfd2a040118a5be",
+        "geometry_kind": "fem",
+        "frame_count": 6,
+        "frame_indices": [
+          0,
+          2,
+          5
+        ],
+        "frame_sha256": [
+          "18d232ee5b5b18e5b6c98132ffbfd41344c371b2d81a4929cd69971a51031a09",
+          "5c6204501221f3f4e6931aafdfdc684b772ea4543a0959e844dabbfcf16f0b11",
+          "6e6db50daaa588a2fd418f6d46b14cd7523581e04fd924102ad956e9f6ac6912"
+        ],
+        "canvas_visible": true,
+        "context_lost": false,
+        "drawing_buffer": [
+          649,
+          509
+        ],
+        "source_details_disclosure_verified": true,
+        "output_inspector_continuous_sections_verified": true,
+        "closed_values_preview_no_sample_request": true,
+        "pending_snapshot_retained_verified": true,
+        "delayed_sample_index": 1,
+        "sample_read_error_retained_verified": true,
+        "sample_read_error_reselection_recovered": true,
+        "failed_sample_index": 4,
+        "results_browser_verified": true,
+        "output_count": 38,
+        "per_snapshot_settings_retained": true,
+        "saved_panels_hide_restore_verified": true,
+        "saved_folder_float_dock_verified": true,
+        "layout_checks": [
+          {
+            "width": 1280,
+            "height": 900,
+            "scrollWidth": 1280,
+            "results_tree_boxes": [
+              {
+                "label": "Saved result outputs",
+                "x": 12,
+                "width": 228.390625,
+                "scrollWidth": 228,
+                "clientWidth": 228,
+                "scrollLeft": 0
+              },
+              {
+                "label": "Result output entries",
+                "x": 24,
+                "width": 204.390625,
+                "scrollWidth": 204,
+                "clientWidth": 204,
+                "scrollLeft": 0
+              }
+            ],
+            "primary_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": false
+              }
+            ],
+            "tree_labels": [
+              {
+                "text": "H_eff",
+                "clientWidth": 102,
+                "scrollWidth": 102
+              },
+              {
+                "text": "m",
+                "clientWidth": 102,
+                "scrollWidth": 102
+              },
+              {
+                "text": "table",
+                "clientWidth": 115,
+                "scrollWidth": 115
+              }
+            ],
+            "scrolled_elements": [],
+            "reachable_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ]
+          },
+          {
+            "width": 1024,
+            "height": 900,
+            "scrollWidth": 1024,
+            "results_tree_boxes": [
+              {
+                "label": "Saved result outputs",
+                "x": 12,
+                "width": 216.9375,
+                "scrollWidth": 217,
+                "clientWidth": 217,
+                "scrollLeft": 0
+              },
+              {
+                "label": "Result output entries",
+                "x": 24,
+                "width": 192.9375,
+                "scrollWidth": 193,
+                "clientWidth": 193,
+                "scrollLeft": 0
+              }
+            ],
+            "primary_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ],
+            "tree_labels": [
+              {
+                "text": "H_eff",
+                "clientWidth": 91,
+                "scrollWidth": 91
+              },
+              {
+                "text": "m",
+                "clientWidth": 91,
+                "scrollWidth": 91
+              },
+              {
+                "text": "table",
+                "clientWidth": 104,
+                "scrollWidth": 104
+              }
+            ],
+            "scrolled_elements": [],
+            "reachable_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ]
+          },
+          {
+            "width": 768,
+            "height": 900,
+            "scrollWidth": 768,
+            "results_tree_boxes": [
+              {
+                "label": "Saved result outputs",
+                "x": 12,
+                "width": 216,
+                "scrollWidth": 216,
+                "clientWidth": 216,
+                "scrollLeft": 0
+              },
+              {
+                "label": "Result output entries",
+                "x": 24,
+                "width": 192,
+                "scrollWidth": 192,
+                "clientWidth": 192,
+                "scrollLeft": 0
+              }
+            ],
+            "primary_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ],
+            "tree_labels": [
+              {
+                "text": "H_eff",
+                "clientWidth": 90,
+                "scrollWidth": 90
+              },
+              {
+                "text": "m",
+                "clientWidth": 90,
+                "scrollWidth": 90
+              },
+              {
+                "text": "table",
+                "clientWidth": 103,
+                "scrollWidth": 103
+              }
+            ],
+            "scrolled_elements": [],
+            "reachable_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ]
+          },
+          {
+            "width": 1920,
+            "height": 1080,
+            "scrollWidth": 1920,
+            "results_tree_boxes": [
+              {
+                "label": "Saved result outputs",
+                "x": 12,
+                "width": 576.640625,
+                "scrollWidth": 577,
+                "clientWidth": 577,
+                "scrollLeft": 0
+              },
+              {
+                "label": "Result output entries",
+                "x": 24,
+                "width": 552.640625,
+                "scrollWidth": 553,
+                "clientWidth": 553,
+                "scrollLeft": 0
+              }
+            ],
+            "primary_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ],
+            "tree_labels": [
+              {
+                "text": "H_eff",
+                "clientWidth": 357,
+                "scrollWidth": 357
+              },
+              {
+                "text": "m",
+                "clientWidth": 357,
+                "scrollWidth": 357
+              },
+              {
+                "text": "table",
+                "clientWidth": 382,
+                "scrollWidth": 382
+              }
+            ],
+            "scrolled_elements": [],
+            "reachable_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ]
+          },
+          {
+            "width": 1500,
+            "height": 1000,
+            "scrollWidth": 1500,
+            "results_tree_boxes": [
+              {
+                "label": "Saved result outputs",
+                "x": 12,
+                "width": 389.6875,
+                "scrollWidth": 390,
+                "clientWidth": 390,
+                "scrollLeft": 0
+              },
+              {
+                "label": "Result output entries",
+                "x": 24,
+                "width": 365.6875,
+                "scrollWidth": 366,
+                "clientWidth": 366,
+                "scrollLeft": 0
+              }
+            ],
+            "primary_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ],
+            "tree_labels": [
+              {
+                "text": "H_eff",
+                "clientWidth": 170,
+                "scrollWidth": 170
+              },
+              {
+                "text": "m",
+                "clientWidth": 170,
+                "scrollWidth": 170
+              },
+              {
+                "text": "table",
+                "clientWidth": 195,
+                "scrollWidth": 195
+              }
+            ],
+            "scrolled_elements": [],
+            "reachable_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ]
+          }
+        ],
+        "saved_camera_fit_verified": true,
+        "live_return_verified": true,
+        "live_view_source": "current",
+        "live_drawing_buffer": [
+          516,
+          495
+        ],
+        "results_sample_indices": [
+          0,
+          2,
+          5
+        ],
+        "results_sample_sha256": [
+          "b9446203a1b90c6ac762ca4a1f9b2ae742afd37282042873df537b5fd961335b",
+          "a66b8a4046e5d057e6bbcc423bff3152724dd82b8e78c59e93ad90c753d6b531",
+          "aca0f253fae53a994dfe72b2051fdb0b2ea2b67e6bd5a739bc4a1bdd44f33bfb"
+        ],
+        "results_canvas_changed": true,
+        "object_draft_cancel_preserved": true,
+        "object_draft_saved_folder_guarded": true,
+        "object_draft_discard_verified": true,
+        "airbox_draft_cancel_preserved": true,
+        "airbox_draft_saved_folder_guarded": true,
+        "airbox_draft_discard_verified": true,
+        "model_inspector_historical_context_verified": true,
+        "return_live_preserves_model_draft": true,
+        "sample_reselection_verified": true,
+        "table_columns_verified": [
+          "t",
+          "step",
+          "mx",
+          "my",
+          "mz",
+          "e_total"
+        ],
+        "table_sample_indices": [
+          0,
+          5
+        ],
+        "saved_camera_reset_verified": true,
+        "return_live_pending_sample_verified": true,
+        "current_run_results_verified": true,
+        "current_run_id": "run-live-56b1f8abca4b1224e47cd0c94ef95d609ca66df7482a74e0e3d73f5204530fa6-1",
+        "results_navigation_state_retained": true,
+        "results_saved_folder_entry_verified": true,
+        "terminal_live_scalars_verified": true,
+        "terminal_live_step": 101,
+        "terminal_live_time_s": 1e-10,
+        "terminal_live_scalar_revision": 2,
+        "terminal_live_observation_frame": {
+          "observation_frame_id": "obs:docker-startup-9c91a875e2d50307459fcf30c8b0b474dbfc15261573bcb933f4cfddab9aea97@1793254707126:6002390632978672749:2:101:3ddb7cdfd9d7bdbb",
+          "session_epoch": "docker-startup-9c91a875e2d50307459fcf30c8b0b474dbfc15261573bcb933f4cfddab9aea97@1793254707126",
+          "domain_generation_id": "6002390632978672749",
+          "topology_revision": "2",
+          "source_step": 101,
+          "source_time_seconds": 1e-10
+        },
+        "publication_waiting_ui_verified": true,
+        "publication_failure_distinct_verified": true,
+        "publication_catalog_arrival_verified": true,
+        "publication_evidence": "browser-availability-fixture-with-real-published-catalog",
+        "publication_poll_count": 4,
+        "no_session_close_to_home_verified": true,
+        "no_session_legacy_inspector_close_verified": true,
+        "no_session_browser_only_close_verified": true,
+        "no_session_evidence": "browser-session-discovery-fixture-with-real-result-data",
+        "field_payloads_verified": true,
+        "changed_canvas": true,
+        "inspector_stable": true,
+        "camera_stable": true,
+        "payload_evidence": "application_body_reads",
+        "live_visualization_unchanged": true,
+        "startup_camera_initialization": null,
+        "hook_errors": [],
+        "errors": []
+      }
+    },
+    {
+      "attempt": "d45f2cc6a05e47869eca368fdaace792",
+      "result": {
+        "schema": "fullmag.docker-dev-saved-playback-result.v1",
+        "state": "passed",
+        "scenario": "saved-playback",
+        "item_id": "8",
+        "public_url": "http://127.0.0.1:3298",
+        "probe_url": "http://frontend:8080",
+        "playwright_version": "1.62.1",
+        "browser_gpu_mode": "swiftshader-webgl-requested",
+        "script_sha256": "f04db44d7101eb18b56675c44f87783ebfb2e79902abc285239f4b39c96d8c64",
+        "geometry_kind": "fem",
+        "frame_count": 6,
+        "frame_indices": [
+          0,
+          2,
+          5
+        ],
+        "frame_sha256": [
+          "18d232ee5b5b18e5b6c98132ffbfd41344c371b2d81a4929cd69971a51031a09",
+          "5c6204501221f3f4e6931aafdfdc684b772ea4543a0959e844dabbfcf16f0b11",
+          "6e6db50daaa588a2fd418f6d46b14cd7523581e04fd924102ad956e9f6ac6912"
+        ],
+        "canvas_visible": true,
+        "context_lost": false,
+        "drawing_buffer": [
+          649,
+          509
+        ],
+        "source_details_disclosure_verified": true,
+        "output_inspector_continuous_sections_verified": true,
+        "closed_values_preview_no_sample_request": true,
+        "pending_snapshot_retained_verified": true,
+        "delayed_sample_index": 1,
+        "sample_read_error_retained_verified": true,
+        "sample_read_error_reselection_recovered": true,
+        "failed_sample_index": 4,
+        "results_browser_verified": true,
+        "output_count": 38,
+        "per_snapshot_settings_retained": true,
+        "saved_panels_hide_restore_verified": true,
+        "saved_folder_float_dock_verified": true,
+        "layout_checks": [
+          {
+            "width": 1280,
+            "height": 900,
+            "scrollWidth": 1280,
+            "results_tree_boxes": [
+              {
+                "label": "Saved result outputs",
+                "x": 12,
+                "width": 228.390625,
+                "scrollWidth": 228,
+                "clientWidth": 228,
+                "scrollLeft": 0
+              },
+              {
+                "label": "Result output entries",
+                "x": 24,
+                "width": 204.390625,
+                "scrollWidth": 204,
+                "clientWidth": 204,
+                "scrollLeft": 0
+              }
+            ],
+            "primary_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": false
+              }
+            ],
+            "tree_labels": [
+              {
+                "text": "H_eff",
+                "clientWidth": 102,
+                "scrollWidth": 102
+              },
+              {
+                "text": "m",
+                "clientWidth": 102,
+                "scrollWidth": 102
+              },
+              {
+                "text": "table",
+                "clientWidth": 115,
+                "scrollWidth": 115
+              }
+            ],
+            "scrolled_elements": [],
+            "reachable_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ]
+          },
+          {
+            "width": 1024,
+            "height": 900,
+            "scrollWidth": 1024,
+            "results_tree_boxes": [
+              {
+                "label": "Saved result outputs",
+                "x": 12,
+                "width": 216.9375,
+                "scrollWidth": 217,
+                "clientWidth": 217,
+                "scrollLeft": 0
+              },
+              {
+                "label": "Result output entries",
+                "x": 24,
+                "width": 192.9375,
+                "scrollWidth": 193,
+                "clientWidth": 193,
+                "scrollLeft": 0
+              }
+            ],
+            "primary_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ],
+            "tree_labels": [
+              {
+                "text": "H_eff",
+                "clientWidth": 91,
+                "scrollWidth": 91
+              },
+              {
+                "text": "m",
+                "clientWidth": 91,
+                "scrollWidth": 91
+              },
+              {
+                "text": "table",
+                "clientWidth": 104,
+                "scrollWidth": 104
+              }
+            ],
+            "scrolled_elements": [],
+            "reachable_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ]
+          },
+          {
+            "width": 768,
+            "height": 900,
+            "scrollWidth": 768,
+            "results_tree_boxes": [
+              {
+                "label": "Saved result outputs",
+                "x": 12,
+                "width": 216,
+                "scrollWidth": 216,
+                "clientWidth": 216,
+                "scrollLeft": 0
+              },
+              {
+                "label": "Result output entries",
+                "x": 24,
+                "width": 192,
+                "scrollWidth": 192,
+                "clientWidth": 192,
+                "scrollLeft": 0
+              }
+            ],
+            "primary_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ],
+            "tree_labels": [
+              {
+                "text": "H_eff",
+                "clientWidth": 90,
+                "scrollWidth": 90
+              },
+              {
+                "text": "m",
+                "clientWidth": 90,
+                "scrollWidth": 90
+              },
+              {
+                "text": "table",
+                "clientWidth": 103,
+                "scrollWidth": 103
+              }
+            ],
+            "scrolled_elements": [],
+            "reachable_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ]
+          },
+          {
+            "width": 1920,
+            "height": 1080,
+            "scrollWidth": 1920,
+            "results_tree_boxes": [
+              {
+                "label": "Saved result outputs",
+                "x": 12,
+                "width": 576.640625,
+                "scrollWidth": 577,
+                "clientWidth": 577,
+                "scrollLeft": 0
+              },
+              {
+                "label": "Result output entries",
+                "x": 24,
+                "width": 552.640625,
+                "scrollWidth": 553,
+                "clientWidth": 553,
+                "scrollLeft": 0
+              }
+            ],
+            "primary_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ],
+            "tree_labels": [
+              {
+                "text": "H_eff",
+                "clientWidth": 357,
+                "scrollWidth": 357
+              },
+              {
+                "text": "m",
+                "clientWidth": 357,
+                "scrollWidth": 357
+              },
+              {
+                "text": "table",
+                "clientWidth": 382,
+                "scrollWidth": 382
+              }
+            ],
+            "scrolled_elements": [],
+            "reachable_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ]
+          },
+          {
+            "width": 1500,
+            "height": 1000,
+            "scrollWidth": 1500,
+            "results_tree_boxes": [
+              {
+                "label": "Saved result outputs",
+                "x": 12,
+                "width": 389.6875,
+                "scrollWidth": 390,
+                "clientWidth": 390,
+                "scrollLeft": 0
+              },
+              {
+                "label": "Result output entries",
+                "x": 24,
+                "width": 365.6875,
+                "scrollWidth": 366,
+                "clientWidth": 366,
+                "scrollLeft": 0
+              }
+            ],
+            "primary_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ],
+            "tree_labels": [
+              {
+                "text": "H_eff",
+                "clientWidth": 170,
+                "scrollWidth": 170
+              },
+              {
+                "text": "m",
+                "clientWidth": 170,
+                "scrollWidth": 170
+              },
+              {
+                "text": "table",
+                "clientWidth": 195,
+                "scrollWidth": 195
+              }
+            ],
+            "scrolled_elements": [],
+            "reachable_controls": [
+              {
+                "label": "Saved sample index",
+                "center_visible": true
+              },
+              {
+                "label": "Visualization component",
+                "center_visible": true
+              }
+            ]
+          }
+        ],
+        "saved_camera_fit_verified": true,
+        "live_return_verified": true,
+        "live_view_source": "current",
+        "live_drawing_buffer": [
+          516,
+          495
+        ],
+        "results_sample_indices": [
+          0,
+          2,
+          5
+        ],
+        "results_sample_sha256": [
+          "b9446203a1b90c6ac762ca4a1f9b2ae742afd37282042873df537b5fd961335b",
+          "a66b8a4046e5d057e6bbcc423bff3152724dd82b8e78c59e93ad90c753d6b531",
+          "aca0f253fae53a994dfe72b2051fdb0b2ea2b67e6bd5a739bc4a1bdd44f33bfb"
+        ],
+        "results_canvas_changed": true,
+        "object_draft_cancel_preserved": true,
+        "object_draft_saved_folder_guarded": true,
+        "object_draft_discard_verified": true,
+        "airbox_draft_cancel_preserved": true,
+        "airbox_draft_saved_folder_guarded": true,
+        "airbox_draft_discard_verified": true,
+        "model_inspector_historical_context_verified": true,
+        "return_live_preserves_model_draft": true,
+        "sample_reselection_verified": true,
+        "table_columns_verified": [
+          "t",
+          "step",
+          "mx",
+          "my",
+          "mz",
+          "e_total"
+        ],
+        "table_sample_indices": [
+          0,
+          5
+        ],
+        "saved_camera_reset_verified": true,
+        "return_live_pending_sample_verified": true,
+        "current_run_results_verified": true,
+        "current_run_id": "run-live-4901d9094a83d35875013f679964a51ed3d30d9a7074a127be70dd7a3e1efac3-1",
+        "results_navigation_state_retained": true,
+        "results_saved_folder_entry_verified": true,
+        "terminal_live_scalars_verified": true,
+        "terminal_live_step": 101,
+        "terminal_live_time_s": 1e-10,
+        "terminal_live_scalar_revision": 3,
+        "terminal_live_observation_frame": {
+          "observation_frame_id": "obs:docker-startup-61373cecd97a7b2cc72b1ff89ee37e6bcc407e2e166848294f5c0f6262c73343@1793255461458:6002390632978672749:2:101:3ddb7cdfd9d7bdbb",
+          "session_epoch": "docker-startup-61373cecd97a7b2cc72b1ff89ee37e6bcc407e2e166848294f5c0f6262c73343@1793255461458",
+          "domain_generation_id": "6002390632978672749",
+          "topology_revision": "2",
+          "source_step": 101,
+          "source_time_seconds": 1e-10
+        },
+        "publication_waiting_ui_verified": true,
+        "publication_failure_distinct_verified": true,
+        "publication_catalog_arrival_verified": true,
+        "publication_evidence": "browser-availability-fixture-with-real-published-catalog",
+        "publication_poll_count": 4,
+        "no_session_close_to_home_verified": true,
+        "no_session_legacy_inspector_close_verified": true,
+        "no_session_browser_only_close_verified": true,
+        "no_session_evidence": "browser-session-discovery-fixture-with-real-result-data",
+        "field_payloads_verified": true,
+        "changed_canvas": true,
+        "inspector_stable": true,
+        "camera_stable": true,
+        "visualization_trace": [
+          {
+            "phase": "initial-home",
+            "method": "GET",
+            "revision": 1,
+            "camera": {
+              "projection": "perspective",
+              "position": [
+                1.453468243118921e-07,
+                1.0464971350456231e-07,
+                1.453468243118921e-07
+              ],
+              "target": [
+                0,
+                0,
+                0
+              ],
+              "up": [
+                0,
+                0,
+                1
+              ],
+              "fov_degrees": 45,
+              "orthographic_scale": null
+            }
+          }
+        ],
+        "payload_evidence": "application_body_reads",
+        "live_visualization_unchanged": true,
+        "startup_camera_initialization": null,
+        "hook_errors": [],
+        "errors": []
+      }
+    }
+  ],
+  "camera_anomaly": "First browser run observed global revision 1 -> 2 without recording a session mutation. Cause/caller not proved. Unchanged repeat passed. On a fresh subsequent run the same camera was already persisted at revision 1 before QA; context-wide tracing then passed without mutation. Do not label the first result a pass or claim a camera fix.",
+  "limitations": [
+    "No public autosave observation before terminalization",
+    "No multi-stage aggregate resolver yet",
+    "H_eff has values and coordinates but no producer-owned 3D mapping",
+    "SwiftShader UI proof, not hardware-GPU or scientific qualification",
+    "Required CI and full-feature review/merge remain open"
+  ]
+}

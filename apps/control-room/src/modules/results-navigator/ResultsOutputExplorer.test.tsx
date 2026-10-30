@@ -1,0 +1,810 @@
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type {
+  ResultsCatalog,
+  ResultsEntry,
+  ResultsSource,
+} from "@/kernel/api/resultsBrowser";
+import { ResultsBrowserUiController } from "@/kernel/results-browser/ResultsBrowserUiController";
+import { ResultsHistoryExitOwnerProvider } from "@/kernel/visualization/ResultsHistoryExitOwnerContext";
+import {
+  findElement,
+  findElements,
+  installSimulationPreparationTestDom,
+  TestElement,
+  TestEvent,
+} from "@/kernel/layout/simulationPreparationTestDom.test-support";
+
+const fixtures = vi.hoisted(() => {
+  const selection = {
+    kind: null,
+    label: null,
+    nodeId: null,
+    objectId: null,
+    ref: null as unknown,
+    moduleSource: null,
+  };
+  const kernel = {
+    selection: {
+      clear: vi.fn(),
+      get: () => selection,
+      set: vi.fn(),
+      subscribe: () => () => undefined,
+    },
+    snapshotVisualizations: undefined,
+    resultsBrowserUi: undefined as unknown,
+  };
+  const resourceCalls: Array<string | null> = [];
+  const pages = new Map<string, ResultsCatalog>();
+  let firstPage: ResultsCatalog | null = null;
+  let catalogError: Error | null = null;
+  let sessionIdentity: {
+    sessionId: string;
+    sessionEpoch: string;
+    requestScopeEpoch: string;
+  } | null = {
+    sessionId: "session-1",
+    sessionEpoch: "epoch-1",
+    requestScopeEpoch: "request-1",
+  };
+
+  const useResultsCatalogResource = vi.fn(
+    (_source: ResultsSource, cursor: string | null) => {
+      resourceCalls.push(cursor);
+      const data = cursor === null ? firstPage : pages.get(cursor) ?? null;
+      return {
+        data,
+        error: catalogError,
+        refreshError: null,
+        refetch: vi.fn(),
+        revision: data?.revision ?? null,
+        status: catalogError ? "error" : data ? "ready" : "loading",
+      };
+    },
+  );
+
+  return {
+    kernel,
+    pages,
+    resourceCalls,
+    selection,
+    get sessionIdentity() {
+      return sessionIdentity;
+    },
+    setSessionIdentity: (identity: typeof sessionIdentity) => {
+      sessionIdentity = identity;
+    },
+    setError: (error: Error | null) => { catalogError = error; },
+    setFirstPage: (catalog: ResultsCatalog | null) => {
+      firstPage = catalog;
+    },
+    useResultsCatalogResource,
+  };
+});
+
+vi.mock("@/kernel/KernelContext", () => ({
+  useKernel: () => fixtures.kernel,
+}));
+vi.mock("@/kernel/resources/resultsBrowserResources", () => ({
+  useResultsCatalogResource: fixtures.useResultsCatalogResource,
+}));
+vi.mock("@/kernel/selection/useSelection", () => ({
+  useSelectionSelector: (selector: (selection: unknown) => unknown) =>
+    selector(fixtures.selection),
+}));
+vi.mock("@/kernel/visualization/returnResultsToLive", () => ({
+  returnResultsToLive: vi.fn(),
+}));
+vi.mock("@/kernel/visualization/useSnapshotVisualization", () => ({
+  useSnapshotVisualization: () => ({ activeKey: null, definitions: {} }),
+}));
+vi.mock("@/kernel/resources/useSessionStatus", () => ({
+  useSessionResourceIdentity: () => fixtures.sessionIdentity,
+}));
+vi.mock("@/shared/ui/Input", async () => {
+  const React = await import("react");
+  return {
+    Input: (props: React.ComponentProps<"input">) => {
+      const { onChange, ...rest } = props;
+      return React.createElement("input", { ...rest, onInput: onChange });
+    },
+  };
+});
+
+import { ResultsOutputExplorer } from "./ResultsOutputExplorer";
+
+let uiController = new ResultsBrowserUiController();
+fixtures.kernel.resultsBrowserUi = uiController;
+
+const source: ResultsSource = { kind: "workspace", itemId: "1" };
+
+function entry(
+  id: string,
+  path: string,
+  parentId: string | null = null,
+  kind: ResultsEntry["kind"] = "file",
+): ResultsEntry {
+  return {
+    id,
+    path,
+    parent_id: parentId,
+    name: path.split("/").at(-1) ?? path,
+    kind,
+    size_bytes: 1,
+    array_id: kind === "zarr_array" ? id : null,
+  };
+}
+
+function catalog(
+  revision: string,
+  runId: string,
+  entries: ResultsEntry[],
+  nextCursor: string | null = null,
+  truncated = false,
+): ResultsCatalog {
+  return {
+    schema: "fullmag.results-catalog.v1",
+    revision,
+    root_label: "Run outputs",
+    run_id: runId,
+    entries,
+    next_cursor: nextCursor,
+    total_count: entries.length,
+    truncated,
+  };
+}
+
+function selectedRef(
+  selectedEntry: ResultsEntry,
+  revision: string,
+  runId: string,
+  selectedSource: ResultsSource = source,
+) {
+  return {
+    type: "result-output" as const,
+    kind: "results.output.entry" as const,
+    nodeId: "results:output:workspace:1:" + encodeURIComponent(selectedEntry.id),
+    source: selectedSource,
+    entry: selectedEntry,
+    revision,
+    runId,
+  };
+}
+
+function findButton(container: TestElement, label: string): TestElement {
+  return findElement(
+    container,
+    (element) => element.tagName === "BUTTON" && element.textContent === label,
+    `${label} button`,
+  );
+}
+
+function changeInput(input: TestElement, value: string): void {
+  // The minimal test DOM does not reflect the input `type` IDL property;
+  // React's change plugin uses it to classify text controls.
+  (input as TestElement & { type?: string }).type = "text";
+  const nativeValueSetter = Object.getOwnPropertyDescriptor(TestElement.prototype, "value")?.set;
+  if (!nativeValueSetter) throw new Error("Missing native test input value setter");
+  nativeValueSetter.call(input, value);
+  input.dispatchEvent(new TestEvent("input", { bubbles: true }));
+  input.dispatchEvent(new TestEvent("change", { bubbles: true }));
+}
+
+async function renderExplorer(
+  root: ReturnType<typeof createRoot>,
+  renderSource: ResultsSource = source,
+  watch = false,
+  owner: "saved" | "current" | null = null,
+): Promise<void> {
+  await act(async () => {
+    root.render(
+      <ResultsHistoryExitOwnerProvider owner={owner}>
+        <ResultsOutputExplorer source={renderSource} watch={watch} />
+      </ResultsHistoryExitOwnerProvider>,
+    );
+  });
+}
+
+describe("ResultsOutputExplorer revision-pinned pagination and selection", () => {
+  beforeEach(() => {
+    fixtures.pages.clear();
+    fixtures.resourceCalls.length = 0;
+    fixtures.setFirstPage(null);
+    fixtures.setError(null);
+    fixtures.setSessionIdentity({
+      sessionId: "session-1",
+      sessionEpoch: "epoch-1",
+      requestScopeEpoch: "request-1",
+    });
+    fixtures.selection.ref = null;
+    uiController = new ResultsBrowserUiController();
+    fixtures.kernel.resultsBrowserUi = uiController;
+    vi.clearAllMocks();
+  });
+
+  it("shows publication waiting as a status and replaces it with the actual catalog", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    fixtures.setError(Object.assign(new Error("no canonical accepted output receipt"), {
+      status: 409, code: "current_results_not_published",
+    }));
+    try {
+      await renderExplorer(root, { kind: "current" }, true);
+      expect(container.textContent).toContain("Waiting for results publication");
+      expect(container.textContent).toContain("This panel checks for published results while it is visible.");
+      expect(findElements(container, el => el.getAttribute("role") === "alert")).toHaveLength(0);
+      expect(container.textContent).not.toContain("No results catalog is available.");
+      fixtures.setError(null);
+      fixtures.setFirstPage(catalog("revision-published", "run-1", [entry("m", "fields/m")]));
+      await renderExplorer(root, { kind: "current" }, true);
+      expect(container.textContent).not.toContain("Waiting for results publication");
+      expect(container.textContent).toContain("m");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("does not promise automatic checks when watch is disabled or hide a stale catalog failure", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    fixtures.setError(Object.assign(new Error("publication changed"), {
+      status: 409, code: "current_results_not_published",
+    }));
+    try {
+      await renderExplorer(root, { kind: "current" });
+      expect(container.textContent).toContain("Use Refresh to check for published results.");
+      expect(container.textContent).not.toContain("while it is visible");
+      fixtures.setFirstPage(catalog("old-revision", "old-run", [entry("m", "fields/m")]));
+      await renderExplorer(root, { kind: "current" }, true);
+      expect(container.textContent).not.toContain("Waiting for results publication");
+      expect(findElements(container, el => el.getAttribute("role") === "alert")).toHaveLength(1);
+      expect(container.textContent).toContain("publication changed");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it.each([
+    { code: "current_results_publication_missing", status: 409, source: { kind: "current" } },
+    { code: "results_run_mismatch", status: 409, source: { kind: "current" } },
+    { code: "current_results_not_published", status: 500, source: { kind: "current" } },
+    { code: "current_results_not_published", status: 409, source: { kind: "workspace", itemId: "1" } },
+  ] as const)("keeps $code/$status failures explicit for $source.kind", async ({code,status,source}) => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    fixtures.setError(Object.assign(new Error("Result catalog cannot be read"), { status, code }));
+    try {
+      await renderExplorer(root, source, true);
+      expect(findElements(container, el => el.getAttribute("role") === "alert")).toHaveLength(1);
+      expect(container.textContent).toContain("Result catalog cannot be read");
+      expect(container.textContent).not.toContain("Waiting for results publication");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("retains filter and collapse across a host remount for the exact source, run and session", async () => {
+    const fields = entry("fields", "fields", null, "directory");
+    const field = entry("field-m", "fields/m", fields.id, "zarr_array");
+    fixtures.setFirstPage(catalog("revision-1", "run-1", [fields, field]));
+
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const firstRoot = createRoot(container as unknown as Element);
+    try {
+      await renderExplorer(firstRoot);
+      const search = findElement(
+        container,
+        (element) => element.getAttribute("aria-label") === "Search saved result outputs",
+        "results search",
+      );
+      const fieldsRow = findElement(
+        container,
+        (element) => element.getAttribute("data-entry-id") === fields.id,
+        "fields row",
+      );
+      const collapse = findElement(
+        fieldsRow,
+        (element) => element.getAttribute("aria-label") === "Collapse fields",
+        "fields disclosure",
+      );
+      await act(async () => {
+        collapse.dispatchEvent(new TestEvent("click", { bubbles: true }));
+      });
+      await act(async () => changeInput(search, "fields"));
+      await act(async () => firstRoot.unmount());
+
+      const secondRoot = createRoot(container as unknown as Element);
+      await renderExplorer(secondRoot);
+      const remountedSearch = findElement(
+        container,
+        (element) => element.getAttribute("aria-label") === "Search saved result outputs",
+        "remounted results search",
+      );
+      const remountedFields = findElement(
+        container,
+        (element) => element.getAttribute("data-entry-id") === fields.id,
+        "remounted fields row",
+      );
+      expect(remountedSearch.value).toBe("fields");
+      expect(remountedFields.getAttribute("aria-expanded")).toBe("true");
+      await act(async () => changeInput(remountedSearch, ""));
+      expect(remountedFields.getAttribute("aria-expanded")).toBe("false");
+      await act(async () => secondRoot.unmount());
+    } finally {
+      dom.restore();
+    }
+  });
+
+  it("retains an explicit Zarr-array expansion across refresh, revision refresh, and remount", async () => {
+    const fields = entry("fields", "fields", null, "directory");
+    const field = entry("field-m", "fields/m", fields.id, "zarr_array");
+    const metadata = entry("array-meta", "fields/m/.zattrs", field.id);
+    const makeCatalog = () => catalog("revision-1", "run-1", [fields, field, metadata]);
+    fixtures.setFirstPage(makeCatalog());
+
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const firstRoot = createRoot(container as unknown as Element);
+    try {
+      await renderExplorer(firstRoot);
+      const fieldRow = findElement(
+        container,
+        (element) => element.getAttribute("data-entry-id") === field.id,
+        "Zarr array row",
+      );
+      expect(fieldRow.getAttribute("aria-expanded")).toBe("false");
+      const expand = findElement(
+        fieldRow,
+        (element) => element.getAttribute("aria-label") === "Expand fields/m",
+        "Zarr array disclosure",
+      );
+      await act(async () => expand.dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(fieldRow.getAttribute("aria-expanded")).toBe("true");
+      expect(findElement(
+        container,
+        (element) => element.getAttribute("data-entry-id") === metadata.id,
+        "Zarr technical child",
+      )).toBeTruthy();
+
+      fixtures.setFirstPage(makeCatalog());
+      await renderExplorer(firstRoot);
+      expect(findElement(
+        container,
+        (element) => element.getAttribute("data-entry-id") === field.id,
+        "refreshed Zarr array row",
+      ).getAttribute("aria-expanded")).toBe("true");
+
+      fixtures.setFirstPage({ ...makeCatalog(), revision: "revision-2" });
+      await renderExplorer(firstRoot);
+      expect(findElement(
+        container,
+        (element) => element.getAttribute("data-entry-id") === field.id,
+        "revision-refreshed Zarr array row",
+      ).getAttribute("aria-expanded")).toBe("true");
+
+      await act(async () => firstRoot.unmount());
+      const secondRoot = createRoot(container as unknown as Element);
+      await renderExplorer(secondRoot);
+      expect(findElement(
+        container,
+        (element) => element.getAttribute("data-entry-id") === field.id,
+        "remounted Zarr array row",
+      ).getAttribute("aria-expanded")).toBe("true");
+      await act(async () => secondRoot.unmount());
+    } finally {
+      dom.restore();
+    }
+  });
+
+  it("reveals matching Zarr children for search without rewriting expansion on clear", async () => {
+    const fields = entry("fields", "fields", null, "directory");
+    const field = entry("field-m", "fields/m", fields.id, "zarr_array");
+    const metadata = entry("array-meta", "fields/m/.zattrs", field.id);
+    fixtures.setFirstPage(catalog("revision-1", "run-1", [fields, field, metadata]));
+
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const findField = () => findElement(
+      container,
+      (element) => element.getAttribute("data-entry-id") === field.id,
+      "search Zarr array row",
+    );
+    const findMetadata = () => findElement(
+      container,
+      (element) => element.getAttribute("data-entry-id") === metadata.id,
+      "search Zarr technical child",
+    );
+    try {
+      await renderExplorer(root);
+      const search = findElement(
+        container,
+        (element) => element.getAttribute("aria-label") === "Search saved result outputs",
+        "results search",
+      );
+      expect(findField().getAttribute("aria-expanded")).toBe("false");
+      await act(async () => changeInput(search, "zattrs"));
+      expect(findField().getAttribute("aria-expanded")).toBe("true");
+      expect(findMetadata()).toBeTruthy();
+      const searchDisclosure = findElement(
+        findField(),
+        (element) => element.getAttribute("aria-label") === "Collapse fields/m",
+        "search-forced Zarr array disclosure",
+      );
+      expect(searchDisclosure.getAttribute("disabled")).not.toBeNull();
+      expect(searchDisclosure.getAttribute("title")).toBe("Expanded to show search matches");
+      await act(async () => searchDisclosure.dispatchEvent(new TestEvent("click", { bubbles: true })));
+      expect(findField().getAttribute("aria-expanded")).toBe("true");
+
+      await act(async () => changeInput(search, ""));
+      expect(findField().getAttribute("aria-expanded")).toBe("false");
+      expect(() => findMetadata()).toThrow();
+
+      const expand = findElement(
+        findField(),
+        (element) => element.getAttribute("aria-label") === "Expand fields/m",
+        "Zarr array disclosure after search",
+      );
+      await act(async () => expand.dispatchEvent(new TestEvent("click", { bubbles: true })));
+      await act(async () => changeInput(search, "zattrs"));
+      await act(async () => changeInput(search, ""));
+      expect(findField().getAttribute("aria-expanded")).toBe("true");
+      expect(findMetadata()).toBeTruthy();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("does not carry the output tree filter into a different run", async () => {
+    const fields = entry("fields", "fields", null, "directory");
+    fixtures.setFirstPage(catalog("revision-1", "run-1", [fields]));
+
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await renderExplorer(root);
+      const search = findElement(
+        container,
+        (element) => element.getAttribute("aria-label") === "Search saved result outputs",
+        "results search",
+      );
+      await act(async () => changeInput(search, "fields"));
+      fixtures.setFirstPage(catalog("revision-2", "run-2", [fields]));
+      await renderExplorer(root);
+      expect(
+        findElement(
+          container,
+          (element) => element.getAttribute("aria-label") === "Search saved result outputs",
+          "new-run results search",
+        ).value,
+      ).toBe("");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("keeps legacy output controls local when run or session identity is unavailable", async () => {
+    const fields = entry("fields", "fields", null, "directory");
+    const field = entry("field-m", "fields/m", fields.id, "zarr_array");
+    fixtures.setFirstPage({
+      ...catalog("revision-legacy", "run-legacy", [fields, field]),
+      run_id: null,
+    });
+    fixtures.setSessionIdentity(null);
+
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await renderExplorer(root);
+      const search = findElement(
+        container,
+        (element) => element.getAttribute("aria-label") === "Search saved result outputs",
+        "legacy results search",
+      );
+      const fieldsRow = findElement(
+        container,
+        (element) => element.getAttribute("data-entry-id") === fields.id,
+        "legacy fields row",
+      );
+      const collapse = findElement(
+        fieldsRow,
+        (element) => element.getAttribute("aria-label") === "Collapse fields",
+        "legacy fields disclosure",
+      );
+      await act(async () => {
+        collapse.dispatchEvent(new TestEvent("click", { bubbles: true }));
+      });
+      await act(async () => changeInput(search, "fields"));
+      expect(search.value).toBe("fields");
+      expect(fieldsRow.getAttribute("aria-expanded")).toBe("true");
+      await act(async () => changeInput(search, ""));
+      expect(fieldsRow.getAttribute("aria-expanded")).toBe("false");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("fences the local legacy state by source, run and session without revision resets", async () => {
+    const fields = entry("fields", "fields", null, "directory");
+    const field = entry("field-m", "fields/m", fields.id, "zarr_array");
+    fixtures.setSessionIdentity(null);
+    fixtures.setFirstPage(catalog("revision-a-1", "run-a", [fields, field]));
+
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const findSearch = () => findElement(
+      container,
+      (element) => element.getAttribute("aria-label") === "Search saved result outputs",
+      "legacy scoped results search",
+    );
+    const findFieldsRow = () => findElement(
+      container,
+      (element) => element.getAttribute("data-entry-id") === fields.id,
+      "legacy scoped fields row",
+    );
+    try {
+      await renderExplorer(root);
+      const fieldsRow = findFieldsRow();
+      await act(async () => {
+        findElement(
+          fieldsRow,
+          (element) => element.getAttribute("aria-label") === "Collapse fields",
+          "legacy scoped fields disclosure",
+        ).dispatchEvent(new TestEvent("click", { bubbles: true }));
+      });
+      await act(async () => changeInput(findSearch(), "fields"));
+
+      fixtures.setFirstPage(catalog("revision-a-2", "run-a", [fields, field]));
+      await renderExplorer(root);
+      expect(findSearch().value).toBe("fields");
+      expect(findFieldsRow().getAttribute("aria-expanded")).toBe("true");
+      await act(async () => changeInput(findSearch(), ""));
+      expect(findFieldsRow().getAttribute("aria-expanded")).toBe("false");
+
+      fixtures.setFirstPage(catalog("revision-b-1", "run-b", [fields, field]));
+      await renderExplorer(root);
+      expect(findSearch().value).toBe("");
+      expect(findFieldsRow().getAttribute("aria-expanded")).toBe("true");
+
+      fixtures.setFirstPage(catalog("revision-a-3", "run-a", [fields, field]));
+      await renderExplorer(root);
+      expect(findSearch().value).toBe("");
+      expect(findFieldsRow().getAttribute("aria-expanded")).toBe("true");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("preserves tree query and collapse while dropping pages from an older revision", async () => {
+    const fields = entry("fields", "fields", null, "directory");
+    const field = entry("field-m", "fields/m", fields.id, "zarr_array");
+    const unrelated = entry("logs", "logs/solver.txt");
+    const oldPage = entry("old-page", "old/page.json");
+    fixtures.setFirstPage(catalog("revision-1", "run-1", [fields, field, unrelated], "page-2", true));
+    fixtures.pages.set("page-2", catalog("revision-1", "run-1", [oldPage]));
+
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await renderExplorer(root);
+      const search = findElement(
+        container,
+        (element) => element.getAttribute("aria-label") === "Search saved result outputs",
+        "results search",
+      );
+      const fieldsRow = findElement(
+        container,
+        (element) => element.getAttribute("data-entry-id") === fields.id,
+        "fields row",
+      );
+      const collapse = findElement(
+        fieldsRow,
+        (element) => element.getAttribute("aria-label") === "Collapse fields",
+        "fields disclosure",
+      );
+      await act(async () => {
+        collapse.dispatchEvent(new TestEvent("click", { bubbles: true }));
+      });
+      await act(async () => {
+        changeInput(search, "fields");
+      });
+      expect(search.value).toBe("fields");
+      expect(container.textContent).not.toContain("solver.txt");
+      expect(
+        findElement(
+          container,
+          (element) => element.getAttribute("aria-label") === "Search saved result outputs",
+          "search after collapse",
+        ),
+      ).toBe(search);
+      expect(search.value).toBe("fields");
+      expect(fieldsRow.getAttribute("aria-expanded")).toBe("true");
+
+      await act(async () => {
+        findButton(container, "Next page").dispatchEvent(
+          new TestEvent("click", { bubbles: true }),
+        );
+      });
+      expect(search.value).toBe("fields");
+      expect(container.textContent).toContain("4 loaded");
+
+      const originalSearch = search;
+      const revisionTwoFields = entry("fields", "fields", null, "directory");
+      const revisionTwoField = entry("field-m", "fields/m", revisionTwoFields.id, "zarr_array");
+      fixtures.setFirstPage(
+        catalog("revision-2", "run-1", [revisionTwoFields, revisionTwoField]),
+      );
+      await renderExplorer(root);
+
+      const updatedSearch = findElement(
+        container,
+        (element) => element.getAttribute("aria-label") === "Search saved result outputs",
+        "updated results search",
+      );
+      expect(updatedSearch).toBe(originalSearch);
+      expect(updatedSearch.value).toBe("fields");
+      expect(
+        findElement(
+          container,
+          (element) => element.getAttribute("data-entry-id") === fields.id,
+          "updated fields row",
+        ).getAttribute("aria-expanded"),
+      ).toBe("true");
+      await act(async () => changeInput(updatedSearch, ""));
+      expect(findElement(
+        container,
+        (element) => element.getAttribute("data-entry-id") === fields.id,
+        "updated fields row after search clear",
+      ).getAttribute("aria-expanded")).toBe("false");
+      expect(
+        findElements(
+          container,
+          (element) => element.getAttribute("data-entry-id") === oldPage.id,
+        ),
+      ).toHaveLength(0);
+      expect(container.textContent).toContain("2 loaded of 2 total");
+      expect(fixtures.resourceCalls.slice(-2)).toEqual([null, null]);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("offers explicit same-run revision adoption using a loaded matching entry", async () => {
+    const oldEntry = entry("array-m", "fields/m", null, "zarr_array");
+    const currentEntry = entry("array-m", "fields/m", null, "zarr_array");
+    fixtures.setFirstPage(catalog("revision-2", "run-1", [currentEntry]));
+    fixtures.selection.ref = selectedRef(oldEntry, "revision-1", "run-1");
+
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await renderExplorer(root);
+      expect(container.textContent).toContain("pinned to revision revision-1");
+      const update = findButton(container, "Update selected output");
+
+      await act(async () => {
+        update.dispatchEvent(new TestEvent("click", { bubbles: true }));
+      });
+
+      const patch = fixtures.kernel.selection.set.mock.calls[0]?.[0] as {
+        ref?: { revision?: string; entry?: ResultsEntry };
+      };
+      expect(patch.ref?.revision).toBe("revision-2");
+      expect(patch.ref?.entry).toEqual(currentEntry);
+      expect(fixtures.kernel.selection.clear).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("keeps an opaque selected identity when the incomplete catalog has not loaded its page", async () => {
+    const oldEntry = entry("array-m", "fields/m", null, "zarr_array");
+    fixtures.setFirstPage(catalog("revision-2", "run-1", [], "page-2", true));
+    fixtures.selection.ref = selectedRef(oldEntry, "revision-1", "run-1");
+
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await renderExplorer(root);
+      expect(container.textContent).toContain("may be on a page that has not been loaded yet");
+      await act(async () => {
+        findButton(container, "Update selected output").dispatchEvent(
+          new TestEvent("click", { bubbles: true }),
+        );
+      });
+      const patch = fixtures.kernel.selection.set.mock.calls[0]?.[0] as {
+        ref?: { revision?: string; entry?: ResultsEntry };
+      };
+      expect(patch.ref?.revision).toBe("revision-2");
+      expect(patch.ref?.entry).toEqual(oldEntry);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("does not rebind a selected old-run output by path", async () => {
+    const oldEntry = entry("array-m", "fields/m", null, "zarr_array");
+    const currentEntry = entry("array-m", "fields/m", null, "zarr_array");
+    fixtures.setFirstPage(catalog("revision-2", "run-2", [currentEntry]));
+    fixtures.selection.ref = selectedRef(oldEntry, "revision-1", "run-1");
+
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await renderExplorer(root);
+      expect(container.textContent).toContain("It was not rebound by path.");
+      expect(
+        findElements(
+          container,
+          (element) => element.tagName === "BUTTON" && element.textContent === "Update selected output",
+        ),
+      ).toHaveLength(0);
+      expect(fixtures.kernel.selection.set).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("offers clearing when a complete new revision removed the selected output", async () => {
+    const oldEntry = entry("array-m", "fields/m", null, "zarr_array");
+    fixtures.setFirstPage(catalog("revision-2", "run-1", []));
+    fixtures.selection.ref = selectedRef(oldEntry, "revision-1", "run-1");
+
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await renderExplorer(root);
+      expect(container.textContent).toContain("not present in the complete catalog");
+      expect(() => findButton(container, "Update selected output")).toThrow();
+      await act(async () => {
+        findButton(container, "Clear selected output").dispatchEvent(
+          new TestEvent("click", { bubbles: true }),
+        );
+      });
+      expect(fixtures.kernel.selection.clear).toHaveBeenCalledWith("results-navigator");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("leaves the saved-folder exit action to the owning shell", async () => {
+    fixtures.setFirstPage(catalog("revision-1", "run-1", [entry("array-m", "fields/m", null, "zarr_array")]));
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await renderExplorer(root, source, false, "saved");
+      expect(() => findButton(container, "Return to live")).toThrow();
+      expect(() => findButton(container, "Close results")).toThrow();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+});

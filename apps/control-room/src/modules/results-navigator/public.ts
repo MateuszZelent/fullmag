@@ -1,4 +1,8 @@
 export { default as ResultsNavigatorModule } from "./ResultsNavigatorModule";
+export {
+  default as ResultsOutputExplorer,
+  type ResultsOutputExplorerProps,
+} from "./ResultsOutputExplorer";
 export { ResultsNavigatorTree } from "./ResultsNavigatorTree";
 export { resultsNavigatorManifest } from "./manifest";
 export {

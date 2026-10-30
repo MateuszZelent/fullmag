@@ -7,6 +7,22 @@ use std::path::Path;
 pub(super) const WORKER_EXECUTION_STARTED_RECEIPT: &str = "worker_execution_started.v1.json";
 pub(super) const WORKER_EXECUTION_RECEIPT_SCHEMA: &str = "fullmag.accepted_worker_execution.v1";
 
+pub(super) const WORKER_EXECUTION_COMPLETED_RECEIPT: &str = "worker_execution_completed.v1.json";
+pub(super) const WORKER_EXECUTION_COMPLETED_RECEIPT_V2: &str = "worker_execution_completed.v2.json";
+
+/// Any completion marker, including an unreadable legacy stats payload,
+/// fences failure recovery. Parsing success must never authorize a replay.
+pub(super) fn has_completed_worker_receipt(attempt_output_dir: &Path) -> Result<bool> {
+    for name in [WORKER_EXECUTION_COMPLETED_RECEIPT, WORKER_EXECUTION_COMPLETED_RECEIPT_V2] {
+        match std::fs::symlink_metadata(attempt_output_dir.join(name)) {
+            Ok(_) => return Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            Err(error) => return Err(error).context("inspect worker completion fence"),
+        }
+    }
+    Ok(false)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct WorkerExecutionReceiptIdentity {

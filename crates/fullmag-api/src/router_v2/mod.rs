@@ -825,6 +825,26 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::data::get_artifact),
         )
         .route(
+            "/v2/sessions/current/data/results",
+            get(handlers::workspace_results::get_current_results_catalog),
+        )
+        .route(
+            "/v2/sessions/current/data/results/arrays/:array_id",
+            get(handlers::workspace_results::get_current_results_array),
+        )
+        .route(
+            "/v2/sessions/current/data/results/arrays/:array_id/geometry",
+            get(handlers::workspace_results::get_current_results_geometry),
+        )
+        .route(
+            "/v2/sessions/current/data/results/arrays/:array_id/samples/:sample_index",
+            get(handlers::workspace_results::get_current_results_sample),
+        )
+        .route(
+            "/v2/sessions/current/data/results/entries/:entry_id",
+            get(handlers::workspace_results::get_current_results_entry),
+        )
+        .route(
             "/v2/sessions/current/data/antenna/field-solutions/:solution_id",
             get(handlers::data::get_antenna_field_solution),
         )
@@ -941,6 +961,26 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/workspace/items/:id/playback/geometry",
             get(handlers::workspace_items::get_item_playback_geometry),
+        )
+        .route(
+            "/v2/workspace/items/:id/results",
+            get(handlers::workspace_results::get_workspace_results_catalog),
+        )
+        .route(
+            "/v2/workspace/items/:id/results/arrays/:array_id",
+            get(handlers::workspace_results::get_workspace_results_array),
+        )
+        .route(
+            "/v2/workspace/items/:id/results/arrays/:array_id/geometry",
+            get(handlers::workspace_results::get_workspace_results_geometry),
+        )
+        .route(
+            "/v2/workspace/items/:id/results/arrays/:array_id/samples/:sample_index",
+            get(handlers::workspace_results::get_workspace_results_sample),
+        )
+        .route(
+            "/v2/workspace/items/:id/results/entries/:entry_id",
+            get(handlers::workspace_results::get_workspace_results_entry),
         )
         .route(
             "/v2/workspace/settings/:key",

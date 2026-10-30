@@ -157,6 +157,7 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api development_accepted_restore::tests
           cargo test -p fullmag-runtime-control --lib scheduler::accepted_start_tests
           cargo test -p fullmag-api --bin fullmag-api live_accepted_projection::tests
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_worker::accepted_final_step_stats_tests
           cargo test -p fullmag-api --bin fullmag-api accepted_fem_study_worker::source_contract_tests
           cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_fem_study_worker::source_contract_tests
           cargo test -p fullmag-api --bin fullmag-api live_scene_preparation::tests
@@ -188,9 +189,16 @@ jobs:
         run: cargo test -p fullmag-cli --bin fullmag container_recovery_capabilities
 
       - name: Verify read-only saved FDM/FEM playback and binary frame routes
+        env:
+          RUST_MIN_STACK: 16777216
         run: |
-          cargo test --locked -p fullmag-workspace-inspect --lib
+          cargo test --locked -p fullmag-workspace-inspect --lib -- --skip manifest::tests::cross_process_writer_gate_blocks_initial_and_terminal_writes_then_retries_after_process_exit
+          cargo test --locked -p fullmag-workspace-inspect --lib -- --exact manifest::tests::cross_process_writer_gate_blocks_initial_and_terminal_writes_then_retries_after_process_exit
           cargo test --locked -p fullmag-api --bin fullmag-api saved_playback_
+          cargo test --locked -p fullmag-api --bin fullmag-api workspace_results
+          cargo test --locked -p fullmag-runner --lib autosave_fem_geometry
+          cargo test --locked -p fullmag-runner --lib autosave_zarr
+          cargo test --locked -p fullmag-runner --lib artifact_pipeline::tests::fem_nodal_binding_is_published_before_first_zarr_sample -- --exact
 
       - name: Run instance discovery contracts (ADR 0069)
         run: cargo test -p fullmag-api --bin fullmag-api instance_discovery::tests --no-fail-fast
@@ -436,6 +444,18 @@ jobs:
           # test worker stack large enough for its nested serde traversal.
           RUST_MIN_STACK: 8388608
         run: ./scripts/ci/run_frontend3d_required_gate.sh rust-quantity-api-cli-contracts
+
+      - name: Preserve Cargo-resolved lockfile and manifests
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-contracts-lockfile
+          path: |
+            Cargo.lock
+            Cargo.toml
+            crates/fullmag-workspace-inspect/Cargo.toml
+          if-no-files-found: error
+          retention-days: 7
 
   bias-field-artifact-contracts:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.contract_scope == 'bias-field-artifacts' }}
@@ -945,6 +965,8 @@ jobs:
           python -B scripts/test_docker_dev_codegen.py -v
           python -B scripts/test_docker_dev_browser_qa.py -v
           python -B scripts/test_docker_volume_receipts.py -v
+          python -B scripts/test_docker_volume_frontend_recovery.py -v
+          python -B scripts/test_docker_volume_frontend_preflight_rejection.py -v
           python -B scripts/test_docker_saved_authoring_history.py -v
           python -B scripts/test_docker_volume_device_access.py -v
           python -B scripts/test_docker_volume_retained_device_lifecycle.py -v

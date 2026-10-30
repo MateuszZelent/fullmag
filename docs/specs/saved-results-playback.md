@@ -56,7 +56,7 @@ W Docker folder musi być dostępny w przestrzeni plików backendu. Podczas kwal
 
 Wykonywalne testy dekodera i adaptera obejmują poprawną kolejność komórek/składowych, błędny rozmiar, NaN, skale i zmianę źródła. Testy źródeł czytnika obejmują traversal/symlinki, źródło niekompletne, rewizję, brak chunku i granice.
 
-Wymagany dowód przeglądarkowy: rzeczywisty folder YIG, co najmniej dwie różne klatki, poprawna etykieta czasu i zmieniony kolor, niezmieniona geometria/kamera/Inspector, widoczny canvas, gl.isContextLost()==false oraz dodatnie drawingBufferWidth/Height. Typecheck, lint, testy i architecture/API hygiene pozostają osobnymi bramkami. Zakaz kompilacji testów Rust obowiązuje do osobnego odwołania i nie jest obchodzony.
+Wymagany dowód przeglądarkowy: rzeczywisty folder YIG, co najmniej dwie różne klatki, poprawna etykieta czasu i zmieniony kolor, niezmieniona geometria/kamera/Inspector, widoczny canvas, gl.isContextLost()==false oraz dodatnie drawingBufferWidth/Height. Typecheck, lint, testy i architecture/API hygiene pozostają osobnymi bramkami. Testy i kompilację wykonuje się w zarządzanym środowisku projektu albo w wymaganym CI.
 
 Rewizja identyfikuje deskryptor, metadane Zarr i sąsiednie manifesty, nie checksum treści chunków. Odczyt wykrywa zmianę wybranego pliku w trakcie żądania, błędny rozmiar i NaN; poprawna skończona podmiana przed żądaniem nie zmienia rewizji. Pełna kontrola integralności oryginalnego YIG pozostaje w SHA256SUMS i recovery.json.
 
@@ -94,4 +94,64 @@ Adapter wizualizacji wyznacza powierzchnię komórek, których wszystkie węzły
 
 Zapis geometryczny representation_evidence=not_verified pozostaje zachowany. Import nie nadaje kwalifikacji natywnej mapie DOF, fizyce solvera ani wyższym rzędom FEM. Obsługiwane jest zapisane rzeczywiste pole m H1/P1; pola zespolone, inne rzędy i niejawne mapy są odrzucane.
 
-W lokalnym storage nie znaleziono ukończonej serii FEM do kwalifikacji. Przykład fem_playback_fixture tworzy jawnie syntetyczny, deterministyczny folder do sprawdzenia rzeczywistego HTTP/UI; taki dowód nie jest wynikiem symulacji FEM. Oryginalny YIG pozostaje osobnym rzeczywistym zapisem FDM.
+Podczas pierwotnego przeglądu nie znaleziono ukończonej serii FEM; późniejsze dowody rzeczywistych runów i ich granice są zapisane w [audycie Results](../audits/2026-10-28-results-browser-ux-audit.md). Przykład fem_playback_fixture tworzy jawnie syntetyczny, deterministyczny folder do sprawdzenia rzeczywistego HTTP/UI; taki dowód nie jest wynikiem symulacji FEM. Oryginalny YIG pozostaje osobnym rzeczywistym zapisem FDM.
+
+
+## Przeglądarka outputów Results i publikacja podczas runu
+
+Stan 30.10.2026: poniższe rozszerzenie jest zaimplementowane w źródłach i podlega
+CI oraz kwalifikacji runtime. Historyczne dowody `/playback` powyżej nie dowodzą
+ukończenia rozszerzenia. Aktualne ograniczenia: [audyt](../audits/2026-10-28-results-browser-ux-audit.md).
+
+Przeglądarka korzysta z katalogu `/v2/workspace/items/{id}/results` dla zapisanego
+folderu albo `/v2/sessions/current/data/results` dla outputu bieżącego accepted runu.
+Pod tym samym prefiksem znajdują się zasoby `/arrays/{array_id}`,
+`/arrays/{array_id}/samples/{sample_index}`, `/arrays/{array_id}/geometry` oraz
+odczyt wpisu katalogu. Nie jest wymagane ręczne przygotowanie `playback.json`
+dla tablicy posiadającej obsługiwany, jawny binding producenta. Nieobsługiwane
+formaty pozostają wpisami katalogu z metadanymi lub wyjaśnieniem ograniczenia;
+sama obecność pliku nie nadaje prawa do wizualizacji 3D.
+
+Current Results agreguje zarezerwowane leafy etapów i prób należących do accepted
+runu. Nazwy i ID wpisów są przypisane do konkretnego członka kolekcji.
+`catalog.run_id` identyfikuje accepted run. Rewizja katalogu obejmuje cały aktualny
+zestaw członków; cursor poprzedniej rewizji traci ważność po zmianie kolekcji.
+Metadane tablicy zwracają token rewizji jej leafa. Klient traktuje wszystkie ID,
+cursory i rewizje jako nieprzezroczyste i przekazuje zwrócony token do odczytu
+próbek/geometrii tej tablicy. Token nie może służyć do odczytu innego leafa.
+Dodanie siblinga nie unieważnia istniejącego tokenu tablicy; zmiana wybranego
+leafa powoduje konflikt rewizji. Stary viewport nie przełącza się samoczynnie.
+
+Deklaracja `fullmag.accepted_results_publication.v1` wiąże publiczny output
+z accepted runem, próbą, epoką, fingerprintem specyfikacji i polityką commitów
+próbek. Gdy jest obecna, każda tablica wymaga prawidłowego watermarku
+`fullmag.zarr.sample_publication.v1`. Wzrost `.zarray.shape` nie wystarcza:
+odczyt pokazuje tylko zatwierdzony prefiks wraz z jego współrzędnymi czasu.
+Prefiks może pozostać czytelny po anulowaniu albo błędzie; nie zmienia to
+statusu runu na sukces. Brak lub uszkodzenie zadeklarowanej polityki nie pozwala
+przejść do starszego kontraktu folderu. Legacy Current nadal wymaga ukończonej
+publikacji.
+
+Discovery obejmuje maksymalnie 256 kandydatów. Pojedynczy receipt ma limit
+1 MiB, a suma odczytywanych receiptów w jednym rozwiązaniu kolekcji 16 MiB;
+ponowna kontrola po odczycie ma osobny taki limit. Brak pliku i błędy typu/ścieżki
+pozostają odrębne od przekroczenia budżetu. Payloady i metadane czytnika mają
+również własny współdzielony budżet żądania; paginacja nie znosi tych limitów.
+
+Dla rzeczywistych nodalnych pól FEM H1/P1 producent zapisuje
+`fullmag.zarr_fem_nodal_binding.v1` w `.zattrs`. Binding obejmuje quantity,
+jednostkę, układ AoS/SoA, szerokość tablicy, fingerprint siatki oraz referencje
+hash/długość do obiektów geometrii i semantyki wsparcia w `.fullmag_geometry`.
+Obiekty należą do dokładnego Zarr zawierającego tablicę, także gdy store jest
+zagnieżdżony w folderze runu. Reader nie szuka zastępstwa w siblingu ani w
+aktualnej siatce live. Obsługiwane są M (jednostka 1, wsparcie magnetyczne),
+H_eff (A/m, pełne wsparcie) i DemagPhi (A, skalar na pełnym wsparciu).
+Binding i binarne FMMT/FMSP są walidowane; `representation_evidence=not_verified`
+nie zmienia się w dowód natywnej numeracji DOF ani poprawności fizyki.
+
+Inspector zachowuje wybór próbki oraz osobne ustawienia jej wyglądu podczas
+świadomego przyjęcia nowej rewizji tego samego źródła. Preferencje mają limit
+128 wpisów; źródła, runy/sesje, quantity i indeksy próbek pozostają rozdzielone.
+To pamięć ustawień, a nie cache danych bez rewizji. Render nadal używa dokładnej
+rewizji. `Return to live` odłącza historyczne źródło i zachowuje preferencje;
+reset sesji je usuwa. Pusta tablica nie udostępnia akcji `Load into 3D`.

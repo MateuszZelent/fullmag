@@ -27,6 +27,15 @@
   isolation: isolate;
 }
 
+/* Saved results use a compact context header in place of the full ribbon. */
+.fm-workspace-shell:has(> .fm-saved-results-playback-shell__header) {
+  grid-template-rows:
+    var(--fm-menu-height)
+    auto
+    minmax(0, 1fr)
+    var(--fm-status-height);
+}
+
 .fm-workspace-shell:has(> .fm-runtime-degraded-banner) {
   grid-template-rows:
     var(--fm-menu-height)
