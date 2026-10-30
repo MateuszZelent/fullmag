@@ -4127,6 +4127,41 @@ mod tests {
     }
 
     #[test]
+    fn materialize_script_stages_restores_authored_damping_after_relax_alpha() {
+        let ir = sample_problem_ir();
+        let authored_damping: Vec<f64> = ir.materials.iter().map(|material| material.damping).collect();
+        let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
+            ir,
+            shared_geometry_assets: None,
+            default_until_seconds: Some(1e-12),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    primitive_node(
+                        "relax",
+                        "relax",
+                        json!({"relax_algorithm": "llg_overdamped", "relax_alpha": "1"}),
+                    ),
+                    primitive_node(
+                        "run",
+                        "run",
+                        json!({"entrypoint_kind": "flat_run", "until_seconds": 1e-12}),
+                    ),
+                ],
+            }),
+            stages: vec![],
+        };
+
+        let stages = materialize_script_stages(config).expect("relax then run should materialize");
+        assert_eq!(stages.len(), 2);
+        assert!(stages[0].ir.materials.iter().all(|material| material.damping == 1.0));
+        let run_damping: Vec<f64> =
+            stages[1].ir.materials.iter().map(|material| material.damping).collect();
+        assert_eq!(run_damping, authored_damping);
+    }
+
+    #[test]
     fn session_command_direct_minimizer_rejects_llg_only_controls() {
         let base_problem = sample_problem_ir();
         let command = crate::types::SessionCommand {
