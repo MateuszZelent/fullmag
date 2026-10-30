@@ -143,7 +143,7 @@ describe("resolveSimulationPreparationViewModel", () => {
 
     expect(model).toMatchObject({
       isVisible: true,
-      kind: "connecting",
+      kind: "syncing",
       progress: { kind: "indeterminate" },
       title: "Preparing simulation",
     });
@@ -151,6 +151,39 @@ describe("resolveSimulationPreparationViewModel", () => {
     expect(model.progress).toEqual({ kind: "indeterminate" });
     expect(model).not.toHaveProperty("eta");
     expect(model).not.toHaveProperty("percent");
+  });
+
+  it("holds the startup gate silently while a reload reads a published preparation", () => {
+    const model = resolveSimulationPreparationViewModel(
+      resource<SimulationPreparationResource>(null, "loading"),
+      statusResource("ready", {
+        preparationRevision: 35,
+        solverState: "completed",
+      }),
+      1_000,
+    );
+
+    expect(model).toMatchObject({ isVisible: true, kind: "syncing" });
+  });
+
+  it("shows the window while the runtime workspace is unavailable", () => {
+    const model = resolveSimulationPreparationViewModel(
+      resource<SimulationPreparationResource>(null, "idle"),
+      {
+        data: null,
+        error: new Error("no active local live workspace"),
+        refetch,
+        revision: null,
+        status: "error",
+      },
+      1_000,
+    );
+
+    expect(model).toMatchObject({
+      detail: "Waiting for the runtime workspace to become available.",
+      isVisible: true,
+      kind: "connecting",
+    });
   });
 
   it("releases a ready restored session when revision zero has no preparation snapshot", () => {
