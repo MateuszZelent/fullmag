@@ -374,13 +374,13 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --locked -p fullmag-plan fem_eigen_bias_sample_ --lib -- --nocapture | tee "$RUNNER_TEMP/eigen-bias-demag-policy-plan.log"
-          rg -q '^test result: ok\. 2 passed; 0 failed;' "$RUNNER_TEMP/eigen-bias-demag-policy-plan.log"
+          grep -q '^test result: ok\. 2 passed; 0 failed;' "$RUNNER_TEMP/eigen-bias-demag-policy-plan.log"
           cargo test --locked -p fullmag-runner bias_field_sample_relax_plan_carries_demag_policy_without_changing_llg_budget --lib -- --nocapture | tee "$RUNNER_TEMP/eigen-bias-demag-policy-runner.log"
-          rg -q '^test result: ok\. 1 passed; 0 failed;' "$RUNNER_TEMP/eigen-bias-demag-policy-runner.log"
+          grep -q '^test result: ok\. 1 passed; 0 failed;' "$RUNNER_TEMP/eigen-bias-demag-policy-runner.log"
           cargo test --locked -p fullmag-runner --lib relaxation::convergence::tests::max_steps_is_terminal_but_not_converged -- --exact --nocapture | tee "$RUNNER_TEMP/eigen-bias-max-steps.log"
-          rg -q '^test result: ok\. 1 passed; 0 failed;' "$RUNNER_TEMP/eigen-bias-max-steps.log"
+          grep -q '^test result: ok\. 1 passed; 0 failed;' "$RUNNER_TEMP/eigen-bias-max-steps.log"
           cargo test --locked -p fullmag-runner --lib fem::eigen_tests::accepted_relax_stage_handoff_rejects_nonconvergent_and_incoherent_completions -- --exact --nocapture | tee "$RUNNER_TEMP/eigen-bias-m0-handoff.log"
-          rg -q '^test result: ok\. 1 passed; 0 failed;' "$RUNNER_TEMP/eigen-bias-m0-handoff.log"
+          grep -q '^test result: ok\. 1 passed; 0 failed;' "$RUNNER_TEMP/eigen-bias-m0-handoff.log"
 
       - name: Run scene periodic boundary intent contracts
         run: cargo test -p fullmag-authoring scene_pbc --lib
