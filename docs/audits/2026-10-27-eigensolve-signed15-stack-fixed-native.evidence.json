@@ -1,0 +1,775 @@
+{
+  "run_catalog": {
+    "schema_version": "run_catalog.v1",
+    "run_id": "run-live-d09693e8f59dc1d41274c8b5510b57fd7a69f0c1847b7cd3a3d18172900e19bc",
+    "revision": 213,
+    "updated_at": "2026-10-27T18:46:04.661477122Z",
+    "tasks": [
+      {
+        "task_id": "task-d655617ab09552862774e66ae60403251dddc1fbb7479b8caf1d19bd067f96c2",
+        "input_fingerprint": "6c0ecdbe5406839d67ce40a80796a684f3b51a8c748a849101aa122cd0acb367",
+        "lifecycle": "succeeded",
+        "readiness": {
+          "state": "ready"
+        },
+        "observation": "reconciling",
+        "attempt_id": "attempt-ca9235e0b54349c08b680229fe817fc7",
+        "ownership_epoch": 2,
+        "artifact_ids": [
+          "accepted-field-40ebfd14d2a10e1e21651bf9b254b956636d84cefa65770f88e759cc5564c73f",
+          "accepted-field-8090eb211ea4f98bf9dc1848dd2e5d4598bad0c23649566fa900b9c51fb94d42",
+          "accepted-field-6ded278027be14d59d8001cfed579a85c4c5b6328558006654dbf12529046264",
+          "accepted-field-b0a245c7f04613ac31251468bd8e40d9d3a99c5dbbadac2118a6f25fdf437bde",
+          "accepted-field-94af29e745204ad70b478045ef7960eb28e00f09c656fad15138bea5f99ed886",
+          "accepted-field-0ffc7bad75aa48fa73fb572e158677145d5921edf5be4a91b95d28e928bc087c",
+          "accepted-field-9008fcef90351745751385a135683224589412f1a8445428e38b31cae32353e0",
+          "accepted-field-f4f32458e16e2c9a5a791e7e0ed27bb3f5366617bd7dff677ae87b08b87e6a4e",
+          "accepted-field-c9c40b33f81f403c01ce1410d8676481da44e3ecebdb30e926186d397610a9d7",
+          "accepted-quantities-004c2c1d51588dcd9a42e6a6b6d0ac21f94ec295ad488ef6986f029f88574b13",
+          "artifact-619e15856dc6828f7ac023d5232fc9b4d8478c0862de24efc693f99b6f1287d9",
+          "artifact-f912733c792bd4116b46d4a45ed6ff0d7465e10b3188f8433983fd364fa81ac4",
+          "artifact-6159ee720c9464d4035f8c3edf7f148b23fc0a0cc4aca6e00437b275664d3c48",
+          "artifact-7b091d4c877b1bce66c82a0e44c67c81b9f26ca1ed08e166794235eb39daaae7"
+        ],
+        "resource_id": "docker-all.compute.cpu",
+        "coordinator_watermark": {
+          "command_sequence": 5,
+          "event_sequence": 7
+        },
+        "coordinator_genesis": {
+          "run_id": "run-live-d09693e8f59dc1d41274c8b5510b57fd7a69f0c1847b7cd3a3d18172900e19bc",
+          "task_id": "task-d655617ab09552862774e66ae60403251dddc1fbb7479b8caf1d19bd067f96c2",
+          "attempt_id": "attempt-ca9235e0b54349c08b680229fe817fc7",
+          "ownership_epoch": 2,
+          "lease_token": "lease-1294bbe1ad3f44e8b006f3af8d92a539",
+          "lease_heartbeat_sequence": 0,
+          "checkpoint_sha256": "d038e32b32b3de119857a66b44d2d370e2a9e71c2612b802e6817e48bf038440",
+          "checkpoint": {
+            "claim": {
+              "attempt_id": "attempt-ca9235e0b54349c08b680229fe817fc7",
+              "lease": {
+                "budget": {
+                  "cpu_millis": 6000,
+                  "gpu_memory_bytes": 0,
+                  "memory_bytes": 24964497408,
+                  "storage_bytes": 7516192768
+                },
+                "heartbeat_sequence": 0,
+                "kind": "cpu",
+                "lease_token": "lease-1294bbe1ad3f44e8b006f3af8d92a539",
+                "resource_id": "docker-all.compute.cpu"
+              },
+              "ownership_epoch": 2,
+              "run_id": "run-live-d09693e8f59dc1d41274c8b5510b57fd7a69f0c1847b7cd3a3d18172900e19bc",
+              "task_id": "task-d655617ab09552862774e66ae60403251dddc1fbb7479b8caf1d19bd067f96c2"
+            },
+            "command_sequence": 0,
+            "event_sequence": 0,
+            "schema_version": "coordinator_checkpoint.v1",
+            "task": {
+              "assessment": null,
+              "attempt_id": "attempt-ca9235e0b54349c08b680229fe817fc7",
+              "claim": {
+                "attempt_id": "attempt-ca9235e0b54349c08b680229fe817fc7",
+                "lease": {
+                  "budget": {
+                    "cpu_millis": 6000,
+                    "gpu_memory_bytes": 0,
+                    "memory_bytes": 24964497408,
+                    "storage_bytes": 7516192768
+                  },
+                  "heartbeat_sequence": 0,
+                  "kind": "cpu",
+                  "lease_token": "lease-1294bbe1ad3f44e8b006f3af8d92a539",
+                  "resource_id": "docker-all.compute.cpu"
+                },
+                "ownership_epoch": 2,
+                "run_id": "run-live-d09693e8f59dc1d41274c8b5510b57fd7a69f0c1847b7cd3a3d18172900e19bc",
+                "task_id": "task-d655617ab09552862774e66ae60403251dddc1fbb7479b8caf1d19bd067f96c2"
+              },
+              "input_fingerprint": "6c0ecdbe5406839d67ce40a80796a684f3b51a8c748a849101aa122cd0acb367",
+              "lifecycle": "preparing",
+              "observation": "reconciling",
+              "ownership_epoch": 2,
+              "readiness": {
+                "state": "ready"
+              },
+              "run_id": "run-live-d09693e8f59dc1d41274c8b5510b57fd7a69f0c1847b7cd3a3d18172900e19bc",
+              "task_id": "task-d655617ab09552862774e66ae60403251dddc1fbb7479b8caf1d19bd067f96c2"
+            }
+          }
+        }
+      },
+      {
+        "task_id": "task-d33ac542095722402372cac16766d6f0fa35ef7e3f14958c7e3feeaf5211739b",
+        "input_fingerprint": "cfb748201ae0a12700a3b75f484e02c7cf580bcb06bd90fb88e4dc47934f844e",
+        "lifecycle": "succeeded",
+        "readiness": {
+          "state": "ready"
+        },
+        "observation": "reconciling",
+        "attempt_id": "attempt-34d0adffa47f496686e296d628b1b481",
+        "ownership_epoch": 1,
+        "artifact_ids": [
+          "artifact-11ad767d6377a14b1932f45b71d629a48c4391cba52c40f34f54aa7d84a93c6e",
+          "artifact-f5f663fff721135faad390d511ae0b875a10c95567ce9f42ea11f5a19cd0b0a9"
+        ],
+        "resource_id": "docker-all.compute.cpu",
+        "coordinator_watermark": {
+          "command_sequence": 90,
+          "event_sequence": 92
+        },
+        "coordinator_genesis": {
+          "run_id": "run-live-d09693e8f59dc1d41274c8b5510b57fd7a69f0c1847b7cd3a3d18172900e19bc",
+          "task_id": "task-d33ac542095722402372cac16766d6f0fa35ef7e3f14958c7e3feeaf5211739b",
+          "attempt_id": "attempt-34d0adffa47f496686e296d628b1b481",
+          "ownership_epoch": 1,
+          "lease_token": "lease-e10886ea114d4fcd97bf0a8fd3994eb6",
+          "lease_heartbeat_sequence": 0,
+          "checkpoint_sha256": "38261e12fd705cb4cfbf6fef47c7a4d8f1639c33d15aa33afaf52ef65ed77535",
+          "checkpoint": {
+            "claim": {
+              "attempt_id": "attempt-34d0adffa47f496686e296d628b1b481",
+              "lease": {
+                "budget": {
+                  "cpu_millis": 6000,
+                  "gpu_memory_bytes": 0,
+                  "memory_bytes": 24964497408,
+                  "storage_bytes": 7516192768
+                },
+                "heartbeat_sequence": 0,
+                "kind": "cpu",
+                "lease_token": "lease-e10886ea114d4fcd97bf0a8fd3994eb6",
+                "resource_id": "docker-all.compute.cpu"
+              },
+              "ownership_epoch": 1,
+              "run_id": "run-live-d09693e8f59dc1d41274c8b5510b57fd7a69f0c1847b7cd3a3d18172900e19bc",
+              "task_id": "task-d33ac542095722402372cac16766d6f0fa35ef7e3f14958c7e3feeaf5211739b"
+            },
+            "command_sequence": 0,
+            "event_sequence": 0,
+            "schema_version": "coordinator_checkpoint.v1",
+            "task": {
+              "assessment": null,
+              "attempt_id": "attempt-34d0adffa47f496686e296d628b1b481",
+              "claim": {
+                "attempt_id": "attempt-34d0adffa47f496686e296d628b1b481",
+                "lease": {
+                  "budget": {
+                    "cpu_millis": 6000,
+                    "gpu_memory_bytes": 0,
+                    "memory_bytes": 24964497408,
+                    "storage_bytes": 7516192768
+                  },
+                  "heartbeat_sequence": 0,
+                  "kind": "cpu",
+                  "lease_token": "lease-e10886ea114d4fcd97bf0a8fd3994eb6",
+                  "resource_id": "docker-all.compute.cpu"
+                },
+                "ownership_epoch": 1,
+                "run_id": "run-live-d09693e8f59dc1d41274c8b5510b57fd7a69f0c1847b7cd3a3d18172900e19bc",
+                "task_id": "task-d33ac542095722402372cac16766d6f0fa35ef7e3f14958c7e3feeaf5211739b"
+              },
+              "input_fingerprint": "cfb748201ae0a12700a3b75f484e02c7cf580bcb06bd90fb88e4dc47934f844e",
+              "lifecycle": "preparing",
+              "observation": null,
+              "ownership_epoch": 1,
+              "readiness": {
+                "state": "ready"
+              },
+              "run_id": "run-live-d09693e8f59dc1d41274c8b5510b57fd7a69f0c1847b7cd3a3d18172900e19bc",
+              "task_id": "task-d33ac542095722402372cac16766d6f0fa35ef7e3f14958c7e3feeaf5211739b"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "spectrum_path": "/state/runs/docker-all/session-store/runs/run-live-d09693e8f59dc1d41274c8b5510b57fd7a69f0c1847b7cd3a3d18172900e19bc/worker-attempts/task-d33ac542095722402372cac16766d6f0fa35ef7e3f14958c7e3feeaf5211739b/attempt-34d0adffa47f496686e296d628b1b481/epoch-1/frequency_domain/generations/313f6863399497df95d7c28c621f85043aed3106b866ca1fa2c2dab0f32eb4bd/eigen/spectrum.v2.json",
+  "spectrum_sha256": "cfdf680919c599e5c40ef3b99cd6ecf1269d3fbf7e31b9b8a7b6ea2fe78d4ec9",
+  "samples": [
+    {
+      "sample_index": 0,
+      "modes": [
+        {
+          "raw_mode_index": 0,
+          "frequency_hz": 13560765016.846203,
+          "k_vector": [
+            0.0,
+            -25000000.0,
+            0.0
+          ],
+          "block_residuals": {
+            "backend_reported_residual": null,
+            "certification_tolerance": 1e-08,
+            "certified": true,
+            "eps_full": 2.7172922182445158e-11,
+            "eps_gauge": null,
+            "eps_phi": 1.2275663336633423e-14,
+            "eps_q": 2.717296429403178e-11,
+            "eps_reduced": 2.717296429403178e-11,
+            "floquet_cartesian_magnetic_seam_relative_residual": 1.724260258882892e-36,
+            "floquet_equilibrium_pair_relative_residual": 0.0,
+            "floquet_full_magnetic_relative_residual": 2.7172922182445158e-11,
+            "floquet_full_potential_relative_residual": 1.2317340054273929e-14,
+            "floquet_gauge_policy_satisfied": true,
+            "floquet_scalar_phase_seam_relative_residual": 0.0,
+            "floquet_seam_frame_certified": true,
+            "floquet_tangent_frame_seam_relative_residual": 0.0,
+            "full_descriptor_certified": true,
+            "reduced_pencil_certified": true,
+            "scope": "full_projected_weak_form_and_periodic_seams"
+          },
+          "mode_field_available": true,
+          "assembly_kind": "mfem_weak_form_shared_domain",
+          "source_mesh_topology_sha256": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4"
+        }
+      ]
+    },
+    {
+      "sample_index": 1,
+      "modes": [
+        {
+          "raw_mode_index": 0,
+          "frequency_hz": 12819133185.02152,
+          "k_vector": [
+            0.0,
+            -20000000.0,
+            0.0
+          ],
+          "block_residuals": {
+            "backend_reported_residual": null,
+            "certification_tolerance": 1e-08,
+            "certified": true,
+            "eps_full": 9.902895307477595e-12,
+            "eps_gauge": null,
+            "eps_phi": 1.4769488984080314e-14,
+            "eps_q": 9.902929216018456e-12,
+            "eps_reduced": 9.902929216018456e-12,
+            "floquet_cartesian_magnetic_seam_relative_residual": 2.3023985476375136e-36,
+            "floquet_equilibrium_pair_relative_residual": 0.0,
+            "floquet_full_magnetic_relative_residual": 9.902895307477595e-12,
+            "floquet_full_potential_relative_residual": 1.469985735638184e-14,
+            "floquet_gauge_policy_satisfied": true,
+            "floquet_scalar_phase_seam_relative_residual": 0.0,
+            "floquet_seam_frame_certified": true,
+            "floquet_tangent_frame_seam_relative_residual": 0.0,
+            "full_descriptor_certified": true,
+            "reduced_pencil_certified": true,
+            "scope": "full_projected_weak_form_and_periodic_seams"
+          },
+          "mode_field_available": true,
+          "assembly_kind": "mfem_weak_form_shared_domain",
+          "source_mesh_topology_sha256": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4"
+        }
+      ]
+    },
+    {
+      "sample_index": 2,
+      "modes": [
+        {
+          "raw_mode_index": 0,
+          "frequency_hz": 12041290552.066849,
+          "k_vector": [
+            0.0,
+            -15000000.0,
+            0.0
+          ],
+          "block_residuals": {
+            "backend_reported_residual": null,
+            "certification_tolerance": 1e-08,
+            "certified": true,
+            "eps_full": 1.7151149929308806e-12,
+            "eps_gauge": null,
+            "eps_phi": 1.620103035129225e-14,
+            "eps_q": 1.7151032900688986e-12,
+            "eps_reduced": 1.7151032900688986e-12,
+            "floquet_cartesian_magnetic_seam_relative_residual": 1.6671689992377112e-36,
+            "floquet_equilibrium_pair_relative_residual": 0.0,
+            "floquet_full_magnetic_relative_residual": 1.7151149929308806e-12,
+            "floquet_full_potential_relative_residual": 1.6122326774428858e-14,
+            "floquet_gauge_policy_satisfied": true,
+            "floquet_scalar_phase_seam_relative_residual": 0.0,
+            "floquet_seam_frame_certified": true,
+            "floquet_tangent_frame_seam_relative_residual": 0.0,
+            "full_descriptor_certified": true,
+            "reduced_pencil_certified": true,
+            "scope": "full_projected_weak_form_and_periodic_seams"
+          },
+          "mode_field_available": true,
+          "assembly_kind": "mfem_weak_form_shared_domain",
+          "source_mesh_topology_sha256": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4"
+        }
+      ]
+    },
+    {
+      "sample_index": 3,
+      "modes": [
+        {
+          "raw_mode_index": 0,
+          "frequency_hz": 11211849791.651201,
+          "k_vector": [
+            0.0,
+            -10000000.0,
+            0.0
+          ],
+          "block_residuals": {
+            "backend_reported_residual": null,
+            "certification_tolerance": 1e-08,
+            "certified": true,
+            "eps_full": 2.414522889528399e-11,
+            "eps_gauge": null,
+            "eps_phi": 1.933983454519204e-14,
+            "eps_q": 2.4145269648724995e-11,
+            "eps_reduced": 2.4145269648724995e-11,
+            "floquet_cartesian_magnetic_seam_relative_residual": 1.4540350038913889e-36,
+            "floquet_equilibrium_pair_relative_residual": 0.0,
+            "floquet_full_magnetic_relative_residual": 2.414522889528399e-11,
+            "floquet_full_potential_relative_residual": 1.953998516419507e-14,
+            "floquet_gauge_policy_satisfied": true,
+            "floquet_scalar_phase_seam_relative_residual": 0.0,
+            "floquet_seam_frame_certified": true,
+            "floquet_tangent_frame_seam_relative_residual": 0.0,
+            "full_descriptor_certified": true,
+            "reduced_pencil_certified": true,
+            "scope": "full_projected_weak_form_and_periodic_seams"
+          },
+          "mode_field_available": true,
+          "assembly_kind": "mfem_weak_form_shared_domain",
+          "source_mesh_topology_sha256": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4"
+        }
+      ]
+    },
+    {
+      "sample_index": 4,
+      "modes": [
+        {
+          "raw_mode_index": 0,
+          "frequency_hz": 10681045691.954409,
+          "k_vector": [
+            0.0,
+            -7000000.0,
+            0.0
+          ],
+          "block_residuals": {
+            "backend_reported_residual": null,
+            "certification_tolerance": 1e-08,
+            "certified": true,
+            "eps_full": 2.4610942448452422e-11,
+            "eps_gauge": null,
+            "eps_phi": 2.348247698593056e-14,
+            "eps_q": 2.4610913655303138e-11,
+            "eps_reduced": 2.4610913655303138e-11,
+            "floquet_cartesian_magnetic_seam_relative_residual": 8.95532957124957e-37,
+            "floquet_equilibrium_pair_relative_residual": 0.0,
+            "floquet_full_magnetic_relative_residual": 2.4610942448452422e-11,
+            "floquet_full_potential_relative_residual": 2.3356310488855585e-14,
+            "floquet_gauge_policy_satisfied": true,
+            "floquet_scalar_phase_seam_relative_residual": 0.0,
+            "floquet_seam_frame_certified": true,
+            "floquet_tangent_frame_seam_relative_residual": 0.0,
+            "full_descriptor_certified": true,
+            "reduced_pencil_certified": true,
+            "scope": "full_projected_weak_form_and_periodic_seams"
+          },
+          "mode_field_available": true,
+          "assembly_kind": "mfem_weak_form_shared_domain",
+          "source_mesh_topology_sha256": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4"
+        }
+      ]
+    },
+    {
+      "sample_index": 5,
+      "modes": [
+        {
+          "raw_mode_index": 0,
+          "frequency_hz": 10310201976.016174,
+          "k_vector": [
+            0.0,
+            -5000000.0,
+            0.0
+          ],
+          "block_residuals": {
+            "backend_reported_residual": null,
+            "certification_tolerance": 1e-08,
+            "certified": true,
+            "eps_full": 7.494532641082661e-12,
+            "eps_gauge": null,
+            "eps_phi": 2.5266776980274895e-14,
+            "eps_q": 7.494482179274099e-12,
+            "eps_reduced": 7.494482179274099e-12,
+            "floquet_cartesian_magnetic_seam_relative_residual": 1.5196256929995616e-36,
+            "floquet_equilibrium_pair_relative_residual": 0.0,
+            "floquet_full_magnetic_relative_residual": 7.494532641082661e-12,
+            "floquet_full_potential_relative_residual": 2.5400185940045403e-14,
+            "floquet_gauge_policy_satisfied": true,
+            "floquet_scalar_phase_seam_relative_residual": 0.0,
+            "floquet_seam_frame_certified": true,
+            "floquet_tangent_frame_seam_relative_residual": 0.0,
+            "full_descriptor_certified": true,
+            "reduced_pencil_certified": true,
+            "scope": "full_projected_weak_form_and_periodic_seams"
+          },
+          "mode_field_available": true,
+          "assembly_kind": "mfem_weak_form_shared_domain",
+          "source_mesh_topology_sha256": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4"
+        }
+      ]
+    },
+    {
+      "sample_index": 6,
+      "modes": [
+        {
+          "raw_mode_index": 0,
+          "frequency_hz": 9724035208.05018,
+          "k_vector": [
+            0.0,
+            -2000000.0,
+            0.0
+          ],
+          "block_residuals": {
+            "backend_reported_residual": null,
+            "certification_tolerance": 1e-08,
+            "certified": true,
+            "eps_full": 5.226171682890313e-13,
+            "eps_gauge": null,
+            "eps_phi": 3.2942340899429415e-14,
+            "eps_q": 5.226358953652524e-13,
+            "eps_reduced": 5.226358953652524e-13,
+            "floquet_cartesian_magnetic_seam_relative_residual": 1.2035478404806705e-36,
+            "floquet_equilibrium_pair_relative_residual": 0.0,
+            "floquet_full_magnetic_relative_residual": 5.226171682890313e-13,
+            "floquet_full_potential_relative_residual": 3.4318049470477045e-14,
+            "floquet_gauge_policy_satisfied": true,
+            "floquet_scalar_phase_seam_relative_residual": 0.0,
+            "floquet_seam_frame_certified": true,
+            "floquet_tangent_frame_seam_relative_residual": 0.0,
+            "full_descriptor_certified": true,
+            "reduced_pencil_certified": true,
+            "scope": "full_projected_weak_form_and_periodic_seams"
+          },
+          "mode_field_available": true,
+          "assembly_kind": "mfem_weak_form_shared_domain",
+          "source_mesh_topology_sha256": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4"
+        }
+      ]
+    },
+    {
+      "sample_index": 7,
+      "modes": [
+        {
+          "raw_mode_index": 0,
+          "frequency_hz": 9299249697.073517,
+          "k_vector": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "block_residuals": {
+            "backend_reported_residual": 1.7947320013943493e-13,
+            "certification_tolerance": 1e-08,
+            "certified": true,
+            "eps_full": 1.652629543376944e-13,
+            "eps_gauge": 0.0,
+            "eps_phi": 1.0113397934967384e-14,
+            "eps_q": 1.652629543376944e-13,
+            "eps_reduced": null,
+            "floquet_cartesian_magnetic_seam_relative_residual": null,
+            "floquet_equilibrium_pair_relative_residual": null,
+            "floquet_full_magnetic_relative_residual": null,
+            "floquet_full_potential_relative_residual": null,
+            "floquet_gauge_policy_satisfied": false,
+            "floquet_scalar_phase_seam_relative_residual": null,
+            "floquet_seam_frame_certified": false,
+            "floquet_tangent_frame_seam_relative_residual": null,
+            "full_descriptor_certified": true,
+            "reduced_pencil_certified": false,
+            "scope": "native_descriptor"
+          },
+          "mode_field_available": true,
+          "assembly_kind": "mfem_weak_form_shared_domain",
+          "source_mesh_topology_sha256": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4"
+        }
+      ]
+    },
+    {
+      "sample_index": 8,
+      "modes": [
+        {
+          "raw_mode_index": 0,
+          "frequency_hz": 9724074783.19701,
+          "k_vector": [
+            0.0,
+            2000000.0,
+            0.0
+          ],
+          "block_residuals": {
+            "backend_reported_residual": null,
+            "certification_tolerance": 1e-08,
+            "certified": true,
+            "eps_full": 2.0922970479044578e-13,
+            "eps_gauge": null,
+            "eps_phi": 3.027524738259923e-14,
+            "eps_q": 2.092073954761439e-13,
+            "eps_reduced": 2.092073954761439e-13,
+            "floquet_cartesian_magnetic_seam_relative_residual": 1.5234807564048018e-36,
+            "floquet_equilibrium_pair_relative_residual": 0.0,
+            "floquet_full_magnetic_relative_residual": 2.0922970479044578e-13,
+            "floquet_full_potential_relative_residual": 3.0442344779394765e-14,
+            "floquet_gauge_policy_satisfied": true,
+            "floquet_scalar_phase_seam_relative_residual": 0.0,
+            "floquet_seam_frame_certified": true,
+            "floquet_tangent_frame_seam_relative_residual": 0.0,
+            "full_descriptor_certified": true,
+            "reduced_pencil_certified": true,
+            "scope": "full_projected_weak_form_and_periodic_seams"
+          },
+          "mode_field_available": true,
+          "assembly_kind": "mfem_weak_form_shared_domain",
+          "source_mesh_topology_sha256": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4"
+        }
+      ]
+    },
+    {
+      "sample_index": 9,
+      "modes": [
+        {
+          "raw_mode_index": 0,
+          "frequency_hz": 10310352014.352716,
+          "k_vector": [
+            0.0,
+            5000000.0,
+            0.0
+          ],
+          "block_residuals": {
+            "backend_reported_residual": null,
+            "certification_tolerance": 1e-08,
+            "certified": true,
+            "eps_full": 1.713417264219637e-11,
+            "eps_gauge": null,
+            "eps_phi": 2.6287728553550604e-14,
+            "eps_q": 1.713416387557476e-11,
+            "eps_reduced": 1.713416387557476e-11,
+            "floquet_cartesian_magnetic_seam_relative_residual": 1.915536551088861e-36,
+            "floquet_equilibrium_pair_relative_residual": 0.0,
+            "floquet_full_magnetic_relative_residual": 1.713417264219637e-11,
+            "floquet_full_potential_relative_residual": 2.680597673273742e-14,
+            "floquet_gauge_policy_satisfied": true,
+            "floquet_scalar_phase_seam_relative_residual": 0.0,
+            "floquet_seam_frame_certified": true,
+            "floquet_tangent_frame_seam_relative_residual": 0.0,
+            "full_descriptor_certified": true,
+            "reduced_pencil_certified": true,
+            "scope": "full_projected_weak_form_and_periodic_seams"
+          },
+          "mode_field_available": true,
+          "assembly_kind": "mfem_weak_form_shared_domain",
+          "source_mesh_topology_sha256": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4"
+        }
+      ]
+    },
+    {
+      "sample_index": 10,
+      "modes": [
+        {
+          "raw_mode_index": 0,
+          "frequency_hz": 10681152764.14336,
+          "k_vector": [
+            0.0,
+            7000000.0,
+            0.0
+          ],
+          "block_residuals": {
+            "backend_reported_residual": null,
+            "certification_tolerance": 1e-08,
+            "certified": true,
+            "eps_full": 1.8202316388657814e-11,
+            "eps_gauge": null,
+            "eps_phi": 2.3518562224678757e-14,
+            "eps_q": 1.8202323015147725e-11,
+            "eps_reduced": 1.8202323015147725e-11,
+            "floquet_cartesian_magnetic_seam_relative_residual": 1.3895022418183382e-36,
+            "floquet_equilibrium_pair_relative_residual": 0.0,
+            "floquet_full_magnetic_relative_residual": 1.8202316388657814e-11,
+            "floquet_full_potential_relative_residual": 2.3151907714064978e-14,
+            "floquet_gauge_policy_satisfied": true,
+            "floquet_scalar_phase_seam_relative_residual": 0.0,
+            "floquet_seam_frame_certified": true,
+            "floquet_tangent_frame_seam_relative_residual": 0.0,
+            "full_descriptor_certified": true,
+            "reduced_pencil_certified": true,
+            "scope": "full_projected_weak_form_and_periodic_seams"
+          },
+          "mode_field_available": true,
+          "assembly_kind": "mfem_weak_form_shared_domain",
+          "source_mesh_topology_sha256": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4"
+        }
+      ]
+    },
+    {
+      "sample_index": 11,
+      "modes": [
+        {
+          "raw_mode_index": 0,
+          "frequency_hz": 11211886649.578224,
+          "k_vector": [
+            0.0,
+            10000000.0,
+            0.0
+          ],
+          "block_residuals": {
+            "backend_reported_residual": null,
+            "certification_tolerance": 1e-08,
+            "certified": true,
+            "eps_full": 1.255135717070378e-11,
+            "eps_gauge": null,
+            "eps_phi": 1.9476426960617194e-14,
+            "eps_q": 1.2551328792633702e-11,
+            "eps_reduced": 1.2551328792633702e-11,
+            "floquet_cartesian_magnetic_seam_relative_residual": 1.6345537176231646e-36,
+            "floquet_equilibrium_pair_relative_residual": 0.0,
+            "floquet_full_magnetic_relative_residual": 1.255135717070378e-11,
+            "floquet_full_potential_relative_residual": 1.952669596819893e-14,
+            "floquet_gauge_policy_satisfied": true,
+            "floquet_scalar_phase_seam_relative_residual": 0.0,
+            "floquet_seam_frame_certified": true,
+            "floquet_tangent_frame_seam_relative_residual": 0.0,
+            "full_descriptor_certified": true,
+            "reduced_pencil_certified": true,
+            "scope": "full_projected_weak_form_and_periodic_seams"
+          },
+          "mode_field_available": true,
+          "assembly_kind": "mfem_weak_form_shared_domain",
+          "source_mesh_topology_sha256": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4"
+        }
+      ]
+    },
+    {
+      "sample_index": 12,
+      "modes": [
+        {
+          "raw_mode_index": 0,
+          "frequency_hz": 12041315829.63064,
+          "k_vector": [
+            0.0,
+            15000000.0,
+            0.0
+          ],
+          "block_residuals": {
+            "backend_reported_residual": null,
+            "certification_tolerance": 1e-08,
+            "certified": true,
+            "eps_full": 4.268388066386643e-12,
+            "eps_gauge": null,
+            "eps_phi": 1.6643344801676717e-14,
+            "eps_q": 4.26837945694393e-12,
+            "eps_reduced": 4.26837945694393e-12,
+            "floquet_cartesian_magnetic_seam_relative_residual": 1.5139869002132152e-36,
+            "floquet_equilibrium_pair_relative_residual": 0.0,
+            "floquet_full_magnetic_relative_residual": 4.268388066386643e-12,
+            "floquet_full_potential_relative_residual": 1.6757506938386382e-14,
+            "floquet_gauge_policy_satisfied": true,
+            "floquet_scalar_phase_seam_relative_residual": 0.0,
+            "floquet_seam_frame_certified": true,
+            "floquet_tangent_frame_seam_relative_residual": 0.0,
+            "full_descriptor_certified": true,
+            "reduced_pencil_certified": true,
+            "scope": "full_projected_weak_form_and_periodic_seams"
+          },
+          "mode_field_available": true,
+          "assembly_kind": "mfem_weak_form_shared_domain",
+          "source_mesh_topology_sha256": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4"
+        }
+      ]
+    },
+    {
+      "sample_index": 13,
+      "modes": [
+        {
+          "raw_mode_index": 0,
+          "frequency_hz": 12819200390.629957,
+          "k_vector": [
+            0.0,
+            20000000.0,
+            0.0
+          ],
+          "block_residuals": {
+            "backend_reported_residual": null,
+            "certification_tolerance": 1e-08,
+            "certified": true,
+            "eps_full": 1.4746312549623184e-11,
+            "eps_gauge": null,
+            "eps_phi": 1.5930551608649244e-14,
+            "eps_q": 1.474633589804952e-11,
+            "eps_reduced": 1.474633589804952e-11,
+            "floquet_cartesian_magnetic_seam_relative_residual": 1.6001245471907564e-36,
+            "floquet_equilibrium_pair_relative_residual": 0.0,
+            "floquet_full_magnetic_relative_residual": 1.4746312549623184e-11,
+            "floquet_full_potential_relative_residual": 1.5769980288024677e-14,
+            "floquet_gauge_policy_satisfied": true,
+            "floquet_scalar_phase_seam_relative_residual": 0.0,
+            "floquet_seam_frame_certified": true,
+            "floquet_tangent_frame_seam_relative_residual": 0.0,
+            "full_descriptor_certified": true,
+            "reduced_pencil_certified": true,
+            "scope": "full_projected_weak_form_and_periodic_seams"
+          },
+          "mode_field_available": true,
+          "assembly_kind": "mfem_weak_form_shared_domain",
+          "source_mesh_topology_sha256": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4"
+        }
+      ]
+    },
+    {
+      "sample_index": 14,
+      "modes": [
+        {
+          "raw_mode_index": 0,
+          "frequency_hz": 13560913969.2644,
+          "k_vector": [
+            0.0,
+            25000000.0,
+            0.0
+          ],
+          "block_residuals": {
+            "backend_reported_residual": null,
+            "certification_tolerance": 1e-08,
+            "certified": true,
+            "eps_full": 1.2631874100668894e-11,
+            "eps_gauge": null,
+            "eps_phi": 1.309806611520694e-14,
+            "eps_q": 1.2631868407572304e-11,
+            "eps_reduced": 1.2631868407572304e-11,
+            "floquet_cartesian_magnetic_seam_relative_residual": 1.395475486415948e-36,
+            "floquet_equilibrium_pair_relative_residual": 0.0,
+            "floquet_full_magnetic_relative_residual": 1.2631874100668894e-11,
+            "floquet_full_potential_relative_residual": 1.3132389284290926e-14,
+            "floquet_gauge_policy_satisfied": true,
+            "floquet_scalar_phase_seam_relative_residual": 0.0,
+            "floquet_seam_frame_certified": true,
+            "floquet_tangent_frame_seam_relative_residual": 0.0,
+            "full_descriptor_certified": true,
+            "reduced_pencil_certified": true,
+            "scope": "full_projected_weak_form_and_periodic_seams"
+          },
+          "mode_field_available": true,
+          "assembly_kind": "mfem_weak_form_shared_domain",
+          "source_mesh_topology_sha256": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4"
+        }
+      ]
+    }
+  ],
+  "scope": "Native solver and durable tasks completed; API projection still cached failed before retry fix",
+  "source_commit": "4f6469b1cfcba89ac7a349252c526c55876331a1",
+  "explicit_retry": {
+    "disposition": "accepted",
+    "run_id": "run-live-d09693e8f59dc1d41274c8b5510b57fd7a69f0c1847b7cd3a3d18172900e19bc",
+    "task_id": "task-d655617ab09552862774e66ae60403251dddc1fbb7479b8caf1d19bd067f96c2",
+    "retry_id": "retry-de-signed15-current-node-sample-20261027",
+    "previous_attempt_id": "attempt-7cad042550cb49b3899825029eb5bb66",
+    "previous_ownership_epoch": 1,
+    "lifecycle": "queued",
+    "catalog_revision": 11
+  },
+  "qualification": "NOT VERIFIED: mesh/airbox/spectrum completeness/COMSOL gates remain open"
+}

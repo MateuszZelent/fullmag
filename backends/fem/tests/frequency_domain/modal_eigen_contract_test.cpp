@@ -4211,7 +4211,7 @@ void modal_floquet_shared_domain_original_descriptor_certification_is_fail_close
             return accepted_modes_before_cap >
                     static_cast<double>(requested_mode_count)
                 ? "truncated_by_requested_count"
-                : "partial_convergence";
+                : "not_certified";
         };
     const char *native_window_status = best_effort_window_status(
         native_result.diagnostics_json.c_str(),
@@ -4227,13 +4227,13 @@ void modal_floquet_shared_domain_original_descriptor_certification_is_fail_close
                   "\"complete\":false,\"execution_lane\":\"production_cpu\"") !=
                   std::string::npos &&
               native_result.diagnostics_json.find(
-                  "\"unsupported_reason\":\"floquet_nev_refill_dimension_limit_reached\"") !=
+                  "\"unsupported_reason\":\"floquet_nev_refill_dimension_limit_reached\"") ==
                   std::string::npos &&
               native_result.diagnostics_json.find(
                   native_diagnostics_window_status) != std::string::npos &&
               native_result.result_json.find(native_result_window_status) !=
                   std::string::npos,
-          "native best_effort result preserves incomplete coverage and the actual refill reason");
+          "native best_effort meets its publication goal without claiming complete coverage");
     check(native_result.diagnostics_json.find(
               "\"operator_diagnostics\":{\"operator_family\":\"mfem_linearized_llg\","
               "\"payload_kind\":\"certified_shared_domain\","
@@ -4287,10 +4287,10 @@ void modal_floquet_shared_domain_original_descriptor_certification_is_fail_close
                    "\"complete\":false,\"execution_lane\":\"production_cpu\"") &&
               contains(result.diagnostics_json,
                        cabi_diagnostics_window_status.c_str()) &&
-              contains(result.diagnostics_json,
-                       "\"unsupported_reason\":\"floquet_nev_refill_dimension_limit_reached\"") &&
+              !contains(result.diagnostics_json,
+                        "\"unsupported_reason\":\"floquet_nev_refill_dimension_limit_reached\"") &&
               contains(result.result_json, cabi_result_window_status.c_str()),
-          "best_effort C ABI result preserves incomplete coverage and its refill reason");
+          "best_effort C ABI meets the requested goal while preserving uncertified coverage");
     check(contains(result.diagnostics_json,
                    "\"deduplication_inner_product\":\"floquet_positive_tangent_mass\"") &&
               contains(result.diagnostics_json,
@@ -5328,7 +5328,23 @@ void modal_certificate_boundary_rejects_stale_and_mismatched_identity()
           "modal C ABI reports the unknown marker with a stable token");
     fullmag_fem_frequency_domain_result_destroy(&result);
 
+    payload.boundary_kind = "pure_neumann";
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(!contains(result.diagnostics_json, "unknown_airbox_marker"),
+          "modal C ABI accepts marker sentinel zero for pure Neumann");
+    check(!contains(result.diagnostics_json, "pure_neumann_boundary_marker_must_be_zero"),
+          "modal C ABI keeps marker zero bound to pure Neumann");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
     payload.boundary_marker = 1;
+    result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "modal C ABI rejects a physical marker for pure Neumann");
+    check(contains(result.diagnostics_json, "pure_neumann_boundary_marker_must_be_zero"),
+          "modal C ABI reports the invalid pure-Neumann marker");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
+    payload.boundary_kind = "periodic";
     payload.equilibrium_digest =
         "sha256:6123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     result = fullmag_fem_modal_eigen_solve(&request);
@@ -9542,6 +9558,9 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
               contains(window_result.diagnostics_json,
                        "\"additional_modes_may_exist\":true"),
           "native merge preserves the exact incomplete best_effort window status");
+    check(contains(window_result.diagnostics_json, "\"certified_refill_target\":1,") &&
+              contains(window_result.diagnostics_json, "\"first_attempt_unique_certified_modes\":"),
+          "best_effort production window passes the public one-mode refill goal and reports the first certified pool");
     check(!contains(window_result.diagnostics_json,
                     "\"shifted_ksp_failure_probe\":"),
           "successful window subsolves omit the failure-only shifted-KSP probe");
@@ -9672,7 +9691,7 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
     const char *expected_dimension_limited_one_window_status =
         dimension_limited_one_truncated
             ? "truncated_by_requested_count"
-            : "partial_convergence";
+            : "not_certified";
     const std::string expected_dimension_limited_one_result_status =
         "\"window_completeness\":\"" +
         std::string(expected_dimension_limited_one_window_status) + "\"";
@@ -9686,9 +9705,11 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
                        expected_dimension_limited_one_diagnostic_status.c_str()) &&
               contains(dimension_limited_one_result.result_json,
                        expected_dimension_limited_one_result_status.c_str()) &&
+              !contains(dimension_limited_one_result.diagnostics_json,
+                        "\"unsupported_reason\":\"floquet_nev_refill_dimension_limit_reached\"") &&
               contains(dimension_limited_one_result.diagnostics_json,
-                       "\"unsupported_reason\":\"floquet_nev_refill_dimension_limit_reached\""),
-          "dimension-limited best_effort preserves its exact incomplete-window status and internal-limit evidence");
+                       "\"certified_refill_target\":1,"),
+          "one-mode best_effort meets the certified target without reporting an unused guard limit");
     if (dimension_limited_one_truncated) {
         check(contains(dimension_limited_one_result.diagnostics_json,
                        "\"result_truncated\":true") &&
@@ -9845,7 +9866,8 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
             hard_ksp_nearest_result =
                 fullmag_fem_modal_eigen_solve(&hard_ksp_nearest_request);
         }
-        check(hard_ksp_nearest_result.status == FULLMAG_FEM_FD_SOLVE_ERROR &&
+        const bool nearest_hard_ksp_contract =
+            hard_ksp_nearest_result.status == FULLMAG_FEM_FD_SOLVE_ERROR &&
                   contains(hard_ksp_nearest_result.diagnostics_json,
                            "\"stop_reason\":\"floquet_slepc_solve_failed\"") &&
                   contains(hard_ksp_nearest_result.diagnostics_json,
@@ -9853,24 +9875,109 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
                   contains(hard_ksp_nearest_result.diagnostics_json,
                            "\"callback_count\":") &&
                   contains(hard_ksp_nearest_result.diagnostics_json,
-                           "\"true_probe_attempt_count\":0"),
+                           "\"true_probe_attempt_count_scope\":\"positive_default_reason_callbacks_during_this_eps_attempt\"");
+        if (!nearest_hard_ksp_contract) {
+            const char *json = hard_ksp_nearest_result.diagnostics_json;
+            const char *stop = json == nullptr ? nullptr : std::strstr(json, "\"stop_reason\":");
+            const char *attempts = json == nullptr ? nullptr : std::strstr(json, "\"true_probe_attempt_count\":");
+            std::fprintf(stderr,
+                "DIAG: nearest hard KSP status=%d expected_error=%d probe_present=%d "
+                "callback_present=%d stop=%.160s attempts=%.80s\n",
+                static_cast<int>(hard_ksp_nearest_result.status),
+                static_cast<int>(FULLMAG_FEM_FD_SOLVE_ERROR),
+                contains(json, "\"shifted_ksp_failure_probe\":{\"schema_version\":\"shifted_ksp_failure_probe.v1\"") ? 1 : 0,
+                contains(json, "\"callback_count\":") ? 1 : 0,
+                stop == nullptr ? "absent" : stop,
+                attempts == nullptr ? "absent" : attempts);
+        }
+        check(nearest_hard_ksp_contract,
               "nearest hard KSP failure preserves its stop reason and failure-only scalar callback probe");
         check(extract_json_number(
                   hard_ksp_nearest_result.diagnostics_json,
                   "\"callback_count\":",
                   "hard_ksp_failure_probe_callback_count") >= 1.0,
               "hard failure retains the actual registered callback count");
-        const bool candidate_waits_for_true_probe =
-            contains(hard_ksp_nearest_result.diagnostics_json,
-                     "\"candidate_operator_diagnostic\":{\"schema_version\":\"floquet_candidate_operator_diagnostic.v1\",\"requested\":true") &&
-            contains(hard_ksp_nearest_result.diagnostics_json,
-                     "\"reason\":\"awaiting_true_probe_candidate\"") &&
-            contains(hard_ksp_nearest_result.diagnostics_json,
-                     "\"sample_available\":false") &&
-            contains(hard_ksp_nearest_result.diagnostics_json,
-                     "\"live_pc_observation\":null");
-        check(candidate_waits_for_true_probe,
-              "hard failure keeps candidate measurements explicitly unavailable until a positive true-probe candidate exists");
+        // These counters span this EPS attempt, which can include successful
+        // KSP callbacks before a later hard failure. Never erase that history
+        // or confuse attempts with completed vector measurements. The direct
+        // shifted-KSP contract separately checks immediate breakdown and
+        // positive-default callbacks whose KSPBuildSolution observes failure.
+        const std::string failure_probe = json_object_after_key(
+            hard_ksp_nearest_result.diagnostics_json, "\"shifted_ksp_failure_probe\":");
+        const std::string last_probe = json_object_after_key(
+            failure_probe.c_str(), "\"last_true_probe\":");
+        const double callback_count = extract_json_number(
+            failure_probe.c_str(), "\"callback_count\":", "nearest callback history");
+        const double attempts_count = extract_json_number(
+            failure_probe.c_str(), "\"true_probe_attempt_count\":", "nearest probe attempts");
+        const double completed_count = extract_json_number(
+            failure_probe.c_str(), "\"true_probe_count\":", "nearest completed probes");
+        const double measurement_failures = extract_json_number(
+            failure_probe.c_str(), "\"true_probe_measurement_failure_count\":", "nearest failed measurements");
+        check(attempts_count >= 0.0 && attempts_count <= callback_count &&
+                  completed_count >= 0.0 && measurement_failures >= 0.0 &&
+                  completed_count + measurement_failures <= attempts_count,
+              "hard failure preserves internally consistent EPS-lifetime callback and measurement counters");
+        if (attempts_count > 0.0) {
+            const double ordinal = extract_json_number(
+                last_probe.c_str(), "\"callback_ordinal\":", "nearest last probe ordinal");
+            check(ordinal >= 1.0 && ordinal <= callback_count &&
+                      extract_json_number(last_probe.c_str(), "\"default_reason\":",
+                          "nearest last probe default reason") > 0.0,
+                  "a recorded true-probe attempt belongs to a prior or current positive-default callback");
+            if (json_member_has_literal(failure_probe.c_str(), "\"last_default_reason_available\":", "true") &&
+                extract_json_number(failure_probe.c_str(), "\"last_default_reason\":",
+                    "nearest final default reason") <= 0.0) {
+                check(ordinal < callback_count,
+                      "the final nonpositive callback does not create a new true-probe attempt");
+            }
+        } else {
+            check(json_member_has_literal(last_probe.c_str(), "\"callback_ordinal\":", "null") &&
+                      json_member_has_literal(last_probe.c_str(), "\"default_reason\":", "null"),
+                  "absent true-probe history keeps its ordinal and reason unavailable");
+        }
+        const std::string candidate = json_object_after_key(
+            last_probe.c_str(), "\"candidate_operator_diagnostic\":");
+        check(contains(candidate.c_str(),
+                       "\"schema_version\":\"floquet_candidate_operator_diagnostic.v1\"") &&
+                  json_member_has_literal(candidate.c_str(), "\"requested\":", "true"),
+              "hard failure preserves the requested candidate diagnostic schema");
+        check(json_member_has_literal(candidate.c_str(),
+                  "\"memory_admission_source\":", "\"\"") &&
+                  json_member_has_literal(candidate.c_str(),
+                      "\"diagnostic_mode\":", "\"full_small\""),
+              "production C ABI JSON closes small-C1 admission source and mode strings");
+        const char *comparison_reason_literals[] = {
+            "\"exact_shifted_matrix_comparison_pending\"",
+            "\"exact_shifted_matrix_comparison_measured\"",
+            "\"exact_shifted_matrix_comparison_failed\"",
+            "\"exact_shifted_matrix_copy_failed\"",
+            "\"exact_materialized_shifted_schur_matrix_unavailable\""};
+        bool comparison_reason_delimited = false;
+        for (const char *literal : comparison_reason_literals) {
+            comparison_reason_delimited = comparison_reason_delimited ||
+                json_member_has_literal(candidate.c_str(),
+                    "\"exact_shifted_matrix_comparison_reason\":", literal);
+        }
+        check(comparison_reason_delimited,
+              "production C ABI JSON closes and delimits the exact-Schur reason string");
+        if (attempts_count > 0.0) {
+            // A later hard error must preserve already captured diagnostic
+            // history; it must not relabel earlier positive callbacks absent.
+            check(json_member_has_literal(candidate.c_str(), "\"sample_available\":", "true") &&
+                      extract_json_number(candidate.c_str(), "\"callback_ordinal\":",
+                          "nearest candidate callback ordinal") ==
+                      extract_json_number(last_probe.c_str(), "\"callback_ordinal\":",
+                          "nearest paired true-probe callback ordinal") &&
+                      !contains(candidate.c_str(), "\"reason\":\"awaiting_true_probe_candidate\"") &&
+                      contains(candidate.c_str(), "\"live_pc_observation\":{\"schema_version\":\"floquet_live_pc_observation.v1\""),
+                  "hard failure retains measured candidate evidence paired with its last positive true-probe callback");
+        } else {
+            check(json_member_has_literal(candidate.c_str(), "\"sample_available\":", "false") &&
+                      contains(candidate.c_str(), "\"reason\":\"awaiting_true_probe_candidate\"") &&
+                      json_member_has_literal(candidate.c_str(), "\"live_pc_observation\":", "null"),
+                  "absent positive true-probe history keeps candidate measurements explicitly unavailable");
+        }
         check(floquet_dense_raw_spectrum_is_consistent(
                   hard_ksp_nearest_result.result_json, false),
               "hard-KSP result preserves the requested cached dense-oracle schema and truthful raw-spectrum availability");
@@ -11050,6 +11157,21 @@ void modal_certified_recovery_exhausted_budget_contract()
           "initialize the isolated algebraic budget process");
     AlgebraicCertifiedRecoveryFixture fixture{};
     initialize_algebraic_certified_recovery_fixture(fixture, 1);
+    Vec probe_original = nullptr;
+    check(VecDuplicate(fixture.rhs, &probe_original) == PETSC_SUCCESS &&
+              VecCopy(fixture.rhs, probe_original) == PETSC_SUCCESS,
+          "preserve candidate before diagnostic-only action probe");
+    fd::detail::FloquetFailedActionProbeResult probe{};
+    check(fd::detail::report_floquet_failed_action_probe(
+              fixture.inner, fixture.rhs, &probe) == PETSC_SUCCESS &&
+              std::abs(probe.action_norm - std::sqrt(30.0)) < 1.0e-12 &&
+              probe.repeat_defect == 0.0 && probe.scale_defect < 1.0e-12,
+          "linear diagonal operator has repeatable scale-consistent action");
+    PetscBool candidate_unchanged = PETSC_FALSE;
+    check(VecEqual(fixture.rhs, probe_original, &candidate_unchanged) == PETSC_SUCCESS &&
+              candidate_unchanged == PETSC_TRUE &&
+              VecDestroy(&probe_original) == PETSC_SUCCESS,
+          "action probe leaves candidate unchanged and releases owned scratch");
     const PetscErrorCode solve_error = KSPSolve(fixture.outer, fixture.rhs, fixture.solution);
     // Cached values only after the failed outer call. This selector deliberately
     // makes no claim about teardown of a partially unwound PETSc solve graph.

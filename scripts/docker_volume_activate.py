@@ -44,6 +44,15 @@ CONTROL_ROOT = "/opt/fullmag/control"
 ACTIVATE_EXIT_UNKNOWN = 75
 OPERATION_SCHEMA = "fullmag.docker-build-operation.v1"
 RETIREMENT_CAS_PAYLOAD_BYTES = 32 * 1024
+RETIREMENT_CURRENT_POINTER_PINS = (
+    "compose_project",
+    "control_volume",
+    "development_attempt",
+    "config_sha256",
+    "backend_container",
+    "image_id",
+    "source_root",
+)
 RETIREMENT_REFUSAL_SCHEMA = "fullmag.live-retirement-refusal.v1"
 RETIREMENT_REFUSAL_CODES = frozenset({
     "preflight_failed",
@@ -856,6 +865,122 @@ def _read_control_bytes(
     return bytes(result.stdout)
 
 
+def _validate_active_lease(
+    active_raw: bytes,
+    *,
+    expected_operation_id: str | None = None,
+    mismatch_message: str = "retained retirement active lease belongs to another operation",
+) -> str:
+    """Validate the control lease's exact ASCII token without normalizing bytes.
+
+    The build-control writer emits one trailing LF, while retained legacy
+    operations may contain the bare operation token.  Both forms are
+    authentic; every other byte layout is malformed and must not be accepted
+    by a recovery path.  Callers retain ``active_raw`` separately for CAS
+    hashing, so this parser never changes the bytes used by the finalizer's
+    ownership fence.
+    """
+
+    if not isinstance(active_raw, bytes):
+        raise BuildControlError("retained active operation identity is invalid")
+    if len(active_raw) == 33 and active_raw.endswith(b"\n"):
+        token_raw = active_raw[:-1]
+    elif len(active_raw) == 32:
+        token_raw = active_raw
+    else:
+        raise BuildControlError("retained active operation identity is invalid")
+    try:
+        operation_id = token_raw.decode("ascii")
+    except UnicodeDecodeError as error:
+        raise BuildControlError("retained active operation identity is invalid") from error
+    if ATTEMPT_RE.fullmatch(operation_id) is None:
+        raise BuildControlError("retained active operation identity is invalid")
+    if expected_operation_id is not None:
+        if (not isinstance(expected_operation_id, str)
+                or ATTEMPT_RE.fullmatch(expected_operation_id) is None):
+            raise BuildControlError("retained active operation expectation is invalid")
+        if operation_id != expected_operation_id:
+            raise ControlOutcomeUnknown(mismatch_message)
+    return operation_id
+
+
+def _retirement_pointer_pins(record: Mapping[str, object], *, label: str) -> dict[str, str]:
+    if not isinstance(record, Mapping):
+        raise BuildControlError(label + " is not an object")
+    pins: dict[str, str] = {}
+    for key in RETIREMENT_CURRENT_POINTER_PINS:
+        value = record.get(key)
+        if not isinstance(value, str) or not value:
+            raise BuildControlError(label + " is missing its " + key + " pin")
+        pins[key] = value
+    if ATTEMPT_RE.fullmatch(pins["development_attempt"]) is None:
+        raise BuildControlError(label + " has an invalid development attempt pin")
+    if SHA256_RE.fullmatch(pins["config_sha256"]) is None:
+        raise BuildControlError(label + " has an invalid config pin")
+    if IMAGE_ID_RE.fullmatch(pins["image_id"]) is None:
+        raise BuildControlError(label + " has an invalid image pin")
+    if re.fullmatch(r"[0-9a-f]{64}", pins["backend_container"]) is None:
+        raise BuildControlError(label + " has an invalid backend container pin")
+    return pins
+
+
+def _retirement_current_pointer_preimage(
+    control: BuildControl,
+    *,
+    operation_id: str,
+    current_raw: bytes | None,
+    target_raw: bytes,
+    terminal: Mapping[str, object],
+) -> bytes | None:
+    """Authenticate the only current-pointer preimage recovery may replace."""
+
+    if ATTEMPT_RE.fullmatch(operation_id) is None:
+        raise BuildControlError("retained retirement operation id is invalid")
+    if (not isinstance(target_raw, bytes) or not target_raw
+            or len(target_raw) > RETIREMENT_CAS_PAYLOAD_BYTES):
+        raise BuildControlError("retained retirement current pointer target is incomplete")
+    if current_raw is None:
+        return None
+    if (not isinstance(current_raw, bytes) or not current_raw
+            or len(current_raw) > RETIREMENT_CAS_PAYLOAD_BYTES):
+        raise BuildControlError("retained retirement current pointer is incomplete")
+    if current_raw == target_raw:
+        _retirement_pointer_pins(terminal, label="retained retirement terminal")
+        return None
+    try:
+        current = json.loads(current_raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise BuildControlError("retained retirement current pointer is not valid JSON") from error
+    if not isinstance(current, Mapping):
+        raise BuildControlError("retained retirement current pointer is not an object")
+    previous_attempt = current.get("attempt")
+    if (not isinstance(previous_attempt, str)
+            or ATTEMPT_RE.fullmatch(previous_attempt) is None
+            or previous_attempt == operation_id):
+        raise BuildControlError("retained retirement current pointer has an invalid predecessor")
+    if (current.get("schema") != OPERATION_SCHEMA
+            or current.get("phase") != "activation"
+            or current.get("state") not in {"succeeded", "failed-confirmed"}):
+        raise BuildControlError("retained retirement current pointer is not an activation terminal")
+    previous_terminal_raw = _read_control_bytes(
+        control,
+        "activation/attempts/" + previous_attempt + "/terminal.json",
+        optional=True,
+        maximum=RETIREMENT_CAS_PAYLOAD_BYTES,
+    )
+    if previous_terminal_raw is None or previous_terminal_raw != current_raw:
+        raise ControlOutcomeUnknown(
+            "retained retirement current pointer is not its immutable predecessor terminal"
+        )
+    previous_pins = _retirement_pointer_pins(
+        current, label="retained retirement predecessor terminal"
+    )
+    target_pins = _retirement_pointer_pins(terminal, label="retained retirement terminal")
+    if previous_pins != target_pins:
+        raise BuildControlError("retained retirement current pointer pins differ from its target terminal")
+    return current_raw
+
+
 def _retirement_inputs_sha256(inputs: Mapping[str, object]) -> str:
     """Hash the exact immutable activation envelope bound into the image marker."""
 
@@ -1095,10 +1220,7 @@ def _retained_retirement_context(
     active_raw = _read_control_bytes(control, "active", optional=True, maximum=256)
     if active_raw is None:
         return None
-    operation_id = active_raw.decode("utf-8", "replace").strip()
-    if (not ATTEMPT_RE.fullmatch(operation_id)
-            or not _retirement_lease_matches(active_raw, operation_id)):
-        raise BuildControlError("retained active operation identity is invalid")
+    operation_id = _validate_active_lease(active_raw)
     receipt_relative = "activation/attempts/" + operation_id + "/receipt.json"
     receipt_raw = _read_control_bytes(control, receipt_relative)
     try:
@@ -1241,28 +1363,24 @@ def _retirement_lease_matches(raw: bytes, operation_id: str) -> bool:
 def _retirement_previous_current(control: BuildControl, target: bytes) -> bytes | None:
     previous = _read_control_bytes(control, "activation/current.json", optional=True,
                                    maximum=RETIREMENT_CAS_PAYLOAD_BYTES)
-    if previous is None or previous == target:
-        return previous
     try:
-        record = json.loads(previous)
+        terminal = json.loads(target)
     except (ValueError, UnicodeDecodeError) as error:
-        raise ControlOutcomeUnknown("retained retirement current pointer is invalid") from error
-    if (not isinstance(record, dict)
-            or record.get("schema") != OPERATION_SCHEMA
-            or record.get("phase") != "activation"
-            or record.get("state") not in {"succeeded", "failed-confirmed"}
-            or record.get("compose_project") != control.project
-            or record.get("control_volume") != control.volume
-            or not isinstance(record.get("attempt"), str)
-            or ATTEMPT_RE.fullmatch(record["attempt"]) is None):
-        raise ControlOutcomeUnknown("retained retirement current pointer is not a terminal of this group")
-    predecessor = _read_control_bytes(
-        control, "activation/attempts/" + record["attempt"] + "/terminal.json",
-        maximum=RETIREMENT_CAS_PAYLOAD_BYTES)
-    if predecessor != previous:
-        raise ControlOutcomeUnknown("retained retirement current pointer differs from its terminal")
-    return previous
-
+        raise ControlOutcomeUnknown("retained retirement target pointer is invalid") from error
+    if not isinstance(terminal, dict):
+        raise ControlOutcomeUnknown("retained retirement target pointer is not an object")
+    if (terminal.get("compose_project") != control.project
+            or terminal.get("control_volume") != control.volume):
+        raise ControlOutcomeUnknown("retained retirement target pointer is not a terminal of this group")
+    try:
+        return _retirement_current_pointer_preimage(
+            control, operation_id=terminal.get("attempt"), current_raw=previous,
+            target_raw=target, terminal=terminal,
+        )
+    except ControlOutcomeUnknown:
+        raise
+    except BuildControlError as error:
+        raise ControlOutcomeUnknown(str(error)) from error
 
 def _retirement_cas_script(
     *,
@@ -1280,10 +1398,12 @@ def _retirement_cas_script(
     if not ATTEMPT_RE.fullmatch(operation_id):
         raise BuildControlError("retirement CAS operation id is invalid")
     payloads = (receipt_raw, result_raw, terminal_raw, current_raw)
-    if (not active_raw or len(active_raw) > 256 or not receipt_raw
-            or any(len(payload) > RETIREMENT_CAS_PAYLOAD_BYTES for payload in payloads)
+    if (not isinstance(active_raw, bytes) or not active_raw or len(active_raw) > 256
+            or any(not isinstance(payload, bytes) or not payload
+                   or len(payload) > RETIREMENT_CAS_PAYLOAD_BYTES for payload in payloads)
             or (expected_current_raw is not None
-                and len(expected_current_raw) > RETIREMENT_CAS_PAYLOAD_BYTES)):
+                and (not isinstance(expected_current_raw, bytes) or not expected_current_raw
+                     or len(expected_current_raw) > RETIREMENT_CAS_PAYLOAD_BYTES))):
         raise BuildControlError("retirement CAS expected records are incomplete")
     if not _retirement_lease_matches(active_raw, operation_id):
         raise ControlOutcomeUnknown("retained retirement active lease belongs to another operation")
@@ -1348,6 +1468,10 @@ def _retirement_cas_script(
         "test -d /control/activation; test ! -L /control/activation; "
         "test -d /control/activation/attempts; test ! -L /control/activation/attempts; "
         f"test -d {root}; test ! -L {root}; "
+        f"test ! -L {root}/retirement-finalization.lock; "
+        f"exec 8>>{root}/retirement-finalization.lock; flock -n 8; "
+        f"test -f {root}/retirement-finalization.lock; test ! -L {root}/retirement-finalization.lock; "
+        f"test \"$(stat -c '%h' {root}/retirement-finalization.lock)\" = 1; "
         "verify() { test -f \"$1\"; test ! -L \"$1\"; "
         "test \"$(stat -c %h \"$1\")\" = 1; "
         "test \"$(sha256sum \"$1\" | cut -d ' ' -f 1)\" = \"$2\"; }; "

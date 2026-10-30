@@ -26,6 +26,174 @@ using FloquetCandidateOperatorDiagnosticCapture = PetscErrorCode (*)(
 using FloquetCandidateOperatorDiagnosticDestroy = PetscErrorCode (*)(
     void **user_context);
 
+enum class FloquetSeqAIJStorageKind {
+    duplicated_matrix,
+    lu_factor,
+};
+
+struct FloquetSparseStorageEstimate {
+    bool available = false;
+    std::uint64_t bytes = 0;
+    std::uint64_t rows = 0;
+    std::uint64_t columns = 0;
+    std::uint64_t nz_allocated = 0;
+    std::uint64_t nz_used = 0;
+    const char *reason = "seqaij_storage_statistics_unavailable";
+};
+
+struct FloquetSparseWorkspaceEstimate {
+    bool available = false;
+    std::uint64_t bytes = 0;
+    const char *reason = "seqaij_workspace_estimate_unavailable";
+};
+
+inline bool floquet_seqaij_info_count(
+    double observed_count,
+    std::uint64_t *out_count) noexcept
+{
+    if (out_count == nullptr || !std::isfinite(observed_count) ||
+        observed_count < 0.0 || std::floor(observed_count) != observed_count) {
+        return false;
+    }
+    constexpr double largest_exact_integer = 9007199254740992.0;
+    if (observed_count > largest_exact_integer ||
+        static_cast<long double>(observed_count) >
+            static_cast<long double>(std::numeric_limits<PetscInt>::max())) {
+        return false;
+    }
+    *out_count = static_cast<std::uint64_t>(observed_count);
+    return true;
+}
+
+inline bool floquet_add_sparse_storage(
+    std::uint64_t count,
+    std::uint64_t element_bytes,
+    std::uint64_t *in_out_total) noexcept
+{
+    if (in_out_total == nullptr ||
+        (element_bytes != 0u && count >
+            std::numeric_limits<std::uint64_t>::max() / element_bytes)) {
+        return false;
+    }
+    const std::uint64_t bytes = count * element_bytes;
+    if (bytes > std::numeric_limits<std::uint64_t>::max() - *in_out_total) {
+        return false;
+    }
+    *in_out_total += bytes;
+    return true;
+}
+
+inline FloquetSparseStorageEstimate estimate_floquet_seqaij_storage(
+    bool exact_cpu_seqaij_type,
+    PetscInt rows,
+    PetscInt columns,
+    double nz_allocated_info,
+    double nz_used_info,
+    FloquetSeqAIJStorageKind kind) noexcept
+{
+    FloquetSparseStorageEstimate estimate{};
+    if (!exact_cpu_seqaij_type) {
+        estimate.reason = "unsupported_sparse_matrix_type";
+        return estimate;
+    }
+    if (rows <= 0 || columns <= 0 ||
+        !floquet_seqaij_info_count(nz_allocated_info, &estimate.nz_allocated) ||
+        !floquet_seqaij_info_count(nz_used_info, &estimate.nz_used) ||
+        estimate.nz_allocated < estimate.nz_used) {
+        estimate.reason = "seqaij_dimensions_or_nnz_counts_invalid";
+        return estimate;
+    }
+    if (static_cast<std::uint64_t>(estimate.nz_allocated) >
+        std::numeric_limits<std::uint64_t>::max() /
+            (sizeof(PetscScalar) + sizeof(PetscInt))) {
+        estimate.reason = "seqaij_storage_estimate_overflow";
+        return estimate;
+    }
+    estimate.rows = static_cast<std::uint64_t>(rows);
+    estimate.columns = static_cast<std::uint64_t>(columns);
+    std::uint64_t bytes = estimate.nz_allocated *
+        (sizeof(PetscScalar) + sizeof(PetscInt));
+    const std::uint64_t maximum = std::numeric_limits<std::uint64_t>::max();
+    const std::uint64_t row_bytes = static_cast<std::uint64_t>(sizeof(PetscInt));
+    const std::uint64_t scalar_bytes = static_cast<std::uint64_t>(sizeof(PetscScalar));
+    std::uint64_t int_entries = 0;
+    std::uint64_t scalar_entries = 0;
+    if (kind == FloquetSeqAIJStorageKind::duplicated_matrix) {
+        // MatDuplicateNoCreate_SeqAIJ retains i, imax, ilen, optional diag,
+        // optional compressed-row i/rindex, and up to rows+1 inode-size
+        // entries. The 7*rows+4 bound covers their allocated extents.
+        if (estimate.rows > (maximum - 4u) / 7u) {
+            estimate.reason = "seqaij_storage_estimate_overflow";
+            return estimate;
+        }
+        int_entries = 7u * estimate.rows + 4u;
+    } else {
+        if (estimate.rows > (maximum - 8u) / 16u) {
+            estimate.reason = "seqaij_storage_estimate_overflow";
+            return estimate;
+        }
+        // Persistent LU storage includes i, diag, solve_work, three
+        // permutation payloads, and optional inode metadata. The additional
+        // per-row allowance covers symbolic/inode setup arrays (bi_ptr, im,
+        // linked-list and inode comparison/permutation work). The separate
+        // scalar allowance covers numeric setup's rows+1 rtmp array.
+        int_entries = 16u * estimate.rows + 8u;
+        scalar_entries = estimate.rows + 1u;
+    }
+    if (!floquet_add_sparse_storage(int_entries, row_bytes, &bytes) ||
+        !floquet_add_sparse_storage(scalar_entries, scalar_bytes, &bytes)) {
+        estimate.reason = "seqaij_storage_estimate_overflow";
+        return estimate;
+    }
+    estimate.available = true;
+    estimate.bytes = bytes;
+    estimate.reason = "petsc_seqaij_allocated_storage_estimate_not_rss";
+    return estimate;
+}
+
+inline FloquetSparseWorkspaceEstimate estimate_floquet_sparse_workspace(
+    std::uint64_t duplicated_poisson_matrix_bytes,
+    std::uint64_t poisson_factor_storage_estimate_bytes,
+    std::uint64_t fixed_vector_workspace_bytes,
+    std::uint64_t factor_estimate_multiplier = 2u) noexcept
+{
+    FloquetSparseWorkspaceEstimate estimate{};
+    if (duplicated_poisson_matrix_bytes == 0u ||
+        poisson_factor_storage_estimate_bytes == 0u ||
+        fixed_vector_workspace_bytes == 0u || factor_estimate_multiplier == 0u) {
+        estimate.reason = "seqaij_workspace_estimate_input_unavailable";
+        return estimate;
+    }
+    const std::uint64_t maximum = std::numeric_limits<std::uint64_t>::max();
+    if (poisson_factor_storage_estimate_bytes >
+            maximum / factor_estimate_multiplier) {
+        estimate.reason = "seqaij_workspace_estimate_overflow";
+        return estimate;
+    }
+    const std::uint64_t factor_bytes =
+        poisson_factor_storage_estimate_bytes * factor_estimate_multiplier;
+    if (duplicated_poisson_matrix_bytes > maximum - factor_bytes ||
+        duplicated_poisson_matrix_bytes + factor_bytes >
+            maximum - fixed_vector_workspace_bytes) {
+        estimate.reason = "seqaij_workspace_estimate_overflow";
+        return estimate;
+    }
+    estimate.available = true;
+    estimate.bytes = duplicated_poisson_matrix_bytes + factor_bytes +
+        fixed_vector_workspace_bytes;
+    estimate.reason = "petsc_seqaij_allocated_storage_estimate_not_rss";
+    return estimate;
+}
+
+inline bool floquet_sparse_workspace_estimate_within_budget(
+    bool estimate_available,
+    std::uint64_t estimate_bytes,
+    std::uint64_t budget_bytes) noexcept
+{
+    return estimate_available && estimate_bytes > 0u && budget_bytes > 0u &&
+        estimate_bytes <= budget_bytes;
+}
+
 struct FloquetCandidateDiagnosticSetupTransaction {
     PetscErrorCode push_error = PETSC_SUCCESS;
     PetscErrorCode setup_error = PETSC_SUCCESS;

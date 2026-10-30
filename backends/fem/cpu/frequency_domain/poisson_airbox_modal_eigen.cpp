@@ -11,6 +11,7 @@
 #include <cstring>
 #include <limits>
 #include <mutex>
+#include <new>
 #include <vector>
 
 #if FULLMAG_FEM_WITH_SLEPC
@@ -378,7 +379,12 @@ FrequencyDomainStatus validate_problem(
     if (result == nullptr) {
         return FrequencyDomainStatus::validation_error;
     }
-    *result = PoissonAirboxModalEigenResult{};
+    // The bounded diagnostics make this record about 780 KiB. Assignment
+    // from a value-initialized temporary creates that much worker stack even
+    // before validation. Reconstruct the caller-owned object in place, as in
+    // the production Schur entry point; release its vector members first.
+    result->~PoissonAirboxModalEigenResult();
+    ::new (static_cast<void *>(result)) PoissonAirboxModalEigenResult();
     result->q_dof_count = problem.q_dof_count;
     result->phi_dof_count = problem.phi_dof_count;
     result->augmented_dof_count = augmented_dof_count_for(problem);

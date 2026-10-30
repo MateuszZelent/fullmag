@@ -1,17 +1,14 @@
 "use client";
 
-import { Activity, Play, RotateCw } from "lucide-react";
+import { Play, Pause } from "lucide-react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   useFrequencyDomainEigenModeFieldMetaResource,
   useFrequencyDomainEigenModeResource,
-  useFrequencyDomainEigenSpectrumResource,
-  useFrequencyDomainManifestResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import {
-  buildEigenSpectrumChartModel,
   eigenModeFieldAvailable,
   frequencyDomainManifestPayload,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
@@ -20,6 +17,7 @@ import {
   readEigenModeResourcePayload,
   type EigenResidualSummary,
 } from "@/shared/domain/analysis/eigenResidualSummary";
+import { formatModeWavevector, modeResultLabel, sameModeResultOwner } from "@/shared/domain/analysis/modeResultPresentation";
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 import {
   finiteModalScalar,
@@ -28,7 +26,10 @@ import {
   type ModalDampingObservables,
 } from "@/shared/domain/analysis/modalDampingObservables";
 import { Button } from "@/shared/ui/Button";
+import { EigenModePicker, useEigenModeBrowserData } from "./EigenModePicker";
+import { ModeVisualizationPhaseControl } from "../ModeVisualizationInspectorPanel";
 
+import { useInspectorActiveTab } from "../../InspectorTabState";
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
@@ -40,7 +41,6 @@ import {
 import {
   FrequencyDomainModeDisplayControls,
   analysisFieldViewLabel,
-  isActiveAnalysisFieldView,
   normalizeAnalysisFieldView,
   useFrequencyDomainModeDisplaySettings,
 } from "../FrequencyDomainModeDisplayControls";
@@ -79,7 +79,9 @@ export function buildEigenModeIdentityViewModel(input: {
 export function EigenModeInspectorPanel({
   selection,
 }: InspectorPanelProps) {
+  const kernel = useKernel();
   const summary = useEigenModeSummary(selection);
+  const activeTab = useInspectorActiveTab();
   const modeDisplaySettings = useFrequencyDomainModeDisplaySettings({
     activation: {
       commandId: "analysis.eigen.plot-mode-3d",
@@ -87,7 +89,7 @@ export function EigenModeInspectorPanel({
       componentCount: summary.componentCount,
       defaultPhaseRad: 0,
       fieldId: summary.fieldId,
-      label: summary.modeIdentity,
+      label: summary.physicalLabel,
       source: "eigen-mode",
       valueKind: summary.valueKind,
     },
@@ -98,48 +100,77 @@ export function EigenModeInspectorPanel({
     <div
       data-inspector-owner="frequency-domain.eigen-mode"
       data-inspector-surface="eigen-mode"
+      data-inspector-tab={activeTab}
     >
-      <InspectorGroup title="Eigen Mode Control" badge={summary.badge}>
-        <FieldRow label="Canonical object" value="Eigenmodes mode" />
-        <FieldRow label="Mode identity" value={summary.modeIdentity} />
+      {activeTab === "overview" ? <>
+        <EigenModePicker samples={summary.samples} selection={selection} />
+        <InspectorGroup title="Selected eigenmode">
+          <FieldRow label="Mode field" value={summary.field3DReady ? "Available" : summary.field3DStatus} />
+          <FieldRow label="3D field request" value={sameModeResultOwner(modeDisplaySettings.activeAnalysisFieldOverlay?.modeIntent, summary.owner) ? "Selected mode requested; rendering status is shown in the viewport" : modeDisplaySettings.activeAnalysisFieldOverlay ? "Another mode is active. Show this mode to replace it." : "Not activated"} />
+          <EigenMode3DActions settings={modeDisplaySettings} summary={summary} />
+        </InspectorGroup>
+        <p className="fm-result-inspector__help">Select a point on the dispersion chart, then show its field in 3D. Field amplitude is normalized, not a driven-wave amplitude.</p>
+        <InspectorGroup title="Phase & playback" collapsible defaultOpen={false}>
+          <ModeVisualizationPhaseControl
+            key={summary.fieldId}
+            disabled={!summary.field3DReady || !sameModeResultOwner(modeDisplaySettings.activeAnalysisFieldOverlay?.modeIntent, summary.owner)}
+            animate={modeDisplaySettings.activeAnalysisFieldOverlay?.animation?.animatePhase ?? false}
+            animationDirection={modeDisplaySettings.activeAnalysisFieldOverlay?.animation?.direction ?? 1}
+            animationLoop={modeDisplaySettings.activeAnalysisFieldOverlay?.animation?.loop ?? true}
+            animationRateHz={modeDisplaySettings.activeAnalysisFieldOverlay?.animation?.animationRateHz || 1}
+            phaseRad={String(modeDisplaySettings.activeAnalysisFieldOverlay?.visualizationPhaseRad ?? 0)}
+            onAnimationChange={(animation) => kernel.analysisFieldOverlay.update({
+              animation,
+              query: { ...modeDisplaySettings.activeAnalysisFieldOverlay?.query, view: "phase_rotated_real" },
+            })}
+            onSetPhase={(value) => kernel.analysisFieldOverlay.update({
+              animation: { ...modeDisplaySettings.activeAnalysisFieldOverlay?.animation, animatePhase: false, animationRateHz: modeDisplaySettings.activeAnalysisFieldOverlay?.animation?.animationRateHz || 1 },
+              visualizationPhaseRad: Number(value),
+              query: { ...modeDisplaySettings.activeAnalysisFieldOverlay?.query, view: "phase_rotated_real" },
+            })}
+          />
+          <p className="fm-result-inspector__help">Playback speed is visual only. Choose a signed component or vectors to see precession; magnitude can remain constant.</p>
+        </InspectorGroup>
+        <InspectorGroup title="Appearance" collapsible defaultOpen={false}>
+          {!sameModeResultOwner(modeDisplaySettings.activeAnalysisFieldOverlay?.modeIntent, summary.owner) ? <p className="fm-result-inspector__help">Show this mode in 3D before changing its appearance.</p> : null}
+          <FrequencyDomainModeDisplayControls
+            componentOptions={summary.componentOptions}
+            disabled={!summary.field3DReady || !sameModeResultOwner(modeDisplaySettings.activeAnalysisFieldOverlay?.modeIntent, summary.owner)}
+            labelPrefix="Eigen mode"
+            settings={modeDisplaySettings}
+            viewDefaultValue={summary.defaultView}
+            viewOptions={summary.availableViewValues}
+          />
+        </InspectorGroup>
+      </> : null}
+      {activeTab === "data" ? <InspectorGroup title="Mode observables">
         <FieldRow label="Frequency" value={summary.frequencyDisplay} />
+        <FieldRow label="Wavevector" value={summary.wavevectorLabel} />
         <FieldRow label="Imaginary frequency" value={summary.imaginaryFrequency} />
-        <EigenModeDampingFields damping={summary.damping} />
         <FieldRow label="Angular frequency" value={summary.angularFrequency} />
-        <FieldRow label="Mode field" value={summary.fieldStatus} />
-        <FieldRow label="Mode field resource" value={summary.fieldResource} />
-        <FieldRow label="Available field views" value={summary.availableViews} />
-        <EigenModeResidualFields residual={summary.residual} />
-        <FieldRow label="Tangent leakage max" value={summary.tangentLeakageMax} />
-        <FieldRow label="Dominant polarization" value={summary.dominantPolarization} />
-        <FieldRow label="3D workflow" value={summary.workflow} />
-      </InspectorGroup>
-      <InspectorGroup
-        title="Eigen Mode 3D Visualization"
-        badge={summary.actionBadge}
-      >
+        <FieldRow label="Temporal phasor convention" value={summary.phaseConvention} />
+        <EigenModeDampingFields damping={summary.damping} />
+        <FieldRow label="Mode identity" value={summary.modeIdentity} />
         <FieldRow label="Field ID" value={summary.fieldIdLabel} />
-        <FieldRow label="Field resource" value={summary.fieldResource} />
-        <FieldRow label="Default view" value={summary.defaultViewLabel} />
-        <FieldRow label="Phase convention" value={summary.phaseConvention} />
-        <FieldRow
-          label="Shared style preset"
-          value="one shared eigen/response mode visualization preset; switching modes keeps color, shader, vector, phase, and colormap controls"
-        />
-        <FieldRow
-          label="Volume inspection roadmap"
-          value="clip planes and shader opacity remain planned for internal-mode inspection"
-        />
-        <FrequencyDomainModeDisplayControls
-          componentOptions={summary.componentOptions}
-          disabled={!summary.field3DReady}
-          labelPrefix="Eigen mode"
-          settings={modeDisplaySettings}
-          viewDefaultValue={summary.defaultView}
-          viewOptions={summary.availableViewValues}
-        />
-        <EigenMode3DActions settings={modeDisplaySettings} summary={summary} />
-      </InspectorGroup>
+      </InspectorGroup> : null}
+      {activeTab === "provenance" ? <InspectorGroup title="Mode provenance">
+        <FieldRow label="Run" mono value={summary.owner?.analysisRunId ?? "Owner identity not published"} />
+        <FieldRow label="Stage" mono value={summary.owner?.analysisStageId ?? "Stage identity not published"} />
+        <FieldRow label="Equilibrium" mono value={summary.owner?.equilibriumId ?? "Equilibrium identity not published"} />
+        <FieldRow label="Artifact revision" mono value={summary.owner?.artifactRevision ?? "Revision not published"} />
+        <FieldRow label="Mode identity" value={summary.modeIdentity} />
+        <FieldRow label="Field ID" mono value={summary.fieldIdLabel} />
+        <FieldRow label="Resource" mono value={summary.fieldResource} />
+      </InspectorGroup> : null}
+      {activeTab === "diagnostics" ? <>
+        <InspectorGroup title="Mode residual">
+          <EigenModeResidualFields residual={summary.residual} />
+          <FieldRow label="Certification tolerance" value={summary.certificationTolerance} />
+          <FieldRow label="Producer certificate" value={summary.certificationStatus} />
+          <FieldRow label="Tangent leakage max" value={summary.tangentLeakageMax} />
+        </InspectorGroup>
+        <p className="fm-result-inspector__help">A residual certificate applies to this mode and its stated operator scope. Mesh, airbox and spectrum completeness require separate qualification.</p>
+      </> : null}
     </div>
   );
 }
@@ -153,19 +184,13 @@ export function EigenModeResidualFields({
 }) {
   return (
     <>
-      <FieldRow
-        label="Absolute residual (L2)"
-        value={formatNumberOrUnavailable(residual.absoluteL2)}
-      />
+      {residual.absoluteL2 !== null ? <FieldRow label="Absolute residual (L2)" value={formatNumberOrUnavailable(residual.absoluteL2)} /> : null}
       <FieldRow
         label="Relative residual (L2)"
         value={formatNumberOrUnavailable(residual.relativeL2)}
       />
       <FieldRow label="Residual scope" value={residual.scope} />
-      <FieldRow
-        label="Spectrum residual (type unspecified)"
-        value={formatNumberOrUnavailable(residual.reportedSpectrumResidual)}
-      />
+      {residual.reportedSpectrumResidual !== null ? <FieldRow label="Spectrum residual (type unspecified)" value={formatNumberOrUnavailable(residual.reportedSpectrumResidual)} /> : null}
     </>
   );
 }
@@ -194,7 +219,7 @@ export function EigenModeDampingFields({
         label="Lifetime"
         value={
           damping.lifetimeSeconds == null
-            ? "not available"
+            ? damping.stability === "undamped" ? "No decay in this model" : damping.stability === "growing" ? "Growing mode; no decay lifetime" : "Cannot determine without frequency and phasor convention"
             : formatNumber(damping.lifetimeSeconds) + " s"
         }
       />
@@ -202,7 +227,7 @@ export function EigenModeDampingFields({
         label="Linewidth (FWHM)"
         value={
           damping.linewidthFwhmHz == null
-            ? "not available"
+            ? damping.stability === "not available" ? "Unknown frequency or phasor convention" : "No decaying oscillatory resonance"
             : formatFrequency(damping.linewidthFwhmHz)
         }
       />
@@ -210,7 +235,7 @@ export function EigenModeDampingFields({
         label="Q-factor"
         value={
           damping.qualityFactor == null
-            ? "not available"
+            ? damping.stability === "undamped" && damping.linewidthFwhmHz === 0 ? "Unbounded for this undamped oscillator" : damping.stability === "not available" ? "Unknown frequency or phasor convention" : "No finite resonance quality factor"
             : formatNumber(damping.qualityFactor)
         }
       />
@@ -226,15 +251,7 @@ function EigenMode3DActions({
   summary: ReturnType<typeof useEigenModeSummary>;
 }) {
   const kernel = useKernel();
-  const plot = (
-    view:
-      | "phase_rotated_real"
-      | "real"
-      | "imag"
-      | "abs"
-      | "phase"
-      | "animate",
-  ): void => {
+  const plot = (view: string): void => {
     if (!summary.field3DReady) return;
     const animate = view === "animate";
     void kernel.commands.execute(
@@ -246,10 +263,11 @@ function EigenMode3DActions({
       }),
       {
         animatePhase: animate ? true : undefined,
-        animationRateHz: animate ? 1 : undefined,
+        animationRateHz: animate ? settings.activeAnalysisFieldOverlay?.animation?.animationRateHz || 1 : undefined,
         fieldId: summary.fieldId,
-        label: summary.modeIdentity,
-        phaseRad: 0,
+        label: summary.physicalLabel,
+        phaseRad: sameModeResultOwner(settings.activeAnalysisFieldOverlay?.modeIntent, summary.owner)
+          ? settings.activeAnalysisFieldOverlay?.visualizationPhaseRad ?? 0 : 0,
         source: "eigen-mode",
         view: animate ? "phase_rotated_real" : view,
       },
@@ -265,88 +283,20 @@ function EigenMode3DActions({
     );
   };
   const disabled = !summary.field3DReady;
-  const actions = [
-    {
-      icon: RotateCw,
-      label: "Rotated",
-      title: "Plot selected eigen mode with phase-rotated real display",
-      variant: "secondary" as const,
-      view: "phase_rotated_real" as const,
-    },
-    {
-      icon: Activity,
-      label: "Real",
-      title: "Plot selected eigen mode real component",
-      variant: "secondary" as const,
-      view: "real" as const,
-    },
-    {
-      icon: Activity,
-      label: "Imag",
-      title: "Plot selected eigen mode imaginary component",
-      variant: "secondary" as const,
-      view: "imag" as const,
-    },
-    {
-      icon: Activity,
-      label: "Abs",
-      title: "Plot selected eigen mode complex magnitude",
-      variant: "secondary" as const,
-      view: "abs" as const,
-    },
-    {
-      icon: RotateCw,
-      label: "Phase",
-      title: "Plot selected eigen mode phase",
-      variant: "secondary" as const,
-      view: "phase" as const,
-    },
-    {
-      icon: Play,
-      label: "Animate",
-      title: "Animate selected eigen mode phase in 3D",
-      variant: "secondary" as const,
-      view: "animate" as const,
-    },
-  ];
 
   return (
     <div
       aria-label="Selected eigen mode 3D visualization controls"
       className="fm-frequency-domain-visualization-actions"
     >
-      {actions.map((entry) => {
-        const Icon = entry.icon;
-        const isActive =
-          entry.view !== "animate" &&
-          isActiveAnalysisFieldView(
-            settings,
-            summary.fieldId,
-            "eigen-mode",
-            entry.view,
-          );
-        return (
-          <Button
-            aria-label={entry.title}
-            aria-pressed={isActive}
-            className="fm-inspector-action-button"
-            disabled={disabled}
-            key={entry.view}
-            size="sm"
-            title={disabled ? summary.field3DStatus : entry.title}
-            type="button"
-            variant={isActive ? "primary" : entry.variant}
-            onClick={() => plot(entry.view)}
-          >
-            <Icon aria-hidden="true" size={13} />
-            <span>{entry.label}</span>
-          </Button>
-        );
-      })}
+      <Button aria-label="Show selected eigen mode in 3D" className="fm-inspector-action-button" disabled={disabled} size="sm" title={disabled ? summary.field3DStatus : "Show the selected mode field"} variant="primary" onClick={() => plot(normalizeAnalysisFieldView(settings.view))}>
+        Show mode in 3D
+      </Button>
+      <Button aria-label="Animate selected eigen mode phase in 3D" disabled={disabled} size="sm" variant="secondary" onClick={() => plot("animate")}><Play aria-hidden="true" size={13} /> Animate</Button>
       <Button
         aria-label="Stop selected eigen mode animation"
         className="fm-inspector-action-button"
-        disabled={disabled}
+        disabled={disabled || !sameModeResultOwner(settings.activeAnalysisFieldOverlay?.modeIntent, summary.owner)}
         size="sm"
         title={
           disabled ? summary.field3DStatus : "Stop selected eigen mode animation"
@@ -355,9 +305,15 @@ function EigenMode3DActions({
         variant="secondary"
         onClick={stopAnimation}
       >
-        <RotateCw aria-hidden="true" size={13} />
-        <span>Stop animate</span>
+        <Pause aria-hidden="true" size={13} />
+        <span>Stop</span>
       </Button>
+      <Button aria-label="Show dispersion chart and selected mode together" disabled={disabled} size="sm" variant="secondary" onClick={async () => {
+        const result = await kernel.commands.execute("ribbon.analysis.show-chart-and-field", createCommandContext("inspector", kernel));
+        if (result.status === "completed") plot(normalizeAnalysisFieldView(settings.view));
+      }}>Chart + mode</Button>
+      <Button size="sm" variant="secondary" onClick={() => { if (kernel.layout.get().viewportCompanion?.moduleId !== "analysis-plots") kernel.layout.setActiveViewportMainModule("analysis-plots"); kernel.layout.setFocusedSlot("viewport-main"); }}>Back to chart</Button>
+      {sameModeResultOwner(settings.activeAnalysisFieldOverlay?.modeIntent, summary.owner) ? <Button size="sm" variant="secondary" onClick={() => void kernel.commands.execute("viewport-3d.fit", createCommandContext("inspector", kernel, { sourceDetail: "results.eigen.mode" }))}>Fit mode</Button> : null}
     </div>
   );
 }
@@ -366,13 +322,12 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
   const ref = selection.ref?.type === "frequency-domain" ? selection.ref : null;
   const sampleIndex = ref?.sampleIndex ?? null;
   const modeIndex = ref?.modeIndex ?? null;
-  const spectrum = useFrequencyDomainEigenSpectrumResource();
+  const { samples, spectrumModel, manifest } = useEigenModeBrowserData();
   const eigenMode = useFrequencyDomainEigenModeResource(sampleIndex, modeIndex);
   const fieldMeta = useFrequencyDomainEigenModeFieldMetaResource(
     sampleIndex,
     modeIndex,
   );
-  const spectrumModel = buildEigenSpectrumChartModel(spectrum.data);
   const spectrumPoint = spectrumModel.points.find(
     (point) =>
       point.sampleIndex === sampleIndex && point.rawModeIndex === modeIndex,
@@ -421,15 +376,15 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
   const realSamples = finiteNumber(componentSummary?.real_sample_count);
   const imagSamples = finiteNumber(componentSummary?.imag_sample_count);
   const fieldMetaRecord = record(fieldMeta.data);
-  const phaseConvention =
-    stringValue(record(fieldMetaRecord?.field_units)?.phase_convention) ??
-    stringValue(record(modePayload?.metadata)?.phase_convention) ??
-    "not available";
 
-  const manifest = useFrequencyDomainManifestResource();
+
   const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
   const physics = record(manifestPayload?.physics);
   const rawPhasorConvention = resolveModalPhasorConvention(modePayload, physics);
+  const phaseConvention = rawPhasorConvention ?? "Temporal phasor convention not published";
+  const wavevector = ref?.wavevectorKf ?? modePayload?.k_vector;
+  const wavevectorLabel = formatModeWavevector(wavevector);
+  const certificate = record(modePayload?.block_residuals);
   const damping = modalDampingObservables(
     frequencyHz,
     imaginaryFrequencyHz,
@@ -447,7 +402,12 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
           : "mode field metadata not available";
 
   return {
-    actionBadge: field3DReady ? "3D field ready" : "3D unavailable",
+    samples,
+    owner: ref,
+    wavevectorLabel,
+    certificationTolerance: formatNumberOrUnavailable(finiteNumber(certificate?.certification_tolerance)),
+    certificationStatus: certificate?.certified === true ? "Accepted for the reported residual scope" : certificate?.certified === false ? "Rejected" : "Not published",
+    actionBadge: field3DReady ? "Mode field available" : "3D unavailable",
     angularFrequency:
       angularFrequency == null
         ? "not available"
@@ -492,6 +452,7 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
     imaginaryFrequency: formatFrequency(imaginaryFrequencyHz),
     damping,
     modeIdentity: identity.label,
+    physicalLabel: modeResultLabel(wavevector, frequencyHz),
     phaseConvention,
     residual,
     tangentLeakageMax: formatNumberOrUnavailable(tangentLeakage),

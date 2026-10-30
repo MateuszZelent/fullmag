@@ -23,6 +23,9 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use uuid::Uuid;
 
+mod failed_worker_maintenance;
+pub use failed_worker_maintenance::FailedWorkerMaintenanceStorageAdmission;
+
 const HOST_ATTESTATION_PATH: &str = "/run/fullmag/windows-folder-host.json";
 const CONTAINER_ROOT: &str = "/state";
 const GRANT_NAME: &str = ".fullmag-windows-folder-grant.json";
@@ -645,6 +648,22 @@ fn validate_development_runtime_identity(
     delegation: &DevelopmentBuildDelegation,
     expected_commit: &str,
 ) -> Result<()> {
+    let executable = env::current_exe().context("resolving current executable")?;
+    validate_development_runtime_identity_for(
+        delegation, expected_commit, None, &executable, &current_executable_sha256()?,
+    )
+}
+
+// Maintenance may verify the retained runtime's canonical binary separately
+// from its own executable. Ordinary admission always calls the wrapper above.
+#[cfg(target_os = "linux")]
+fn validate_development_runtime_identity_for(
+    delegation: &DevelopmentBuildDelegation,
+    expected_commit: &str,
+    expected_snapshot: Option<&str>,
+    executable: &Path,
+    executable_sha256: &str,
+) -> Result<()> {
     let toolchain_image_id = env::var("FULLMAG_TOOLCHAIN_IMAGE_ID")
         .context("FULLMAG_TOOLCHAIN_IMAGE_ID is required for a development delegation")?;
     validate_image_id(&toolchain_image_id, "FULLMAG_TOOLCHAIN_IMAGE_ID")?;
@@ -691,6 +710,9 @@ fn validate_development_runtime_identity(
         required_json_string(&provenance, "source_digest", "runtime provenance")?;
     let provenance_source_snapshot =
         required_json_string(&provenance, "source_snapshot_sha256", "runtime provenance")?;
+    if expected_snapshot.is_some_and(|snapshot| snapshot != provenance_source_snapshot) {
+        bail!("runtime provenance source snapshot differs from retained owner");
+    }
     let provenance_native_identity_sha256 = required_json_string(
         &provenance,
         "native_source_identity_sha256",
@@ -767,7 +789,6 @@ fn validate_development_runtime_identity(
         bail!("backend build receipt toolchain differs from the delegation");
     }
 
-    let executable = env::current_exe().context("resolving current executable")?;
     let name = executable
         .file_name()
         .and_then(|name| name.to_str())
@@ -785,8 +806,8 @@ fn validate_development_runtime_identity(
         SHA256_HEX_LENGTH,
         "runtime provenance binary hash",
     )?;
-    if expected_hash != current_executable_sha256()? {
-        bail!("current executable hash differs from runtime provenance");
+    if expected_hash != executable_sha256 {
+        bail!("runtime executable hash differs from runtime provenance");
     }
     Ok(())
 }
@@ -1253,7 +1274,18 @@ fn initialize_store_under(parent: &Path, relative: &str) -> Result<(PathBuf, boo
 
 /// Validate the independent Linux bind profile against current host and mount evidence.
 #[cfg(target_os = "linux")]
-pub(crate) fn linux_native_store_identity(root: &Path) -> Result<serde_json::Value> {
+struct LinuxNativeAdmissionEvidence {
+    identity: serde_json::Value,
+    delegation: DevelopmentBuildDelegation,
+}
+
+/// Validate the Linux-native host, filesystem, mount, owner, sentinel, and
+/// probe evidence without binding the result to the process's current
+/// executable.  The ordinary store path adds that current-build check below;
+/// maintenance admission uses this same host evidence before validating its
+/// historical owner and isolated candidate package explicitly.
+#[cfg(target_os = "linux")]
+fn linux_native_host_admission(root: &Path) -> Result<LinuxNativeAdmissionEvidence> {
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::MetadataExt;
     if env::var("FULLMAG_SESSION_STORAGE_PROFILE").ok().as_deref() != Some("linux-native-v1") {
@@ -1317,9 +1349,6 @@ pub(crate) fn linux_native_store_identity(root: &Path) -> Result<serde_json::Val
             .context("Linux native DEV delegation is missing")?,
     )?;
     validate_development_build(&delegation)?;
-    let expected_commit = option_env!("FULLMAG_SOURCE_GIT_COMMIT")
-        .context("managed source commit identity is missing at compile time")?;
-    validate_development_runtime_identity(&delegation, expected_commit)?;
     let payload = format!("{token}:{image}");
     if host["restart_expected_sha256"] != sha256_hex(payload.as_bytes())
         || read_bounded_regular_file(&state.join(".linux-native-sentinel"), MAX_EVIDENCE_BYTES)?
@@ -1363,10 +1392,26 @@ pub(crate) fn linux_native_store_identity(root: &Path) -> Result<serde_json::Val
         bail!("Linux native storage probe checks are incomplete");
     }
     // Device/inode and namespace are admission evidence; the owner scope survives recreation.
-    Ok(
-        serde_json::json!({"schema": "fullmag.linux-native-store-identity.v1",
-        "engine_id": engine, "owner_token": token, "relative_state_path": relative_state_path(root)?}),
-    )
+    Ok(LinuxNativeAdmissionEvidence {
+        identity: serde_json::json!({
+            "schema": "fullmag.linux-native-store-identity.v1",
+            "engine_id": engine,
+            "owner_token": token,
+            "relative_state_path": relative_state_path(root)?,
+        }),
+        delegation,
+    })
+}
+
+/// Validate the independent Linux bind profile against current host and mount evidence.
+/// This remains the strict current-build path used by ordinary stores.
+#[cfg(target_os = "linux")]
+pub(crate) fn linux_native_store_identity(root: &Path) -> Result<serde_json::Value> {
+    let evidence = linux_native_host_admission(root)?;
+    let expected_commit = option_env!("FULLMAG_SOURCE_GIT_COMMIT")
+        .context("managed source commit identity is missing at compile time")?;
+    validate_development_runtime_identity(&evidence.delegation, expected_commit)?;
+    Ok(evidence.identity)
 }
 
 /// Bootstrap only the fixed Docker accepted store after host-profile admission.

@@ -3,17 +3,17 @@
 use std::sync::Arc;
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::Json;
 
 use crate::error::ApiError;
 use crate::session_persistence::{
-    CheckpointCreateRequest, CheckpointCreateResponse, CheckpointEntry, CheckpointListResponse,
+    CheckpointCreateRequest, CheckpointCreateResponse, CheckpointEntry, CheckpointListResponse, FmsFileUpload,
     CheckpointRestoreRequest, CheckpointRestoreResponse, FieldStateExportRequest,
     FieldStateExportResponse, FieldStateImportRequest, FieldStateImportResponse,
     FieldStateInspectRequest, FieldStateInspectResponse, RecoveryClearResponse,
     RecoveryListResponse, SessionExportRequest, SessionExportResponse, SessionImportCommitRequest,
-    SessionImportCommitResponse, SessionImportInspectRequest, SessionImportInspectResponse,
+    SessionImportCommitResponse, SessionImportInspectRequest, SessionImportInspectResponse, SessionRestoreMode,
 };
 use crate::types::AppState;
 
@@ -81,6 +81,55 @@ pub async fn commit_session(
         context.as_ref(),
     )
     .await
+}
+
+/// Upload the original ZIP bytes; no base64 expansion or JSON body buffer.
+#[utoipa::path(
+    post,
+    path = "/v2/persistence/imports/file-inspections",
+    request_body(content = FmsFileUpload, content_type = "application/octet-stream", description = "Original .fms ZIP bytes; nonempty, at most 512 MiB"),
+    responses(
+        (status = 200, description = "Project archive inspection", body = SessionImportInspectResponse),
+        (status = 400, description = "Invalid archive"),
+        (status = 408, description = "Upload timed out"),
+        (status = 413, description = "Archive exceeds the file upload limit"),
+        (status = 415, description = "Unsupported upload content type or encoding")
+    ),
+    tag = "persistence"
+)]
+pub async fn inspect_project_archive_file(
+    State(state): State<Arc<AppState>>, request: Request,
+) -> Result<Json<SessionImportInspectResponse>, ApiError> {
+    crate::session_persistence::import_session_file_inspect(state, request).await
+}
+
+#[derive(serde::Deserialize)]
+pub struct SessionFileImportQuery {
+    pub restore_mode: SessionRestoreMode,
+}
+
+#[utoipa::path(
+    post,
+    path = "/v2/sessions/current/persistence/file-imports",
+    params(("restore_mode" = SessionRestoreMode, Query, description = "Explicit archive restore policy")),
+    request_body(content = FmsFileUpload, content_type = "application/octet-stream", description = "Original .fms ZIP bytes; nonempty, at most 512 MiB"),
+    responses(
+        (status = 200, description = "Session import committed", body = SessionImportCommitResponse),
+        (status = 400, description = "Invalid archive or restore policy"),
+        (status = 408, description = "Upload timed out"),
+        (status = 409, description = "Current session changed or restore is unsupported"),
+        (status = 413, description = "Archive exceeds the file upload limit"),
+        (status = 415, description = "Unsupported upload content type or encoding")
+    ),
+    tag = "persistence"
+)]
+pub async fn commit_session_file(
+    State(state): State<Arc<AppState>>, Query(query): Query<SessionFileImportQuery>, request: Request,
+) -> Result<Json<SessionImportCommitResponse>, ApiError> {
+    let epoch = state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire);
+    let context = crate::capture_optional_current_live_request_context(&state).await?;
+    let empty_session_epoch = context.is_none().then_some(epoch);
+    crate::session_persistence::import_session_file_commit(state, request, query.restore_mode, context.as_ref(), empty_session_epoch).await
 }
 
 #[utoipa::path(

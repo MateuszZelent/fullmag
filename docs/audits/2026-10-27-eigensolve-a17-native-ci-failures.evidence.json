@@ -1,0 +1,21 @@
+{
+  "schema": "fullmag.eigensolve-native-ci-failures.v1",
+  "commit": "a85fdf0bb701680b7f8f6bb0e492d18e7088662c",
+  "workflow_run": 40430469653,
+  "job": 121946616991,
+  "artifact_id": 12701973666,
+  "passed": 15,
+  "total": 21,
+  "log_sha256": "ee1030246ed696d5c8922ef7dbd012479a6b46da28ef77105902d05d21ee0176",
+  "assertion_failures": [
+    "46: FAIL: native best_effort result preserves incomplete coverage and the actual refill reason",
+    "FAIL: native best_effort result preserves incomplete coverage and the actual refill reason",
+    "64: FAIL: explicit multi-mode goal still refills after an insufficient one-mode first pool",
+    "FAIL: explicit multi-mode goal still refills after an insufficient one-mode first pool",
+    "69: FAIL: dimension-limited best_effort preserves its exact incomplete-window status and internal-limit evidence",
+    "FAIL: dimension-limited best_effort preserves its exact incomplete-window status and internal-limit evidence",
+    "70: FAIL: dimension-limited best_effort preserves its exact incomplete-window status and internal-limit evidence",
+    "71: FAIL: dimension-limited best_effort preserves its exact incomplete-window status and internal-limit evidence",
+    "72: FAIL: dimension-limited best_effort preserves its exact incomplete-window status and internal-limit evidence"
+  ]
+}

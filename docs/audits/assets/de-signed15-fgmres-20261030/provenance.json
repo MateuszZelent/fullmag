@@ -1,0 +1,222 @@
+{
+  "evidence": [
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/final-integration-20261030/signed15-fgmres-5c8fdb527/api-completed-evidence.json",
+      "sha256": "f2d5d7b087e02c9cc7b6c6176d3abd84c058e0ae5a40fcfbe753c06fe0c865f3"
+    }
+  ],
+  "reference_sha256": "9561fed8d0c7812b78fc97a713f509c52d52f2fda9635c149ffa1fddc974adbf",
+  "parameters": {
+    "geometry": "DE",
+    "bias_field_a_per_m": 79577.47154594767,
+    "film_thickness_m": 1e-08,
+    "air_padding_each_side_m": 2e-06,
+    "exchange_stiffness_j_per_m": 1.3e-11,
+    "saturation_magnetisation_a_per_m": 800000.0,
+    "gamma0_rad_s_per_a_m": 221100.0,
+    "mu0_t_m_a": 1.2566370614359173e-06
+  },
+  "samples": [
+    {
+      "ky_rad_per_um": -25.0,
+      "frequency_hz": 13560765016.693054,
+      "residual": 4.029042271469224e-14,
+      "run_id": "run-live-6a5847c66a6378c7d826fbc4dad2b1ec694685f59b70f8d850da7e26ea1f9df6",
+      "publication_status": "API published",
+      "sample_index": 0,
+      "raw_mode_index": 0,
+      "analytic_n0_finite_airbox_hz": 13673868177.295187,
+      "reference_1d_open_air_hz": 13641746353.677149,
+      "error_n0_percent": -0.8271482446345013,
+      "error_1d_percent": -0.5936288132367018
+    },
+    {
+      "ky_rad_per_um": -20.0,
+      "frequency_hz": 12819133184.864706,
+      "residual": 4.560254242083289e-14,
+      "run_id": "run-live-6a5847c66a6378c7d826fbc4dad2b1ec694685f59b70f8d850da7e26ea1f9df6",
+      "publication_status": "API published",
+      "sample_index": 1,
+      "raw_mode_index": 0,
+      "analytic_n0_finite_airbox_hz": 12898112904.354237,
+      "reference_1d_open_air_hz": 12875388368.071287,
+      "error_n0_percent": -0.6123354639178902,
+      "error_1d_percent": -0.43692028231229196
+    },
+    {
+      "ky_rad_per_um": -15.0,
+      "frequency_hz": 12041290552.070326,
+      "residual": 1.736423578900363e-14,
+      "run_id": "run-live-6a5847c66a6378c7d826fbc4dad2b1ec694685f59b70f8d850da7e26ea1f9df6",
+      "publication_status": "API published",
+      "sample_index": 2,
+      "raw_mode_index": 0,
+      "analytic_n0_finite_airbox_hz": 12089703094.456797,
+      "reference_1d_open_air_hz": 12075445880.476671,
+      "error_n0_percent": -0.4004444278591812,
+      "error_1d_percent": -0.2828494181036145
+    },
+    {
+      "ky_rad_per_um": -10.0,
+      "frequency_hz": 11211849791.58967,
+      "residual": 8.604194860466092e-14,
+      "run_id": "run-live-6a5847c66a6378c7d826fbc4dad2b1ec694685f59b70f8d850da7e26ea1f9df6",
+      "publication_status": "API published",
+      "sample_index": 3,
+      "raw_mode_index": 0,
+      "analytic_n0_finite_airbox_hz": 11235414178.890272,
+      "reference_1d_open_air_hz": 11228265980.388088,
+      "error_n0_percent": -0.20973314312592306,
+      "error_1d_percent": -0.14620413184984749
+    },
+    {
+      "ky_rad_per_um": -7.0,
+      "frequency_hz": 10681045691.726658,
+      "residual": 1.3973109558695165e-13,
+      "run_id": "run-live-6a5847c66a6378c7d826fbc4dad2b1ec694685f59b70f8d850da7e26ea1f9df6",
+      "publication_status": "API published",
+      "sample_index": 4,
+      "raw_mode_index": 0,
+      "analytic_n0_finite_airbox_hz": 10693658153.918102,
+      "reference_1d_open_air_hz": 10689867024.399137,
+      "error_n0_percent": -0.11794338298370954,
+      "error_1d_percent": -0.0825205089300507
+    },
+    {
+      "ky_rad_per_um": -5.0,
+      "frequency_hz": 10310201976.175974,
+      "residual": 4.103774735243461e-14,
+      "run_id": "run-live-6a5847c66a6378c7d826fbc4dad2b1ec694685f59b70f8d850da7e26ea1f9df6",
+      "publication_status": "API published",
+      "sample_index": 5,
+      "raw_mode_index": 0,
+      "analytic_n0_finite_airbox_hz": 10317375926.46114,
+      "reference_1d_open_air_hz": 10315329787.73499,
+      "error_n0_percent": -0.06953270227137986,
+      "error_1d_percent": -0.04971059253104926
+    },
+    {
+      "ky_rad_per_um": -2.0,
+      "frequency_hz": 9724035208.055935,
+      "residual": 3.1951852212076583e-14,
+      "run_id": "run-live-6a5847c66a6378c7d826fbc4dad2b1ec694685f59b70f8d850da7e26ea1f9df6",
+      "publication_status": "API published",
+      "sample_index": 6,
+      "raw_mode_index": 0,
+      "analytic_n0_finite_airbox_hz": 9725403044.253735,
+      "reference_1d_open_air_hz": 9725365858.820045,
+      "error_n0_percent": -0.014064570810845556,
+      "error_1d_percent": -0.013682269473735964
+    },
+    {
+      "ky_rad_per_um": 0.0,
+      "frequency_hz": 9299249697.06775,
+      "residual": 9.57780775879694e-15,
+      "run_id": "run-live-6a5847c66a6378c7d826fbc4dad2b1ec694685f59b70f8d850da7e26ea1f9df6",
+      "publication_status": "API published",
+      "sample_index": 7,
+      "raw_mode_index": 0,
+      "analytic_n0_finite_airbox_hz": 9299249697.068401,
+      "reference_1d_open_air_hz": 9309813711.433355,
+      "error_n0_percent": -6.994405055138486e-12,
+      "error_1d_percent": -0.11347181257376215
+    },
+    {
+      "ky_rad_per_um": 2.0,
+      "frequency_hz": 9724074783.197916,
+      "residual": 3.078644260460395e-14,
+      "run_id": "run-live-6a5847c66a6378c7d826fbc4dad2b1ec694685f59b70f8d850da7e26ea1f9df6",
+      "publication_status": "API published",
+      "sample_index": 8,
+      "raw_mode_index": 0,
+      "analytic_n0_finite_airbox_hz": 9725403044.253735,
+      "reference_1d_open_air_hz": 9725365858.816298,
+      "error_n0_percent": -0.013657645341524915,
+      "error_1d_percent": -0.013275342409979629
+    },
+    {
+      "ky_rad_per_um": 5.0,
+      "frequency_hz": 10310352014.032568,
+      "residual": 3.799294214024027e-14,
+      "run_id": "run-live-6a5847c66a6378c7d826fbc4dad2b1ec694685f59b70f8d850da7e26ea1f9df6",
+      "publication_status": "API published",
+      "sample_index": 9,
+      "raw_mode_index": 0,
+      "analytic_n0_finite_airbox_hz": 10317375926.46114,
+      "reference_1d_open_air_hz": 10315329787.733505,
+      "error_n0_percent": -0.06807847730504468,
+      "error_1d_percent": -0.04825607909169083
+    },
+    {
+      "ky_rad_per_um": 7.0,
+      "frequency_hz": 10681152764.337677,
+      "residual": 9.115093723553686e-14,
+      "run_id": "run-live-6a5847c66a6378c7d826fbc4dad2b1ec694685f59b70f8d850da7e26ea1f9df6",
+      "publication_status": "API published",
+      "sample_index": 10,
+      "raw_mode_index": 0,
+      "analytic_n0_finite_airbox_hz": 10693658153.918102,
+      "reference_1d_open_air_hz": 10689867024.400606,
+      "error_n0_percent": -0.11694211092622142,
+      "error_1d_percent": -0.08151888178812294
+    },
+    {
+      "ky_rad_per_um": 10.0,
+      "frequency_hz": 11211886649.71635,
+      "residual": 4.88350698299688e-14,
+      "run_id": "run-live-6a5847c66a6378c7d826fbc4dad2b1ec694685f59b70f8d850da7e26ea1f9df6",
+      "publication_status": "API published",
+      "sample_index": 11,
+      "raw_mode_index": 0,
+      "analytic_n0_finite_airbox_hz": 11235414178.890272,
+      "reference_1d_open_air_hz": 11228265980.3891,
+      "error_n0_percent": -0.20940509000662022,
+      "error_1d_percent": -0.1458758698926088
+    },
+    {
+      "ky_rad_per_um": 15.0,
+      "frequency_hz": 12041315829.649378,
+      "residual": 2.7115811546155048e-14,
+      "run_id": "run-live-6a5847c66a6378c7d826fbc4dad2b1ec694685f59b70f8d850da7e26ea1f9df6",
+      "publication_status": "API published",
+      "sample_index": 12,
+      "raw_mode_index": 0,
+      "analytic_n0_finite_airbox_hz": 12089703094.456797,
+      "reference_1d_open_air_hz": 12075445880.4828,
+      "error_n0_percent": -0.40023534432044316,
+      "error_1d_percent": -0.28264008775514826
+    },
+    {
+      "ky_rad_per_um": 20.0,
+      "frequency_hz": 12819200390.535107,
+      "residual": 1.223378087771942e-13,
+      "run_id": "run-live-6a5847c66a6378c7d826fbc4dad2b1ec694685f59b70f8d850da7e26ea1f9df6",
+      "publication_status": "API published",
+      "sample_index": 13,
+      "raw_mode_index": 0,
+      "analytic_n0_finite_airbox_hz": 12898112904.354237,
+      "reference_1d_open_air_hz": 12875388368.072458,
+      "error_n0_percent": -0.6118144135061065,
+      "error_1d_percent": -0.4363983122767978
+    },
+    {
+      "ky_rad_per_um": 25.0,
+      "frequency_hz": 13560913969.42748,
+      "residual": 5.232840538886863e-14,
+      "run_id": "run-live-6a5847c66a6378c7d826fbc4dad2b1ec694685f59b70f8d850da7e26ea1f9df6",
+      "publication_status": "API published",
+      "sample_index": 14,
+      "raw_mode_index": 0,
+      "analytic_n0_finite_airbox_hz": 13673868177.295187,
+      "reference_1d_open_air_hz": 13641746353.677834,
+      "error_n0_percent": -0.8260589205859259,
+      "error_1d_percent": -0.592536924193432
+    }
+  ],
+  "scope": "Current API completed/published; raw mode 0, no completeness or tracking claim",
+  "qualification": "NOT VERIFIED",
+  "benchmark_script": {
+    "path": "/home/kkingstoun/git/fullmag/worktrees/eigensolve-integration-ui-20261026/examples/fem_eigen_mode_ui_de_signed15.py",
+    "sha256": "8d48ad08356352d69713b29465a70e2c0ea4135f66069f3d82c2ce853dacfa2f"
+  }
+}

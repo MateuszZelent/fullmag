@@ -316,3 +316,10 @@ resource invalidation and ACK. No opacity transitions. Same-target refreshes
 preserve root identity, focus, scroll and drafts. Browser regression uses the
 production shell and controls, verifies Object/Airbox where applicable, and
 separates controlled fixtures from backend/runtime qualification.
+
+
+### Published eigenmode results (2026-10-28)
+
+Result tabs must change content, not only the active tab marker. Overview prioritizes frequency, wavevector and the field action. Raw identities belong in Data/Provenance and numerical residuals in Diagnostics; required errors remain visible on every tab. Missing optional metrics are omitted. Known undamped oscillators are explained as having no decay, not missing lifetime data. A collection has no single field or artifact to label unavailable. Result inspectors do not show the model-editing footer.
+
+Selection and active visualization are distinct: changing k must not silently retarget the old mode's appearance controls. Ownership is checked by run, stage, artifact revision, sample, mode and field. The existing kernel commands, resource cache and one viewport remain authoritative; appearance changes do not mutate computed eigenvectors.

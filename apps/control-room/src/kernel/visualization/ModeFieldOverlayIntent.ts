@@ -30,6 +30,7 @@ export interface ModeFieldOverlayIntent {
   readonly analysisRunId: string;
   readonly analysisStageId: string;
   readonly artifactRevision: string;
+  readonly equilibriumId?: string;
   readonly fieldId: string;
   readonly metadataResourceKey: string;
   readonly modeId: string;
@@ -85,10 +86,13 @@ export interface ValidatedModeFieldOverlayBinary {
 export function createModeFieldOverlayIntent(
   selection: FrequencyDomainSelectionRef | null | undefined,
 ): ModeFieldOverlayIntent | null {
-  if (!selection || !selection.kind.startsWith("results.eigen")) return null;
+  if (!selection || !(selection.kind.startsWith("results.eigen") ||
+    selection.kind === "results.resonance.modal.mode" ||
+    selection.kind === "results.dispersion.modal.mode_at_k")) return null;
   const analysisRunId = requiredString(selection.analysisRunId);
   const analysisStageId = requiredString(selection.analysisStageId);
   const artifactRevision = requiredString(selection.artifactRevision);
+  const equilibriumId = requiredString(selection.equilibriumId);
   const fieldId = requiredString(selection.fieldId);
   const modeId = requiredString(selection.modeId);
   const sampleId = requiredString(selection.sampleId);
@@ -96,6 +100,7 @@ export function createModeFieldOverlayIntent(
     !analysisRunId ||
     !analysisStageId ||
     !artifactRevision ||
+    !equilibriumId ||
     !fieldId ||
     !modeId ||
     !sampleId ||
@@ -109,6 +114,7 @@ export function createModeFieldOverlayIntent(
     analysisRunId,
     analysisStageId,
     artifactRevision,
+    equilibriumId,
     fieldId,
     metadataResourceKey:
       `analysis/frequency-domain/eigen/samples/${encodeURIComponent(sampleId)}` +
@@ -158,12 +164,11 @@ export function resolveModeFieldOverlayMetadata(
     rawArtifactGenerationId !== null &&
     artifactGenerationId === null;
   const admissibleArtifactGeneration =
-    (artifactGenerationStatus === "legacy_unverified" &&
-      artifactGenerationId === null) ||
-    (artifactGenerationStatus === "member_verified_owner_bound" &&
-      artifactGenerationId !== null);
+    artifactGenerationStatus === "member_verified_owner_bound" &&
+    artifactGenerationId !== null;
 
   if (
+    !requiredString(intent.equilibriumId) ||
     legacyMetadata.status !== "ready" ||
     legacyMetadata.schema_version !== "frequency_domain_mode_field.v1" ||
     legacyMetadata.source_family !== "analysis/eigen" ||
@@ -213,14 +218,15 @@ export function resolveModeFieldOverlayMetadata(
 
 /**
  * A verified field member must return the exact committed generation requested
- * by its metadata. Legacy fields remain available through their existing solo
- * path and do not acquire a synthetic generation identity.
+ * by its metadata. Analysis-result fields retain their separate field-reference
+ * contract; eigenmode overlays require a committed owner-bound generation.
  */
 export function modeFieldOverlayArtifactGenerationMatches(
   metadata: ResolvedModeFieldOverlayMetadata,
   responseArtifactGenerationId: string | null | undefined,
 ): boolean {
   if (
+    isResolvedAnalysisResultModeFieldOverlayMetadata(metadata) &&
     metadata.artifactGenerationStatus === "legacy_unverified" &&
     metadata.artifactGenerationId === null
   ) {
@@ -258,7 +264,7 @@ export function validateModeFieldOverlayBinary(
     !requiredString(field.domainGenerationId) ||
     field.domainGenerationId !== topology.domainGenerationId ||
     !requiredString(field.meshTopologyHash) ||
-    field.meshTopologyHash !== topology.meshTopologyHash ||
+    !sameMeshTopologyHash(field.meshTopologyHash, topology.meshTopologyHash) ||
     !requiredString(field.meshTopologyRevision) ||
     field.meshTopologyRevision !== topology.meshTopologyRevision ||
     field.indexing !== "full_domain" ||
@@ -286,6 +292,20 @@ function isResolvedAnalysisResultModeFieldOverlayMetadata(
     "analysisResultFieldRef" in metadata &&
     isAnalysisResultFieldOverlayIntent(metadata.intent)
   );
+}
+
+// FMVP stores the raw 32-byte SHA-256; the shared-domain manifest qualifies
+// the same digest with "sha256:". Normalize that representation only, keeping
+// the generation, topology revision, shape and payload checks independent.
+function sameMeshTopologyHash(
+  left: string | null | undefined, right: string | null | undefined,
+): boolean {
+  if (!left || !right) return false;
+  const digest = (value: string) => {
+    const match = /^(?:sha256:)?([0-9a-f]{64})$/i.exec(value);
+    return match ? match[1].toLowerCase() : value;
+  };
+  return digest(left) === digest(right);
 }
 
 function requiredString(value: unknown): string | null {

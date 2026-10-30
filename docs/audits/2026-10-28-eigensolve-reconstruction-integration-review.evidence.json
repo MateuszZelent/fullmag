@@ -1,0 +1,76 @@
+{
+  "schema": "eigensolve.wip-reconstruction-review.v1",
+  "date": "2026-10-28",
+  "reviewed_head": "e805d0774640dfa2aaa193790e2f4cabd1b26b16",
+  "preserved_source_head": "9063e52cbdeb5d805bd23da7703ea7c582548fc8",
+  "original_integration_commit": "b152b0e63359c4f9664ff352a4556a68bca811ec",
+  "functions": [
+    {
+      "path": "crates/fullmag-runner/src/fem/eigen_projection.rs",
+      "symbol": "project_complex_mode_to_tangent_basis",
+      "current_line": 49,
+      "normalized_function_sha256": "ca102aa4f6aa01e17d6a917145fe8e23a9ec9a9bd4b168a2420c10d5620fc6aa",
+      "preserved_file_sha256": "fb872e66b13847c4063e97ae8541aba3a278cc08b57e0225add2b0877070c5ab",
+      "disposition": "present-identical-to-preserved-wip",
+      "evidence_scope": "source body and consumer semantics; runtime of reference path not asserted"
+    },
+    {
+      "path": "crates/fullmag-runner/src/fem/eigen_projection.rs",
+      "symbol": "expand_reference_mode_to_periodic_nodes",
+      "current_line": 217,
+      "normalized_function_sha256": "4f37b807ced6aef62c15967885b8787aecb1df36511d338070b5acb31e3a1180",
+      "preserved_file_sha256": "fb872e66b13847c4063e97ae8541aba3a278cc08b57e0225add2b0877070c5ab",
+      "disposition": "present-identical-to-preserved-wip",
+      "evidence_scope": "source body and consumer semantics; runtime of reference path not asserted"
+    },
+    {
+      "path": "crates/fullmag-runner/src/fem/eigen_reduction.rs",
+      "symbol": "validate_materialized_tangent_frame_transport",
+      "current_line": 155,
+      "normalized_function_sha256": "d5d53ee49288b284748ef9ee3e5194b33c343d79a010ba0231604c5bdd689017",
+      "preserved_file_sha256": "69c7f2e2291a55df621d86e4bac66b52498b5630dc45d685eee3672e7e6ec528",
+      "disposition": "present-identical-to-preserved-wip",
+      "evidence_scope": "source body and consumer semantics; runtime of reference path not asserted"
+    }
+  ],
+  "ci": {
+    "run_id": 40611719529,
+    "head_sha": "e805d0774640dfa2aaa193790e2f4cabd1b26b16",
+    "status": "success",
+    "coverage": "full default-feature runner suite; all nine reconstruction/guard/publication regressions executed and passed; native-feature runtime not qualified",
+    "tests_passed": 1821,
+    "tests_failed": 0,
+    "tests_ignored": 1,
+    "named_regressions": [
+      "fem::eigen_projection::scalar_projection_tests::reference_full2x2_expansion_preserves_elliptic_field_across_frame_rotation",
+      "fem::eigen_projection::scalar_projection_tests::reference_projection_expands_periodic_and_signed_bloch_nodes",
+      "fem::eigen_projection::scalar_projection_tests::reference_projection_rejects_invalid_periodic_map",
+      "fem::eigen_projection::scalar_projection_tests::scalar_complex_projection_commutes_with_global_phase",
+      "fem::eigen_projection::scalar_projection_tests::scalar_complex_projection_matches_real_projection",
+      "fem::eigen_tests::materialized_full2x2_guard_accepts_tangent_frame_reference_axis_jump",
+      "fem::eigen_tests::materialized_full2x2_guard_rejects_physical_equilibrium_mismatch",
+      "fem::eigen_tests::reference_mode_publication_rejects_materialized_equilibrium_mismatch",
+      "fem::eigen_tests::reference_mode_publication_expands_periodic_and_signed_floquet_fields"
+    ],
+    "job_id": 122564583507,
+    "job_log_sha256": "5b711d230581fff9cff5c055e1b1e920983bbc95b8ef05d1b29dcb9eaa763ed0",
+    "revalidated_run": 40612294926
+  },
+  "remaining": [
+    "other preserved WIP files",
+    "remaining historical commit dispositions",
+    "native/GPU qualification and scientific convergence",
+    "final post-import strict UI and Docker recovery"
+  ],
+  "checkpoint_inspector_gate": {
+    "status": "success",
+    "test": "fem::single_k_checkpoint::tests::checkpoint_inspector_accepts_actual_persisted_manifest",
+    "interpreter": "python3",
+    "scope": "persisted checkpoint integrity; scientific qualification stays NOT VERIFIED",
+    "run_id": 40612294926,
+    "head_sha": "0a02ca80970d69c4246f6c9573a1eababd423c98",
+    "job_id": 122566508074,
+    "test_count": 1,
+    "job_log_sha256": "c2089d5b927a05cbff252eb3d0ae47d34dd03a9f3181523c70e5644a9e5216c8"
+  }
+}

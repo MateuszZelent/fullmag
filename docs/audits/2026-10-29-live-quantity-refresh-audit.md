@@ -445,4 +445,3 @@ Grupa weryfikacyjna `live-quantity-refresh-verify-20261029`, commit `69e5afbe9`,
 - na magazynie w folderze Windows projektor często odkłada projekcję („session read transaction
   requires no active store writer”); pierwsze ~4400 kroków nie zostało zprojektowanych. Worker
   zapisuje ładunek i nagłówek na każdym kroku (~10 kroków/s); kadencję czasową wnosi PR #270.
-

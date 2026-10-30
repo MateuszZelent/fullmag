@@ -139,7 +139,7 @@ The diagnostics module must expose resource counts in development mode.
 
 ## 7. Center Surface Tabs
 
-When multiple modules target `viewport-main`, the kernel owns center-surface tab state. Switching tabs must unmount the previously active heavy module instead of hiding it. A non-3D tab must have:
+When multiple modules target `viewport-main`, the kernel owns center-surface tab state. Each visible center surface has its own PanelFrame. Active, split companion and explicitly floating/maximized windows have at most one mounted instance each. Docking, moving, resizing and changing the split orientation preserve the component parent and renderer instance. Hidden windows and inactive docked tabs unmount their heavy modules. A non-3D tab with no visible 3D companion or floating 3D window must have:
 
 - no mounted `.fm-viewport-3d` root;
 - no R3F canvas;
@@ -161,3 +161,42 @@ Global realtime invalidation and registry controllers may remain active, but the
 ### Pasek narzędzi po audycie 26.10.2026
 
 Kontrolki 3D zajmują oddzielny wiersz nad canvasem. Nazwany region zachowuje appearance/settings, Details/Retry, freshness, quantity, target, źródło historyczne, mesh quality/size, Regions, Airbox, Frozen Spins, countdown oraz Render details. Dopuszczalne jest zawijanie i przewijanie narzędzi; nie redukuje ono danych ani domyślnej jakości sceny. ViewCube, legendy i wymiary zachowują dotychczasową semantykę.
+
+Floating center windows use the same frame controls and geometry persistence as Inspector. A stable window layer is independent of measured docking anchors; resizing anchors never reparents a renderer. Returning an inactive floating window to the dock selects it as the companion. Tabs restore hidden windows. Layout controls do not own solver commands or numerical state.
+
+### Drag-to-edge docking of center views
+
+Dragging a center view grip near the center workspace edge shows a non-interactive
+preview. Release docks left/right in a horizontal 50/50 split or top/bottom in a
+vertical 50/50 split. An existing visible neighbour is redocked; a displaced third
+view stays floating. With no visible neighbour, the view fills the dock. Escape
+or pointer cancellation restores the pre-gesture placement. Interior release
+keeps the window floating. Preview animation respects reduced-motion preferences.
+Only docking anchors and frame placement change; renderer keys/parents and solver
+state do not. Separator resizing remains available after snapping.
+
+### Workspace-wide panel docking
+
+Explorer, Inspector, Diagnostics and the viewport group use a persisted binary
+split tree. The tree contains measurement anchors only; keyed workspace windows
+remain siblings under a stable parent, including while moved between nested
+horizontal and vertical splits. Floating/hidden panels retain their tree position
+but have no active anchor. A fresh drop can target a workspace edge or a visible
+panel edge. Menus provide keyboard-accessible directions and reset.
+An explicit modes-left/chart-right preset restores both center windows to the
+dock without changing selected result ownership; when no frequency-domain result
+is selected, the UI explains the Results selection step. Back-to-chart focuses an
+already visible chart without collapsing the modes-left arrangement.
+
+### Manual docking and compact-screen preferences
+
+A panel can be dragged by its title, blank header or dotted handle. Interactive
+header children retain their own actions. A click does not detach; Escape
+cancels. Pointer events belong to their capture owner and must not be applied
+twice when they bubble through the header. The handle explains dragging and
+keyboard/menu alternatives in a tooltip. Viewport toolbar controls wrap when
+space is constrained; optional hints must not consume the viewport's flexible
+height. Explicit compact-screen docking is persisted separately under
+`fullmag.workspace.explicit-dock.v1`; reset clears this preference and restores
+automatic drawers. Workspace-edge drop targets extend 20 px inward, with the
+existing preview identifying the destination before release.

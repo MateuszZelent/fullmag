@@ -128,7 +128,16 @@ describe("ViewportTabHost", () => {
 
     expect(html).toContain('data-active-module-id="analysis-plots-test"');
     expect(html).toContain('data-companion-module-id="viewport-3d-test"');
-    // Panel contents are client-rendered by react-resizable-panels; the split host is asserted here.
+    // Renderers have independent stable frames, outside resize-only anchors.
+    // Earlier cases may have resolved the shared lazy-module cache.
+    expect(html.match(/Loading…|Mounted viewport module/g)).toHaveLength(2);
+    expect(html).toContain('data-panel-frame="viewport-module:viewport-3d-test"');
+    expect(html).toContain('data-panel-frame="viewport-module:analysis-plots-test"');
+    expect(html).toContain('aria-label="Move 3D with arrow keys"');
+    expect(html).toContain('aria-label="Move Plots with arrow keys"');
+    expect(html).toContain('data-restore-panel="viewport-module:viewport-3d-test"');
+    expect(html).toContain('aria-label="Arrange viewport windows vertically"');
+    expect(html).toContain('aria-label="Swap viewport window positions"');
     expect(html).toContain('data-companion="true"');
     expect(html).toContain('aria-label="Close 3D split view"');
   });

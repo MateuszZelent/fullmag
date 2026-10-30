@@ -11,7 +11,7 @@ const SUBVIEW_LABELS: Readonly<Record<AnalysisSubview, string>> = {
   "comparison.sources": "Sources",
   "dispersion.branches": "Branches",
   "dispersion.driven-map": "Driven A(k,f)",
-  "dispersion.modal": "Modal fₙ(k)",
+  "dispersion.modal": "Modal frequencies",
   "dynamics.s-k-f": "S(k,f)",
   "dynamics.temporal-fft": "Temporal FFT",
   "dynamics.time-traces": "Time Traces",

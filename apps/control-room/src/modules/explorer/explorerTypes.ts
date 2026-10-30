@@ -337,6 +337,7 @@ export interface ExplorerNode {
   children?: ExplorerNode[];
   contextCommands?: CommandId[];
   contextCommandInputs?: Partial<Record<CommandId, unknown>>;
+  collectionStudyCount?: number;
   analysisRunId?: string;
   analysisStageId?: string;
   artifactRevision?: number | string;

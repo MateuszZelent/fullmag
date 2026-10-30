@@ -1,0 +1,15 @@
+{
+  "cancellation": {
+    "disposition": "accepted",
+    "run_id": "run-live-d09922a123c1f1747cf50f28727abad89e0c16e9dc371e7511a091d57f9e9268",
+    "task_id": "task-aef67e4930bbf7424a97a89ab742aad32ba354bd7589786bab3b9a05c3a858c0",
+    "cancellation_id": "cancel-blocked-signed14-storage-20261027",
+    "cancellation_state": "requested",
+    "lifecycle": "accepted",
+    "catalog_revision": 14,
+    "expected_catalog_revision": 13
+  },
+  "observed_api_status": "failed",
+  "observed_api_revision": 7,
+  "observed_compute_queue": []
+}

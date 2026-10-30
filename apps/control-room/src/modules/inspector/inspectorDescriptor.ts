@@ -132,6 +132,9 @@ function resolveFamily(kind: string): FamilyDescriptor {
       typeLabel: "Diagnostics",
     };
   }
+  if (["results.dispersion.root", "results.resonance.root", "results.dynamics.root"].includes(kind)) {
+    return { tabs: [{ id: "overview", label: "Overview" }], typeLabel: "Result collection" };
+  }
   if (kind.startsWith("results.") || kind.startsWith("resources.")) {
     return { tabs: RESULT_TABS, typeLabel: "Result" };
   }

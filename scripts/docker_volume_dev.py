@@ -260,6 +260,37 @@ except FileNotFoundError:
 else:
  print(raw.decode('utf-8'))
 """
+def _early_startup_failure(backend_id, logs):
+    """Read the exact fence emitted by this container incarnation; never recover it."""
+    match = re.search(
+        r"Runtime startup failed; starting diagnostic API only: [\s\S]*?"
+        r"\. Diagnostic: (/opt/fullmag/runtime-control/runtime-service/api-failure-[0-9a-f]{32}\.json)(?:\s|$)",
+        logs,
+    )
+    if match is None:
+        return None
+    path = match.group(1)
+    probe = """import json,sys,pathlib
+sys.path.insert(0,'/opt/fullmag')
+import runtime_service
+path=pathlib.Path(sys.argv[1])
+expected=runtime_service.process_receipt_path(runtime_service.canonical_paths()).parent
+if path.parent != expected:
+ raise RuntimeError('startup fence is outside the configured technical root')
+raw=runtime_service._bounded_regular(path,'startup failure fence')
+print(raw.decode('utf-8'))
+"""
+    fence = json.loads(docker_text("exec", backend_id, "/usr/local/bin/python3", "-B",
+                                  "-c", probe, path))
+    if (not isinstance(fence, dict)
+            or fence.get("schema") != "fullmag.api-runtime-failure-fence.v1"
+            or fence.get("stage") != "runtime_startup"
+            or not isinstance(fence.get("reason"), str)
+            or not fence["reason"].strip()):
+        raise BuildControlError("Invalid early startup failure fence")
+    return {"path": path, "fence": fence}
+
+
 BACKEND_PROCESS_RECEIPT_SCRIPT = _PROCESS_RECEIPT_PROBE
 
 
@@ -588,6 +619,17 @@ def _owned_volume(control, role, key):
     if result.returncode:
         raise BuildControlError(result.stderr.decode("utf-8", "replace"))
     return name
+
+
+def _frontend_workspace_key(project, inputs):
+    """Frozen configuration changes require a new workspace, preserving old caches."""
+    return hashlib.sha256(canonical({
+        "schema": "fullmag.frontend-workspace-key.v2",
+        "project": project,
+        "dependencies": inputs["dependency_seed_sha256"],
+        "tools": inputs["toolpins_sha256"],
+        "configuration": sorted(inputs["files"], key=lambda item: item["relative"]),
+    })).hexdigest()
 
 
 def _frontend(control, operation, selected, state, port, image):
@@ -1483,6 +1525,178 @@ def _operator_probe_record_from_fields(fields, *, label):
     }
 
 
+_FLOQUET_DIAGNOSTIC_SELECTION_SCHEMA = "fullmag.floquet-diagnostic-selection.v1"
+
+
+def _floquet_diagnostic_successor_record(previous_record, requested_profile):
+    """Derive and pin only the explicit successor-group diagnostic profile."""
+
+    from docker_dev import _operator_probe_environment_for_floquet_profile
+
+    old_record = _operator_probe_record_from_fields(
+        previous_record, label="retained operation"
+    )
+    if requested_profile is None:
+        return old_record, None
+    try:
+        successor_values = _operator_probe_environment_for_floquet_profile(
+            old_record["operator_probe_environment"], requested_profile
+        )
+        successor_record = _operator_probe_record(successor_values)
+    except Exception as error:
+        raise BuildControlError("Invalid Floquet diagnostic profile: " + str(error)) from error
+    selection = {
+        "schema": _FLOQUET_DIAGNOSTIC_SELECTION_SCHEMA,
+        "requested_profile": requested_profile,
+        "old_operator_probe_environment_sha256": (
+            old_record["operator_probe_environment_sha256"]
+        ),
+        "new_operator_probe_environment_sha256": (
+            successor_record["operator_probe_environment_sha256"]
+        ),
+    }
+    return successor_record, selection
+
+
+def _floquet_diagnostic_successor_from_metadata(previous_record, selection):
+    """Rebuild the successor's exact controls from its immutable recreation intent."""
+
+    if selection is None:
+        return previous_record
+    old_record = _operator_probe_record_from_fields(
+        previous_record, label="retained operation"
+    )
+    if (not isinstance(selection, Mapping)
+            or set(selection) != {
+                "schema", "requested_profile",
+                "old_operator_probe_environment_sha256",
+                "new_operator_probe_environment_sha256",
+            }
+            or selection.get("schema") != _FLOQUET_DIAGNOSTIC_SELECTION_SCHEMA):
+        raise BuildControlError("Floquet diagnostic selection metadata is malformed")
+    successor_record, expected_selection = _floquet_diagnostic_successor_record(
+        old_record, selection.get("requested_profile")
+    )
+    if selection != expected_selection:
+        raise BuildControlError("Floquet diagnostic selection hashes differ from retained records")
+    return successor_record
+
+
+_MODAL_SHIFTED_KSP_TYPE_SELECTION_SCHEMA = "fullmag.modal-shifted-ksp-type-selection.v1"
+
+
+def _modal_shifted_ksp_type_successor_record(previous_record, requested_type):
+    """Derive and pin an explicit successor shifted-KSP selection."""
+
+    from docker_dev import _operator_probe_environment_for_modal_shifted_ksp_type
+
+    old_record = _operator_probe_record_from_fields(
+        previous_record, label="retained operation"
+    )
+    if requested_type is None:
+        return old_record, None
+    try:
+        successor_values = _operator_probe_environment_for_modal_shifted_ksp_type(
+            old_record["operator_probe_environment"], requested_type
+        )
+        successor_record = _operator_probe_record(successor_values)
+    except Exception as error:
+        raise BuildControlError("Invalid modal shifted KSP type: " + str(error)) from error
+    selection = {
+        "schema": _MODAL_SHIFTED_KSP_TYPE_SELECTION_SCHEMA,
+        "requested_type": requested_type,
+        "old_operator_probe_environment_sha256": (
+            old_record["operator_probe_environment_sha256"]
+        ),
+        "new_operator_probe_environment_sha256": (
+            successor_record["operator_probe_environment_sha256"]
+        ),
+    }
+    return successor_record, selection
+
+
+def _modal_shifted_ksp_type_successor_from_metadata(previous_record, selection):
+    """Rebuild the shifted-KSP selection from immutable recreation intent."""
+
+    if selection is None:
+        return previous_record
+    old_record = _operator_probe_record_from_fields(
+        previous_record, label="retained operation"
+    )
+    if (not isinstance(selection, Mapping)
+            or set(selection) != {
+                "schema", "requested_type",
+                "old_operator_probe_environment_sha256",
+                "new_operator_probe_environment_sha256",
+            }
+            or selection.get("schema") != _MODAL_SHIFTED_KSP_TYPE_SELECTION_SCHEMA):
+        raise BuildControlError("Modal shifted KSP selection metadata is malformed")
+    successor_record, expected_selection = _modal_shifted_ksp_type_successor_record(
+        old_record, selection.get("requested_type")
+    )
+    if selection != expected_selection:
+        raise BuildControlError("Modal shifted KSP selection hashes differ from retained records")
+    return successor_record
+
+
+def _recreation_successor_operator_probe_record(previous_record, operation_inputs):
+    """Rebuild the successor through the immutable, backward-compatible selectors."""
+
+    inputs = operation_inputs if isinstance(operation_inputs, Mapping) else {}
+    floquet_record = _floquet_diagnostic_successor_from_metadata(
+        previous_record, inputs.get("floquet_diagnostic_selection")
+    )
+    return _modal_shifted_ksp_type_successor_from_metadata(
+        floquet_record, inputs.get("modal_shifted_ksp_type_selection")
+    )
+
+
+def _recreation_operation_inputs(
+    attempt, config_sha256, old_operator_probe_record, *,
+    floquet_selection=None, modal_shifted_ksp_type_selection=None,
+    helper_source_binding=None, offline_attempt=None,
+):
+    """Keep the old record pinned while persisting optional successor intent."""
+
+    inputs = {
+        "attempt": attempt,
+        "config_sha256": config_sha256,
+        **old_operator_probe_record,
+    }
+    if floquet_selection is not None:
+        inputs["floquet_diagnostic_selection"] = floquet_selection
+    if modal_shifted_ksp_type_selection is not None:
+        inputs["modal_shifted_ksp_type_selection"] = modal_shifted_ksp_type_selection
+    if helper_source_binding is not None:
+        inputs["helper_source"] = helper_source_binding
+    if offline_attempt is not None:
+        inputs["offline_reconciliation"] = offline_attempt
+    return inputs
+
+
+def _operator_probe_record_for_start(reuse_state, explicit_record=None):
+    """Choose a start record without rereading host controls for retained groups."""
+
+    if explicit_record is not None:
+        record = _operator_probe_record_from_fields(explicit_record, label="successor start")
+        if reuse_state is not None:
+            retained = _operator_probe_record_from_fields(
+                reuse_state.get("operator_probe_environment_record"),
+                label="service recreation",
+            )
+            if retained != record:
+                raise BuildControlError(
+                    "Successor operator probe record differs from retained recreation intent"
+                )
+        return record
+    if reuse_state is None:
+        from docker_dev import _operator_probe_environment_from_host
+        return _operator_probe_record(_operator_probe_environment_from_host())
+    return _operator_probe_record_from_fields(
+        reuse_state.get("operator_probe_environment_record"), label="service recreation"
+    )
+
+
 def _operator_probe_record_from_retained(previous, document):
     """Recover the exact controls from the retained Compose record and verify mounts."""
 
@@ -1492,6 +1706,14 @@ def _operator_probe_record_from_retained(previous, document):
     if not isinstance(environment, Mapping):
         raise BuildControlError("retained backend environment is malformed")
     values = record["operator_probe_environment"]
+    from docker_dev import (
+        FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED,
+        MODAL_KRYLOV_ENVIRONMENT_ALLOWED,
+    )
+    if any(name in environment and name not in values for name in MODAL_KRYLOV_ENVIRONMENT_ALLOWED):
+        raise BuildControlError("retained backend has unrecorded modal Krylov controls")
+    if any(name in environment and name not in values for name in FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED):
+        raise BuildControlError("retained backend has unrecorded Floquet diagnostic controls")
     if any(environment.get(name) != value for name, value in values.items()):
         raise BuildControlError("retained backend operator probe environment differs from its receipt")
     if environment.get("FULLMAG_OPERATOR_PROBE_ENVIRONMENT_SHA256") != record["operator_probe_environment_sha256"]:
@@ -1528,6 +1750,10 @@ def _reassert_operator_probe_environment(document, record):
     backend_environment = backend["environment"]
     if not isinstance(backend_environment, dict):
         raise BuildControlError("DEV backend environment is malformed")
+    from docker_dev import OPTIONAL_OPERATOR_PROBE_ENVIRONMENT_ALLOWED
+    for name in OPTIONAL_OPERATOR_PROBE_ENVIRONMENT_ALLOWED:
+        if name not in record["operator_probe_environment"]:
+            backend_environment.pop(name, None)
     backend_environment.update(record["operator_probe_environment"])
     backend_environment["FULLMAG_OPERATOR_PROBE_ENVIRONMENT_SHA256"] = record[
         "operator_probe_environment_sha256"
@@ -1782,10 +2008,10 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
           native_restart_metadata=None, accepted_reattach_environment=None,
           accepted_reattach_metadata=None, recreation_resume_proof=None,
           post_build_generation=None, retained_device_access=None, maintenance=None,
-          startup_diagnostic_restart=None, terminal_observation=None, helper_source_binding=None):
+          startup_diagnostic_restart=None, terminal_observation=None, helper_source_binding=None,
+          operator_probe_environment_record=None):
     from docker_dev import (_select_source, _compose_identity,
-        _assert_no_running_fullmag, _source_git_common_directory, _workspace_state_root,
-        _operator_probe_environment_from_host)
+        _assert_no_running_fullmag, _source_git_common_directory, _workspace_state_root)
     import fullmag_docker_runtime as runtime
     provided_control = control
     provided_operation = operation
@@ -1907,12 +2133,9 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
     # Freeze the bounded operator controls before any toolchain/image/cache
     # preparation.  A service recreation reuses the exact prior record rather
     # than rereading ambient host variables.
-    if reuse_state is None:
-        operator_probe_record = _operator_probe_record(_operator_probe_environment_from_host())
-    else:
-        operator_probe_record = _operator_probe_record_from_fields(
-            reuse_state.get("operator_probe_environment_record"), label="service recreation"
-        )
+    operator_probe_record = _operator_probe_record_for_start(
+        reuse_state, operator_probe_environment_record
+    )
     from docker_dev import _resolve_gpu_access, _verify_docker_gpu_access
     policy = getattr(args, "gpu_access", None) or "auto"
     if retained_device_access is not None and (
@@ -2498,6 +2721,8 @@ def _finish(control, operation, document, backend_id, frontend_id, selected, sta
             certificate_path, certificate, cache, toolchain, image, git_common, ledger_profile, port,
             *, completion_gate=None, helper_source_binding=None, terminal_completion_gate=None):
     import fullmag_docker_runtime as runtime
+    # Failure before admission still needs exact incarnation pins for recovery.
+    operation["receipt"].update(backend_container=backend_id, frontend_container=frontend_id)
     token = operation["receipt"]["attempt"]
     operator_probe_record = _operator_probe_record_from_retained(operation["receipt"], document)
     inputs = {"image_id": image, "toolchain_image_id": toolchain["image_id"],
@@ -2613,12 +2838,17 @@ def _finish(control, operation, document, backend_id, frontend_id, selected, sta
             if not observed.get("State", {}).get("Running"):
                 raise BuildControlError("DEV service exited before readiness: " + service)
         process_receipt = json.loads(docker_text("exec", backend_id, "/usr/local/bin/python3", "-B", "-c", _PROCESS_RECEIPT_PROBE))
-        if (str(process_receipt.get("state", "")).startswith("failed")
-                or services[0].get("State", {}).get("Health", {}).get("Status") != "healthy"):
+        healthy = all(service.get("State", {}).get("Health", {}).get("Status") == "healthy" for service in services)
+        if str(process_receipt.get("state", "")).startswith("failed") or not healthy:
             logs = docker_text("logs", "--since", operation["receipt"]["backend_started_at"],
                                "--tail", "100", backend_id, combined=True)
+            early_failure = _early_startup_failure(backend_id, logs)
+            if early_failure is not None:
+                control.write(operation["root"] + "/startup-failure.json", early_failure)
+                raise BuildControlError("Runtime startup failed; services retained: " +
+                                        early_failure["fence"]["reason"][:4096])
             failure = _readiness_failure(process_receipt, logs)
-            if failure:
+            if failure is not None:
                 control.write(operation["root"] + "/process-failure.json", process_receipt)
                 control.write(operation["root"] + "/readiness-failure.json", {
                     "backend_container_id": backend_id,
@@ -2626,7 +2856,7 @@ def _finish(control, operation, document, backend_id, frontend_id, selected, sta
                     "error": failure,
                 })
                 raise BuildControlError(failure)
-        if all(service.get("State", {}).get("Health", {}).get("Status") == "healthy" for service in services):
+        if healthy:
             break
         time.sleep(3)
     else:
@@ -2797,14 +3027,16 @@ def _assert_private_restart_network(actual, ids, project):
         raise BuildControlError("Idle restart bridge has unknown consumers; no backend will be stopped")
 
 
-def _terminal_session_restart_probe(backend_id, *, allow_prepared=False, startup_enabled=False):
+def _terminal_session_restart_probe(backend_id, *, allow_prepared=False, startup_enabled=False, allow_terminal_catalog=False):
     """Allow drain after a terminal task or an exact pre-acceptance failure.
 
     Called only with the private frontend stopped and the group control lease
     held. This is admission to graceful drain, not proof of process absence:
     the existing native drain receipt remains mandatory before restart.
     """
-    script = ('ALLOW_PREPARED = ' + repr(bool(allow_prepared)) + '\n'
+    from docker_terminal_catalog_probe import PROBE as native_terminal_probe
+    script = ('ALLOW_TERMINAL_CATALOG = ' + repr(bool(allow_terminal_catalog)) + '\n'
+        + native_terminal_probe + '\n' + 'ALLOW_PREPARED = ' + repr(bool(allow_prepared)) + '\n'
         + 'STARTUP_ENABLED = ' + repr(bool(startup_enabled)) + '\n' + r'''import hashlib,json,os,re,stat,urllib.error,urllib.request
 MAX=1024*1024
 MAX_STARTUP_RECEIPT=2*MAX
@@ -3141,12 +3373,16 @@ if not all(isinstance(v,str) and v for v in identity):
     raise RuntimeError("terminal restart has no current session identity")
 run=get("/v2/sessions/current/simulation/runs/current",optional=True)
 terminal={"completed","failed","cancelled","stopped"}
+native_terminal=None
+if (ALLOW_TERMINAL_CATALOG and not STARTUP_ENABLED and run
+        and run.get("status")=="running" and status.get("solver",{}).get("state")=="running"):
+    native_terminal=native_terminal_catalog_proof(run.get("run_id"))
 prepared=bool(ALLOW_PREPARED and run and run.get("status")=="waiting_for_solve"
     and status.get("solver",{}).get("state")=="awaiting_command")
 if (not STARTUP_ENABLED and run is None
         and status.get("solver",{}).get("state")=="startup_failed"):
     print(json.dumps(startup_failed_preacceptance(status,run,identity),sort_keys=True))
-elif STARTUP_ENABLED or run is None or (run.get("status") not in terminal and not prepared):
+elif STARTUP_ENABLED or run is None or (run.get("status") not in terminal and not prepared and native_terminal is None):
     print("null")
 else:
     run_id=run.get("run_id")
@@ -3154,7 +3390,7 @@ else:
             or run.get("session_id")!=identity[0]
             or status.get("run",{}).get("run_id")!=run_id
             or status.get("solver",{}).get("state") not in
-                (terminal|{"idle"}|({"awaiting_command"} if prepared else set()))):
+                (terminal|{"idle"}|({"awaiting_command"} if prepared else set())|({"running"} if native_terminal else set()))):
         raise RuntimeError("terminal run differs from the current session")
     queue=get("/v2/platform/compute/queue")
     runtime=get("/v2/platform/runtime-service")
@@ -3200,11 +3436,17 @@ else:
         raise RuntimeError("prepared session changed before drain")
     if held_runs and held_run_proofs(held_items)!=held_runs:
         raise RuntimeError("manual start gate changed before drain")
+    if native_terminal:
+        if (native_terminal_catalog_proof(run_id)!=native_terminal
+                or get("/v2/platform/compute/queue")!=queue
+                or get("/v2/sessions/current/simulation/commands").get("commands")!=[]):
+            raise RuntimeError("native terminal evidence changed or commands are pending")
     result={"schema":("fullmag.docker-prepared-session-drain-preflight.v1" if prepared
             else "fullmag.docker-terminal-session-drain-preflight.v1"),
         "api_instance_id":instance,"session_id":identity[0],"session_epoch":identity[1],
         "request_scope_epoch":identity[2],"run":run,"compute_queue":queue,
         "runtime_service":runtime}
+    if native_terminal: result["native_terminal_catalog_proof"]=native_terminal
     if held_runs: result["held_run_intent_sha256"]=held_runs
     print(json.dumps(result,sort_keys=True))
 '''
@@ -5590,6 +5832,16 @@ def _validate_removed_recreation_proof(
         "config_sha256": args.config_sha256,
         **operator_probe_record,
     }
+    operation_inputs = operation_terminal.get("inputs")
+    selection = (operation_inputs.get("floquet_diagnostic_selection")
+                 if isinstance(operation_inputs, Mapping) else None)
+    ksp_selection = (operation_inputs.get("modal_shifted_ksp_type_selection")
+                     if isinstance(operation_inputs, Mapping) else None)
+    _recreation_successor_operator_probe_record(operator_probe_record, operation_inputs)
+    if selection is not None:
+        expected_operation_inputs["floquet_diagnostic_selection"] = selection
+    if ksp_selection is not None:
+        expected_operation_inputs["modal_shifted_ksp_type_selection"] = ksp_selection
     try:
         import docker_helper_source as helper_source
         stored_helper_source = helper_source.compare_operation_binding(
@@ -5890,6 +6142,9 @@ def _validate_recreation_resume_records(args, control, selected, identity, *, ex
     )
     if expected_proof is not None and proof != expected_proof:
         raise BuildControlError("Recreation resume evidence changed before the new start admission")
+    successor_operator_probe_record = _recreation_successor_operator_probe_record(
+        operator_probe_record, operation_terminal.get("inputs")
+    )
     if current_raw != canonical(current) + b"\n" or current != previous:
         _validate_failed_prestart_successor(
             args,
@@ -5916,6 +6171,7 @@ def _validate_recreation_resume_records(args, control, selected, identity, *, ex
         "snapshot": snapshot,
         "image_id": image,
         "operator_probe_record": operator_probe_record,
+        "successor_operator_probe_record": successor_operator_probe_record,
         "proof": proof,
         "native_recovery_context": native_recovery_context,
     }
@@ -5931,7 +6187,7 @@ def _resume_recreated_operation(args, control, selected, layout, identity, *, he
     snapshot = records["snapshot"]
     image = records["image_id"]
     proof = records["proof"]
-    operator_probe_record = records["operator_probe_record"]
+    operator_probe_record = records["successor_operator_probe_record"]
     backend_id = proof["container_id"]
 
     if _retained_startup_enabled(snapshot["backend"]):
@@ -6522,6 +6778,10 @@ def _completed_recreation_start_context(control, args, selected, layout):
         retained=retained, previous_raw=previous_raw, document_raw=document_raw,
         operator_probe_record=operator_probe_record,
     )
+    completed_inputs = completed.get("inputs")
+    successor_operator_probe_record = _recreation_successor_operator_probe_record(
+        operator_probe_record, completed_inputs
+    )
     from docker_volume_drained_successor import DrainedSuccessorContext
     from docker_volume_startup_diagnostic_restart import StartupDiagnosticStopContext
     if (not isinstance(recovery, (DrainedSuccessorContext, StartupDiagnosticStopContext))
@@ -6530,7 +6790,7 @@ def _completed_recreation_start_context(control, args, selected, layout):
         raise BuildControlError("Completed recreation requires the exact managed failed-owner restart proof")
     reuse = {"state": state, "host_certificate": certificate_path,
         "owner_marker": owner_marker, "receipt": {"image_id": image},
-        "operator_probe_environment_record": operator_probe_record,
+        "operator_probe_environment_record": successor_operator_probe_record,
         "removed_recreation_proof_sha256": hashlib.sha256(canonical(removed_proof)).hexdigest()}
     return {"reuse_state": reuse,
             "retained_device_access": _retained_device_access(previous, document), **recovery}
@@ -6934,7 +7194,34 @@ def _retained_operation(
     resume_recreation_id=None, refresh_frontend_service=False,
 ):
     """Resume one exact retained start; a frontend-only recovery never restarts the backend."""
-    from docker_dev import _select_source, _compose_identity
+    from docker_dev import (
+        FLOQUET_DIAGNOSTIC_PROFILES, MODAL_SHIFTED_KSP_SELECTIONS,
+        _select_source, _compose_identity,
+    )
+    requested_floquet_profile = getattr(args, "floquet_diagnostics", None)
+    requested_modal_shifted_ksp_type = getattr(args, "modal_shifted_ksp_type", None)
+    if requested_floquet_profile is not None:
+        if (not isinstance(requested_floquet_profile, str)
+                or requested_floquet_profile not in FLOQUET_DIAGNOSTIC_PROFILES):
+            raise BuildControlError("Unsupported --floquet-diagnostics profile")
+        if (not recreate_services or resume_recreation_id is not None
+                or getattr(args, "completed_recreation_attempt", None)
+                or getattr(args, "completed_recreation_sha256", None)
+                or getattr(args, "recovery_authorization", None) is not None):
+            raise BuildControlError(
+                "--floquet-diagnostics is allowed only on a new retained recreation start"
+            )
+    if requested_modal_shifted_ksp_type is not None:
+        if (not isinstance(requested_modal_shifted_ksp_type, str)
+                or requested_modal_shifted_ksp_type not in MODAL_SHIFTED_KSP_SELECTIONS):
+            raise BuildControlError("Unsupported --modal-shifted-ksp-type selection")
+        if (not recreate_services or resume_recreation_id is not None
+                or getattr(args, "completed_recreation_attempt", None)
+                or getattr(args, "completed_recreation_sha256", None)
+                or getattr(args, "recovery_authorization", None) is not None):
+            raise BuildControlError(
+                "--modal-shifted-ksp-type is allowed only on a new retained recreation start"
+            )
     require_host()
     import docker_helper_source as helper_source
     helper_pair = helper_source.validate_option_pair(
@@ -7212,6 +7499,7 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                         raise BuildControlError("Backend has an active session; idle restart refused")
                     terminal_session = _terminal_session_restart_probe(
                         ids["backend"], allow_prepared=getattr(args, "allow_prepared_session", False),
+                        allow_terminal_catalog=getattr(args, "allow_terminal_catalog", False),
                     )
                     if terminal_session is not None:
                         control.write(operation["root"] + "/terminal-session-preflight.json", terminal_session)
@@ -7593,12 +7881,29 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                         or labels.get("com.docker.compose.service") != "host-ledger-maintenance"):
                     raise BuildControlError("Recorded ledger helper identity/outcome differs")
                 helper_ids.append(helper_document["Id"])
-        recreate_inputs = {"attempt": args.attempt, "config_sha256": args.config_sha256,
-                           **operator_probe_record}
-        if helper_source_binding is not None:
-            recreate_inputs["helper_source"] = helper_source_binding
-        if offline_attempt is not None:
-            recreate_inputs["offline_reconciliation"] = offline_attempt
+        if requested_floquet_profile is None:
+            successor_operator_probe_record = operator_probe_record
+            floquet_diagnostic_selection = None
+        else:
+            successor_operator_probe_record, floquet_diagnostic_selection = (
+                _floquet_diagnostic_successor_record(
+                    operator_probe_record, requested_floquet_profile
+                )
+            )
+        successor_operator_probe_record, modal_shifted_ksp_type_selection = (
+            _modal_shifted_ksp_type_successor_record(
+                successor_operator_probe_record, requested_modal_shifted_ksp_type
+            )
+        )
+        recreate_inputs = _recreation_operation_inputs(
+            args.attempt,
+            args.config_sha256,
+            operator_probe_record,
+            floquet_selection=floquet_diagnostic_selection,
+            modal_shifted_ksp_type_selection=modal_shifted_ksp_type_selection,
+            helper_source_binding=helper_source_binding,
+            offline_attempt=offline_attempt,
+        )
         with control.operation("recreate-services", recreate_inputs) as operation:
             if offline_attempt is not None:
                 if not validate_for_recreate(
@@ -7991,13 +8296,14 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
             pin_archive(control)
         reuse = None if fresh_state else {"state": state, "host_certificate": certificate_path,
             "owner_marker": owner_path, "receipt": {"image_id": image},
-            "operator_probe_environment_record": operator_probe_record}
+            "operator_probe_environment_record": successor_operator_probe_record}
         if reuse is not None and helper_source_binding is not None:
             reuse["helper_source_binding"] = helper_source_binding
         recovery_context.update(accepted_reattach_context)
         return start(
             args, reuse_state=reuse, retained_device_access=retained_device_access,
             terminal_observation=terminal_observation, helper_source_binding=helper_source_binding,
+            operator_probe_environment_record=successor_operator_probe_record,
             **recovery_context,
         )
     restart_backend = bool(getattr(args, "restart_backend", False))

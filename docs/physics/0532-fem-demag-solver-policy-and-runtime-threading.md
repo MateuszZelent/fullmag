@@ -1,680 +1,221 @@
-# FEM demag solver policy and runtime CPU threading contract
+# FEM demag solver policy and runtime CPU threading
 
-- Status: implemented
+- Status: source contract documented; runtime qualification not verified by this note
 - Owners: Fullmag FEM/runtime
-- Last updated: 2026-06-05
-- Related ADRs: `docs/adr/` (execution-selection + canonical IR contract)
-- Related specs: `docs/specs/capability-matrix-v0.md`
+- Last updated: 2026-10-30
+- Source-map review base: `e17b78ae0e841344a160a02ec7517b0d3b4d4515`
+- Related notes: `docs/physics/0430-fem-dipolar-demag-mfem-gpu-foundations.md`, `docs/physics/0520-fem-robin-airbox-demag-bootstrap-reference.md`, `docs/physics/0580-canonical-relaxation-equilibrium-contract.md`
+
+The earlier contract text and historical investigation updates remain available in the [pinned pre-reorganization revision](https://github.com/MateuszZelent/fullmag/blob/3967f03ba78323827712df99f7de020a2a16ff5b/docs/physics/0532-fem-demag-solver-policy-and-runtime-threading.md). Current implementation contracts are organized below; numerical qualification continues under `docs/superpowers/plans/2026-10-26-eigensolve-integration-mode-ui.md`.
+
+(problem-statement)=
+## Scope and problem statement
+
+This page specifies two separate authoring contracts: the optional FEM Poisson-demagnetization linear-solver policy, and requested CPU-thread selection for a study. The policy selects numerical solver settings for FEM Poisson demag; it does not change magnetostatic equations or configure the LLG stopping budget.
+
+The policy is represented in FEM hints and executable plans. It is not an FDM policy, a modal eigen `solver_policy`, or the shifted KSP policy used by dynamic Floquet solves. Thread selection records requested runtime intent; the effective Rayon/control-plane and native OpenMP counts are resolved separately and may differ.
+
+The source and tests cited here establish implementation contracts. They do not establish that a particular runtime, device, mesh, or scientific benchmark has passed qualification.
+
+(governing-equations)=
+## Governing equations
+
+For magnetostatics without free current, the demagnetizing field is curl-free and satisfies `div(H_d + M) = 0`. In a scalar-potential formulation, `H_d = -grad(u)` gives the Poisson equation below. The equation is stated on the computational FEM domain `D`; its outer boundary treatment is a separate approximation or coupling and is not fixed by the solver policy.
+
+```{math}
+:label: eq-fem-demag-poisson
+\nabla \times \mathbf{H}_{\mathrm{d}} = \mathbf{0}, \qquad
+\nabla \cdot (\mathbf{H}_{\mathrm{d}} + \mathbf{M}) = 0, \qquad
+\mathbf{H}_{\mathrm{d}} = -\nabla u, \qquad
+\Delta u = \nabla \cdot \mathbf{M} \quad \text{in } D.
+```
 
-## 1. Problem statement
+Here `M` is zero in nonmagnetic air elements of a shared domain. For the unscaled scalar-potential weak system, the absolute algebraic residual has units of `A m`; it is not a field-error tolerance in `A/m`. The FEM realization supplies its chosen outer boundary operator and constraints. A finite airbox boundary is not equivalent to the exact condition at infinity.
 
-Fullmag needs two explicit contracts around native FEM Poisson demagnetization:
+(symbols-and-si-units)=
+## Symbols and SI units
 
-1. an authorable FEM-native linear solver policy for the Poisson demag solve,
-2. an explicit requested-vs-resolved CPU threading story for live sessions.
+| LaTeX symbol | Meaning | SI unit | Scope |
+|---|---|---|---|
+| $\mathbf{M}$ | Magnetization in the magnetic region; zero in nonmagnetic air | $\mathrm{A\,m^{-1}}$ | Physical field in the Poisson source |
+| $\mathbf{H}_{\mathrm{d}}$ | Demagnetizing field | $\mathrm{A\,m^{-1}}$ | Physical field recovered from the potential |
+| $u$ | Magnetic scalar potential | $\mathrm{A}$ | Potential used by the scalar Poisson formulation |
+| $D$ | Computational FEM domain | $\mathrm{m}$ | Spatial domain; its boundary treatment is realization-specific |
+| $\varepsilon_{\mathrm{rel}}$ | `rtol`, a relative linear-solver tolerance | $1$ | Dimensionless solver control |
+| $\varepsilon_{\mathrm{abs}}$ | `atol`, an optional absolute algebraic residual threshold | $\mathrm{A\,m}$ | Residual units for the unscaled weak form; not a physical-field tolerance |
+| $N_{\mathrm{iter}}$ | `max_iterations`, the linear-solver iteration cap | $1$ | Count, not a convergence result |
+| $N_{\mathrm{LLG}}$ | Generated bias-sample relaxation step cap | $1$ | Internal eigen sample control, separate from Poisson iterations |
+| $n_{\mathrm{CPU}}$ | Requested CPU thread count | $1$ | Runtime selection intent, not an observed effective count |
 
-Without those contracts, the UI can only show opaque defaults and users cannot
-reproduce numerically relevant solver choices from Python or session metadata.
+(assumptions-and-validity)=
+## Assumptions and validity
 
-## 2. Physical model
+- The policy described here is a numerical backend hint for native FEM Poisson demag. FDM has separate controls.
+- `rtol` and a present `atol` must be positive finite values in the Python model. `max_iterations` must be at least one; `print_level` must be non-negative. The solver and preconditioner names must be from the declared choices.
+- Backend, boundary realization, and solver/preconditioner compatibility still matter. An authored policy is not proof that a requested combination is executable on a given lane.
+- For an unscaled scalar-potential weak form, the residual norm uses the same units as its right-hand side, `A m`. If a realization changes algebraic scaling, the numerical meaning of `atol` follows that realized algebraic residual; it never becomes an `H_d` error bound by itself.
+- CPU thread count is requested runtime intent. It does not claim that every numerical kernel uses that exact many threads.
+- A value reaching `max_iterations` or `max_steps` is a cap outcome. It does not imply convergence.
 
-### 2.1 Governing equations
+(python-api)=
+## Python API
 
-The physical demagnetization model remains unchanged:
+The class-based FEM hints and the stage-first study builder expose equivalent FEM Poisson-policy values. The flat `fm.fem_demag_solver(...)` helper and `study.fem_demag_solver(...)` set the policy on the next built study. `fm.threads(...)` and `study.threads(...)` set requested runtime CPU threads.
 
-- `H_demag = -grad(u)`
-- `div(grad(u)) = div(M)` in the shared FEM domain
+| Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `fm.FEM(order)` | `int` | required | `1` | Integer at least 1; booleans rejected | FEM finite-element order | FEM only | `discretization.fem.order` |
+| `fm.FEM(maximum_element_size) / fm.FEM(hmax)` | `float` | one required | `m` | Positive; if both are passed they must agree | Maximum FEM element size; `hmax` is an alias | FEM only | `discretization.fem.hmax` |
+| `fm.FEM(mesh)` | `str or None` | `None` | `1 (identifier)` | Non-blank when provided | Optional named mesh source | FEM only | `discretization.fem.mesh` |
+| `fm.FEM(demag_solver_policy)` | `FemLinearSolverPolicy or None` | `None` | `1 (configuration)` | Optional by annotation; the constructor has no explicit type check | Typed policy attached to FEM hints | FEM only | `discretization.fem.demag_solver_policy` |
+| `fm.FemLinearSolverPolicy.solver`; `fm.fem_demag_solver(solver=...)`; `study.fem_demag_solver(solver=...)` | `Literal[CG, GMRES]` | `CG` | `1` | `CG` or `GMRES` | Poisson linear-solver method | FEM Poisson only; resolved per backend | `discretization.fem.demag_solver_policy.solver` |
+| `fm.FemLinearSolverPolicy.preconditioner`; `fm.fem_demag_solver(preconditioner=...)`; `study.fem_demag_solver(preconditioner=...)` | `Literal[AMG, JACOBI, NONE]` | `AMG` | `1` | `AMG`, `JACOBI`, or `NONE` | Poisson preconditioner choice | FEM Poisson only; resolved per backend | `discretization.fem.demag_solver_policy.preconditioner` |
+| `fm.FemLinearSolverPolicy.rtol`; `fm.fem_demag_solver(rtol=...)`; `study.fem_demag_solver(rtol=...)` | `float` | `1e-8` | `1` | Positive finite; no general upper bound in the Python model | Relative linear-solver tolerance | FEM Poisson only; planner may add method-specific constraints | `discretization.fem.demag_solver_policy.rtol` |
+| `fm.FemLinearSolverPolicy.atol`; `fm.fem_demag_solver(atol=...)`; `study.fem_demag_solver(atol=...)` | `float or None` | `None` | $\mathrm{A\,m}$ for unscaled weak residual | Positive finite when present | Optional absolute algebraic residual threshold; `None` is omitted from the policy IR | FEM Poisson only; residual scaling is realization-specific | `discretization.fem.demag_solver_policy.atol` |
+| `fm.FemLinearSolverPolicy.max_iterations`; `fm.fem_demag_solver(max_iterations=...)`; `study.fem_demag_solver(max_iterations=...)` | `int` | `500` | `1` (iterations) | Annotated int; the Python model checks only value >= 1 | Upper bound on Poisson linear-solver iterations | FEM Poisson only | `discretization.fem.demag_solver_policy.max_iterations` |
+| `fm.FemLinearSolverPolicy.print_level`; `fm.fem_demag_solver(print_level=...)`; `study.fem_demag_solver(print_level=...)` | `int` | `0` | `1` (verbosity level) | Annotated int; the Python model checks only value >= 0 | Backend solver diagnostic verbosity | FEM Poisson only | `discretization.fem.demag_solver_policy.print_level` |
+| `fm.threads(cpu_threads)`; `study.threads(cpu_threads)` | `int` | required | `1` (threads) | Converted to integer by the flat API and must be at least 1 | Requested runtime CPU threads for the next study/run | Runtime selection; effective counts remain backend-specific | `problem_meta.runtime_metadata.runtime_selection.cpu_threads` |
 
-The added contract in this note changes only the numerical realization policy,
-not the governing micromagnetic equations.
+The strings in this table are API choices, not a promise that every combination is accepted by every device backend. The direct minimizers `projected_gradient_bb` and `nonlinear_cg` have an additional planner rule when FEM demag is enabled: an explicit `rtol` above `1e-12` is rejected; when the policy is omitted, the planner resolves a default policy with `rtol = 1e-12` for that path.
 
-### 2.2 Symbols and SI units
+```python
+# %% Stage-first FEM example: authored Poisson policy and primary Relax stage
+import fullmag as fm
 
-- `M` magnetization `[A/m]`
-- `H_demag` demagnetizing field `[A/m]`
-- `u` scalar potential `[A]`
-- `rtol` relative linear-solver tolerance `[dimensionless]`
-- `atol` absolute linear-solver tolerance `[dimensionless]`
-- `N_iter` linear-solver iteration cap `[dimensionless count]`
+study = fm.study("fem-demag-policy-example")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.universe(mode="manual", size=(40e-9, 40e-9, 40e-9), center=(0.0, 0.0, 0.0))
+study.universe.mesh(maximum_element_size=10e-9)
+body = study.geometry(fm.Box(size=(20e-9, 20e-9, 10e-9), name="film"), name="film")
+body.Ms = 800000.0
+body.Aex = 13e-12
+body.alpha = 0.5
+body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.b_ext(0.1, 0.0, 0.0)
+study.exchange()
+study.demag(model="airbox", variant="dirichlet")
+study.fem_demag_solver(solver="CG", preconditioner="AMG", rtol=1e-8, max_iterations=500)
+study.build_domain_mesh()
 
-All user-visible physical quantities remain SI-clean.
+# %% The top-level stage owns its own LLG stopping controls
+study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped", dt=5e-15, relax_alpha=0.5, max_steps=50000, tolA=1.0)
+study.save("magnetization")
+```
 
-### 2.3 Assumptions and approximations
+This is an authoring example, not a run receipt or qualification. The existing `examples/fem_eigen_mode_ui_de_signed15.py` likewise authors a primary `Relax` stage with `max_steps=50000` and `tolA=1.0`; those values are distinct from the generated bias-sample relaxation described below.
 
-- The solver policy applies only to native FEM Poisson demag realizations.
-- It is a backend hint, not a new physical model term.
-- CPU thread selection is resolved per run start and may differ between:
-  - requested study/runtime threads,
-  - resolved Rayon/control-plane threads,
-  - effective native FEM OpenMP threads.
+(problem-ir)=
+## ProblemIR and planner mapping
 
-## 3. Numerical interpretation
+`FemLinearSolverPolicy` defaults are `CG`, `AMG`, `rtol = 1e-8`, `atol = None`, `max_iterations = 500`, and `print_level = 0`. The Python class omits `atol` from its policy object when it is `None`. The optional policy travels through `FemHintsIR` into executable FEM plans.
 
-### 3.1 FDM
+For an eigen plan with bias-field samples, `FemEigenPlanIR.demag_solver_policy` carries the authored FEM Poisson policy into the generated static `FemPlanIR` used for each sample relaxation. It configures the Poisson linear solve only. It does not configure the generated LLG controls: that helper retains `max_steps = 8` and `torque_tolerance_apm = 1e-3 A/m`. The planner/runner regression checks policy-field preservation and checks that those LLG values stay unchanged.
 
-No change. FDM demag remains governed by FDM-specific solver policy surfaces.
+This sample-owned demag policy is separate from `FemEigenPlanIR.solver_policy` and from the dynamic Floquet shifted KSP. Modal and Floquet operator choices do not inherit the FEM Poisson hint.
 
-### 3.2 FEM
+(round-trip-and-failure-semantics)=
+## Round-trip and failure semantics
 
-Native FEM Poisson demag may now carry an explicit linear-solver policy:
+The requested intent is the authored FEM hint or runtime thread request. Resolved execution is the concrete plan/backend selection and the runtime-reported thread counts, where available. Keep these as distinct values in serialized plans and diagnostics.
 
-- solver: `CG | GMRES`
-- preconditioner: `AMG | JACOBI | NONE`
-- `rtol`
-- optional `atol`
-- `max_iterations`
-- `print_level`
+Python and IR validation reject invalid solver names, preconditioner names, non-positive tolerances, and invalid iteration/verbosity bounds. Planner-specific restrictions add validation errors for combinations such as an explicit direct-minimizer Poisson `rtol > 1e-12`. Unsupported combinations must remain visible as planning/runtime diagnostics; this page does not assume an automatic fallback.
 
-When omitted, the canonical default remains:
+An eigen equilibrium handoff rejects a stage completion marked `MaxSteps` with `converged = false`. Reaching the primary Relax cap of 50,000 steps in the signed15 authoring example is therefore not itself evidence of an accepted equilibrium. The completion must satisfy the convergence contract before it can be consumed.
 
-- solver: `CG`
-- preconditioner: `AMG`
-- `rtol = 1e-8`
-- `atol = None`
-- `max_iterations = 500`
-- `print_level = 0`
-
-For strict native FEM GPU Poisson demag, an omitted solver policy is resolved at
-runtime while preserving the same tolerance and iteration defaults. The general
-strict GPU fallback remains `CG/JACOBI`, but `projected_gradient_bb` resolves to
-`CG/AMG` because the current PGBB demag-policy smoke shows materially lower
-strict-GPU apply time for the AMG row than for the Jacobi row. This is a runtime
-policy selection, not a public authoring default: explicit user-provided
-`FemLinearSolverPolicy` values are not rewritten, and CPU native FEM continues
-to resolve the omitted policy to `CG/AMG`.
-
-### 3.3 Hybrid
-
-No hybrid-specific semantics are introduced. Hybrid work must not reinterpret
-this as a common physics setting.
-
-## 4. API, IR, and planner impact
+When an optional `FemEigenPlanIR.demag_solver_policy` is absent, serde omits it and the existing resolver defaults remain in effect. A present policy is copied into the actual generated bias-relaxation `FemPlanIR`, not only into metadata. These are source and regression-test contracts; this note does not claim the hosted CI or a live solve has passed.
 
-### 4.1 Python API surface
+## Runtime thread selection
 
-This contract lives in explicit FEM backend hints, not in the common `Demag`
-physics term.
+The Python runtime model serializes `cpu_threads` under `problem_meta.runtime_metadata.runtime_selection.cpu_threads`. The IR validator requires a positive integer when the value is present and rejects conflicts with typed `compute_resources.cpu.threads`. The API request is not a promise that Rayon/control-plane or native OpenMP execution uses the same count. Live mid-run thread-pool retuning is outside this API contract.
 
-Canonical Python authoring surfaces:
+(discrete-realization)=
+## Discrete FEM and modal realization
 
-- class-based:
-  - `fm.FemLinearSolverPolicy(...)`
-  - `fm.FEM(..., demag_solver_policy=...)`
-- flat/study DSL:
-  - `fm.fem_demag_solver(...)`
-  - `study.fem_demag_solver(...)`
-
-CPU thread selection remains a runtime selection concern:
-
-- `fm.threads(...)`
-- `study.threads(...)`
-
-### 4.2 ProblemIR representation
-
-- `FemHintsIR` carries optional `demag_solver_policy`
-- `FemPlanIR.demag_solver_policy` is populated from canonical FEM hints
-- session/runtime metadata expose:
-  - requested CPU threads
-  - resolved Rayon/control-plane threads
-  - effective native FEM OpenMP threads when available
-
-### 4.3 Planner and capability-matrix impact
-
-- Planner propagates `FemHintsIR.demag_solver_policy` into executable FEM plans
-- Unsupported native FEM solver/preconditioner combinations remain explicit
-  planning/runtime errors
-- Capability reporting remains public-executable for Poisson FEM demag
-
-## 5. Runtime/session/artifact/provenance impact
-
-- Session/runtime views must preserve:
-  - requested CPU threads,
-  - resolved Rayon thread count,
-  - requested/effective native FEM OpenMP threads when the native path reports them
-- Native FEM Poisson demag provenance must not use FFT labels. In particular,
-  `fft_backend` is reserved for FDM/tensor-FFT demag paths and must remain
-  absent for FEM Poisson realizations.
-- FEM Poisson demag runtime metadata must preserve the numerical solve policy
-  and observed solve result:
-  - solver and preconditioner,
-  - relative tolerance,
-  - maximum iterations,
-  - number of Poisson solves performed for the reported step/snapshot,
-  - actual iterations,
-  - final residual,
-  - boundary variant,
-  - Robin beta policy when applicable.
-- Native FEM runtime metadata must also report the resolved FEM operator
-  assembly mode. Until exchange/mass/DMI move to partial assembly or
-  matrix-free libCEED operators, the current native time-domain path must be
-  labeled as `legacy_sparse` rather than presented as a production
-  partial-assembly implementation.
-- Script export and SceneDocument round-trip must preserve:
-  - requested CPU threads,
-  - FEM demag solver policy
-- Logs and UI must not pretend that live thread-pool changes apply to an already
-  running solve
-
-### 5.1 Fail-closed linear-solve publication
-
-Every production FEM demagnetization realization (non-periodic Poisson,
-periodic reduced Poisson, strict CUDA Poisson, and Fredkin--Koehler FEM/BEM)
-must treat the linear solve as an attempted result until convergence has been
-validated. A candidate scalar potential may be published, cached, lifted,
-recovered into `H_demag`, used in `H_eff`/energy, or exposed as an observable
-only when all of the following hold:
-
-- the concrete solver reports convergence rather than only termination,
-- the reported residual is finite and non-negative,
-- the reported residual satisfies the configured relative tolerance, or the
-  solver explicitly reports convergence through the configured positive
-  absolute tolerance,
-- the iteration count is non-negative and does not exceed `max_iterations`.
-
-Exhausting `max_iterations` without a solver convergence report is not
-convergence. On failure, the runtime must
-invalidate any warm-start/current marker for the attempted candidate and
-return a typed diagnostic containing the demag solver realization, linear
-solver kind, iteration count, residual, relative/absolute tolerance, and
-maximum iterations. Last-attempt iteration/residual telemetry remains
-available for diagnosis, but the failed field is never current solver state.
-
-## 6. Validation strategy
-
-### 6.1 Analytical checks
-
-- No new physical observable is introduced; solver policy changes must preserve
-  validated demag behavior for canonical benchmarks.
-
-### 6.2 Cross-backend checks
-
-- FEM default policy must match prior default native execution behavior
-- Explicit non-default policies must serialize and lower reproducibly
-
-### 6.3 Regression tests
-
-- Python:
-  - `FemLinearSolverPolicy.to_ir()`
-  - `FEM(..., demag_solver_policy=...)` serialization
-  - flat/study script export and re-import preserve the policy
-- Planner:
-  - `FemHintsIR.demag_solver_policy -> FemPlanIR.demag_solver_policy`
-- Frontend:
-  - requested vs resolved CPU-thread display stays typed and round-trippable
-
-## 7. Completeness checklist
-
-- [x] Python API
-- [x] ProblemIR
-- [x] Planner
-- [x] Capability matrix
-- [x] FDM backend
-- [x] FEM backend
-- [x] Hybrid backend
-- [x] Outputs / observables
-- [x] Tests / benchmarks
-- [x] Documentation
-
-## 8. Known limits and deferred work
-
-- Live mid-run thread-pool retuning is still unsupported.
-- Native FEM currently reports OpenMP thread resolution through runtime/log
-  diagnostics and FFI step stats; richer direct UI telemetry can replace
-  artifact-derived display in a later pass.
-- This contract does not yet expose separate linear-solver policies for future
-  FEM mechanics or eigen operators.
-
-Update 2026-05-15: native FEM CPU now carries `atol` and `print_level` across
-the C ABI and uses them when configuring the non-PBC Hypre AMG/CG/GMRES Poisson
-demag solve. Benchmark entrypoints can now set demag solver, preconditioner,
-`rtol`, optional `atol`, `max_iterations`, and Hypre `print_level` without
-editing scripts, and `metadata.json` / CSV rows preserve the requested policy.
-
-Update 2026-05-15 non-PBC hot path: the native FEM Poisson path now keeps a
-context-owned true-DOF solution vector for non-PBC demag and skips repeated
-`GridFunction::GetTrueDofs` warm-start extraction once the persistent Hypre
-solution vector is valid. This preserves the same Poisson equation, BCs,
-solver policy, and recovered `H_demag`; it only removes allocation/copy churn
-from adaptive RK demag solves.
-
-Update 2026-05-15 benchmark validation: the FEM benchmark harness can now
-require demag convergence telemetry and fail rows whose final residual norm or
-actual iteration count exceed explicit thresholds. This is a validation gate
-for solver-policy tuning; it does not change the public physics contract.
-
-Update 2026-05-15 policy sweeps: the FEM benchmark harness can now sweep
-multiple demag solvers and preconditioners in one run. The sweep expands only
-for demag scenarios, so non-demag baselines are not duplicated by irrelevant
-Poisson policy settings.
-
-Update 2026-05-15/2026-06-05 policy selection: the benchmark harness can emit a
-best-policy summary for each logical demag case, selecting the fastest completed
-row that satisfies the configured convergence residual and iteration gates.
-Selection uses an explicit metric configured by
-`--best-demag-policy-metric` / `FULLMAG_BENCH_BEST_DEMAG_POLICY_METRIC`; the
-managed production and demag-performance recipes default it to
-`demag_solver_apply_wall_time_ms` because the current runtime bottleneck is the
-single Hypre apply. Broader `demag_wall_time_ms` remains available for total
-demag-policy comparisons. Runtime policy changes must still be made explicitly
-in the runner and reflected in provenance.
-
-Update 2026-06-05 GPU control-readback budget: the production FEM relaxation
-benchmark now gates FEM GPU hot-loop control-scalar readbacks separately from
-compute host/device transfers. Strict GPU RK still requires zero compute
-readbacks; direct minimizers (`projected_gradient_bb`, `nonlinear_cg`) are
-temporarily allowed a bounded control-readback budget until their line-search
-and curvature decisions move fully device-side. This is a performance
-regression gate only; it does not change solver physics, units, demag boundary
-conditions, or CPU/GPU parity tolerances.
-
-Update 2026-06-05 algorithm-specific control budgets: the production gate now
-uses algorithm-specific per-step limits instead of only the global fallback:
-`llg_overdamped = 0`, `projected_gradient_bb = 4`, and `nonlinear_cg = 3`.
-This prevents projected-gradient BB from regressing up to the looser nonlinear
-CG budget while preserving the current verified direct-minimizer behavior.
-Nonlinear CG reaches the same per-step budget by batching current energy,
-tangent-gradient norm, direction-gradient dot product, and direction norm into
-one control readback on the common descent-direction path.
-When the existing nonlinear-CG direction is non-descent, the GPU reset fallback
-now keeps the reset itself device-side and reuses the already-read tangent
-gradient norm: after setting `p = -g`, `p·g = -||g||²` and `||p||² = ||g||²`.
-This removes the extra reset-direction scalar readback without changing the
-Armijo condition, PR+ update, tangent projection, or metric definition.
-The accepted-step nonlinear-CG PR+ numerator and accepted tangent-gradient norm
-now stay in reserved scalar-result tail slots until the existing final stats
-control readback. The next direction beta is computed from those reduced values
-on the GPU, then the same final control readback validates the accepted
-gradient norm and PR+ numerator on the host. This removes the standalone
-accepted-gradient/PR+ synchronization without dropping the rollback checks.
-
-Update 2026-07-10 cumulative line-search accounting: the four PG-BB control
-phases per accepted step are the batched current energy/gradient metrics, the
-first Armijo trial energy, accepted BB curvature, and final observable stats.
-The three nonlinear-CG phases are the batched current energy/gradient/direction
-metrics, the first Armijo trial energy, and the accepted final-stats/PR+ batch.
-Every further Armijo trial adds exactly one energy-scalar synchronization. The
-benchmark therefore publishes `total_rhs_evals`, the sum over all returned step
-records, without changing the existing last-step `rhs_evals` field name. For
-direct minimizers these are logical evaluation records rather than a claim that
-cached endpoint fields were physically recomputed: every executed step records
-one current state and its first trial, then one record for every additional
-normal or forced-recovery Armijo trial and every refinement RHS evaluation. An
-ordinary step without forced recovery therefore reports `2 + backtracks`; a
-forced-recovery trial is counted even when it does not increment the rejected
-backtrack counter. Their exact gate is
-
-`base + per_step * executed_steps + max(0, total_rhs_evals - 2 * executed_steps)`.
-
-This uses executed work rather than the last step's rejection count. Missing
-cumulative telemetry fails closed when the production control-readback gate is
-requested; old benchmark payloads remain readable when that gate is not used.
-When nonlinear-CG enters forced Armijo recovery, the CUDA direction kernel
-writes the exact restart `p = -g`. The host therefore reuses the already
-validated `p dot g = -||g||_E^2` and `||p||_V^2 = ||g||_V^2` scalars instead of
-re-reducing and synchronizing them. This keeps each additional recovery trial
-represented by its energy evaluation in `total_rhs_evals`.
-
-Update 2026-07-23 canonical nonlinear-CG three-sync accounting: each accepted
-step has three control-scalar host synchronizations: the current
-energy/gradient/direction batch, the first direct Armijo energy batch, and the
-accepted final-stats/PR+ batch. Trial effective-field and final energy-term
-computation remains device-side; nonlinear-CG takes the trial total energy from
-`GpuDirectArmijoResult::trial_snapshot` instead of performing a separate total
-energy readback before the Armijo batch. Each Armijo trial after the first adds
-exactly one synchronization, including forced-restart recovery trials. The
-matching `rhs_evals` telemetry publishes two nominal logical records per
-executed step even when the accepted current endpoint is reused, plus exactly
-one record for every additional normal or recovery trial. The exact cumulative
-limit is therefore
-
-`initial_syncs + 3 * executed_steps + max(0, total_rhs_evals - 2 * executed_steps)`.
-
-No separate direction-recovery allowance is part of this budget. This changes
-only control-readback accounting and diagnostic reuse; fresh-zero demag,
-direct-energy refinement, finite checks, rollback, PR+, energy definitions,
-and accepted trajectories retain their existing contracts.
-
-Update 2026-07-23 canonical PG-BB four-sync accounting: each accepted PG-BB
-step has four baseline control-scalar host synchronizations. The first is one
-packed `GpuPgbbCurrentMetrics` readback containing the current energy-term
-snapshot, volume-metric tangent-gradient norm, energy-metric projected-gradient
-norm, and device-produced finite/nonnegative flags. The second is the direct
-Armijo difference batch, which also owns the trial energy snapshot; PG-BB does
-not read a standalone trial total before this batch. Accepted BB curvature is
-the third synchronization and final observable statistics are the fourth.
-Every Armijo trial after the first adds exactly one direct-difference batch.
-The benchmark script owns this formula once for both direct minimizers:
-
-`initial_syncs + per_step * executed_steps + max(0, total_rhs_evals - 2 * executed_steps)`,
-
-with `per_step = 4` for PG-BB and `per_step = 3` for nonlinear-CG. PG-BB
-`rhs_evals` uses the same logical-record semantics: one current record, every
-normal Armijo trial exactly once, and any direct-energy refinement evaluations
-additively. The packed readback and trial-snapshot reuse do not change Armijo,
-BB1/BB2 reset policy, fresh-zero demag, rollback, energy monotonicity, ABI, or
-opt-in profiler ownership.
-
-The required five-repeat production preset on 2026-07-23 produced 110 rows:
-95 completed and 15 failed before a benchmark result. Every one of the 50
-completed GPU PG-BB rows satisfied the canonical bound with a margin of three
-syncs; representative cumulative records were 32 steps / 71 RHS / 135 syncs
-(bound 138), 32 / 91 / 155 (bound 158), and 32 / 64 / 128 (bound 131).
-The preset did not provide complete CPU/GPU-consistency evidence because CPU
-exchange-only and CPU exchange-plus-uniaxial, and GPU exchange-plus-Zeeman,
-each exhausted their unchanged PG-BB Armijo search in all five repeats. A
-one-repeat comparison against the immutable pre-Task-8 managed runtime
-reproduced the same three failure classes. In particular, GPU Zeeman failed
-both before and after Task 8 with finite current metrics and a positive direct
-energy increment after 20 backtracks, not through the new finite-flag check.
-Consequently the four-sync implementation is production-executed for the 50
-completed GPU rows, but the full preset remains unvalidated until those
-pre-existing Armijo cases are qualified separately. The Task 8 constraint to
-preserve Armijo, BB, and restart semantics forbids treating a tolerance or
-fixture change as part of this synchronization remediation.
-
-Update 2026-07-23 direct-increment remediation decision: the failed cases were
-traced to cancellation-prone endpoint-energy composition, not to a need for a
-looser line search. CPU exchange receives a polarized direct discrete
-increment, while CUDA classifies each final energy slot exactly once as direct
-or explicit endpoint residual. Residual uncertainty is derived from endpoint
-operand magnitudes. The strict Armijo inequality and four-sync PG-BB contract
-remain unchanged. The full preset must be rerun against an identity-pinned
-final native library; the earlier 95/110 artifact is diagnostic evidence only,
-not final qualification.
-
-Update 2026-06-05 direct-minimizer effective-field path: GPU
-`projected_gradient_bb` and `nonlinear_cg` now call the device-resident
-effective-field pipeline directly instead of the full RK RHS helper. This
-preserves exchange, DMI, demag, local-field, and `H_eff` accumulation semantics
-while skipping the LLG RHS kernel that direct minimizers do not consume. With
-native phase timing enabled, exchange and demag remain attributable; `RHS
-total` may remain zero for these minimizers because no LLG RHS is evaluated.
-The phase-profiling env gate is refreshed during GPU RK preflight and tears
-down event pools when disabled, so ordinary disabled runs do not retain timing
-events and direct-minimizer runs can enable/disable profiling without rebuilding
-the runtime.
-
-Update 2026-07-20 GPU demag stream boundary: the managed HYPRE 3.1.0 runtime
-exposes the exact compute stream as
-`hypre_HandleComputeStream(hypre_handle())`. Strict FEM GPU demag records a
-Fullmag-ready event on the Fullmag compute stream, makes that exact HYPRE
-stream wait, records HYPRE-done on the HYPRE stream after `Mult`, and makes the
-Fullmag stream wait before recovery and energy reduction. Ordering through the
-legacy/default stream or a device-wide synchronization is not proof of this
-contract and is forbidden in strict GPU mode.
-
-The compatible Poisson matrix, Krylov object, and AMG hierarchy are set up once
-per demag workspace. A fresh magnetization RHS resets the solution vector to
-zero but does not recreate the solver or preconditioner. Matrix topology,
-boundary realization, solver/preconditioner policy, tolerance, AMG settings,
-device, or workspace changes invalidate the setup and rebuild it explicitly.
-Profiler setup time therefore reports real rebuild work rather than a
-hard-coded zero.
-
-Strict GPU demag solver setup also best-effort enables Hypre's public vendor
-sparse-kernel switches for device builds: SpTrans, SpMV, and SpGEMM. This keeps
-CUDA Hypre AMG setup and solver application on the optimized vendor sparse path
-where the bundled Hypre build supports it, without making optional Hypre
-configuration setters a runtime precondition and without changing the Poisson
-weak form, boundary condition, tolerance, or residual telemetry.
-
-Update 2026-05-15 readiness preset: the benchmark harness exposes
-`--fem-cpu-no-pbc-adaptive-ready-preset` as a shorthand for the existing FEM CPU
-no-PBC adaptive exchange+demag+anisotropy readiness sweep and gates. The preset
-runs both `exchange_demag_anis_uniaxial` and `exchange_demag_anis_cubic` under
-RK23 and RK45 with thread-count tokens `1`, `physical_cores/2`,
-`physical_cores`, and `auto` under the same adaptive CPU gate. It does not
-change solver physics or runtime defaults.
-The readiness gate now also checks requested mesh/scenario/integrator/thread
-coverage, so a partial CSV cannot pass the preset when one of the requested
-meshes, phase-10 anisotropy cases, adaptive integrators, or thread-count cases
-is missing.
-Every benchmark run emits a `FEM_PASS_FAIL_SUMMARY` JSON line grouped by
-`solver_mesh_signature`, including row counts, pass/fail status, demag residual
-and iteration maxima, thread-count coverage, and gate failure counts. This makes
-the phase-10 CSV inspectable without inferring pass/fail from process exit alone.
-When supplied with `--accepted-baseline`, the harness compares matching
-`solver_mesh_signature` benchmark cases against the last accepted CSV and fails
-rows whose wall-clock or demag timing metrics regress beyond the configured
-percentage threshold, defaulting to 10%.
-
-Update 2026-05-15 phase-10 scenario matrix: benchmark naming now distinguishes
-uniaxial and cubic anisotropy cases explicitly:
-`exchange_anis_uniaxial`, `exchange_anis_cubic`,
-`exchange_demag_anis_uniaxial`, and `exchange_demag_anis_cubic`. These names
-select existing material anisotropy parameters for qualification runs and keep
-`exchange_demag_anisotropy` as a compatibility alias.
-
-Update 2026-05-15 qualification artifacts: `metadata.json` now carries a
-`fem_cpu_relaxation_qualification` block for native FEM CPU runs. It records the
-qualified physics terms, solver mesh signature, demag policy, assembly mode,
-relaxation algorithm, stop reason, final energy terms, final torque, norm
-defect, executed steps, and benchmark gate version so downstream tooling does
-not need to infer these values from logs.
-`--require-best-demag-policy` turns missing converged policy summaries into a
-benchmark failure, so Hypre/AMG tuning sweeps cannot silently produce no
-actionable policy. It requires at least two converged policy candidates per
-logical case before a "best" policy can be selected; a single successful row is
-only a smoke proof, not a policy optimization result. If all candidate rows
-fail before convergence telemetry is available, the missing-policy error
-includes their `error_kind` values.
-
-Update 2026-06-05 production benchmark policy gate: the managed
-`verify-fem-relaxation-production-benchmark` recipe passes
-`FULLMAG_BENCH_DEMAG_SOLVERS` and `FULLMAG_BENCH_DEMAG_PRECONDITIONERS` into
-the FEM GPU container. Its default policy matrix compares `CG/AMG` and
-`CG/JACOBI` and runs with `--require-best-demag-policy`, so the production
-benchmark cannot pass demag qualification from a single converged policy row.
-
-Update 2026-06-05 GPU phase timing benchmark gate: when
-`FULLMAG_FEM_STEP_PROFILE=1`, the managed
-`verify-fem-relaxation-production-benchmark` recipe now passes
-`--require-gpu-phase-timings`. Executed `fem_gpu` rows must report positive
-`exchange_wall_time_ms`; LLG rows must also report positive `rhs_wall_time_ms`;
-and rows using strict GPU Poisson demag must report positive
-`demag_wall_time_ms`. Direct minimizers intentionally skip the LLG RHS kernel,
-so their `rhs_wall_time_ms == 0` remains valid when exchange and demag phase
-timings are present.
-
-Update 2026-06-05 pinned scalar readback staging: GPU RK and relaxation scalar
-readbacks now copy device scalar slots into a preallocated pinned host staging
-buffer owned by the CUDA reductions workspace before publishing values to the
-caller. This does not remove the required host wait for RK/adaptive/Armijo
-control decisions, but it removes pageable host destinations from the scalar
-D2H path and keeps the transfer-audit accounting unchanged.
-
-Update 2026-08-03 pinned-host allocation fallback: the pinned scalar staging
-buffer remains the primary GPU readback path. If the CUDA driver rejects only
-the 256-byte `cudaHostAlloc` request with `cudaErrorMemoryAllocation`, the
-reductions workspace binds the same fixed 32-slot host array as a pageable
-fallback and emits an explicit runtime warning. Scalar copies still use
-`cudaMemcpyAsync` followed by the existing stream synchronization, so the
-device result, precision, ordering, transfer-audit byte counts, and all
-demag/RK control decisions are unchanged; only overlap between copy and host
-execution may be lost. Any other CUDA allocation error remains fatal. The
-fallback is therefore a resource-degraded transfer realization, never a demag
-solver or physics fallback, and it must be reported as such in runtime logs.
-For deterministic managed qualification, the CUDA-only test hook
-`FULLMAG_FEM_FORCE_PAGEABLE_SCALAR_READBACK=1` selects the same branch without
-spoofing a solver result; it is unset in production and is not a capability
-fallback. The executable contract verifies allocation, asynchronous device to
-host copy, synchronization, numerical value preservation, and cleanup without
-calling `cudaFreeHost` on the pageable array. Readback diagnostics therefore
-refer to generic scalar host staging, not exclusively to pinned memory.
-
-Update 2026-06-05 solver-mesh size gate: the managed production relaxation
-benchmark now requires completed rows to report at least
-`FULLMAG_BENCH_MIN_SOLVER_NODES` solver nodes. The default managed threshold is
-50 nodes, which is a smoke-floor guard against trivial mesh regressions, not a
-claim that the benchmark covers production-scale GPU performance. Larger
-performance qualification runs should raise this environment variable together
-with tighter `FULLMAG_BENCH_DOMAIN_HMAX` / `FULLMAG_BENCH_AIRBOX_HMAX`.
-
-Update 2026-06-05 demag performance gate: strict FEM GPU Poisson demag now has
-an opt-in managed performance recipe,
-`just verify-fem-gpu-demag-performance-benchmark`. It narrows the sweep to
-demag-bearing Box500 airbox cases, enables native GPU phase timing by default,
-uses tighter default mesh targets (`FULLMAG_BENCH_DOMAIN_HMAX=50e-9`,
-`FULLMAG_BENCH_AIRBOX_HMAX=100e-9`), and requires at least
-`FULLMAG_BENCH_MIN_SOLVER_NODES=800`. It also requires the completed demag
-CPU/GPU pairs to reach `FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP=2` on full
-`demag_wall_time_ms`, not only on the narrower
-`demag_solver_apply_wall_time_ms` phase. The recipe accepts
-`FULLMAG_BENCH_ACCEPTED_BASELINE` and
-`FULLMAG_BENCH_REQUIRE_ACCEPTED_BASELINE=1` for regression-qualified runs. The
-recipe runs one unrecorded FEM GPU warmup case before measured rows, so CUDA and
-Hypre cold-start cost does not contaminate first-policy timing comparisons. The
-standard production relaxation benchmark remains the broader correctness and
-contract smoke; this demag recipe is the preferred gate before claiming GPU
-Poisson demag performance progress.
-
-Update 2026-06-14 setup-reuse gate: the production and demag-performance
-benchmark recipes now pass `--require-demag-setup-reused`. Multi-step demag rows
-must report `demag_solver_setup_reused=true`; missing telemetry or repeated
-setup is a benchmark failure. This is a runtime performance contract only. It
-does not change the demag weak form, solver residual tolerance, boundary model,
-or accepted physical observables.
-
-Update 2026-06-14 BoomerAMG profile sweeps: native CPU and strict GPU Poisson
-demag setup now read benchmark/runtime environment overrides for the Hypre
-BoomerAMG profile:
-`FULLMAG_FEM_DEMAG_AMG_RELAX_TYPE`,
-`FULLMAG_FEM_DEMAG_AMG_COARSENING`,
-`FULLMAG_FEM_DEMAG_AMG_INTERPOLATION`, and
-`FULLMAG_FEM_DEMAG_AMG_AGGRESSIVE_COARSENING`. Optional expert overrides
-`FULLMAG_FEM_DEMAG_AMG_STRENGTH_THRESHOLD` and
-`FULLMAG_FEM_DEMAG_AMG_MAX_LEVELS` are applied only when set; otherwise MFEM /
-Hypre defaults are preserved. When unset, the core profile remains the current
-`18/8/6/1` configuration. The benchmark harness exposes comma-list sweeps
-through `FULLMAG_BENCH_DEMAG_AMG_RELAX_TYPES`,
-`FULLMAG_BENCH_DEMAG_AMG_COARSENINGS`,
-`FULLMAG_BENCH_DEMAG_AMG_INTERPOLATIONS`, and
-`FULLMAG_BENCH_DEMAG_AMG_AGGRESSIVE_COARSENINGS`, plus optional
-`FULLMAG_BENCH_DEMAG_AMG_STRENGTH_THRESHOLDS` and
-`FULLMAG_BENCH_DEMAG_AMG_MAX_LEVELS`; best-policy grouping includes these
-profile fields so tuning cannot merge different AMG configurations. This
-changes only the linear-solver preconditioner profile used to reach the same
-configured residual tolerance.
-`just bench-fem-gpu-demag-amg-profile-sweep` is the exploratory managed-runtime
-entrypoint for these BoomerAMG profile sweeps. It emits CSV, JSON, Markdown, and
-best-policy rows without requiring every candidate profile to pass the
-production convergence/best-policy gates. Use the stricter
-`just verify-fem-gpu-demag-performance-benchmark` before claiming a production
-demag performance improvement.
-
-Update 2026-06-05 strict GPU resolved default: the runner now resolves an
-omitted strict native FEM GPU Poisson demag solver policy to `CG/JACOBI`.
-Managed demag performance qualification on the 258-node Box500 airbox smoke
-showed the warmed strict GPU `CG/JACOBI` path materially faster than `CG/AMG`
-for the current qualification scale while preserving convergence gates. This
-does not change the public Python/IR default and does not override explicit
-authoring choices; runtime logs, provenance, and demag metadata must report the
-resolved policy actually used by the native solver.
-The dedicated demag performance recipe now includes an `OMIT` policy sentinel
-alongside explicit `AMG` and `JACOBI` rows, so the benchmark protects the
-runtime-resolved default path instead of only explicit solver-policy authoring.
-
-Update 2026-06-14 PGBB strict GPU resolved default: the runner now resolves an
-omitted strict native FEM GPU Poisson demag solver policy to `CG/AMG` when the
-active relaxation algorithm is `projected_gradient_bb`. A managed PGBB
-demag-policy smoke on the Box500 airbox case completed `CG/AMG` and
-`CG/JACOBI` rows and showed strict GPU `CG/AMG` with lower apply time and fewer
-iterations for that direct-minimizer path. This does not change explicit user
-policies and does not change the non-PGBB strict GPU fallback documented above.
-The managed `OMIT` smoke after rebuilding the runtime bundle confirms that an
-omitted PGBB demag policy now reports resolved `AMG` in runtime metadata for
-both CPU and strict GPU rows.
-
-Update 2026-05-15 recovery scratch: non-PBC Poisson demag recovery now keeps
-serial and per-thread element scratch buffers in the context-owned recovery
-workspace. This removes repeated MFEM element scratch construction during
-adaptive RK demag recovery while preserving the same gradient recovery,
-magnetic-node zeroing, and energy evaluation.
-
-Update 2026-05-15 Robin energy scratch: the Robin boundary-energy correction
-now reuses a context-owned boundary temporary vector from the demag recovery
-workspace instead of constructing it for every recovery call. The boundary
-energy formula and cached frozen-field correction are unchanged.
-
-Update 2026-05-15 essential-DOF zeroing: non-PBC Poisson demag now zeros
-essential true DOFs by iterating the context-owned `poisson_ess_tdof_list`
-directly instead of constructing an `mfem::Array` wrapper in the solve hot
-path. The eliminated operator and boundary condition semantics are unchanged.
-
-Update 2026-05-15 RHS coefficient scratch: the Poisson RHS magnetization
-coefficient now reuses thread-local DOF and shape scratch during coefficient
-evaluation. This removes repeated element scratch construction during RHS
-assembly while preserving the same `M_s m` interpolation on magnetic elements
-and zero contribution on air elements.
-
-Update 2026-05-15 FSAL field publish: accepted RK23/RK45 FSAL steps now publish
-the cached final `H_ex`, `H_demag`, and `H_eff` buffers by swapping the stepper
-workspace buffers into the context instead of copying full field arrays. This
-preserves the same accepted state and final field values; it only removes an
-O(N) copy from the adaptive RK accept path.
-
-Update 2026-05-15 non-FSAL final refresh: Heun/RK4 final effective-field refresh
-now reuses the same stepper field workspace and swaps the final buffers into the
-context. The post-step `max_dm_dt` RHS also reuses a stage derivative buffer
-instead of constructing a local full-size RHS vector. This preserves the final
-field refresh and reported RHS count while removing per-step buffer churn from
-the non-FSAL explicit-RK path.
-
-Update 2026-05-15 disabled local terms: interfacial DMI, cubic anisotropy, and
-bulk DMI observable buffers are now zero-initialized once during context setup
-when those terms are absent. The effective-field hot path no longer clears those
-full-size buffers on every `exchange + demag + uniaxial anisotropy` evaluation.
-Readback still sees zero fields for disabled terms; active terms still overwrite
-their buffers during evaluation.
-
-Update 2026-05-15 active buffer pre-zeroing: active exchange/demag output
-buffers now use size-only `resize` before evaluator calls, and `H_eff` uses
-`resize` because it is overwritten component-wise after all terms are assembled.
-The disabled exchange/demag fallbacks still produce explicit zero fields. This
-removes another full-buffer clear from each adaptive RHS evaluation without
-changing published fields or energies.
-
-Update 2026-05-15 demag frozen-cache copy: fresh Poisson demag solves now copy
-`H_demag` into the frozen-field cache only when `field_refresh.demag_interval_s`
-is active. Default time-domain relaxation refreshes demag every RHS evaluation,
-so the frozen cache is unused there and no longer pays a full-field copy per
-solve. Runs that explicitly enable frozen-field refresh keep the same cached
-field and Robin-boundary energy semantics.
-
-Update 2026-05-15 FEM CPU no-PBC adaptive gate: the benchmark harness now has a
-`--require-fem-cpu-no-pbc-adaptive-ready` gate for the targeted release slice:
-`fem_cpu`, `exchange_demag_anis_uniaxial` and `exchange_demag_anis_cubic`
-(with `exchange_demag_anisotropy` as a compatibility alias), RK23/RK45
-adaptive stepping, double
-precision, zero periodic mesh pairs, at least 100 executed steps unless the
-stage stopped by torque tolerance, positive adaptive-step/demag-solve counts,
-Poisson-airbox demag with Robin boundary conditions, shared-domain mesh with
-air, completion of the requested benchmark step count, final exchange/demag/
-anisotropy energies for the active terms, demag convergence telemetry, and
-assemble/solve/setup/apply/recover/energy timings. The gate
-requires the reported benchmark payload to confirm the same scenario,
-integrator family, and adaptive timestep policy; it also requires runtime
-provenance to confirm `execution_engine=fem_cpu_native`, `cpu_native`,
-`mfem_device=cpu`, host-source-of-truth data residency, and no CUDA kernels or
-GPU Poisson.
-For multi-step readiness runs, the final row must also confirm demag solver
-setup reuse, because a warmed Hypre/AMG setup is part of the optimized CPU
-no-PBC path rather than optional telemetry.
-The readiness gate rejects positive `demag_refresh_interval_s`, because this
-targeted benchmark must measure the normal Poisson demag evaluation path rather
-than a frozen demag cache policy.
-Benchmark payloads that expose the final anisotropy energy as `e_ani` are
-normalized into the gate's `final_e_ani_j` row field. This is a validation gate
-for small and medium no-PBC CPU runs, not a claim that the bootstrap
-`llg_overdamped` relaxation is a final FE-metric tangent-plane minimizer.
-Benchmark failures whose stderr/stdout contains MPI initialization or PMIx
-startup errors are classified as `error_kind=mpi_init_or_pmix_startup` in the
-CSV so sandbox/runtime-launcher failures are distinguishable from demag
-convergence failures. Gate failure messages include the same `error_kind` when
-the row failed before convergence/readiness checks could inspect solver
-telemetry.
-
-## 9. References
-
-- `docs/physics/0430-fem-dipolar-demag-mfem-gpu-foundations.md`
-- `docs/physics/0520-fem-robin-airbox-demag-bootstrap-reference.md`
+The Poisson RHS is assembled from the magnetization field, the selected FEM Poisson operator and boundary conditions are solved by the resolved linear solver, and the potential is differentiated to recover `H_demag`. The policy controls the numerical linear solve, not the FE order, mesh, magnetic region, source, boundary realization, magnetization, or acceptance of an eigen equilibrium.
+
+For linear Poisson solve publication, an iteration cap alone is not convergence. Check the concrete solver result and residual before treating a field as current; the higher-level eigen handoff independently rejects non-converged stage completions. Consult backend diagnostics for actual solver and residual evidence.
+
+The dynamic Floquet shifted KSP is a separate contract. For sparse shared-domain Floquet whose split dimension exceeds the existing exact-Schur limit of 512, the current source default is FGMRES. The small exact-Schur path retains GMRES. Explicit compatible shifted-KSP overrides remain effective. This change preserves the existing tolerances, restart setting, iteration limits, and physical acceptance gates; it does not alter `FemLinearSolverPolicy`.
+
+| Solver/device lane | Policy disposition | Evidence and boundary |
+|---|---|---|
+| FEM / CPU | Source-documented | FEM Poisson policy is represented in the plan and passed to the CPU Poisson solver path. A source map is not a runtime qualification. |
+| FEM / GPU | Source-documented, runtime qualification not asserted | Policy resolution is backend-specific; this page does not claim a GPU execution passed or that all method/preconditioner pairs are supported. |
+| FDM / CPU | Not applicable | The hint is FEM-specific; FDM demag configuration has its own policy surface. |
+| FDM / GPU | Not applicable | The hint is FEM-specific; FDM demag configuration has its own policy surface. |
+
+(implementation-mapping)=
+## Implementation mapping
+
+### FEM policy flow
+
+`FemLinearSolverPolicy` and `FEM` define the Python authoring values. The builder emits those hints into the canonical discretization. `FemHintsIR` carries the optional policy; `plan_fem` and `plan_fem_eigen` resolve it into executable plans. For eigen bias samples, `bias_field_relax_plan` places the same policy into the generated relaxation plan while constructing its independent LLG step and torque limits.
+
+### Shifted modal KSP flow
+
+`solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context` selects FGMRES only when the sparse shared-domain split dimension exceeds `kFloquetExactSchurPreconditionerMaxDimension`; this is the existing exact-Schur materialization boundary, not a new threshold. At or below that bound, the small exact-Schur route defaults to GMRES. `resolve_modal_krylov_tuning` preserves explicit values. The focused native regression covers the large sparse default, the small exact-Schur default, an explicit large-case GMRES override, and fail-closed failure behavior.
+
+(validation)=
+## Validation and regression evidence
+
+The source-linked regression contracts are:
+
+- Python runtime serialization: `test_problem_runtime_selection_serializes_to_ir`.
+- Planner preserves authored policy fields for the eigen bias sample: `fem_eigen_bias_sample_demag_solver_policy_preserves_all_authored_fields`.
+- Planner preserves the legacy serialized shape when the optional eigen bias policy is absent: `fem_eigen_bias_sample_none_policy_keeps_legacy_serialized_shape`.
+- Runner preserves the Poisson policy without changing the internal LLG sample budget: `bias_field_sample_relax_plan_carries_demag_policy_without_changing_llg_budget`.
+- Runner rejects `MaxSteps` completion without convergence: `accepted_relax_stage_handoff_rejects_nonconvergent_and_incoherent_completions`.
+- Native modal regression checks sparse FGMRES, the explicit GMRES override, unchanged fail-closed behavior, and the small exact-Schur GMRES route.
+
+No unit test, build, runtime solve, or browser verification was run for this documentation update.
+
+(limitations)=
+## Limitations and non-claims
+
+- This document records source contracts and existing test intent; hosted test results and runtime scientific qualification remain separate evidence.
+- A configured linear-solver tolerance does not replace independently checked residuals or equilibrium acceptance.
+- The bias-sample `max_steps = 8` and `1e-3 A/m` torque threshold are implementation-owned and are not configurable through `FemLinearSolverPolicy`.
+- The signed15 example authors a separate top-level `Relax(max_steps=50000, tolA=1.0)`; its source does not establish that a submitted run converged or passed.
+- Large sparse Floquet FGMRES selection does not establish a general Krylov improvement or explain any historical residual failure. It is the current source default for the sparse route; acceptance gates remain unchanged.
+- FDM and hybrid demag are not configured by this FEM-only policy. No GPU, MPI, performance, or scientific qualification is claimed here.
+
+(scientific-bibliography)=
+## Scientific bibliography
+
+- W. F. Brown Jr., *Micromagnetics*, Interscience, 1963. Foundational continuum micromagnetics reference.
+- D. R. Fredkin and T. R. Koehler, “Hybrid method for computing demagnetizing fields,” *IEEE Transactions on Magnetics* 26(2), 415–417 (1990), [doi:10.1109/20.106342](https://doi.org/10.1109/20.106342).
+- A. Aharoni, “Micromagnetics and the phenomenological theory of ferromagnets,” *Physical Review B* 40, 4607–4608 (1989), [doi:10.1103/PhysRevB.40.4607](https://doi.org/10.1103/PhysRevB.40.4607).
+- Project implementation context: `docs/physics/0430-fem-dipolar-demag-mfem-gpu-foundations.md` and `docs/physics/0520-fem-robin-airbox-demag-bootstrap-reference.md`.
+
+(source-code-index)=
+## Source code index
+
+| Source ID | Repository path | Stable symbol | Responsibility |
+|---|---|---|---|
+| py-policy | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FemLinearSolverPolicy` | Python policy values, defaults, validation, and `atol=None` omission. |
+| py-fem-hints | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FEM` | FEM order, size, mesh, and optional policy authoring. |
+| py-study-builder | `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` | Stage-first builder methods for policy and thread intent. |
+| py-exports | `packages/fullmag-py/src/fullmag/__init__.py` | `__all__` | Public API export list for `fem_demag_solver`, `threads`, `FEM`, and policy. |
+| py-runtime-test | `packages/fullmag-py/tests/test_api.py` | `test_problem_runtime_selection_serializes_to_ir` | Thread selection serializes into runtime-selection IR. |
+| py-signed15-example | `examples/fem_eigen_mode_ui_de_signed15.py` | `study` | Authored primary Relax stage values and example provenance. |
+| ir-linear-policy | `crates/fullmag-ir/src/study.rs` | `FemLinearSolverPolicy` | Canonical Rust policy defaults and optional absolute tolerance. |
+| ir-fem-hints | `crates/fullmag-ir/src/mesh_hints.rs` | `FemHintsIR` | FEM hint carries the optional Poisson policy. |
+| ir-fem-plan | `crates/fullmag-ir/src/plan.rs` | `FemPlanIR` | Executable FEM plan stores the resolved Poisson policy. |
+| ir-eigen-plan | `crates/fullmag-ir/src/plan.rs` | `FemEigenPlanIR` | Eigen plan carries bias-sample policy separately from modal solver policy. |
+| planner-fem | `crates/fullmag-plan/src/fem.rs` | `plan_fem` | Resolves ordinary FEM policy into the executable plan. |
+| planner-eigen | `crates/fullmag-plan/src/fem.rs` | `plan_fem_eigen` | Resolves eigen plan policy and method-specific constraints. |
+| planner-policy-test | `crates/fullmag-plan/src/tests.rs` | `fem_eigen_bias_sample_demag_solver_policy_preserves_all_authored_fields` | Planner policy-field propagation regression. |
+| planner-none-test | `crates/fullmag-plan/src/tests.rs` | `fem_eigen_bias_sample_none_policy_keeps_legacy_serialized_shape` | Optional policy omission compatibility regression. |
+| runner-relax-plan | `crates/fullmag-runner/src/fem/eigen_execution.rs` | `bias_field_relax_plan` | Generated sample Relax and Poisson-policy wiring. |
+| runner-policy-test | `crates/fullmag-runner/src/fem/eigen_execution.rs` | `bias_field_sample_relax_plan_carries_demag_policy_without_changing_llg_budget` | Verifies policy pass-through and unchanged LLG controls. |
+| runner-maxsteps-test | `crates/fullmag-runner/src/fem/eigen_tests.rs` | `accepted_relax_stage_handoff_rejects_nonconvergent_and_incoherent_completions` | Rejects a non-converged `MaxSteps` handoff. |
+| poisson-rhs | `backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp` | `assemble_demag_poisson_rhs` | Magnetization-dependent Poisson right-hand side. |
+| poisson-solve | `backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp` | `solve_demag_poisson_hypre` | CPU Hypre solver setup and solve path. |
+| poisson-recovery | `backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp` | `recover_demag_poisson_field` | Potential-to-field recovery. |
+| floquet-sparse-solve | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context` | Large sparse FGMRES versus small exact-Schur GMRES default selection. |
+| floquet-ksp-policy | `backends/fem/cpu/frequency_domain/modal_krylov_tuning.hpp` | `resolve_modal_krylov_tuning` | Explicit modal/Floquet KSP tuning resolution. |
+| floquet-modal-tests | `backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` | `main` | Harness entry point for the large sparse, explicit override, fail-closed, and small exact-Schur cases listed above. |
+
+See the adjacent `0532-fem-demag-solver-policy-and-runtime-threading.source-map.json` for machine-checked path, symbol, equation, and public-parameter mappings.

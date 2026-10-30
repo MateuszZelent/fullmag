@@ -171,8 +171,8 @@ describe("chart renderer owner", () => {
       ],
     });
     expect(option.series).toEqual([
-      expect.objectContaining({ id: "computed", silent: false, showSymbol: true, symbolSize: 4 }),
-      expect.objectContaining({ id: "reference", silent: true, showSymbol: true, symbolSize: 4 }),
+      expect.objectContaining({ id: "computed", silent: false, showSymbol: true, symbolSize: 4, z: 4 }),
+      expect.objectContaining({ id: "reference", silent: true, showSymbol: true, symbolSize: 4, z: 2 }),
     ]);
   });
 
@@ -342,4 +342,13 @@ describe("chart renderer owner", () => {
     expect(source).not.toContain("model.series.flatMap");
     expect(source).not.toContain("Math.max(1, ...model.series.map");
   });
+});
+
+
+it("does not force an unrelated zero baseline into a frequency ordinate", () => {
+  const option = chartRenderModelToEChartsOption({ ...model, yAxes: [{ label: "Frequency", unit: "GHz" }],
+    series: [{ ...model.series[0]!, unit: "GHz", points: [{ rowIndex: 0, x: 0, y: 9.3 }, { rowIndex: 1, x: 1, y: 13.5 }] }],
+  }, DEFAULT_CHART_TOKENS);
+  expect(option.yAxis).toEqual(expect.arrayContaining([expect.objectContaining({ scale: true })]));
+  expect(chartRenderModelToEChartsOption(model, DEFAULT_CHART_TOKENS).yAxis).toEqual(expect.arrayContaining([expect.objectContaining({ scale: false })]));
 });

@@ -479,7 +479,7 @@ def _probe_evidence(control: BuildControl, previous_root: str, probe: Mapping[st
     }
 
 
-def _container_snapshot(args, selected, identity, control, previous, document, *, allow_stopped_backend=False):
+def _container_snapshot(args, selected, identity, control, previous, document, *, allow_stopped_backend=False, allow_stopped_frontend=False):
     from docker_compose_identity import validate_source_labels
     from docker_volume_dev import _validate_retained_service
     from docker_volume_stop_unadmitted import _validate_network
@@ -519,9 +519,16 @@ def _container_snapshot(args, selected, identity, control, previous, document, *
             document, row, service, image_config,
             expected_started_at=(previous.get("backend_started_at") if service == "backend" else None),
         )
-        if (row.get("State", {}).get("Running") is not True
-                and not (allow_stopped_backend and service == "backend"
-                         and row.get("State", {}).get("Running") is False)):
+        state = row.get("State", {})
+        stopped_frontend = allow_stopped_frontend and service == "frontend" and state.get("Running") is False
+        if stopped_frontend and (
+            state.get("Status") != "exited" or state.get("Pid") != 0
+            or any(state.get(key) is not False for key in ("Paused", "Restarting", "Dead"))
+            or not state.get("FinishedAt") or state["FinishedAt"].startswith("0001-")
+        ):
+            _fail("Restart recovery requires a confirmed stopped frontend")
+        if (state.get("Running") is not True and not stopped_frontend
+                and not (allow_stopped_backend and service == "backend" and state.get("Running") is False)):
             _fail("Diagnostic stop requires both exact Compose services running")
     if (actual["backend"].get("State", {}).get("StartedAt")
             != previous.get("backend_started_at")):
@@ -529,6 +536,7 @@ def _container_snapshot(args, selected, identity, control, previous, document, *
     _validate_network(
         actual, ids, control.project,
         allow_stopped_backend=(allow_stopped_backend and actual["backend"].get("State", {}).get("Running") is False),
+        allow_stopped_frontend=(allow_stopped_frontend and actual["frontend"].get("State", {}).get("Running") is False),
     )
     return image, ids, actual
 

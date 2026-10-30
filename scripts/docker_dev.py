@@ -131,19 +131,59 @@ class DirectDockerOutcomeUnknown(DirectDockerError):
     """The Docker client timed out while the daemon may still own resources."""
 
 
+# Optional tokens match modal_krylov_tuning.hpp. Absence preserves native
+# defaults and the exact digest of retained two-key v1 receipts.
+MODAL_KRYLOV_ENVIRONMENT_ALLOWED = {
+    "FULLMAG_MODAL_EPS_PREFILTER_ABS": frozenset(f"1e-{n}" for n in range(6, 14)),
+    "FULLMAG_MODAL_SHIFTED_KSP_RTOL": frozenset(f"1e-{n}" for n in range(6, 14)),
+    "FULLMAG_MODAL_GMRES_RESTART": frozenset({"8", "10", "12", "16", "30"}),
+    "FULLMAG_MODAL_SHIFTED_KSP_TYPE": frozenset({"gmres", "fgmres"}),
+}
+FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED = {
+    "FULLMAG_FLOQUET_DENSE_ORACLE": frozenset({"1"}),
+    "FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC": frozenset({"1"}),
+}
+FLOQUET_DIAGNOSTIC_PROFILES = frozenset({"disabled", "schur-action", "dense-oracle"})
+MODAL_SHIFTED_KSP_TYPES = MODAL_KRYLOV_ENVIRONMENT_ALLOWED[
+    "FULLMAG_MODAL_SHIFTED_KSP_TYPE"
+]
+MODAL_SHIFTED_KSP_SELECTIONS = MODAL_SHIFTED_KSP_TYPES | frozenset({"default"})
+OPTIONAL_OPERATOR_PROBE_ENVIRONMENT_ALLOWED = {
+    **MODAL_KRYLOV_ENVIRONMENT_ALLOWED,
+    **FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED,
+}
+
+
 def _normalize_operator_probe_environment(value: Mapping[str, object]) -> dict[str, str]:
     """Validate the bounded operator-probe environment without ambient passthrough."""
 
-    if not isinstance(value, Mapping) or set(value) != set(OPERATOR_PROBE_ENVIRONMENT_ALLOWED):
+    if (not isinstance(value, Mapping)
+            or not set(OPERATOR_PROBE_ENVIRONMENT_ALLOWED).issubset(value)
+            or not set(value).issubset(
+                OPERATOR_PROBE_ENVIRONMENT_ALLOWED.keys()
+                | MODAL_KRYLOV_ENVIRONMENT_ALLOWED.keys()
+                | FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED.keys())):
         raise _fail(
-            "operator_probe_environment must contain exactly the bounded probe controls"
+            "operator_probe_environment must contain exactly the required controls and optional bounded modal/Floquet diagnostics"
         )
+    if set(value).intersection(FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED) == set(
+            FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED):
+        raise _fail("Floquet diagnostic controls are mutually exclusive")
     normalized: dict[str, str] = {}
-    for name, allowed in OPERATOR_PROBE_ENVIRONMENT_ALLOWED.items():
+    allowed_controls = {
+        **OPERATOR_PROBE_ENVIRONMENT_ALLOWED,
+        **MODAL_KRYLOV_ENVIRONMENT_ALLOWED,
+        **FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED,
+    }
+    for name in value:
+        allowed = allowed_controls[name]
         raw = value[name]
         if not isinstance(raw, str):
             raise _fail(f"{name} must be a string")
-        candidate = raw.strip().lower()
+        candidate = (
+            raw if name in FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED
+            else raw.strip().lower()
+        )
         if candidate not in allowed:
             choices = ", ".join(sorted(allowed))
             raise _fail(f"{name} must be one of: {choices}")
@@ -151,12 +191,57 @@ def _normalize_operator_probe_environment(value: Mapping[str, object]) -> dict[s
     return normalized
 
 
+def _operator_probe_environment_for_floquet_profile(
+    value: Mapping[str, object], profile: str | None
+) -> dict[str, str]:
+    """Apply one explicit diagnostic profile while preserving every other pin."""
+
+    normalized = _normalize_operator_probe_environment(value)
+    if profile is None:
+        return normalized
+    if not isinstance(profile, str) or profile not in FLOQUET_DIAGNOSTIC_PROFILES:
+        raise _fail("Floquet diagnostics profile is unsupported")
+    dense = "FULLMAG_FLOQUET_DENSE_ORACLE"
+    schur = "FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC"
+    result = {name: control for name, control in normalized.items()
+              if name not in FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED}
+    if profile == "dense-oracle":
+        result[dense] = "1"
+    elif profile == "schur-action":
+        result[schur] = "1"
+    return _normalize_operator_probe_environment(result)
+
+
+def _operator_probe_environment_for_modal_shifted_ksp_type(
+    value: Mapping[str, object], requested_type: str | None
+) -> dict[str, str]:
+    """Apply one explicit shifted-KSP type while preserving every other pin."""
+
+    normalized = _normalize_operator_probe_environment(value)
+    if requested_type is None:
+        return normalized
+    if not isinstance(requested_type, str) or requested_type not in MODAL_SHIFTED_KSP_SELECTIONS:
+        raise _fail("modal shifted KSP selection is unsupported")
+    result = dict(normalized)
+    if requested_type == "default":
+        # V1 records allow only this canonical type key; unknown legacy keys
+        # have already been rejected by normalization above.
+        result.pop("FULLMAG_MODAL_SHIFTED_KSP_TYPE", None)
+    else:
+        result["FULLMAG_MODAL_SHIFTED_KSP_TYPE"] = requested_type
+    return _normalize_operator_probe_environment(result)
+
+
 def _operator_probe_environment_from_host() -> dict[str, str]:
-    """Capture the two allowed host controls once for one backend start."""
+    """Capture only bounded controls once for one backend start."""
 
     return _normalize_operator_probe_environment({
-        name: os.environ.get(name, default)
-        for name, default in OPERATOR_PROBE_ENVIRONMENT_DEFAULTS.items()
+        **{name: os.environ.get(name, default)
+           for name, default in OPERATOR_PROBE_ENVIRONMENT_DEFAULTS.items()},
+        **{name: os.environ[name] for name in MODAL_KRYLOV_ENVIRONMENT_ALLOWED
+           if name in os.environ},
+        **{name: os.environ[name] for name in FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED
+           if name in os.environ},
     })
 
 
@@ -1585,7 +1670,7 @@ def _environment(layout: Mapping[str, object], selected: Path, run_root: Path,
         "FULLMAG_WORKSPACE_STATE_ROOT": str(workspace_state_root),
         "FULLMAG_BACKEND_BUILD_STATE_ROOT": str(build_state_root),
     })
-    # Only these two workload controls may cross the host -> Compose boundary.
+    # Only the recorded bounded workload controls may cross the host -> Compose boundary.
     # The caller captures them once before image/cache preparation.  Never
     # reread the mutable ambient host environment here and never let a cache
     # profile smuggle a stale workload choice into a new run.
@@ -2265,8 +2350,7 @@ def _backend_start_inputs(
             "FULLMAG_DEVELOPMENT_INPUTS_PATH": f"{control_root}/frontend/development-inputs.json",
             "FULLMAG_BUILD_CONTROL_VOLUME": control_volume,
             "FULLMAG_BACKEND_HOSTNAME": "fullmag-direct-backend-" + resolved_run_id[:12],
-            "FULLMAG_MIXED_P1_DEVICE": operator_probe_environment["FULLMAG_MIXED_P1_DEVICE"],
-            "FULLMAG_ARTIFACT_FIELD_STORAGE": operator_probe_environment["FULLMAG_ARTIFACT_FIELD_STORAGE"],
+            **operator_probe_environment,
             "FULLMAG_OPERATOR_PROBE_ENVIRONMENT_SHA256": operator_probe_environment_sha256,
         }
 
@@ -2509,6 +2593,45 @@ def recreate(args: argparse.Namespace) -> None:
     start(repo, args.assembly_receipt, args.port, **start_kwargs)
 
 
+class _StoreOnce(argparse.Action):
+    """Reject repeated single-value controls instead of silently taking the last."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        if getattr(namespace, self.dest, None) is not None:
+            parser.error(f"{option_string or self.dest} may be supplied only once")
+        setattr(namespace, self.dest, values)
+
+
+def _validate_floquet_diagnostics_request(args) -> None:
+    profile = getattr(args, "floquet_diagnostics", None)
+    if profile is None:
+        return
+    if not isinstance(profile, str) or profile not in FLOQUET_DIAGNOSTIC_PROFILES:
+        raise _fail("--floquet-diagnostics has an unsupported profile")
+    if getattr(args, "resume_recreation", None) is not None:
+        raise _fail("--floquet-diagnostics cannot override a --resume-recreation intent")
+    if (getattr(args, "completed_recreation_attempt", None)
+            or getattr(args, "completed_recreation_sha256", None)):
+        raise _fail("--floquet-diagnostics cannot be added to a completed recreation")
+    if getattr(args, "recovery_authorization", None) is not None:
+        raise _fail("--floquet-diagnostics cannot combine with container recovery authorization")
+
+
+def _validate_modal_shifted_ksp_type_request(args) -> None:
+    requested_type = getattr(args, "modal_shifted_ksp_type", None)
+    if requested_type is None:
+        return
+    if not isinstance(requested_type, str) or requested_type not in MODAL_SHIFTED_KSP_SELECTIONS:
+        raise _fail("--modal-shifted-ksp-type has an unsupported selection")
+    if getattr(args, "resume_recreation", None) is not None:
+        raise _fail("--modal-shifted-ksp-type cannot override a --resume-recreation intent")
+    if (getattr(args, "completed_recreation_attempt", None)
+            or getattr(args, "completed_recreation_sha256", None)):
+        raise _fail("--modal-shifted-ksp-type cannot be added to a completed recreation")
+    if getattr(args, "recovery_authorization", None) is not None:
+        raise _fail("--modal-shifted-ksp-type cannot combine with container recovery authorization")
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=_repo_default(),
@@ -2522,6 +2645,12 @@ def _parser() -> argparse.ArgumentParser:
     empty_quarantine.add_argument("--activation", required=True)
     empty_quarantine.add_argument("--recovery-id", required=True)
     empty_quarantine.add_argument("--apply", action="store_true", help="commit after exact stopped-namespace and empty-store proofs; default is dry-run")
+    reattest = subparsers.add_parser("reattest-linux-device", help="preview/apply storage-only re-attestation after Linux device renumbering; never start a runtime")
+    reattest.add_argument("--source-root", type=Path, required=True)
+    reattest.add_argument("--attempt", required=True)
+    reattest.add_argument("--config-sha256", required=True)
+    reattest.add_argument("--apply", action="store_true")
+    reattest.add_argument("--expected-plan-sha256")
     offline_reconcile = subparsers.add_parser(
         "reconcile-offline-volume",
         help="repair one stopped terminal-owner control lease while preserving sessions and unknown activation evidence",
@@ -2614,11 +2743,14 @@ def _parser() -> argparse.ArgumentParser:
     idle_restart.add_argument("--port", type=int, required=True)
     idle_restart.add_argument("--saved-authoring-checkpoint")
     idle_restart.add_argument("--saved-authoring-checkpoint-sha256")
-    idle_restart.add_argument("--stop-only", action="store_true", help="Drain and stop the pinned backend without restarting it")
     idle_restart.add_argument(
         "--allow-prepared-session", action="store_true",
         help="allow graceful drain with never-started manual Studies, including held queue entries after a terminal task; retain accepted inputs and never release Solve",
     )
+    idle_restart.add_argument("--allow-terminal-catalog", action="store_true",
+        help="permit graceful drain for a stale API-running projection only with terminal native tasks and released reservations")
+    idle_restart.add_argument("--stop-only", action="store_true",
+        help="stop after authenticated drain; retain all data for managed recreation")
     resources = subparsers.add_parser(
         "increase-resources", help="increase a pinned pre-API backend's budget without restarting its build"
     )
@@ -2693,6 +2825,42 @@ def _parser() -> argparse.ArgumentParser:
         "--catalog-failure", action="store_true",
         help="drain a Ready runtime after an exact unreleased startup catalog failure; requires --pending-activation and fresh-state archival",
     )
+    failed_worker = subparsers.add_parser(
+        "reconcile-failed-worker",
+        help=(
+            "preview or prepare one isolated failed-worker release reconciliation; "
+            "the parent activation helper remains the only control lease"
+        ),
+    )
+    failed_worker.add_argument("--attempt", required=True,
+                               help="exact retained development attempt")
+    failed_worker.add_argument("--iteration-attempt", required=True,
+                               help="exact successful retained idle-restart iteration")
+    failed_worker.add_argument("--config-sha256", required=True,
+                               help="raw SHA-256 of the retained Compose document")
+    failed_worker.add_argument("--source-root", type=Path, required=True,
+                               help="exact registered checkout mounted by the retained group")
+    failed_worker.add_argument("--port", type=int, required=True,
+                               help="retained frontend loopback port")
+    failed_worker.add_argument("--pending-activation", required=True,
+                               help="exact active parent preparation attempt")
+    failed_worker.add_argument("--run-id", required=True,
+                               help="exact failed run containing the task")
+    failed_worker.add_argument("--task-id", required=True,
+                               help="exact failed task to reconcile")
+    failed_worker.add_argument("--exit-receipt-id", required=True,
+                               help="exact worker process exit receipt")
+    failed_worker.add_argument("--request-id",
+                               help="optional canonical UUID, reused for prepare then apply")
+    failed_worker_mode = failed_worker.add_mutually_exclusive_group()
+    failed_worker_mode.add_argument(
+        "--prepare-candidate", action="store_true",
+        help="build and native-validate an isolated candidate without releasing the lease",
+    )
+    failed_worker_mode.add_argument(
+        "--apply", action="store_true",
+        help="invoke native reconciliation with --apply after all pins are revalidated",
+    )
     stop_held = subparsers.add_parser(
         "stop-held-retirement-volume",
         help="preview a pinned diagnostic backend drain; apply requires an explicit UI-reset acknowledgement and plan digest",
@@ -2711,13 +2879,34 @@ def _parser() -> argparse.ArgumentParser:
         help="preview archival recovery of one cancelled preparation and its retained activation lease",
     )
     cancelled_activation.add_argument("--attempt", required=True)
-    cancelled_activation.add_argument("--iteration-attempt", required=True)
+    cancelled_continuation = cancelled_activation.add_mutually_exclusive_group(required=True)
+    cancelled_continuation.add_argument(
+        "--iteration-attempt",
+        help="exact successful retained idle-restart iteration",
+    )
+    cancelled_continuation.add_argument(
+        "--base-development",
+        action="store_true",
+        help="pin the exact retained successful development terminal without inventing an iteration",
+    )
     cancelled_activation.add_argument("--activation-attempt", required=True)
     cancelled_activation.add_argument("--config-sha256", required=True)
     cancelled_activation.add_argument("--source-root", type=Path, required=True)
     cancelled_activation.add_argument("--port", type=int, required=True)
+    cancelled_activation.add_argument(
+        "--cancellation-mode",
+        choices=("cancel-before-start",),
+        help="explicitly admit an all-success preparation set only when Compute never started",
+    )
     cancelled_activation.add_argument("--apply", action="store_true")
     cancelled_activation.add_argument("--expected-plan-sha256")
+    restarted = subparsers.add_parser("stop-restarted-terminal-volume", help="stop a pinned diagnostic-only restarted namespace after proving all tasks terminal and reservations released")
+    restarted.add_argument("--attempt", required=True)
+    restarted.add_argument("--resume-attempt", required=True)
+    restarted.add_argument("--config-sha256", required=True)
+    restarted.add_argument("--source-root", type=Path, required=True)
+    restarted.add_argument("--port", type=int, required=True)
+    restarted.add_argument("--apply", action="store_true")
     preowner_policy = subparsers.add_parser(
         "stop-preowner-policy-volume",
         help="preview or gracefully stop the exact startup-only diagnostic group after a refused budget",
@@ -2737,6 +2926,17 @@ def _parser() -> argparse.ArgumentParser:
     stop_bootstrap.add_argument("--resume-attempt", required=True)
     stop_bootstrap.add_argument("--source-root", type=Path, required=True)
     stop_bootstrap.add_argument("--port", type=int, required=True)
+    stop_iteration = subparsers.add_parser(
+        "stop-startup-iteration-volume",
+        help="stop an exact failed idle iteration retaining only a startup-fenced API and drained prior owner",
+    )
+    stop_iteration.add_argument("--attempt", required=True)
+    stop_iteration.add_argument("--iteration-attempt", required=True)
+    stop_iteration.add_argument("--config-sha256", required=True)
+    stop_iteration.add_argument("--source-root", type=Path, required=True)
+    stop_iteration.add_argument("--port", type=int, required=True)
+    stop_iteration.add_argument("--reconcile-stop-attempt", help="finalize one exact confirmed stop whose original helper still holds the lease")
+    stop_iteration.add_argument("--apply", action="store_true", help="stop after revalidating the preview under the control lease")
     recreate_volume = subparsers.add_parser("recreate-volume", help="Replace exact stopped-backend DEV services while retaining Docker caches")
     recreate_volume.add_argument("--attempt", required=True)
     recreate_volume.add_argument("--config-sha256", required=True)
@@ -2781,6 +2981,20 @@ def _parser() -> argparse.ArgumentParser:
     recreate_volume.add_argument("--drained-successor-proof-sha256", help="SHA-256 of the exact drained-successor proof")
     recreate_volume.add_argument("--terminal-observation-proof", help="Exact private control-volume proof of one terminal observation")
     recreate_volume.add_argument("--terminal-observation-proof-sha256", help="SHA-256 of the exact terminal observation proof")
+    recreate_volume.add_argument(
+        "--floquet-diagnostics",
+        choices=sorted(FLOQUET_DIAGNOSTIC_PROFILES),
+        action=_StoreOnce,
+        default=None,
+        help="explicitly select the successor group's bounded Floquet diagnostic profile",
+    )
+    recreate_volume.add_argument(
+        "--modal-shifted-ksp-type",
+        choices=sorted(MODAL_SHIFTED_KSP_SELECTIONS),
+        action=_StoreOnce,
+        default=None,
+        help="select the successor group's shifted modal KSP type or restore its native default",
+    )
     recreate_volume.add_argument(
         "--offline-reconciliation", metavar="OPERATION_TOKEN",
         help="consume the exact completed offline control repair without replaying its old operation",
@@ -2982,6 +3196,9 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.action == "recreate-volume":
+            _validate_floquet_diagnostics_request(args)
+            _validate_modal_shifted_ksp_type_request(args)
         if args.action in {"up", "build"}:
             from docker_dev_host import require_host
             require_host()
@@ -2999,8 +3216,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             from docker_volume_cache_maintenance import maintain
             maintain(args)
         elif args.action == "restart-idle-volume":
-            from docker_volume_dev import restart_idle
-            restart_idle(args)
+            from docker_volume_dev import restart_idle, stop_idle
+            (stop_idle if args.stop_only else restart_idle)(args)
         elif args.action == "increase-resources":
             from docker_volume_resources import increase
             increase(args)
@@ -3013,9 +3230,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.action == "stop-unadmitted":
             from docker_volume_stop_unadmitted import stop
             stop(args)
+        elif args.action == "reattest-linux-device":
+            from docker_volume_linux_reattest import run as reattest_linux_device
+            print(json.dumps(reattest_linux_device(args), ensure_ascii=False, sort_keys=True))
         elif args.action == "stop-diagnostic-volume":
             from docker_volume_stop_diagnostic import stop_diagnostic
             result = stop_diagnostic(args)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        elif args.action == "reconcile-failed-worker":
+            from docker_volume_failed_worker_reconciliation import run as reconcile_failed_worker
+            result = reconcile_failed_worker(args)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         elif args.action == "stop-preowner-policy-volume":
             if bool(args.proof_path) != bool(args.proof_sha256):
@@ -3045,9 +3269,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             from docker_volume_cancelled_activation import run as recover_cancelled_activation
             result = recover_cancelled_activation(args)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        elif args.action == "stop-restarted-terminal-volume":
+            from docker_volume_restart_recovery import run as stop_restarted
+            print(json.dumps(stop_restarted(args), ensure_ascii=False, sort_keys=True))
         elif args.action == "stop-bootstrap-volume":
             from docker_volume_stop_bootstrap import stop_bootstrap
             result = stop_bootstrap(args)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        elif args.action == "stop-startup-iteration-volume":
+            from docker_volume_stop_startup_iteration import stop_iteration
+            result = stop_iteration(args)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         elif args.action == "recreate-volume":
             if bool(args.terminal_observation_proof) != bool(args.terminal_observation_proof_sha256):

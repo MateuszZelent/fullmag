@@ -29,6 +29,10 @@ import {
 } from "./src/kernel/layout/instanceTabVisibility";
 
 describe("control-room Next dev proxy config", () => {
+  it("preserves bounded full archive uploads through the API proxy", () => {
+    expect(nextConfig.experimental?.proxyClientMaxBodySize).toBe(512 * 1024 * 1024);
+  });
+
   it("keeps proxy waiting compatible with the synchronous command phase owners", () => {
     const script = readFileSync(new URL("../../crates/fullmag-api/src/script.rs", import.meta.url), "utf8");
     const preparation = readFileSync(new URL("../../crates/fullmag-api/src/live_scene_preparation.rs", import.meta.url), "utf8");

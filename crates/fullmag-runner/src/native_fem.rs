@@ -147,6 +147,10 @@ use std::sync::Arc;
 mod mesh_preparation;
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub use mesh_preparation::prepare_fem_mesh_space;
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+mod tracking_mass;
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+pub(crate) use tracking_mass::TrackingMassSnapshot;
 
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn checked_native_finite(label: &str, value: f64) -> Result<f64, RunError> {

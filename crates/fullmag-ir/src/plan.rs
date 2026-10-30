@@ -1719,15 +1719,26 @@ pub struct FemEigenDispersionValidationIR {
     pub scenarios: Vec<FemEigenDispersionValidationScenarioIR>,
 }
 
+/// Requested completeness guarantee, independent of residual acceptance.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FemEigenCompletenessPolicyIR {
+    CertifiedCount,
+    BestEffort,
+}
+
 /// Optional native modal-solver controls carried by a resolved FEM eigen plan.
 ///
-/// An omitted value delegates resolution to the native PETSc/SLEPc adapter.
+/// Omitted numerical limits delegate resolution to the native PETSc/SLEPc adapter.
+/// Omitted completeness preserves the strict `certified_count` runner contract.
 /// This keeps backend defaults observable instead of silently imposing a
 /// runner-side iteration cap.  Values supplied here are requested limits,
 /// while the native diagnostics remain the authority for resolved limits.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FemEigenSolverPolicyIR {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completeness: Option<FemEigenCompletenessPolicyIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub residual_tolerance: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1869,6 +1880,10 @@ pub struct FemEigenPlanIR {
     pub spin_wave_bc: SpinWaveBoundaryConditionIR,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub demag_realization: Option<ResolvedFemDemagIR>,
+    /// Authored FEM Poisson policy for the bias-sample relaxation plan only.
+    /// This is independent of modal `solver_policy` and Floquet inner KSP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_solver_policy: Option<FemLinearSolverPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub air_box_config: Option<AirBoxConfigIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2250,6 +2265,22 @@ mod tests {
     };
 
     #[test]
+    fn fem_eigen_completeness_policy_is_typed_and_optional() {
+        for value in ["best_effort", "certified_count"] {
+            let input = serde_json::json!({"completeness": value});
+            let policy: FemEigenSolverPolicyIR = serde_json::from_value(input.clone()).unwrap();
+            assert_eq!(serde_json::to_value(policy).unwrap(), input);
+        }
+        for value in [serde_json::json!("complete"), serde_json::json!(0), serde_json::json!(true)] {
+            assert!(serde_json::from_value::<FemEigenSolverPolicyIR>(
+                serde_json::json!({"completeness": value})
+            ).is_err());
+        }
+        let omitted: FemEigenSolverPolicyIR = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(omitted.completeness.is_none());
+    }
+
+    #[test]
     fn fem_eigen_solver_policy_preserves_partial_fields_and_rejects_unknown_fields() {
         let policy: FemEigenSolverPolicyIR = serde_json::from_value(serde_json::json!({
             "residual_tolerance": 1.0e-8,
@@ -2259,6 +2290,7 @@ mod tests {
         assert_eq!(
             policy,
             FemEigenSolverPolicyIR {
+                completeness: None,
                 residual_tolerance: Some(1.0e-8),
                 max_outer_iterations: Some(24),
                 max_linear_iterations: None,

@@ -410,6 +410,104 @@ fn missing_manifest_cas_blocks_queue_and_exact_admission_replay() {
 }
 
 #[test]
+fn failed_invalid_output_without_solution_set_preserves_failed_catalog_and_artifacts() {
+    let mut fixture = fixture();
+    event(&mut fixture, 2, WorkerEvent::Completing);
+    crate::study::publish_study_outputs(
+        &fixture.store,
+        &fixture.accepted,
+        &fixture.producer.checkpoint().claim,
+        "producer",
+        &[],
+        None,
+        None,
+    )
+    .unwrap();
+    let run_id = fixture
+        .accepted
+        .run
+        .specification
+        .run_id
+        .as_str()
+        .to_owned();
+    let claim = fixture.producer.checkpoint().claim.clone();
+    let artifact_catalog_before = fixture
+        .store
+        .read_artifact_catalog(&run_id)
+        .unwrap()
+        .unwrap();
+    let task_before = fixture
+        .store
+        .read_run_catalog(&run_id)
+        .unwrap()
+        .unwrap()
+        .tasks[0]
+        .clone();
+    let manifest_ref = artifact_catalog_before
+        .entries
+        .iter()
+        .find(|entry| entry.artifact_type == "study_output_manifest")
+        .and_then(|entry| entry.object_ref.as_deref())
+        .unwrap()
+        .to_owned();
+    let solution_set_id = format!(
+        "solution-{}",
+        fullmag_session::canonical_json_sha256(&serde_json::json!({
+            "run_id": claim.run_id.as_str(),
+            "task_id": claim.task_id.as_str(),
+            "attempt_id": claim.attempt_id.as_str(),
+            "ownership_epoch": claim.ownership_epoch.value(),
+        }))
+    );
+    std::fs::remove_dir_all(
+        fixture
+            .store
+            .root()
+            .join("solutions")
+            .join(fullmag_session::hex_sha256(solution_set_id.as_bytes())),
+    )
+    .unwrap();
+    std::fs::remove_file(
+        fixture
+            .store
+            .root()
+            .join("objects/sha256")
+            .join(manifest_ref),
+    )
+    .unwrap();
+
+    event(
+        &mut fixture,
+        3,
+        WorkerEvent::Failed {
+            retryable: false,
+            reason: "fixture output publication failed".into(),
+        },
+    );
+
+    let catalog_after = fixture.store.read_run_catalog(&run_id).unwrap().unwrap();
+    assert_eq!(catalog_after.tasks[0].lifecycle, FmsTaskLifecycle::Failed);
+    assert_eq!(
+        catalog_after.tasks[0].artifact_ids,
+        task_before.artifact_ids
+    );
+    assert_eq!(
+        fixture
+            .store
+            .read_artifact_catalog(&run_id)
+            .unwrap()
+            .unwrap(),
+        artifact_catalog_before
+    );
+    assert!(fixture
+        .store
+        .solution_sets()
+        .read(&solution_set_id)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
 fn start_publication_rechecks_dependencies_after_admission() {
     let mut fixture = fixture();
     finish(&mut fixture);

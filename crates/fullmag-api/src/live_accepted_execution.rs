@@ -2363,6 +2363,15 @@ fn apply_live_accepted_observation_output_defaults(study: &mut fullmag_authoring
         if !step.enabled || !step.outputs.is_empty() {
             continue;
         }
+        if matches!(&step.kind, fullmag_authoring::StudyStepKind::Primitive {
+            stage_kind: fullmag_authoring::StudyPrimitiveStageKind::Eigenmodes,
+        }) {
+            step.outputs = vec![fullmag_authoring::StudyOutputPort {
+                port_id: fullmag_application::MODAL_EIGEN_OUTPUT_PORT.into(),
+                data_kind: fullmag_authoring::StudyPortDataKind::Artifact,
+            }];
+            continue;
+        }
         let needs_observation_outputs = match &step.kind {
             fullmag_authoring::StudyStepKind::Primitive { stage_kind } => matches!(
                 *stage_kind,
@@ -2749,7 +2758,7 @@ mod tests {
     }
 
     #[test]
-    fn live_accepted_observation_defaults_are_limited_to_enabled_empty_run_relax_steps() {
+    fn live_accepted_defaults_preserve_explicit_outputs_and_bind_modal_artifacts() {
         use fullmag_authoring::{StudyPrimitiveStageKind as Stage, StudyStepKind as Kind};
 
         let explicit = vec![
@@ -2862,7 +2871,10 @@ mod tests {
         assert_eq!(study.steps[1].outputs, default_observation_outputs());
         assert!(study.steps[2].outputs.is_empty());
         assert_eq!(study.steps[3].outputs, explicit);
-        assert!(study.steps[4].outputs.is_empty());
+        assert_eq!(study.steps[4].outputs, vec![fullmag_authoring::StudyOutputPort {
+            port_id: fullmag_application::MODAL_EIGEN_OUTPUT_PORT.into(),
+            data_kind: fullmag_authoring::StudyPortDataKind::Artifact,
+        }]);
         assert_eq!(study.steps[5].outputs, antenna);
         assert!(study.steps[6].outputs.is_empty());
         assert!(study.steps[7].outputs.is_empty());

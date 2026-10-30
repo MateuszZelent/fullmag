@@ -7,6 +7,7 @@ import type { InspectorPanelProps } from "../../inspectorTypes";
 import {
   DispersionOverviewResultInspector,
   DynamicsResultInspector,
+  hasStableDispersionReferenceOwner,
   HysteresisResultInspector,
   LegacyTimeDomainResultInspector,
   ResonanceOverviewResultInspector,
@@ -108,5 +109,49 @@ describe("physics-first result root Inspectors", () => {
     expect(html).toContain("Field sweep");
     expect(html).toContain("Branch and turning-point data");
     expect(html).toContain("Magnetization observable");
+  });
+});
+
+describe("dispersion reference import owner gate", () => {
+  const dispersionRef: Extract<SelectionRef, { type: "frequency-domain" }> = {
+    analysisRunId: "run-1",
+    analysisStageId: "stage-1",
+    artifactRevision: "sha256:dispersion-7",
+    kind: "results.eigen.dispersion",
+    nodeId: "results:run:run-1:stage:stage-1:dispersion",
+    resourceRef: "sha256:dispersion-7",
+    type: "frequency-domain",
+  };
+
+  it("requires a matching dispersion route and complete published owner identity", () => {
+    expect(hasStableDispersionReferenceOwner({
+      ...selection("results.eigen.dispersion", "Dispersion"),
+      ref: dispersionRef,
+    })).toBe(true);
+    expect(hasStableDispersionReferenceOwner({
+      ...selection("results.dispersion.modal.relation", "Dispersion"),
+      ref: { ...dispersionRef, kind: "results.dispersion.modal.relation" },
+    })).toBe(true);
+
+    expect(hasStableDispersionReferenceOwner({
+      ...selection("results.eigen.dispersion", "Dispersion"),
+      ref: { ...dispersionRef, analysisRunId: " " },
+    })).toBe(false);
+    expect(hasStableDispersionReferenceOwner({
+      ...selection("results.eigen.dispersion", "Dispersion"),
+      ref: { ...dispersionRef, analysisStageId: " " },
+    })).toBe(false);
+    expect(hasStableDispersionReferenceOwner({
+      ...selection("results.eigen.dispersion", "Dispersion"),
+      ref: { ...dispersionRef, artifactRevision: " " },
+    })).toBe(false);
+    expect(hasStableDispersionReferenceOwner({
+      ...selection("results.eigen.dispersion", "Dispersion"),
+      ref: { ...dispersionRef, kind: "results.eigen.spectrum" },
+    })).toBe(false);
+    expect(hasStableDispersionReferenceOwner({
+      ...selection("results.eigen.spectrum", "Spectrum"),
+      ref: dispersionRef,
+    })).toBe(false);
   });
 });

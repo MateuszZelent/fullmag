@@ -2317,6 +2317,26 @@ describe("ControlRoomApi", () => {
     );
   });
 
+  it.each(["forbidden", "read_only", undefined])(
+    "does not compute missing archived fields with commandability %s",
+    async (commandability) => {
+      const mutations: string[] = [];
+      const api = new ControlRoomApi({ baseUrl: "http://127.0.0.1:8765", fetchImpl: async (url, init) => {
+        const path = String(url);
+        if (init?.method === "POST") { mutations.push(path); throw new Error("Unexpected compute"); }
+        if (path.endsWith("/model/geometry/validation")) return jsonResponse({ dirty: false });
+        if (path.endsWith("/simulation/solver/status")) return jsonResponse({ is_busy: false });
+        if (path.endsWith("/status")) return jsonResponse({ lifecycle: { commandability } });
+        if (path.includes("/samples/vector")) return new Response(null, { status: 204, headers: contractHeaders });
+        if (path.includes("/meta")) return jsonResponse({ message: "field not available in memory" }, { status: 404 });
+        throw new Error(`Unexpected request ${path}`);
+      } });
+      await expect(api.data.fields.meta("m")).rejects.toMatchObject({ status: 404 });
+      expect((await api.data.fields.vector("m")).status).toBe("not-applicable");
+      expect(mutations).toEqual([]);
+    },
+  );
+
   it("materializes missing field metadata on demand before retrying", async () => {
     const calls: Array<{ body: unknown; method: string | undefined; url: string }> = [];
     let metaRequests = 0;
@@ -2334,6 +2354,7 @@ describe("ControlRoomApi", () => {
         }
         if (requestUrl.endsWith("/v2/sessions/current/status")) {
           return jsonResponse({
+            lifecycle: { commandability: "allowed" },
             resources: { mesh_revision: 1, mesh_build_revision: 1 },
           });
         }
@@ -2411,6 +2432,9 @@ describe("ControlRoomApi", () => {
         if (requestUrl.endsWith("/v2/sessions/current/model/geometry/validation")) {
           freshnessScopes.push(new Headers(init?.headers).get("x-fullmag-session-scope"));
           return jsonResponse({ dirty: false, scene_revision: 1 });
+        }
+        if (requestUrl.endsWith("/v2/sessions/current/status")) {
+          return jsonResponse({ lifecycle: { commandability: "allowed" } });
         }
         if (requestUrl.endsWith("/v2/sessions/current/simulation/commands")) {
           commandRequests += 1;
@@ -2634,6 +2658,7 @@ describe("ControlRoomApi", () => {
         }
         if (requestUrl.endsWith("/v2/sessions/current/status")) {
           return jsonResponse({
+            lifecycle: { commandability: "allowed" },
             resources: { mesh_revision: 1, mesh_build_revision: 1 },
           });
         }
@@ -5305,6 +5330,50 @@ describe("ControlRoomApi", () => {
       "http://127.0.0.1:8765/v2/sessions/current/diagnostics/gpu",
       "http://127.0.0.1:8765/v2/sessions/current/diagnostics/solver-profile",
     ]);
+  });
+
+  it("posts original archive blobs through the shared scoped transport without base64", async () => {
+    const file = new Blob(["raw FMS bytes"], { type: "application/octet-stream" });
+    const controller = new AbortController();
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const api = new ControlRoomApi({ baseUrl: "http://127.0.0.1:8765", fetchImpl: async (url, init) => {
+      requests.push({ url: String(url), init });
+      return jsonResponse({ inspection: {}, session_id: "imported-file" });
+    }});
+    const options = { signal: controller.signal, sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1" };
+    await api.persistence.imports.inspectFile(file, options);
+    await api.persistence.imports.commitFile(file, "visualization_only", options);
+    expect(requests.map(request => request.url)).toEqual([
+      "http://127.0.0.1:8765/v2/persistence/imports/file-inspections",
+      "http://127.0.0.1:8765/v2/sessions/current/persistence/file-imports?restore_mode=visualization_only",
+    ]);
+    for (const { init } of requests) {
+      expect(init?.body).toBe(file);
+      expect(init?.method).toBe("POST");
+      expect(init?.signal).toBe(controller.signal);
+      const headers = new Headers(init?.headers);
+      expect(headers.get("content-type")).toBe("application/octet-stream");
+      expect(headers.get("x-request-id")).toBeTruthy();
+      expect(headers.get("x-fullmag-session-scope")).toBe(options.sessionScopeKey);
+    }
+  });
+
+  it("rejects empty and oversized archive files before any HTTP request", async () => {
+    const fetchImpl = vi.fn();
+    const api = new ControlRoomApi({ baseUrl: "http://127.0.0.1:8765", fetchImpl });
+    await expect(api.persistence.imports.inspectFile(new Blob([]))).rejects.toMatchObject({ status: 400 });
+    const oversized = new Blob(["small backing buffer"]);
+    Object.defineProperty(oversized, "size", { value: 512 * 1024 * 1024 + 1 });
+    await expect(api.persistence.imports.commitFile(oversized, "visualization_only")).rejects.toMatchObject({ status: 413, code: "fms_archive_too_large" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("does not replay a failed file import and preserves the structured API error", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ code: "session_import_scope_changed", error: "Workspace changed" }, { status: 409 }));
+    const api = new ControlRoomApi({ baseUrl: "http://127.0.0.1:8765", fetchImpl, maxGetRetries: 3 });
+    await expect(api.persistence.imports.commitFile(new Blob(["fms"]), "visualization_only"))
+      .rejects.toMatchObject({ status: 409, code: "session_import_scope_changed" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("posts session import requests through persistence facade methods", async () => {

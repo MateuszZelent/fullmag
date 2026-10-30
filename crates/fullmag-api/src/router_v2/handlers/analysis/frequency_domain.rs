@@ -1,5 +1,8 @@
 //! Frequency-domain analysis family manifest and artifact resource endpoints.
 
+#[path = "frequency_domain_owner.rs"]
+pub(super) mod frequency_domain_owner;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::Read,
@@ -192,6 +195,7 @@ pub enum FrequencyDomainJsonArtifactPayload {
     Branches(FrequencyDomainBranchesArtifactPayload),
     FieldSweep(FrequencyDomainFieldSweepArtifactPayload),
     Diagnostics(FrequencyDomainDiagnosticsArtifactPayload),
+    EigenDiagnosticsV2(FrequencyDomainEigenDiagnosticsV2ArtifactPayload),
     Mode(FrequencyDomainModeArtifactPayload),
     ResponseSweep(FrequencyDomainResponseSweepArtifactPayload),
     ResponsePoint(FrequencyDomainResponsePointPayload),
@@ -656,6 +660,45 @@ pub struct FrequencyDomainDiagnosticsArtifactPayload {
     pub complete: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub interrupted: Option<bool>,
+    #[serde(flatten)]
+    pub extra: FrequencyDomainArtifactExtras,
+}
+
+/// One requested diagnostic section in the user-facing eigen diagnostics artifact.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainEigenDiagnosticSectionPayload {
+    pub status: String,
+    pub available: bool,
+    pub data: Option<Value>,
+    pub unavailable_reason: Option<String>,
+    #[serde(flatten)]
+    pub extra: FrequencyDomainArtifactExtras,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainEigenDiagnosticsDispersionPayload {
+    pub sample_count: u64,
+    pub mode_count: u64,
+    pub mode_count_requested: Option<u64>,
+    #[serde(flatten)]
+    pub extra: FrequencyDomainArtifactExtras,
+}
+
+/// Schema for the user-requested eigen diagnostics projection. This differs
+/// from solver diagnostics, which report execution completion and interruption.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainEigenDiagnosticsV2ArtifactPayload {
+    pub schema_version: String,
+    pub solver_model: String,
+    pub solver_model_scope: String,
+    pub sample_count: u64,
+    pub mode_count: u64,
+    pub dispersion: FrequencyDomainEigenDiagnosticsDispersionPayload,
+    pub tracking: FrequencyDomainEigenDiagnosticSectionPayload,
+    pub residuals: FrequencyDomainEigenDiagnosticSectionPayload,
+    pub overlaps: FrequencyDomainEigenDiagnosticSectionPayload,
+    pub tangent_leakage: FrequencyDomainEigenDiagnosticSectionPayload,
+    pub orthogonality: FrequencyDomainEigenDiagnosticSectionPayload,
     #[serde(flatten)]
     pub extra: FrequencyDomainArtifactExtras,
 }
@@ -1276,6 +1319,7 @@ pub async fn get_frequency_domain_eigen_dispersion(
         &captured.artifact_dir,
         "eigen/dispersion/path.json",
         captured.generation.as_ref(),
+        csv_snapshot.as_ref().map(|(text, _)| text.as_str()),
     )?;
     captured.bind_artifact_path("eigen/dispersion.csv")?;
     if let (Some((text, _)), Some(path_metadata)) = (csv_snapshot.as_ref(), path_metadata.as_ref())
@@ -2166,105 +2210,110 @@ struct FrequencyDomainLiveArtifactIdentity {
 }
 
 #[derive(Debug, Clone)]
-struct FrequencyDomainCapturedStageIdentity {
-    stage_id: Option<String>,
-    kind: Option<String>,
-    mesh_generation_id: Option<String>,
-    artifact_refs: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
 struct FrequencyDomainCapturedLiveIdentity {
     session_id: String,
     run_id: Option<String>,
-    stages: Vec<FrequencyDomainCapturedStageIdentity>,
-    active_stage_index: Option<usize>,
+    stages: Vec<crate::types::StageExecutionRecord>,
     latest_mesh_generation_id: Option<String>,
     mesh_generation_id: Option<String>,
 }
 
 impl FrequencyDomainCapturedLiveIdentity {
     fn from_snapshot(snapshot: &SessionStateResponse) -> Self {
-        let (stages, active_stage_index) = snapshot
-            .stage_execution
-            .as_ref()
-            .map(|execution| {
-                (
-                    execution
-                        .stages
-                        .iter()
-                        .map(|stage| FrequencyDomainCapturedStageIdentity {
-                            stage_id: stage.stage_id.clone(),
-                            kind: stage.kind.clone(),
-                            mesh_generation_id: stage.mesh_generation_id.clone(),
-                            artifact_refs: stage.artifact_refs.clone(),
-                        })
-                        .collect(),
-                    execution.active_stage_index,
-                )
-            })
-            .unwrap_or_default();
         Self {
             session_id: snapshot.session.session_id.clone(),
-            run_id: snapshot
-                .run
-                .as_ref()
-                .map(|run| run.run_id.clone())
+            run_id: snapshot.run.as_ref().map(|run| run.run_id.clone())
                 .or_else(|| Some(snapshot.session.run_id.clone())),
-            stages,
-            active_stage_index,
-            latest_mesh_generation_id: snapshot
-                .live_state
-                .as_ref()
+            stages: snapshot.stage_execution.as_ref()
+                .map(|execution| execution.stages.clone()).unwrap_or_default(),
+            latest_mesh_generation_id: snapshot.live_state.as_ref()
                 .and_then(|live| live.latest_step.fem_mesh_generation_id.clone()),
-            mesh_generation_id: snapshot
-                .fem_mesh
-                .as_ref()
-                .and_then(|mesh| mesh.generation_id.clone()),
+            mesh_generation_id: snapshot.fem_mesh.as_ref().and_then(|mesh| mesh.generation_id.clone()),
         }
     }
 
-    fn artifact_identity(&self, artifact_path: &str) -> FrequencyDomainLiveArtifactIdentity {
-        let expected_kind_fragment = if artifact_path.starts_with("eigen/") {
-            Some("eigen")
-        } else if artifact_path.starts_with("response/") {
-            Some("frequency")
-        } else {
-            None
-        };
-        let stage = self
-            .stages
-            .iter()
-            .rev()
-            .find(|stage| {
-                stage.artifact_refs.iter().any(|reference| {
-                    reference == artifact_path || reference.ends_with(artifact_path)
-                })
+    fn same_owner_context(&self, other: &Self) -> bool {
+        self.session_id == other.session_id && self.run_id == other.run_id
+            && self.latest_mesh_generation_id == other.latest_mesh_generation_id
+            && self.mesh_generation_id == other.mesh_generation_id
+            && self.stages.len() == other.stages.len()
+            && self.stages.iter().zip(&other.stages).all(|(left, right)| {
+                left.stage_id == right.stage_id
+                    && left.mesh_generation_id == right.mesh_generation_id
+                    && left.artifact_refs == right.artifact_refs
             })
-            .or_else(|| {
-                expected_kind_fragment.and_then(|fragment| {
-                    self.stages.iter().rev().find(|stage| {
-                        stage
-                            .kind
-                            .as_deref()
-                            .is_some_and(|kind| kind.contains(fragment))
-                    })
-                })
-            })
-            .or_else(|| {
-                self.active_stage_index
-                    .and_then(|index| self.stages.get(index))
-            });
-        FrequencyDomainLiveArtifactIdentity {
+    }
+
+    fn artifact_identity(
+        &self,
+        root: &FsPath,
+        artifact_path: &str,
+        generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
+    ) -> Result<(FrequencyDomainLiveArtifactIdentity, Option<frequency_domain_owner::LegacyOwnerSnapshot>), ApiError> {
+        let mut identity = FrequencyDomainLiveArtifactIdentity {
             session_id: Some(self.session_id.clone()),
             run_id: self.run_id.clone(),
-            stage_id: stage.and_then(|stage| stage.stage_id.clone()),
-            mesh_generation_id: stage
-                .and_then(|stage| stage.mesh_generation_id.clone())
-                .or_else(|| self.latest_mesh_generation_id.clone())
-                .or_else(|| self.mesh_generation_id.clone()),
+            stage_id: None,
+            mesh_generation_id: self.latest_mesh_generation_id.clone().or_else(|| self.mesh_generation_id.clone()),
+        };
+        if artifact_path.is_empty() { return Ok((identity, None)); }
+        let legacy = if let Some(generation) = generation {
+            // A committed producer owns only exact members. Neither mutable
+            // aliases nor currently active stages may bind an unowned member.
+            if generation.commit.content.members.contains_key(artifact_path) {
+                super::results::validate_generation_producer(Some(generation), self.run_id.as_deref(), None)?;
+                if let Some(producer) = &generation.commit.content.producer {
+                    identity.run_id = Some(producer.run_id.clone());
+                    identity.stage_id = Some(producer.stage_id.clone());
+                }
+            }
+            None
+        } else {
+            let legacy = frequency_domain_owner::read_legacy_owner(root, artifact_path)?;
+            if let Some(owner) = legacy.as_ref().and_then(|snapshot| snapshot.owner.as_ref()) {
+                if self.run_id.as_deref().is_some_and(|run| run != owner.run_id) {
+                    return Err(ApiError::conflict("frequency_domain_artifact_generation_owner_mismatch"));
+                }
+            }
+            let published_owner = legacy.as_ref().and_then(|snapshot| snapshot.owner.as_ref());
+            if self.stages.iter().all(|stage| stage.artifact_refs.is_empty()) {
+                // Without reference evidence there is nothing to hash for owner
+                // resolution. A missing published owner remains unbound.
+                identity.stage_id = published_owner.map(|owner| owner.stage_id.clone());
+            } else if let Some((digest, byte_length)) = legacy_artifact_identity(root, artifact_path)? {
+                let stage = super::results::result_artifact_stage_id_with_captured_legacy_owner(
+                    root, artifact_path, self.run_id.as_deref().unwrap_or_default(),
+                    &self.stages, None, &digest, byte_length, legacy.as_ref(),
+                )?;
+                if stage != "stage:analysis" { identity.stage_id = Some(stage); }
+            }
+            legacy
+        };
+        if let Some(stage_id) = &identity.stage_id {
+            if let Some(stage) = self.stages.iter().find(|stage| stage.stage_id.as_ref() == Some(stage_id)) {
+                identity.mesh_generation_id = stage.mesh_generation_id.clone().or(identity.mesh_generation_id);
+            }
         }
+        Ok((identity, legacy))
     }
+}
+
+/// Hash legacy bytes without allocating a second complete binary field. Modern
+/// generation members already carry this identity and never enter this path.
+fn legacy_artifact_identity(root: &FsPath, artifact_path: &str) -> Result<Option<(String, u64)>, ApiError> {
+    let Some(path) = try_resolve_artifact_path(root, artifact_path)? else { return Ok(None) };
+    let mut file = std::fs::File::open(path)?;
+    if !file.metadata()?.is_file() { return Err(ApiError::internal("legacy artifact is not a regular file")); }
+    let mut hasher = Sha256::new();
+    let mut length = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 { break; }
+        hasher.update(&buffer[..count]);
+        length += count as u64;
+    }
+    Ok(Some((format!("sha256:{:x}", hasher.finalize()), length)))
 }
 
 #[derive(Debug, Clone)]
@@ -2276,17 +2325,19 @@ pub(crate) struct FrequencyDomainArtifactSetCapture {
     live_identity: FrequencyDomainCapturedLiveIdentity,
     artifact_path: String,
     identity: FrequencyDomainLiveArtifactIdentity,
+    legacy_owner: Option<frequency_domain_owner::LegacyOwnerSnapshot>,
 }
 
 impl FrequencyDomainArtifactSetCapture {
     fn bind_artifact_path(&mut self, artifact_path: &str) -> Result<(), ApiError> {
+        if self.artifact_path == artifact_path { return Ok(()); }
         self.artifact_path = artifact_path.to_string();
-        self.identity = self.live_identity.artifact_identity(artifact_path);
-        super::results::validate_generation_producer(
-            self.generation.as_ref(),
-            self.identity.run_id.as_deref(),
-            self.identity.stage_id.as_deref(),
-        )
+        let (identity, legacy_owner) = self.live_identity.artifact_identity(
+            &self.artifact_dir, artifact_path, self.generation.as_ref(),
+        )?;
+        self.identity = identity;
+        self.legacy_owner = legacy_owner;
+        Ok(())
     }
 
     fn generation_status(&self) -> Option<FrequencyDomainArtifactGenerationStatus> {
@@ -2318,18 +2369,37 @@ impl FrequencyDomainArtifactSetCapture {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct FrequencyDomainFieldOwnerCapture {
+    legacy_owner: Option<frequency_domain_owner::LegacyOwnerSnapshot>,
+}
+
+impl FrequencyDomainFieldOwnerCapture {
+    pub(crate) fn ensure_current(
+        &self,
+        root: &FsPath,
+        artifact_path: &str,
+        generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
+    ) -> Result<(), ApiError> {
+        if generation.is_none()
+            && frequency_domain_owner::read_legacy_owner(root, artifact_path)? != self.legacy_owner
+        {
+            return Err(ApiError::conflict("frequency_domain_artifact_set_stale"));
+        }
+        super::results::ensure_generation_capture_current(root, generation)
+    }
+}
+
 pub(crate) fn validate_frequency_domain_field_artifact_owner(
     snapshot: &SessionStateResponse,
     artifact_path: &str,
     generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
-) -> Result<(), ApiError> {
-    let identity = FrequencyDomainCapturedLiveIdentity::from_snapshot(snapshot)
-        .artifact_identity(artifact_path);
-    super::results::validate_generation_producer(
-        generation,
-        identity.run_id.as_deref(),
-        identity.stage_id.as_deref(),
-    )
+) -> Result<FrequencyDomainFieldOwnerCapture, ApiError> {
+    let root = crate::session::current_artifact_dir(snapshot)
+        .ok_or_else(|| ApiError::not_found("no artifact directory for analysis field payload"))?;
+    let (_, legacy_owner) = FrequencyDomainCapturedLiveIdentity::from_snapshot(snapshot)
+        .artifact_identity(&root, artifact_path, generation)?;
+    Ok(FrequencyDomainFieldOwnerCapture { legacy_owner })
 }
 
 fn canonical_frequency_domain_artifact_root(
@@ -2375,14 +2445,9 @@ async fn capture_frequency_domain_artifact_set(
         })?;
     let live_identity = FrequencyDomainCapturedLiveIdentity::from_snapshot(snapshot);
     let artifact_path = artifact_paths.first().copied().unwrap_or_default();
-    let identity = live_identity.artifact_identity(artifact_path);
-    if !artifact_path.is_empty() {
-        super::results::validate_generation_producer(
-            generation.as_ref(),
-            identity.run_id.as_deref(),
-            identity.stage_id.as_deref(),
-        )?;
-    }
+    let (identity, legacy_owner) = live_identity.artifact_identity(
+        &artifact_dir, artifact_path, generation.as_ref(),
+    )?;
     Ok(FrequencyDomainArtifactSetCapture {
         request_context,
         artifact_dir,
@@ -2391,6 +2456,7 @@ async fn capture_frequency_domain_artifact_set(
         live_identity,
         artifact_path: artifact_path.to_string(),
         identity,
+        legacy_owner,
     })
 }
 
@@ -2410,9 +2476,21 @@ async fn validate_current_frequency_domain_artifact_set(
         .ok_or_else(|| ApiError::not_found("no artifact directory for the active workspace"))?;
     let (artifact_dir, artifact_set_id) = canonical_frequency_domain_artifact_root(&artifact_root)?;
     let live_identity = FrequencyDomainCapturedLiveIdentity::from_snapshot(snapshot);
+    let (identity, legacy_owner) = if captured.generation.is_none() {
+        if !live_identity.same_owner_context(&captured.live_identity) {
+            return Err(ApiError::conflict("frequency_domain_artifact_set_stale"));
+        }
+        let owner = frequency_domain_owner::read_legacy_owner(&artifact_dir, &captured.artifact_path)?;
+        // The source and exact-reference identity were already captured. Only
+        // owner-record and live-context witnesses need rechecking here.
+        (captured.identity.clone(), owner)
+    } else {
+        live_identity.artifact_identity(&artifact_dir, &captured.artifact_path, captured.generation.as_ref())?
+    };
     if artifact_dir != captured.artifact_dir
         || artifact_set_id != captured.artifact_set_id
-        || live_identity.artifact_identity(&captured.artifact_path) != captured.identity
+        || identity != captured.identity
+        || legacy_owner != captured.legacy_owner
     {
         return Err(ApiError::conflict("frequency_domain_artifact_set_stale"));
     }
@@ -2487,6 +2565,14 @@ pub(crate) fn decode_frequency_domain_artifact_payload(
             &["eigen/field_sweep.v1" as &str][..],
             serde_json::from_value::<FrequencyDomainFieldSweepArtifactPayload>(value)
                 .map(FrequencyDomainJsonArtifactPayload::FieldSweep),
+        )
+    } else if artifact_path == "eigen/diagnostics.v2.json"
+        && schema_version == "eigen_diagnostics.v2"
+    {
+        (
+            &["eigen_diagnostics.v2" as &str][..],
+            serde_json::from_value::<FrequencyDomainEigenDiagnosticsV2ArtifactPayload>(value)
+                .map(FrequencyDomainJsonArtifactPayload::EigenDiagnosticsV2),
         )
     } else if artifact_path == "eigen/diagnostics.v2.json"
         || artifact_path == "eigen/diagnostics/solver.v1.json"
@@ -2576,7 +2662,44 @@ pub(crate) fn decode_frequency_domain_artifact_payload(
     if let FrequencyDomainJsonArtifactPayload::FieldSweep(field_sweep) = &payload {
         validate_frequency_domain_field_sweep(field_sweep)?;
     }
+    if let FrequencyDomainJsonArtifactPayload::EigenDiagnosticsV2(diagnostics) = &payload {
+        validate_frequency_domain_eigen_diagnostics_v2(diagnostics)?;
+    }
     Ok(payload)
+}
+
+fn validate_frequency_domain_eigen_diagnostics_v2(
+    diagnostics: &FrequencyDomainEigenDiagnosticsV2ArtifactPayload,
+) -> Result<(), ApiError> {
+    const ARTIFACT_PATH: &str = "eigen/diagnostics.v2.json";
+    if diagnostics.dispersion.sample_count != diagnostics.sample_count
+        || diagnostics.dispersion.mode_count != diagnostics.mode_count
+    {
+        return Err(ApiError::internal(format!(
+            "inconsistent eigen diagnostics dispersion counts in '{ARTIFACT_PATH}'"
+        )));
+    }
+
+    for (name, section) in [
+        ("tracking", &diagnostics.tracking),
+        ("residuals", &diagnostics.residuals),
+        ("overlaps", &diagnostics.overlaps),
+        ("tangent_leakage", &diagnostics.tangent_leakage),
+        ("orthogonality", &diagnostics.orthogonality),
+    ] {
+        let available_status = matches!(section.status.as_str(), "available" | "partial");
+        if section.available != available_status || section.available != section.data.is_some() {
+            return Err(ApiError::internal(format!(
+                "inconsistent eigen diagnostics {name} availability in '{ARTIFACT_PATH}'"
+            )));
+        }
+        if !section.available && section.unavailable_reason.is_none() {
+            return Err(ApiError::internal(format!(
+                "missing eigen diagnostics {name} unavailable_reason in '{ARTIFACT_PATH}'"
+            )));
+        }
+    }
+    Ok(())
 }
 
 // Persisted field identity does not require an HTTP route. Legacy readers may
@@ -3323,6 +3446,7 @@ fn read_dispersion_path_metadata_resource(
     artifact_dir: &std::path::Path,
     artifact_path: &str,
     generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
+    csv_content: Option<&str>,
 ) -> Result<Option<FrequencyDomainKPathMetadataResource>, ApiError> {
     let Some((value, _)) = super::results::read_result_artifact_snapshot_in_generation(
         artifact_dir,
@@ -3337,12 +3461,57 @@ fn read_dispersion_path_metadata_resource(
     } else {
         serde_json::json!({ "sampling": value })
     };
+    if normalized["sampling"]["kind"] == "single" {
+        validate_single_dispersion_sampling(&normalized, csv_content)
+            .map_err(|error| ApiError::internal(format!("invalid {artifact_path}: {error}")))?;
+        // A single sample is not a path. Its coordinates remain in the CSV;
+        // do not invent control points or relax the typed path contract.
+        return Ok(None);
+    }
     let mut resource =
         serde_json::from_value::<FrequencyDomainKPathMetadataResource>(normalized)
             .map_err(|error| ApiError::internal(format!("invalid {artifact_path}: {error}")))?;
     normalize_and_validate_dispersion_path_metadata(&mut resource)
         .map_err(|error| ApiError::internal(format!("invalid {artifact_path}: {error}")))?;
     Ok(Some(resource))
+}
+
+fn validate_single_dispersion_sampling(
+    value: &serde_json::Value,
+    csv_content: Option<&str>,
+) -> Result<(), String> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct SingleSampling {
+        kind: String,
+        k_vector: [f64; 3],
+    }
+    let sampling: SingleSampling = serde_json::from_value(value["sampling"].clone())
+        .map_err(|error| error.to_string())?;
+    if sampling.kind != "single" || !sampling.k_vector.iter().all(|v| v.is_finite()) {
+        return Err("single sampling requires a finite three-component k_vector".into());
+    }
+    if let Some(legacy_vector) = value.get("k_vector") {
+        let vector: [f64; 3] = serde_json::from_value(legacy_vector.clone())
+            .map_err(|error| error.to_string())?;
+        if vector != sampling.k_vector {
+            return Err("single sampling disagrees with legacy k_vector".into());
+        }
+    }
+    if let Some(csv) = csv_content {
+        let samples = parse_dispersion_csv_path_samples(csv)?;
+        if samples.len() > 1 {
+            return Err("single sampling cannot describe multiple CSV samples".into());
+        }
+        for sample in samples.values() {
+            if sample.k_vector.iter().zip(sampling.k_vector.iter())
+                .any(|(actual, expected)| (actual - expected).abs() > 1.0e-6)
+            {
+                return Err("single sampling k_vector disagrees with dispersion.csv".into());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn normalize_and_validate_dispersion_path_metadata(
@@ -4616,6 +4785,157 @@ mod spectrum_residual_tests {
 }
 
 #[cfg(test)]
+mod eigen_diagnostics_schema_tests {
+    use super::*;
+
+    fn eigen_diagnostics_v2() -> Value {
+        serde_json::json!({
+            "schema_version": "eigen_diagnostics.v2",
+            "solver_model": "slepc_modal_eigen",
+            "solver_model_scope": "selected_k_sample",
+            "sample_count": 1,
+            "mode_count": 1,
+            "dispersion": {
+                "sample_count": 1,
+                "mode_count": 1,
+                "mode_count_requested": 1
+            },
+            "tracking": {
+                "status": "not_requested",
+                "available": false,
+                "data": null,
+                "unavailable_reason": "disabled_by_request"
+            },
+            "residuals": {
+                "status": "partial",
+                "available": true,
+                "data": {
+                    "mode_count": 1,
+                    "records": [{
+                        "sample_index": 0,
+                        "sample_id": "sample-0000",
+                        "raw_mode_index": 0,
+                        "mode_id": "sample-0000/mode-0000",
+                        "branch_id": null,
+                        "residual_absolute_l2": null,
+                        "residual_relative_l2": 2.7347e-13,
+                        "residual_linf": null
+                    }]
+                },
+                "unavailable_reason": "some_requested_metrics_not_reported"
+            },
+            "overlaps": {
+                "status": "not_applicable",
+                "available": false,
+                "data": null,
+                "unavailable_reason": "single_sample_has_no_predecessor"
+            },
+            "tangent_leakage": {
+                "status": "unavailable",
+                "available": false,
+                "data": null,
+                "unavailable_reason": "tangent_leakage_metrics_not_reported"
+            },
+            "orthogonality": {
+                "status": "available",
+                "available": true,
+                "data": {
+                    "definition": "mass_inner_product = u_i^T M u_j",
+                    "records": [{
+                        "sample_index": 0,
+                        "sample_id": "sample-0000",
+                        "lhs_mode_index": 0,
+                        "rhs_mode_index": 0,
+                        "mass_inner_product": 1.0
+                    }]
+                },
+                "unavailable_reason": null
+            },
+            "execution_lane": "production_cpu",
+            "solver_adapter": "slepc_modal_eigen"
+        })
+    }
+
+    #[test]
+    fn eigen_diagnostics_v2_uses_its_own_contract_and_preserves_legacy_schemas() {
+        let payload = decode_frequency_domain_artifact_payload(
+            "eigen/diagnostics.v2.json",
+            eigen_diagnostics_v2(),
+        )
+        .expect("the eigen diagnostics producer schema should be readable");
+        let FrequencyDomainJsonArtifactPayload::EigenDiagnosticsV2(diagnostics) = payload else {
+            panic!("eigen diagnostics should use its own typed payload");
+        };
+        assert_eq!(diagnostics.solver_model, "slepc_modal_eigen");
+        assert_eq!(diagnostics.sample_count, 1);
+        assert!(diagnostics.residuals.available);
+        assert_eq!(
+            diagnostics.residuals.data.as_ref().unwrap()["records"][0]
+                ["residual_relative_l2"],
+            2.7347e-13
+        );
+        assert_eq!(diagnostics.extra.0["execution_lane"], "production_cpu");
+
+        let mut missing_section = eigen_diagnostics_v2();
+        missing_section.as_object_mut().unwrap().remove("residuals");
+        assert!(decode_frequency_domain_artifact_payload(
+            "eigen/diagnostics.v2.json",
+            missing_section,
+        )
+        .is_err());
+
+        let mut inconsistent_counts = eigen_diagnostics_v2();
+        inconsistent_counts["dispersion"]["sample_count"] = serde_json::json!(2);
+        assert!(decode_frequency_domain_artifact_payload(
+            "eigen/diagnostics.v2.json",
+            inconsistent_counts,
+        )
+        .is_err());
+
+        let mut inconsistent_section = eigen_diagnostics_v2();
+        inconsistent_section["residuals"]["available"] = serde_json::json!(false);
+        assert!(decode_frequency_domain_artifact_payload(
+            "eigen/diagnostics.v2.json",
+            inconsistent_section,
+        )
+        .is_err());
+
+        for path in [
+            "eigen/diagnostics.v2.json",
+            "eigen/diagnostics/solver.v1.json",
+        ] {
+            for schema in [
+                "frequency_domain_modal_solver_diagnostics.v1",
+                "frequency_domain_modal_solver_diagnostics.v2",
+            ] {
+                let payload = decode_frequency_domain_artifact_payload(
+                    path,
+                    serde_json::json!({"schema_version": schema, "status": "completed"}),
+                )
+                .expect("historical modal solver diagnostics remain readable");
+                assert!(matches!(payload, FrequencyDomainJsonArtifactPayload::Diagnostics(_)));
+            }
+        }
+
+        for path in [
+            "response/diagnostics/solver.v1.json",
+            "response/diagnostics.v1.json",
+        ] {
+            for schema in [
+                "frequency_domain_response_diagnostics.v1",
+                "frequency_domain_response_diagnostics.v2",
+            ] {
+                assert!(decode_frequency_domain_artifact_payload(
+                    path,
+                    serde_json::json!({"schema_version": schema, "status": "completed"}),
+                )
+                .is_ok());
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod response_progress_generation_tests {
     use super::*;
     use std::path::PathBuf;
@@ -4866,5 +5186,84 @@ mod response_progress_generation_tests {
                 Some(&generation),
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod frequency_domain_owner_capture_tests {
+    use super::*;
+
+    struct Root(PathBuf);
+    impl Root {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!("frequency-owner-capture-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(root.join("eigen")).unwrap();
+            std::fs::create_dir_all(root.join("frequency_domain")).unwrap();
+            Self(root)
+        }
+    }
+    impl Drop for Root { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); } }
+
+    fn live_identity() -> FrequencyDomainCapturedLiveIdentity {
+        FrequencyDomainCapturedLiveIdentity {
+            session_id: "import-session".into(), run_id: Some("archived-run".into()),
+            stages: vec![serde_json::from_value(serde_json::json!({
+                "stage_id":"unrelated-modal-stage", "kind":"flat_eigenmodes", "status":"completed"
+            })).unwrap()],
+            latest_mesh_generation_id: None, mesh_generation_id: None,
+        }
+    }
+
+    #[test]
+    fn committed_owner_identity_ignores_legacy_records_and_unrelated_stages() {
+        let root = Root::new();
+        let path = "eigen/spectrum.v2.json";
+        std::fs::write(root.0.join("metadata.json"), b"invalid mutable alias").unwrap();
+        std::fs::write(root.0.join("frequency_domain/manifest.v1.json"), b"invalid mutable manifest").unwrap();
+        let unbound = super::super::results::write_immutable_result_generation_for_test(
+            &root.0, [(path.into(), b"{}".to_vec())], None,
+        );
+        for member in [path, "eigen/nonmember.json"] {
+            let (identity, witness) = live_identity().artifact_identity(&root.0, member, Some(&unbound)).unwrap();
+            assert!(identity.stage_id.is_none());
+            assert!(witness.is_none());
+        }
+        let producer = fullmag_runner::artifact_generation::PublicationOwner {
+            run_id: "archived-run".into(), stage_id: "published-stage".into(), stage_kind: "eigenmodes".into(),
+        };
+        let bound = super::super::results::write_immutable_result_generation_for_test(
+            &root.0, [(path.into(), b"{}".to_vec())], Some(producer),
+        );
+        let (identity, _) = live_identity().artifact_identity(&root.0, path, Some(&bound)).unwrap();
+        assert_eq!(identity.stage_id.as_deref(), Some("published-stage"));
+        let mut foreign = live_identity();
+        foreign.run_id = Some("foreign-run".into());
+        assert!(foreign.artifact_identity(&root.0, path, Some(&bound)).is_err());
+    }
+
+    #[test]
+    fn legacy_identity_never_infers_owner_from_unreferenced_stage_kind() {
+        let root = Root::new();
+        let path = "eigen/spectrum.v2.json";
+        std::fs::write(root.0.join(path), b"{}").unwrap();
+        let (identity, _) = live_identity().artifact_identity(&root.0, path, None).unwrap();
+        assert!(identity.stage_id.is_none());
+    }
+
+    #[test]
+    fn legacy_binary_owner_capture_fences_even_same_owner_record_changes() {
+        let root = Root::new();
+        let path = "eigen/field.bin";
+        std::fs::write(root.0.join("frequency_domain/manifest.v1.json"), br#"{"schema_version":"frequency_domain_manifest.v1","study_product":"modal_eigen"}"#).unwrap();
+        let metadata = serde_json::json!({"problem_meta":{"runtime_metadata":{
+            "producer_run_id":"archived-run","producer_stage_id":"published-stage","producer_stage_kind":"eigenmodes"}}});
+        std::fs::write(root.0.join("metadata.json"), serde_json::to_vec(&metadata).unwrap()).unwrap();
+        let (_, witness) = live_identity().artifact_identity(&root.0, path, None).unwrap();
+        let capture = FrequencyDomainFieldOwnerCapture { legacy_owner: witness };
+        capture.ensure_current(&root.0, path, None).unwrap();
+        let mut changed = metadata;
+        changed["diagnostic"] = serde_json::json!("changed after capture");
+        std::fs::write(root.0.join("metadata.json"), serde_json::to_vec(&changed).unwrap()).unwrap();
+        assert!(capture.ensure_current(&root.0, path, None).is_err());
     }
 }

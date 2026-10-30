@@ -48,6 +48,7 @@ pub(crate) mod waveguide_mesh_bindings;
 pub(crate) mod waveguide_mesh_dirichlet;
 pub(crate) mod waveguide_mesh_world;
 pub(crate) mod waveguide_mesh_identity;
+mod ordered_map;
 mod floating_point_guard;
 mod validation;
 pub use antenna::*;
@@ -84,7 +85,10 @@ pub use quantities::{
     field_to_quantity_output, scalar_to_quantity_output, OutputSinkIR, QuantityOutputIR,
 };
 pub use selection::*;
-pub use spectral_validation::BlochWavevectorIR;
+pub use spectral_validation::{
+    validate_bounded_floquet_dynamic_demag_admission, BlochWavevectorIR,
+    FLOQUET_TRANSLATION_AXIS_TOLERANCE_M,
+};
 pub use spin_transport::*;
 pub use antenna_lead_preparation::*;
 pub use study::*;

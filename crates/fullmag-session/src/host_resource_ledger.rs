@@ -48,6 +48,10 @@ use crate::types::{
 };
 use crate::writer::Writer;
 
+mod pending_inventory_recovery;
+mod failed_worker_exit;
+pub use failed_worker_exit::FailedWorkerExitReconciliation;
+
 pub mod worker_orphan_teardown;
 pub use worker_orphan_teardown::*;
 
@@ -718,7 +722,11 @@ pub struct HostResourceReservation {
     pub identity: HostReservationIdentity,
     /// Integrity check for the immutable request fields; reservation state is
     /// excluded so safe state transitions retain the same request identity.
+    /// Only proof-backed pre-coordinator inventory revalidation may repin its producer.
     pub request_sha256: String,
+    /// Content-addressed proof for the explicit pre-coordinator inventory revalidation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_inventory_recovery_sha256: Option<String>,
     pub host_id: String,
     pub policy_revision: u64,
     pub host_owner_epoch: u64,
@@ -765,6 +773,7 @@ impl HostResourceReservation {
         Ok(Self {
             identity: request.identity.clone(),
             request_sha256: host_request_sha256(request)?,
+            pending_inventory_recovery_sha256: None,
             host_id: request.expected_host_id.clone(),
             policy_revision: request.expected_policy_revision,
             host_owner_epoch: request.expected_owner_epoch,
@@ -5135,9 +5144,23 @@ impl HostResourceLedger {
         run_id: &str,
         receipt_id: &str,
     ) -> Result<HostResourceReservation> {
+        self.release_worker_after_exit_with_store_identity(store, run_id, receipt_id, || {
+            Self::store_id(store.root())
+        })
+    }
+
+    // Only the ordinary admission above and exact failed-worker maintenance
+    // below can supply the validated store identity. No public string override.
+    fn release_worker_after_exit_with_store_identity(
+        &self,
+        store: &SessionStore,
+        run_id: &str,
+        receipt_id: &str,
+        store_identity: impl FnOnce() -> Result<String>,
+    ) -> Result<HostResourceReservation> {
         let _host_writer = self.writer.acquire()?;
         let _store_writer = store.write_transaction()?;
-        let store_id = Self::store_id(store.root())?;
+        let store_id = store_identity()?;
         let mut document = self.read_document_locked()?;
         let receipt = store
             .read_worker_process_exit_receipt(run_id, receipt_id)?
@@ -6419,6 +6442,7 @@ fn validate_ledger_document_body(document: &HostResourceLedgerDocument, root: &P
     for reservation in &document.reservations {
         let reservation_policy = document.policy_for_reservation(reservation)?;
         reservation.validate(reservation_policy)?;
+        pending_inventory_recovery::validate_receipt(root, reservation_policy, reservation)?;
         if reservation.node_policy_revision > 0 {
             let current_revision = document
                 .node_policy
@@ -7703,6 +7727,7 @@ fn validate_worker_orphan_release_proof_identity(
 
 #[cfg(test)]
 mod tests {
+    include!("host_resource_ledger/failed_worker_exit_tests.rs");
     use super::*;
 
     const GPU_A: &str = "GPU-00000000-0000-4000-8000-000000000001";
@@ -9132,16 +9157,16 @@ mod tests {
         }
     }
 
-    struct V4WorkerLaunchFixture {
+    pub(super) struct V4WorkerLaunchFixture {
         _directory: tempfile::TempDir,
-        store: SessionStore,
-        ledger: HostResourceLedger,
-        inventory_owner: Option<HostInventoryOwner>,
-        request: HostReservationRequest,
-        lease: FmsResourceLease,
+        pub(super) store: SessionStore,
+        pub(super) ledger: HostResourceLedger,
+        pub(super) inventory_owner: Option<HostInventoryOwner>,
+        pub(super) request: HostReservationRequest,
+        pub(super) lease: FmsResourceLease,
     }
 
-    fn v4_worker_launch_fixture(task_id: &str) -> V4WorkerLaunchFixture {
+    pub(super) fn v4_worker_launch_fixture(task_id: &str) -> V4WorkerLaunchFixture {
         let directory = tempfile::tempdir().unwrap();
         let mut policy = policy();
         policy.schema_version = HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V2.into();

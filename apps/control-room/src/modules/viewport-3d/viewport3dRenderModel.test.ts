@@ -1426,6 +1426,37 @@ describe("viewport3dRenderModel", () => {
 
       expect(modalSurface).not.toBeNull();
       expect(modalSurface?.projectionMode).toBe(projectionMode);
+      expect(modalSurface?.complexRepresentation).toBe("phase_rotated_real");
+      expect(modalSurface?.range).toEqual({ min: -8, max: 8 });
+      for (const representation of ["real", "imag", "abs", "phase"]) {
+        const displayed = buildViewport3DFieldRenderModel(
+          topologyModel, staleScopedTimeField, 0.5,
+          { ...options, modeOverlay: {
+            ...options.modeOverlay, representation, displayGain: 2,
+          } },
+        );
+        const surface = resolveViewport3DTargetSurfaceLayerInput({
+          fieldModel: displayed, partId: "part-a", scalarColorMode: "x",
+        }).scalarColors;
+        expect(surface?.complexRepresentation).toBe(representation);
+        expect(surface?.amplitudeScale).toBe(2);
+        expect(surface?.colors).toHaveLength(0);
+        expect(surface?.complexRealValues?.length).toBeGreaterThan(0);
+        expect(surface?.range).toEqual(representation === "phase"
+          ? { min: -Math.PI, max: Math.PI }
+          : { min: representation === "abs" ? 0 : -16, max: 16 });
+        // A new view must not mutate a previously published cached wrapper.
+        expect(modalSurface?.complexRepresentation).toBe("phase_rotated_real");
+        expect(modalSurface?.range).toEqual({ min: -8, max: 8 });
+      }
+      const manual = buildViewport3DFieldRenderModel(
+        topologyModel, staleScopedTimeField, 0.5,
+        { ...options, scalarRangesByMode: new Map([["x", { min: -3, max: 5 }]]),
+          modeOverlay: { ...options.modeOverlay, autoRange: false, displayGain: 2 } },
+      );
+      expect(resolveViewport3DTargetSurfaceLayerInput({
+        fieldModel: manual, partId: "part-a", scalarColorMode: "x",
+      }).scalarColors?.range).toEqual({ min: -3, max: 5 });
       expect(modalSurface).toMatchObject({
         complexPhaseRad: Math.PI / 2,
         floquetSpatialConvention:

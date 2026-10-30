@@ -13,6 +13,7 @@ import {
 const selection: Extract<SelectionRef, { type: "frequency-domain" }> = {
   analysisRunId: "run-k0",
   analysisStageId: "stage-eigen",
+  equilibriumId: "sha256:eq-k0",
   artifactRevision: "sha256:artifact-v1",
   fieldId: "analysis:eigen:sample-k0:mode-1:delta_m_xyz",
   kind: "results.eigen.mode",
@@ -48,6 +49,8 @@ const metadata: FrequencyDomainFieldResource = {
   quantity: "delta_m",
   resource_key: "data/fields/analysis%3Aeigen%3Asample-k0%3Amode-1%3Adelta_m_xyz",
   schema_version: "frequency_domain_mode_field.v1",
+    generation_id: "publication-14",
+    generation_status: "member_verified_owner_bound",
   source_family: "analysis/eigen",
   status: "ready",
   value_kind: "complex_spatial_vector",
@@ -88,6 +91,18 @@ describe("ModeFieldOverlayIntent", () => {
       sampleId: "sample-k0",
     });
     expect(Object.isFrozen(intent)).toBe(true);
+  });
+
+  it("accepts an exact nonzero-k Results mode and rejects missing stable identity", () => {
+    const atK = { ...selection, kind: "results.dispersion.modal.mode_at_k" as const };
+    expect(createModeFieldOverlayIntent(atK)?.modeId).toBe(selection.modeId);
+    expect(createModeFieldOverlayIntent({ ...atK, modeId: undefined })).toBeNull();
+  });
+
+  it("requires an explicit sample equilibrium for every eigenmode intent", () => {
+    expect(createModeFieldOverlayIntent({ ...selection, equilibriumId: undefined })).toBeNull();
+    expect(createModeFieldOverlayIntent({ ...selection, equilibriumId: " " })).toBeNull();
+    expect(createModeFieldOverlayIntent(selection)?.equilibriumId).toBe("sha256:eq-k0");
   });
 
   it("accepts only canonical ready global XYZ complex field metadata", () => {
@@ -145,6 +160,25 @@ describe("ModeFieldOverlayIntent", () => {
         topology,
       ),
     ).toBeNull();
+  });
+
+  it("matches native FMVP digest bytes to the qualified shared-domain fingerprint", () => {
+    const resolved = resolveModeFieldOverlayMetadata(
+      createModeFieldOverlayIntent(selection)!, metadata, "sha256:field-v1",
+    )!;
+    const hash = "75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4";
+    const binary = { ...validBinary(5), meshTopologyHash: hash };
+    const qualified = { ...topology, meshTopologyHash: `sha256:${hash}` };
+    expect(validateModeFieldOverlayBinary(resolved, binary, qualified)).not.toBeNull();
+    expect(validateModeFieldOverlayBinary(resolved, binary, {
+      ...qualified, meshTopologyHash: `sha256:${"0".repeat(64)}`,
+    })).toBeNull();
+    expect(validateModeFieldOverlayBinary(resolved, binary, {
+      ...qualified, meshTopologyRevision: "other-revision",
+    })).toBeNull();
+    expect(validateModeFieldOverlayBinary(resolved, binary, {
+      ...qualified, meshTopologyHash: `sha256:${hash.slice(1)}`,
+    })).toBeNull();
   });
 
   it("fails closed for stale topology, invalid shape, or non-finite binary values", () => {

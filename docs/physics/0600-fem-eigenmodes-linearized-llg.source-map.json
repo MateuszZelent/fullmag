@@ -74,7 +74,13 @@
         "source-native-production-cpu-k-guard",
         "source-native-floquet-admission-test",
         "source-native-floquet-cabi-route-test",
-        "source-native-floquet-direct-entry-test"
+        "source-native-floquet-direct-entry-test",
+        "source-rust-floquet-pair-selector",
+        "source-rust-floquet-k-axis-guard",
+        "source-rust-modal-v6-axis-resolver",
+        "source-rust-floquet-axis-admission-test",
+        "source-rust-modal-v6-axis-resolver-test",
+        "source-rust-floquet-pair-selector-test"
       ]
     },
     {
@@ -124,6 +130,36 @@
       "sources": [
         "source-tiny-slepc-reference-metric",
         "source-tiny-validation-dispatch-regression"
+      ]
+    },
+    {
+      "id": "eq-0600-scalar-reference-reconstruction",
+      "symbols": [
+        "ref_delta_m",
+        "ref_a",
+        "ref_e1",
+        "ref_e2",
+        "ref_i"
+      ],
+      "sources": [
+        "source-complex-scalar-projection",
+        "source-periodic-reference-publication-test"
+      ]
+    },
+    {
+      "id": "eq-0600-reference-periodic-expansion",
+      "symbols": [
+        "ref_delta_src",
+        "ref_delta_dst",
+        "ref_i",
+        "ref_k",
+        "ref_delta_r"
+      ],
+      "sources": [
+        "source-periodic-reference-expansion",
+        "source-materialized-reference-transport",
+        "source-periodic-reference-publication-test",
+        "source-materialized-reference-publication-test"
       ]
     }
   ],
@@ -283,6 +319,60 @@
       "latex": "$I_2$",
       "meaning": "macierz jednostkowa o wymiarze dwa",
       "si_unit": "$1$"
+    },
+    {
+      "id": "ref_delta_m",
+      "latex": "$\\delta\\mathbf m$",
+      "meaning": "Zespolony fazor zaburzenia znormalizowanej magnetyzacji",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "ref_a",
+      "latex": "$a$",
+      "meaning": "Zespolony współczynnik skalarnego modu referencyjnego",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "ref_e1",
+      "latex": "$\\mathbf e_1$",
+      "meaning": "Pierwszy jednostkowy wektor lokalnej bazy stycznej",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "ref_e2",
+      "latex": "$\\mathbf e_2$",
+      "meaning": "Drugi jednostkowy wektor lokalnej bazy stycznej",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "ref_i",
+      "latex": "$\\mathrm i$",
+      "meaning": "Jednostka urojona",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "ref_delta_src",
+      "latex": "$\\delta\\mathbf m_{\\mathrm{src}}$",
+      "meaning": "Fazor reprezentanta klasy periodycznej",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "ref_delta_dst",
+      "latex": "$\\delta\\mathbf m_{\\mathrm{dst}}$",
+      "meaning": "Fazor docelowego węzła tej klasy",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "ref_k",
+      "latex": "$\\mathbf k$",
+      "meaning": "Zadany wektor falowy",
+      "si_unit": "$\\mathrm{rad\\,m^{-1}}$"
+    },
+    {
+      "id": "ref_delta_r",
+      "latex": "$\\Delta\\mathbf r$",
+      "meaning": "Translacja od reprezentanta do węzła docelowego",
+      "si_unit": "$\\mathrm m$"
     }
   ],
   "sources": [
@@ -645,6 +735,156 @@
       "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
       "symbol": "emit_floquet_factor_phase_marker",
       "responsibility": "Opt-in text phase boundaries around existing live/fresh setup calls; no PETSc queries or acceptance changes."
+    },
+    {
+      "id": "source-complex-scalar-projection",
+      "path": "crates/fullmag-runner/src/fem/eigen_projection.rs",
+      "symbol": "project_complex_mode_to_tangent_basis",
+      "responsibility": "Preserve the existing circular scalar visualization convention under complex global phase."
+    },
+    {
+      "id": "source-periodic-reference-expansion",
+      "path": "crates/fullmag-runner/src/fem/eigen_projection.rs",
+      "symbol": "expand_reference_mode_to_periodic_nodes",
+      "responsibility": "Expand reference Cartesian fields over signed Bloch classes without changing reduced normalization."
+    },
+    {
+      "id": "source-materialized-reference-transport",
+      "path": "crates/fullmag-runner/src/fem/eigen_reduction.rs",
+      "symbol": "validate_materialized_tangent_frame_transport",
+      "responsibility": "Validate the final equilibrium before reference reconstruction; no new solver capability."
+    },
+    {
+      "id": "source-periodic-reference-publication-test",
+      "path": "crates/fullmag-runner/src/fem/eigen_tests.rs",
+      "symbol": "reference_mode_publication_expands_periodic_and_signed_floquet_fields",
+      "responsibility": "Prepared scalar and Full2x2 publication regression at Gamma and signed nonzero k; execution NOT VERIFIED."
+    },
+    {
+      "id": "source-materialized-reference-publication-test",
+      "path": "crates/fullmag-runner/src/fem/eigen_tests.rs",
+      "symbol": "reference_mode_publication_rejects_materialized_equilibrium_mismatch",
+      "responsibility": "Prepared executor regression rejecting materialized periodic equilibrium mismatch; execution NOT VERIFIED."
+    },
+    {
+      "id": "source-rust-floquet-pair-selector",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "eigen_policy_floquet_pair_sets_match",
+      "responsibility": "Define the empty-selector means all mesh pairs contract used by native shared-domain planning."
+    },
+    {
+      "id": "source-rust-floquet-k-axis-guard",
+      "path": "crates/fullmag-runner/src/fem/eigen_capability.rs",
+      "symbol": "native_cpu_modal_window_has_floquet_dynamic_demag_path",
+      "responsibility": "Admit finite signed and mixed-axis k only along periodic axes, using the v6 certificate axis resolver and planner-compatible pair selection."
+    },
+    {
+      "id": "source-rust-modal-v6-axis-resolver",
+      "path": "crates/fullmag-runner/src/fem/eigen_certificate.rs",
+      "symbol": "modal_v6_pair_axis_mask",
+      "responsibility": "Resolve an axis hint or one finite nonzero translation axis without indexing an empty list; reject ambiguous translation fallback."
+    },
+    {
+      "id": "source-rust-floquet-axis-admission-test",
+      "path": "crates/fullmag-runner/src/fem/eigen_tests.rs",
+      "symbol": "floquet_dynamic_demag_provider_preserves_signed_mixed_k_and_rejects_open_axes",
+      "responsibility": "Regress signed/mixed k, Gamma-containing paths, exact open-axis rejection and nonfinite inputs without rewriting requested coordinates."
+    },
+    {
+      "id": "source-rust-modal-v6-axis-resolver-test",
+      "path": "crates/fullmag-runner/src/fem/eigen_tests.rs",
+      "symbol": "modal_v6_pair_axis_mask_rejects_missing_zero_oblique_and_nonfinite_translation",
+      "responsibility": "Regress missing/zero/oblique/nonfinite translation fallback and signed axis translations without panic."
+    },
+    {
+      "id": "source-rust-floquet-pair-selector-test",
+      "path": "crates/fullmag-runner/src/fem/eigen_tests.rs",
+      "symbol": "floquet_dynamic_demag_provider_requires_exact_requested_pair_set",
+      "responsibility": "Regress empty selector acceptance, exact all-pair selection, selector duplicates, unknown/subset IDs and incomplete mesh pair metadata."
+    },
+    {
+      "id": "source-native-floquet-explicit-full-refill-goal",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "solve_floquet_shared_domain_sparse_modal_spectrum",
+      "responsibility": "Treat the explicit full selected-mode count as the same goal as the implicit default, preserving residual certification, mass deduplication, EPS diagnostics, smaller best-effort guards and cancellation."
+    },
+    {
+      "id": "source-native-floquet-explicit-full-refill-goal-test",
+      "path": "backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp",
+      "symbol": "void refills_native_floquet_nev_before_tangent_mass_cap",
+      "responsibility": "Regress explicit/implicit count parity with the same operator, initial search space, original residual threshold and two independently known physical frequencies; do not infer window completeness."
+    },
+    {
+      "id": "source-native-shifted-ksp-probe-history-test",
+      "path": "backends/fem/tests/frequency_domain/shifted_ksp_true_convergence_test.cpp",
+      "symbol": "bool run_ksp_case",
+      "responsibility": "Exercise actual PETSc immediate breakdown and later build-solution breakdown after a positive default callback; preserve truthful probe attempts, completed counts and unavailable measurements."
+    },
+    {
+      "id": "source-ir-strict-floquet-admission",
+      "path": "crates/fullmag-ir/src/spectral_validation.rs",
+      "symbol": "validate_bounded_floquet_dynamic_demag_admission",
+      "responsibility": "Share strict materialized translation/hint/axis and finite k admission between planner and native runner."
+    },
+    {
+      "id": "source-native-p1-tracking-provider",
+      "path": "backends/fem/cpu/frequency_domain/modal/tracking_mass_provider.cpp",
+      "symbol": "TrackingMassProviderResult assemble_consistent_p1_tracking_mass",
+      "responsibility": "Assemble phase-free geometric P1 mass on magnetic volumes using canonical physical vertex rows."
+    },
+    {
+      "id": "source-native-p1-tracking-snapshot",
+      "path": "backends/fem/src/frequency_domain/tracking_mass_snapshot.cpp",
+      "symbol": "fullmag_fem_tracking_mass_snapshot_create_v1",
+      "responsibility": "Publish an immutable bounded native CSR snapshot with mask/map/source and identity digests."
+    },
+    {
+      "id": "source-rust-native-p1-tracking-wrapper",
+      "path": "crates/fullmag-runner/src/native_fem/tracking_mass.rs",
+      "symbol": "from_mesh",
+      "responsibility": "Validate native snapshot extents, canonical maps, mask, volume and compiled source identity before copying ownership."
+    },
+    {
+      "id": "source-rust-native-p1-csr-product",
+      "path": "crates/fullmag-runner/src/eigen/tracking_mass_csr.rs",
+      "symbol": "inner_product",
+      "responsibility": "Apply one phase-free geometric CSR in the Cartesian nodal mass inner product without substituting M squared."
+    },
+    {
+      "id": "source-rust-native-p1-csr-validation",
+      "path": "crates/fullmag-runner/src/eigen/tracking_mass_csr.rs",
+      "symbol": "validate",
+      "responsibility": "Validate persisted CSR support, symmetry, air rows, volume and native canonical CSR/map/identity digests."
+    },
+    {
+      "id": "source-rust-native-p1-tracking-adapter",
+      "path": "crates/fullmag-runner/src/fem/eigen_path.rs",
+      "symbol": "eigen_path_consistent_tracking_metric",
+      "responsibility": "Choose native CSR on native modal paths, retain explicit reference Tet4 mass, and share one per mesh generation."
+    },
+    {
+      "id": "source-rust-native-p1-metric-reader",
+      "path": "crates/fullmag-runner/src/eigen/tracking_mass.rs",
+      "symbol": "from_artifact_json",
+      "responsibility": "Read legacy v1 and additive native CSR v2 without rewriting retained archives."
+    },
+    {
+      "id": "source-rust-native-p1-subspace",
+      "path": "crates/fullmag-runner/src/eigen/tracking_subspace.rs",
+      "symbol": "weighted_orthonormal_basis",
+      "responsibility": "Use the same consistent FE mass for orthonormalization and transport while preserving diagonal weighting."
+    },
+    {
+      "id": "source-rust-native-p1-subspace-test",
+      "path": "crates/fullmag-runner/src/eigen/tracking.rs",
+      "symbol": "native_csr_subspace_transport_preserves_rotated_degenerate_span",
+      "responsibility": "Regress a complex rotated span and physical-space unit norms in the native CSR representation."
+    },
+    {
+      "id": "source-python-native-p1-metric-reader",
+      "path": "scripts/comsol_tracking_metric.py",
+      "symbol": "_validate_native_v2_metric",
+      "responsibility": "Validate native CSR v2 against independently reconstructed Tet4 geometry, SI volume and canonical digests while retaining v1."
     }
   ],
   "public_api": {

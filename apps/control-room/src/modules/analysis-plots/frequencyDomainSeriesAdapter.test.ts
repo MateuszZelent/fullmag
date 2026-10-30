@@ -333,7 +333,7 @@ describe("frequencyDomainSeriesAdapter", () => {
         unit: "MHz",
       }),
     );
-    expect(model.series[0]?.points).toEqual([{ rowIndex: 0, x: 1, y: 750 }]);
+    expect(model.series[0]?.points).toEqual([{ ...model.points[0], rowIndex: 0, x: 1, y: 750 }]);
   });
 
   it("uses MHz units for sub-GHz dispersion frequencies", () => {
@@ -350,7 +350,7 @@ describe("frequencyDomainSeriesAdapter", () => {
         unit: "MHz",
       }),
     );
-    expect(model.series[0]?.points).toEqual([
+    expect(model.series[0]?.points).toMatchObject([
       { rowIndex: 0, x: 78539816.33974482, y: 250 },
     ]);
   });

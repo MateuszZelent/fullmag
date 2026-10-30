@@ -1,0 +1,281 @@
+{
+  "schema": "eigensolve.master-merge-resolution.v1",
+  "parents": {
+    "branch": "43af3e8ddf4fbaf496da39f4dc403ca5ba14af26",
+    "master": "2c67d8f904b1dede9268bbbc8bf6257cbe33aa4f"
+  },
+  "merge_base": "1afcb531630d6cd5b8caba1f8a4d4593bb29cdb7",
+  "status": "merged-and-pushed-source-ci-pass-runtime-unavailable",
+  "resolved": [
+    {
+      "path": "apps/control-room/src/kernel/api/ControlRoomApi.ts",
+      "sha256": "b3a02d5e88bce0ea745ca31bc691de78a84705bb4d24e1abaec6d5f9c89f2803"
+    },
+    {
+      "path": "apps/control-room/src/kernel/commands/projectWorkspaceCommandPolicy.ts",
+      "sha256": "c54809a574b74c845ce25c70789745820a1a0671ca43be122dec68e4fa682bb4"
+    },
+    {
+      "path": "apps/control-room/src/modules/viewport-3d/Viewport3DModule.tsx",
+      "sha256": "63076aaddd25c1e7235b1ec9ff8932be1929999f41301d5c63f18b9f6dc60816"
+    },
+    {
+      "path": "crates/fullmag-api/src/live_retirement.rs",
+      "sha256": "9acec1bf8605a4bbf4a6b8414021350b6d27443dc8e632d2012fcf67c9130725"
+    },
+    {
+      "path": "docs/guides/docker-volume-development.md",
+      "sha256": "42f079586f78269da0e6519e13ed451dc9a3b9580a10d3097e0021a72d7da176"
+    },
+    {
+      "path": "scripts/docker_dev.py",
+      "sha256": "f5fe270ca097598d70295158fdba508c1034dca0429dd2a301b2b9c9152f0675"
+    },
+    {
+      "path": "scripts/docker_dev_codegen.py",
+      "sha256": "3d303384fbee443eb3efcaa542e314e77b20d6dfbda2fc4b5384f25f266d9aff"
+    },
+    {
+      "path": "scripts/docker_volume_activate.py",
+      "sha256": "99dea8d8d3aa3e9872f1aa798b9ec8c527ba77f4d0961cfae853b5a057e856f9"
+    },
+    {
+      "path": "scripts/docker_volume_dev.py",
+      "sha256": "f3fc099d3e0778c1bfbd842c9c0a5b3e9fc4e03b3ca06b6f9d2d9346956715a0"
+    },
+    {
+      "path": "scripts/test_docker_live_retirement.py",
+      "sha256": "61457c90a5391657bcd67d540f318a0553ccfd6e6cfd5c0ae1d6554820f8a13b"
+    },
+    {
+      "path": "scripts/test_docker_retirement_refusal.py",
+      "sha256": "da6f10725c0ab6f842b55adfc13840e742c236464111e4416a188dd51d53a0fd"
+    },
+    {
+      "path": "scripts/test_docker_volume_readiness_receipt.py",
+      "sha256": "f0969b24aee28eb374e99b46fe99441e811434ffa724901345745a3c28284bd2"
+    }
+  ],
+  "checks": [
+    {
+      "log": "/tmp/eigen-merge-volume-tests.log",
+      "tests": 473,
+      "status": "passed",
+      "sha256": "239ecea11e705e4ead023a59eacd938ee12d229071ae887f14cf70edc5b3caff"
+    },
+    {
+      "log": "/tmp/eigen-merge-retirement-all-final.log",
+      "tests": 131,
+      "status": "passed",
+      "sha256": "f02e5e7f8cd3cc463a4108554a018501e9209a06e67393d5e70368f9d37f55a0"
+    },
+    {
+      "log": "/tmp/eigen-merge-dev-tests-final.log",
+      "tests": 192,
+      "status": "passed",
+      "sha256": "534da3ecfe1c0c55a8872d9210ecae700656768292d03456776536a026e695f6"
+    }
+  ],
+  "rust_parse": "rustfmt --edition 2021 --emit stdout live_retirement.rs succeeded; no compilation on host",
+  "foreign_files_preserved": [
+    {
+      "status": " M",
+      "path": "docs/audits/2026-10-27-eigensolve-shared-domain-assembly-publication.md",
+      "bytes": 3948,
+      "sha256": "76879acec4647abe7bc5d08a4f6db6ff89a015ef06a18c1c1838228c3d3d6510"
+    },
+    {
+      "status": " M",
+      "path": "docs/superpowers/plans/2026-10-26-eigensolve-runtime-to-results-refactor.md",
+      "bytes": 79992,
+      "sha256": "9fca9f98c93ca5e628856e2d26c0e10f83a34bbbb5e51482dbbf179fcf96c3e7"
+    },
+    {
+      "status": "??",
+      "path": "docs/audits/2026-10-27-eigensolve-a17-native-ci-second.evidence.json",
+      "bytes": 1668,
+      "sha256": "c67400a8acf33ed54c3923dfa7f62b44209dfb9a76473808ff29a4f1e37443b4"
+    },
+    {
+      "status": "??",
+      "path": "docs/audits/2026-10-27-eigensolve-a18-mode-publication.evidence.json",
+      "bytes": 189056,
+      "sha256": "1172ea6521e61d2d0cd3063acc18eec48f67a5c6132ad868fe21829c8b2adbd2"
+    },
+    {
+      "status": "??",
+      "path": "docs/audits/2026-10-27-eigensolve-a18-startup-shutdown.evidence.json",
+      "bytes": 1442,
+      "sha256": "faf3b4a78302a038e56f557996c107ad770d23aa60dbb6d00a1df7c5cee14332"
+    },
+    {
+      "status": "??",
+      "path": "docs/audits/2026-10-27-eigensolve-air-plane-reproduction.evidence.json",
+      "bytes": 1046,
+      "sha256": "598e46446153987f09c16412e4b9e6a81ee00b44c675a5bbb784fb6f2ef001b7"
+    },
+    {
+      "status": "??",
+      "path": "docs/audits/2026-10-27-eigensolve-failed-action-probe.evidence.json",
+      "bytes": 19626,
+      "sha256": "f9aaa2d5b4e36b7107a7253cd60ff14ee1eec754f6f3da0d803d62f7ecd3ca0b"
+    },
+    {
+      "status": "??",
+      "path": "docs/audits/2026-10-27-eigensolve-k10-current-mode.evidence.json",
+      "bytes": 119317,
+      "sha256": "e429b89e3536c8801e79719f21e4027849f1d6c0ae0d3ab927e0c0acbbfbf866"
+    },
+    {
+      "status": "??",
+      "path": "docs/audits/2026-10-27-eigensolve-mode-display-review.evidence.json",
+      "bytes": 140192,
+      "sha256": "f0b07447d0dff5b8cc2817b4c2d9897ed9d229d855e1d60b7386c11d848cfc10"
+    },
+    {
+      "status": "??",
+      "path": "docs/audits/2026-10-27-eigensolve-shared-domain-assembly-publication.evidence.json",
+      "bytes": 9689,
+      "sha256": "2a41fa6a3cfef054777fb3ffb58501ffe62546c0440dd62d2665f00169057d9e"
+    },
+    {
+      "status": "??",
+      "path": "docs/audits/2026-10-27-eigensolve-signed15-activation-rejection.evidence.json",
+      "bytes": 726,
+      "sha256": "fd6ba0e07e1ee19934593115dd2be136e82ccd024376ddce028a36e4b54b110c"
+    },
+    {
+      "status": "??",
+      "path": "docs/audits/2026-10-27-eigensolve-signed15-native-failure.evidence.json",
+      "bytes": 31378,
+      "sha256": "d4a5c50c00c5b2e1e793eb443775a728230c0487696dd50ad46c37dcdde30dd9"
+    },
+    {
+      "status": "??",
+      "path": "docs/audits/2026-10-27-eigensolve-signed15-restart30-failure.evidence.json",
+      "bytes": 31894,
+      "sha256": "6ac3d791673b19979814664a563c01907375b946b20e5986eca1e93802545ae1"
+    },
+    {
+      "status": "??",
+      "path": "docs/audits/2026-10-27-eigensolve-signed15-start.evidence.json",
+      "bytes": 1131,
+      "sha256": "3932c8f5cb4782525db4688c515521b39929e5148d7e232b32fe0698afda7d99"
+    }
+  ],
+  "preservation_manifest": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/eigensolve-master-merge-preservation-20261028/manifest.json",
+  "runtime": "Docker daemon unavailable; no restart or simulation replay",
+  "remaining": [
+    "compiled API/runner/UI gates on the merged tree",
+    "generated OpenAPI source parity",
+    "managed runtime recovery and final post-import strict Gamma",
+    "PR review, master promotion and qualified cleanup"
+  ],
+  "merge_commit": "060cb0c7910d92880f1002c39e3594662ea5775e",
+  "ci_runs": [
+    {
+      "id": 40614876139,
+      "name": "bootstrap",
+      "head_sha": "060cb0c7910d92880f1002c39e3594662ea5775e",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "html_url": "https://github.com/MateuszZelent/fullmag/actions/runs/40614876139"
+    },
+    {
+      "id": 40614873334,
+      "name": "eigensolve-method-contracts",
+      "head_sha": "060cb0c7910d92880f1002c39e3594662ea5775e",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "html_url": "https://github.com/MateuszZelent/fullmag/actions/runs/40614873334"
+    },
+    {
+      "id": 40614870524,
+      "name": "eigensolve-api-source-contracts",
+      "head_sha": "060cb0c7910d92880f1002c39e3594662ea5775e",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/MateuszZelent/fullmag/actions/runs/40614870524"
+    },
+    {
+      "id": 40614867705,
+      "name": "eigensolve-ui-method-contracts",
+      "head_sha": "060cb0c7910d92880f1002c39e3594662ea5775e",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/MateuszZelent/fullmag/actions/runs/40614867705"
+    },
+    {
+      "id": 40614777208,
+      "name": "contract-guard",
+      "head_sha": "060cb0c7910d92880f1002c39e3594662ea5775e",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/MateuszZelent/fullmag/actions/runs/40614777208"
+    },
+    {
+      "id": 40614777119,
+      "name": "eigensolve-ui-method-contracts",
+      "head_sha": "060cb0c7910d92880f1002c39e3594662ea5775e",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/MateuszZelent/fullmag/actions/runs/40614777119"
+    },
+    {
+      "id": 40614777179,
+      "name": "Public documentation",
+      "head_sha": "060cb0c7910d92880f1002c39e3594662ea5775e",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/MateuszZelent/fullmag/actions/runs/40614777179"
+    },
+    {
+      "id": 40614777138,
+      "name": "dispersion-artifact-consumers",
+      "head_sha": "060cb0c7910d92880f1002c39e3594662ea5775e",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/MateuszZelent/fullmag/actions/runs/40614777138"
+    },
+    {
+      "id": 40614777144,
+      "name": "Shifted KSP true-convergence regression",
+      "head_sha": "060cb0c7910d92880f1002c39e3594662ea5775e",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/MateuszZelent/fullmag/actions/runs/40614777144"
+    },
+    {
+      "id": 40614777177,
+      "name": "eigensolve-method-contracts",
+      "head_sha": "060cb0c7910d92880f1002c39e3594662ea5775e",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/MateuszZelent/fullmag/actions/runs/40614777177"
+    },
+    {
+      "id": 40614777204,
+      "name": "bootstrap",
+      "head_sha": "060cb0c7910d92880f1002c39e3594662ea5775e",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/MateuszZelent/fullmag/actions/runs/40614777204"
+    }
+  ],
+  "ci_cancelled_duplicates": [
+    40614876139,
+    40614873334
+  ],
+  "generated_api_parity": {
+    "artifact_id": 12784119408,
+    "source_commit": "060cb0c7910d92880f1002c39e3594662ea5775e",
+    "files_compared": 4,
+    "result": "byte-identical; OpenAPI compared after excluding instance/build provenance"
+  },
+  "current_runtime_check": {
+    "docker": "unix socket unavailable",
+    "ui": "http://localhost:3217/workspace unreachable",
+    "merged_source_deployed": false,
+    "solve_replayed": false
+  }
+}

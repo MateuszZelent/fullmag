@@ -720,3 +720,18 @@
   font-size: var(--fm-font-size-xs);
   line-height: var(--fm-line-height-normal);
 }
+
+/* Each sample owns its own spectrum; mode rows stay in normal document flow. */
+.fm-frequency-domain-chart__point-actions { grid-column: 1 / -1; }
+.fm-frequency-domain-chart__point-actions > .fm-frequency-domain-chart__mode {
+  height: auto;
+  min-height: var(--fm-control-height-sm);
+  white-space: normal;
+}
+
+/* Results show physical context first; technical detail lives in explicit tabs. */
+.fm-result-inspector { display: grid; gap: var(--fm-space-3); min-width: 0; }
+.fm-result-inspector__help { margin: var(--fm-space-2) 0; color: var(--fm-text-secondary); font-size: var(--fm-font-size-sm); line-height: var(--fm-line-height-normal); }
+.fm-result-inspector__notice { padding: var(--fm-space-2); border-left: 3px solid var(--fm-warning); color: var(--fm-text-primary); background: var(--fm-bg-panel-raised); overflow-wrap: anywhere; }
+.fm-result-inspector [data-slot="inspector-group-content"] { gap: var(--fm-space-2); }
+.fm-result-inspector .fm-frequency-domain-visualization-actions { display: flex; flex-wrap: wrap; gap: var(--fm-space-2); margin-top: var(--fm-space-3); }

@@ -1070,6 +1070,14 @@ export const PERSISTENCE_IMPORT_INSPECTIONS_PATH = openApiV2Path(
   "/v2/persistence/imports/inspections",
 );
 
+export const PERSISTENCE_FILE_IMPORTS_PATH = openApiV2Path(
+  "/v2/sessions/current/persistence/file-imports",
+);
+
+export const PERSISTENCE_FILE_IMPORT_INSPECTIONS_PATH = openApiV2Path(
+  "/v2/persistence/imports/file-inspections",
+);
+
 export const PERSISTENCE_ASSET_IMPORT_PATH = openApiV2Path(
   "/v2/sessions/current/persistence/assets/import",
 );

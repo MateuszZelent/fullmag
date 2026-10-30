@@ -132,7 +132,8 @@ export function createChartDisplayTransform(
     : { factor: 1, prefix: "" };
   const transform: ChartDisplayTransform = {
     factor: scale.factor / scaleToCanonical,
-    displayUnit: `${scale.prefix}${policy.canonicalUnit}`,
+    displayUnit: policy.canonicalUnit === "rad/m" && scale.prefix === "M"
+      ? "rad/µm" : `${scale.prefix}${policy.canonicalUnit}`,
     formatValue: (value) =>
       `${formatChartDisplayValue(value, transform)}${
         transform.displayUnit ? ` ${sanitizeLabelText(transform.displayUnit)}` : ""

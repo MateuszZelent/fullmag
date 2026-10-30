@@ -322,7 +322,11 @@ pub(super) fn prepare_process_pool_samples(
         message: format!("adaptive eigen tracking mesh topology: {error}"),
     })?;
     let tracking_metric =
-        super::eigen_path::eigen_path_consistent_tracking_metric(&tracking_topology, &plan.mesh)?;
+        super::eigen_path::eigen_path_consistent_tracking_metric(
+            &tracking_topology,
+            &plan.mesh,
+            super::eigen_capability::native_cpu_modal_window_enabled(plan),
+        )?;
     let mut precomputed = HashMap::with_capacity(samples.len());
     let mut worker_plan = plan.clone();
     let mut bootstrap_sample_index = None;

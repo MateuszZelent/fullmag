@@ -205,7 +205,7 @@ export class CommandRegistry {
       };
     }
 
-    const sessionContext = this.captureSessionContext(commandContext);
+    const sessionContext = this.captureSessionContext(commandContext, cmd.allowsEmptySession === true);
     try {
       this.diagnostics?.record({
         commandId: id,
@@ -267,7 +267,7 @@ export class CommandRegistry {
     }
   }
 
-  private captureSessionContext(context: CommandContext): {
+  private captureSessionContext(context: CommandContext, allowsEmptySession = false): {
     context: CommandContext;
     release: () => void;
   } {
@@ -276,7 +276,7 @@ export class CommandRegistry {
     const scopeKey = context.sessionScopeKey === undefined
       ? source.getScopeKey()
       : context.sessionScopeKey;
-    let current = scopeKey !== null && source.getScopeKey() === scopeKey;
+    let current = (scopeKey !== null || allowsEmptySession) && source.getScopeKey() === scopeKey;
     const observe = () => {
       // Once obsolete, a command stays obsolete even if A -> B -> A occurs.
       current = current && source.getScopeKey() === scopeKey;

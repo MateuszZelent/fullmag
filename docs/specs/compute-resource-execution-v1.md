@@ -1250,6 +1250,28 @@ bilans agregatów nie jest deklaracją placement/affinity. Tentative i unknown/
 quarantined konsumują zasoby tak jak committed. Exact replay nie tworzy
 drugiej rezerwacji, a zmiana tokenu/budżetu/fence nie jest replayem.
 
+Jawny wyjątek recovery dotyczy wyłącznie utrwalonego solver admission przed
+utworzeniem koordynatora: dokładny lokalny lease `Active`, host reservation
+`Committed/Pending`, niezmienione task/attempt/epoch/token oraz brak journal,
+provider dispatch, cancellation intent i worker exit. Po restarcie producenta
+inwentaryzacji `reconcile_pending_worker_inventory_owner` rewaliduje pod
+lockami host → store ten sam przydział przeciw bieżącemu ownerowi (ten sam ID,
+ściśle większy epoch), świeżej próbce, pojemności i niezmienionej generacji
+runtime/polityce. Nie zmienia budżetu, placement ani danych fizycznych.
+
+Przed atomową publikacją nowych pinów producenta i digestu requestu zapisuje
+niezmienny `inventory-recovery/<receipt-sha256>.json`
+(`host_pending_inventory_recovery.v1`): pełną starą/nową rezerwację, lokalny
+lease i hash trwałego admission. Przerwanie przed publikacją ledgera pozwala
+powtórzyć ten sam receipt; konflikt bajtów odmawia zmiany. Rezerwacja wiąże receipt polem `pending_inventory_recovery_sha256`; brak,
+podmiana lub niezgodność jego zawartości blokują każdy odczyt ledgera oraz
+launch, także po przejściu permitu do Consumed. Admission i katalog
+pozostają bez zmian. Zwykłe `reserve` nadal odrzuca zmianę owner epoch;
+`authorize_worker_launch` nadal wymaga aktualnych zasobów i konsumuje permit
+dokładnie raz. To nie jest recovery uruchomionego workera, zmiana generacji
+runtime ani zgoda na reset nieznanej rezerwacji. Stan źródłowy: wdrożone;
+CI/runtime tej operacji wymagają osobnego potwierdzenia.
+
 Dla admission przypiętego do aktywnego host inventory ownera bieżące
 `cpu.effective_capacity_millis` jest dodatkowym limitem nad polityką: suma
 niezwolnionych rezerwacji nie może przekroczyć mniejszej z pojemności

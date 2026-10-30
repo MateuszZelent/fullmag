@@ -89,13 +89,16 @@
 }
 
 .fm-viewport-tabs__root {
-  display: grid;
-  grid-template-rows: var(--fm-ribbon-tabs-height) minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   min-height: 0;
+  min-width: 0;
 }
 
 .fm-viewport-tabs__bar {
   display: flex;
+  flex-wrap: wrap;
+  flex-shrink: 0;
   align-items: center;
   border-bottom: 1px solid var(--fm-border-subtle);
   background: var(--fm-bg-chrome);
@@ -116,6 +119,7 @@
 }
 
 .fm-viewport-tabs__surface {
+  flex: 1;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
@@ -376,3 +380,32 @@
 .fm-slot[data-slot-id="app-menu"] {
   border: 0;
 }
+
+/* Stable renderer windows are positioned over resize-only docking anchors. */
+.fm-viewport-tabs__surface { position: relative; }
+.fm-viewport-dock-anchor { width: 100%; height: 100%; min-width: 0; min-height: 0; }
+.fm-viewport-window { position: absolute; min-width: 0; min-height: 0; pointer-events: none; }
+.fm-viewport-window[hidden] { display: none; }
+.fm-viewport-window > .fm-panel-frame { pointer-events: auto; }
+.fm-viewport-window__content { flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
+.fm-viewport-window__content > * { flex: 1; min-width: 0; min-height: 0; }
+
+/* Drag-to-dock targets never intercept pointer capture or reparent renderers. */
+.fm-dock-guides, .fm-dock-preview { position: absolute; pointer-events: none; z-index: 75; }
+.fm-dock-guides { inset: 0; }
+.fm-dock-guide { position: absolute; display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--fm-radius-md); background: var(--fm-bg-panel); border: 1px solid var(--fm-accent); color: var(--fm-accent); box-shadow: var(--fm-shadow-elevated); }
+.fm-dock-guide[data-active="true"] { background: var(--fm-accent); color: var(--fm-bg-app); }
+.fm-dock-guide--left { left: 8px; top: calc(50% - 16px); }
+.fm-dock-guide--right { right: 8px; top: calc(50% - 16px); }
+.fm-dock-guide--top { top: 8px; left: calc(50% - 16px); }
+.fm-dock-guide--bottom { bottom: 8px; left: calc(50% - 16px); }
+.fm-dock-preview { inset: 3px; border: 2px solid var(--fm-accent); border-radius: var(--fm-radius-md); background: color-mix(in srgb, var(--fm-accent) 18%, transparent); display: grid; place-items: center; animation: fm-dock-preview-in var(--fm-transition-fast); }
+.fm-dock-preview--left { right: 50%; }
+.fm-dock-preview--right { left: 50%; }
+.fm-dock-preview--top { bottom: 50%; }
+.fm-dock-preview--bottom { top: 50%; }
+.fm-dock-preview span { padding: var(--fm-space-2) var(--fm-space-3); border-radius: var(--fm-radius-md); background: var(--fm-bg-panel); color: var(--fm-text-primary); box-shadow: var(--fm-shadow-elevated); }
+@keyframes fm-dock-preview-in { from { opacity: 0; transform: scale(.98); } to { opacity: 1; transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .fm-dock-preview { animation: none; } }
+
+.fm-panel-chrome.fm-viewport-tabs__bar > .fm-tabs-list { flex: 1 1 160px; }

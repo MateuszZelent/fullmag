@@ -22,6 +22,9 @@ mod owned_worker_process;
 #[path = "compute_operator_env.rs"]
 mod compute_operator_env;
 use owned_worker_process::OwnedWorkerProcess;
+#[path = "worker_output_diagnostic.rs"]
+mod worker_output_diagnostic;
+use worker_output_diagnostic::process_output_diagnostic;
 
 /// How long the read-only Stop poll, or a heartbeat failing on transient store
 /// I/O, may keep failing before the attempt ends.
@@ -42,6 +45,19 @@ impl std::fmt::Display for WorkerLaunchDeferred {
 }
 
 impl std::error::Error for WorkerLaunchDeferred {}
+
+/// Only for idempotent configuration reads before launch authorization.
+/// Preserve the durable Start/claim when writer contention outlasts the short
+/// retry, so the scheduler can service cancellation and try the same launch.
+fn classify_prelaunch_store_busy<T>(result: Result<T>) -> Result<T> {
+    result.map_err(|error| {
+        if is_store_writer_busy(&error) {
+            error.context(WorkerLaunchDeferred)
+        } else {
+            error
+        }
+    })
+}
 
 #[derive(Debug)]
 pub(crate) struct SupervisedWorkerResult {
@@ -884,7 +900,10 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
     {
         bail!("pending cancellation requires reconciliation before worker spawn");
     }
-    let cpu_thread_environment = if host.is_some() {
+    let cpu_thread_environment = classify_prelaunch_store_busy((|| {
+        if host.is_none() {
+            return Ok(Vec::new());
+        }
         let starts = recovered_before_spawn
             .commands
             .iter()
@@ -921,9 +940,18 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
             &accepted_step.execution_plan,
             &cpu_ids,
             gpu_uuid.is_some(),
-        )?
-    } else {
-        Vec::new()
+        )
+    })());
+    let cpu_thread_environment = match cpu_thread_environment {
+        Ok(environment) => environment,
+        Err(error) if error.downcast_ref::<WorkerLaunchDeferred>().is_some() => {
+            // No token or process exists yet. Only the supervision slot ends;
+            // the admitted claim and original durable Start remain unchanged.
+            slot.release()
+                .context("release CPU-configuration deferred supervision slot")?;
+            return Err(error);
+        }
+        Err(error) => return Err(error),
     };
     #[cfg(windows)]
     let cpu_rate_limit = if host.is_some() {
@@ -1013,20 +1041,7 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
             );
         }
     };
-    if !process_exit_receipt.status_success {
-        // The receipt keeps a bounded excerpt; the API log keeps the worker's
-        // full native diagnostics (bounded) for root-cause analysis.
-        let stderr = String::from_utf8_lossy(&outcome.output.stderr);
-        let stdout = String::from_utf8_lossy(&outcome.output.stdout);
-        tracing::warn!(
-            run_id = %process_exit_receipt.run_id,
-            task_id = %process_exit_receipt.task_id,
-            receipt_id = %process_exit_receipt.receipt_id,
-            stderr = %bounded_head_and_tail(&stderr, WORKER_STDERR_LOG_EDGE_BYTES),
-            stdout = %bounded_head_and_tail(&stdout, WORKER_STDERR_LOG_EDGE_BYTES),
-            "accepted worker process failed"
-        );
-    }
+    publish_worker_process_observation(&process_exit_receipt, &outcome);
     accepted_supervisor_test_fail_after_process_exit_receipt()?;
     match final_heartbeat_result {
         Ok(FinalHeartbeatReconciliation::Reconciled) => {}
@@ -2613,6 +2628,35 @@ fn persist_worker_process_exit_receipt(
     Ok(receipt)
 }
 
+fn publish_worker_process_observation(
+    receipt: &FmsWorkerProcessExitReceipt,
+    outcome: &ObservedWorkerProcess,
+) {
+    // The runtime service persists scheduler stderr. Keep the CLI stdout contract
+    // and the durable receipt unchanged; logging failure cannot block release.
+    let event = serde_json::json!({
+        "schema_version": "worker_process_observed.v1",
+        "receipt_id": receipt.receipt_id,
+        "run_id": receipt.run_id,
+        "task_id": receipt.task_id,
+        "attempt_id": receipt.attempt_id,
+        "status_success": receipt.status_success,
+        "exit_code": receipt.exit_code,
+        "stdout": process_output_diagnostic(&outcome.output.stdout, &receipt.lease_token),
+        "stderr": process_output_diagnostic(&outcome.output.stderr, &receipt.lease_token),
+    });
+    let result = (|| -> Result<()> {
+        let mut stderr = std::io::stderr().lock();
+        serde_json::to_writer(&mut stderr, &event)?;
+        stderr.write_all(b"\n")?;
+        stderr.flush()?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        eprintln!("could not publish worker process diagnostic: {error:#}");
+    }
+}
+
 pub(crate) fn worker_process_exit_receipt_for_current_task(
     store: &SessionStore,
     run_id: &str,
@@ -2964,7 +3008,7 @@ fn worker_failure_reason(outcome: &ObservedWorkerProcess) -> String {
             })
             .map(|index| &normalized[index..]);
         match report {
-            Some(report) => bounded_head(report, WORKER_FAILURE_REPORT_BYTES).to_owned(),
+            Some(report) => bounded_head(report, if report.starts_with(WORKER_FAILURE_MARKER) { 1024 } else { WORKER_FAILURE_REPORT_BYTES }).to_owned(),
             None => bounded_head_and_tail(&normalized, WORKER_FAILURE_EDGE_BYTES),
         }
     };
@@ -3480,6 +3524,34 @@ mod tests {
         assert_eq!(bounded_head_and_tail("ąbcdeź", 2), "ą ... ź");
     }
 
+
+    #[cfg(unix)]
+    #[test]
+    fn worker_failure_reason_preserves_cause_before_large_native_diagnostics() {
+        use std::os::unix::process::ExitStatusExt;
+        let stderr = format!(
+            "accepted worker failed: earlier report\naccepted worker failed: execute accepted worker Start: native Floquet rejected: actual cause; diagnostics={{\"provenance\":\"{}\"}}",
+            "ą".repeat(4096),
+        );
+        let outcome = ObservedWorkerProcess {
+            output: Output {
+                status: ExitStatus::from_raw(256),
+                stdout: Vec::new(),
+                stderr: stderr.into_bytes(),
+            },
+            timed_out: false,
+            stop_requested: false,
+            process_id: 7,
+            process_start_token: None,
+            control_failure_reason: None,
+        };
+        let reason = worker_failure_reason(&outcome);
+        assert!(reason.contains("native Floquet rejected: actual cause"), "{reason}");
+        assert!(!reason.contains("earlier report"));
+        assert!(reason.chars().count() < 1100);
+    }
+
+
     fn temporary_store(name: &str) -> (PathBuf, SessionStore) {
         let root = std::env::temp_dir().join(format!(
             "fullmag-accepted-supervisor-{name}-{}",
@@ -3713,6 +3785,21 @@ mod tests {
             _inventory_owner: inventory_owner,
             _root: root,
         }
+    }
+
+    #[test]
+    fn prelaunch_cpu_configuration_defers_only_typed_writer_contention() {
+        let busy: Result<()> = Err(anyhow::Error::new(fullmag_session::StoreWriterBusy)
+            .context("load exact accepted worker step for CPU environment"));
+        let deferred = classify_prelaunch_store_busy(busy).unwrap_err();
+        assert!(deferred.downcast_ref::<WorkerLaunchDeferred>().is_some());
+        assert!(deferred.chain().any(|cause| cause.is::<fullmag_session::StoreWriterBusy>()));
+
+        let invalid: Result<()> = Err(anyhow::anyhow!("session store writer is busy: invalid claim"));
+        let invalid = classify_prelaunch_store_busy(invalid).unwrap_err();
+        assert!(invalid.downcast_ref::<WorkerLaunchDeferred>().is_none());
+        assert!(invalid.to_string().contains("invalid claim"));
+        assert_eq!(classify_prelaunch_store_busy(Ok(7)).unwrap(), 7);
     }
 
     #[test]

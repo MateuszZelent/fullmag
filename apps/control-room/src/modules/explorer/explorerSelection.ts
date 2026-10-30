@@ -354,6 +354,7 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
 
   if (isFrequencyDomainSelectionNode(node)) {
     return {
+      ...(node.collectionStudyCount !== undefined ? { collectionStudyCount: node.collectionStudyCount } : {}),
       ...(node.analysisRunId ? { analysisRunId: node.analysisRunId } : {}),
       ...(node.analysisStageId ? { analysisStageId: node.analysisStageId } : {}),
       ...(node.artifactRevision !== undefined
@@ -912,6 +913,14 @@ export function selectExplorerNode(
     },
     source,
   );
+  if (ref?.type === "frequency-domain" && (
+    node.kind === "results.dispersion.modal.relation" ||
+    node.kind === "results.eigen.spectrum" ||
+    node.kind === "results.resonance.modal.spectrum"
+  )) {
+    kernel.layout?.setActiveViewportMainModule("analysis-plots");
+    kernel.layout?.setFocusedSlot("viewport-main");
+  }
 }
 
 // Airbox nodes publish one mesh-derived status; the inspector reads the three

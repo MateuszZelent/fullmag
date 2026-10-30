@@ -237,6 +237,14 @@ RUN corepack enable && corepack prepare pnpm@10.8.1 --activate
 
 COPY --from=deps /opt/fullmag-deps /opt/fullmag-deps
 
+# The same exact-arithmetic surface assembly is compiled in CPU source gates.
+# Keep these packages after cached MFEM/PETSc/SLEPc dependencies.
+ARG FULLMAG_MPFR_DEBIAN_VERSION="4.1.0-3build3"
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends libgmp-dev "libmpfr-dev=${FULLMAG_MPFR_DEBIAN_VERSION}" "libmpfr6=${FULLMAG_MPFR_DEBIAN_VERSION}" && \
+    pkg-config --exists gmp 'mpfr >= 4.1' && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /workspace
 RUN git config --global --add safe.directory /workspace
 

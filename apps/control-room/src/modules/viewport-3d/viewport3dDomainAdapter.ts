@@ -28,6 +28,7 @@ import {
 } from "@/kernel/selection/selectionTypes";
 
 import {
+  combineViewport3DBounds,
   resolveDomainBounds,
   type Viewport3DBounds,
   type Viewport3DTargetFieldBufferSource,
@@ -793,6 +794,20 @@ export function resolveMeshPartBounds(
     radius: Math.max(Math.hypot(size[0], size[1], size[2]) / 2, 1e-12),
     size,
   };
+}
+
+/** Frame a magnetic mode without allowing an airbox to dwarf its support. */
+export function resolveFemMagneticModeBounds(
+  domain: FemManifestRenderDomain,
+): Viewport3DBounds | null {
+  if (domain.magneticParts.length === 0) return null;
+  const bounds = domain.magneticParts.map(resolveMeshPartBounds);
+  // Incomplete carriers must not silently crop another magnetic object.
+  if (bounds.some((entry) => !entry ||
+    ![...entry.center, ...entry.size, entry.radius].every(Number.isFinite))) {
+    return null;
+  }
+  return combineViewport3DBounds(bounds);
 }
 
 function partIncludesBoundaryFace(

@@ -1,0 +1,60 @@
+{
+  "schema": "fullmag.eigensolve-modal-runtime-update.v1",
+  "checkout": "eigensolve-integration-ui-20261026",
+  "branch": "codex/eigensolve-integration-ui-20261026",
+  "source_head_before_update": "a63b4e44e",
+  "ci": {
+    "url": "https://github.com/MateuszZelent/fullmag/actions/runs/40594365988",
+    "source_sha": "26408e1195334f7aa7b3ab9cd1d1036abdfeb72f",
+    "all_jobs": "success",
+    "session_tests_passed": 437,
+    "nonempty_cold_modal_import": "passed"
+  },
+  "preserved_results": {
+    "run_id": "run-live-f6e511007567b55c1e3fad2a56f9c85e914ddce3d5fb6d5565c0df3a40e65a88",
+    "generation_id": "sha256:94a4698432bb417fd3e0758c39300ef98661c84a7d3b7e6638e74b10b9ca7f4f",
+    "members": 304,
+    "bytes": 132501653,
+    "every_member_size_and_sha256_verified": true,
+    "backup_root_in_group": "/state/runs/eigensolve-checkpoints/signed15-94a4698432bb-1793140585978662568",
+    "role": "visualization-evidence-only",
+    "restores_scheduler_authority": false
+  },
+  "runtime_update": {
+    "group": "fullmag-worktree-eigensolve-integration-ui-202610-78b341212cbdaa7d",
+    "attempt": "1f32c0d42ed344fca1428a9c29020dbc",
+    "config_sha256": "9ecddbfc7720e8af8a2f95f4533c90499f01dba0650eb2a666ffdb9e675e1e42",
+    "port": 3217,
+    "operation": "managed restart-idle-volume --allow-terminal-catalog",
+    "status": "succeeded",
+    "old_backend": "0.1.0-dev.20261027.gfe06a6573bc0+9796",
+    "iteration_attempt": "2c5aab51243e495585dac88e88a25375",
+    "backend_container_id": "916151d0db46",
+    "preserved_original_container_and_volumes": true,
+    "backend_version": "0.1.0-dev.20261027.ga63b4e44e6f4+9796",
+    "source_snapshot_sha256": "53f20b09770bf17dd2930c2b3221107a44e89eb7d0b8e1128e6d1256c01b7157",
+    "api_and_native_ready": true
+  },
+  "new_signed15_run": {
+    "run_id": "run-live-93df870d6af7a8e9d70a3742a0de6e7860b5a072c98b7359c3463c18b49113de",
+    "activation_attempt": "681c82422afd449eb46e88e5a60e29f3",
+    "request_id": "modal-ui-signed15-fms-20261027-a63b4e44e",
+    "script_sha256": "8d48ad08356352d69713b29465a70e2c0ea4135f66069f3d82c2ce853dacfa2f",
+    "session_id": "docker-startup-dd62c87abc74113ead93cc5b36b99d5043bd50acf2814ce577f899bd3ccdc268",
+    "status": "completed",
+    "mesh_cell_count": 7134,
+    "relax_stage": "completed",
+    "eigen_stage": "completed",
+    "final_spectrum_published": true,
+    "generation_id": "sha256:094bf14b5f4e43d1622336ab43a09cbdce64b3e558519dfbb6c616473a5c215b"
+  },
+  "actual_solved_archive_roundtrip": "EXPORT_PASS; import open in 2026-10-28-eigensolve-large-fms-transport.md",
+  "strict_browser_without_artifact_500": "PASS: workbench and strict Gamma on new actual run",
+  "scientific_qualification": "NOT_VERIFIED",
+  "artifact_catalog_during_compute": {
+    "http_status": 200,
+    "etag_header_line_length": 89,
+    "full_postsolve_catalog": "PASS: HTTP 200, ETag value length 83"
+  },
+  "final_results_evidence": "2026-10-28-eigensolve-modal-runtime-results.evidence.json"
+}

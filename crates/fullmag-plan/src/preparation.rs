@@ -871,10 +871,19 @@ impl PreparationMaterialization {
                 execution_plan.common.resolved_backend.as_str()
             )));
         }
-        let BackendPlanIR::Fem(fem) = &execution_plan.backend_plan else {
-            return Err(PreparationPlanError::Contract(
-                "FEM preparation requires a time-domain FEM execution plan".into(),
-            ));
+        let (mesh, fe_order, mesh_build_report) = match &execution_plan.backend_plan {
+            BackendPlanIR::Fem(fem) => (&fem.mesh, fem.fe_order, fem.mesh_build_report.as_ref()),
+            BackendPlanIR::FemEigen(fem) => {
+                (&fem.mesh, fem.fe_order, fem.mesh_build_report.as_ref())
+            }
+            BackendPlanIR::FemFrequencyResponse(fem) => {
+                (&fem.mesh, fem.fe_order, fem.mesh_build_report.as_ref())
+            }
+            _ => {
+                return Err(PreparationPlanError::Contract(
+                    "FEM preparation requires a magnetic FEM execution plan".into(),
+                ));
+            }
         };
         Self::from_native_fem_mesh_with_identity(
             problem_fingerprint,
@@ -882,9 +891,9 @@ impl PreparationMaterialization {
             requested_backend,
             geometry_fingerprint,
             display_fingerprint,
-            &fem.mesh,
-            fem.fe_order,
-            fem.mesh_build_report.as_ref(),
+            mesh,
+            fe_order,
+            mesh_build_report,
             native,
         )
     }
@@ -2771,6 +2780,109 @@ mod tests {
         }
     }
 
+    fn fem_frequency_domain_execution_plan_fixture(
+        mesh: MeshIR,
+        study: fullmag_ir::StudyIR,
+    ) -> ExecutionPlanIR {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = BackendTarget::Fem;
+        problem.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
+            fdm: None,
+            fem: Some(fullmag_ir::FemHintsIR {
+                order: 1,
+                hmax: 2.0e-9,
+                mesh: Some("meshes/preparation-tet.msh".into()),
+                demag_solver_policy: None,
+            }),
+            hybrid: None,
+        });
+        problem.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+            fdm_grid_assets: Vec::new(),
+            fem_mesh_assets: vec![fullmag_ir::FemMeshAssetIR {
+                geometry_name: "strip".into(),
+                mesh_source: Some("meshes/preparation-tet.msh".into()),
+                mesh: Some(mesh),
+            }],
+            fem_domain_mesh_asset: None,
+        });
+        problem.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
+        problem.study = study;
+        crate::plan(&problem).expect("frequency-domain FEM preparation fixture should plan")
+    }
+
+    fn fem_eigen_execution_plan_fixture(mesh: MeshIR) -> ExecutionPlanIR {
+        let dynamics = fullmag_ir::ProblemIR::bootstrap_example()
+            .study
+            .dynamics()
+            .clone();
+        fem_frequency_domain_execution_plan_fixture(
+            mesh,
+            fullmag_ir::StudyIR::Eigenmodes {
+                dynamics,
+                operator: fullmag_ir::EigenOperatorConfigIR {
+                    kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                    include_demag: false,
+                },
+                count: 1,
+                target: fullmag_ir::EigenTargetIR::Lowest,
+                equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+                k_sampling: None,
+                bias_field_sweep: None,
+                normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
+                damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
+                spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+                magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
+                sampling: fullmag_ir::SamplingIR {
+                    table_autosave: None,
+                    stage_autosave: None,
+                    outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
+                        quantity: "eigenfrequency".to_string(),
+                        scope: None,
+                    }],
+                },
+                mode_tracking: None,
+            },
+        )
+    }
+
+    fn fem_frequency_response_execution_plan_fixture(mesh: MeshIR) -> ExecutionPlanIR {
+        let dynamics = fullmag_ir::ProblemIR::bootstrap_example()
+            .study
+            .dynamics()
+            .clone();
+        fem_frequency_domain_execution_plan_fixture(
+            mesh,
+            fullmag_ir::StudyIR::FrequencyResponse {
+                dynamics,
+                operator: fullmag_ir::EigenOperatorConfigIR {
+                    kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                    include_demag: false,
+                },
+                equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+                k_sampling: None,
+                normalization: fullmag_ir::FrequencyResponseNormalizationIR::UnitL2,
+                damping_policy: fullmag_ir::EigenDampingPolicyIR::Include,
+                spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+                magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
+                excitation: fullmag_ir::FrequencyExcitationIR {
+                    field_au_per_m: [0.0, 0.0, 1.0],
+                    phase_rad: 0.0,
+                },
+                frequencies_hz: fullmag_ir::FrequencySweepIR {
+                    values_hz: vec![1.0e9],
+                },
+                solver_policy: None,
+                sampling: fullmag_ir::SamplingIR {
+                    table_autosave: None,
+                    stage_autosave: None,
+                    outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
+                        observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
+                    }],
+                },
+            },
+        )
+    }
+
     fn native_fem_mesh_space_evidence(mesh: &MeshIR, fe_order: u32) -> NativeFemMeshSpaceEvidence {
         NativeFemMeshSpaceEvidence {
             abi_version: NATIVE_FEM_MESH_SPACE_ABI_VERSION,
@@ -2945,7 +3057,57 @@ mod tests {
     }
 
     #[test]
-    fn fem_materialization_rejects_mesh_rebinding_and_unimplemented_higher_order_space() {
+    fn fem_materialization_accepts_eigen_and_frequency_response_mesh_and_order() {
+        let mesh = fem_mesh_fixture();
+        for execution_plan in [
+            fem_eigen_execution_plan_fixture(mesh.clone()),
+            fem_frequency_response_execution_plan_fixture(mesh.clone()),
+        ] {
+            let selected_mesh = match &execution_plan.backend_plan {
+                BackendPlanIR::FemEigen(plan) => {
+                    assert_eq!(plan.fe_order, 1);
+                    &plan.mesh
+                }
+                BackendPlanIR::FemFrequencyResponse(plan) => {
+                    assert_eq!(plan.fe_order, 1);
+                    &plan.mesh
+                }
+                other => panic!("expected frequency-domain FEM plan, got {other:?}"),
+            };
+            let native = native_fem_mesh_space_evidence(selected_mesh, 1);
+            let materialized = PreparationMaterialization::from_fem_execution_plan(
+                fingerprint('a'),
+                7,
+                BackendTarget::Fem,
+                &execution_plan,
+                fingerprint('c'),
+                fingerprint('d'),
+                &native,
+            )
+            .expect("frequency-domain FEM mesh/space should materialize");
+
+            assert_eq!(materialized.plan.resolved_backend, BackendTarget::Fem);
+            assert_eq!(
+                materialized.plan.mesh.output_fingerprint,
+                native.topology_fingerprint
+            );
+            assert_eq!(
+                materialized.plan.space.output_fingerprint,
+                native.space_fingerprint
+            );
+            let space_certificate = materialized
+                .certificates
+                .iter()
+                .find(|certificate| certificate.producer.kind == PreparationProducerKind::Space)
+                .expect("materialization should certify the FEM space");
+            let space = space_certificate.space.as_ref().unwrap();
+            assert_eq!(space.fe_family.as_deref(), Some("H1"));
+            assert_eq!(space.fe_order, Some(1));
+        }
+    }
+
+    #[test]
+    fn fem_materialization_rejects_non_fem_mesh_rebinding_and_unimplemented_higher_order_space() {
         let mesh = fem_mesh_fixture();
         let execution_plan = fem_execution_plan_fixture(mesh.clone(), 1);
         let mut rebound = native_fem_mesh_space_evidence(&mesh, 1);
@@ -2961,6 +3123,45 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("different canonical mesh"));
+
+        let fdm_plan = fdm_execution_plan_fixture();
+        let fdm_error = PreparationMaterialization::from_fem_execution_plan(
+            fingerprint('a'),
+            7,
+            BackendTarget::Auto,
+            &fdm_plan,
+            fingerprint('c'),
+            fingerprint('d'),
+            &rebound,
+        )
+        .unwrap_err();
+        assert!(fdm_error
+            .to_string()
+            .contains("resolved backend 'fem', got 'fdm'"));
+
+        for modal_plan in [
+            fem_eigen_execution_plan_fixture(mesh.clone()),
+            fem_frequency_response_execution_plan_fixture(mesh.clone()),
+        ] {
+            let selected_mesh = match &modal_plan.backend_plan {
+                BackendPlanIR::FemEigen(plan) => &plan.mesh,
+                BackendPlanIR::FemFrequencyResponse(plan) => &plan.mesh,
+                other => panic!("expected frequency-domain FEM plan, got {other:?}"),
+            };
+            let mut modal_rebound = native_fem_mesh_space_evidence(selected_mesh, 1);
+            modal_rebound.canonical_mesh_fingerprint = fingerprint('f');
+            let modal_error = PreparationMaterialization::from_fem_execution_plan(
+                fingerprint('a'),
+                7,
+                BackendTarget::Fem,
+                &modal_plan,
+                fingerprint('c'),
+                fingerprint('d'),
+                &modal_rebound,
+            )
+            .unwrap_err();
+            assert!(modal_error.to_string().contains("different canonical mesh"));
+        }
 
         let higher_order_plan = fem_execution_plan_fixture(mesh.clone(), 2);
         let higher_order_evidence = native_fem_mesh_space_evidence(&mesh, 2);

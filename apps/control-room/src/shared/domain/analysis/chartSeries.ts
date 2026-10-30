@@ -2,13 +2,32 @@ import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 
 import type { AnalysisChartResourceRef } from "./chartCursorPoint";
 
-export interface ChartPoint {
+export interface DispersionChartPointMetadata {
+  analyticFrequencyHz?: number | null;
   branchId?: string | null;
+  breakBefore?: boolean;
+  frequencyHz?: number;
   itemId?: string | null;
+  modeFieldAvailable?: boolean;
+  modeFieldId?: string | null;
+  modeFieldResourceKey?: string | null;
+  modeId?: string | null;
+  overlap?: number | null;
+  pathS?: number;
+  rawModeIndex?: number;
+  relativeError?: number | null;
+  residualNorm?: number | null;
+  sampleId?: string | null;
+  sampleIndex?: number;
+  sampleLabel?: string | null;
+  validationGeometry?: string | null;
+  wavevectorKf?: readonly [number, number, number] | null;
+}
+
+export interface ChartPoint extends DispersionChartPointMetadata {
   label?: string | null;
   linewidthHz?: number | null;
   rowIndex: number;
-  sampleId?: string | null;
   x: number;
   y: number;
 }
@@ -32,6 +51,7 @@ export interface ChartSeries {
   dataRevision?: string | number | null;
   dimension?: string;
   id: string;
+  hasCompleteWavevectorKf?: boolean;
   kind?: "line" | "scatter";
   label: string;
   points: readonly ChartPoint[];

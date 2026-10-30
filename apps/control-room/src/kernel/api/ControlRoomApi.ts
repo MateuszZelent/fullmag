@@ -1,3 +1,4 @@
+import { fmsFileSizeError, MAX_FMS_FILE_BYTES } from "@/shared/domain/persistence/fmsFileTransport";
 import { WORKSPACE_ITEM_PLAYBACK_PATH, WORKSPACE_ITEM_PLAYBACK_FRAME_PATH, WORKSPACE_ITEM_PLAYBACK_GEOMETRY_PATH } from "./apiPaths";
 import type { SavedPlaybackResource } from "./savedResultsPlayback";
 import { artifactFieldResponseIdentityError } from "./artifactFieldResponseIdentity";
@@ -202,6 +203,8 @@ import {
   PERSISTENCE_FIELD_STATE_IMPORTS_PATH,
   PERSISTENCE_IMPORT_INSPECTIONS_PATH,
   PERSISTENCE_IMPORTS_PATH,
+  PERSISTENCE_FILE_IMPORTS_PATH,
+  PERSISTENCE_FILE_IMPORT_INSPECTIONS_PATH,
   PERSISTENCE_PROJECT_OPEN_PATH,
   PERSISTENCE_PROJECT_AUTHORING_PATH,
   PERSISTENCE_PROJECT_FROM_SCRIPT_PATH,
@@ -1115,7 +1118,7 @@ export class ControlRoomApi {
   private readonly retryDelayMs: number;
   private readonly requestIdFactory: () => string;
   private readonly transport: OpenApiV2Transport;
-  private readonly fieldMaterializationRequests = new Map<string, Promise<void>>();
+  private readonly fieldMaterializationRequests = new Map<string, Promise<boolean>>();
   private readonly meshFreshnessRequests = new Map<string, Promise<boolean>>();
 
   readonly sessions = {
@@ -3213,6 +3216,10 @@ export class ControlRoomApi {
         ),
     },
     imports: {
+      inspectFile: (file: Blob, options?: RequestOptions) =>
+        this.postFile<SessionImportInspectResponse>(PERSISTENCE_FILE_IMPORT_INSPECTIONS_PATH, file, options),
+      commitFile: (file: Blob, restoreMode: SessionImportCommitRequest["restore_mode"], options?: RequestOptions) =>
+        this.postFile<SessionImportCommitResponse>(PERSISTENCE_FILE_IMPORTS_PATH, file, options, restoreMode),
       commit: (request: SessionImportCommitRequest, options?: RequestOptions) =>
         this.postJson<SessionImportCommitResponse, SessionImportCommitRequest>(
           PERSISTENCE_IMPORTS_PATH,
@@ -3910,9 +3917,40 @@ export class ControlRoomApi {
       if (await this.meshIsStale(options)) {
         throw error;
       }
-      await this.materializeFieldsForQuantity(quantityId, options);
+      if (!await this.materializeFieldsForQuantity(quantityId, options)) {
+        throw error;
+      }
       return this.retryFieldMetaUntilReady(quantityId, path, params, options);
     }
+  }
+
+  private async postFile<TResponse>(
+    path: OpenApiV2Path,
+    file: Blob,
+    options: RequestOptions = {},
+    restoreMode?: SessionImportCommitRequest["restore_mode"],
+  ): Promise<TResponse> {
+    const sizeError = fmsFileSizeError(file.size);
+    if (sizeError) {
+      throw new ControlRoomApiError(sizeError, file.size > MAX_FMS_FILE_BYTES ? 413 : 400,
+        null, file.size > MAX_FMS_FILE_BYTES ? "fms_archive_too_large" : "invalid_fms_file");
+    }
+    const query = restoreMode === undefined ? "" : `?restore_mode=${encodeURIComponent(restoreMode)}`;
+    const url = `${this.baseUrl}${path}${query}`;
+    // Keep the Blob intact. OpenAPI's generic Request normalization buffers
+    // bodies for JSON diagnostics; the shared fetch boundary below already
+    // provides instance/scope headers, diagnostics, cancellation and no POST retries.
+    const response = await this.executeFetchRequest(url, "POST", {
+      body: file,
+      headers: { ...sessionScopeHeaders(options), "content-type": "application/octet-stream" },
+      signal: options.signal,
+    }, new Set(), false);
+    this.requireApiInstanceCurrent();
+    const text = await response.text();
+    let payload: unknown;
+    try { payload = JSON.parse(text); } catch { payload = text; }
+    return readOpenApiResult<TResponse>({ response,
+      ...(response.ok ? { data: payload } : { error: payload }) });
   }
 
   private async postJson<TResponse, TBody>(
@@ -4407,7 +4445,9 @@ export class ControlRoomApi {
     if (await this.meshIsStale(options)) {
       return result;
     }
-    await this.materializeFieldsForQuantity(quantityId, options);
+    if (!await this.materializeFieldsForQuantity(quantityId, options)) {
+      return result;
+    }
     return this.retryFieldVectorUntilReady(
       path,
       pathParams,
@@ -4449,9 +4489,9 @@ export class ControlRoomApi {
   private async materializeFieldsForQuantity(
     quantityId: string,
     options: RequestOptions = {},
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (quantityId.startsWith("analysis:")) {
-      return;
+      return false;
     }
     throwIfAborted(options.signal);
     const key = options.sessionScopeKey ?? FIELD_MATERIALIZATION_REQUEST_KEY;
@@ -4460,8 +4500,13 @@ export class ControlRoomApi {
       return existing;
     }
     const requestedQuantityId = resolveCanonicalQuantityId(quantityId);
-    const request = this.commands
-      .submit(
+    const request = (async () => {
+      const status = await this.requestOptionalJson<LiveStatusResource>(SESSION_STATUS_PATH, options);
+      // Persisted results can serve fields but have no live computation authority.
+      // Missing/unknown commandability must never turn a read into a solver command.
+      if (status?.lifecycle?.commandability !== "allowed") return false;
+      throwIfAborted(options.signal);
+      await this.commands.submit(
         {
           client_intent_id: `field-on-demand:${requestedQuantityId}:${Date.now()}`,
           kind: "compute_fields",
@@ -4470,11 +4515,11 @@ export class ControlRoomApi {
           target: { kind: "study" },
         },
         options,
-      )
-      .then(() => undefined)
-      .finally(() => {
-        this.fieldMaterializationRequests.delete(key);
-      });
+      );
+      return true;
+    })().finally(() => {
+      this.fieldMaterializationRequests.delete(key);
+    });
     this.fieldMaterializationRequests.set(key, request);
     return request;
   }

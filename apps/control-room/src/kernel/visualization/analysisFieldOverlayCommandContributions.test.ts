@@ -9,7 +9,26 @@ import { SelectionController } from "../selection/SelectionController";
 import { analysisResultSelectionRef } from "@/shared/domain/analysis/results";
 
 import { AnalysisFieldOverlayController } from "./AnalysisFieldOverlayController";
+import { createModeFieldOverlayIntent } from "./ModeFieldOverlayIntent";
+import { createAnalysisResultFieldOverlayIntent } from "./AnalysisResultFieldOverlayIntent";
 import { ANALYSIS_FIELD_OVERLAY_COMMANDS } from "./analysisFieldOverlayCommandContributions";
+
+function canonicalEigenRef(fieldId: string, index?: number) {
+  const modeIndex = index ?? Number(fieldId.match(/mode-?(\d+)/)?.[1] ?? 0);
+  return {
+    analysisRunId: "run-k0", analysisStageId: "stage-eigen",
+    artifactRevision: "sha256:artifact-v1", equilibriumId: "sha256:eq-k0",
+    fieldId, kind: "results.eigen.mode" as const,
+    modeId: `mode-${modeIndex}`, modeIndex, nodeId: `results:${fieldId}`,
+    sampleId: "sample-0000", sampleIndex: 0, type: "frequency-domain" as const,
+  };
+}
+function canonicalEigenSelection(fieldId: string) {
+  const selection = new SelectionController(new EventBus<KernelEventMap>());
+  const ref = canonicalEigenRef(fieldId);
+  selection.set({ kind: ref.kind, label: "Mode", nodeId: ref.nodeId, objectId: null, ref }, "test");
+  return selection;
+}
 
 function commandRegistry(): CommandRegistry {
   const commands = new CommandRegistry();
@@ -53,6 +72,36 @@ function analysisResultSelection(
 }
 
 describe("analysis field overlay commands", () => {
+  it("plots a native nonzero-k Results mode with its exact immutable identity", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const ref = {
+      ...canonicalEigenRef("analysis:eigen:sample-0000:mode-0000", 0),
+      kind: "results.dispersion.modal.mode_at_k" as const,
+      artifactRevision: "sha256:native-manifest",
+      sampleId: "k-sample-0000",
+      modeId: "sample-0000/mode-0000",
+      sampleIndex: 0,
+      wavevectorKf: [0, 1e7, 0] as [number, number, number],
+    };
+    selection.set({ kind: ref.kind, label: "Mode at +10", nodeId: ref.nodeId,
+      objectId: null, ref }, "results-navigator");
+    const context = { analysisFieldOverlay: overlay, selection, source: "test" } as const;
+    expect(commands.isEnabled("analysis.eigen.plot-mode-3d", context)).toBe(true);
+    const result = await commands.execute("analysis.eigen.plot-mode-3d", context);
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()).toMatchObject({
+      fieldId: ref.fieldId,
+      wavevectorKf: [0, 1e7, 0],
+      modeIntent: {
+        analysisRunId: ref.analysisRunId, analysisStageId: ref.analysisStageId,
+        equilibriumId: ref.equilibriumId, artifactRevision: ref.artifactRevision,
+        sampleId: ref.sampleId, modeId: ref.modeId,
+      },
+    });
+  });
+
   it("hands a result item field reference to the shared eigen overlay intent", async () => {
     const commands = commandRegistry();
     const overlay = new AnalysisFieldOverlayController();
@@ -211,6 +260,7 @@ describe("analysis field overlay commands", () => {
     const result = await commands.execute(
       "analysis.eigen.plot-mode-3d",
       {
+        selection: canonicalEigenSelection("analysis:eigen:sample-0000:mode-0002"),
         analysisFieldOverlay: overlay,
         source: "test",
       },
@@ -224,7 +274,9 @@ describe("analysis field overlay commands", () => {
     );
 
     expect(result.status).toBe("completed");
-    expect(overlay.getSnapshot()).toEqual({
+    expect(overlay.getSnapshot()).toMatchObject({
+      modeIntent: createModeFieldOverlayIntent(canonicalEigenRef("analysis:eigen:sample-0000:mode-0002")),
+      provenance: { runId: "run-k0", stageId: "stage-eigen", equilibriumId: "sha256:eq-k0" },
       appearance: {
         shaderVisible: true,
         surfaceColorSource: "magnitude",
@@ -258,6 +310,7 @@ describe("analysis field overlay commands", () => {
       const result = await commands.execute(
         "analysis.eigen.plot-mode-3d",
         {
+        selection: canonicalEigenSelection("analysis:eigen:sample-0000:mode-0002"),
           analysisFieldOverlay: overlay,
           source: "test",
         },
@@ -289,6 +342,7 @@ describe("analysis field overlay commands", () => {
         nodeId: "results:eigen:sample:0:mode:2",
         objectId: null,
         ref: {
+          ...canonicalEigenRef("analysis:eigen:sample-0000:mode-0002", 2),
           fieldId: "analysis:eigen:sample-0000:mode-0002",
           kind: "results.eigen.mode",
           modeIndex: 2,
@@ -330,6 +384,7 @@ describe("analysis field overlay commands", () => {
         nodeId: "results:eigen:sample-k0:mode-2",
         objectId: null,
         ref: {
+          ...canonicalEigenRef("analysis:eigen:sample-k0:mode-2:delta_m_xyz", 2),
           analysisRunId: "run-k0",
           analysisStageId: "stage-eigen",
           artifactRevision: "sha256:artifact-v1",
@@ -377,6 +432,7 @@ describe("analysis field overlay commands", () => {
         nodeId: "results:eigen:sample:0:mode:2",
         objectId: null,
         ref: {
+          ...canonicalEigenRef("analysis:eigen:sample-0000:mode-0002", 2),
           fieldId: "analysis:eigen:sample-0000:mode-0002",
           kind: "results.eigen.mode",
           modeIndex: 2,
@@ -404,6 +460,50 @@ describe("analysis field overlay commands", () => {
     expect(layout.get().focusedSlot).toBe("viewport-main");
   });
 
+  it("preserves chart and 3D split when plotting another selected mode", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const events = new EventBus<KernelEventMap>();
+    const layout = new LayoutController(events);
+    const selection = new SelectionController(events);
+    layout.setActiveViewportMainModule("analysis-plots");
+    layout.setViewportCompanion({moduleId:"viewport-3d",placement:"beside"});
+    selection.set(
+      {
+        kind: "results.eigen.mode",
+        label: "Mode 2",
+        nodeId: "results:eigen:sample:0:mode:2",
+        objectId: null,
+        ref: {
+          ...canonicalEigenRef("analysis:eigen:sample-0000:mode-0002", 2),
+          fieldId: "analysis:eigen:sample-0000:mode-0002",
+          kind: "results.eigen.mode",
+          modeIndex: 2,
+          nodeId: "results:eigen:sample:0:mode:2",
+          sampleIndex: 0,
+          type: "frequency-domain",
+        },
+      },
+      "test",
+    );
+
+    const result = await commands.execute(
+      "analysis.eigen.plot-mode-3d-imag",
+      {
+        analysisFieldOverlay: overlay,
+        layout,
+        selection,
+        source: "test",
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()?.query.view).toBe("imag");
+    expect(layout.get().activeViewportMainModuleId).toBe("analysis-plots");
+    expect(layout.get().viewportCompanion).toEqual({moduleId:"viewport-3d",placement:"beside"});
+    expect(layout.get().focusedSlot).toBe("viewport-main");
+  });
+
   it("stores mode appearance on the analysis overlay when plotting", async () => {
     const commands = commandRegistry();
     const overlay = new AnalysisFieldOverlayController();
@@ -411,6 +511,7 @@ describe("analysis field overlay commands", () => {
     const result = await commands.execute(
       "analysis.eigen.plot-mode-3d",
       {
+        selection: canonicalEigenSelection("analysis:eigen:sample-0000:mode-0002"),
         analysisFieldOverlay: overlay,
         source: "test",
       },
@@ -461,6 +562,7 @@ describe("analysis field overlay commands", () => {
     const result = await commands.execute(
       "analysis.eigen.plot-mode-3d",
       {
+        selection: canonicalEigenSelection("analysis:eigen:sample-0000:mode-0002"),
         analysisFieldOverlay: overlay,
         source: "test",
       },
@@ -499,6 +601,7 @@ describe("analysis field overlay commands", () => {
     await commands.execute(
       "analysis.eigen.plot-mode-3d",
       {
+        selection: canonicalEigenSelection("analysis:eigen:sample-0000:mode-0001"),
         analysisFieldOverlay: overlay,
         source: "test",
       },
@@ -530,6 +633,7 @@ describe("analysis field overlay commands", () => {
     const modeSwitchResult = await commands.execute(
       "analysis.eigen.plot-mode-3d",
       {
+        selection: canonicalEigenSelection("analysis:eigen:sample-0000:mode-0002"),
         analysisFieldOverlay: overlay,
         source: "test",
       },
@@ -693,6 +797,7 @@ describe("analysis field overlay commands", () => {
           nodeId: "results:eigen:sample:0:mode:2",
           objectId: null,
           ref: {
+          ...canonicalEigenRef("analysis:eigen:sample-0000:mode-0002", 2),
             fieldId: "analysis:eigen:sample-0000:mode-0002",
             kind: "results.eigen.mode",
             modeIndex: 2,
@@ -932,6 +1037,7 @@ describe("analysis field overlay commands", () => {
         nodeId: "results:eigen:mode:2",
         objectId: null,
         ref: {
+          ...canonicalEigenRef("analysis:eigen:sample-0000:mode-0002", 2),
           fieldId: "analysis:eigen:sample-0000:mode-0002",
           kind: "results.eigen.mode",
           modeIndex: 2,
@@ -1067,9 +1173,10 @@ describe("analysis field overlay commands", () => {
         nodeId: "results:run-new:eigen:mode:2",
         objectId: null,
         ref: {
+          ...canonicalEigenRef("mode-field:new", 2),
           analysisRunId: "run-new",
           analysisStageId: "eigen-new",
-          artifactRevision: 8,
+          artifactRevision: "sha256:artifact-v8",
           equilibriumId: "eq-new",
           fieldId: "mode-field:new",
           frequencyHz: 13e9,
@@ -1145,7 +1252,7 @@ describe("analysis field overlay commands", () => {
       commands
         .get("analysis.frequency-domain.rebind-3d-overlay")
         ?.disabledReason?.(context),
-    ).toBe("Selected analysis target artifact revision is missing.");
+    ).toBe("Select a typed analysis field in the selected result context to rebind.");
   });
 
   it("clears the active analysis field", async () => {
@@ -1268,6 +1375,7 @@ describe("analysis field overlay commands", () => {
     const result = await commands.execute(
       "analysis.eigen.set-mode-3d-animation",
       {
+        selection: canonicalEigenSelection("analysis:eigen:sample-0000:mode-0002"),
         analysisFieldOverlay: overlay,
         source: "test",
       },
@@ -1454,6 +1562,7 @@ describe("analysis field overlay commands", () => {
     const result = await commands.execute(
       "analysis.frequency-domain.set-3d-animation",
       {
+        selection: canonicalEigenSelection("analysis:eigen:sample-0000:mode-0002"),
         analysisFieldOverlay: overlay,
         source: "test",
       },
@@ -1483,6 +1592,36 @@ describe("analysis field overlay commands", () => {
       source: "eigen-mode",
       visualizationPhaseRad: 0.5,
     });
+  });
+
+  it("animates the explicitly selected mode instead of the previously active field", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const oldId = "analysis:eigen:sample-0000:mode-0002";
+    const nextId = "analysis:eigen:sample-0000:mode-0003";
+    overlay.set({ fieldId: oldId, modeIntent: createModeFieldOverlayIntent(canonicalEigenRef(oldId))!,
+      label: "Previous", source: "eigen-mode", query: { view: "real" } });
+    const result = await commands.execute("analysis.frequency-domain.set-3d-animation",
+      { analysisFieldOverlay: overlay, selection: canonicalEigenSelection(nextId), source: "test" },
+      { fieldId: nextId, source: "eigen-mode", animatePhase: true, animationRateHz: 1 });
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()?.fieldId).toBe(nextId);
+    expect(overlay.getSnapshot()?.modeIntent?.fieldId).toBe(nextId);
+    expect(overlay.getSnapshot()?.animation?.animatePhase).toBe(true);
+  });
+
+  it("does not animate a previous field when the explicit target lacks an owner", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const oldId = "analysis:eigen:sample-0000:mode-0002";
+    overlay.set({ fieldId: oldId, modeIntent: createModeFieldOverlayIntent(canonicalEigenRef(oldId))!,
+      label: "Previous", source: "eigen-mode", query: { view: "real" } });
+    const original = overlay.getSnapshot();
+    const result = await commands.execute("analysis.frequency-domain.set-3d-animation",
+      { analysisFieldOverlay: overlay, source: "test" },
+      { fieldId: "analysis:eigen:sample-0007:mode-0000", source: "eigen-mode", animatePhase: true });
+    expect(result.status).toBe("failed");
+    expect(overlay.getSnapshot()).toBe(original);
   });
 
   it("rejects eigen mode phase animation when the active overlay is a response field", async () => {
@@ -1515,4 +1654,88 @@ describe("analysis field overlay commands", () => {
     expect(result.message).toBe("No eigen mode field is active.");
     expect(overlay.getSnapshot()?.animation).toBeUndefined();
   });
+  it("rejects raw eigen fieldId activation without a canonical owner and equilibrium", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const result = await commands.execute("analysis.eigen.plot-mode-3d", {
+      analysisFieldOverlay: overlay, source: "test",
+    }, { fieldId: "analysis:eigen:sample-0000:mode-0002", source: "eigen-mode" });
+    expect(result.status).toBe("failed");
+    expect(result.message).toContain("equilibrium identity");
+    expect(overlay.getSnapshot()).toBeNull();
+  });
+
+  it("does not borrow the active intent for a selected eigen result missing equilibrium", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const fieldId = "analysis:eigen:sample-0000:mode-0002";
+    const modeIntent = createModeFieldOverlayIntent(canonicalEigenRef(fieldId))!;
+    overlay.set({ fieldId, modeIntent, label: "Owned", source: "eigen-mode", query: { view: "real" } });
+    const original = overlay.getSnapshot();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const ref = { ...canonicalEigenRef(fieldId), equilibriumId: undefined };
+    selection.set({ kind: ref.kind, label: "Incomplete", nodeId: ref.nodeId, objectId: null, ref }, "test");
+    const context = { analysisFieldOverlay: overlay, selection, source: "test" } as const;
+    expect(commands.isEnabled("analysis.eigen.plot-mode-3d-imag", context)).toBe(false);
+    expect((await commands.execute("analysis.eigen.plot-mode-3d-imag", context)).status).toBe("failed");
+    expect(overlay.getSnapshot()).toBe(original);
+  });
+
+  it("preserves the qualified active mode intent and context when its mode-visualization view changes", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const fieldId = "analysis:eigen:sample-0000:mode-0002";
+    const modeIntent = createModeFieldOverlayIntent(canonicalEigenRef(fieldId))!;
+    overlay.set({
+      fieldId, modeIntent, label: "Owned", source: "eigen-mode", modeIndex: 2, sampleIndex: 0,
+      frequencyHz: 1.5e9, query: { view: "phase_rotated_real", phase_rad: 0.75 },
+      visualizationPhaseRad: 0.75, wavevectorKf: [0, 0, 0],
+      provenance: {
+        runId: modeIntent.analysisRunId, stageId: modeIntent.analysisStageId,
+        artifactRevision: modeIntent.artifactRevision, equilibriumId: modeIntent.equilibriumId,
+        kContextKind: "gamma", representation: "complex-vector-xyz",
+        resourceRef: "data/fields/owned", normalization: "unit_l2", studyProduct: "modal_eigen",
+      },
+    });
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    selection.set({
+      kind: "object.mode_visualization.view", label: "Imaginary", nodeId: "mode-view", objectId: "body",
+      ref: { type: "mode-visualization", kind: "object.mode_visualization.view", fieldId,
+        nodeId: "mode-view", objectId: "body", source: "eigen-mode",
+        visualizationTargetId: `mode:body:eigen-mode:${fieldId}`, view: "imag" },
+    }, "test");
+    const context = { analysisFieldOverlay: overlay, selection, source: "test" } as const;
+    expect(commands.isEnabled("analysis.eigen.plot-mode-3d-imag", context)).toBe(true);
+    expect((await commands.execute("analysis.eigen.plot-mode-3d-imag", context)).status).toBe("completed");
+    expect(overlay.getSnapshot()?.modeIntent).toBe(modeIntent);
+    expect(overlay.getSnapshot()).toMatchObject({
+      frequencyHz: 1.5e9, modeIndex: 2, sampleIndex: 0, visualizationPhaseRad: 0.75,
+      query: { view: "imag" }, provenance: { equilibriumId: "sha256:eq-k0", normalization: "unit_l2" },
+    });
+    expect((await commands.execute("analysis.eigen.set-mode-3d-phase", context, { phaseRad: 1.25 })).status).toBe("completed");
+    expect(overlay.getSnapshot()?.modeIntent).toBe(modeIntent);
+    expect(overlay.getSnapshot()?.visualizationPhaseRad).toBe(1.25);
+  });
+
+  it("preserves the separate active analysis-result intent when its mode-visualization view changes", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const resultIntent = createAnalysisResultFieldOverlayIntent(analysisResultSelection())!;
+    const fieldId = resultIntent.fieldId;
+    overlay.set({ fieldId, analysisResultFieldIntent: resultIntent, label: "Result mode",
+      source: "eigen-mode", query: { view: "real", phase_rad: 0.5 } });
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    selection.set({ kind: "object.mode_visualization.view", label: "Imaginary", nodeId: "result-view", objectId: "body",
+      ref: { type: "mode-visualization", kind: "object.mode_visualization.view", fieldId,
+        nodeId: "result-view", objectId: "body", source: "eigen-mode",
+        visualizationTargetId: `mode:body:eigen-mode:${fieldId}`, view: "imag" } }, "test");
+    const result = await commands.execute("analysis.eigen.plot-mode-3d-imag", {
+      analysisFieldOverlay: overlay, selection, source: "test",
+    });
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()?.analysisResultFieldIntent).toBe(resultIntent);
+    expect(overlay.getSnapshot()?.modeIntent).toBeUndefined();
+    expect(overlay.getSnapshot()?.query.view).toBe("imag");
+  });
+
 });

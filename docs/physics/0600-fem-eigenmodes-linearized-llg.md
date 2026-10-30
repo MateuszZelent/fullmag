@@ -54,7 +54,7 @@ The executable reference path currently retains the following field contribution
 - bulk DMI
 - surface anisotropy (boundary-face mass term)
 
-Spin torques and Bloch-periodic complex operators remain future work.
+Spin torques remain future work. The bounded CPU Floquet lane already contains a real-split Bloch operator with dynamic demag; its implementation, verification limits and GPU boundary are specified below.
 
 ## Operator variants
 
@@ -156,6 +156,46 @@ Payload selection retains the existing request contract: a nonnull raw pointer w
 A zero-length raw slice is omitted even when its pointer is nonnull, as can occur for Rust `Some(&[])`; its storage is never dereferenced. If a fixed-size vector is declared, the existing fallback selects it; otherwise the request retains implicit $\Gamma$ behavior.
 
 This threshold controls native CPU admission and routing only. It does not round, replace, or rewrite the requested components in diagnostics or operator inputs. Existing physical squared-wave-number finite and overflow checks continue to use those requested components. The generic Floquet airbox operator remains usable at $\Gamma$; the nonzero-$k$ admission gate does not wrap its mathematical domain.
+
+The shared-domain CPU Floquet admission guard uses the same pair-selector
+contract as the planner: an empty selector means all periodic mesh pairs.
+An explicit selector must contain each mesh pair exactly once; a proper subset,
+an unknown or repeated selector ID, an empty actual pair set, or disagreement
+between node-pair and boundary-pair IDs is rejected.
+
+The bounded lane is axis aligned. Its admission guard and v6 certificate
+producer share one axis resolver: a valid `x`/`y`/`z` hint takes precedence;
+otherwise a finite lattice translation must have exactly one component above
+the existing geometric cutoff of $10^{-15}\,\mathrm{m}$ in absolute value.
+Missing, zero or oblique translations without a valid hint are unsupported.
+Open-direction components of the requested wavevector must be exactly zero,
+including components smaller than the Gamma routing threshold. This restriction
+applies to every point of a path, which may include Gamma together with signed
+or mixed-axis nonzero points. Admission does not rewrite their coordinates.
+These checks establish input compatibility, not numerical or scientific
+qualification of the CPU/GPU solver lanes.
+
+A selected-mode publication goal equal to `requested_mode_count` has identical
+semantics whether `certified_refill_target` is omitted or explicitly equal to
+that count. Only independently residual-certified, positive-mass-deduplicated
+modes count toward that goal. The larger internal EPS search pool may stop at
+its iteration budget after enough individually converged modes are available;
+its stop reason and iteration counts remain diagnostics. Fulfilling the selected
+publication count does not certify completeness of the requested frequency
+window. A smaller explicit best-effort goal retains its converged-pool gate;
+Stop/Pause, hard solve errors, residual checks and the global iteration budget
+remain unchanged.
+
+Failure-only shifted-KSP telemetry is published only on the failure path;
+it can retain earlier positive-callback history from the same EPS attempt.
+`true_probe_attempt_count` therefore need not be zero after a later hard KSP
+failure, and it differs from the count of completed vector measurements.
+The callback rejects nonpositive default reasons before attempting a new true
+probe. Earlier counters and measurements remain available with their recorded
+scope and callback ordinal; unavailable norms remain null. The direct KSP
+regression covers immediate breakdown and a positive-default callback whose
+solution build sees breakdown; the nearest C ABI regression verifies the
+serialized error, counter consistency and their binding to callback history.
 
 For a Bloch/Floquet modal problem with nonzero wavevector `k`, the tangent
 operator is partitioned as
@@ -371,6 +411,65 @@ Mode artifacts export:
 
 The current circular polarization export is a tangent-basis reconstruction convenience for visualization. It should be treated as a reference visualization product contract, not yet as a full non-Hermitian modal analysis package.
 
+(reference-mode-reconstruction)=
+### Rekonstrukcja referencyjnego pola modu
+
+Skalarny eksport referencyjny zachowuje istniejące przybliżenie kołowe także
+dla zespolonego współczynnika eigenwektora. Globalna faza mnoży cały fazor
+kartezjański, bez zmiany amplitudy ani trajektorii kołowej. Ta rekonstrukcja
+nie wyznacza fizycznej eliptyczności modu.
+
+```{math}
+:label: eq-0600-scalar-reference-reconstruction
+\delta\mathbf m = a(\mathbf e_1+\mathrm i\mathbf e_2).
+```
+
+Po rekonstrukcji pól skalarnych lub Full2x2 publikacja referencyjna rozwija
+klasy periodyczne na pełną siatkę magnetyczną, z istniejącą ujemną konwencją
+fazy Blocha opisaną w `0710-periodic-and-floquet-boundary-conditions.md`,
+równanie `eq-0710-phase`:
+
+```{math}
+:label: eq-0600-reference-periodic-expansion
+\delta\mathbf m_{\mathrm{dst}} =
+\exp(-\mathrm i\mathbf k\cdot\Delta\mathbf r)\,
+\delta\mathbf m_{\mathrm{src}}.
+```
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $\delta\mathbf m$ | Zespolony fazor zaburzenia znormalizowanej magnetyzacji | $1$ |
+| $a$ | Zespolony współczynnik skalarnego modu referencyjnego | $1$ |
+| $\mathbf e_1$ | Pierwszy jednostkowy wektor lokalnej bazy stycznej | $1$ |
+| $\mathbf e_2$ | Drugi jednostkowy wektor lokalnej bazy stycznej | $1$ |
+| $\mathrm i$ | Jednostka urojona | $1$ |
+| $\delta\mathbf m_{\mathrm{src}}$ | Fazor reprezentanta klasy periodycznej | $1$ |
+| $\delta\mathbf m_{\mathrm{dst}}$ | Fazor docelowego węzła tej klasy | $1$ |
+| $\mathbf k$ | Zadany wektor falowy | $\mathrm{rad\,m^{-1}}$ |
+| $\Delta\mathbf r$ | Translacja od reprezentanta do węzła docelowego | $\mathrm m$ |
+
+Runner sprawdza zgodność równowagi przed utworzeniem stanu FEM oraz ponownie
+przed rozwinięciem na zmaterializowanej równowadze. Pierwsza kontrola jest
+konieczna, ponieważ konstruktor stanu nakłada statyczne więzy periodyczne
+i mógłby ukryć niespójność wejściowych wektorów. Czyste translacje wymagają
+zgodnych fizycznych wektorów równowagi. Full2x2 dopuszcza wspierane obroty
+lokalnej bazy; skalarna ścieżka nadal wymaga transportu tożsamościowego.
+Normowanie wektora zredukowanego pozostaje bez zmian. Natywny publisher
+zachowuje własną projekcję z transportem baz stycznych. Zmiana dotyczy
+referencyjnej publikacji FEM CPU i nie ustanawia nowej możliwości natywnej,
+FEM GPU, FDM ani pełnej analizy niehermitowskiej.
+
+Właścicielami są
+`crates/fullmag-runner/src/fem/eigen_projection.rs::project_complex_mode_to_tangent_basis`,
+`crates/fullmag-runner/src/fem/eigen_projection.rs::expand_reference_mode_to_periodic_nodes`
+oraz
+`crates/fullmag-runner/src/fem/eigen_reduction.rs::validate_materialized_tangent_frame_transport`.
+Dziewięć regresji projekcji, publikacji i materializacji przeszło w GitHub
+Actions [40292988623](https://github.com/MateuszZelent/fullmag/actions/runs/40292988623)
+dla commita `100340ea2a29aea9e3e72e5ea9acab3521b61c5b`. To dowód kontraktu
+referencyjnej rekonstrukcji; managed runtime, browser/WebGL i kwalifikacja
+naukowa pozostają oddzielnymi dowodami: **NOT VERIFIED**.
+
 ## Branch identity at crossings and degeneracies
 
 `KSamplingIR::Path` solves each sample independently, so the order and phase
@@ -503,9 +602,10 @@ ordinary overlap matching or branch restart in control.
 
 The present implementation is scoped to right eigenvectors in a common FEM
 coordinate basis.  It is phase-invariant and can transport a rotated basis,
-but it does not yet remove a known Bloch envelope phase before comparison and
-does not claim a left/right biorthogonal metric for strongly non-Hermitian
-damped pencils.  Those cases require explicit phase-frame and left/right
+and the path payload adapter converts physical Floquet fields to the common
+nodal envelope frame before comparison. The phase-free geometric mass does
+not apply this conversion a second time. Tracking does not claim a left/right
+biorthogonal metric for strongly non-Hermitian damped pencils.  Those cases require explicit phase-frame and left/right
 fields in a later versioned contract.
 
 The numerical owner is
@@ -912,6 +1012,26 @@ ferromagnetic films*, J. Phys. C 19 (1986), DOI:10.1088/0022-3719/19/35/7013.
 (source-code-index)=
 | Path | Symbol | Responsibility |
 |---|---|---|
+| `scripts/comsol_tracking_metric.py` | `_validate_native_v2_metric` | Independently reconstruct Tet4 geometric mass before accepting native CSR v2 while preserving legacy v1 replay. |
+| `crates/fullmag-ir/src/spectral_validation.rs` | `validate_bounded_floquet_dynamic_demag_admission` | Share strict materialized translation/hint/axis and finite k admission between planner and native runner. |
+| `backends/fem/cpu/frequency_domain/modal/tracking_mass_provider.cpp` | `TrackingMassProviderResult assemble_consistent_p1_tracking_mass` | Assemble phase-free geometric P1 mass on magnetic volumes using canonical physical vertex rows. |
+| `backends/fem/src/frequency_domain/tracking_mass_snapshot.cpp` | `fullmag_fem_tracking_mass_snapshot_create_v1` | Publish an immutable bounded native CSR snapshot with mask/map/source and identity digests. |
+| `crates/fullmag-runner/src/native_fem/tracking_mass.rs` | `from_mesh` | Validate native snapshot extents, canonical maps, mask, volume and compiled source identity before copying ownership. |
+| `crates/fullmag-runner/src/eigen/tracking_mass_csr.rs` | `inner_product` | Apply one phase-free geometric CSR in the Cartesian nodal mass inner product without substituting M squared. |
+| `crates/fullmag-runner/src/eigen/tracking_mass_csr.rs` | `validate` | Validate persisted CSR support, symmetry, air rows, volume and native canonical CSR/map/identity digests. |
+| `crates/fullmag-runner/src/fem/eigen_path.rs` | `eigen_path_consistent_tracking_metric` | Choose native CSR on native modal paths, retain explicit reference Tet4 mass, and share one per mesh generation. |
+| `crates/fullmag-runner/src/eigen/tracking_mass.rs` | `from_artifact_json` | Read legacy v1 and additive native CSR v2 without rewriting retained archives. |
+| `crates/fullmag-runner/src/eigen/tracking_subspace.rs` | `weighted_orthonormal_basis` | Use the same consistent FE mass for orthonormalization and transport while preserving diagonal weighting. |
+| `crates/fullmag-runner/src/eigen/tracking.rs` | `native_csr_subspace_transport_preserves_rotated_degenerate_span` | Regress a complex rotated span and physical-space unit norms in the native CSR representation. |
+| `backends/fem/tests/frequency_domain/shifted_ksp_true_convergence_test.cpp` | `bool run_ksp_case` | Regress immediate breakdown, positive-default/build-breakdown and true measurement availability without erasing callback history. |
+| `crates/fullmag-plan/src/fem.rs` | `eigen_policy_floquet_pair_sets_match` | Define the empty-selector means all mesh pairs contract used by native shared-domain planning. |
+| `crates/fullmag-runner/src/fem/eigen_capability.rs` | `native_cpu_modal_window_has_floquet_dynamic_demag_path` | Admit finite signed and mixed-axis k only along periodic axes through the shared strict post-mesh admission predicate; preserve planner-compatible pair selection. |
+| `crates/fullmag-runner/src/fem/eigen_certificate.rs` | `modal_v6_pair_axis_mask` | Resolve an axis hint or one finite nonzero translation axis without indexing an empty list; reject ambiguous translation fallback. |
+| `crates/fullmag-runner/src/fem/eigen_tests.rs` | `floquet_dynamic_demag_provider_preserves_signed_mixed_k_and_rejects_open_axes` | Regress signed/mixed k, Gamma-containing paths, exact open-axis rejection and nonfinite inputs without rewriting requested coordinates. |
+| `crates/fullmag-runner/src/fem/eigen_tests.rs` | `modal_v6_pair_axis_mask_rejects_missing_zero_oblique_and_nonfinite_translation` | Regress missing/zero/oblique/nonfinite translation fallback and signed axis translations without panic. |
+| `crates/fullmag-runner/src/fem/eigen_tests.rs` | `floquet_dynamic_demag_provider_requires_exact_requested_pair_set` | Regress empty selector acceptance, exact all-pair selection, selector duplicates, unknown/subset IDs and incomplete mesh pair metadata. |
+| `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `solve_floquet_shared_domain_sparse_modal_spectrum` | Treat the explicit full selected-mode count as the same goal as the implicit default, preserving residual certification, mass deduplication, EPS diagnostics, smaller best-effort guards and cancellation. |
+| `backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` | `void refills_native_floquet_nev_before_tangent_mass_cap` | Regress explicit/implicit count parity with the same operator, initial search space, original residual threshold and two independently known physical frequencies; do not infer window completeness. |
 | `packages/fullmag-py/src/fullmag/model/study.py` | `class Eigenmodes` | Validate public modal parameters. |
 | `crates/fullmag-plan/src/fem.rs` | `plan_fem_eigen` | Lower the FEM eigen study and enforce capability policy. |
 | `crates/fullmag-plan/src/fem.rs` | `fem_eigen_solver_policy_has_native_path` | Reject ignored controls on structurally selected reference families. |
@@ -949,6 +1069,11 @@ ferromagnetic films*, J. Phys. C 19 (1986), DOI:10.1088/0022-3719/19/35/7013.
 | `crates/fullmag-cli/src/orchestrator.rs` | `accepted_relax_handoff_for_eigen_stage` | Resolve the accepted Relax-stage handoff; direct runner calls without it fail closed. |
 | `crates/fullmag-runner/src/fem/eigen_tests.rs` | `relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_without_per_sample_relaxation` | Source-fixture regression for one reused handoff across nonzero k samples; not physical or runtime qualification. |
 | `scripts/verify_fem_frequency_domain_eigen_artifacts.py` | `p00_demag_factor` | Stable analytic P00 reference. |
+| `crates/fullmag-runner/src/fem/eigen_projection.rs` | `project_complex_mode_to_tangent_basis` | Rekonstrukcja skalarnej wizualizacji kołowej z zachowaniem globalnej fazy zespolonej. |
+| `crates/fullmag-runner/src/fem/eigen_projection.rs` | `expand_reference_mode_to_periodic_nodes` | Rozwinięcie kartezjańskiego fazora na pełną siatkę zgodnie z fazą Blocha. |
+| `crates/fullmag-runner/src/fem/eigen_reduction.rs` | `validate_materialized_tangent_frame_transport` | Kontrola końcowej równowagi i wspieranego transportu przed rekonstrukcją. |
+| `crates/fullmag-runner/src/fem/eigen_tests.rs` | `reference_mode_publication_expands_periodic_and_signed_floquet_fields` | Regresja publikacji scalar/Full2x2 przy Gamma i obu znakach k; CI 40292988623 PASS. |
+| `crates/fullmag-runner/src/fem/eigen_tests.rs` | `reference_mode_publication_rejects_materialized_equilibrium_mismatch` | Regresja odrzucenia niespójnej równowagi przed nałożeniem więzów; CI 40292988623 PASS. |
 | `crates/fullmag-runner/src/eigen/tracking_subspace.rs` | `frequencies_are_degenerate` | Apply the private absolute-plus-relative complex-frequency grouping bound. |
 | `crates/fullmag-runner/src/eigen/tracking.rs` | `frequency_clusters_use_anchored_complex_distance_and_additive_tolerance` | Regress anchored grouping, complex distance, and additive/relative tolerance boundaries; does not qualify physical degeneracy. |
 
@@ -1350,3 +1475,80 @@ Diagnostyczny profil może włączyć klasę Mat w PetscInfo (`-info :mat:self`)
 ## Alias dodatniej konwencji fazora w obserwablach UI — PR97/4248159364
 
 Token `exp_plus_i_omega_t` używany przez Poisson-airbox oznacza tę samą dodatnią konwencję czasową co `exp_i_omega_t`. Wspólny `phasorConventionAdapter.ts::phasorAdapter` interpretuje oba z tym samym znakiem zaniku i kierunkiem animacji; `modalDampingObservables.ts::modalDampingObservables` akceptuje dokładnie oba tokeny oraz istniejącą konwencję ujemną. Nie zmienia to częstotliwości solvera, równania ani wzorów linewidth/Q/lifetime. Testy porównują alias dla zaniku, wzrostu i zera; nieznane tokeny nadal dają unavailable. Dowód runtime/przeglądarki pozostaje NOT VERIFIED.
+
+
+### Wspólna walidacja osi wejściowej ścieżki CPU
+
+Planner po materializacji siatki i runner muszą używać tego samego warunku
+admission dla ograniczonej ścieżki nonzero-k Floquet z dynamicznym demagiem.
+Każda wybrana para ma translację obecną, skończoną, niezerową i osiową;
+`axis_hint` może opisać tę oś, lecz nie zastępuje translacji ani nie może jej
+przeczyć. Zachowujemy istniejący próg rozpoznania osi translacji 1e-15 m.
+Każdy wektor ścieżki jest skończony, a składowe na osiach otwartych muszą
+wynosić dokładnie zero. Tolerancja klasyfikacji Gamma 1e-12 rad/m pozostaje
+osobnym kontraktem. Ogólny resolver certyfikatu Gamma nie uzyskuje nowych
+wymagań przez tę kontrolę admission nonzero-k. Regresje mają sprawdzać
+planner i runner, małą niezerową składową na osi otwartej oraz brakującą,
+zerową, nieosiową i niefinitywną translację mimo poprawnego hintu.
+
+### I6: autorytatywna geometryczna masa P1 do śledzenia modów
+
+Native snapshot dostarcza rzeczywistą macierz geometryczną
+`M_ij = integral_Omega_m N_i N_j dV` w m^3 na pełnych węzłach fizycznych,
+bez faz Blocha, parametrów Ms, tłumienia i operatora dynamicznego B_alpha.
+Iloczyn modów wynosi `sum_c u_c^H M v_c`. Zastosowanie M do obu wektorów
+przed zwykłym iloczynem dawałoby M^2 i jest niedopuszczalne. Zmiana bazy
+podprzestrzeni i normalizacja mają korzystać z tego samego iloczynu M.
+Wewnętrzna wspólna dodatnia skala M może służyć reprezentowalności;
+nie zmienia znormalizowanych overlapów i nie zmienia zapisanego CSR w m^3.
+
+Snapshot powstaje raz dla danej generacji siatki i maski magnetycznych
+komórek. W serial powstaje po pierwszym zaakceptowanym rozwiązaniu i raw
+checkpoint; pool współdzieli snapshot przygotowany dla tej samej siatki. Mapy DOF/węzłów i tożsamość źródeł muszą być
+sprawdzone przed użyciem; wiersze wyłącznie powietrzne nie uczestniczą
+w metryce magnetyka. Ścieżka native ma korzystać z CSR, nie tylko zapisać
+jego hash jako sidecar obok nadal używanej metryki Rust. Jawna historyczna
+realizacja Rust Tet4 pozostaje dla odbiorników archiwów i właściwych profili.
+
+Nowy zapis CSR używa addytywnego `fullmag.tracking_consistent_p1_metric.v2`;
+odczyt historycznego v1 i jego równoważna masa Tet4 pozostają wspierane bez
+przepisywania archiwów. Tożsamości źródeł, geometrii, maski, mapy DOF i CSR
+są częścią provenance. Sam provider Tet4/Prism6 nie rozszerza istniejącej
+produkcji MeshTopology poza Tet4. Runtime i kwalifikacja I6 pozostają
+NOT VERIFIED do przejścia bramek native, konsumentów i odtwarzania wyników.
+
+
+Adapter `eigen_path_consistent_tracking_metric` wybiera native dla rzeczywistej
+natywnej ścieżki modalnej CPU/GPU; brak wymaganego feature lub błąd snapshotu
+jest błędem, bez cichej zamiany na Rust. Jawne ścieżki referencyjne zachowują
+metrykę v1. W serial/adaptive snapshot jest współdzielony między k przez Arc;
+w adapterze bias-field powstaje raz dla zaakceptowanego wspólnego mesh prefix.
+Nowa reprezentacja podprzestrzeni pozostaje w fizycznych współrzędnych
+węzłowych: wszystkie iloczyny Gram-Schmidta, cross-Gram i normy używają M.
+Historyczna reprezentacja diagonalna zachowuje swoją wagę sqrt(M_diag).
+
+Reader v2 sprawdza zakresy CSR, symetrię, dodatnie wpisy i przekątne,
+pokrycie węzłów magnetycznych, dokładnie puste wiersze powietrza, zgodność
+objętości oraz natywne hashe CSR/map/identity z tym samym typed length-prefix
+preimage co C++. Weryfikacja struktury i hashy nie jest niezależnym dowodem
+SPD ani pochodzenia naukowego pliku; każdy używany norm-square musi nadal
+być dodatni i skończony. Produkcja MeshTopology pozostaje Tet4.
+
+
+Niezależny reader Python `Tet4TrackingMetric._validate_native_v2_metric`
+obsługuje v1/v2 i dla v2 rekonstruuje współczynniki Tet4 z geometrii w SI;
+nie zastępuje własnego iloczynu masowego macierzą producenta. Sprawdza CSR
+z `rtol=1e-12`, `atol=0` oraz typed hashe. To walidacja zgodności masy i
+kontraktu, a nie kwalifikacja częstotliwości, kompletności ani COMSOL A1.
+Native snapshot odczytuje source SHA ze wspólnego runtime build-info,
+który obsługuje zarówno target-wide macro, jak i generated header direct
+Compose. Hosted profil tracking-mass-mfem jawnie ustawia DIRECT_COMPOSE=1,
+aby uniknąć pozornej kwalifikacji wyłącznie historycznej ścieżki makra.
+
+
+Hosted suite 40905319431 wykrył nowy błąd kolejności admission: native tracking
+był tworzony przed sprawdzeniem certyfikatu równowagi i zasłaniał właściwy
+błąd `uncertified_provided_equilibrium`. Tworzenie metryki serial przesunięto
+za zaakceptowane native completion i raw checkpoint; kontrola niezmienności
+już istniejącej siatki pozostaje przed solve. Nie zmieniono fixture'u ani
+wymagania certyfikowanej równowagi. Nowy przebieg CI jest wymagany.

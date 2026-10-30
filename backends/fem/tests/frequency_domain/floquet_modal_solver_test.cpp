@@ -351,6 +351,35 @@ struct SavedEnvironmentValue {
     }
 };
 
+struct ScopedFloquetModalKrylovEnvironment {
+    std::array<SavedEnvironmentValue, 8> values{
+        SavedEnvironmentValue("FULLMAG_MODAL_EPS_PREFILTER_ABS"),
+        SavedEnvironmentValue("FULLMAG_MODAL_SHIFTED_KSP_RTOL"),
+        SavedEnvironmentValue("FULLMAG_MODAL_GMRES_RESTART"),
+        SavedEnvironmentValue("FULLMAG_MODAL_SHIFTED_KSP_TYPE"),
+        SavedEnvironmentValue("FULLMAG_FLOQUET_EPS_PREFILTER_ABS"),
+        SavedEnvironmentValue("FULLMAG_FLOQUET_SHIFTED_KSP_RTOL"),
+        SavedEnvironmentValue("FULLMAG_FLOQUET_GMRES_RESTART"),
+        SavedEnvironmentValue("FULLMAG_FLOQUET_SHIFTED_KSP_TYPE")};
+    bool ready = true;
+
+    ScopedFloquetModalKrylovEnvironment()
+    {
+        for (const SavedEnvironmentValue &value : values) {
+            if (clear_floquet_diagnostic_environment_value(value.name) != 0) {
+                ready = false;
+            }
+        }
+    }
+
+    ~ScopedFloquetModalKrylovEnvironment()
+    {
+        for (const SavedEnvironmentValue &value : values) {
+            value.restore();
+        }
+    }
+};
+
 struct ScopedFloquetDiagnosticEnvironment {
     SavedEnvironmentValue dense_oracle{
         "FULLMAG_FLOQUET_DENSE_ORACLE"};
@@ -1076,6 +1105,10 @@ void reports_opt_in_action_diagnostic_unavailable_before_setup()
     }
 
     const auto &diagnostic = result.floquet_schur_action_diagnostic;
+    check(result.ksp_type != nullptr &&
+              std::strcmp(result.ksp_type, "not_configured") == 0 &&
+              std::isnan(result.ksp_breakdown_tolerance),
+          "pre-setup failure does not report a shifted KSP that was never selected");
     check(diagnostic.requested && !diagnostic.available &&
               std::strcmp(diagnostic.status, "unavailable") == 0 &&
               std::strcmp(
@@ -1094,6 +1127,9 @@ void reports_opt_in_action_diagnostic_unavailable_before_setup()
 
 void executes_native_sparse_matshell_above_dense_bound(bool force_inner_failure = false)
 {
+    ScopedFloquetModalKrylovEnvironment ksp_environment;
+    check(ksp_environment.ready,
+          "large sparse KSP default regression clears common and legacy tuning overrides");
     constexpr std::size_t q_dimension = 514u;
     // Keep the synthetic fixture well away from exact zero; the 1 MHz
     // frequency makes shifted selection deterministic without encoding a
@@ -1167,24 +1203,43 @@ void executes_native_sparse_matshell_above_dense_bound(bool force_inner_failure 
             fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked();
     }
 
-    const char *previous_action_diagnostic =
-        std::getenv("FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC");
-    const bool had_previous_action_diagnostic = previous_action_diagnostic != nullptr;
-    const std::string previous_action_diagnostic_value =
-        had_previous_action_diagnostic ? previous_action_diagnostic : "";
+    const SavedEnvironmentValue previous_dense_oracle(
+        "FULLMAG_FLOQUET_DENSE_ORACLE");
+    const SavedEnvironmentValue previous_action_diagnostic(
+        "FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC");
+    check(clear_floquet_diagnostic_environment_value(
+              previous_dense_oracle.name) == 0 &&
+              clear_action_diagnostic_environment() == 0,
+          "large sparse C1 comparison starts with both diagnostic opt-ins disabled");
+    fd::SLEPcTinyGyrotropicModalEigenResult baseline_result{};
+    if (!force_inner_failure) {
+        baseline_result = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
+            operator_view, spectral);
+    }
     check(set_action_diagnostic_environment("1") == 0,
           "action-only diagnostic opt-in can be enabled for the prepared native regression");
     const auto result = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
         operator_view, spectral);
-    if (had_previous_action_diagnostic) {
-        check(set_action_diagnostic_environment(
-                  previous_action_diagnostic_value.c_str()) == 0,
-              "action-only diagnostic environment is restored after the prepared regression");
-    } else {
-        check(clear_action_diagnostic_environment() == 0,
-              "action-only diagnostic environment is cleared after the prepared regression");
-    }
+    previous_action_diagnostic.restore();
+    previous_dense_oracle.restore();
 #if FULLMAG_FEM_WITH_SLEPC
+    fd::SLEPcTinyGyrotropicModalEigenResult explicit_gmres_result{};
+    if (!force_inner_failure) {
+        check(clear_floquet_diagnostic_environment_value(
+                  previous_dense_oracle.name) == 0 &&
+                  clear_action_diagnostic_environment() == 0,
+              "explicit GMRES override regression disables diagnostic opt-ins");
+        check(set_floquet_diagnostic_environment_value(
+                  "FULLMAG_MODAL_SHIFTED_KSP_TYPE", "gmres") == 0,
+              "large sparse KSP regression can select the explicit GMRES override");
+        explicit_gmres_result = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
+            operator_view, spectral);
+        check(clear_floquet_diagnostic_environment_value(
+                  "FULLMAG_MODAL_SHIFTED_KSP_TYPE") == 0,
+              "large sparse KSP regression clears its explicit GMRES override");
+        previous_action_diagnostic.restore();
+        previous_dense_oracle.restore();
+    }
     check(result.floquet_schur_action_diagnostic.requested,
           "native regression records that the action-only diagnostic was requested");
     check(result.floquet_schur_action_diagnostic.pre_eps_only &&
@@ -1233,6 +1288,9 @@ void executes_native_sparse_matshell_above_dense_bound(bool force_inner_failure 
               "forced inner failure scenario must start before any process-unsafe solver state");
         check(!result.ok && result.accepted_modes.empty(),
               "inner KSP failure must remain fail-closed");
+        check(result.ksp_type != nullptr &&
+                  std::strcmp(result.ksp_type, "fgmres") == 0,
+              "forced inner failure reports the resolved large sparse FGMRES default");
         check(!result.ksp_diagnostics_available &&
                   !result.ksp_converged_reason_available &&
                   !result.ksp_last_true_residual_available,
@@ -1263,6 +1321,184 @@ void executes_native_sparse_matshell_above_dense_bound(bool force_inner_failure 
               std::isfinite(
                   result.floquet_schur_action_diagnostic.mat_shell_reconstruction_relative_defect),
           "native regression measures the bounded action-only probe and MatShell callback before EPS");
+    const auto &candidate_diagnostic =
+        result.shifted_ksp_failure_probe.candidate_operator_diagnostic;
+    check(candidate_diagnostic.requested &&
+              candidate_diagnostic.workspace_available &&
+              std::strcmp(candidate_diagnostic.diagnostic_mode, "sparse_replay") == 0 &&
+              candidate_diagnostic.sample_available &&
+              candidate_diagnostic.production_phi_rhs_norm_available &&
+              candidate_diagnostic.production_phi_norm_available &&
+              candidate_diagnostic.production_poisson_residual_available &&
+              candidate_diagnostic.production_vs_isolated_replay_available &&
+              candidate_diagnostic.isolated_repeatability_available &&
+              candidate_diagnostic.isolated_additivity_available,
+          "above-bound sparse C1 captures Poisson residual, replay, repeatability, and additivity");
+    check(!candidate_diagnostic.exact_shifted_matrix_comparison_available &&
+              std::strcmp(
+                  candidate_diagnostic.exact_shifted_matrix_comparison_reason,
+                  "sparse_replay_exact_schur_unavailable") == 0 &&
+              candidate_diagnostic.shifted_lu_policy_comparison.requested &&
+              !candidate_diagnostic.shifted_lu_policy_comparison.available &&
+              std::strcmp(
+                  candidate_diagnostic.shifted_lu_policy_comparison.reason,
+                  "sparse_replay_exact_schur_unavailable") == 0 &&
+              candidate_diagnostic.live_pc_observation.requested &&
+              !candidate_diagnostic.live_pc_observation.available &&
+              std::strcmp(
+                  candidate_diagnostic.live_pc_observation.reason,
+                  "sparse_replay_skips_live_pc_observation") == 0,
+          "sparse-only C1 labels exact-Schur, shifted-LU, and live-PC evidence unavailable");
+    check(candidate_diagnostic.sparse_workspace_budget_bytes_available &&
+              candidate_diagnostic.sparse_workspace_budget_bytes ==
+                  64u * 1024u * 1024u &&
+              candidate_diagnostic.sparse_workspace_estimated_bytes_available &&
+              candidate_diagnostic.sparse_workspace_estimated_bytes > 0u &&
+              candidate_diagnostic.sparse_workspace_estimated_bytes <=
+                  candidate_diagnostic.sparse_workspace_budget_bytes &&
+              candidate_diagnostic.sparse_workspace_postsetup_estimated_bytes_available &&
+              candidate_diagnostic.sparse_workspace_postsetup_estimated_bytes > 0u &&
+              candidate_diagnostic.sparse_workspace_postsetup_estimated_bytes <=
+                  candidate_diagnostic.sparse_workspace_budget_bytes &&
+              !candidate_diagnostic.sparse_workspace_observed_bytes_available &&
+              std::strcmp(
+                  candidate_diagnostic.memory_admission_source,
+                  "petsc_seqaij_allocated_storage_estimate_not_rss") == 0 &&
+              std::strcmp(
+                  candidate_diagnostic.memory_admission_status,
+                  "estimated_admitted") == 0,
+          "sparse-only C1 reports separate SeqAIJ storage estimates and no RSS observation");
+
+    Mat synthetic_seqaij = nullptr;
+    check(MatCreateSeqAIJ(PETSC_COMM_SELF, 4, 4, 1, nullptr, &synthetic_seqaij) ==
+                  PETSC_SUCCESS,
+          "create a small SeqAIJ fixture for sparse storage admission");
+    for (PetscInt row = 0; row < 4; ++row) {
+        check(MatSetValue(
+                  synthetic_seqaij,
+                  row,
+                  row,
+                  static_cast<PetscScalar>(1.0),
+                  INSERT_VALUES) == PETSC_SUCCESS,
+              "populate the SeqAIJ storage fixture");
+    }
+    check(MatAssemblyBegin(synthetic_seqaij, MAT_FINAL_ASSEMBLY) == PETSC_SUCCESS &&
+              MatAssemblyEnd(synthetic_seqaij, MAT_FINAL_ASSEMBLY) == PETSC_SUCCESS,
+          "assemble the SeqAIJ storage fixture");
+    MatInfo synthetic_info{};
+    check(MatGetInfo(synthetic_seqaij, MAT_LOCAL, &synthetic_info) == PETSC_SUCCESS &&
+              synthetic_info.nz_allocated > 0.0 && synthetic_info.nz_used > 0.0 &&
+              synthetic_info.memory == 0.0,
+          "pinned SeqAIJ reports valid allocated CSR counts while MatInfo.memory is zero");
+    const auto synthetic_matrix_estimate =
+        fd::detail::estimate_floquet_seqaij_storage(
+            true,
+            4,
+            4,
+            synthetic_info.nz_allocated,
+            synthetic_info.nz_used,
+            fd::detail::FloquetSeqAIJStorageKind::duplicated_matrix);
+    const auto synthetic_factor_estimate =
+        fd::detail::estimate_floquet_seqaij_storage(
+            true,
+            4,
+            4,
+            synthetic_info.nz_allocated,
+            synthetic_info.nz_used,
+            fd::detail::FloquetSeqAIJStorageKind::lu_factor);
+    check(synthetic_matrix_estimate.available && synthetic_matrix_estimate.bytes > 0u &&
+              synthetic_factor_estimate.available && synthetic_factor_estimate.bytes > 0u,
+          "valid SeqAIJ CSR counts produce conservative duplicate and factor storage estimates");
+    const auto synthetic_vectors = static_cast<std::uint64_t>(
+        (13 * 4 + 5 * 4) * sizeof(PetscScalar));
+    const auto synthetic_workspace_estimate =
+        fd::detail::estimate_floquet_sparse_workspace(
+            synthetic_matrix_estimate.bytes,
+            synthetic_factor_estimate.bytes,
+            synthetic_vectors);
+    check(synthetic_workspace_estimate.available &&
+              synthetic_workspace_estimate.bytes > 1u,
+          "valid SeqAIJ storage and fixed vectors produce a preflight estimate");
+    const auto unavailable_workspace_estimate =
+        fd::detail::estimate_floquet_sparse_workspace(
+            0u,
+            synthetic_factor_estimate.bytes,
+            synthetic_vectors);
+    const auto estimate_budget_rejection =
+        fd::detail::floquet_sparse_workspace_estimate_within_budget(
+            true,
+            synthetic_workspace_estimate.bytes,
+            synthetic_workspace_estimate.bytes - 1u);
+    const auto unsupported_type_estimate = fd::detail::estimate_floquet_seqaij_storage(
+        false,
+        4,
+        4,
+        synthetic_info.nz_allocated,
+        synthetic_info.nz_used,
+        fd::detail::FloquetSeqAIJStorageKind::duplicated_matrix);
+    const auto negative_nnz_estimate = fd::detail::estimate_floquet_seqaij_storage(
+        true,
+        4,
+        4,
+        -1.0,
+        synthetic_info.nz_used,
+        fd::detail::FloquetSeqAIJStorageKind::duplicated_matrix);
+    const auto nonfinite_nnz_estimate = fd::detail::estimate_floquet_seqaij_storage(
+        true,
+        4,
+        4,
+        std::numeric_limits<double>::quiet_NaN(),
+        synthetic_info.nz_used,
+        fd::detail::FloquetSeqAIJStorageKind::duplicated_matrix);
+    const auto fractional_nnz_estimate = fd::detail::estimate_floquet_seqaij_storage(
+        true,
+        4,
+        4,
+        0.5,
+        0.0,
+        fd::detail::FloquetSeqAIJStorageKind::duplicated_matrix);
+    const auto inconsistent_nnz_estimate = fd::detail::estimate_floquet_seqaij_storage(
+        true,
+        4,
+        4,
+        1.0,
+        2.0,
+        fd::detail::FloquetSeqAIJStorageKind::duplicated_matrix);
+    const auto out_of_exact_double_range_nnz_estimate =
+        fd::detail::estimate_floquet_seqaij_storage(
+            true,
+            4,
+            4,
+            9007199254740994.0,
+            0.0,
+            fd::detail::FloquetSeqAIJStorageKind::duplicated_matrix);
+    std::uint64_t overflow_total = 0u;
+    const bool checked_multiply_overflow = fd::detail::floquet_add_sparse_storage(
+        std::numeric_limits<std::uint64_t>::max(),
+        2u,
+        &overflow_total);
+    check(!estimate_budget_rejection && !unavailable_workspace_estimate.available &&
+              !unsupported_type_estimate.available &&
+              !negative_nnz_estimate.available && !nonfinite_nnz_estimate.available &&
+              !fractional_nnz_estimate.available && !inconsistent_nnz_estimate.available &&
+              !out_of_exact_double_range_nnz_estimate.available &&
+              !checked_multiply_overflow,
+          "SeqAIJ admission rejects a one-byte-short budget, missing estimates, unsupported types, invalid counts, and arithmetic overflow");
+    check(MatDestroy(&synthetic_seqaij) == PETSC_SUCCESS,
+          "destroy the SeqAIJ storage fixture");
+    check(baseline_result.ok == result.ok &&
+              baseline_result.accepted_mode_count == result.accepted_mode_count &&
+              baseline_result.accepted_mode_count == 1 &&
+              baseline_result.max_candidate_relative_residual <=
+                  spectral.residual_tolerance &&
+              result.max_candidate_relative_residual <= spectral.residual_tolerance &&
+              std::abs(baseline_result.accepted_modes.front().frequency_hz -
+                       result.accepted_modes.front().frequency_hz) <= 1.0e-9 &&
+              baseline_result.accepted_modes.front().relative_residual <=
+                  spectral.residual_tolerance &&
+              result.accepted_modes.front().relative_residual <=
+                  spectral.residual_tolerance,
+          "opt-in sparse C1 preserves the opt-out solve acceptance and certified mode");
 #endif
     check(result.execution_policy != nullptr &&
               std::strcmp(result.execution_policy, "petsc_sequential_cpu") == 0,
@@ -1291,18 +1527,26 @@ void executes_native_sparse_matshell_above_dense_bound(bool force_inner_failure 
                   result.poisson_iteration_semantics,
                   "preonly_factorization_no_iterative_convergence") == 0,
           "native Floquet result distinguishes Poisson factorization from iteration");
+#if FULLMAG_FEM_WITH_SLEPC
     check(result.ksp_type != nullptr &&
-              std::strcmp(result.ksp_type, "gmres") == 0 &&
+              std::strcmp(result.ksp_type, "fgmres") == 0 &&
               result.pc_type != nullptr &&
               std::strcmp(result.pc_type, "lu") == 0 &&
               result.factorization_package != nullptr &&
               std::strcmp(result.factorization_package, "petsc_default_lu") == 0,
-          "native Floquet result exposes the shifted GMRES/LU policy");
-#if FULLMAG_FEM_WITH_SLEPC
-    check(result.ksp_restart == 8 &&
-              std::abs(result.ksp_breakdown_tolerance - 2.0) <=
+          "above-bound shared-domain Floquet defaults to shifted FGMRES with the existing LU policy");
+    check(result.ksp_restart == 30 &&
+              std::isnan(result.ksp_breakdown_tolerance),
+          "large sparse FGMRES keeps the existing restart and reports no GMRES-only breakdown tolerance");
+    check(!force_inner_failure && explicit_gmres_result.ok &&
+              explicit_gmres_result.ksp_type != nullptr &&
+              std::strcmp(explicit_gmres_result.ksp_type, "gmres") == 0 &&
+              explicit_gmres_result.accepted_mode_count == 1 &&
+              explicit_gmres_result.max_candidate_relative_residual <=
+                  spectral.residual_tolerance &&
+              std::abs(explicit_gmres_result.ksp_breakdown_tolerance - 2.0) <=
                   std::numeric_limits<double>::epsilon(),
-          "native Floquet result exposes the bounded GMRES restart and residual replacement policy");
+          "large sparse shared-domain Floquet preserves an explicit GMRES override and original acceptance gate");
     check(result.factorization_shift_policy != nullptr &&
               std::strstr(result.factorization_shift_policy,
                           "magnetic_only_") ==
@@ -1460,6 +1704,9 @@ void finalizes_certified_candidates_by_tangent_mass_before_nearest_cap()
 
 void normalizes_si_scale_floquet_pencil()
 {
+    ScopedFloquetModalKrylovEnvironment ksp_environment;
+    check(ksp_environment.ready,
+          "small exact-Schur regression clears common and legacy tuning overrides");
 #if FULLMAG_FEM_WITH_SLEPC
     constexpr std::size_t q_dimension = 8u;
     constexpr double coefficient_scale = 1.0e-60;
@@ -1511,6 +1758,11 @@ void normalizes_si_scale_floquet_pencil()
                           "exact_schur_materialized_") ==
                   result.factorization_shift_policy,
           "small native Floquet systems precondition with the materialized exact Schur action");
+    check(result.ksp_type != nullptr &&
+              std::strcmp(result.ksp_type, "gmres") == 0 &&
+              std::abs(result.ksp_breakdown_tolerance - 2.0) <=
+                  std::numeric_limits<double>::epsilon(),
+          "small exact-Schur Floquet path retains the GMRES default and its breakdown policy");
     check(std::isfinite(result.factorization_shift_amount) &&
               result.factorization_shift_amount > 0.0,
           "preconditioner LU reports its resolved positive shift amount");
@@ -1796,14 +2048,72 @@ void refills_native_floquet_nev_before_tangent_mass_cap()
                 probe.true_probe_measurement_failure_count));
     };
 
+    // A best-effort publication limit must not become the larger EPS guard
+    // goal. Keep the identical initial search space and certify/deduplicate
+    // the actual first pool before applying the separate refill target.
+    auto one_mode_goal_request = make_refill_request(2, 160);
+    one_mode_goal_request.certified_refill_target = 1;
+    const auto one_mode_goal_result =
+        fd::solve_floquet_shared_domain_sparse_modal_spectrum(
+            refill_operator_view, one_mode_goal_request);
+    check(one_mode_goal_result.ok &&
+              one_mode_goal_result.accepted_mode_count == 1 &&
+              one_mode_goal_result.eps_attempt_count == 1 &&
+              one_mode_goal_result.eps_first_attempt_unique_certified_mode_count_available &&
+              one_mode_goal_result.eps_first_attempt_unique_certified_mode_count == 1 &&
+              one_mode_goal_result.eps_certified_refill_target == 1 &&
+              one_mode_goal_result.eps_converged_reason > 0 &&
+              one_mode_goal_result.max_relative_residual <= one_mode_goal_request.residual_tolerance,
+          "explicit one-mode goal stops after one converged residual-certified mass-deduplicated pool");
+    for (int invalid_goal : {-1, 3}) {
+        auto invalid_request = make_refill_request(2, 160);
+        invalid_request.certified_refill_target = invalid_goal;
+        const auto invalid_result = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
+            refill_operator_view, invalid_request);
+        check(!invalid_result.ok && invalid_result.status != nullptr &&
+                  std::strcmp(invalid_result.status, "validation_error") == 0 &&
+                  invalid_result.eps_attempt_count == 0,
+              "invalid explicit refill goals are rejected before EPS execution");
+    }
+
     const auto refill_request = make_refill_request(2, 160);
     const auto refill_result = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
         refill_operator_view, refill_request);
+    check(one_mode_goal_result.eps_initial_nev == refill_result.eps_initial_nev &&
+              one_mode_goal_result.eps_initial_ncv == refill_result.eps_initial_ncv &&
+              one_mode_goal_result.eps_initial_mpd == refill_result.eps_initial_mpd,
+          "separate certified refill goal preserves initial NEV NCV and MPD");
+    auto two_mode_goal_request = refill_request;
+    two_mode_goal_request.certified_refill_target = 2;
+    const auto two_mode_goal_result = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
+        refill_operator_view, two_mode_goal_request);
+    const bool explicit_multi_mode_contract =
+        two_mode_goal_result.ok && two_mode_goal_result.accepted_mode_count == 2 &&
+        two_mode_goal_result.eps_attempt_count > 1 &&
+        two_mode_goal_result.eps_certified_refill_target == 2 &&
+        two_mode_goal_result.max_relative_residual <= two_mode_goal_request.residual_tolerance;
+    if (!explicit_multi_mode_contract) {
+        report_refill_diagnostics("explicit multi-mode refill", two_mode_goal_result);
+        report_refill_diagnostics("default multi-mode refill control", refill_result);
+    }
+    check(explicit_multi_mode_contract,
+          "explicit multi-mode goal still refills after an insufficient one-mode first pool");
     const double expected_first_refill_frequency_hz =
         refill_spectral_center_hz + refill_frequency_offsets_hz[1u];
     const double expected_second_refill_frequency_hz =
         refill_spectral_center_hz + refill_frequency_offsets_hz[4u];
     constexpr double expected_refill_frequency_tolerance_hz = 1.0e-3;
+    for (double expected_frequency : {
+             expected_first_refill_frequency_hz, expected_second_refill_frequency_hz}) {
+        check(std::any_of(
+                  two_mode_goal_result.accepted_modes.begin(),
+                  two_mode_goal_result.accepted_modes.end(),
+                  [=](const fd::SLEPcModalAcceptedMode &mode) {
+                      return std::abs(mode.frequency_hz - expected_frequency) <=
+                          expected_refill_frequency_tolerance_hz;
+                  }),
+              "explicit full refill goal retains both independently known physical frequencies");
+    }
     bool saw_expected_first_refill_frequency = false;
     bool saw_expected_second_refill_frequency = false;
     bool refill_residuals_accepted = refill_result.accepted_modes.size() == 2u;
@@ -1954,6 +2264,31 @@ void refills_native_floquet_nev_before_tangent_mass_cap()
               budget_limited_result.eps_cumulative_iterations_available &&
               budget_limited_result.outer_iterations == 1,
           "refill cannot reset or exceed the resolved total EPS iteration budget");
+
+    auto one_mode_budget_request = budget_limited_request;
+    one_mode_budget_request.certified_refill_target = 1;
+    const auto one_mode_budget_result =
+        fd::solve_floquet_shared_domain_sparse_modal_spectrum(
+            refill_operator_view, one_mode_budget_request);
+    // The fixture may converge its first EPS search in its last allowed
+    // iteration. Only the two-mode refill then lacks budget; a certified
+    // one-mode request is already satisfied. A negative EPS reason must
+    // still fail even when a residual-certified candidate was extracted.
+    const bool first_search_converged =
+        budget_limited_result.eps_converged_reason_available &&
+        budget_limited_result.eps_converged_reason > 0 &&
+        budget_limited_result.eps_converged_reason != EPS_CONVERGED_USER;
+    check(one_mode_budget_result.ok == first_search_converged &&
+              one_mode_budget_result.accepted_mode_count == 1 &&
+              one_mode_budget_result.eps_solved_attempt_count == 1 &&
+              one_mode_budget_result.outer_iterations <= one_mode_budget_request.max_outer_iterations,
+          "one-mode goal succeeds at the budget boundary only if EPS actually converged");
+    check(!one_mode_budget_result.ok ||
+              (one_mode_budget_result.eps_converged_reason_available &&
+               one_mode_budget_result.eps_converged_reason > 0 &&
+               one_mode_budget_result.eps_converged_reason != EPS_CONVERGED_USER &&
+               one_mode_budget_result.relative_residual <= one_mode_budget_request.residual_tolerance),
+          "budget-boundary success retains EPS convergence and full residual certification");
 
     CancelAfterPolls cancellation{};
     auto cancellation_request = make_request(2, 160);

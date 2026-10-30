@@ -232,6 +232,28 @@ class DockerDevCodegenTests(unittest.TestCase):
         self.assertEqual(container, "container-id")
         self.assertIs(observed, document)
 
+        # Desktop WSL rewrites bind sources. Accept only an inode-proven alias.
+        import docker_dev_browser_qa as qa
+        with tempfile.TemporaryDirectory() as temporary:
+            local = Path(temporary)
+            selected = local / "selected"
+            selected.mkdir()
+            aliases = local / "aliases"
+            (aliases / "Ubuntu").mkdir(parents=True)
+            token = "a" * 64
+            (aliases / "Ubuntu" / token).symlink_to(selected, target_is_directory=True)
+            document["Config"]["Env"] = ["FULLMAG_SOURCE_HOST_ROOT=" + str(selected)]
+            document["Mounts"][0]["Source"] = (
+                "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu/" + token
+            )
+            with mock.patch.object(codegen, "_capture", return_value=(b"container-id\n", b"")), \
+                 mock.patch.object(codegen, "_inspect", return_value=document), \
+                 mock.patch.object(qa, "LOCAL_WSL_BIND_MOUNT_ROOT", aliases):
+                codegen._running_service("project", "backend", identity, selected)
+                document["Mounts"][0]["Source"] = document["Mounts"][0]["Source"].replace(token, "b" * 64)
+                with self.assertRaisesRegex(codegen.CodegenError, "source mount"):
+                    codegen._running_service("project", "backend", identity, selected)
+
         document["Config"]["Env"] = [r"FULLMAG_SOURCE_ROOT=C:\git\fullmag\fullmag"]
         with mock.patch.object(codegen, "_capture", return_value=(b"container-id\n", b"")):
             with mock.patch.object(codegen, "_inspect", return_value=document):

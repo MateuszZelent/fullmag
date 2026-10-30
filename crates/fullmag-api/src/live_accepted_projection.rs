@@ -190,6 +190,7 @@ struct DurableProjection {
     latest_total_energy: Option<fullmag_application::StudyScalarArtifact>,
     terminal_stats: Option<fullmag_runner::StepStats>,
     latest_output_identity: Option<String>,
+    modal_publications: Vec<crate::accepted_modal_publication::ModalPublicationCandidate>,
     live_observation: Option<(usize, crate::accepted_study_worker::AcceptedLiveObservation)>,
     live_observation_identity: Option<String>,
     live_observation_sequence: Option<u64>,
@@ -265,14 +266,11 @@ async fn poll_once(
     let Some(context) = capture_context(state).await? else {
         return Ok(());
     };
-    // A terminal run whose final state is already projected has nothing left
-    // to publish. Editing the model after it (the normal live workflow between
-    // commands) changes the input identity and must not retry it forever.
+    // Model edits after a terminal result must not republish that result into
+    // changed computational inputs. With unchanged inputs keep observing the
+    // durable catalog: an explicit task retry can advance the same run ID.
     if cursor.as_ref().is_some_and(|previous| {
-        previous.run_id == context.run_id
-            && previous.session_id == context.session_id
-            && previous.session_epoch == context.session_epoch
-            && matches!(previous.status, "completed" | "failed" | "cancelled")
+        terminal_projection_has_different_inputs(previous, &context)
     }) {
         // Release the projected run's Study; a next run has its own intent.
         *study_cache = None;
@@ -933,6 +931,25 @@ fn load_durable_projection(
             status,
         )?
     };
+    // All read-model consumers have borrowed `verified` by this point. Move
+    // modal payloads into the publication candidate instead of cloning a
+    // potentially hundreds-of-megabytes CAS bundle.
+    let modal_publications = if durable_changed {
+        artifact_catalog
+            .as_ref()
+            .map(|artifact_catalog| {
+                collect_modal_publications(
+                    &accepted,
+                    &run_catalog,
+                    artifact_catalog,
+                    verified,
+                )
+            })
+            .transpose()?
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let command_id = intent
         .specification
         .pointer("/parameters/live_workspace/command_id")
@@ -1005,6 +1022,7 @@ fn load_durable_projection(
         latest_total_energy,
         terminal_stats,
         latest_output_identity,
+        modal_publications,
         live_observation,
         live_observation_identity,
         live_observation_sequence,
@@ -1598,6 +1616,17 @@ fn stage_journal_details_for_task(
     Ok(details)
 }
 
+fn terminal_projection_has_different_inputs(
+    previous: &ProjectionCursor,
+    context: &ProjectionContext,
+) -> bool {
+    previous.run_id == context.run_id
+        && previous.session_id == context.session_id
+        && previous.session_epoch == context.session_epoch
+        && matches!(previous.status, "completed" | "failed" | "cancelled")
+        && !cursor_matches_context(previous, context)
+}
+
 fn cursor_matches_context(cursor: &ProjectionCursor, context: &ProjectionContext) -> bool {
     cursor.api_instance_id == context.api_instance_id
         && cursor.session_id == context.session_id
@@ -1767,14 +1796,23 @@ fn catalog_status(tasks: &[fullmag_session::FmsTaskCatalogEntry]) -> &'static st
 }
 
 fn terminal_catalog_without_outputs(tasks: &[fullmag_session::FmsTaskCatalogEntry]) -> bool {
-    !tasks.is_empty()
+    use fullmag_session::{FmsTaskLifecycle as Life, FmsTaskReadiness};
+    let is_failed_terminal = |task: &fullmag_session::FmsTaskCatalogEntry| {
+        matches!(task.lifecycle, Life::Failed | Life::Interrupted | Life::Cancelled)
+    };
+    // A failed upstream stage leaves downstream tasks accepted and blocked.
+    // They cannot have produced a catalog, and must not hide the durable failure.
+    tasks.iter().any(is_failed_terminal)
         && tasks.iter().all(|task| {
-            matches!(
-                task.lifecycle,
-                fullmag_session::FmsTaskLifecycle::Failed
-                    | fullmag_session::FmsTaskLifecycle::Interrupted
-                    | fullmag_session::FmsTaskLifecycle::Cancelled
-            ) && task.artifact_ids.is_empty()
+            let unstarted_dependency = task.lifecycle == Life::Accepted
+                && matches!(&task.readiness, FmsTaskReadiness::Blocked { reason }
+                    if reason == fullmag_session::FMS_TASK_AWAITING_DEPENDENCY_RESOLUTION_REASON)
+                && task.attempt_id.is_none()
+                && task.ownership_epoch.is_none()
+                && task.resource_id.is_none()
+                && task.coordinator_watermark.is_none()
+                && task.coordinator_genesis.is_none();
+            task.artifact_ids.is_empty() && (is_failed_terminal(task) || unstarted_dependency)
         })
 }
 
@@ -1901,11 +1939,13 @@ fn load_verified_outputs(
                 .object_ref
                 .clone()
                 .ok_or_else(|| ApiError::conflict("accepted output has no CAS reference"))?;
-            let bytes = store
-                .cas()
-                .get(&object_ref)
-                .map_err(|error| ApiError::internal(format!("read accepted output CAS: {error}")))?
-                .ok_or_else(|| ApiError::conflict("accepted output CAS object is missing"))?;
+            let bytes = if output.codec_id == fullmag_application::MODAL_EIGEN_BUNDLE_CODEC_ID {
+                store.cas().get_bounded(&object_ref, fullmag_application::MODAL_EIGEN_BUNDLE_MAX_BYTES as u64)
+            } else {
+                store.cas().get(&object_ref)
+            }
+            .map_err(|error| ApiError::internal(format!("read accepted output CAS: {error}")))?
+            .ok_or_else(|| ApiError::conflict("accepted output CAS object is missing"))?;
             let decoded = fullmag_application::decode_study_artifact(
                 &fullmag_application::ResolvedStudyArtifact {
                     artifact_id: output.artifact_id.clone(),
@@ -1930,6 +1970,115 @@ fn load_verified_outputs(
         }
     }
     Ok(outputs)
+}
+
+fn collect_modal_publications(
+    accepted: &fullmag_runtime_control::AcceptedStudySnapshot,
+    run_catalog: &fullmag_session::FmsRunCatalog,
+    artifact_catalog: &fullmag_session::FmsArtifactCatalog,
+    verified: Vec<VerifiedOutput>,
+) -> Result<Vec<crate::accepted_modal_publication::ModalPublicationCandidate>, ApiError> {
+    let mut candidates = Vec::new();
+    for output in verified {
+        let fullmag_application::DecodedStudyArtifact::ModalEigen(bundle) = output.decoded else {
+            continue;
+        };
+        if output.data_kind != "artifact" {
+            return Err(ApiError::conflict(
+                "accepted modal output has a non-artifact data kind",
+            ));
+        }
+        let step = accepted
+            .study
+            .steps
+            .iter()
+            .find(|step| step.step_id == output.step_id)
+            .ok_or_else(|| {
+                ApiError::conflict("accepted modal output step is absent from the immutable Study")
+            })?;
+        if !fullmag_runtime_control::study_modal::is_modal_step(step)
+            || step.outputs.len() != 1
+            || step.outputs[0].port_id != fullmag_application::MODAL_EIGEN_OUTPUT_PORT
+            || step.outputs[0].data_kind != fullmag_authoring::StudyPortDataKind::Artifact
+        {
+            return Err(ApiError::conflict(
+                "accepted modal output is not declared by an eigenmodes artifact step",
+            ));
+        }
+        let task_id = fullmag_session::task_id_for_study_step(&run_catalog.run_id, &output.step_id)
+            .map_err(|error| {
+                ApiError::conflict(format!("accepted modal task identity is invalid: {error}"))
+            })?;
+        let task = run_catalog
+            .tasks
+            .iter()
+            .find(|task| task.task_id == task_id)
+            .ok_or_else(|| ApiError::conflict("accepted modal output task is absent from the RunCatalog"))?;
+        let (Some(attempt_id), Some(ownership_epoch)) =
+            (task.attempt_id.as_deref(), task.ownership_epoch)
+        else {
+            return Err(ApiError::conflict(
+                "accepted modal output task has no attempt/ownership identity",
+            ));
+        };
+        match task.lifecycle {
+            fullmag_session::FmsTaskLifecycle::Succeeded => {}
+            fullmag_session::FmsTaskLifecycle::Accepted
+            | fullmag_session::FmsTaskLifecycle::Queued
+            | fullmag_session::FmsTaskLifecycle::Preparing
+            | fullmag_session::FmsTaskLifecycle::Running
+            | fullmag_session::FmsTaskLifecycle::Stopping => {
+                // A worker can publish its output before the coordinator
+                // advances the catalog to Succeeded (the Completing window).
+                // Defer the bridge until that exact lifecycle transition is
+                // durable instead of turning a transient catalog into a
+                // permanent projection error.
+                continue;
+            }
+            fullmag_session::FmsTaskLifecycle::Failed
+            | fullmag_session::FmsTaskLifecycle::Cancelled
+            | fullmag_session::FmsTaskLifecycle::Interrupted => {
+                return Err(ApiError::conflict(
+                    "accepted modal output is owned by a terminal non-success task",
+                ));
+            }
+        }
+        let mut matches = artifact_catalog.entries.iter().filter(|entry| {
+            entry.artifact_type == "artifact"
+                && entry.task_id == task_id
+                && entry.attempt_id == attempt_id
+                && entry.ownership_epoch == ownership_epoch
+                && entry.status == fullmag_session::FmsArtifactStatus::Published
+                && task.artifact_ids.contains(&entry.artifact_id)
+                && entry.object_ref.as_deref() == Some(output.object_ref.as_str())
+                && entry.content_sha256 == output.object_ref
+                && entry.study_output.as_ref().is_some_and(|study_output| {
+                    study_output.step_id == output.step_id
+                        && study_output.port_id == fullmag_application::MODAL_EIGEN_OUTPUT_PORT
+                        && study_output.case_id == "default"
+                })
+        });
+        let Some(_) = matches.next() else {
+            return Err(ApiError::conflict(
+                "accepted modal output is not pinned by its exact artifact catalog lineage",
+            ));
+        };
+        if matches.next().is_some() {
+            return Err(ApiError::conflict(
+                "accepted modal output has multiple exact artifact catalog entries",
+            ));
+        }
+        candidates.push(crate::accepted_modal_publication::ModalPublicationCandidate {
+            task_order: output.task_order,
+            task_id,
+            attempt_id: attempt_id.to_owned(),
+            ownership_epoch,
+            step_id: output.step_id.clone(),
+            object_ref: output.object_ref.clone(),
+            bundle,
+        });
+    }
+    Ok(candidates)
 }
 
 fn terminal_stats_from_pinned_artifact(
@@ -3030,6 +3179,11 @@ async fn apply_projection(
             }
         }
     }
+    if !projection.modal_publications.is_empty() {
+        // Modal generations are durable UI artifacts even when a study has no
+        // magnetic-state or scalar output to change the live read model.
+        changed = true;
+    }
     if !changed && previous_status == public_status && !terminal {
         return Ok(());
     }
@@ -3074,6 +3228,21 @@ async fn apply_projection(
                 "current live resources changed while accepted output was being projected",
             ));
         }
+    }
+    if !projection.modal_publications.is_empty() {
+        crate::accepted_modal_publication::publish_verified_modal_outputs(
+            &next,
+            context.run_id.as_str(),
+            &projection.modal_publications,
+        )?;
+        // Publish both the durable files and their live resource revision.
+        // Otherwise clients that loaded an empty artifact list before Solve
+        // would keep that list after the modal generation became available.
+        let root = crate::session::current_artifact_dir(&next);
+        next.artifacts = crate::session::read_artifacts_from_dir(root.as_deref())?;
+        realtime_state.revisions.artifact_revision =
+            crate::router_v2::handlers::sessions::status::artifact_revision(&next);
+        realtime_state.revisions.artifacts_revision = next.artifacts.len() as u64;
     }
     // A run that failed or was cancelled before publishing outputs still ends
     // its bound command; otherwise its client would wait forever.
@@ -4220,6 +4389,31 @@ mod tests {
     }
 
     #[test]
+    fn outputless_failure_allows_only_unstarted_dependency_blocked_siblings() {
+        use fullmag_session::{FmsTaskLifecycle as Life, FmsTaskReadiness};
+        let mut blocked = task(Life::Accepted);
+        blocked.readiness = FmsTaskReadiness::Blocked {
+            reason: fullmag_session::FMS_TASK_AWAITING_DEPENDENCY_RESOLUTION_REASON.into(),
+        };
+        assert!(terminal_catalog_without_outputs(&[task(Life::Failed), blocked.clone()]));
+        assert!(!terminal_catalog_without_outputs(&[blocked.clone()]));
+        for life in [Life::Queued, Life::Preparing, Life::Running, Life::Stopping, Life::Succeeded] {
+            let mut sibling = blocked.clone();
+            sibling.lifecycle = life;
+            assert!(!terminal_catalog_without_outputs(&[task(Life::Failed), sibling]));
+        }
+        let mut ready = blocked.clone();
+        ready.readiness = FmsTaskReadiness::Ready;
+        assert!(!terminal_catalog_without_outputs(&[task(Life::Failed), ready]));
+        let mut claimed = blocked.clone();
+        claimed.attempt_id = Some("attempt-existing".into());
+        assert!(!terminal_catalog_without_outputs(&[task(Life::Failed), claimed]));
+        let mut output = blocked;
+        output.artifact_ids.push("artifact-existing".into());
+        assert!(!terminal_catalog_without_outputs(&[task(Life::Failed), output]));
+    }
+
+    #[test]
     fn fdm_output_frame_uses_the_existing_field_admission_revision() {
         let request: crate::types::CurrentLiveSnapshotRequest = serde_json::from_value(json!({
             "session_id": "accepted-fdm-frame",
@@ -4412,6 +4606,56 @@ mod tests {
             stage_journal_details: StageJournalDetailsCache::new(),
         };
         assert!(!cursor_matches_context(&previous, &context));
+    }
+
+    #[test]
+    fn terminal_projection_keeps_observing_retry_of_same_inputs() {
+        let mut context = ProjectionContext {
+            api_instance_id: "instance".into(),
+            session_id: "session".into(),
+            session_epoch: 1,
+            scene_revision: 7,
+            execution_input: Some(SceneExecutionInputIdentity {
+                schema_version: "scene_execution_input.v1".into(),
+                sha256: "a".repeat(64),
+            }),
+            run_id: "run".into(),
+            allow_api_instance_rebind: false,
+        };
+        let mut previous = ProjectionCursor {
+            api_instance_id: "instance".into(),
+            session_id: "session".into(),
+            session_epoch: 1,
+            scene_revision: 7,
+            execution_input_sha256: Some("a".repeat(64)),
+            run_id: "run".into(),
+            run_revision: 10,
+            artifact_revision: None,
+            status: "failed",
+            solver_profile_identity: None,
+            latest_output_identity: None,
+            live_observation_identity: None,
+            live_observation_sequence: None,
+            live_magnetization_sequence: None,
+            stage_execution: crate::session::accepted_stage_execution_state(
+                Vec::new(), crate::types::RuntimeLifecycleState::Unknown,
+            ),
+            stage_journal_details: StageJournalDetailsCache::new(),
+        };
+        for status in ["failed", "cancelled", "completed"] {
+            previous.status = status;
+            assert!(!terminal_projection_has_different_inputs(&previous, &context),
+                "terminal same-run results must still poll the catalog for explicit retry");
+        }
+        context.scene_revision += 1;
+        assert!(!terminal_projection_has_different_inputs(&previous, &context),
+            "metadata-only edits must not hide a durable retry");
+        context.execution_input.as_mut().unwrap().sha256 = "b".repeat(64);
+        assert!(terminal_projection_has_different_inputs(&previous, &context),
+            "changed physics must not republish an old terminal result");
+        context.run_id = "next-run".into();
+        assert!(!terminal_projection_has_different_inputs(&previous, &context),
+            "a new run must always be observed");
     }
 
     #[test]

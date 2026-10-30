@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { EMPTY_SELECTION, type Selection } from "@/kernel/selection/selectionTypes";
 import { createModeFieldOverlayIntent } from "@/kernel/visualization/ModeFieldOverlayIntent";
-import type { EigenDispersionPoint } from "@/shared/domain/analysis/frequencyDomainChartModels";
+import {
+  frequencyDomainResultContextFromManifest,
+  type EigenDispersionPoint,
+} from "@/shared/domain/analysis/frequencyDomainChartModels";
 
-import { buildEigenDispersionPointSelectionRefFromSelection } from "./FrequencyDomainResultInspectors";
+import { buildEigenDispersionPointSelectionRefFromSelection, buildEigenSpectrumPointSelectionRefFromSelection } from "./FrequencyDomainResultInspectors";
 
 const dispersionPoint: EigenDispersionPoint = {
   analyticFrequencyHz: null,
@@ -27,6 +30,29 @@ const dispersionPoint: EigenDispersionPoint = {
   wavevectorKf: [0, 0, 0],
 };
 
+function dispersionResultContext(
+  samples: readonly Record<string, unknown>[],
+) {
+  return frequencyDomainResultContextFromManifest({
+    boundary_context: "floquet_periodic",
+    geometry_identity: "geometry-1",
+    k_sampling: { kind: "path", sample_count: 2 },
+    mesh_identity: "mesh-1",
+    run_id: "run-published-7",
+    stage_id: "stage-eigen-2",
+    study_product: "modal_eigen",
+    sample_execution_provenance: {
+      schema_version: "frequency_domain_sample_execution_provenance.v1",
+      status: "mixed",
+      sample_count: 2,
+      samples,
+    },
+  }, {
+    runId: "run-published-7",
+    stageId: "stage-eigen-2",
+  });
+}
+
 describe("dispersion Inspector selection handoff", () => {
   it("keeps the current published run, stage, revision and artifact fence on the clicked mode", () => {
     const selection: Selection = {
@@ -37,6 +63,7 @@ describe("dispersion Inspector selection handoff", () => {
       ref: {
         analysisRunId: "run-published-7",
         analysisStageId: "stage-eigen-2",
+        equilibriumId: "stale-equilibrium-from-previous-sample",
         datasetId: "catalog:dataset-eigen-2",
         datasetRevision: "catalog-revision-7",
         artifactPath: "results/run-published-7/eigen/dispersion.json",
@@ -51,6 +78,10 @@ describe("dispersion Inspector selection handoff", () => {
     const ref = buildEigenDispersionPointSelectionRefFromSelection(
       dispersionPoint,
       selection,
+      dispersionResultContext([
+        { sample_index: 0, validation: { equilibrium_artifact_sha256: "equilibrium-sample-0000" } },
+        { sample_index: 1, validation: { equilibrium_artifact_sha256: "equilibrium-sample-0001" } },
+      ]),
     );
 
     expect(ref).toMatchObject({
@@ -60,6 +91,7 @@ describe("dispersion Inspector selection handoff", () => {
       datasetRevision: "catalog-revision-7",
       artifactPath: "results/run-published-7/eigen/dispersion.json",
       artifactRevision: "sha256:published-dispersion-v7",
+      equilibriumId: "equilibrium-sample-0000",
       fieldId: dispersionPoint.modeFieldId,
       kind: "results.eigen.mode",
       modeId: dispersionPoint.modeId,
@@ -73,10 +105,93 @@ describe("dispersion Inspector selection handoff", () => {
       analysisRunId: "run-published-7",
       analysisStageId: "stage-eigen-2",
       artifactRevision: "sha256:published-dispersion-v7",
+      equilibriumId: "equilibrium-sample-0000",
       fieldId: dispersionPoint.modeFieldId,
       modeId: dispersionPoint.modeId,
       sampleId: dispersionPoint.sampleId,
     });
+  });
+
+  it("resolves the newly selected sample instead of reusing the prior sample equilibrium", () => {
+    const selection: Selection = {
+      ...EMPTY_SELECTION,
+      kind: "results.eigen.mode",
+      label: "Previously selected sample 0",
+      nodeId: "results:eigen:sample:0:mode:2",
+      ref: {
+        analysisRunId: "run-published-7",
+        analysisStageId: "stage-eigen-2",
+        equilibriumId: "equilibrium-sample-0000",
+        artifactPath: "results/run-published-7/eigen/dispersion.json",
+        artifactRevision: "sha256:published-dispersion-v7",
+        kind: "results.eigen.mode",
+        nodeId: "results:eigen:sample:0:mode:2",
+        type: "frequency-domain",
+      },
+    };
+    const sampleOnePoint: EigenDispersionPoint = {
+      ...dispersionPoint,
+      modeFieldId: "analysis:eigen:sample-0001:mode-0002:delta_m_xyz",
+      modeFieldResourceKey: "field://analysis/eigen/mode-0002-sample-1",
+      modeId: "sample-0001/mode-0002",
+      sampleId: "sample-0001",
+      sampleIndex: 1,
+    };
+
+    const ref = buildEigenDispersionPointSelectionRefFromSelection(
+      sampleOnePoint,
+      selection,
+      dispersionResultContext([
+        { sample_index: 0, validation: { equilibrium_artifact_sha256: "equilibrium-sample-0000" } },
+        { sample_index: 1, validation: { equilibrium_artifact_sha256: "equilibrium-sample-0001" } },
+      ]),
+    );
+
+    expect(ref).toMatchObject({
+      equilibriumId: "equilibrium-sample-0001",
+      fieldId: sampleOnePoint.modeFieldId,
+      modeId: "sample-0001/mode-0002",
+      sampleId: "sample-0001",
+      sampleIndex: 1,
+    });
+    expect(ref.type === "frequency-domain" ? createModeFieldOverlayIntent(ref) : null)
+      .toMatchObject({ equilibriumId: "equilibrium-sample-0001" });
+  });
+
+  it("removes field selection when per-sample equilibrium is missing or no manifest is available", () => {
+    const selection: Selection = {
+      ...EMPTY_SELECTION,
+      kind: "results.eigen.mode",
+      label: "Previously selected sample 0",
+      nodeId: "results:eigen:sample:0:mode:2",
+      ref: {
+        analysisRunId: "run-published-7",
+        analysisStageId: "stage-eigen-2",
+        equilibriumId: "equilibrium-sample-0000",
+        artifactPath: "results/run-published-7/eigen/dispersion.json",
+        artifactRevision: "sha256:published-dispersion-v7",
+        kind: "results.eigen.mode",
+        nodeId: "results:eigen:sample:0:mode:2",
+        type: "frequency-domain",
+      },
+    };
+    const missingSampleEquilibrium = dispersionResultContext([
+      { sample_index: 0, validation: { equilibrium_artifact_sha256: "equilibrium-sample-0000" } },
+      { sample_index: 1, validation: {} },
+    ]);
+
+    for (const resultContext of [missingSampleEquilibrium, null]) {
+      const ref = buildEigenDispersionPointSelectionRefFromSelection(
+        { ...dispersionPoint, sampleId: "sample-0001", sampleIndex: 1 },
+        selection,
+        resultContext,
+      );
+
+      expect(ref).not.toHaveProperty("fieldId");
+      expect(ref).not.toHaveProperty("equilibriumId");
+      expect(ref.type === "frequency-domain" ? createModeFieldOverlayIntent(ref) : null)
+        .toBeNull();
+    }
   });
 
   it("does not invent owner or revision fences when the current selection has no frequency-domain ref", () => {
@@ -96,4 +211,41 @@ describe("dispersion Inspector selection handoff", () => {
     expect(ref.type === "frequency-domain" ? createModeFieldOverlayIntent(ref) : null)
       .toBeNull();
   });
+});
+
+
+it("does not expose a spectrum mode field without a matching published owner and equilibrium", () => {
+  const point = { branchId: null, dampingRateHz: null, displayModeIndex: 0,
+    frequencyHz: 9.3e9, imaginaryFrequencyHz: null, modeFieldAvailable: true,
+    modeFieldId: "field-7", modeFieldResourceKey: "field-7-resource", modeId: "mode-7-0",
+    rawModeIndex: 0, residualNorm: 1e-11, sampleIndex: 7, sampleId: "sample-7", tangentLeakageMax: null,
+  };
+  const ref = buildEigenSpectrumPointSelectionRefFromSelection(point, { ref: null } as never, null);
+  expect(ref).toMatchObject({ sampleIndex: 7, sampleId: "sample-7", modeIndex: 0, modeId: "mode-7-0" });
+  if (ref.type !== "frequency-domain") throw new Error("Expected a frequency-domain mode selection");
+  expect(ref.fieldId).toBeUndefined();
+  expect(ref.resourceRef).toBeUndefined();
+});
+
+
+it("binds Spectrum selection to the clicked sample equilibrium rather than a stale selected equilibrium", () => {
+  const point = { branchId: null, dampingRateHz: null, displayModeIndex: 0,
+    frequencyHz: 10e9, imaginaryFrequencyHz: null, modeFieldAvailable: true,
+    modeFieldId: "field-1", modeFieldResourceKey: "field-1-resource", modeId: "mode-1-0",
+    rawModeIndex: 0, residualNorm: 1e-11, sampleIndex: 1, sampleId: "sample-1", tangentLeakageMax: null,
+  };
+  const selection: Selection = { ...EMPTY_SELECTION, ref: {
+    type: "frequency-domain", kind: "results.eigen.spectrum", nodeId: "spectrum",
+    analysisRunId: "run-published-7", analysisStageId: "stage-eigen-2",
+    artifactRevision: "sha256:manifest", equilibriumId: "stale-equilibrium",
+  } };
+  const context = dispersionResultContext([
+    { sample_index: 0, validation: { equilibrium_artifact_sha256: "eq-0" } },
+    { sample_index: 1, validation: { equilibrium_artifact_sha256: "eq-1" } },
+  ]);
+  const ref = buildEigenSpectrumPointSelectionRefFromSelection(point, selection, context);
+  expect(ref).toMatchObject({ sampleIndex: 1, modeIndex: 0, equilibriumId: "eq-1", fieldId: "field-1", resourceRef: "field-1-resource" });
+  const foreign = buildEigenSpectrumPointSelectionRefFromSelection(point, selection, { ...context, runId: "foreign-run" });
+  if (foreign.type !== "frequency-domain") throw new Error("Expected a frequency-domain mode selection");
+  expect(foreign.fieldId).toBeUndefined();
 });

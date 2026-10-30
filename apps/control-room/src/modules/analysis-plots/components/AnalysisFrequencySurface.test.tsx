@@ -5,12 +5,15 @@ import type { KernelApi } from "@/kernel/types";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 
 const renderedRanges: Array<{ fromValue: number; toValue: number } | null | undefined> = [];
+const renderedXAxisLabels: Array<string | undefined> = [];
+const renderedSeries: unknown[] = [];
 let forwardedRangeChange: ((range: { fromValue: number; toValue: number }) => void) | undefined;
-vi.mock("./EChartsSurface", () => ({ EChartsSurface: ({ initialRange, onRangeChange }: { initialRange?: { fromValue: number; toValue: number } | null; onRangeChange?: (range: { fromValue: number; toValue: number }) => void }) => { renderedRanges.push(initialRange); forwardedRangeChange = onRangeChange; return <div data-testid="chart" />; } }));
+vi.mock("./EChartsSurface", () => ({ EChartsSurface: ({ allSeries, initialRange, onRangeChange, xAxisLabel }: { allSeries?: unknown; initialRange?: { fromValue: number; toValue: number } | null; onRangeChange?: (range: { fromValue: number; toValue: number }) => void; xAxisLabel?: string }) => { renderedRanges.push(initialRange); renderedXAxisLabels.push(xAxisLabel); renderedSeries.push(allSeries); forwardedRangeChange = onRangeChange; return <div data-testid="chart" />; } }));
 
 import type { ChartSeries } from "../chartTableModel";
 import { AnalysisFrequencySurface } from "./AnalysisFrequencySurface";
 import { classifyFrequencyDomainResult } from "@/shared/domain/analysis/frequencyDomainResultClassification";
+import { frequencyDomainResultContextFromManifest } from "@/shared/domain/analysis/frequencyDomainChartModels";
 
 const series: ChartSeries[] = [{
   id: "response",
@@ -37,7 +40,99 @@ const selectedPoint: AnalysisChartCursorPoint = {
   xUnit: "GHz",
 };
 
+const dispersionSeries: ChartSeries[] = [{
+  id: "dispersion:branch-a",
+  kind: "line",
+  label: "Branch a",
+  points: [
+    { branchId: "a", modeId: "mode-0", pathS: 0, rawModeIndex: 2, rowIndex: 4, sampleId: "sample-0", sampleIndex: 0, wavevectorKf: [0, -25e6, 0], x: 0, y: 1.2 },
+    { branchId: "a", modeId: "mode-1", pathS: 25e6, rawModeIndex: 2, rowIndex: 8, sampleId: "sample-1", sampleIndex: 1, wavevectorKf: [0, 0, 0], x: 25e6, y: 1.3 },
+    { branchId: "a", modeId: "mode-2", pathS: 50e6, rawModeIndex: 2, rowIndex: 10, sampleId: "sample-2", sampleIndex: 2, wavevectorKf: [0, 25e6, 0], x: 50e6, y: 1.4 },
+  ],
+  quantity: "frequency",
+  source: { kind: "analysis.frequency_domain", resourceKey: "analysis/frequency-domain/eigen-dispersion", tableId: "frequency-domain:eigen-dispersion" },
+  status: "ready",
+  unit: "GHz",
+  xUnit: "rad/m",
+}];
+
+const dispersionActionSeries: ChartSeries[] = [{
+  id: "dispersion:branch-a",
+  kind: "line",
+  label: "Branch a",
+  points: [{
+    branchId: "a",
+    modeFieldAvailable: true,
+    modeFieldId: "field-sample-1-mode-2",
+    modeFieldResourceKey: "field://sample-1-mode-2",
+    modeId: "sample-1/mode-2",
+    pathS: 25e6,
+    rawModeIndex: 2,
+    rowIndex: 1,
+    sampleId: "sample-1",
+    sampleIndex: 1,
+    wavevectorKf: [0, 1e7, 0],
+    x: 25e6,
+    y: 1.3,
+  }],
+  quantity: "frequency",
+  source: { kind: "analysis.frequency_domain", resourceKey: "artifact://dispersion", tableId: "frequency-domain:eigen-dispersion" },
+  status: "ready",
+  unit: "GHz",
+  xUnit: "rad/m",
+}];
+
 describe("AnalysisFrequencySurface", () => {
+  it("offers the mode action only for the exact projected dispersion sample", () => {
+    const context = frequencyDomainResultContextFromManifest({
+      boundary_context: "floquet_periodic",
+      geometry_identity: "geometry-1",
+      k_sampling: { kind: "path", sample_count: 2 },
+      mesh_identity: "mesh-1",
+      run_id: "run-1",
+      stage_id: "stage-1",
+      study_product: "modal_eigen",
+      sample_execution_provenance: {
+        schema_version: "frequency_domain_sample_execution_provenance.v1",
+        sample_count: 2,
+        samples: [
+          { sample_index: 0, validation: { equilibrium_artifact_sha256: "eq-0" } },
+          { sample_index: 1, validation: { equilibrium_artifact_sha256: "eq-1" } },
+        ],
+      },
+    });
+    const selectedDispersionPoint: AnalysisChartCursorPoint = {
+      label: "Branch a",
+      point: { rowIndex: 1, x: 25e6, y: 1.3 },
+      quantity: "frequency",
+      seriesId: "dispersion:branch-a",
+      source: dispersionActionSeries[0]!.source,
+      unit: "GHz",
+      xUnit: "rad/m",
+    };
+    const html = renderToStaticMarkup(
+      <AnalysisFrequencySurface
+        calculationMode="dispersion_modal"
+        chartId="dispersion:artifact://dispersion"
+        context={context}
+        kernel={{} as KernelApi}
+        onPointSelect={() => undefined}
+        onSelectedSeriesIdsChange={() => undefined}
+        presentation={{ kind: "ready", revision: "sha256:dispersion-7" }}
+        selectedPoint={selectedDispersionPoint}
+        selectedSeriesIds={["dispersion:branch-a"]}
+        series={dispersionActionSeries}
+        status="ready"
+        title="Dispersion"
+        unavailableReason={null}
+      />,
+    );
+
+    expect(html).toContain("View selected mode in 3D");
+    expect(html).not.toContain("disabled=");
+    expect(html).toContain("Equilibrium: per sample");
+  });
+
   it("neutralizes an FMR title when typed qualification evidence is absent", () => {
     const html = renderToStaticMarkup(
       <AnalysisFrequencySurface
@@ -146,6 +241,102 @@ describe("AnalysisFrequencySurface", () => {
     expect(onRangeChange).toHaveBeenCalledWith({ fromValue: 3, toValue: 4 });
   });
 
+  it("defaults a one-component dispersion path to signed k and retains point identity", () => {
+    renderedXAxisLabels.length = 0;
+    renderedSeries.length = 0;
+    renderedRanges.length = 0;
+    forwardedRangeChange = undefined;
+    const onRangeChange = vi.fn();
+    const selectedDispersionPoint: AnalysisChartCursorPoint = {
+      label: "Branch a",
+      point: dispersionSeries[0]!.points[0]!,
+      quantity: "frequency",
+      seriesId: dispersionSeries[0]!.id,
+      source: dispersionSeries[0]!.source,
+      unit: "GHz",
+      xUnit: "rad/m",
+    };
+    const html = renderToStaticMarkup(
+      <AnalysisFrequencySurface
+        kernel={{} as KernelApi}
+        onPointSelect={() => undefined}
+        onRangeChange={onRangeChange}
+        onSelectedSeriesIdsChange={() => undefined}
+        range={{ fromValue: 0, toValue: 50e6 }}
+        selectedPoint={selectedDispersionPoint}
+        selectedSeriesIds={["dispersion:branch-a"]}
+        series={dispersionSeries}
+        status="ready"
+        title="Eigenmode dispersion"
+        unavailableReason={null}
+      />,
+    );
+
+    expect(renderedXAxisLabels.at(-1)).toBe("kᵧ [rad/m]");
+    expect(renderedRanges.at(-1)).toBeNull();
+    expect(forwardedRangeChange).toBeUndefined();
+    const rendered = renderedSeries.at(-1) as ChartSeries[];
+    expect(rendered[0]?.points.map((point) => point.x)).toEqual([-25e6, 0, 25e6]);
+    expect(rendered[0]?.points.map((point) => point.rowIndex)).toEqual([4, 8, 10]);
+    expect(html).toContain("Dispersion wavevector coordinate");
+    expect(html).toContain("kᵧ:");
+    expect(onRangeChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps dispersion on path distance when a point lacks its published k vector", () => {
+    const missingVectorSeries = [{
+      ...dispersionSeries[0]!,
+      points: dispersionSeries[0]!.points.map((point, index) => ({
+        ...point,
+        ...(index === 1 ? { wavevectorKf: null } : {}),
+      })),
+    }];
+    renderedXAxisLabels.length = 0;
+    const html = renderToStaticMarkup(
+      <AnalysisFrequencySurface
+        kernel={{} as KernelApi}
+        onPointSelect={() => undefined}
+        onSelectedSeriesIdsChange={() => undefined}
+        selectedPoint={null}
+        selectedSeriesIds={["dispersion:branch-a"]}
+        series={missingVectorSeries}
+        status="ready"
+        title="Eigenmode dispersion"
+        unavailableReason={null}
+      />,
+    );
+
+    expect(renderedXAxisLabels.at(-1)).toBe("k-path distance s [rad/m]");
+    expect(html).toContain("Signed k components unavailable");
+  });
+
+  it("hides a stale dispersion cursor when its source row is absent", () => {
+    const stalePoint: AnalysisChartCursorPoint = {
+      label: "Branch a",
+      point: { rowIndex: 99, x: 7.5e7, y: 1.5 },
+      quantity: "frequency",
+      seriesId: dispersionSeries[0]!.id,
+      source: dispersionSeries[0]!.source,
+      unit: "GHz",
+      xUnit: "rad/m",
+    };
+    const html = renderToStaticMarkup(
+      <AnalysisFrequencySurface
+        kernel={{} as KernelApi}
+        onPointSelect={() => undefined}
+        onSelectedSeriesIdsChange={() => undefined}
+        selectedPoint={stalePoint}
+        selectedSeriesIds={["dispersion:branch-a"]}
+        series={dispersionSeries}
+        status="ready"
+        title="Eigenmode dispersion"
+        unavailableReason={null}
+      />,
+    );
+
+    expect(html).not.toContain('aria-label="Selected frequency-domain point"');
+  });
+
   it("shows typed physical identity, axes, SI/display units, and neutral workflow naming", () => {
     const classification = classifyFrequencyDomainResult({
       boundaryContext: "finite_open",
@@ -164,6 +355,9 @@ describe("AnalysisFrequencySurface", () => {
           classification,
           contractGaps: [],
           equilibriumId: "eq-1",
+          sampleEquilibriumIds: null,
+          sampleEquilibriumProvenance: "absent",
+          sampleCount: null,
           evidence: {
           boundaryContext: "finite_open",
           drive: { identity: "rf-1", kind: "magnetic_rf" },
@@ -203,4 +397,16 @@ describe("AnalysisFrequencySurface", () => {
     expect(html).toContain("Workflow: Frequency response");
     expect(html).not.toContain("FMR driven");
   });
+});
+
+
+it("counts computed modal points separately from analytical reference samples", () => {
+  const reference = { ...dispersionSeries[0]!, id: "reference", quantity: "reference_frequency", label: "Analytical reference" };
+  const html = renderToStaticMarkup(<AnalysisFrequencySurface kernel={{} as KernelApi}
+    calculationMode="dispersion_modal" onPointSelect={() => undefined} onSelectedSeriesIdsChange={() => undefined}
+    selectedSeriesIds={[dispersionSeries[0]!.id, reference.id]} selectedPoint={null}
+    series={[...dispersionSeries, reference]} status="ready" title="Dispersion" unavailableReason={null} />);
+  expect(html).toContain("3 points");
+  expect(html).toContain("1 reference curve");
+  expect(html).not.toContain("6 points");
 });

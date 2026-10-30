@@ -29,6 +29,7 @@ import {
   SIMULATION_STAGES_EXECUTION_PATH,
   VISUALIZATION_STATE_PATH,
 } from "../api/apiPaths";
+import { defaultFmsRestoreMode } from "@/shared/domain/persistence/fmsFileTransport";
 import { ControlRoomApiError } from "../api/ControlRoomApi";
 import type {
   CommandDetailResource,
@@ -1379,6 +1380,7 @@ function invalidateHysteresisBookmarkResources(
 }
 
 interface ImportStateInput {
+  fmsFile?: Blob;
   fmsBase64?: string;
   fms_base64?: string;
   restoreMode?: "resume" | "visualization_only" | "replace_project";
@@ -1522,13 +1524,12 @@ function pickFieldStateFileBase64(): Promise<{
 function resolveImportStateInput(input: unknown): ImportStateInput | null {
   if (!input || typeof input !== "object" || Array.isArray(input)) return null;
   const candidate = input as ImportStateInput;
-  const fmsBase64 = candidate.fmsBase64 ?? candidate.fms_base64;
-  if (typeof fmsBase64 !== "string" || fmsBase64.length === 0) return null;
-
-  return {
-    fmsBase64,
-    restoreMode: candidate.restoreMode ?? candidate.restore_mode,
-  };
+  const value = candidate.fmsBase64 ?? candidate.fms_base64;
+  const fmsBase64 = typeof value === "string" && value.length > 0 ? value : undefined;
+  const fmsFile = typeof Blob !== "undefined" && candidate.fmsFile instanceof Blob ? candidate.fmsFile : undefined;
+  if (fmsBase64 && fmsFile) throw new Error("Choose a single archive payload.");
+  if (!fmsBase64 && !fmsFile) return null;
+  return { fmsBase64, fmsFile, restoreMode: candidate.restoreMode ?? candidate.restore_mode };
 }
 
 function resolveSessionSaveTarget(input: unknown): string | undefined {
@@ -1538,33 +1539,14 @@ function resolveSessionSaveTarget(input: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function pickFmsFileBase64(): Promise<string | null> {
-  if (
-    typeof document === "undefined" ||
-    typeof FileReader === "undefined"
-  ) {
-    return Promise.resolve(null);
-  }
-
-  return new Promise((resolve, reject) => {
+function pickFmsFile(): Promise<File | null> {
+  if (typeof document === "undefined") return Promise.resolve(null);
+  return new Promise((resolve) => {
     const input = document.createElement("input");
     input.accept = ".fms,application/octet-stream";
     input.type = "file";
-    input.onchange = () => {
-      const file = input.files?.[0] ?? null;
-      if (!file) {
-        resolve(null);
-        return;
-      }
-
-      const reader = new FileReader();
-      reader.onerror = () => reject(reader.error ?? new Error("Failed to read .fms file."));
-      reader.onload = () => {
-        const value = typeof reader.result === "string" ? reader.result : "";
-        resolve(value.includes(",") ? value.split(",").pop() ?? "" : value);
-      };
-      reader.readAsDataURL(file);
-    };
+    input.onchange = () => resolve(input.files?.[0] ?? null);
+    input.addEventListener("cancel", () => resolve(null), { once: true });
     input.click();
   });
 }
@@ -2889,6 +2871,7 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
   },
   {
     id: "study.import-state",
+    allowsEmptySession: true,
     title: "Restore Runtime State",
     category: "Study",
     group: "study-recovery",
@@ -2902,16 +2885,22 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
       }
 
       const input = resolveImportStateInput(context.input);
-      const fmsBase64 = input?.fmsBase64 ?? (await pickFmsFileBase64());
-      if (!fmsBase64) {
+      const archive = input?.fmsFile ?? input?.fmsBase64 ?? (await pickFmsFile());
+      if (!archive) {
         return { message: "No .fms file selected.", status: "cancelled" };
       }
 
       assertCurrentSessionScope(context);
-      const response = await context.api.persistence.imports.commit({
-        fms_base64: fmsBase64,
-        restore_mode: input?.restoreMode ?? "resume",
-      }, sessionRequestOptions(context));
+      let restoreMode = input?.restoreMode;
+      if (!restoreMode && typeof archive !== "string") {
+        const inspection = await context.api.persistence.imports.inspectFile(archive, sessionRequestOptions(context));
+        assertCurrentSessionScope(context);
+        restoreMode = defaultFmsRestoreMode(inspection.inspection.restore_class);
+      }
+      restoreMode ??= "resume";
+      const response = typeof archive === "string"
+        ? await context.api.persistence.imports.commit({ fms_base64: archive, restore_mode: restoreMode }, sessionRequestOptions(context))
+        : await context.api.persistence.imports.commitFile(archive, restoreMode, sessionRequestOptions(context));
       let activeStatus: LiveStatusResource;
       try {
         activeStatus = await context.api.sessions.current.status();

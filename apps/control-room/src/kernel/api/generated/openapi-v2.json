@@ -13197,6 +13197,11 @@
         ],
         "type": "string"
       },
+      "FmsFileUpload": {
+        "description": "Owned binary upload. OpenAPI describes the bytes, not a JSON number array.",
+        "format": "binary",
+        "type": "string"
+      },
       "FrameEntry": {
         "description": "One saved frame of a results folder (an entry of `frames.json`).",
         "properties": {
@@ -13742,6 +13747,133 @@
           "branch_tracking"
         ],
         "type": "object"
+      },
+      "FrequencyDomainEigenDiagnosticSectionPayload": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
+          },
+          {
+            "properties": {
+              "available": {
+                "type": "boolean"
+              },
+              "data": {},
+              "status": {
+                "type": "string"
+              },
+              "unavailable_reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "status",
+              "available"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "One requested diagnostic section in the user-facing eigen diagnostics artifact."
+      },
+      "FrequencyDomainEigenDiagnosticsDispersionPayload": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
+          },
+          {
+            "properties": {
+              "mode_count": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "mode_count_requested": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "sample_count": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "sample_count",
+              "mode_count"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "FrequencyDomainEigenDiagnosticsV2ArtifactPayload": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
+          },
+          {
+            "properties": {
+              "dispersion": {
+                "$ref": "#/components/schemas/FrequencyDomainEigenDiagnosticsDispersionPayload"
+              },
+              "mode_count": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "orthogonality": {
+                "$ref": "#/components/schemas/FrequencyDomainEigenDiagnosticSectionPayload"
+              },
+              "overlaps": {
+                "$ref": "#/components/schemas/FrequencyDomainEigenDiagnosticSectionPayload"
+              },
+              "residuals": {
+                "$ref": "#/components/schemas/FrequencyDomainEigenDiagnosticSectionPayload"
+              },
+              "sample_count": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "schema_version": {
+                "type": "string"
+              },
+              "solver_model": {
+                "type": "string"
+              },
+              "solver_model_scope": {
+                "type": "string"
+              },
+              "tangent_leakage": {
+                "$ref": "#/components/schemas/FrequencyDomainEigenDiagnosticSectionPayload"
+              },
+              "tracking": {
+                "$ref": "#/components/schemas/FrequencyDomainEigenDiagnosticSectionPayload"
+              }
+            },
+            "required": [
+              "schema_version",
+              "solver_model",
+              "solver_model_scope",
+              "sample_count",
+              "mode_count",
+              "dispersion",
+              "tracking",
+              "residuals",
+              "overlaps",
+              "tangent_leakage",
+              "orthogonality"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "Schema for the user-requested eigen diagnostics projection. This differs\nfrom solver diagnostics, which report execution completion and interruption."
       },
       "FrequencyDomainFieldResource": {
         "properties": {
@@ -14730,6 +14862,9 @@
           },
           {
             "$ref": "#/components/schemas/FrequencyDomainDiagnosticsArtifactPayload"
+          },
+          {
+            "$ref": "#/components/schemas/FrequencyDomainEigenDiagnosticsV2ArtifactPayload"
           },
           {
             "$ref": "#/components/schemas/FrequencyDomainModeArtifactPayload"
@@ -48079,6 +48214,50 @@
         ]
       }
     },
+    "/v2/persistence/imports/file-inspections": {
+      "post": {
+        "operationId": "persistence_post_persistence_imports_file_inspections",
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "$ref": "#/components/schemas/FmsFileUpload"
+              }
+            }
+          },
+          "description": "Original .fms ZIP bytes; nonempty, at most 512 MiB",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionImportInspectResponse"
+                }
+              }
+            },
+            "description": "Project archive inspection"
+          },
+          "400": {
+            "description": "Invalid archive"
+          },
+          "408": {
+            "description": "Upload timed out"
+          },
+          "413": {
+            "description": "Archive exceeds the file upload limit"
+          },
+          "415": {
+            "description": "Unsupported upload content type or encoding"
+          }
+        },
+        "summary": "Upload the original ZIP bytes; no base64 expansion or JSON body buffer.",
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
     "/v2/persistence/imports/inspections": {
       "post": {
         "operationId": "persistence_post_persistence_imports_inspections",
@@ -68810,6 +68989,66 @@
           },
           "404": {
             "description": "No active workspace or artifact not found"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/sessions/current/persistence/file-imports": {
+      "post": {
+        "operationId": "persistence_post_sessions_current_persistence_file_imports",
+        "parameters": [
+          {
+            "description": "Explicit archive restore policy",
+            "in": "query",
+            "name": "restore_mode",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SessionRestoreMode"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "$ref": "#/components/schemas/FmsFileUpload"
+              }
+            }
+          },
+          "description": "Original .fms ZIP bytes; nonempty, at most 512 MiB",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionImportCommitResponse"
+                }
+              }
+            },
+            "description": "Session import committed"
+          },
+          "400": {
+            "description": "Invalid archive or restore policy"
+          },
+          "408": {
+            "description": "Upload timed out"
+          },
+          "409": {
+            "description": "Current session changed or restore is unsupported"
+          },
+          "413": {
+            "description": "Archive exceeds the file upload limit"
+          },
+          "415": {
+            "description": "Unsupported upload content type or encoding"
           }
         },
         "tags": [

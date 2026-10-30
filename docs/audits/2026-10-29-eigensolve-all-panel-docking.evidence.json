@@ -1,0 +1,236 @@
+{
+  "schema": "fullmag.workspace-docking.browser-ci.v1",
+  "implementation_sha": "3eb8898554c875773c1a9cf7e539f5a08ccebf7a",
+  "ci": {
+    "url": "https://github.com/MateuszZelent/fullmag/actions/runs/40787829242",
+    "result": "PASS",
+    "tests": 1451,
+    "files": 63,
+    "typecheck": "PASS",
+    "architecture": "PASS"
+  },
+  "browser": {
+    "capturedAt": "2026-10-28T23:31:11.566Z",
+    "runId": "run-live-bf62fc7d346d46ad1cca97c205d6d59a96eeca8f708d37fefacf09dd5cdb5c01",
+    "origin": "http://localhost:3217",
+    "scope": "Published-results UX in separate browser; presentation preferences may persist; no solver submissions or result modifications",
+    "presentationWrites": [
+      {
+        "method": "PATCH",
+        "path": "/v2/sessions/current/visualization/state"
+      },
+      {
+        "method": "PATCH",
+        "path": "/v2/sessions/current/visualization/state"
+      }
+    ],
+    "errors": [],
+    "blockedMutations": [],
+    "initial": {
+      "partId": "part:film_geom",
+      "surfaceIndexCount": 1560,
+      "fieldQuantity": "analysis:eigen:sample-0000:mode-0000",
+      "requestedQuantity": "analysis:eigen:sample-0000:mode-0000",
+      "surfaceVisible": true,
+      "surfaceColorSource": "magnitude",
+      "bufferQuantity": "analysis:eigen:sample-0000:mode-0000",
+      "bufferRepresentation": "phase_rotated_real",
+      "bufferMin": 0,
+      "bufferMax": 250202010640.56915,
+      "complexValueCount": 5127,
+      "rgbValueCount": 0
+    },
+    "splitBefore": {
+      "primary": "analysis-plots",
+      "companion": "viewport-3d"
+    },
+    "splitAfter": {
+      "primary": "analysis-plots",
+      "companion": "viewport-3d"
+    },
+    "binding": {
+      "partId": "part:film_geom",
+      "surfaceIndexCount": 1560,
+      "fieldQuantity": "analysis:eigen:sample-0000:mode-0000",
+      "requestedQuantity": "analysis:eigen:sample-0000:mode-0000",
+      "surfaceVisible": true,
+      "surfaceColorSource": "magnitude",
+      "bufferQuantity": "analysis:eigen:sample-0000:mode-0000",
+      "bufferRepresentation": "phase_rotated_real",
+      "bufferMin": 0,
+      "bufferMax": 250202010640.56915,
+      "complexValueCount": 5127,
+      "rgbValueCount": 0
+    },
+    "chartText": "Dispersion\nModal frequencies\nEigenfrequencies at fixed k\nEigenmode spectrum · 1 point · 11.212 GHz\nLive\nSCIENTIFIC TRUST: UNKNOWN\n1 series\nProvenance\nShow / hide lower panel\nGHz\nEigen frequency\nGHz\n11.212\n\nAnalysis chart. 1 series and 1 plotted points.\n\nData Table\nCSV\nTSV\nPNG\nWavevector sample\nSample 0\n\nSample 0 · computed modes at this k. Mode rank is diagnostic; no intensity weighting.\n\nMode 0: 11.2119 GHz · 3D field available\nPhysical context and workflow",
+    "webgl": {
+      "width": 442,
+      "height": 479,
+      "contextLost": false,
+      "visible": true
+    },
+    "windowActions": [
+      {
+        "name": "preset modes left, spectrum right",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 442,
+          "h": 479
+        }
+      },
+      {
+        "name": "resize panel-left",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 428,
+          "h": 479
+        }
+      },
+      {
+        "name": "resize panel-bottom",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 428,
+          "h": 434
+        }
+      },
+      {
+        "name": "panel-right left of workspace",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 304,
+          "h": 402
+        }
+      },
+      {
+        "name": "panel-right bottom of viewport-main",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 615,
+          "h": 179
+        }
+      },
+      {
+        "name": "panel-left right of workspace",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 396,
+          "h": 115
+        }
+      },
+      {
+        "name": "panel-left top of viewport-main",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 797,
+          "h": 20
+        }
+      },
+      {
+        "name": "panel-bottom left of workspace",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 396,
+          "h": 16
+        }
+      },
+      {
+        "name": "panel-bottom right of panel-right",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 797,
+          "h": 80
+        }
+      },
+      {
+        "name": "reset workspace without remount",
+        "retained": true,
+        "gl": {
+          "lost": false,
+          "w": 442,
+          "h": 479
+        }
+      }
+    ],
+    "resizes": [
+      {
+        "pane": "panel-left",
+        "before": 319.203125,
+        "after": 359.203125
+      },
+      {
+        "pane": "panel-bottom",
+        "before": 191.40625,
+        "after": 236.390625
+      }
+    ],
+    "stage": "panel-bottom right of panel-right",
+    "persistedStructure": [
+      "horizontal",
+      [
+        "vertical",
+        [
+          "vertical",
+          "panel-left",
+          "viewport-main"
+        ],
+        [
+          "horizontal",
+          "panel-right",
+          "panel-bottom"
+        ]
+      ],
+      "viewport-aux"
+    ],
+    "compactInspector": {
+      "x": 449.5,
+      "y": 200,
+      "width": 445.5,
+      "height": 774
+    },
+    "pass": true
+  },
+  "artifacts": [
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/all-panel-docking-20261029/final/compact-inspector-docked.png",
+      "sha256": "2e14dee4fd084e1645080b5aabfa90475edf19457e12c37664696542647ef81f"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/all-panel-docking-20261029/final/custom-all-panels.png",
+      "sha256": "87d738f059e715394cef159918cf53cc2acf98369b005875fcdb0316dc94d95c"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/all-panel-docking-20261029/final/final-modes-spectrum-inspector.png",
+      "sha256": "0cf06571970bc5700c24c0ec924f7533c745a9c6292bae504374492d4de7d16d"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/all-panel-docking-20261029/final/inspector-dock-preview.png",
+      "sha256": "546709507d607d6fa982c3bb9c947dd22bd88c3dfddad18a78efa18b40c4e311"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/all-panel-docking-20261029/final/modes-left-spectrum-right.png",
+      "sha256": "1a6dc2f97f1c7a507f974cd22ea10f81ebf06f472a29314ca59fb869b4ae38c5"
+    },
+    {
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/all-panel-docking-20261029/final/probe.json",
+      "sha256": "750f10e97cda92d4c5a87a9438224bddeaecac873c7774c75b6df85a75d48a00"
+    }
+  ],
+  "limitations": [
+    "Published completed FEM result; no new Solve; active solver R6 NOT VERIFIED in this probe",
+    "SwiftShader browser evidence is not hardware GPU or scientific qualification"
+  ],
+  "foreign_wip": {
+    "files": 14,
+    "sha256_preserved": true
+  }
+}

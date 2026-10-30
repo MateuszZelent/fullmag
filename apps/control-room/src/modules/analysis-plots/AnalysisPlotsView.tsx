@@ -164,17 +164,17 @@ export const AnalysisPlotsView = memo(function AnalysisPlotsView(props: Analysis
       className="fm-analysis-plots__panel fm-analysis-plots__panel--primary"
       data-analysis-surface={surfaceDescriptor.surface}
     >
-      <header className="fm-analysis-plots__header">
+      {!isFrequencySubview ? <header className="fm-analysis-plots__header">
         <div><h3>{surfaceDescriptor.title}</h3>{provenance ? <span>Dataset provenance: {provenance}</span> : null}</div>
-        {surface !== "comparison" ? <Select value={selectedDatasetRef ?? ""} onValueChange={(value) => onDatasetRefChange(value || null)}>
+        {surface !== "comparison" && !isFrequencySubview ? <Select value={selectedDatasetRef ?? ""} onValueChange={(value) => onDatasetRefChange(value || null)}>
           <SelectTrigger aria-label="Analysis dataset"><SelectValue placeholder="Select a dataset" /></SelectTrigger>
           <SelectContent>{datasetRefs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent>
         </Select> : null}
-      </header>
+      </header> : null}
       {activeSubview === "dynamics.time-traces" ? (resolvedDatasetRef ? <AnalysisTableSurface chartId={chartId} chartSeries={chartSeries} descriptorId={descriptorId ?? undefined} displayUnits={displayUnits} kernel={kernel} onDisplayUnitsChange={onDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} status={tableUnsupportedReason ? "unsupported" : resolvedTableStatus} table={resolvedTable} unsupportedReason={tableUnsupportedReason} xAxisId={xAxisId} xAxisLabel={formatXAxisLabel(chartSeries, xAxisId)} /> : datasetPrompt) : null}
       {activeSubview === "dynamics.temporal-fft" ? <SpinWaveGammaView onFeatureSelect={onGammaFeatureSelect} resource={spinWaveGamma} status={spinWaveGammaStatus} /> : null}
       {isDynamicStructureFactorSubview ? <DynamicStructureFactorView onPointSelect={onDsfPointSelect} resource={dynamicStructureFactor} status={dynamicStructureFactorStatus} /> : null}
-      {isFrequencySubview ? <AnalysisFrequencySurface calculationMode={frequencyDomainCalculationMode} chartId={chartId} comparisonModel={activeSubview === "resonance.modal-driven" ? frequencyDomainComparisonModel : undefined} descriptorId={descriptorId ?? undefined} displayUnits={displayUnits} kernel={kernel} onDisplayUnitsChange={onDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} presentation={props.frequencyDomainPresentation} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} series={frequencyDomainSeries} status={frequencyDomainStatus} title={frequencyDomainTitle} unavailableReason={frequencyDomainUnavailableReason} /> : null}
+      {isFrequencySubview ? <AnalysisFrequencySurface datasetProvenance={provenance} calculationMode={frequencyDomainCalculationMode} chartId={chartId} comparisonModel={activeSubview === "resonance.modal-driven" ? frequencyDomainComparisonModel : undefined} descriptorId={descriptorId ?? undefined} displayUnits={displayUnits} kernel={kernel} onDisplayUnitsChange={onDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} presentation={props.frequencyDomainPresentation} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} series={frequencyDomainSeries} status={frequencyDomainStatus} title={frequencyDomainTitle} unavailableReason={frequencyDomainUnavailableReason} /> : null}
       {isHysteresisSubview ? (selectedStageId ? <HysteresisChart kernel={kernel} stageId={selectedStageId} /> : <div className="fm-analysis-plots__empty" role="status">Select a hysteresis stage</div>) : null}
       {activeSubview === "comparison.sources" ? <div className="fm-analysis-plots__comparison fm-analysis-plots__empty" role="status">
         <strong>Comparison unavailable</strong>

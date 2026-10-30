@@ -114,6 +114,26 @@ def _validate_resume(
     backend_id = previous.get("backend_container")
     frontend_id = previous.get("frontend_container")
     image_id = previous_inputs.get("image_id")
+    failed_start_pins = backend_id is None or frontend_id is None
+    if failed_start_pins:
+        # Older failed development terminals published IDs only after readiness.
+        # A fresh failed-resume observation may bind its exact IDs, but only to
+        # the unchanged development cgroup and backend incarnation.
+        previous_cgroup = previous.get("worker_cgroup")
+        if (previous.get("state") != "failed-confirmed"
+                or not isinstance(previous_cgroup, Mapping)
+                or previous_cgroup != cgroup
+                or previous.get("backend_started_at") != receipt.get("backend_started_at")
+                or not isinstance(receipt.get("backend_container"), str)
+                or CONTAINER_RE.fullmatch(receipt["backend_container"]) is None
+                or receipt.get("backend_container") != previous_cgroup.get("container_id")
+                or not isinstance(receipt.get("frontend_container"), str)
+                or CONTAINER_RE.fullmatch(receipt["frontend_container"]) is None):
+            _fail("Failed development lacks exact fresh-resume container/cgroup pins")
+        if backend_id is None:
+            backend_id = receipt["backend_container"]
+        if frontend_id is None:
+            frontend_id = receipt["frontend_container"]
     if (
         receipt.get("schema") != "fullmag.docker-build-operation.v1"
         or receipt.get("phase") != "resume"
@@ -174,8 +194,10 @@ def _validate_resume(
         "frontend_container": frontend_id,
         "image_id": image_id,
         "pin_sources": {
-            "backend_container": ["development terminal", "resume worker_cgroup", "Docker inspect"],
-            "frontend_container": ["development terminal", "Docker inspect"],
+            "backend_container": (["development worker_cgroup", "failed resume container ID", "resume worker_cgroup", "Docker inspect"]
+                                  if failed_start_pins else ["development terminal", "resume worker_cgroup", "Docker inspect"]),
+            "frontend_container": (["failed resume container ID", "Docker inspect"]
+                                   if failed_start_pins else ["development terminal", "Docker inspect"]),
             "image_id": ["development inputs", "resume worker_cgroup", "Docker inspect"],
             "backend_started_at": ["failed resume terminal", "Docker inspect"],
         },

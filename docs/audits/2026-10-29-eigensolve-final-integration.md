@@ -1,0 +1,893 @@
+# Domknięcie integracji eigensolve i UI — checkpoint
+
+## Bieżący checkpoint: świeży signed15 z FGMRES, 30.10.2026
+
+- Runtime compiled5c8/snapshot a128cd72, development7ac23e14, config7195cbd0: succeeded. Jawny FGMRES i schur-action1; stare recordy zachowane.
+- Oryginalny signed15: run6a5847c6 completed, **15/15 widm i pól ready/member_verified_owner_bound**. Gamma9,299249697GHz; eps_full max1.397e-13 przy niezmienionym1e-8. FMS38MB/CRC PASS zachowany pozaGit.
+- Wykres z analityką gotowy: max różnica n0=0.827148%, zachowana1D=0.593629%; brak pełnej zbieżności/COMSOL. [Szczegółowy raport](2026-10-30-eigensolve-signed15-fgmres-runtime.md).
+- BrowserGamma sample7: film bezairboxu, animacja i paleta PASS, WebGL888×573/contextLostfalse, bez błędów i zapisów solvera.
+- R6: **11/14** operacji na tym samym running run, potem jego udana publikacja. Ostatnie gesty nadal otwarte. Timeout odczytu i błędny punkt chwytu obserwatora są jawnie zapisane; nie replayowano Compute.
+- UI R5: legacy inspector nie ma importera ani pełnej selekcji ownera. Poprawka reuse wrappera i exact identity w toku; świeża analityka w UI jeszcze NOT VERIFIED.
+- Native baseline41068131113:21/21PASS na84197c1b3. Nowy default large-sparseFloquet w475147b09 ma hosted native41093866398 w toku. K0, small exact, explicit overrides i bramki bez zmiany; runtime bez override'u wymaga próby.
+- API41085124821 i wszystkie pozaPython joby bootstrap41085120349 PASS na d9. Dwa wspólne fixture’y pustych operator records są poprawione do v1; ponowne CI potrzebne. Unit testy wyłącznie GHA.
+- I1 demag policy kompiluje się w hosted Rust job; log wykazał brak wykonania trzech nowych regresji, dlatego dodano je do CI z asercją liczby testów. Ich wynik, runtime Some/biasLLG8 oraz pozostałe disposition są otwarte. I7, latest master/review/merge i końcowy cleanup również otwarte. Chronione14plików i cudze dane zachowane.
+
+
+## Cel i warunki zakończenia
+
+Użytkownik zlecił dokończenie planu, integrację z masterem i sprzątnięcie worktree.
+Nie utożsamiamy ukończonego R6 ze scaleniem PR ani pełną kwalifikacją naukową.
+Kolejność: uzgodnienie źródeł → review i CI → weryfikacja zintegrowanego runtime
+→ merge PR → aktualizacja mastera przy zachowaniu WIP → drain grupy i cleanup
+wyłącznie zweryfikowanego worktree i prywatnych zasobów. Bez kasowania wyników.
+
+## Aktualna baza
+
+- Gałąź: `codex/eigensolve-integration-ui-20261026`, PR #262.
+- Początek etapu: `6a71b3142d666989408d0db68f787b2fa36ca26e`.
+- Pobrany master: `c276a163ba` (pełny SHA w merge commicie).
+- Rozbieżność początkowa: master 369 / branch 176 commitów; 419 plików PR.
+- 14 plików wcześniejszego WIP worktree i 20 plików współdzielonego mastera
+  skopiowano wraz z hashami do zewnętrznego checkpointu `final-integration-20261029`.
+  Nie stage'owano ich ani nie resetowano głównego checkoutu.
+
+## Rozwiązania konfliktów (29 plików)
+
+- Frontend: zachowano modalne sterowanie i nowsze helpery geometrii bez pola.
+  Duży konflikt testu był głównie formatowaniem; trzy wersje sparsowano
+  TypeScript-em i znormalizowano bez kompilacji. Zachowano testy obu gałęzi.
+- Telemetria: zwijane metryki w wynikach oraz nowe postępy anten z mastera.
+- Timeout proxy: budżet faz z mastera, limit archiwum FMS z brancha; oba testy.
+- Runner: Relax handoff i Frozen Spins mają odrębne argumenty oraz guardy.
+  Centralny materializator runtime-control rozpoznaje dokładny port certyfikatu
+  równowagi FEM; wrapper API deleguje do wspólnej implementacji.
+- Retirement: nowszy importer-issued observation proof z mastera zastępuje
+  starszą lokalną implementację imported_read_only; zachowano bounded retry
+  otwarcia store/ledger. Nie omijamy dowodu importera ani lease.
+- Przygotowanie: masterowy spójny dowód nieudanej preparacji i wcześniejsze
+  helpery/regresje diagnostyczne; porty modalne i publikacja zachowane.
+- FMS: zachowano staged/spawn_blocking import, modalną walidację, nowszą
+  projekcję zaakceptowanej definicji i prywatny dowód geometrii anten.
+  Testy Compact/Solved oraz pustych CAS assets pozostają niezależne.
+- Launcher: zachowano exact failed-worker recovery i nowsze preowner/catalog
+  recovery; wielozadaniowy katalog jest walidowany, nie zredukowany do 1 zadania.
+- Diagnostyka: redagowany structured worker observation, reporty MFEM/MPI,
+  guard brakującej próbki zasobów oraz oryginalna granica worker error chain.
+
+## Stan dowodów
+
+Składnia wszystkich konfliktowych Rust/TS/Python PASS (parsery, bez lokalnej
+kompilacji testów). `git diff --check` PASS. To nie zastępuje kompilacji,
+review ani uruchomienia po scaleniu; wymagane są aktualne CI w GitHub Actions.
+
+R1–R6 mają wcześniejsze dowody UI, w tym 14 rodzajów operacji podczas realnego
+solvera w dwóch kwalifikujących przebiegach. Wymagają oceny wpływu integracji.
+Pozostałe stare fragmenty solvera I1/I6 oraz kwalifikacja I7 mają oddzielne
+otwarte pozycje w planie; nie oznaczono ich jako ukończonych przez ten merge.
+PR pozostaje draftem; cleanup nie został uruchomiony.
+
+
+Uwaga o współbieżności: podczas etapu zewnętrzny writer zmienił lokalny
+`FooterTelemetry.tsx` w głównym checkoutcie. Oryginalna kopia pozostaje
+zachowana, a bieżący plik mastera nie był przez ten wątek zapisywany.
+Staged diff merge'a zawiera też wcześniejsze whitespace w dokumentach
+pochodzących z mastera; nie przerabiano historycznych plików patch.
+
+
+## Pierwsze pełne CI po merge
+
+UI: 1459 testów PASS / 1 FAIL — ujawniono ciche nadpisanie budżetu proxy
+przez transport FMS. Naprawa łączy oba ograniczenia w jednej konfiguracji.
+Pełny lint ujawnił synchroniczne odtwarzanie preferencji w efekcie; użyto
+leniwego odczytu i useSyncExternalStore z serwerowym snapshotem hydracji.
+Rust: uzgodniono brakujące/nadmiarowe argumenty łączące Relax i Frozen Spins,
+identyczny helper fixture'u FMS zduplikowany przez scalanie testów oraz nowy
+opcjonalny external_cas w fixture ArchiveWalker. Python: usunięto podwójne
+zadeklarowanie --stop-only. Nie osłabiono oczekiwań, progów ani testów.
+Kompilowane testy pozostają wyłącznie w GitHub Actions.
+
+
+Drugi przebieg: 1460 testów UI PASS, typy i architektura PASS; React Doctor
+wskazał jeszcze browser-dependent branch szerokości. Odczyt szerokości
+przeniesiono do pierwszego pomiaru layoutu requestAnimationFrame i zdarzeń
+resize, z identyczną wartością początkową po stronie SSR/klienta. Nie wyciszono
+reguły. Fixture pre-admission uzupełnia teraz pełny interfejs BuildControl
+(namespace_registry=None), zamiast osłabiać kontrolę namespace w produkcji.
+
+Przy inwentaryzacji zastano obie usługi grupy zakończone exit255 o 07:24:39 UTC,
+bez OOM i bez błędu Dockera w State.Error. Nie przypisujemy zatrzymania
+zmianie Next config; wymaga ono osobnej kontrolowanej ścieżki wznowienia.
+
+
+Pełny frontend: 9393 PASS / 7 FAIL. Pięć awarii wynikało z braku rzeczywistego
+SelectionController w fixture powłoki; diagnostyka wymaga teraz zakładki
+Diagnostics. Zachowano asercje statusu i wyraźne rozróżnienie fₙ(k) / A(k,f).
+Kompilacja API ujawniła nowy allow_operation_profile (dla modalnego false),
+terminal_publication (modalny bundle nie publikuje terminalnego stanu czasowego)
+oraz brakujące opcjonalne pola i cache w starszych fixture'ach. Uzupełniono
+inicjalizatory zamiast usuwać walidację i testy. Te poprawki wymagają kolejnego CI.
+
+
+Browser smoke ujawnił brak semantycznej etykiety splittera Inspector oraz resetu
+rozmiaru w nowym drzewie. Uchwyty nazywają teraz sąsiednie panele. Double-click
+odtwarza domyślny układ: remount dotyczy wyłącznie anchorów i splitterów;
+WorkspaceWindow pozostają w stabilnej warstwie. Browser gate nadal sprawdza
+360/416/560px i reset, ale względem początkowego rozmiaru nowego dock layout,
+a nie hardkodowanego dawnego 416px. Weryfikacja runtime po scaleniu otwarta.
+
+
+Trzeci przebieg: kontrola SSR nadal śledziła localStorage z leniwego inicjalizatora
+stanu aż do drzewa. Inicjalizacja tree/explicitDocked/restored ma teraz wyłącznie
+stałe wartości. Preferencje i szerokość są ładowane razem w pierwszej klatce
+layoutu; zapis preferencji pozostaje wyłączony do zakończenia tego odczytu.
+Nowa regresja porównuje markup serwera przy obecnym/nieobecnym window i wymaga
+zera odczytów localStorage podczas renderu. Nie wyłączono reguły doktora.
+Fixture frontend volume aktualizuje niezależnie wyliczony digest o metadata
+files, zgodnie z bieżącym kluczem produkcyjnym (guard label drift zachowany).
+
+
+Browser smoke po korekcie uchwytów przeszedł Inspector resize/reset i dotarł do
+wykresów. Stary odczyt wymagał jednoczesnego pokazania identity/field/resource
+w jednym panelu. Aktualny test przechodzi przez Data (sample/mode/field),
+Provenance (exact resource) i Diagnostics (niezależne residuale), a potem wraca
+do Overview. Zachowuje wcześniejsze asercje właściciela JSON, generacji,
+equilibrium i indeksu źródłowego rzeczywistego kliknięcia ECharts.
+
+
+## Korekta pomiaru dysku i wznowienia runtime
+
+Pomiar `df /` dystrybucji WSL (6,5 GiB) nie opisywał filesystemu demona
+Docker Desktop. Kanoniczny `BuildControl.space` potwierdził 300818042880 B
+wolnego w VM Dockera (około 280 GiB); fizyczny C: z DataFolder Dockera ma
+około 165 GiB wolnego. Prośba o 30 GiB sprzątania WSL była nieuzasadniona.
+Nie obniżono progu 32 GiB i nie usunięto żadnych danych.
+
+Resume `40a38150f556478682c8ae027d8acb0b` zakończył się failed-confirmed:
+stary obraz nie zawiera GMP/MPFR wymaganych przez nowy master. Kanoniczny
+bootstrap Compose zakończył `toolchain` sukcesem, attempt
+`2b267de511f64ead930925e0ca4a08ac`, image
+`sha256:84bd740324c9c498cd23b4fdeb026603e5e039073b2fc31ec126f56878517d67`.
+Recepta wymaga teraz kontrolowanego odtworzenia usług z tym toolchainem.
+
+Browser CI ujawnił rzeczywisty pusty Provenance przy bezpośrednim wyborze
+legacy EigenModeInspectorPanel. Mod publikuje teraz własny panel provenance
+(run/stage/equilibrium/revision/sample/mode/field/resource) zarówno dla tego
+route'u, jak i physics-first. Wrapper deleguje tę zakładkę zamiast dublować
+metadane. Browser gate sprawdza aktywną zakładkę własnego panelu modu.
+
+
+Kontrola wszystkich inicjalizatorów HostResourceReservation wykazała jeszcze
+jeden stary fixture w failed_worker_recovery::tests::reservation (wykrywany
+przez feature runtime-service-control CI). Dodano opcjonalny pin recovery=None.
+Obraz CPU bramek MFEM również nie instalował GMP/MPFR wymaganych przez wspólny
+CMake; dodano późną warstwę z tym samym pinem MPFR co w obrazie GPU oraz
+pkg-config preflight. Weryfikacja natywna wyłącznie w GitHub Actions.
+
+
+## Recovery failed admission — luka producent/konsument
+
+Build i API ukończone; admission failed-confirmed b1b3dd2c031b41778d6d8983e765ca7e,
+config 9788eca276e839741b6b291812003037802d50aee7fa2b662646093c2e7abc05.
+Native OWNER Ready pochodzi z innego buildu. Obserwacyjne resume
+9869254e01c9445d9977ce1ddec89a70 potwierdza ten sam target/build mismatch;
+nie restartowało backendu i nie ponawiało Solve. Stop-bootstrap odmówił przed
+mutacją, ponieważ failed development nie ma top-level container IDs, które
+_finish publikował dopiero po readiness. Oba receipty mają ten sam cgroup Ready.
+
+Naprawa publikuje IDs przed wait/publication. Dla historycznego failed start
+stop-bootstrap wymaga świeżych IDs w nowym resume, identycznego cgroup i
+StartedAt z wcześniejszego development, pełnego config/source/image binding
+oraz wszystkich istniejących live probes. Succeeded z brakującymi IDs,
+zmieniona inkarnacja i sprzeczne obecne IDs nadal są odrzucane. Żaden stary
+receipt nie jest zmieniany; fallback ma prawdziwe, odrębne pin_sources.
+Dziewięć nowych testów tego kontraktu dodano do GitHub Actions; lokalnie tylko AST.
+
+Rust CI wykazał cztery regresje utraty szczegółu powodu niedostępnej próbki
+hosta w Display. Context zachowuje teraz reason również w Display i nadal
+zachowuje ComputeNodeSampleNotCurrent jako typed source; dodano asercję typu.
+Browser zachowuje test residualu względnego i wymaga braku niepublikowanego
+Absolute residual, zgodnie z nowym UI (null w fixture oznacza brak wiersza).
+
+I6 — dalsze konkretne ustalenia do naprawy: runtime guard pustego selektora
+Floqueta jest sprzeczny z plannerem (pusty oznacza wszystkie pary); guard k
+powinien używać tej samej maski osi co certyfikat v6, łącznie z translacyjnym
+fallbackiem przy braku axis_hint. Producent v6 używa eager then_some(nonzero[0]),
+co może spanikować przy pustej liście osi. Historycznego WIP nie można przenieść
+wprost: uwzględniał tylko axis_hint, a obecny certyfikat wspiera też translację.
+Te punkty i native tracking provider pozostają otwarte; nie oznaczono I6 jako PASS.
+
+
+## Natywny Floquet/SLEPc — aktualny dowód CI
+
+Workflow 40865035881, job 123417530842, źródła 97e94e906, profil
+floquet-modal-slepc: obraz CPU z GMP/MPFR i kompilacja kontraktów ukończone.
+CTest: 19/21 PASS, dwa FAIL. Artefakt GitHub zachowany
+fem-cpu-source-contract-floquet-modal-slepc-40865035881-1 (457782 B ZIP).
+
+- fem_floquet_modal_solver_contract: explicit multi-mode refill kończy partial
+  z floquet_nev_refill_outer_iteration_budget_exhausted mimo dwóch zaakceptowanych
+  modów; trzeba prześledzić goal/outer budget i fixture. Nie zwiększono budżetu
+  ani nie zmieniono oczekiwania w ciemno.
+- fem_modal_eigen_hard_ksp_nearest_contract: nie spełnia łącznej asercji stop reason
+  / failure-only scalar callback probe przy twardym błędzie KSP; dokładny
+  niespełniony składnik wymaga dalszej diagnostyki. Potrzebne review
+  przepływu awarii i metadanych, a nie poluzowania residualu.
+
+Oba są otwartymi konkretnymi punktami I6. To nie jest PASS pełnej ścieżki
+natywnej ani kwalifikacja naukowa. Nie ponowiono identycznego joba bez poprawki.
+
+
+## Recovery zastosowane i korekta rozpoznania miejsca
+
+CI źródeł 38079580c: python-contracts 123431887364 i control-room-contracts
+123431887066 zakończone SUCCESS. Dziewięć regresji stop-bootstrap wykonano
+w kroku Python GitHub Actions; lokalnie nie kompilowano ani nie uruchamiano testów.
+
+Świeża obserwacja resume ad7d5bd5dfef43a5b7bb24c6eec9fd45 nie restartowała
+backendu. Zachowała inkarnację e6ab0da98540, StartedAt
+2026-10-29T11:13:16.581353245Z i opublikowała pełne IDs przed odmową admission.
+Stop-bootstrap d2797c1d2df047faa9bd4db5fb0eb501: SUCCEEDED, stopped-confirmed.
+Zatrzymano wyłącznie własny diagnostyczny backend. OWNER hash przed/po
+fe65b122ce8c13be9364b408c0f5d0a771734bde03de79e35497f51245eb0585 jest identyczny;
+sesje i resource leases untouched. Native execution pozostaje unknown,
+a nie fikcyjnie drained. Frontend nadal działa, ale nie jest to dowód działającego solvera.
+Kolejny krok wymaga legalnego recovery starego native OWNER; samo stop-bootstrap
+nie udziela prawa do skasowania OWNER lub obejścia jego weryfikacji.
+
+Korekta wcześniejszej diagnozy dysku: df / dotyczy dystrybucji WSL (~6,5 GiB).
+Demon Docker to Docker Desktop; BuildControl.space dla własnej grupy raportuje
+300818042880 B dostępnego (~280 GiB), ponad próg 32 GiB. Docker DataFolder
+C:\ProgramData\DockerDesktop\vm-data ma około 165 GiB wolnego na Windows.
+Wycofano prośbę o zwolnienie 30 GiB WSL. Niczego nie usunięto.
+
+Browser CI 123431887164 przeszedł poprzednie kontrole mode/viewport, ale zatrzymał
+się na przestarzałym odczycie owner identity w Overview dyspersji. Naprawiono
+nawigację smoke do Provenance przed niezmienionymi asercjami run/stage/revision,
+następnie do Data przed importem CSV. Nie usunięto testu importu/precyzji ani
+asercji przypisania wyniku do właściciela. Nowy przebieg wymaga CI.
+
+Bramka Rust 123431887588 dla 38079580c zakończyła SUCCESS po wszystkich
+kontraktach. Generated API determinism, native modal C ABI, checkpoint Windows,
+FDM qualification oraz Inspector actions browser smoke również SUCCESS.
+Profile SLEPc w automatycznym bootstrap są SKIPPED, nie PASS; osobny ręczny
+run 40865035881 pozostaje dowodem 19/21. Jedyną porażką automatycznego
+bootstrap był browser-fixture-smoke opisany powyżej.
+
+
+## I6 — poprawki wejścia Floqueta, 29 października
+
+Naprawiono źródłowo trzy otwarte błędy: pusty selektor oznacza wszystkie pary
+zgodnie z plannerem; każdy punkt k jest sprawdzany względem osi periodycznych;
+wspólny resolver osi v6 nie indeksuje pustego Vec przy zerowej translacji.
+Resolver zachowuje pierwszeństwo axis_hint i translacyjny fallback oraz cutoff
+1e-15 m. Składowa k na otwartej osi musi być dokładnie zerowa, także poniżej
+progu Gamma 1e-12 rad/m; nie zmieniono ani nie zaokrąglono k i progów residualu.
+
+Rozszerzono istniejący test selektora i dodano trzy regresje signed/mixed/path,
+translacji bez hintu oraz braku/zera/oblique/nonfinite translacji. Wszystkie
+cztery funkcje jawnie objęto CI. Lokalnie wykonano tylko rustfmt --emit stdout
+(parsowanie), JSON i diff-check. Native provider trackingu, dwie porażki CTest,
+kwalifikacja runtime i nauki nadal są otwarte. Nie oznaczono całego I6 jako PASS.
+Dokument 0600 i source map opisują nowe warunki bez deklarowania fizycznej
+kwalifikacji. Master 6caa3e226 scalono bez konfliktów jako 2bf23f6ff; chronione
+14 plików WIP pozostały byte-for-byte identyczne. Usunięto wyłącznie pustą linię
+na końcu testu dostarczonego przez master, aby diff-check przechodził.
+
+Uwaga do hooka: commit 6cce2aadd i merge 2bf23f6ff uruchomiły React Doctor.
+Zgłosił odpowiednio 8 ostrzeżeń w starych częściach smoke-analysis-plots oraz
+3 ostrzeżenia w RealtimeInvalidationBridge z mastera, poza czterema dodanymi
+liniami nawigacji testu. Hook nie blokował commitu. Nie dodano suppressions ani
+nie obniżono bramek. Ocena tych wskazań pozostaje oddzielna od zielonego CI.
+
+
+Natywny refill: znaleziono różnicę między domyślnym celem N i jawnym celem N
+mimo identycznej zaakceptowanej puli. Jawny cel równy requested_mode_count ma
+teraz tę samą semantykę co domyślny; mniejszy best-effort zachowuje dawną bramkę
+EPS. Nie zmieniono NEV/NCV/MPD, budżetu 160, residualu 1e-10 ani certyfikacji
+per-mode. Test dodatkowo wymaga obu niezależnie znanych częstotliwości. EPS
+reason i iteracje pozostają widoczne; count fulfillment nie daje kompletności
+okna. Wymaga potwierdzenia natywnym CTest w CI.
+
+Druga porażka nearest KSP dostała wyłącznie ograniczoną diagnostykę składnika
+asercji (status/probe/callback/stop reason/true probe attempts), bez zmiany
+oczekiwań. Dotychczasowy log nie zawierał tych wartości. Ponowienie profilu
+po tej zmianie jest zbieraniem brakującego dowodu, a nie ślepym rerunem.
+Context7 nadal odmawia z powodu miesięcznej kwoty; oficjalna dokumentacja
+SLEPc EPSSetDimensions nie uzasadniała zgadywanej zmiany NEV/NCV, więc jej
+nie wykonano: https://slepc.upv.es/release/manualpages/EPS/EPSSetDimensions.html.
+
+
+Browser run 40872170503 przeszedł nawigację Provenance i poprawny import CSV.
+Następna asercja po odrzuceniu pliku ponad 4 MiB nadal odczytywała owner jako
+widoczny tekst w Data. Frame publikuje teraz stabilne semantyczne atrybuty
+run/stage/artifact revision na każdej zakładce; test czterech zakładek zabezpiecza
+ich przypisanie. Smoke sprawdza wszystkie trzy identyfikatory po odrzuceniu,
+pozostawiając Data zamontowane, żeby nie skasować błędu/wyboru pliku przed
+screenshotem. Zachowano test braku File.text dla za dużego pliku, braku POST,
+czyszczenia poprzednich kontrolek i dokładnej tożsamości wybranego węzła.
+
+
+## Decyzja runtime na podstawie zwolnionych zasobów
+
+Istniejący read-only _released_snapshot dla bieżących mountów e6ab0da98540:
+active_count=0, 20 rezerwacji hosta i 20 lokalnych leases. Każdy wpis released
+ma zweryfikowany autentyczny release proof. SHA-256 kanonicznej obserwacji:
+5ae150bf14d1e6e71ee0d51b73d4dcf08e26da60e99c6f4a1b1f227193a52ed0.
+To aktualny dowód braku aktywnych zasobów, nie domniemanie z OWNER Ready.
+Docker ma obecnie 223374323712 B wolnego, nadal ponad 32 GiB.
+
+Następna operacja: istniejące canonical recreate-volume --fresh-state dla
+b1b3dd2c031b41778d6d8983e765ca7e / config 9788eca276e839741b6b291812003037802d50aee7fa2b662646093c2e7abc05,
+source_root tego worktree, port 3217. Zachowuje cały dawny runtime-control
+atomowym archiwum, stare state_root oraz ledger; usuwa tylko dwa własne
+kontenery e6ab0da98540 i 5979f13fe9d6, następnie buduje nowy runtime w tej samej
+grupie. Nie edytuje ani nie usuwa historycznego OWNER i nie udaje drained.
+Dane fizyczne i historia pozostają dostępne, a nowy namespace nie przejmuje
+starego właściciela. To jawne odtworzenie nowego runtime, nie recovery aktywnego
+native lease (żaden nie jest aktywny).
+
+Przed operacją potwierdzono odtwarzalne archiwum signed15:
+/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/eigensolve-modal-updated-signed15-20261027/de-signed15-with-references-20261028.fms
+size=158456496, SHA-256=2338882b585bc40f9911ec3334676e672cb23c2a55448d4945e711533b57b6cf, ZIP entries=349, integralność PASS.
+Po starcie wymagane jest przywrócenie tego modelu/importu, a następnie nowe
+obliczenia i R6; pusty backend ani sam stary import nie zamykają celu.
+
+
+## Bieżący runtime i rzeczywiste UI — dowód 29.10
+
+Canonical fresh-state zakończył się SUCCEEDED: recreate 447b8d642dcb4682b5b783c0b5b90b91,
+nowy development c2810c89e195482eac664f37379919a2, config
+0b0db2898ea73851e0d8f659364832f624bfba43edd3dd9cb78207aec15aa2e7.
+Runtime źródeł acb0330ea, snapshot d58fc8162ba1ecfea790ea422941e9df502aaba1609e4b99dbb4cff712c98fbc.
+Nowy OWNER Ready potwierdza ten build i host c281; historyczny OWNER ma w
+runtime-archives/447b… dokładnie ten sam SHA-256 fe65… co przed archiwizacją.
+Nie dodawano kolejnej ścieżki recovery ani nie edytowano ręcznie OWNER.
+
+Rzeczywisty import UI zwrócił HTTP 200: odzyskane 15 próbek, Γ=9,299249697 GHz.
+Browser pokazał signed dyspersję z dwiema referencjami oraz rzeczywisty mod Γ
+z widocznym samym filmem 40x40x10 nm. Fit mode działa; poprzedni skrypt używał
+nieaktualnego Fit view. Weryfikacja końcowa: PASS, zero pageerror/HTTP failure,
+WebGL contextLost=false, bufor 888x573. To odtworzone dane, nie nowe obliczenie.
+Screeny i proof: final-integration-20261029/restored-runtime w katalogu artefaktów.
+
+Nowa aktywacja Gamma frequency_window db0bdb00b71244ffb6c3528c6a43a811: succeeded,
+run ffe91832… / request eigensolve-gamma-window-r6-acb0330ea-20261029-1.
+Obserwator R6 zaliczył 14/14 operacji na tym samym running runie przed/po,
+zero pageerror i numerycznych mutacji. RUN NADAL TRWA; nie zaliczono jeszcze
+końcowego R6 bez completed i widma. Żywy worker PID 29195 potwierdzono w Dockerze
+(17 min elapsed, ponad 22 min CPU); sam status API nie był podstawą czekania.
+
+CI acb0330ea: Rust, Control Room i cały browser fixture smoke SUCCESS.
+Dwie bramki dokumentacji odrzuciły brak tabeli source-code index dla ośmiu
+nowych mapowań i niejednoznaczny bare symbol C++. Uzupełniono tabelę i prefiks
+void definicji; rzeczywisty statyczny walidator 0600 PASS, bez zmiany walidatora.
+
+Native CTest 40877529745: 20/21 PASS — refill poprawiony. Pozostałe FAIL dotyczy
+wyłącznie błędnego żądania true_probe_attempt_count=0. Status error=4, stop reason,
+failure-only serializer i callback są poprawne; licznik ma sześć prób i jawny
+zakres całego EPS. Produkcyjny callback nie resetuje historii i ma prawidłową
+bramkę nonpositive-default. Istniejący bezpośredni test KSP sprawdza breakdown
+przed jakąkolwiek próbą oraz positive-default/build-breakdown z attempts>0.
+Test C ABI wymaga teraz ścisłej spójności scope/liczników/ordinal i positive
+default dla zapisanej próby; końcowy nonpositive callback nie może dodawać próby.
+Zachowano error/stop reason, null norms i pozostałe asercje. Brak zmiany solvera,
+macierzy lub tolerancji. Nowa asercja wymaga ponowienia CTest w GitHub Actions.
+
+[Strukturalny checkpoint i dokładne identyfikatory](2026-10-29-eigensolve-final-integration.evidence.json).
+
+
+## Kolejna obserwacja storage i kontraktu KSP
+
+Świeży pomiar mountów backendu rozdziela `/state` (bind z WSL, około
+6,5 GiB wolnego) od `/build` i runtime-control (named volumes Dockera,
+około 186 GiB wolnego). Fizyczny C: ma około 69 GiB; wolna przestrzeń
+wewnątrz wirtualnego dysku nie gwarantuje możliwości jego dalszego wzrostu.
+Nie ma podstaw do żądania dodatkowych 30 GiB w dystrybucji WSL na build.
+Nie usunięto danych. Odczyt `du` ma odmowy dostępu i nie jest kompletną
+kwalifikacją wyników do retencji; cache uv/pip są jedynie kandydatami.
+
+Native CI 40887820514 nadal ma 20/21 PASS. Jedyny fail wymagał, by candidate
+zawsze był unavailable po hard KSP error. Log zachował jednak poprawną
+obserwację z dodatniego callbacku 20 przed późniejszym MatSolve failure.
+Test sprawdza teraz powiązanie zachowanej próbki z ordinalem ostatniego
+true-probe; unavailable/null dotyczy braku dodatniej historii. Kod produkcji,
+residuale, progi i przerwanie przy hard error pozostają bez zmian. Poprawka
+wymaga kolejnego GitHub Actions; nie ogłaszamy 21/21 przed wynikiem.
+
+Bieżący run Gamma `run-live-ffe91832f1f9a883c7ac8f0b227e89bbed56580f3304d119a6bfdef7734720be`
+ma status running. Rzeczywisty worker PID 29195 zwiększa zużyty czas CPU;
+nie jest to wyłącznie wiszący status API. Nie aktywowano drugiego runu ani
+nie restartowano usług. Dowód 14 operacji R6 pozostaje zachowany wraz z
+nieukończonym jeszcze oczekiwaniem na końcowe wyniki tej generacji.
+
+
+## I6 — podłączony native P1 CSR, odbiór oczekuje
+
+Provider Tet4/Prism6 i bounded immutable C ABI odtworzono z atomów historycznych.
+Natywny CSR faktycznie wyznacza iloczyn M w serial/adaptive/bias tracking,
+normalizacji i Procrustes transport. Nie użyto M^2 ani sidecaru ignorowanego
+przez konsumenta. Starszy Rust Tet4 v1 pozostaje dla jawnej referencji i replay.
+Nowe v2 ma czytniki Rust i niezależną kontrolę Tet4 w Pythonie: jednostki m^3,
+pełne węzły, puste wiersze powietrza, mapy, CSR i typed hashe źródeł.
+
+Review wykrył i naprawił brak source SHA w direct Compose: snapshot korzysta
+ze wspólnego runtime build-info, a hosted profil MFEM testuje generated-header
+route (DIRECT_COMPOSE=1). Dodano oddzielny no-MFEM unavailable profile.
+Review wykrył też nierówne długości adjacent strict zip w nowym readerze
+Python; poprawiono je przed wykonaniem testów. Statyczny parser i mapa naukowa
+PASS; nowe testy i kompilacja native/Rust pozostają wyłącznie w GitHub Actions.
+Zmiany nie rozszerzają produkcyjnego MeshTopology poza Tet4.
+
+Run Gamma ffe91832… zakończył się failed o około 15:18 UTC. Relax ma succeeded,
+eigen failed/disconnected i zero artefaktów modalnych. Nie ma nowej częstotliwości.
+Backend i frontend pozostały healthy. Trwa diagnoza autorytatywnej przyczyny;
+nie przypisujemy jej diskowi, solverowi ani panelom bez dowodu. R6 zachowuje
+14 poprawnych operacji podczas pracy, ale wymaganego końcowego spectrum nie ma.
+Wcześniejszy podpisany sweep15 i zrzuty UI pozostają odrębnym dowodem.
+
+
+Autorytatywna diagnoza Gamma: worker exit1, bez timeout i stop request;
+`frequency_window_subwindow_failed`, brak kompletnego bazowego klastra.
+Brak dowodu awarii dysku lub przekroczenia limitu revision10000. Obcięcie
+failure message do1024 znaków zgubiło window_certificate i dokładną przyczynę
+pierwszego nieudanego podokna. Następny krok to bounded failure-only sidecar
+przed truncation, następnie diagnoza tej samej fizyki i ponowny pilot.
+
+Review kolejnego CI40897875054 ustalił błędny zakres odczytu fixture'u:
+`candidate_operator_diagnostic` jest pod `last_true_probe`, nie bezpośrednio
+pod failure_probe. Poprawiono depth-1 lookup; równość z faktycznym callbackiem
+pozostaje sprawdzana. Nie zmieniono produkcji, KSP ani physical acceptance.
+
+
+I6 checkpoint wypchnięty: `14fc9280e39a1551743a375a491257819012ce5e`.
+Hosted source profiles: MFEM/directCompose40905285319, no-stack40905296548,
+Floquet/SLEPc40905306186, method40905319431. Ostatni przeszedł nowe testy
+Python v2 i mapę naukową; Rust1853PASS/1FAIL/1ignored wykrył złą kolejność
+alokacji metryki przed odmową niecertyfikowanej równowagi. Naprawiono kod:
+cache identity sprawdzamy przed solve, nowy native tracking powstaje dopiero
+po zaakceptowanym completion i raw checkpoint. Oczekiwanie testu i gate
+`uncertified_provided_equilibrium` pozostały bez zmian. Wymagany recheck CI.
+
+
+## D1 — zachowanie przyczyny awarii przed obcięciem wiadomości
+
+W prywatnym epoch modalnego workera dodano failure-only
+`native_failure_diagnostic.v1.json` z ownerem run/task/step/attempt/epoch.
+Nie zmieniono limitu publicznego failure_reason, RunError, statusów ani
+katalogu zaakceptowanych wyników. Source marker diagnostics_json odpowiada
+rzeczywistemu formatterowi native runnera. Limit wejścia parsera to 1 MiB,
+certyfikatu 16 KiB, całego pliku 64 KiB; zapisywany jest rzeczywiście ograniczony
+fallback, nie jego większy oryginał. Istniejący immutable writer zachowuje
+create-new i fsync. Zwykła ścieżka FDM pozostaje bez nowego sidecara.
+
+Certyfikat ma allowlist znanych scalarów, schedule summaries oraz niewielkich
+list częstotliwości/ranków. Nie zapisuje pól przestrzennych, operatorów,
+environment ani tokenów. Pierwszy failed subwindow zachowuje rzeczywisty
+status i kody/flags EPS; `status=ok` nie jest przekształcany w failure na
+podstawie samego stop_reason. `diagnostics_truncated` pozostaje jawne.
+Review poprawił realny błąd fallback serialization oraz zbędną mutację FDM.
+Hipotezę globalnego root odrzucono po odczycie callera: root=&attempt jest
+już prywatnym epoch, a storage.data_root to osobny argument autosave_root.
+
+Dodano regresje realnego rozmiaru zapisanego pliku przy pretty inflation,
+niemutowalności, filtracji payloadów, markerów oraz dostępności metadanych.
+Wykonanie wyłącznie GitHub Actions; managed/runtime zapis po nowej Gamma
+pozostaje NOT VERIFIED. Nie uruchomiono ponownie pełnego okna bez tej naprawy.
+
+Odczyt artefaktów hosted 14fc rozdzielił dwie przyczyny:
+- MFEM 40905285319 i stub 40905296548: brak zamykającego #endif w teście
+  snapshot C ABI (biblioteka zlinkowana); poprawka dodaje samo zamknięcie.
+- SLEPc 40905306186: build/link oraz **21/21 CTest PASS**. Dopiero finalizacja
+  CI próbuje automatycznie retire głównego checkoutu i jest prawidłowo blokowana.
+  Cały workflow pozostaje failure; nie osłabiono ochrony main checkout.
+
+To konkretne otwarte bramki integracji I6, nie dowód błędu nowego algorytmu
+fizycznego. Podsumowanie z SHA logów/receiptów zachowano w pliku
+2026-10-29-eigensolve-native-ci-failures.evidence.json. Poprawiany jest zakres
+finalizacji ephemeral CI, z zachowaniem obowiązkowych production guards.
+
+
+Finalizacja CI używa teraz istniejącego owner-finish(state=review) dla passed
+main-checkout, z jawnym cleanup_state=not_applicable_main_checkout.
+Managed worktree zachowuje state=completed i wszystkie guardy retire.
+Nie zmieniono produkcyjnego storage/retirement API. Atexit nie przepisuje
+tego rozróżnienia na fałszywy cleanup completed. Dodano hosted regresję wyboru
+kontraktu; pełny workflow stanowi rzeczywistą próbę tej finalizacji.
+Końcowe source review D1 nie znalazło błędu produkcyjnego. Główny fixture
+przestawiono na rzeczywiste CPU pole subwindows, zachowując osobne aliasy.
+
+
+## Bieżący build i rzeczywisty wyścig preparation
+
+Na c8330392428194abc6b9ca7a9f72c2b597e3bf26 wszystkie trzy hosted profile
+native oraz pełny runner/Python method workflow przeszły. Bootstrap zatrzymał
+się na jednej nowej asercji planera: zero/oblique/wrong-axis odrzuca wcześniej
+mesh periodic-node-pair residual validator, missing/NaN odrzuca bounded
+admission. Fixture zachowuje pięć negatywnych przypadków i wymaga konkretnego
+komunikatu właściwej warstwy. Kod produkcyjny tego guardu jest bez zmian.
+
+Kontrolowany restart własnej grupy przeszedł terminal-catalog proof i native
+drain. Iteracja 1bf0177c89fd435bbead059aa29fd5e9: make exit=0, build 561926 ms,
+pakiet opublikowany, API zdrowe. Runtime snapshot to
+ad1c117b4f871c664cd452e8642b4f66e3e305ee6bf121bb8345da3a61b08d03.
+
+Jednorazowa aktywacja e603ca28017940beb9f171ca6da8ba00 utworzyła run abb3…,
+ale HTTP409 accepted_preparation_receipt_invalid zatrzymał Compute.
+To inny błąd niż wcześniejszy native window failure: solver nie ruszył,
+oba preparery wyszły kodem0 i zwolniły lease, a trwałe receipts są prawidłowe.
+Przyczyną jest scanner store.rs czytający folder w trakcie atomic_write:
+writer tworzy .<uuid-v4>.part, a scanner przed rename wymaga suffixu .json.
+
+Poprawka reuse istniejącego is_atomic_write_staging_filename w collectorach
+launch/exit pomija wyłącznie rozpoznane regularne pliki staging. Symlinki,
+katalogi, nieznane nazwy, null i malformed JSON pozostają hard errors.
+Regresje sprawdzają częściowe pliki, rename/publication, brak receiptu oraz
+negatywne dane; wykonanie wyłącznie GitHub Actions, runtime fix NOT VERIFIED.
+Nie ponowiono aktywacji ani Compute na podstawie samego upływu czasu.
+Dowody: 2026-10-29-eigensolve-preparation-staging-race.evidence.json.
+
+Przy review historycznego f098 potwierdzono obecne native operator/sentinel
+pure-Neumann atoms. Historyczne automatyczne przełączenie boundary pozostaje
+osobną kwestią modelu; nie zmienia się jawnego finite-Dirichlet benchmarku ani
+analityki dla uzyskania PASS.
+
+
+## Granice dysków i recovery po anulowaniu przed Compute — 29.10, 19:13 UTC
+
+Pomiar z wnętrza bieżącego backendu rozdziela dwa filesystemy: named volumes
+`/build` i `/opt/fullmag/control` mają około 260 GiB wolnego (`/dev/sdf`),
+a bind `/state` korzysta z Ubuntu WSL (`/dev/sdd`, około 6 GiB wolnego).
+Na Windows C: jest około 13 GiB wolnego. Wcześniejsza prośba o 30 GiB
+w Ubuntu nie była uzasadnionym warunkiem przekroczenia dockerowego progu
+32 GiB dla buildu. Pojemność filesystemu gościa nie dowodzi jednak możliwości
+rozrostu pliku VHDX przy małej ilości miejsca na Windows.
+
+`storage` w Ubuntu zajmuje około 17 GiB: runtime'y 15 GiB, user-data 1,2 GiB,
+runy 806 MiB; hostowe builds mają mniej niż 1 MiB. To inwentarz, nie lista
+danych zakwalifikowanych do usunięcia. Zachowano sesje, wyniki, bieżący cache,
+control i ledgery. Szeroki skan całego home przerwano jako zbyt kosztowny;
+nie wyciągamy wniosków o pozostałych katalogach z niepełnego pomiaru.
+
+Run `abb3…` anulowano pojedynczym scope-bound Stop. Komenda jest completed,
+run cancelled, oba zadania w katalogu cancelled; Compute nigdy nie wydano.
+Oryginalny helper aktywacji wciąż poprawnie zachowuje lease. Poprzedni
+`cancelled-activation-recovery/current.json` ma potwierdzone archiwum.
+Nowa procedura jawnego `cancel-before-start` zachowuje legacy failed-preparation,
+waliduje komplet successful preparation receipts, brak start_release/admissions,
+wszystkie solver leases danego runu, host owners i canonical artifact catalog.
+Przejście do kolejnego current używa CAS i zachowuje predecessor anchor/journal.
+
+Niezależne review wykryło pomijanie released/orphan leases, orphan host owner
+oraz canonical artifact catalog. Poprawiono także fail-closed walk, walidację
+ścieżek/stagingu i daty katalogu. Nowe regresje wykonują rzeczywiste wygenerowane
+bloki na tymczasowym filesystemie; wykonanie wyłącznie w GHA. Aktualny produkcyjny
+preview przeszedł: plan SHA-256
+`d94a5fcbacdbbc5f96cc91d310e38044a65bee1c9595defd24e85f4891437f60`.
+Nie wykonano jeszcze apply ani nowego Compute. Runtime recovery pozostaje
+NOT VERIFIED do wykonania procedury i świeżego startu aplikacji.
+
+Pełny hosted planner `40935795721` wykonał 596 testów: 583 PASS, 13 FAIL.
+Poprawiony XY/Gamma fixture już PASS. Jedenaście błędów antenna/spin ma poprawki
+w pobranym masterze; nie przepisujemy ich równolegle. Dwa nasze fixture'y FEM
+preparation nie zadawały wymaganych wyjść widmowych — poprawiono źródła testów,
+zachowując produkcyjne guardy i obsługę FemEigen/FemFrequencyResponse.
+Nowe wykonanie CI i scalenie nowszego mastera pozostają konieczne.
+
+
+### Wynik zastosowania recovery
+
+Hosted workflow [40938573256](https://github.com/MateuszZelent/fullmag/actions/runs/40938573256)
+przeszedł, w tym nowe behawioralne regresje wygenerowanych bloków probe'a.
+Zastosowano dokładny plan d94a5f… po ponownej walidacji. Operator zakończony
+kodem 0: backend b26f… exited=0, OOM=false; oryginalny helper zwolnił lease,
+oryginalne rekordy są zachowane. Stan `stopped-awaiting-fresh-archive`,
+restart policy `fresh-state-only`: to potwierdzenie drain i zamknięcia lease,
+jeszcze nie potwierdzenie ponownie działającego API lub obliczeń.
+Publiczne, zredagowane dowody: [recovery evidence](2026-10-29-eigensolve-cancel-before-start-recovery.evidence.json).
+
+Pobrano master 9f70be04f8e60a55c5c321d26c2e2fde41798d4c i połączono
+z dotychczasowym checkpointem 5a17e1925. Jedyny konflikt fixture browser QA
+rozwiązano przez kanoniczny `metadata_cache_key` i metadane next.config.mjs
+z upstream, zachowując asercje owned labels. Pozostałe 14 chronionych plików
+pozostało identyczne; source-map przeszła statyczny validator. Finalne review,
+commit merge, hosted CI i świeża aplikacja następują po tym checkpointcie.
+
+
+## Aktualny checkpoint — 30.10.2026
+
+Master `9f70be04` scalono jako `aa81ac433`; gałąź wypchnięta. Hosted CI:
+planer `40952201408` PASS na `95787aeb8`, API/browser smoke `40943644955`
+i pełne kontrakty UI `40944251371` PASS na `aa81ac433`. Natywne źródła FEM
+nie zmieniły się w tym merge; wcześniejsze trzy natywne bramki pozostają
+oddzielnymi, datowanymi dowodami. Nie oznacza to merge PR do mastera.
+
+**Nowy realny wynik Gamma:** run
+`run-live-2e29c2a17581f8ddd1fc635be30747ff7baa955886790cd5b5d13be1e2239f48`,
+snapshot `641e1aabf7063b1497e9d2ef90447c7a2abf4ffb779b0145fc0b2383aeb54664`,
+CPU Schur/SLEPc, k=(0,0,0), f=9,299249697 GHz,
+residual względny L2=2,734737633559983e-13 < 1e-8. Zapisano jeden wybrany mod,
+`selected_only`, nearest 10 GHz. Dataset ma jeden sample/item; metadata pola
+zespolonego są `ready`, `member_verified_owner_bound`, 1709×3×2 f64.
+To dowód punktu numerycznego i publikacji metadanych, nie kompletności okna,
+sprawdzenia binarnego pola w przeglądarce ani kwalifikacji całego solvera.
+
+Dla tej samej jednorodnej geometrii i skończonego airboxu Dirichleta
+Nz=1−10nm/4010nm=0,9975062344139651; analityka daje 9,299249697068401 GHz,
+różnica względna 7,1583e-14. Wartość otwartego filmu 9,309813711 GHz odnosi
+się do innych warunków brzegowych. Porównania nie należy używać jako dowodu
+zbieżności ani zgodności z COMSOL A1. Surowe manifesty/item/spectrum/fieldmeta
+oraz `gamma-point-evidence.json` zachowano w zewnętrznym checkpointcie.
+
+R6 na tym źródle: pierwsza operacja panelu PASS; podczas drugiej solver
+zakończył obliczenia, więc pełne 14/14 pozostaje otwarte. Starsze dowody
+R6 nie zostały usunięte. Browser pokazał model i zakończone etapy, lecz okno
+przygotowania utknęło na Connecting; nowego renderu pola Gamma jeszcze
+nie zakwalifikowano.
+
+Po restarcie Dockera oba kontenery miały exit255. Przypięte resume
+`0c104244153c4c4e82c1b2634324eea2` poprawnie zbudowało aplikację `95787aeb8`
+(Make 185090ms), ale odmówiło podpięcia starego właściciela native z innego
+buildu. Istniejące `stop-bootstrap-volume` uwierzytelniło dokładny przypadek
+pre-owner, zatrzymało wyłącznie diagnostyczne API i zachowało OWNER, lease,
+store oraz wyniki. Następny start wymaga zarządzanego odtworzenia z archiwum;
+nie usunięto danych i nie ponowiono Solve.
+
+Naprawa `0fb7cf913` dodaje osobny typ dla rzeczywistego `eigen_diagnostics.v2`,
+który wcześniejszy reader błędnie traktował jako generyczny modal solver
+schema i odrzucał HTTP500. Zachowano historyczne schematy, owner/generation
+fence i dodano regresję. CI `41037878320` jest w toku; status runtime poprawki
+pozostaje NOT VERIFIED. Otwarte są także reset starych field carriers przy
+nowej aktywnej preparacji oraz terminalny fallback okna przygotowania.
+
+Pozostały pełny signed15 z Gamma i oknem 8,5–16 GHz, odbiór UI/R6,
+kompletność i zbieżność, serial/adaptive, COMSOL A1 ≤0,5%, semantyczne
+disposition I1, merge PR oraz bezpieczny cleanup. Celu nie zamknięto.
+
+
+Uzupełnienie checkpointu: CI `41037878320` zakończyło wszystkie trzy joby PASS;
+log potwierdza faktyczne wykonanie nowej regresji schematu, nie zerowy filtr.
+Cztery generowane źródła API skopiowano z artefaktu `12968064481` po kontroli
+`source-commit.txt=0fb7cf913`; zmieniły się tylko JSON i typy TS.
+
+Zaimplementowano reset przejściowych field carriers/cache/bundles/live preview
+oraz coupled checkpoint wyłącznie przy przyjętej zmianie preparation_id.
+Nowy payload jest stosowany po resecie; starsza rewizja i replay tej samej
+preparacji nie kasują nowszych danych. TerminalObservation nadal korzysta ze
+zwykłego publikatora. Dodano regresje obu modalnych planów, replayu, starszej
+rewizji, nowych fields/checkpoint i zachowania terminalnych danych.
+Osobna korekta modelu UI zwalnia fallback Connecting przy gotowym odczycie
+null i terminalnym solverze; loading/stale, brak zasobu, nowa aktywacja i
+faktyczny running preparation pozostają widoczne. Surowej odpowiedzi
+preparation poprzedni browser probe nie zachował, więc przyczynę tego
+konkretnego ekranu trzeba jeszcze potwierdzić po nowym starcie.
+Obie poprawki mają parser/diff PASS; nowe testy hosted i runtime są otwarte.
+
+
+## Runtime i GUI po poprawkach — 30.10.2026
+
+Build `89bbdf499`, snapshot `569e347ed2be6da535fc7e68ac3e18c0918646d96fabaaeea707985f5167200d`,
+start DEV `c628b5470ea84f1fb34a9f9a281e9674` succeeded. Gamma ponowiono:
+`run-live-30e4b1695d3e88a7fccf98afb628125f58b58556b8a2520d3e6a59fec7ffdd85`.
+Częstotliwość 9,299249697 GHz i residual 2,7347e-13 są identyczne z poprzednim
+wynikiem. Nowy typed diagnostics reader zwraca HTTP200. Brak abs/Linf jest
+jawnie raportowany jako partial, bez wymyślania metryk.
+
+Przeglądarka: rzeczywisty mod Gamma wybrany z Resonance & FMR, 5127 wartości
+zespolonych, surface film_geom, poprawny owner i quantity. Fit mode obejmuje
+sam ferromagnetyk. WebGL 888×573, contextLost=false; zmiana fazy i palety
+zmienia obrazy canvas. Brak page errors i niedozwolonych mutacji. SwiftShader
+nie jest dowodem sprzętowego GPU. Cold frontend kompilował /workspace 49s;
+po rozgrzaniu odpowiadał 141–198ms. Automatyzacja została dostosowana do
+pojedynczego Gamma w rodzinie Resonance & FMR, zamiast błędnie wymagać
+wielopunktowej rodziny k-resolved. Nie zmieniano w tym celu UI produkcyjnego.
+
+Zapisano solved FMS `de-gamma-89bbdf499-20261030.fms` (3402395B), SHA256
+`7c93f43df7f7416d62b5866affc7fe1e5b0ef8815af3bf83f9450fda55de4b34`,
+w zewnętrznym `final-integration-20261030`. Wynik nie zależy już od bieżącej
+sesji do zachowania danych. Screenshot i pełny browser JSON są obok.
+
+UI CI `41040360146` PASS. API CI `41040357851` wykryło błąd nowego fixture'u:
+request z nowym m nie miał zaakceptowanej obserwacji fizycznej. Produkcyjna
+bramka odrzuciła go poprawnie. Dodano fizyczny ScalarRow step0 zgodny z m;
+nie zmieniono guardu ani produkcyjnego algorytmu. Powtórzenie CI jest wymagane.
+
+Signed15 z oryginalnym oknem 8,5–16GHz i wszystkimi piętnastoma ±k/Gamma
+uruchomiono jako `run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e`,
+activation `57c502343b5e4df38609030026e87bcf`; potwierdzono running/is_busy=true.
+Obserwator R6 pracuje na tym samym run ID. Jego pełny odbiór oraz wynik
+signed sweepa wymagają oddzielnego końcowego sprawdzenia; nie deklarujemy PASS.
+
+
+### Wynik signed15 i dalsza diagnoza
+
+Signed15 zakończył się failed; worker native exit1: sparse CSR multi-shift,
+`floquet_slepc_solve_failed`, `subwindow_failed`, zero zaakceptowanych modów,
+tangent_dof_count656. To oryginalny natywny błąd solve, nie Stop/cancel.
+R6 zdążył zakwalifikować 10/14 operacji: przed i po każdej ten sam run,
+running/is_busy=true. Operacja edge-dock Inspectora zakończyła się po błędzie
+solvera, dlatego nie jest zaliczona. Browser errors=0, blocked mutations=0;
+nie wysłano poleceń numerycznych. Pełne R6 pozostaje INCOMPLETE.
+Nowy szczegółowy JSON `2026-10-30-r6-signed15-native-failure.evidence.json`
+zachowuje obserwacje; starszych dowodów R6 nie nadpisano.
+
+D1 sidecar powstał, ale utracił niższe dane: producent C++ zapisuje
+subwindows[].status=solve_error, podczas gdy projekcja rozpoznawała tylko
+failed/diagnostics_truncated. Dodano ten rzeczywisty status oraz bounded
+scalar projection EPS/KSP i shifted_ksp_failure_probe, bez wektorów i bez
+zmiany tolerancji. Wymaga nowego CI i repro; dokładna przyczyna SLEPc
+pozostaje nierozpoznana do czasu odczytu tych danych.
+
+Źródłowy trace wykluczył hipotezę, że rtol1e-7 z fem_demag_solver steruje
+dynamicznym matvec Floqueta. Ten operator ma osobny Poisson PREONLY/LU
+z konfigurowanym rtol1e-11 dla outertol1e-8; runtime PETSc defaults nie były
+odczytane. Nie zmieniono ani tej polityki, ani kryterium pełnego residualu.
+Drugi CI fixture incoming m przeszedł źródło obserwacji, lecz wykazał brak
+FEM topology. Fixture dostał rzeczywisty czterowęzłowy tet i cztery zgodne
+wektory m. Produkcyjne guardy topologii i obserwacji pozostają zachowane.
+
+
+### Rozdzielenie miejsca Ubuntu i Docker Desktop
+
+Pomiar live z tego samego backendu: /build jest nazwanym wolumenem Docker,
+filesystem /dev/sde, 169 GiB wolnego. /state jest bind mountem filesystemu
+Ubuntu /dev/sdd, 2,7 GiB wolnego. Windows C: ma około 29 GiB.
+Próg 32 GiB w docker_build_control.py jest mierzony przez df -Pk /control
+wewnątrz Docker VM; nie dotyczy wolnego miejsca pod / w Ubuntu.
+Wcześniejsza prośba o dodatkowe 30 GiB w Ubuntu przed buildem była oparta
+na niewłaściwym filesystemie. Bieżący pomiar spełnia tę bramkę Docker.
+Sesje i wyniki nadal wymagają miejsca w Ubuntu, ponieważ /state jest bind
+mountem. Nie wykonywano sprzątania, migracji danych ani restartów.
+
+
+## Checkpoint c593 — CI, kontrolowany restart i niższa diagnostyka
+
+API workflow `41047805119`: wszystkie trzy joby PASS. Log joba124036108832
+potwierdza wykonanie incoming-fields FEM fixture, trzech nowych testów
+publikacji active preparation oraz nowej regresji Floquet solve_error.
+Zarządzany restart/drain `6bb163a8a13d4eb69907aa48211ce7f4` succeeded;
+runtime-provenance commit=c593135c08c7007a3c723ad0cfbb977a36a452e8,
+snapshot=8f35e240d0b7bd2453f2fdbc52bd4f962e08498beb51783676135ac793f95f69.
+Oryginalny signed15 uruchomiono ponownie, bez zmian fizyki/okna/tolerancji:
+activation=f9c82543e9d24424a89b01341f56ed33,
+run=run-live-6ff6193599f29731ecedf3b246ab9d58c8982fc72e79e674d644dbe2a07d5f49.
+
+Błąd native ponownie EPS91 / floquet_slepc_solve_failed. Tym razem sidecar
+3821B zachował first_failed_subwindow i pełne bounded skalary probe.
+Callback253/iter30: residual rekurencyjny1,50016e-38, niezależnie mierzony
+3,54756e-13, rhs1,01214e-13, próg1,01214e-24 (rtol1e-11).
+To pomiar wewnętrznego shifted KSP, nie residual fizycznego deskryptora.
+Trwa sprawdzenie poprawności pomiaru i powtarzalności operatora; nie
+zmieniono kryterium akceptacji. Sidecar SHA256
+7498e4ad1b8c819a2c159cd57ca98313e345e2a0dc7a3e9dc7fd794ea0cf9266.
+
+R6 tego runu nie zostało wykonane. Pierwszy browser goto wyczerpał60s,
+frontend następnie potwierdził /workspace200 po62s zimnej kompilacji.
+Drugi obserwator przyjął za baseline już nowy run waiting_for_compute,
+lecz stary warunek wymagał innego run ID. Naprawiono wyłącznie verifier:
+jawny oczekiwany run ID, dłuższy cold load i fail-fast po terminalnym runie.
+Nie ponowiono z tego powodu solvera. Starsze10/14 z89bb pozostaje dowodem
+historycznym; pełne R6 nadal otwarte.
+
+Review I1 providera tracking ma osobny raport2026-10-30 i wpis w inventory.
+Odpowiedniki P1/C ABI/admission istnieją w źródle; nie kopiowano ich drugi raz
+ani nie oznaczono wszystkich388 historycznych commitów jako przejrzanych.
+
+
+### Operator replay — stan instrumentacji
+
+Inspekcja dokładnego commitu PETSc1467453 nie wykazała stale-iterate ani
+błędu kolejności w callbacku. Braku runtime flag skalowania/nullspace nie
+przekształcono w dowód ich stanu. Source MatShell jest stałym sparse Schurem
+z PREONLY/LU i stałą rotacją; runtime repeatability pozostaje do zmierzenia.
+Obecny C1 ma dwa guardy q/phi<=512, więc nie obejmuje q_split1312 naszego
+przypadku. Limit małego exact Schura jest osobny i pozostaje zachowany.
+Managed DEV ma zamkniętą allowlistę env: istniejące flagi Floquet diagnostyki
+nie są do niej podłączone. To kolejna konkretna luka do usunięcia, nie powód
+uruchamiania ręcznego solvera ani zmniejszania przypadku.
+
+D1 rozszerzono źródłowo o ograniczone scalars candidate_operator_diagnostic:
+Poisson residual, production/isolated replay, repeatability/additivity,
+status i availability. Bez pól/macierzowych payloadów i bez kopiowania
+nieznanych obiektów; limit64KiB pozostaje. Regresję filtracji rozszerzono;
+nowe hosted CI jest wymagane. Tej zmiany jeszcze nie ma w runtimec593.
+
+
+Review planowanego sparse C1 odrzucił pierwszy draft przed zastosowaniem:
+warunek dodatniego MatInfo.memory był błędnym założeniem kontraktu root.
+[Dokładny PETSc1467453](https://github.com/petsc/petsc/blob/1467453aedb62826efc970ceafc4bd6dab8229ab/src/mat/impls/aij/seq/aij.c#L1985)
+w MatGetInfo_SeqAIJ ustawia ten parametr na zero. Draft pozostaje poza repo;
+kontrakt skorygowano na jawne CPU SeqAIJ allocated-storage estimates oraz
+ponowną estymację po prywatnym setupie, z tym samym cap64MiB. Brak actual
+memory ma pozostać null; estimate nie może udawać pomiaru RSS ani gwarancji
+fill-in. Ta korekta nie zmienia fizyki lub progu residualu. Workflow41053623397
+na64f8dcb9b zakończył się pełnym PASS wszystkich trzech jobów; sparse C1 i
+managed flag route nadal są odrębną pracą w toku.
+
+
+Managed profil Floqueta jest teraz zaimplementowany źródłowo w launcherze,
+receptach i walidatorach: optional strict flags plus explicit recreate profile,
+stare piny przed derywacją następcy, persisted selection z old/new SHA,
+wznowienia bez ambient env. Nowe testy obejmują stare SHA, błędne i podwójne
+sterowania, Compose, niezmienność pozostałego env i odtwarzanie intentu.
+Review produkcyjnego flow oraz AST/diff PASS; testy wyłącznie GitHub Actions,
+nowy managed runtime jeszcze NOT VERIFIED. Native sparse C1 nadal poza repo.
+
+
+## Sparse C1 — implementacja po review, przed CI/runtime
+
+Zastosowano skorygowany sparse_replay dla q/phi>512, bez zmiany limitu
+produkcyjnego exact Schura512, równań i gate1e-8. Admission używa jawnego
+SeqAIJ allocated-storage estimate z cap64MiB oraz ponownej estymaty po setupie;
+actual memory pozostaje null. Szczegółowy kontrakt i pinned źródła są
+w2026-10-30-eigensolve-sparse-c1-memory-contract.md. Default opt-out i full_small
+zachowano. Test >512 porównuje akceptację/wynik bez diagnostyki i z nią.
+
+Niezależny review wyłapał dwa brakujące closingquotes w producer JSON;
+naprawiono je i dodano boundary assertions do istniejącego rzeczywistego
+C ABI hard-ksp-nearest. Root wykrył też własny błąd D1: candidate znajduje się
+pod last_true_probe, nie na root shifted_ksp_failure_probe. Consumer i fixture
+przeniesiono do dokładnej ścieżki producenta, bez fallbacku. Review końcowy
+nie zgłosił pozostałych blockerów. Parser/diff PASS, kompilacja/native tests
+pozostają wymagane w CI; nowy kod nie jest jeszcze running runtime.
+
+Bootstrap b595 job124069044243 odrzucił dwa stare fixture'y admission cache.
+Commit e6a58cc7b celowo wymaga cold pull przed konstrukcją BuildControl,
+który używa helpera; fixture oczekiwał starej kolejności. Drugi patchował
+instancję, choć static guard czyta backing przez klasę. Poprawiono wyłącznie
+fixture i forwarding mocka. Produkcyjny Windows physical32GiB guard przed
+cold pull i osobny Docker VM32GiB guard pozostają bez zmian. Ponowne CI
+musi dojść także do nowych managed-profile kontraktów.
+
+
+## CI checkpointu 4c8bfa91a — trzy przyczyny, poprawki testów
+
+GitHub Actions 41061956575: kontrakt generowany PASS, dwa zadania Rust
+nie skompilowały testów przez głębokość jednego zagnieżdżonego json! w
+fixture D1. Ten sam błąd wystąpił w bootstrap 41061943931 na Linux i Windows.
+Fixture rozdzielono na trzy mniejsze wywołania makra; payload, rzeczywista
+ścieżka last_true_probe, asercje redakcji i limit rekurencji crate pozostają.
+To poprawka kompilacji testu, bez zmiany produkcyjnego readera.
+
+Python bootstrap wykazał, że mock klasy nie udostępnia domyślnie atrybutów
+rozpoczynających się od assert_. Konstruktor ma teraz autospec rzeczywistego
+BuildControl; zachowano przekazanie guardu do rejestratora zdarzeń oraz
+asercje przed pull/construct/prepare. Produkcyjne progi miejsca bez zmian.
+
+Trzy awarie FooterTelemetry to drift fixture/oczekiwań: okno HTTP zastąpiono
+pełnym, typowanym ScalarWindowResource z rows i current_observation. Kontrakt
+API wymaga rows; nie dodano opcjonalnego fallbacku do produkcyjnego resolvera.
+Testy starego scope WebSocket oczekują bieżącego formatu 6 miejsc i sprawdzają
+źródło Scalar history resource, nadal odrzucając stare epoch/revision.
+Root przejrzał diff wszystkich trzech plików; rustfmt parser, Python AST i
+diff-check PASS. Lokalnie nie uruchomiono żadnych unit tests. Poprawki
+wymagają kolejnego hosted bootstrap/API CI. Natywna kontrola C1/SLEPc
+41061935465 pozostaje w toku; nie jest zastąpiona przez te korekty fixture.
+
+
+Native CI 41061935465 zakończyło się przed CTest: nowy test SeqAIJ wywołuje
+bezpośrednio PETSc, lecz jego executable nie linkował PETSC::petsc. Linker
+zgłosił undefined reference MatAssemblyBegin / DSO missing from command line.
+Dodano jawne PETSC::petsc i MPI::MPI_CXX wyłącznie temu targetowi, w istniejącym
+warunku MFEM+SLEPc, tak jak sąsiedni test callbacku zbieżności. Nie zmieniono
+linkowania produkcji ani profilu no-stack. Native-build-and-ctest.log nie
+zawiera startu żadnego CTest; nie jest to dowód PASS/FAIL samych asercji.
+Pełny profil Floquet/SLEPc wymaga ponowienia po tej korekcie.
+
+
+## Follow-up hosted CI b8f47197f
+
+API workflow 41066670891 PASS. Bootstrap 41066669378 dotarł dalej po
+naprawie cache-admission i ujawnił niepełny fixture abrupt Windows bind.
+Korekta dotyczy routingu: cztery ścieżki z literą dysku oraz bare host-prefix
+muszą wywołać exact physical-proof gate i odrzucić unresolved; dwa // muszą
+być unsafe przed proof. Nie zmieniono produkcyjnego recovery. Niezależny
+review potwierdził fail-closed oraz istniejące testy present Windows proof;
+brak osobnych testów absent-stopped validatora zapisano jako otwarte
+zastrzeżenie tej odrębnej ścieżki, bez twierdzenia o jej kwalifikacji.
+
+Trzy asercje UI miały jeszcze starą etykietę źródła. Aktualna selekcja
+zaakceptowanego HTTP sample publikuje Accepted scalar observation;
+skorygowano tylko etykiety, zachowując wartości, scope fencing i asercję
+źródła. Python AST/diff-check PASS; pełny bootstrap wymaga hosted recheck.
+Natywny profil po korekcie linkowania jest uruchomiony jako 41068131113
+na 84197c1b3 i pozostaje NOT VERIFIED do odczytu wyników CTest.

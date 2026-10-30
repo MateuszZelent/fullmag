@@ -2,11 +2,17 @@ name: eigensolve-api-source-contracts
 
 on:
   workflow_dispatch:
+    inputs:
+      generated_only:
+        description: "Generate the complete API source artifact; reuse unchanged backend test evidence"
+        type: boolean
+        default: false
 permissions:
   contents: read
 
 jobs:
   physical-field-source-contracts:
+    if: ${{ !inputs.generated_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -19,8 +25,38 @@ jobs:
         run: git rev-parse HEAD
       - name: Run complete FMS and typed session document contracts
         run: cargo test --locked -p fullmag-session --lib --no-fail-fast
+      - name: Preserve accepted modal archive projection and cold import contracts
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-api --bin fullmag-api session_persistence::accepted_modal::tests -- --nocapture | tee "$RUNNER_TEMP/accepted-modal-archive.log"
+          grep -F "selects_and_publishes_exact_nonempty_complex_bundle ... ok" "$RUNNER_TEMP/accepted-modal-archive.log"
+          grep -F "rejects_missing_zarr_chunk_even_when_new_digest_and_commit_match ... ok" "$RUNNER_TEMP/accepted-modal-archive.log"
+          grep -F "rejects_unowned_stale_ambiguous_and_corrupt_bundles ... ok" "$RUNNER_TEMP/accepted-modal-archive.log"
+          cargo test --locked -p fullmag-api --bin fullmag-api session_persistence::accepted_fms_persistence_tests -- --nocapture | tee "$RUNNER_TEMP/accepted-modal-roundtrip.log"
+          grep -F "accepted_solved_modal_archive_reopens_without_original_store ... ok" "$RUNNER_TEMP/accepted-modal-roundtrip.log"
+          grep -F "archived_metadata_revision_requires_exact_versioned_physical_binding ... ok" "$RUNNER_TEMP/accepted-modal-roundtrip.log"
+          grep -F "binary_upload_started_empty_preserves_newer_workspace ... ok" "$RUNNER_TEMP/accepted-modal-roundtrip.log"
+          grep -F "accepted_fms_export_inspect_readonly_import_and_tamper_rejection ... ok" "$RUNNER_TEMP/accepted-modal-roundtrip.log"
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_modal_publication::tests -- --nocapture
+      - name: Preserve bounded binary archive intake and cancellation cleanup
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-api --bin fullmag-api session_persistence::file_transport::tests -- --nocapture | tee "$RUNNER_TEMP/fms-file-intake.log"
+          grep -F "exact_limit_preserves_file_bytes_and_leaves_no_named_upload ... ok" "$RUNNER_TEMP/fms-file-intake.log"
+          grep -F "stream_error_and_timeout_leave_no_named_upload ... ok" "$RUNNER_TEMP/fms-file-intake.log"
       - name: Run session ownership and physical field contracts
         run: cargo test --locked -p fullmag-api --bin fullmag-api session::tests --no-fail-fast
+      - name: Preserve active preparation reset and terminal field ownership
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-api --bin fullmag-api live_scene_preparation::tests::new_modal_and_frequency_preparation_clears_prior_fields_before_noop_initial_publish -- --exact
+          cargo test --locked -p fullmag-api --bin fullmag-api live_scene_preparation::tests::active_preparation_replay_keeps_new_solve_fields_and_cache -- --exact
+          cargo test --locked -p fullmag-api --bin fullmag-api live_scene_preparation::tests::terminal_observation_publication_preserves_accepted_fields_cache_and_checkpoint -- --exact
+      - name: Preserve native Floquet failure diagnostic projection
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_worker::native_failure_diagnostic::tests -- --nocapture | tee "$RUNNER_TEMP/native-failure-projection.log"
+          grep -F "floquet_solve_error_preserves_bounded_shifted_ksp_diagnostics ... ok" "$RUNNER_TEMP/native-failure-projection.log"
       - name: Preserve dataset source paths and byte revisions
         run: |
           set -o pipefail
@@ -34,12 +70,19 @@ jobs:
           cargo test --locked -p fullmag-runner --lib artifact_generation::tests -- --nocapture
           cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::analysis::frequency_domain::spectrum_residual_tests::artifact_generation_status_uses_explicit_wire_values -- --exact | tee "$RUNNER_TEMP/artifact-generation-status.log"
           grep -F "artifact_generation_status_uses_explicit_wire_values ... ok" "$RUNNER_TEMP/artifact-generation-status.log"
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::analysis::frequency_domain::eigen_diagnostics_schema_tests::eigen_diagnostics_v2_uses_its_own_contract_and_preserves_legacy_schemas -- --exact
           cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::analysis::results::generation_snapshot_tests -- --nocapture | tee "$RUNNER_TEMP/artifact-generations.log"
           grep -F "committed_field_reader_returns_only_digest_verified_generation_bytes ... ok" "$RUNNER_TEMP/artifact-generations.log"
           grep -F "legacy_capture_fence_rejects_a_new_publication ... ok" "$RUNNER_TEMP/artifact-generations.log"
           grep -F "spectrum_v3_projection_field_link_is_bound_to_the_captured_binary_generation ... ok" "$RUNNER_TEMP/artifact-generations.log"
           cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::data::fields::tests::analysis_artifact_generation_precondition_requires_metadata_binding -- --exact
           cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::data::fields::tests::artifact_generation_header_is_emitted_only_for_a_verified_member -- --exact
+      - name: Keep imported modal archives separate from managed observation sources
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::tests::v2_imported_modal_observation_discovery_preserves_source_boundary -- --exact | tee "$RUNNER_TEMP/imported-observation.log"
+          grep -F "v2_imported_modal_observation_discovery_preserves_source_boundary ... ok" "$RUNNER_TEMP/imported-observation.log"
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::tests::v2_live_observation_discovery_still_requires_managed_store -- --exact
       - name: Run older callback magnetization publication contract
         run: cargo test --locked -p fullmag-api --bin fullmag-api router_v2::tests::v2_older_runtime_m_frame_preserves_newer_selected_source_and_bundle -- --exact
       - name: Run physical row and bundle consistency contract
@@ -50,6 +93,7 @@ jobs:
           grep -F "test router_v2::tests::v2_progress_keeps_live_magnetization_at_its_original_observation_step ... ok" "$RUNNER_TEMP/field-freshness.log"
 
   postprocessing-revision-contracts:
+    if: ${{ !inputs.generated_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -97,6 +141,22 @@ jobs:
         run: >-
           python -B scripts/fullmag_storage.py run --profile linux-host --
           pnpm --dir apps/control-room generate:api
+      - name: Validate binary file import schema and required restore policy
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+          contract = json.loads(Path("apps/control-room/src/kernel/api/generated/openapi-v2.json").read_text())
+          for path in ("/v2/persistence/imports/file-inspections", "/v2/sessions/current/persistence/file-imports"):
+              operation = contract["paths"][path]["post"]
+              assert operation["requestBody"]["required"]
+              schema = operation["requestBody"]["content"]["application/octet-stream"]["schema"]
+              if "$ref" in schema:
+                  schema = contract["components"]["schemas"][schema["$ref"].split("/")[-1]]
+              assert schema["type"] == "string" and schema["format"] == "binary"
+              assert "items" not in schema
+          parameters = contract["paths"]["/v2/sessions/current/persistence/file-imports"]["post"]["parameters"]
+          assert any(parameter.get("name") == "restore_mode" and parameter.get("required") for parameter in parameters)
       - name: Preserve generated contract and source identity
         run: git rev-parse HEAD > apps/control-room/src/kernel/api/generated/source-commit.txt
       - uses: actions/upload-artifact@v7
@@ -106,5 +166,6 @@ jobs:
             apps/control-room/src/kernel/api/generated/openapi-v2.json
             apps/control-room/src/kernel/api/generated/openapi-v2-types.ts
             apps/control-room/src/kernel/api/generated/openapi-v2-client.ts
+            apps/control-room/src/kernel/api/generated/openapi-v2-paths.ts
             apps/control-room/src/kernel/api/generated/source-commit.txt
           if-no-files-found: error

@@ -18,6 +18,7 @@
 //!
 //! Entry point for higher-level code: `fem::relax::execute_fem_relax(engine, plan, …)`.
 
+pub(crate) mod pbc;
 pub(crate) mod eigen_anisotropy;
 pub(crate) mod eigen_capability;
 pub(crate) mod eigen_certificate;

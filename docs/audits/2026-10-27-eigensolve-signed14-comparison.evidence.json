@@ -1,0 +1,49 @@
+{
+  "run_id": "run-live-78af971e5683452fdac585a84f99efc0496abce914a05474c3b4e270fb267279",
+  "scope": "raw certified checkpoints; accepted publication failed",
+  "checkpoint_evidence_sha256": "080e8e86f78a599916173e7cb2b0b21c7d2d5081cb8e32a6ea921c2f9c5c2c9f",
+  "historical_csv_sha256": "9561fed8d0c7812b78fc97a713f509c52d52f2fda9635c149ffa1fddc974adbf",
+  "sample_count": 14,
+  "max_abs_historical_percent": 0.058912602588656604,
+  "max_abs_open_air_1d_percent": 0.5936288121140554,
+  "reciprocity_pairs": [
+    {
+      "abs_k_rad_per_um": 2.0,
+      "positive_minus_negative_hz": 39575.1468296051,
+      "relative_pair_percent": 0.00040698193137961763
+    },
+    {
+      "abs_k_rad_per_um": 5.0,
+      "positive_minus_negative_hz": 150038.33654212952,
+      "relative_pair_percent": 0.0014552308983765128
+    },
+    {
+      "abs_k_rad_per_um": 7.0,
+      "positive_minus_negative_hz": 107072.18895149231,
+      "relative_pair_percent": 0.0010024454100221966
+    },
+    {
+      "abs_k_rad_per_um": 10.0,
+      "positive_minus_negative_hz": 36857.92702293396,
+      "relative_pair_percent": 0.00032874028036795064
+    },
+    {
+      "abs_k_rad_per_um": 15.0,
+      "positive_minus_negative_hz": 25277.563791275024,
+      "relative_pair_percent": 0.000209923821289424
+    },
+    {
+      "abs_k_rad_per_um": 20.0,
+      "positive_minus_negative_hz": 67205.60843658447,
+      "relative_pair_percent": 0.0005242587880236421
+    },
+    {
+      "abs_k_rad_per_um": 25.0,
+      "positive_minus_negative_hz": 148952.41819763184,
+      "relative_pair_percent": 0.0010984011592638677
+    }
+  ],
+  "mesh_convergence": "NOT VERIFIED",
+  "comsol_A1": "NOT VERIFIED",
+  "gamma": "NOT RUN"
+}

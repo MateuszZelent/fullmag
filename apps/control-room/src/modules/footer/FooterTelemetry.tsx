@@ -95,6 +95,9 @@ export function FooterTelemetry({
   stageExecution: Pick<ResourceResult<StageExecutionResource | null>, "data" | "status">;
   view: "overview" | "antenna";
 }) {
+  const viewingResults = useSelectionSelector(selection => selection.kind?.startsWith("results.") ?? false);
+  const [metricsExpanded, setMetricsExpanded] = useState(false);
+  const showMetrics = !viewingResults || metricsExpanded;
   const solverStatus = useSolverStatusResource({ enabled: Boolean(status) && view === "overview" });
   const solverStatusForRun = resolveFooterSolverStatus(status, solverStatus.data);
   const antennaStage = resolveFooterAntennaStage(status, stageExecution.data);
@@ -225,7 +228,10 @@ export function FooterTelemetry({
         ) : null}
       </div>
 
-      <div className="fm-footer-telemetry__metrics"><div className="fm-footer-telemetry__metrics-grid" aria-label="Runtime metrics">
+      {viewingResults ? <button type="button" className="fm-footer-telemetry__details-toggle" aria-expanded={showMetrics} onClick={() => setMetricsExpanded(value => !value)}>
+        {showMetrics ? "Hide runtime details" : "Show runtime details"}
+      </button> : null}
+      <div hidden={!showMetrics} className="fm-footer-telemetry__metrics"><div className="fm-footer-telemetry__metrics-grid" aria-label="Runtime metrics">
         {telemetry.metrics.map((metric) => (
           <TelemetryMetric key={metric.id} group={metricGroup(metric.id)} {...metric} />
         ))}

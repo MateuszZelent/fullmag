@@ -421,8 +421,20 @@ struct FloquetShiftedKspFailureProbe {
         bool requested = false;
         bool workspace_available = false;
         bool sample_available = false;
+        const char *diagnostic_mode = "full_small";
         const char *status = "disabled";
         const char *reason = "";
+        bool sparse_workspace_budget_bytes_available = false;
+        std::uint64_t sparse_workspace_budget_bytes = 0;
+        bool sparse_workspace_estimated_bytes_available = false;
+        std::uint64_t sparse_workspace_estimated_bytes = 0;
+        bool sparse_workspace_observed_bytes_available = false;
+        std::uint64_t sparse_workspace_observed_bytes = 0;
+        bool sparse_workspace_postsetup_estimated_bytes_available = false;
+        std::uint64_t sparse_workspace_postsetup_estimated_bytes = 0;
+        const char *memory_admission_source = "";
+        const char *memory_admission_status = "not_required";
+        const char *memory_admission_reason = "";
         std::uint64_t callback_ordinal = 0;
         std::int64_t iteration = -1;
         bool production_phi_rhs_norm_available = false;
@@ -447,6 +459,8 @@ struct FloquetShiftedKspFailureProbe {
         bool exact_shifted_matrix_comparison_available = false;
         double exact_shifted_matrix_relative_defect =
             std::numeric_limits<double>::quiet_NaN();
+        const char *exact_shifted_matrix_comparison_reason =
+            "exact_shifted_matrix_comparison_not_started";
         ShiftedLuPolicyComparison shifted_lu_policy_comparison{};
         LivePcObservation live_pc_observation{};
         double preconditioner_normalization_scale =
@@ -892,6 +906,7 @@ struct SLEPcTinyGyrotropicModalEigenResult {
     int outer_iterations = 0;
     int max_outer_iterations = 0;
     int eps_initial_nev = 0;
+    int eps_certified_refill_target = 0;
     int eps_attempt_count = 0;
     int eps_solved_attempt_count = 0;
     int eps_initial_ncv = 0;
@@ -1001,6 +1016,9 @@ struct SLEPcSparseGyrotropicModalEigenRequest {
     CsrMatrixView tangent_mass_csr{};
     const SLEPcTangentMassActionContext *tangent_mass_action_context = nullptr;
     int requested_mode_count = 1;
+    // Optional certified-pool refill goal; zero retains requested_mode_count.
+    // This does not reduce the initial EPS search space or finalizer pool cap.
+    int certified_refill_target = 0;
     double target_frequency_hz = 0.0;
     double frequency_min_hz = 0.0;
     double frequency_max_hz = 0.0;

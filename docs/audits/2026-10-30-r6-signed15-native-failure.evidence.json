@@ -1,0 +1,266 @@
+{
+  "schema": "fullmag.r6.live-docking.v1",
+  "source_sha": "89bbdf499c8a64c9dfd4fa55b707f1782dac55f4",
+  "status": "INCOMPLETE; 10/14 qualified before independent native solve_error",
+  "operations": [
+    {
+      "name": "float diagnostics",
+      "before": {
+        "at": "2026-10-30T10:56:55.215Z",
+        "runId": "run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e",
+        "session": "eigen-mode-ui-de-signed15",
+        "state": "running",
+        "isBusy": true,
+        "running": true
+      },
+      "after": {
+        "at": "2026-10-30T10:56:56.024Z",
+        "runId": "run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e",
+        "session": "eigen-mode-ui-de-signed15",
+        "state": "running",
+        "isBusy": true,
+        "running": true
+      },
+      "qualified": true
+    },
+    {
+      "name": "dock diagnostics",
+      "before": {
+        "at": "2026-10-30T10:56:56.044Z",
+        "runId": "run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e",
+        "session": "eigen-mode-ui-de-signed15",
+        "state": "running",
+        "isBusy": true,
+        "running": true
+      },
+      "after": {
+        "at": "2026-10-30T10:56:56.886Z",
+        "runId": "run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e",
+        "session": "eigen-mode-ui-de-signed15",
+        "state": "running",
+        "isBusy": true,
+        "running": true
+      },
+      "qualified": true
+    },
+    {
+      "name": "float inspector",
+      "before": {
+        "at": "2026-10-30T10:56:56.980Z",
+        "runId": "run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e",
+        "session": "eigen-mode-ui-de-signed15",
+        "state": "running",
+        "isBusy": true,
+        "running": true
+      },
+      "after": {
+        "at": "2026-10-30T10:57:01.681Z",
+        "runId": "run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e",
+        "session": "eigen-mode-ui-de-signed15",
+        "state": "running",
+        "isBusy": true,
+        "running": true
+      },
+      "qualified": true
+    },
+    {
+      "name": "move inspector",
+      "before": {
+        "at": "2026-10-30T10:57:01.772Z",
+        "runId": "run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e",
+        "session": "eigen-mode-ui-de-signed15",
+        "state": "running",
+        "isBusy": true,
+        "running": true
+      },
+      "after": {
+        "at": "2026-10-30T10:57:07.044Z",
+        "runId": "run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e",
+        "session": "eigen-mode-ui-de-signed15",
+        "state": "running",
+        "isBusy": true,
+        "running": true
+      },
+      "detail": {
+        "before": {
+          "x": 1270.953125,
+          "y": 200,
+          "width": 401.046875,
+          "height": 678.59375
+        },
+        "after": {
+          "x": 1240.953125,
+          "y": 220,
+          "width": 401.046875,
+          "height": 678.59375
+        }
+      },
+      "qualified": true
+    },
+    {
+      "name": "resize inspector",
+      "before": {
+        "at": "2026-10-30T10:57:07.072Z",
+        "runId": "run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e",
+        "session": "eigen-mode-ui-de-signed15",
+        "state": "running",
+        "isBusy": true,
+        "running": true
+      },
+      "after": {
+        "at": "2026-10-30T10:57:07.379Z",
+        "runId": "run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e",
+        "session": "eigen-mode-ui-de-signed15",
+        "state": "running",
+        "isBusy": true,
+        "running": true
+      },
+      "detail": {
+        "before": {
+          "x": 1240.953125,
+          "y": 220,
+          "width": 401.046875,
+          "height": 678.59375
+        },
+        "after": {
+          "x": 1240.953125,
+          "y": 220,
+          "width": 376.046875,
+          "height": 653.59375
+        }
+      },
+      "qualified": true
+    },
+    {
+      "name": "maximize inspector",
+      "before": {
+        "at": "2026-10-30T10:57:07.396Z",
+        "runId": "run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e",
+        "session": "eigen-mode-ui-de-signed15",
+        "state": "running",
+        "isBusy": true,
+        "running": true
+      },
+      "after": {
+        "at": "2026-10-30T10:57:07.632Z",
+        "runId": "run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e",
+        "session": "eigen-mode-ui-de-signed15",
+        "state": "running",
+        "isBusy": true,
+        "running": true
+      },
+      "qualified": true
+    },
+    {
+      "name": "restore inspector",
+      "before": {
+        "at": "2026-10-30T10:57:07.653Z",
+        "runId": "run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e",
+        "session": "eigen-mode-ui-de-signed15",
+        "state": "running",
+        "isBusy": true,
+        "running": true
+      },
+      "after": {
+        "at": "2026-10-30T10:57:07.905Z",
+        "runId": "run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e",
+        "session": "eigen-mode-ui-de-signed15",
+        "state": "running",
+        "isBusy": true,
+        "running": true
+      },
+      "qualified": true
+    },
+    {
+      "name": "hide inspector",
+      "before": {
+        "at": "2026-10-30T10:57:07.926Z",
+        "runId": "run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e",
+        "session": "eigen-mode-ui-de-signed15",
+        "state": "running",
+        "isBusy": true,
+        "running": true
+      },
+      "after": {
+        "at": "2026-10-30T10:57:08.376Z",
+        "runId": "run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e",
+        "session": "eigen-mode-ui-de-signed15",
+        "state": "running",
+        "isBusy": true,
+        "running": true
+      },
+      "qualified": true
+    },
+    {
+      "name": "restore hidden inspector",
+      "before": {
+        "at": "2026-10-30T10:57:08.398Z",
+        "runId": "run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e",
+        "session": "eigen-mode-ui-de-signed15",
+        "state": "running",
+        "isBusy": true,
+        "running": true
+      },
+      "after": {
+        "at": "2026-10-30T10:57:08.609Z",
+        "runId": "run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e",
+        "session": "eigen-mode-ui-de-signed15",
+        "state": "running",
+        "isBusy": true,
+        "running": true
+      },
+      "qualified": true
+    },
+    {
+      "name": "dock inspector",
+      "before": {
+        "at": "2026-10-30T10:57:08.628Z",
+        "runId": "run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e",
+        "session": "eigen-mode-ui-de-signed15",
+        "state": "running",
+        "isBusy": true,
+        "running": true
+      },
+      "after": {
+        "at": "2026-10-30T10:57:12.473Z",
+        "runId": "run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e",
+        "session": "eigen-mode-ui-de-signed15",
+        "state": "running",
+        "isBusy": true,
+        "running": true
+      },
+      "qualified": true
+    },
+    {
+      "name": "mouse drag and edge-dock Inspector title",
+      "before": {
+        "at": "2026-10-30T10:57:12.494Z",
+        "runId": "run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e",
+        "session": "eigen-mode-ui-de-signed15",
+        "state": "running",
+        "isBusy": true,
+        "running": true
+      },
+      "after": {
+        "at": "2026-10-30T10:57:29.398Z",
+        "runId": "run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e",
+        "session": "eigen-mode-ui-de-signed15",
+        "state": "failed",
+        "isBusy": false,
+        "running": false
+      },
+      "detail": {
+        "edge": "right",
+        "preview": "right"
+      },
+      "qualified": false
+    }
+  ],
+  "browser_errors": [],
+  "blocked_mutations": [],
+  "solver_run_id": "run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e",
+  "end_reason": "Error: Solver finished or changed during mouse drag and edge-dock Inspector title",
+  "native_failure": "floquet_slepc_solve_failed; subwindow_failed; accepted_modes0",
+  "no_numeric_commands_from_browser": true,
+  "full_r6_pass": false
+}

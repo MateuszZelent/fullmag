@@ -11952,6 +11952,83 @@ fn fem_eigen_bias_field_samples_bind_cpu_and_gpu_execution() {
     }
 }
 
+fn planned_k0_relax_each_eigen_plan_with_demag_policy(
+    demag_solver_policy: Option<fullmag_ir::FemLinearSolverPolicy>,
+) -> fullmag_ir::FemEigenPlanIR {
+    let mut ir = k0_periodic_airbox_fem_eigen_ir();
+    ir.materials[0].damping = 0.0;
+    ir.problem_meta
+        .runtime_metadata
+        .remove("k0_kittel_validation");
+    let fem_hints = ir
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fem.as_mut())
+        .expect("bootstrap eigen fixture must contain FEM hints");
+    fem_hints.demag_solver_policy = demag_solver_policy;
+    let fullmag_ir::StudyIR::Eigenmodes {
+        bias_field_sweep, ..
+    } = &mut ir.study
+    else {
+        unreachable!("fixture must remain an eigenmode study")
+    };
+    *bias_field_sweep = Some(fullmag_ir::BiasFieldSweepIR {
+        samples_a_per_m: vec![[12_500.0, 0.0, 0.0]],
+        equilibrium_policy: fullmag_ir::BiasFieldSweepEquilibriumPolicyIR::RelaxEach,
+        ordering: "declared".to_string(),
+        continuation_seed: fullmag_ir::BiasFieldSweepContinuationSeedIR::InitialState,
+    });
+
+    let planned = plan(&ir).expect("bounded RelaxEach bias sample must plan");
+    let BackendPlanIR::FemEigen(fem_eigen) = planned.backend_plan else {
+        panic!("expected FEM eigen plan")
+    };
+    assert_eq!(fem_eigen.bias_field_samples.len(), 1);
+    fem_eigen
+}
+
+#[test]
+fn fem_eigen_bias_sample_demag_solver_policy_preserves_all_authored_fields() {
+    let policy = fullmag_ir::FemLinearSolverPolicy {
+        solver: "GMRES".to_string(),
+        preconditioner: "JACOBI".to_string(),
+        rtol: 2.5e-7,
+        atol: Some(3.0e-9),
+        max_iterations: 37,
+        print_level: 2,
+    };
+    let fem_eigen = planned_k0_relax_each_eigen_plan_with_demag_policy(Some(policy.clone()));
+
+    assert_eq!(fem_eigen.demag_solver_policy, Some(policy.clone()));
+    assert!(
+        fem_eigen.solver_policy.is_none(),
+        "demag Poisson policy must remain separate from the modal policy"
+    );
+    let encoded = serde_json::to_value(&fem_eigen).expect("FEM eigen plan serializes");
+    assert_eq!(encoded["demag_solver_policy"]["solver"], "GMRES");
+    assert_eq!(encoded["demag_solver_policy"]["preconditioner"], "JACOBI");
+    assert_eq!(encoded["demag_solver_policy"]["rtol"], 2.5e-7);
+    assert_eq!(encoded["demag_solver_policy"]["atol"], 3.0e-9);
+    assert_eq!(encoded["demag_solver_policy"]["max_iterations"], 37);
+    assert_eq!(encoded["demag_solver_policy"]["print_level"], 2);
+}
+
+#[test]
+fn fem_eigen_bias_sample_none_policy_keeps_legacy_serialized_shape() {
+    let fem_eigen = planned_k0_relax_each_eigen_plan_with_demag_policy(None);
+    assert!(fem_eigen.demag_solver_policy.is_none());
+
+    let encoded = serde_json::to_value(&fem_eigen).expect("FEM eigen plan serializes");
+    assert!(
+        encoded.get("demag_solver_policy").is_none(),
+        "None must remain omitted so legacy canonical plan bytes stay unchanged"
+    );
+    let decoded: fullmag_ir::FemEigenPlanIR = serde_json::from_value(encoded)
+        .expect("legacy plan without the optional field deserializes");
+    assert!(decoded.demag_solver_policy.is_none());
+}
+
 fn planned_k0_eigen_execution_resolution(
     requested_device: &str,
     runtime_override: Option<&str>,
@@ -13209,7 +13286,7 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
                     destination_marker: None,
                     marker_a: 10,
                     marker_b: 11,
-                    translation: None,
+                    translation: Some([1.0, 0.0, 0.0]),
                     tolerance: None,
                     axis_hint: None,
                     orientation: None,
@@ -13351,6 +13428,102 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
         assert!(fem.spin_wave_bc.boundary_pair_ids().is_empty());
         assert_eq!(fem.solver_policy.as_ref().unwrap().max_linear_iterations, Some(4));
     } else { panic!("expected FEM eigen all-pairs plan"); }
+
+    let mut signed_k_ir = ir.clone();
+    if let fullmag_ir::StudyIR::Eigenmodes { k_sampling, .. } = &mut signed_k_ir.study {
+        *k_sampling = Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [-1.0e7, 0.0, 0.0],
+        });
+    }
+    plan(&signed_k_ir).expect("signed finite k must remain on the bounded Floquet lane");
+
+    let mut signed_path_ir = ir.clone();
+    if let fullmag_ir::StudyIR::Eigenmodes { k_sampling, .. } = &mut signed_path_ir.study {
+        *k_sampling = Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![
+                fullmag_ir::KPointIR::gamma(),
+                fullmag_ir::KPointIR {
+                    label: Some("signed".to_string()),
+                    k_vector: [-1.0e7, 0.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![1],
+            closed: false,
+        });
+    }
+    plan(&signed_path_ir).expect("all finite signed path points must remain admitted");
+
+    let mut open_axis_ir = ir.clone();
+    if let fullmag_ir::StudyIR::Eigenmodes { k_sampling, .. } = &mut open_axis_ir.study {
+        *k_sampling = Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [1.0e7, 0.0, 1.0e-15],
+        });
+    }
+    let open_axis_error = plan(&open_axis_ir)
+        .expect_err("a nonzero open-axis component at 1e-15 must fail before provider resolution");
+    assert!(open_axis_error.reasons.iter().any(|reason| {
+        reason.contains("floquet_airbox_dynamic_demag_admission")
+            && reason.contains("exactly zero on an open axis")
+    }));
+
+    for (case, translation, expected_prefix, expected_pair, expected_detail) in [
+        (
+            "missing",
+            None,
+            "fem_eigen.floquet_airbox_dynamic_demag_admission",
+            "periodic pair 'x_faces'",
+            "translation is missing",
+        ),
+        (
+            "nan",
+            Some([f64::NAN, 0.0, 0.0]),
+            "fem_eigen.floquet_airbox_dynamic_demag_admission",
+            "periodic pair 'x_faces'",
+            "translation must contain finite values",
+        ),
+        (
+            "zero",
+            Some([0.0, 0.0, 0.0]),
+            "mesh periodic node pair 0 residual",
+            "pair_id 'x_faces'",
+            "exceeds tolerance",
+        ),
+        (
+            "oblique",
+            Some([1.0, 1.0, 0.0]),
+            "mesh periodic node pair 0 residual",
+            "pair_id 'x_faces'",
+            "exceeds tolerance",
+        ),
+        (
+            "wrong_axis",
+            Some([0.0, 1.0, 0.0]),
+            "mesh periodic node pair 0 residual",
+            "pair_id 'x_faces'",
+            "exceeds tolerance",
+        ),
+    ] {
+        let mut invalid_mesh_ir = ir.clone();
+        let mesh = invalid_mesh_ir
+            .geometry_assets
+            .as_mut()
+            .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+            .and_then(|asset| asset.mesh.as_mut())
+            .expect("the dynamic demag fixture must carry an inline mesh");
+        mesh.periodic_boundary_pairs[0].translation = translation;
+        mesh.periodic_boundary_pairs[0].axis_hint = Some("x".to_string());
+        let error = plan(&invalid_mesh_ir)
+            .expect_err("a hint must not substitute invalid or conflicting translation metadata");
+        let actual = error.reasons.join("; ");
+        assert!(
+            error.reasons.iter().any(|reason| {
+                reason.contains(expected_prefix)
+                    && reason.contains(expected_pair)
+                    && reason.contains(expected_detail)
+            }),
+            "invalid translation case '{case}' produced unexpected reasons: {actual}"
+        );
+    }
 
     let mut subset_ir = ir.clone();
     let subset_mesh = subset_ir.geometry_assets.as_mut().unwrap()
@@ -13545,6 +13718,41 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
         .iter()
         .any(|reason| { reason.contains("strict double-precision CPU FEM plan") }));
 
+    let analytic_mesh = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .and_then(|asset| asset.mesh.as_mut())
+        .expect("the DE/BV fixture must carry an inline mesh");
+    // Keep periodic seam markers separate from the certified open airbox boundary.
+    assert!(!analytic_mesh.boundary_markers.contains(&20));
+    assert!(!analytic_mesh.boundary_markers.contains(&21));
+    analytic_mesh
+        .periodic_boundary_pairs
+        .push(fullmag_ir::MeshPeriodicBoundaryPairIR {
+            pair_id: "y_faces".to_string(),
+            source_marker: None,
+            destination_marker: None,
+            marker_a: 20,
+            marker_b: 21,
+            translation: Some([0.0, 1.0, 0.0]),
+            tolerance: None,
+            axis_hint: Some("y".to_string()),
+            orientation: None,
+            pairing_policy: None,
+        });
+    analytic_mesh
+        .periodic_node_pairs
+        .push(fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "y_faces".to_string(),
+            node_a: 0,
+            node_b: 2,
+        });
+    // The y seam identifies nodes 0 and 2, so their nodal material values must agree.
+    // Earlier assertions retain the original heterogeneous single-axis fixture.
+    let analytic_ms = ir.materials[0].ms_field.as_mut().unwrap();
+    analytic_ms[2] = analytic_ms[0];
+
     ir.problem_meta.runtime_metadata.insert(
         "dispersion_validation".to_string(),
         serde_json::json!({
@@ -13596,6 +13804,12 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
             samples_per_segment: vec![2, 1, 2],
             closed: false,
         });
+    }
+    if let fullmag_ir::StudyIR::Eigenmodes { spin_wave_bc, .. } = &mut ir.study {
+        if let fullmag_ir::SpinWaveBoundaryConditionIR::Config(config) = spin_wave_bc {
+            config.boundary_pair_id = None;
+            config.pair_ids = vec!["x_faces".to_string(), "y_faces".to_string()];
+        }
     }
     let planned = plan(&ir).expect(
         "DE/BV analytic metadata should remain a postsolve comparison on the numeric Floquet-airbox lane",

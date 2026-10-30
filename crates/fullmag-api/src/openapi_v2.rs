@@ -365,6 +365,8 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::persistence::session::export_session,
         crate::router_v2::handlers::persistence::session::inspect_project_archive,
         crate::router_v2::handlers::persistence::session::commit_session,
+        crate::router_v2::handlers::persistence::session::inspect_project_archive_file,
+        crate::router_v2::handlers::persistence::session::commit_session_file,
         crate::router_v2::handlers::persistence::session::list_checkpoints,
         crate::router_v2::handlers::persistence::session::get_checkpoint,
         crate::router_v2::handlers::persistence::session::delete_checkpoint,

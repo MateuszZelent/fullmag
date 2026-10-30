@@ -6,6 +6,7 @@ mod compute_operator_env;
 mod failed_worker_recovery;
 mod failed_preclaim_cancellation;
 mod runtime_service_unclaimed_cancellation;
+mod runtime_service_failed_worker_exit;
 use anyhow::{bail, Context, Result};
 use fullmag_session::{
     compute_node_snapshot::Reported,
@@ -2552,6 +2553,9 @@ fn run() -> Result<()> {
         Some(value) if value == OsString::from("--cancel-failed-no-spawn") => {
             cancel_failed_no_spawn(args)
         }
+        Some(value) if value == OsString::from("--reconcile-failed-worker-exit") => {
+            runtime_service_failed_worker_exit::reconcile(args)
+        }
         Some(value) if value == OsString::from("--cancel-unclaimed") => {
             runtime_service_unclaimed_cancellation::cancel_unclaimed(args)
         }
@@ -2568,7 +2572,7 @@ fn run() -> Result<()> {
             }
             run_service(path)
         }
-        _ => bail!("usage: fullmag-runtime-service --complete-reaped-worker-archive --config <absolute-json-path> --request <original-absolute-json-path> --request-sha256 <sha256> --completion <absolute-json-path> --completion-sha256 <sha256> [--verify-only] | --fail-reaped-worker --config <absolute-json-path> --request <absolute-json-path> --request-sha256 <sha256> [--verify-only] | --config <absolute-json-path> | --cancel-failed-no-spawn --config <absolute-json-path> --request <absolute-json-path> | --cancel-unclaimed --config <absolute-json-path> --request <absolute-json-path> | --prepare-orphan-teardown --config <absolute-json-path> --request <absolute-json-path> | --recover-orphan-after-teardown --config <absolute-json-path> --request <absolute-json-path> --attestation <absolute-json-path> | --initialize-docker-host --ledger-root <absolute-path> --store-root <absolute-path> [--device-access cpu|gpu] [--native-fem-readiness <absolute-json-path>] [--host-id <stable-id>]")
+        _ => bail!("usage: fullmag-runtime-service --reconcile-failed-worker-exit --config <absolute-json-path> --request <absolute-json-path> [--apply] | --complete-reaped-worker-archive --config <absolute-json-path> --request <original-absolute-json-path> --request-sha256 <sha256> --completion <absolute-json-path> --completion-sha256 <sha256> [--verify-only] | --fail-reaped-worker --config <absolute-json-path> --request <absolute-json-path> --request-sha256 <sha256> [--verify-only] | --config <absolute-json-path> | --cancel-failed-no-spawn --config <absolute-json-path> --request <absolute-json-path> | --cancel-unclaimed --config <absolute-json-path> --request <absolute-json-path> | --prepare-orphan-teardown --config <absolute-json-path> --request <absolute-json-path> | --recover-orphan-after-teardown --config <absolute-json-path> --request <absolute-json-path> --attestation <absolute-json-path> | --initialize-docker-host --ledger-root <absolute-path> --store-root <absolute-path> [--device-access cpu|gpu] [--native-fem-readiness <absolute-json-path>] [--host-id <stable-id>]")
     }
 }
 
@@ -3285,6 +3289,7 @@ mod tests {
         let mut original = HostResourceReservation {
             identity,
             request_sha256: "a".repeat(64),
+            pending_inventory_recovery_sha256: None,
             host_id: "host".into(),
             policy_revision: 1,
             host_owner_epoch: 1,

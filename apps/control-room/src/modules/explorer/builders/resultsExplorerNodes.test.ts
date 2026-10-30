@@ -104,6 +104,8 @@ describe("buildPhysicsFirstResultsTree", () => {
     );
     const dispersion = families?.find((node) => node.kind === "results.dispersion.root");
     expect(dispersion?.analysisModuleId).toBe("analysis.dispersion");
+    expect(dispersion?.analysisRunId).toBe(modalFinite.runId);
+    expect(dispersion?.collectionStudyCount).toBe(dispersion?.children?.length);
     for (const descendant of flattenExplorerNodes(dispersion?.children ?? [])) {
       expect(descendant.analysisModuleId).toBe("analysis.dispersion");
     }
@@ -770,7 +772,34 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
       modeIndex: 3,
       sampleIndex: 2,
       wavevectorKf: [5e7, 0, 0],
+      label: "kₓ = +50 rad/µm · 13 GHz",
     });
+  });
+
+  it.each([
+    { requested: {}, boundary: "floquet_periodic", sampling: { kind: "single", vector_rad_per_m: [0, 1e7, 0] }, accepted: true },
+    { requested: { boundary_context: "finite_open" }, boundary: "floquet_periodic", sampling: { kind: "single", vector_rad_per_m: [0, 1e7, 0] }, accepted: false },
+    { requested: { k_sampling: { kind: "single", vector_rad_per_m: [0, 1e7, 0] } }, boundary: "floquet_periodic", sampling: { kind: "single", vector_rad_per_m: [0, null, 0] }, accepted: false },
+  ])("reads canonical manifest coordinates without hiding conflicts: $accepted / $requested", ({ requested, boundary, sampling, accepted }) => {
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      currentRun: { revision: 20, run_id: "native-k10" },
+      manifest: { result_manifest: { status: "ready", revision: "sha256:manifest-k10", run_id: "native-k10", stage_id: "eigenmodes", payload: {
+        study_product: "modal_eigen", equilibrium_identity: "eq-k10",
+        boundary_context: boundary, k_sampling: sampling, requested_execution: requested,
+        run_id: "native-k10", stage_id: "eigenmodes",
+      } } },
+      spectrum: { status: "ready" },
+    });
+    expect(adapted.snapshot.entries).toHaveLength(accepted ? 1 : 0);
+    if (accepted) {
+      expect(adapted.snapshot.entries[0]).toMatchObject({
+        artifactRevision: "sha256:manifest-k10",
+        boundaryContext: "floquet_periodic",
+        kSampling: { kind: "single", vectorRadPerM: [0, 1e7, 0] },
+      });
+    } else {
+      expect(adapted.contractGaps.length).toBeGreaterThan(0);
+    }
   });
 
   it("uses the CSV wavevector when path metadata is absent", () => {
@@ -977,9 +1006,9 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
       .not.toContain("Spectral Response Map · A(k,f)");
   });
 
-  it("adapts explicit manifest provenance without trusting the manifest run placeholder", () => {
+  it("resolves legacy manifest owner placeholders from the API artifact wrapper", () => {
     const adapted = physicsFirstResultsSnapshotFromResources({
-      currentRun: { revision: 17, run_id: "runtime-run-17" },
+      currentRun: { revision: 17, run_id: "artifact-run-17" },
       dispersion: {
         path_metadata: {
           sampling: {
@@ -1004,9 +1033,12 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
               k_sampling: "path",
             },
             revision: "eigen-r9",
-            stage_id: "eigen-stage",
+            run_id: "current",
+            stage_id: "eigenmodes",
             study_product: "modal_eigen",
           },
+          run_id: "artifact-run-17",
+          stage_id: "artifact-stage-17",
           status: "ready",
         },
       },
@@ -1015,18 +1047,46 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
 
     expect(adapted.contractGaps).toEqual([]);
     expect(adapted.snapshot).toMatchObject({
-      resultContextRunId: "runtime-run-17",
+      resultContextRunId: "artifact-run-17",
       entries: [
         {
           artifactRevision: "eigen-r9",
           equilibriumId: "eq-relax-r4",
           kSampling: { kind: "path", label: "Γ–X", sampleCount: 9 },
-          runId: "runtime-run-17",
-          stageId: "eigen-stage",
+          runId: "artifact-run-17",
+          stageId: "artifact-stage-17",
           studyProduct: "modal_eigen",
         },
       ],
     });
+  });
+
+  it("fails closed on an exact stage conflict even when the payload run id is a legacy alias", () => {
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      currentRun: { revision: 17, run_id: "artifact-run-17" },
+      manifest: {
+        result_manifest: {
+          payload: {
+            equilibrium_identity: "eq-relax-r4",
+            geometry_identity: "geometry-r4",
+            mesh_identity: "mesh-r4",
+            requested_execution: { boundary_context: "finite_open" },
+            run_id: "current",
+            stage_id: "payload-stage",
+            study_product: "modal_eigen",
+          },
+          run_id: "artifact-run-17",
+          stage_id: "wrapper-stage",
+          status: "ready",
+        },
+      },
+      spectrum: { status: "ready" },
+    });
+
+    expect(adapted.snapshot.entries).toEqual([]);
+    expect(adapted.contractGaps).toContain(
+      "stage identity conflicts with artifact owner",
+    );
   });
 
   it("preserves explicit result context gaps", () => {
@@ -1073,6 +1133,63 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
       badge: "contract gap",
       postprocessingContractGap: "geometry identity unavailable; mesh identity unavailable",
     });
+  });
+
+  it("retains modal results with distinct verified equilibria per sample", () => {
+    const eq0 = `sha256:${"1".repeat(64)}`;
+    const eq1 = `sha256:${"2".repeat(64)}`;
+    const input = {
+      currentRun: { revision: 30, run_id: "run-modal-samples" },
+      manifest: { result_manifest: {
+        status: "ready",
+        run_id: "run-modal-samples",
+        stage_id: "eigen",
+        payload: {
+          study_product: "modal_eigen",
+          run_id: "run-modal-samples",
+          stage_id: "eigen",
+          geometry_identity: "geometry-exact",
+          mesh_identity: "mesh-exact",
+          requested_execution: {
+            boundary_context: "floquet_periodic",
+            k_sampling: { kind: "grid", sample_count: 2 },
+          },
+          sample_execution_provenance: {
+            schema_version: "frequency_domain_sample_execution_provenance.v1",
+            status: "mixed",
+            sample_count: 2,
+            samples: [
+              { sample_index: 0, validation: { equilibrium_artifact_sha256: eq0 } },
+              { sample_index: 1, validation: { equilibrium_artifact_sha256: eq1 } },
+            ],
+          },
+        },
+      } },
+      dispersion: {
+        status: "ready",
+        path_metadata: { sampling: { kind: "grid", points: [
+          { k_vector: [0, 0, 0] }, { k_vector: [0, 1e7, 0] },
+        ] } },
+      },
+      spectrum: {
+        status: "ready",
+        payload: { modes: [{ frequency_hz: 11e9, raw_mode_index: 0, sample_index: 1,
+          mode_field_id: "field-sample-1", mode_field_resource_key: "data/fields/field-sample-1" }] },
+      },
+    };
+    const adapted = physicsFirstResultsSnapshotFromResources(input);
+    expect(adapted.contractGaps).toEqual([]);
+    expect(adapted.snapshot.entries).toHaveLength(1);
+    expect(adapted.snapshot.entries[0]?.equilibriumId).toBeUndefined();
+    const mode = flattenExplorerNodes(buildPhysicsFirstResultsTree(adapted.snapshot))
+      .find((node) => node.kind === "results.dispersion.modal.mode_at_k");
+    expect(mode).toMatchObject({ sampleIndex: 1, equilibriumId: eq1 });
+
+    // Identity syntax is opaque in this adapter; a missing sample identity
+    // must invalidate the collection rather than reuse the other sample.
+    input.manifest.result_manifest.payload.sample_execution_provenance.samples[1]!
+      .validation.equilibrium_artifact_sha256 = "";
+    expect(physicsFirstResultsSnapshotFromResources(input).snapshot.entries).toEqual([]);
   });
 
   it("fails closed when owner, equilibrium, or boundary evidence is absent", () => {

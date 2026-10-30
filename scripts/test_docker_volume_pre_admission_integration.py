@@ -80,6 +80,7 @@ class _Control:
     namespace = ""
     namespace_registry = None
     namespace_registry_sha256 = None
+    namespace_registry = None
 
     def __init__(self, previous: dict[str, object], document: dict[str, object], events: list[object]) -> None:
         self.previous = previous
@@ -306,6 +307,9 @@ class RetainedPreAdmissionIntegrationTests(unittest.TestCase):
         import docker_volume_activation_reconcile
         import docker_volume_dev as dev
 
+        retained_operator_probe_record = dev._operator_probe_record(
+            dict(docker_dev.OPERATOR_PROBE_ENVIRONMENT_DEFAULTS)
+        )
         configuration = {"services": {"fem-gpu-toolchain": {"build": {"args": {
             "FULLMAG_CUDA_BASE_IMAGE": "sha256:" + "e" * 64,
         }}}}}
@@ -325,7 +329,10 @@ class RetainedPreAdmissionIntegrationTests(unittest.TestCase):
             mock.patch.object(docker_dev, "_compose_identity", return_value=identity),
             mock.patch.object(docker_build_control, "toolchain_configuration", return_value=configuration),
             mock.patch.object(dev, "BuildControl", return_value=harness.control),
-            mock.patch.object(dev, "_operator_probe_record_from_retained", return_value={}),
+            mock.patch.object(
+                dev, "_operator_probe_record_from_retained",
+                return_value=retained_operator_probe_record,
+            ),
             mock.patch.object(dev, "compose_capture", side_effect=harness.compose_capture),
             mock.patch.object(dev, "docker_text", side_effect=harness.docker_text),
             mock.patch.object(dev, "docker_capture", side_effect=harness.docker_capture),

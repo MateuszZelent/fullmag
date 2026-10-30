@@ -66,7 +66,7 @@ export interface ResultsViewSelectionRef {
   kind: "results-view";
   runId: string;
   stageId: string;
-  viewId: "branches" | "field-sweep" | "response-sweep" | "spectrum";
+  viewId: "branches" | "dispersion" | "field-sweep" | "response-sweep" | "spectrum";
 }
 
 export type ResultsSelectionRef =
@@ -344,10 +344,19 @@ export function kernelSelectionForResultsNavigatorNode(
   ref: Extract<SelectionRef, { type: "frequency-domain" }>;
 } {
   const kind = node.inspectorId ?? inspectorSelectionKindForResultsNodeKind(node.kind);
+  const selectionRef = node.selectionRef;
+  const hasCurrentDispersionOwner =
+    node.kind !== "results.frequency-domain.dispersion" ||
+    (typeof node.resourceRevision === "string" &&
+      node.resourceRevision.trim().length > 0 &&
+      selectionRef?.kind === "results-view" &&
+      selectionRef.viewId === "dispersion" &&
+      selectionRef.artifactRevision === node.resourceRevision);
+  const currentSelectionRef = hasCurrentDispersionOwner ? selectionRef : undefined;
   return {
     kind,
-    ref: node.selectionRef
-      ? toKernelFrequencyDomainSelectionRef(node.selectionRef, node.id, kind)
+    ref: currentSelectionRef
+      ? toKernelFrequencyDomainSelectionRef(currentSelectionRef, node.id, kind)
       : {
           kind,
           nodeId: node.id,

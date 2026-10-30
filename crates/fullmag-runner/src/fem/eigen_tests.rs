@@ -774,6 +774,23 @@ fn accepted_relax_completion() -> fullmag_ir::StageCompletionIR {
     }
 }
 
+fn execution_plan_for_modal(plan: FemEigenPlanIR) -> fullmag_ir::ExecutionPlanIR {
+    fullmag_ir::ExecutionPlanIR {
+        common: fullmag_ir::CommonPlanMeta {
+            ir_version: fullmag_ir::IR_VERSION.to_string(),
+            requested_backend: fullmag_ir::BackendTarget::Fem,
+            resolved_backend: fullmag_ir::BackendTarget::Fem,
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            material_field_plans: Vec::new(),
+        },
+        backend_plan: fullmag_ir::BackendPlanIR::FemEigen(plan),
+        output_plan: fullmag_ir::OutputPlanIR {
+            outputs: Vec::new(),
+        },
+        provenance: fullmag_ir::ProvenancePlanIR::default(),
+    }
+}
+
 fn accepted_energy_relax_completion() -> fullmag_ir::StageCompletionIR {
     fullmag_ir::StageCompletionIR {
         status: "completed".to_string(),
@@ -1511,6 +1528,150 @@ fn accepted_relax_stage_handoff_revalidates_provided_multik_path_and_rejects_swe
     });
     let error = validate_eigen_equilibrium_certificate(&sweep, None, Some(&handoff))
         .expect_err("a provided continuation must not reuse one m0 for a field sweep");
+    assert!(error
+        .message
+        .contains("provided_continuation_rejects_bias_field_sweep"));
+}
+
+#[test]
+fn accepted_relax_materializer_preserves_path_relaxed_marker_and_exact_m0() {
+    let mut target = minimal_native_modal_plan();
+    target.equilibrium = EquilibriumSourceIR::RelaxedInitialState;
+    target.k_sampling = Some(KSamplingIR::Path {
+        points: vec![
+            KPointIR::gamma(),
+            KPointIR {
+                label: Some("X".to_string()),
+                k_vector: [1.0e7, 0.0, 0.0],
+            },
+        ],
+        samples_per_segment: vec![2],
+        closed: false,
+    });
+    target.equilibrium_magnetization = vec![[0.0, 1.0, 0.0]; target.mesh.nodes.len()];
+    let handoff = relax_handoff_from_completion(&target, &accepted_relax_completion())
+        .expect("a path may reuse the same accepted static relaxation");
+    let accepted_m0 = handoff.equilibrium_magnetization.clone();
+    let replayed = crate::ReplayedFemRelaxation {
+        handoff,
+        equilibrium_magnetization: accepted_m0.clone(),
+    };
+
+    let mut authored_target = target;
+    authored_target.equilibrium_magnetization =
+        vec![[9.0, 9.0, 9.0]; authored_target.mesh.nodes.len()];
+    let bound = crate::materialize_accepted_fem_relaxation_target(
+        &execution_plan_for_modal(authored_target),
+        &replayed,
+    )
+    .expect("the accepted static endpoint must materialize a K path");
+    let fullmag_ir::BackendPlanIR::FemEigen(bound_eigen) = bound.backend_plan else {
+        panic!("materializer must retain the FEM eigen backend");
+    };
+    assert_eq!(
+        bound_eigen.equilibrium,
+        EquilibriumSourceIR::RelaxedInitialState,
+        "path materialization must retain the authored Relax marker"
+    );
+    assert_eq!(bound_eigen.equilibrium_magnetization, accepted_m0);
+    assert!(matches!(
+        bound_eigen.k_sampling,
+        Some(KSamplingIR::Path { .. })
+    ));
+}
+
+#[test]
+fn accepted_relax_materializer_binds_single_and_rejects_path_drift_or_sweep() {
+    let mut target = minimal_native_modal_plan();
+    target.equilibrium = EquilibriumSourceIR::RelaxedInitialState;
+    target.equilibrium_magnetization = vec![[0.0, 1.0, 0.0]; target.mesh.nodes.len()];
+    let handoff = relax_handoff_from_completion(&target, &accepted_relax_completion())
+        .expect("a single K target must accept the static relaxation handoff");
+    let accepted_m0 = handoff.equilibrium_magnetization.clone();
+    let replayed = crate::ReplayedFemRelaxation {
+        handoff,
+        equilibrium_magnetization: accepted_m0.clone(),
+    };
+
+    let mut authored_target = target.clone();
+    authored_target.equilibrium_magnetization =
+        vec![[9.0, 9.0, 9.0]; authored_target.mesh.nodes.len()];
+    let bound = crate::materialize_accepted_fem_relaxation_target(
+        &execution_plan_for_modal(authored_target),
+        &replayed,
+    )
+    .expect("the accepted static endpoint must materialize a single K target");
+    let fullmag_ir::BackendPlanIR::FemEigen(bound_eigen) = bound.backend_plan else {
+        panic!("materializer must retain the FEM eigen backend");
+    };
+    assert_eq!(
+        bound_eigen.equilibrium,
+        EquilibriumSourceIR::RelaxedInitialState
+    );
+    assert_eq!(bound_eigen.equilibrium_magnetization, accepted_m0);
+    assert!(matches!(
+        bound_eigen.k_sampling,
+        Some(KSamplingIR::Single { .. })
+    ));
+
+    let mut path_target = target.clone();
+    path_target.k_sampling = Some(KSamplingIR::Path {
+        points: vec![
+            KPointIR::gamma(),
+            KPointIR {
+                label: Some("X".to_string()),
+                k_vector: [1.0e7, 0.0, 0.0],
+            },
+        ],
+        samples_per_segment: vec![2],
+        closed: false,
+    });
+
+    let mut material_drift = path_target.clone();
+    material_drift.material.saturation_magnetisation *= 1.01;
+    let error = crate::materialize_accepted_fem_relaxation_target(
+        &execution_plan_for_modal(material_drift),
+        &replayed,
+    )
+    .expect_err("material drift must not cross the accepted handoff boundary");
+    assert!(error
+        .message
+        .contains("equilibrium_material_signature_mismatch"));
+
+    let mut mesh_drift = path_target.clone();
+    mesh_drift.mesh.nodes[0][0] += 1.0e-12;
+    let error = crate::materialize_accepted_fem_relaxation_target(
+        &execution_plan_for_modal(mesh_drift),
+        &replayed,
+    )
+    .expect_err("mesh drift must not cross the accepted handoff boundary");
+    assert!(error.message.contains("mesh_identity_mismatch"));
+
+    let mut m0_drift = accepted_m0;
+    m0_drift[0] = [1.0, 0.0, 0.0];
+    let drifted_replayed = crate::ReplayedFemRelaxation {
+        handoff: replayed.handoff.clone(),
+        equilibrium_magnetization: m0_drift,
+    };
+    let error = crate::materialize_accepted_fem_relaxation_target(
+        &execution_plan_for_modal(path_target.clone()),
+        &drifted_replayed,
+    )
+    .expect_err("accepted m0 drift must not cross the handoff boundary");
+    assert!(error.message.contains("equilibrium_content_mismatch"));
+
+    let mut sweep = path_target;
+    sweep.bias_field_samples.push(bias_field_sample(
+        0,
+        [1.0, 0.0, 0.0],
+        fullmag_ir::BiasFieldSweepEquilibriumPolicyIR::RelaxEach,
+        fullmag_ir::BiasFieldSweepContinuationSeedIR::InitialState,
+    ));
+    let error = crate::materialize_accepted_fem_relaxation_target(
+        &execution_plan_for_modal(sweep),
+        &replayed,
+    )
+    .expect_err("one accepted m0 must not be reused for a bias-field sweep");
     assert!(error
         .message
         .contains("provided_continuation_rejects_bias_field_sweep"));
@@ -4096,6 +4257,7 @@ pub(super) fn minimal_native_modal_plan() -> FemEigenPlanIR {
         exchange_bc: fullmag_ir::ExchangeBoundaryCondition::Neumann,
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
         demag_realization: None,
+        demag_solver_policy: None,
         air_box_config: None,
         mode_tracking: None,
         dispersion_validation: None,
@@ -5219,6 +5381,7 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
         .get("component_participation")
         .is_none());
     assert_eq!(spectrum_v2["samples"][0]["sample_id"], "k-sample-0000");
+    assert_eq!(spectrum_v2["samples"][0]["modes"][0]["mode_id"], "sample-0000/mode-0000");
     assert!(spectrum_v2["samples"][0].get("method_evidence").is_none());
     assert_eq!(spectrum_v2["solve_succeeded"], true);
     assert_eq!(spectrum_v2["fields_available"], true);
@@ -6610,7 +6773,14 @@ fn native_nonzero_floquet_diagnostics_bind_floquet_boundary_without_k0_claim() {
 fn floquet_dynamic_demag_provider_requires_exact_requested_pair_set() {
     let base = bounded_floquet_dynamic_demag_execution_plan();
     assert!(native_cpu_modal_window_has_floquet_dynamic_demag_path(&base));
-    for requested in [vec![], vec!["x_faces", "x_faces"], vec!["x_faces", "unknown_faces"]] {
+    let mut all_pairs = base.clone();
+    let SpinWaveBoundaryConditionIR::Config(config) = &mut all_pairs.spin_wave_bc else {
+        panic!("fixture must have explicit Floquet configuration");
+    };
+    config.boundary_pair_id = None;
+    config.pair_ids.clear();
+    assert!(native_cpu_modal_window_has_floquet_dynamic_demag_path(&all_pairs));
+    for requested in [vec!["x_faces", "x_faces"], vec!["x_faces", "unknown_faces"]] {
         let mut plan = base.clone();
         let SpinWaveBoundaryConditionIR::Config(config) = &mut plan.spin_wave_bc else {
             panic!("fixture must have explicit Floquet configuration");
@@ -6642,6 +6812,121 @@ fn floquet_dynamic_demag_provider_requires_exact_requested_pair_set() {
     let mut incomplete_nodes = base.clone();
     incomplete_nodes.mesh.periodic_node_pairs.retain(|pair| pair.pair_id != "x_faces");
     assert!(!native_cpu_modal_window_has_floquet_dynamic_demag_path(&incomplete_nodes));
+}
+
+#[test]
+fn floquet_dynamic_demag_provider_preserves_signed_mixed_k_and_rejects_open_axes() {
+    let base = bounded_floquet_dynamic_demag_execution_plan();
+    for k in [[1.0e7, 0.0, 0.0], [-1.0e7, 0.0, 0.0], [1.0e7, -1.0e7, 0.0]] {
+        let mut plan = base.clone();
+        plan.k_sampling = Some(KSamplingIR::Single { k_vector: k });
+        assert!(native_cpu_modal_window_has_floquet_dynamic_demag_path(
+            &plan
+        ));
+        let Some(KSamplingIR::Single { k_vector }) = plan.k_sampling else {
+            unreachable!()
+        };
+        assert_eq!(
+            k_vector, k,
+            "admission must not rewrite the requested vector"
+        );
+    }
+    for k in [
+        [1.0e7, 0.0, 1.0],
+        [1.0e7, 0.0, 1.0e-15],
+        [0.0, 0.0, 1.0e7],
+        [f64::NAN, 0.0, 0.0],
+        [0.0, f64::INFINITY, 0.0],
+    ] {
+        let mut plan = base.clone();
+        plan.k_sampling = Some(KSamplingIR::Single { k_vector: k });
+        assert!(!native_cpu_modal_window_has_floquet_dynamic_demag_path(
+            &plan
+        ));
+    }
+    let mut path = base;
+    path.k_sampling = Some(KSamplingIR::Path {
+        points: vec![
+            KPointIR::gamma(),
+            KPointIR {
+                label: Some("mixed".to_owned()),
+                k_vector: [-1.0e7, 1.0e7, 0.0],
+            },
+        ],
+        samples_per_segment: vec![1],
+        closed: false,
+    });
+    assert!(native_cpu_modal_window_has_floquet_dynamic_demag_path(
+        &path
+    ));
+    let Some(KSamplingIR::Path { points, .. }) = path.k_sampling.as_mut() else {
+        unreachable!()
+    };
+    points[1].k_vector[2] = 1.0e-15;
+    assert!(!native_cpu_modal_window_has_floquet_dynamic_demag_path(
+        &path
+    ));
+}
+
+#[test]
+fn floquet_dynamic_demag_provider_uses_certificate_translation_axes() {
+    let mut plan = bounded_floquet_dynamic_demag_execution_plan();
+    for pair in &mut plan.mesh.periodic_boundary_pairs {
+        pair.axis_hint = None;
+    }
+    assert!(native_cpu_modal_window_has_floquet_dynamic_demag_path(
+        &plan
+    ));
+    plan.mesh.periodic_boundary_pairs[0].translation = Some([0.0; 3]);
+    assert!(!native_cpu_modal_window_has_floquet_dynamic_demag_path(
+        &plan
+    ));
+
+    for translation in [
+        None,
+        Some([f64::NAN, 0.0, 0.0]),
+        Some([0.0, 0.0, 0.0]),
+        Some([1.0e-15, 0.0, 0.0]),
+        Some([1.0, 1.0, 0.0]),
+        Some([0.0, 1.0, 0.0]),
+    ] {
+        let mut hinted_invalid = bounded_floquet_dynamic_demag_execution_plan();
+        hinted_invalid.mesh.periodic_boundary_pairs[0].axis_hint = Some("x".to_owned());
+        hinted_invalid.mesh.periodic_boundary_pairs[0].translation = translation;
+        assert!(
+            !native_cpu_modal_window_has_floquet_dynamic_demag_path(&hinted_invalid),
+            "hint must not substitute invalid or conflicting translation metadata: {translation:?}"
+        );
+    }
+}
+
+#[test]
+fn modal_v6_pair_axis_mask_rejects_missing_zero_oblique_and_nonfinite_translation() {
+    let mut pair = bounded_floquet_dynamic_demag_execution_plan()
+        .mesh
+        .periodic_boundary_pairs[0]
+        .clone();
+    pair.axis_hint = None;
+    for translation in [
+        None,
+        Some([0.0; 3]),
+        Some([1.0e-6, 1.0e-6, 0.0]),
+        Some([f64::NAN, 0.0, 0.0]),
+        Some([f64::INFINITY, 0.0, 0.0]),
+    ] {
+        pair.translation = translation;
+        assert_eq!(modal_v6_pair_axis_mask(&pair), None);
+    }
+    for (translation, expected) in [
+        ([1.0e-6, 0.0, 0.0], 1),
+        ([0.0, -1.0e-6, 0.0], 2),
+        ([0.0, 0.0, 1.0e-6], 4),
+    ] {
+        pair.translation = Some(translation);
+        assert_eq!(modal_v6_pair_axis_mask(&pair), Some(expected));
+    }
+    pair.axis_hint = Some("x".to_owned());
+    assert_eq!(modal_v6_pair_axis_mask(&pair), Some(1));
 }
 
 #[test]
@@ -11546,6 +11831,7 @@ fn eigen_diagnostics_reference_single_k_executor_publishes_without_native_provid
 
     let mut policy_plan = plan.clone();
     policy_plan.solver_policy = Some(fullmag_ir::FemEigenSolverPolicyIR {
+        completeness: None,
         residual_tolerance: Some(1.0e-8),
         max_outer_iterations: None,
         max_linear_iterations: None,
@@ -11654,6 +11940,7 @@ fn eigen_diagnostics_reference_single_k_executor_publishes_without_native_provid
 
     let mut empty_policy_plan = plan.clone();
     empty_policy_plan.solver_policy = Some(fullmag_ir::FemEigenSolverPolicyIR {
+        completeness: None,
         residual_tolerance: None,
         max_outer_iterations: None,
         max_linear_iterations: None,
@@ -11812,6 +12099,7 @@ fn relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_witho
         closed: false,
     });
     plan.solver_policy = Some(fullmag_ir::FemEigenSolverPolicyIR {
+        completeness: None,
         residual_tolerance: None,
         max_outer_iterations: None,
         max_linear_iterations: None,
@@ -11861,6 +12149,7 @@ fn relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_witho
 
     let mut policy_plan = plan.clone();
     policy_plan.solver_policy = Some(fullmag_ir::FemEigenSolverPolicyIR {
+        completeness: None,
         residual_tolerance: None,
         max_outer_iterations: Some(24),
         max_linear_iterations: None,
@@ -11985,4 +12274,174 @@ fn relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_witho
         frequency_domain_manifest["spectrum_output_scopes"],
         serde_json::json!(["per_sample", "global"])
     );
+}
+
+#[test]
+fn materialized_full2x2_guard_accepts_tangent_frame_reference_axis_jump() {
+    let mut plan = bounded_k0_execution_plan();
+    add_x_floquet_pair_to_plan(&mut plan);
+    let topology = MeshTopology::from_ir(&plan.mesh).expect("periodic FEM mesh is valid");
+    let (_, node_a, node_b) = topology
+        .periodic_node_pairs
+        .first()
+        .expect("fixture must contain a Floquet pair")
+        .clone();
+    assert!(topology.magnetic_node_volumes[node_a as usize] > 0.0);
+    assert!(topology.magnetic_node_volumes[node_b as usize] > 0.0);
+
+    // Keep the equilibrium seam below the 1e-8 m0 tolerance while placing the
+    // two otherwise nearly equal vectors on opposite sides of the
+    // tangent_bases() |m_z|=0.9 reference-axis branch. Native shared-domain
+    // constraints transport the resulting local coordinates with
+    // T_dst^T T_src, so the Rust preflight must allow this valid chart change.
+    let z_a: f64 = 0.9 - 1.0e-10;
+    let z_b: f64 = 0.9 + 1.0e-10;
+    let mut equilibrium = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+    equilibrium[node_a as usize] = [(1.0 - z_a * z_a).sqrt(), 0.0, z_a];
+    equilibrium[node_b as usize] = [(1.0 - z_b * z_b).sqrt(), 0.0, z_b];
+    let seam = (equilibrium[node_a as usize][0] - equilibrium[node_b as usize][0])
+        .hypot(equilibrium[node_a as usize][2] - equilibrium[node_b as usize][2]);
+    assert!(
+        seam < 1.0e-8,
+        "fixture seam must pass the m0 periodic tolerance"
+    );
+
+    validate_materialized_tangent_frame_transport(&plan, &topology, &equilibrium)
+        .expect("a local tangent-frame rotation is valid when physical m0 is periodic");
+}
+
+#[test]
+fn materialized_full2x2_guard_rejects_physical_equilibrium_mismatch() {
+    let mut plan = bounded_k0_execution_plan();
+    add_x_floquet_pair_to_plan(&mut plan);
+    let topology = MeshTopology::from_ir(&plan.mesh).expect("periodic FEM mesh is valid");
+    let (_, node_a, node_b) = topology
+        .periodic_node_pairs
+        .first()
+        .expect("fixture must contain a Floquet pair")
+        .clone();
+    let mut equilibrium = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+    equilibrium[node_a as usize] = [1.0, 0.0, 0.0];
+    equilibrium[node_b as usize] = [0.0, 1.0, 0.0];
+
+    let error = validate_materialized_tangent_frame_transport(&plan, &topology, &equilibrium)
+        .expect_err("pure-translation Floquet pairs must preserve physical m0");
+    assert!(error
+        .message
+        .contains("matching physical equilibrium vectors"));
+}
+
+
+/// Exercise reference publication rather than only the projection helpers. The
+/// artificial accepted handoff is validation-only and makes no runtime claim.
+#[test]
+fn reference_mode_publication_expands_periodic_and_signed_floquet_fields() {
+    for operator in [
+        fullmag_ir::EigenOperatorIR::LinearizedLlg,
+        fullmag_ir::EigenOperatorIR::Full2x2,
+    ] {
+        for k_x in [0.0, -0.43, 0.43] {
+            let mut plan = minimal_native_modal_plan();
+            add_x_floquet_pair_to_plan(&mut plan);
+            plan.equilibrium = EquilibriumSourceIR::Provided;
+            plan.operator.kind = operator;
+            plan.operator.include_demag = false;
+            plan.enable_demag = false;
+            plan.damping_policy = EigenDampingPolicyIR::Ignore;
+            plan.material.uniaxial_anisotropy = Some(1.0e4);
+            plan.material.anisotropy_axis = Some([1.0, 0.0, 0.0]);
+            plan.target = fullmag_ir::EigenTargetIR::Lowest;
+            plan.count = 1;
+            plan.k_sampling = Some(KSamplingIR::Single { k_vector: [k_x, 0.0, 0.0] });
+            let handoff = validation_only_raw_provided_fixture_handoff(&plan)
+                .expect("the reference fixture must bind an accepted equilibrium");
+            let outputs = [OutputIR::EigenMode {
+                field: "mode".to_string(),
+                all_modes: false,
+                indices: vec![0],
+                branches: vec![],
+                sample_selector: None,
+            }];
+            let run = execute_fem_eigen_inner(
+                &plan, &outputs, false, false, None, 0, None, None,
+                Some(&handoff), None, None,
+            ).expect("the small reference fixture must publish a mode without native providers");
+            let payload = eigen_diagnostics_published_json(
+                &run.auxiliary_artifacts, "eigen/modes/mode_0000.json",
+            );
+            let topology = MeshTopology::from_ir(&plan.mesh).unwrap();
+            let reduction = build_reduction_map(
+                &topology, &plan.spin_wave_bc, plan.k_sampling.as_ref(),
+            ).unwrap();
+            for key in ["real", "imag", "amplitude", "phase"] {
+                assert_eq!(payload[key].as_array().unwrap().len(), topology.n_nodes);
+            }
+            let read_vector = |key: &str, node: usize| -> Vector3 {
+                std::array::from_fn(|component| payload[key][node][component].as_f64().unwrap())
+            };
+            let max_amplitude = payload["max_amplitude"].as_f64().unwrap();
+            assert!(max_amplitude > 0.0);
+            let mut saw_nonzero_slave = false;
+            for node in 0..topology.n_nodes {
+                let Some(class) = reduction.node_map[node] else { continue };
+                let root = reduction.active_nodes[class];
+                let factor = reduction.node_phases[node];
+                let root_real = read_vector("real", root);
+                let root_imag = read_vector("imag", root);
+                let real = read_vector("real", node);
+                let imag = read_vector("imag", node);
+                for component in 0..3 {
+                    let expected = factor * Complex64::new(root_real[component], root_imag[component]);
+                    let actual = Complex64::new(real[component], imag[component]);
+                    assert!((actual - expected).norm() < 1.0e-10 * max_amplitude,
+                        "operator={operator:?} k_x={k_x} node={node} component={component}");
+                    for phase in [0.0, std::f64::consts::FRAC_PI_2, std::f64::consts::PI,
+                        3.0 * std::f64::consts::FRAC_PI_2] {
+                        let visible = real[component] * phase.cos() - imag[component] * phase.sin();
+                        let expected_visible = (expected * Complex64::from_polar(1.0, phase)).re;
+                        assert!((visible - expected_visible).abs() < 1.0e-10 * max_amplitude);
+                    }
+                }
+                assert_eq!(payload["amplitude"][node], payload["amplitude"][root]);
+                let amplitude = payload["amplitude"][node].as_f64().unwrap();
+                let relative_phase = Complex64::from_polar(
+                    1.0,
+                    payload["phase"][node].as_f64().unwrap()
+                        - payload["phase"][root].as_f64().unwrap(),
+                );
+                assert!((relative_phase - factor).norm() < 1.0e-10);
+                if operator == fullmag_ir::EigenOperatorIR::LinearizedLlg {
+                    let scale = max_amplitude.powi(2);
+                    assert!((dot(real, real) - amplitude.powi(2)).abs() < 1.0e-10 * scale);
+                    assert!((dot(imag, imag) - amplitude.powi(2)).abs() < 1.0e-10 * scale);
+                    assert!(dot(real, imag).abs() < 1.0e-10 * scale);
+                }
+                if node != root && amplitude > 1.0e-12 * max_amplitude {
+                    saw_nonzero_slave = true;
+                }
+            }
+            assert!(saw_nonzero_slave, "fixture must exercise a nonzero periodic slave");
+        }
+    }
+}
+
+#[test]
+fn reference_mode_publication_rejects_materialized_equilibrium_mismatch() {
+    let mut plan = minimal_native_modal_plan();
+    add_x_floquet_pair_to_plan(&mut plan);
+    plan.equilibrium = EquilibriumSourceIR::Provided;
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.target = fullmag_ir::EigenTargetIR::Lowest;
+    plan.k_sampling = Some(KSamplingIR::Single { k_vector: [0.0; 3] });
+    let handoff = validation_only_raw_provided_fixture_handoff(&plan).unwrap();
+    // The authored equilibrium passes the pre-materialization checks. Only the
+    // actual override consumed by materialize_equilibrium has a periodic seam.
+    let mut override_m0 = plan.equilibrium_magnetization.clone();
+    override_m0[1] = [0.0, 1.0, 0.0];
+    let error = execute_fem_eigen_inner(
+        &plan, &[], false, false, None, 0, None, Some(&override_m0),
+        Some(&handoff), None, None,
+    ).err().expect("the executor must reject inconsistent materialized m0 before mode publication");
+    assert!(error.message.contains("matching physical equilibrium vectors"),
+        "unexpected guard error: {}", error.message);
 }

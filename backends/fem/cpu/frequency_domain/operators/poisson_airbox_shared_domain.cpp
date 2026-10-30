@@ -1869,7 +1869,13 @@ FrequencyDomainStatus validate_modal_shared_domain_payload_contract(
             if (role == FULLMAG_FEM_FACET_ROLE_PERIODIC_SEAM) {
                 has_periodic_face = true;
             }
-            if (role == FULLMAG_FEM_FACET_ROLE_EXTERIOR && marker == payload.boundary_marker) {
+            // Pure Neumann is natural on all exterior, non-periodic facets;
+            // marker zero is its sentinel, not a physical boundary marker.
+            // Essential/Robin conditions still require the certified marker.
+            if (role == FULLMAG_FEM_FACET_ROLE_EXTERIOR &&
+                ((std::strcmp(payload.boundary_kind, "pure_neumann") == 0 &&
+                  payload.boundary_marker == 0u) ||
+                 marker == payload.boundary_marker)) {
                 has_open_z_face = true;
             }
         }

@@ -19,6 +19,7 @@ function intent(modeId: string, modeIndex: number) {
   return createModeFieldOverlayIntent({
     analysisRunId: "run-k0",
     analysisStageId: "stage-eigen",
+  equilibriumId: "sha256:eq-k0",
     artifactRevision: "sha256:artifact-v1",
     fieldId: `analysis:eigen:sample-k0:${modeId}:delta_m_xyz`,
     kind: "results.eigen.mode",
@@ -48,6 +49,8 @@ function metadata(fieldId: string): FrequencyDomainFieldResource {
     quantity: "delta_m",
     resource_key: `data/fields/${encodeURIComponent(fieldId)}`,
     schema_version: "frequency_domain_mode_field.v1",
+    generation_id: "publication-14",
+    generation_status: "member_verified_owner_bound",
     source_family: "analysis/eigen",
     status: "ready",
     value_kind: "complex_spatial_vector",

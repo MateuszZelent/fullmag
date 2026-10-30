@@ -1760,6 +1760,7 @@ struct CurrentLiveApplyFlags {
     has_run: bool,
     has_scalar_row: bool,
     clear_preview_cache: bool,
+    reset_preparation_fields: bool,
 }
 
 pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, metadata: Value) {
@@ -2245,6 +2246,7 @@ fn finalize_current_live_apply(
 
     refresh_runtime_status(current);
     let quantities_inputs_changed = flags.has_metadata
+        || flags.reset_preparation_fields
         || flags.has_latest_fields
         || flags.has_preview_fields
         || flags.clear_preview_cache
@@ -2443,16 +2445,71 @@ pub(crate) fn apply_current_live_snapshot_with_options(
     req: CurrentLiveSnapshotRequest,
     drop_live_magnetization: bool,
 ) -> Result<(), ApiError> {
+    apply_current_live_snapshot_candidate(current, req, drop_live_magnetization, false)
+}
+
+/// Apply an active preparation publication, discarding only transient field
+/// carriers that belong to a different preparation. Terminal observations use
+/// the ordinary snapshot path so their accepted results remain available.
+pub(crate) fn apply_current_live_preparation_snapshot(
+    current: &mut SessionStateResponse,
+    req: CurrentLiveSnapshotRequest,
+) -> Result<(), ApiError> {
+    apply_current_live_snapshot_candidate(current, req, false, true)
+}
+
+fn apply_current_live_snapshot_candidate(
+    current: &mut SessionStateResponse,
+    req: CurrentLiveSnapshotRequest,
+    drop_live_magnetization: bool,
+    reset_fields_for_new_preparation: bool,
+) -> Result<(), ApiError> {
     let mut candidate = current.clone();
-    apply_current_live_snapshot_in_place(&mut candidate, req, drop_live_magnetization)?;
+    apply_current_live_snapshot_in_place(
+        &mut candidate,
+        req,
+        drop_live_magnetization,
+        reset_fields_for_new_preparation,
+    )?;
     *current = candidate;
     Ok(())
+}
+
+fn incoming_preparation_changes_id(
+    current: &SessionStateResponse,
+    incoming: Option<&SimulationPreparationSnapshot>,
+) -> bool {
+    let Some(incoming) = incoming else {
+        return false;
+    };
+    if current
+        .simulation_preparation
+        .as_ref()
+        .is_some_and(|existing| incoming.revision < existing.revision)
+    {
+        return false;
+    }
+    current
+        .simulation_preparation
+        .as_ref()
+        .map(|existing| existing.preparation_id.as_str())
+        != Some(incoming.preparation_id.as_str())
+}
+
+fn clear_transient_preparation_fields(current: &mut SessionStateResponse) {
+    current.latest_fields = LatestFields::default();
+    current.preview_cache = CachedPreviewFields::default();
+    current.field_publication_bundles.clear();
+    current.live_state = None;
+    current.coupled_checkpoint = None;
+    current.preview = None;
 }
 
 fn apply_current_live_snapshot_in_place(
     current: &mut SessionStateResponse,
     mut req: CurrentLiveSnapshotRequest,
     drop_live_magnetization: bool,
+    reset_fields_for_new_preparation: bool,
 ) -> Result<(), ApiError> {
     let apply_start = std::time::Instant::now();
     if let Some(live_state) = req.live_state.as_ref() {
@@ -2477,7 +2534,61 @@ fn apply_current_live_snapshot_in_place(
     ) {
         return Ok(());
     }
-    let mut affected_field_quantities = BTreeSet::new();
+    let reset_preparation_fields = reset_fields_for_new_preparation
+        && incoming_preparation_changes_id(current, req.simulation_preparation.as_ref());
+    let mut reset_preparation_quantities = BTreeSet::new();
+    if reset_preparation_fields {
+        reset_preparation_quantities.extend(
+            current
+                .latest_fields
+                .entries()
+                .map(|(quantity, _)| quantity.clone()),
+        );
+        reset_preparation_quantities.extend(
+            current
+                .preview_cache
+                .iter()
+                .map(|(quantity, _)| quantity.clone()),
+        );
+        reset_preparation_quantities.extend(current.field_publication_bundles.keys().cloned());
+        if current
+            .live_state
+            .as_ref()
+            .is_some_and(|state| state.latest_step.magnetization.is_some())
+        {
+            reset_preparation_quantities.insert("m".to_string());
+        }
+        if let Some(field) = current
+            .live_state
+            .as_ref()
+            .and_then(|state| state.latest_step.preview_field.as_ref())
+        {
+            reset_preparation_quantities.insert(field.quantity.clone());
+        }
+        match current.preview.as_ref() {
+            Some(PreviewState::Spatial(preview)) => {
+                reset_preparation_quantities.insert(preview.quantity.clone());
+            }
+            Some(PreviewState::GlobalScalar(preview)) => {
+                reset_preparation_quantities.insert(preview.quantity.clone());
+            }
+            None => {}
+        }
+    }
+    let reset_field_revisions_before = reset_preparation_quantities
+        .iter()
+        .map(|quantity| {
+            (
+                quantity.clone(),
+                current
+                    .field_quantity_revisions
+                    .get(quantity)
+                    .copied()
+                    .unwrap_or(0),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut affected_field_quantities = reset_preparation_quantities.clone();
     if let Some(latest_fields) = req.latest_fields.as_ref() {
         affected_field_quantities.extend(
             latest_fields
@@ -2521,8 +2632,12 @@ fn apply_current_live_snapshot_in_place(
     }
     let previous_field_sources =
         capture_effective_field_sources(current, &affected_field_quantities);
+    if reset_preparation_fields {
+        clear_transient_preparation_fields(current);
+    }
     let previous_stage_execution = current.stage_execution.clone();
     let flags = CurrentLiveApplyFlags {
+        reset_preparation_fields,
         has_metadata: req.metadata.is_some(),
         has_latest_fields: req.latest_fields.is_some(),
         has_preview_fields: req.preview_fields.is_some(),
@@ -2672,6 +2787,17 @@ fn apply_current_live_snapshot_in_place(
         );
     }
     apply_effective_field_source_delta(current, previous_field_sources);
+    for (quantity, revision_before) in reset_field_revisions_before {
+        if current
+            .field_quantity_revisions
+            .get(&quantity)
+            .copied()
+            .unwrap_or(0)
+            == revision_before
+        {
+            bump_field_sample_revision(current, &quantity, None);
+        }
+    }
 
     let result = finalize_current_live_apply(current, flags);
     if result.is_ok() {
@@ -4330,6 +4456,197 @@ mod tests {
             "failure": null
         }))
         .expect("preparation fixture should deserialize")
+    }
+
+    fn preparation_request(preparation_id: &str, revision: u64) -> CurrentLiveSnapshotRequest {
+        serde_json::from_value(json!({
+            "session_id": "test-session",
+            "metadata": {
+                "physics_marker": "new-preparation",
+                "execution_plan": { "backend_plan": { "kind": "fem_eigen" } }
+            },
+            "simulation_preparation": {
+                "preparation_id": preparation_id,
+                "revision": revision,
+                "status": "ready",
+                "active_stage_id": null,
+                "started_at_unix_ms": 1_700_000_000_001_u64,
+                "completed_at_unix_ms": 1_700_000_000_002_u64,
+                "stages": [],
+                "log_tail": [],
+                "failure": null
+            }
+        }))
+        .expect("preparation snapshot request should deserialize")
+    }
+
+    #[test]
+    fn new_active_preparation_clears_transient_fields_but_keeps_history_and_mesh() {
+        let mut current = test_current_snapshot();
+        current.simulation_preparation = Some(simulation_preparation(1));
+        current.fem_mesh = Some(domain_fem_mesh("source-geometry").into());
+        current.latest_fields = serde_json::from_value(json!({
+            "m": { "values": [[1.0, 0.0, 0.0]], "source_step": 4 },
+            "H_eff": { "values": [[0.0, 1.0, 0.0]], "source_step": 4 },
+            "mode_shape": { "values": [[0.0, 0.0, 1.0]], "source_step": 4 }
+        }))
+        .expect("prior solve fields");
+        let frame = accepted_observation_frame_ref(&current, 4, Some(4.0e-12));
+        let cached = preview_field("H_eff");
+        current.preview_cache.insert(cached.clone());
+        current
+            .preview_cache
+            .remember_accepted_source(&cached, frame.clone());
+        current
+            .preview_cache
+            .remember_accepted_latest_source("H_eff", frame.clone());
+        current.field_publication_bundles.insert(
+            "H_eff".into(),
+            crate::schemas::common::FieldPublicationBundle::for_response(
+                frame,
+                1,
+                1,
+                1,
+                1,
+                "topology",
+                "H_eff",
+                "full",
+                "full_domain",
+                None::<String>,
+                "carrier",
+                "fingerprint",
+            ),
+        );
+        current.live_state = Some(live_state_with_magnetization(4, vec![1.0, 0.0, 0.0]));
+        current.coupled_checkpoint = Some(json!({ "run": "previous" }));
+        current.preview = Some(PreviewState::GlobalScalar(GlobalScalarPreviewState {
+            display_kind: "field".into(),
+            config_revision: 1,
+            source_step: 4,
+            source_time: 4.0e-12,
+            quantity: "H_eff".into(),
+            unit: "A/m".into(),
+            value: 1.0,
+        }));
+        current.scalar_rows.push(scalar_row(4, 2.0));
+        current
+            .terminal_field_generations
+            .insert("previous-run".into(), 9);
+
+        apply_current_live_preparation_snapshot(&mut current, preparation_request("prep-new", 2))
+            .expect("new active preparation should publish");
+
+        assert!(current.latest_fields.entries().next().is_none());
+        assert!(current.preview_cache.is_empty());
+        assert!(current
+            .preview_cache
+            .accepted_source_frame(&cached)
+            .is_none());
+        assert!(current
+            .preview_cache
+            .accepted_latest_source_frame("H_eff")
+            .is_none());
+        assert!(current.field_publication_bundles.is_empty());
+        assert!(current.live_state.is_none());
+        assert!(current.coupled_checkpoint.is_none());
+        assert!(current.preview.is_none());
+        assert_eq!(
+            current.fem_mesh.as_ref().unwrap().generation_id.as_deref(),
+            Some("source-geometry")
+        );
+        assert_eq!(
+            current.scalar_rows.len(),
+            1,
+            "scalar history remains available"
+        );
+        assert_eq!(current.terminal_field_generations["previous-run"], 9);
+        assert_eq!(
+            current.metadata.as_ref().unwrap()["physics_marker"],
+            "new-preparation"
+        );
+    }
+
+    #[test]
+    fn replaying_same_active_preparation_keeps_new_solve_fields_and_cache() {
+        let mut current = test_current_snapshot();
+        current.simulation_preparation = Some(simulation_preparation(1));
+        current.latest_fields = serde_json::from_value(json!({
+            "m": { "values": [[0.0, 1.0, 0.0]], "source_step": 7 },
+            "H_eff": { "values": [[0.0, 0.0, 2.0]], "source_step": 7 }
+        }))
+        .expect("new solve fields");
+        let frame = accepted_observation_frame_ref(&current, 7, Some(7.0e-12));
+        let cached = preview_field("H_eff");
+        current.preview_cache.insert(cached.clone());
+        current
+            .preview_cache
+            .remember_accepted_source(&cached, frame.clone());
+        current
+            .preview_cache
+            .remember_accepted_latest_source("H_eff", frame.clone());
+        current.live_state = Some(live_state_with_magnetization(7, vec![0.0, 1.0, 0.0]));
+        current.coupled_checkpoint = Some(json!({ "run": "active" }));
+
+        apply_current_live_preparation_snapshot(&mut current, preparation_request("prep-test", 2))
+            .expect("same-preparation replay should publish");
+
+        assert_eq!(
+            current.latest_fields.get("m").unwrap()["values"],
+            json!([[0.0, 1.0, 0.0]])
+        );
+        assert_eq!(
+            current.latest_fields.get("H_eff").unwrap()["values"],
+            json!([[0.0, 0.0, 2.0]])
+        );
+        assert!(current.preview_cache.get("H_eff").is_some());
+        assert!(current
+            .preview_cache
+            .accepted_source_frame(&cached)
+            .is_some());
+        assert!(current
+            .preview_cache
+            .accepted_latest_source_frame("H_eff")
+            .is_some());
+        assert_eq!(current.live_state.as_ref().unwrap().latest_step.step, 7);
+        assert_eq!(
+            current.coupled_checkpoint.as_ref().unwrap()["run"],
+            "active"
+        );
+    }
+
+    #[test]
+    fn older_active_preparation_cannot_clear_newer_fields() {
+        let mut current = test_current_snapshot();
+        current.simulation_preparation = Some(simulation_preparation(5));
+        current.latest_fields = serde_json::from_value(json!({
+            "m": {"values": [[0.0, 1.0, 0.0]], "source_step": 7}
+        })).unwrap();
+        current.coupled_checkpoint = Some(json!({"newer_run": true}));
+        apply_current_live_preparation_snapshot(
+            &mut current, preparation_request("prep-stale-different", 4),
+        ).unwrap();
+        assert_eq!(current.simulation_preparation.as_ref().unwrap().revision, 5);
+        assert_eq!(current.latest_fields.get("m").unwrap()["values"], json!([[0.0, 1.0, 0.0]]));
+        assert_eq!(current.coupled_checkpoint.as_ref().unwrap()["newer_run"], true);
+    }
+
+    #[test]
+    fn new_active_preparation_retains_incoming_fields_and_checkpoint() {
+        let mut current = test_current_snapshot();
+        current.simulation_preparation = Some(simulation_preparation(1));
+        current.coupled_checkpoint = Some(json!({"old_run": true}));
+        let mut request = preparation_request("prep-new-with-fields", 2);
+        let mesh = domain_fem_mesh("incoming-preparation");
+        let incoming_values = vec![[0.0, 0.0, 1.0]; mesh.nodes.len()];
+        request.fem_mesh = Some(mesh.into());
+        request.latest_fields = Some(serde_json::from_value(json!({
+            "m": {"values": incoming_values, "source_step": 0}
+        })).unwrap());
+        request.latest_scalar_row = Some(scalar_row(0, 0.0));
+        request.coupled_checkpoint = Some(json!({"new_run": true}));
+        apply_current_live_preparation_snapshot(&mut current, request).unwrap();
+        assert_eq!(current.latest_fields.get("m").unwrap()["values"], json!(incoming_values));
+        assert_eq!(current.coupled_checkpoint.as_ref().unwrap()["new_run"], true);
     }
 
     #[test]

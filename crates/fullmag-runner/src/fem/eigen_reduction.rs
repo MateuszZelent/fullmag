@@ -149,6 +149,18 @@ pub(super) fn validate_tangent_frame_transport_support(
     reject_nonidentity_tangent_frame_transport(topology, &selected_pairs, equilibrium)
 }
 
+/// Validate the final equilibrium used to reconstruct reference modal fields.
+/// Pure-translation periodic expansion requires matching physical tangent planes;
+/// scalar modes additionally require identity-frame transport.
+pub(super) fn validate_materialized_tangent_frame_transport(
+    plan: &FemEigenPlanIR,
+    topology: &MeshTopology,
+    equilibrium: &[Vector3],
+) -> Result<(), RunError> {
+    validate_tangent_frame_transport_support(plan, topology, equilibrium)?;
+    validate_shared_domain_tangent_frame_transport(plan, topology, equilibrium)
+}
+
 /// Validate physical equilibrium continuity for the native shared-domain
 /// Full2x2 payload. Local tangent coordinates may rotate across a periodic
 /// pair; the native constraint transports them with `T_dst^T T_src` before

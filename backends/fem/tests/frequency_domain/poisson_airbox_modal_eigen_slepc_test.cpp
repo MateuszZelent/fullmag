@@ -19,6 +19,10 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <memory>
+#if defined(__linux__)
+#include <pthread.h>
+#endif
 #include <string>
 #include <vector>
 
@@ -1695,7 +1699,7 @@ void FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated()
               "\"requested_ncv\":") == 50u,
           "every planned subwindow must publish its explicit SLEPc ncv");
     check(contains(result.window_certificate_json,
-                   "\"krylov_subspace_policy\":\"bounded_quadruple_nev_window_v2\""),
+                   "\"krylov_subspace_policy\":\"bounded_quadruple_nev_floor32_window_v3\""),
           "window certificate must name the bounded Krylov-subspace policy");
     const std::uint64_t split_dimension = 2u * result.q_dof_count;
     const std::uint64_t requested_nev = static_cast<std::uint64_t>(
@@ -1704,7 +1708,7 @@ void FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated()
         json_number_after(result.window_certificate_json, "\"requested_ncv\":"));
     const std::uint64_t expected_ncv = std::min(
         split_dimension,
-        std::max(requested_nev + 1u, 4u * requested_nev));
+        std::max({requested_nev + 1u, 4u * requested_nev, std::uint64_t{32u}}));
     check(requested_ncv == expected_ncv && requested_ncv <= split_dimension,
           "base ncv must follow the explicit bounded policy and not exceed dimension");
     const char *cursor = result.executed_subwindows_json;
@@ -1727,7 +1731,7 @@ void FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated()
         check(local_ncv > local_nev && local_ncv <= split_dimension &&
                   local_ncv == std::min(
                       split_dimension,
-                      std::max(local_nev + 1u, 4u * local_nev)),
+                      std::max({local_nev + 1u, 4u * local_nev, std::uint64_t{32u}})),
               "each subwindow ncv must follow the bounded policy");
         ++checked_subwindow_dimensions;
         cursor = ncv_entry + 1;
@@ -1740,6 +1744,72 @@ void FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated()
     check(json_number_after(result.window_certificate_json, "\"refined_ncv\":") >
               json_number_after(result.window_certificate_json, "\"refined_nev\":"),
           "window certificate must publish a bounded refinement ncv greater than nev");
+}
+
+void PublicPoissonValidationDoesNotMaterializeResultOnWorkerStack()
+{
+#if defined(__linux__)
+    struct Probe {
+        fd::PoissonAirboxEigenBlockProblem problem{};
+        std::unique_ptr<fd::PoissonAirboxModalEigenResult> result =
+            std::make_unique<fd::PoissonAirboxModalEigenResult>();
+        fd::FrequencyDomainStatus status = fd::FrequencyDomainStatus::ok;
+        bool returned = false;
+    } probe;
+    probe.problem.requested_mode_count = 0u;
+    probe.result->accepted_modes.emplace_back();
+    probe.result->frequency_hz = 123.0;
+    pthread_attr_t attributes;
+    const int initialized = pthread_attr_init(&attributes);
+    check(initialized == 0, "small-stack validation attributes must initialize");
+    if (initialized != 0) return;
+    const int configured = pthread_attr_setstacksize(&attributes, 256u * 1024u);
+    check(configured == 0, "validation regression must use a 256 KiB worker stack");
+    if (configured != 0) {
+        pthread_attr_destroy(&attributes);
+        return;
+    }
+    pthread_t worker;
+    const int started = pthread_create(&worker, &attributes, [](void *opaque) -> void * {
+        auto &state = *static_cast<Probe *>(opaque);
+        state.status = fd::solve_poisson_airbox_modal_eigen_cpu_slepc(
+            state.problem, state.result.get());
+        state.returned = true;
+        return nullptr;
+    }, &probe);
+    pthread_attr_destroy(&attributes);
+    check(started == 0, "small-stack validation worker must start");
+    if (started != 0) return;
+    const int joined = pthread_join(worker, nullptr);
+    check(joined == 0 && probe.returned,
+          "public K0 validation must return without a large result temporary on the stack");
+    check(probe.status == fd::FrequencyDomainStatus::validation_error &&
+              probe.result->accepted_modes.empty() && probe.result->frequency_hz == 0.0,
+          "in-place reset must preserve invalid-input rejection and clear previous modes");
+#endif
+}
+
+void FrequencyWindowOneModeKeepsMinimumRestartSubspace()
+{
+    const WindowSpectrumFixture fixture = make_window_spectrum_fixture(
+        {0.20e9, 1.10e9, 2.10e9, 3.10e9, 4.10e9, 5.10e9, 6.10e9,
+         7.10e9, 8.10e9});
+    const auto problem = fixture.problem(0.5e9, 1.5e9, 1);
+    fd::PoissonAirboxModalEigenResult result{};
+    check(solve_window_fixture_with_bounded_diagnostics(
+              "FrequencyWindowOneModeKeepsMinimumRestartSubspace", problem, &result) ==
+              fd::FrequencyDomainStatus::ok,
+          result.error_message);
+    check(result.accepted_mode_count == 1u &&
+              std::abs(result.frequency_hz - 1.10e9) / 1.10e9 < 1.0e-8,
+          "larger private workspace must preserve the one-mode public result");
+    check_stable_selected_search_certificate(result);
+    const auto split_dimension = 2u * result.q_dof_count;
+    check(split_dimension >= 32u,
+          "fixture must exercise the workspace floor rather than its dimension cap");
+    check(json_number_after(result.window_certificate_json, "\"requested_nev\":") == 4.0 &&
+              json_number_after(result.window_certificate_json, "\"requested_ncv\":") == 32.0,
+          "one-mode window must retain NEV=4 and reserve a 32-vector basis");
 }
 
 void FrequencyWindowRetainsInteriorModesBeforePublicationCap()
@@ -1795,9 +1865,9 @@ void FrequencyWindowRetainsInteriorModesBeforePublicationCap()
           "refinement must resolve above the actual base NEV and remain within its count and actual split-dimension bounds");
     const std::uint64_t expected_base_ncv = std::min(
         split_dimension,
-        std::max<std::uint64_t>(
+        std::max<std::uint64_t>({
             static_cast<std::uint64_t>(requested_nev) + 1u,
-            4u * static_cast<std::uint64_t>(requested_nev)));
+            4u * static_cast<std::uint64_t>(requested_nev), 32u}));
     check(json_number_after(result.window_certificate_json, "\"requested_ncv\":") ==
               static_cast<double>(expected_base_ncv),
           "window discovery must publish ncv for its actual effective nev");
@@ -3162,6 +3232,8 @@ int main()
     PublishesCanonicalResidualFieldsAndSolverReasons();
     FrequencyWindowPublishesSelectedSearchStabilityWithoutCount();
     FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated();
+    PublicPoissonValidationDoesNotMaterializeResultOnWorkerStack();
+    FrequencyWindowOneModeKeepsMinimumRestartSubspace();
     FrequencyWindowRetainsInteriorModesBeforePublicationCap();
     FrequencyWindowCoversBothClippedEdges();
     FrequencyWindowFailsClosedWhenMaximumRequestCannotCoverBothEdges();

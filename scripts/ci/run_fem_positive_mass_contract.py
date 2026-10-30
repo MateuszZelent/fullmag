@@ -24,6 +24,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 STORAGE_CLI = REPO_ROOT / "scripts" / "fullmag_storage.py"
 DOCKERFILE = REPO_ROOT / "docker" / "fem-cpu" / "Dockerfile"
 DOCKERIGNORE = REPO_ROOT / ".dockerignore"
+SCRIPTS_ROOT = REPO_ROOT / "scripts"
+if str(SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_ROOT))
+
+from docker_compose_identity import compose_project_identity
+
+
 STORAGE_PROFILE = "linux-host"
 DOCKER_BUILD_JOBS = 2
 NATIVE_BUILD_JOBS = 2
@@ -62,6 +69,69 @@ CONTRACT_PROFILES: dict[str, dict[str, Any]] = {
             },
         ],
         "uses_slepc": False,
+        "timeout": {
+            "workflow_minutes": WORKFLOW_TIMEOUT_MINUTES,
+            "orchestration_minutes": ORCHESTRATION_TIMEOUT_MINUTES,
+            "execution_minutes": BUILD_EXECUTION_TIMEOUT_MINUTES,
+            "dependency_build_seconds": DEPENDENCY_BUILD_TIMEOUT_SECONDS,
+            "native_build_test_seconds": NATIVE_BUILD_TEST_TIMEOUT_SECONDS,
+        },
+    },
+    "tracking-mass-mfem": {
+        "slug": "fem-tracking-mass-mfem-contract",
+        "schema": "fullmag.ci.fem.tracking_mass_mfem_contract.v1",
+        "preflight_schema": "fullmag.ci.fem.tracking_mass_mfem_preflight.v1",
+        "qualification_scope": "mfem_cpu_tracking_mass_provider_and_snapshot_source_contract_only",
+        "route_kind": "github_hosted_cpu_mfem_tracking_mass_contract",
+        "tests": [
+            {
+                "name": "fem_tracking_mass_provider_contract",
+                "source_suffix": "backends/fem/tests/frequency_domain/tracking_mass_provider_test.cpp",
+                "marker": "PASS: fem_tracking_mass_provider_geometric_csr_contract",
+                "compile_definitions": ["-DFULLMAG_HAS_MFEM_STACK=1"],
+            },
+            {
+                "name": "fem_tracking_mass_snapshot_contract",
+                "source_suffix": "backends/fem/tests/frequency_domain/tracking_mass_snapshot_contract_test.cpp",
+                "marker": "PASS: fem_tracking_mass_snapshot_cabi_contract",
+                "compile_definitions": [
+                    "-DFULLMAG_HAS_MFEM_STACK=1",
+                    "-DFULLMAG_FEM_SOURCE_SNAPSHOT_SHA256",
+                ],
+            },
+        ],
+        "uses_slepc": False,
+        "uses_mfem_stack": True,
+        "requires_source_snapshot": True,
+        "direct_compose": True,
+        "timeout": {
+            "workflow_minutes": WORKFLOW_TIMEOUT_MINUTES,
+            "orchestration_minutes": ORCHESTRATION_TIMEOUT_MINUTES,
+            "execution_minutes": BUILD_EXECUTION_TIMEOUT_MINUTES,
+            "dependency_build_seconds": DEPENDENCY_BUILD_TIMEOUT_SECONDS,
+            "native_build_test_seconds": NATIVE_BUILD_TEST_TIMEOUT_SECONDS,
+        },
+    },
+    "tracking-mass-stub": {
+        "slug": "fem-tracking-mass-stub-contract",
+        "schema": "fullmag.ci.fem.tracking_mass_stub_contract.v1",
+        "preflight_schema": "fullmag.ci.fem.tracking_mass_stub_preflight.v1",
+        "qualification_scope": "no_stack_tracking_mass_abi_unavailable_contract_only",
+        "route_kind": "github_hosted_cpu_no_mfem_abi_contract",
+        "tests": [
+            {
+                "name": "fem_tracking_mass_snapshot_contract",
+                "source_suffix": "backends/fem/tests/frequency_domain/tracking_mass_snapshot_contract_test.cpp",
+                "marker": "PASS: fem_tracking_mass_snapshot_stub_contract",
+                "compile_definitions": [
+                    "-DFULLMAG_HAS_MFEM_STACK=0",
+                    "-DFULLMAG_FEM_SOURCE_SNAPSHOT_SHA256",
+                ],
+            },
+        ],
+        "uses_slepc": False,
+        "uses_mfem_stack": False,
+        "requires_source_snapshot": True,
         "timeout": {
             "workflow_minutes": WORKFLOW_TIMEOUT_MINUTES,
             "orchestration_minutes": ORCHESTRATION_TIMEOUT_MINUTES,
@@ -616,6 +686,41 @@ def _assert_source_identity(
         )
 
 
+def _capture_source_snapshot_sha256(output_path: Path) -> str:
+    command = [
+        sys.executable,
+        str(REPO_ROOT / "scripts" / "capture_source_snapshot_identity.py"),
+        "--repo-root",
+        str(REPO_ROOT),
+        "--output",
+        str(output_path),
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ContractRunError("could not capture the managed source snapshot identity") from error
+    if result.returncode != 0:
+        raise ContractRunError(
+            "source snapshot identity capture failed: "
+            + (result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}")
+        )
+    try:
+        identity = json.loads(output_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ContractRunError("source snapshot identity output is missing or invalid") from error
+    digest = identity.get("source_snapshot_sha256") if isinstance(identity, dict) else None
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise ContractRunError("source snapshot identity lacks a lowercase SHA-256 digest")
+    return digest
+
+
 def _dockerfile_values() -> dict[str, str]:
     text = DOCKERFILE.read_text(encoding="utf-8")
     values: dict[str, str] = {}
@@ -730,6 +835,55 @@ def _owner_action(
     if state is not None:
         arguments.extend(["--state", state])
     _storage_command(action, arguments, env=env)
+
+
+def _checkout_kind(layout: dict[str, Any]) -> str:
+    """Return the canonical checkout kind used by the storage safety contract."""
+
+    try:
+        identity = compose_project_identity(layout)
+    except Exception as error:
+        raise ContractRunError(
+            f"Could not resolve canonical checkout identity before owner finalization: {error}"
+        ) from error
+    checkout_kind = identity.get("checkout_kind")
+    if checkout_kind not in {"main-checkout", "worktree"}:
+        raise ContractRunError(
+            f"Storage identity returned unsupported checkout kind: {checkout_kind!r}"
+        )
+    return checkout_kind
+
+
+def _owner_finish_plan(*, checkout_kind: str, passed: bool) -> dict[str, str]:
+    """Describe safe registry finalization without weakening worktree-retirement guards."""
+
+    if checkout_kind not in {"main-checkout", "worktree"}:
+        raise ContractRunError(
+            f"Cannot select owner finalization for unsupported checkout kind: {checkout_kind!r}"
+        )
+    if not passed:
+        return {
+            "state": "review",
+            "mode": "failure_review",
+            "cleanup_state": "review_required",
+            "reason": "The bounded source contract did not pass; retain the receipt for review.",
+        }
+    if checkout_kind == "main-checkout":
+        return {
+            "state": "review",
+            "mode": "main_checkout_receipt_only",
+            "cleanup_state": "not_applicable_main_checkout",
+            "reason": (
+                "GitHub Actions ran in the canonical main checkout; record the passed build "
+                "owner without attempting private worktree retirement."
+            ),
+        }
+    return {
+        "state": "completed",
+        "mode": "worktree_retirement",
+        "cleanup_state": "completed",
+        "reason": "The bounded source contract passed and the managed worktree may retire safely.",
+    }
 
 
 def _parse_cache(path: Path) -> dict[str, str]:
@@ -1098,6 +1252,7 @@ def _execute_contract(args: Any) -> int:
     native_execution_status = "not_started"
     native_build_dir = build_dir / "native"
     ctest_log_path = run_dir / "native-build-and-ctest.log"
+    source_snapshot_sha256: str | None = None
     try:
         env = os.environ.copy()
         global _ORCHESTRATION_DEADLINE
@@ -1119,6 +1274,16 @@ def _execute_contract(args: Any) -> int:
             args.git_head, args.github_sha, env=env, stage="before Docker execution"
         )
         receipt["source"]["identity_verified_before_docker"] = True
+        if profile.get("requires_source_snapshot", False):
+            source_snapshot_identity_path = run_dir / "source-snapshot-identity.json"
+            source_snapshot_sha256 = _capture_source_snapshot_sha256(
+                source_snapshot_identity_path
+            )
+            receipt["source"]["source_snapshot_sha256"] = source_snapshot_sha256
+            receipt["source"]["source_snapshot_identity_path"] = str(
+                source_snapshot_identity_path
+            )
+            _write_json(receipt_path, receipt)
 
         dockerfile_pins = _dockerfile_values()
         run_id = env["GITHUB_RUN_ID"]
@@ -1415,14 +1580,21 @@ def _execute_contract(args: Any) -> int:
         container_build_dir = f"/fullmag-storage/{storage_relative_build}/native"
         container_temp_dir = f"/fullmag-storage/{storage_relative_temp}"
         slepc_enabled = "ON" if profile["uses_slepc"] else "OFF"
+        mfem_stack_enabled = "ON" if profile.get("uses_mfem_stack", True) else "OFF"
         cmake_flags = [
             "-DCMAKE_BUILD_TYPE=Release",
             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
             "-DFULLMAG_ENABLE_CUDA=OFF",
             "-DFULLMAG_ENABLE_FEM_GPU=OFF",
-            "-DFULLMAG_USE_MFEM_STACK=ON",
+            f"-DFULLMAG_USE_MFEM_STACK={mfem_stack_enabled}",
             f"-DFULLMAG_FEM_WITH_SLEPC={slepc_enabled}",
         ]
+        if source_snapshot_sha256 is not None:
+            cmake_flags.append(
+                f"-DFULLMAG_FEM_SOURCE_SNAPSHOT_SHA256={source_snapshot_sha256}"
+            )
+        if profile.get("direct_compose", False):
+            cmake_flags.append("-DFULLMAG_DIRECT_COMPOSE=1")
         if profile["uses_slepc"]:
             cmake_flags.append(f"-DCMAKE_PREFIX_PATH={INSTALL_PREFIX}")
         test_targets = _test_targets(profile)
@@ -1436,7 +1608,7 @@ def _execute_contract(args: Any) -> int:
             ("FM_BUILD_DIR", container_build_dir),
             ("FM_TEMP_DIR", container_temp_dir),
             ("CMAKE_BUILD_PARALLEL_LEVEL", str(NATIVE_BUILD_JOBS)),
-            ("FULLMAG_USE_MFEM_STACK", "ON"),
+            ("FULLMAG_USE_MFEM_STACK", mfem_stack_enabled),
             ("FULLMAG_MANAGED_FEM_DEVICE", "cpu"),
             ("FULLMAG_FEM_REQUIRE_GPU", "0"),
             ("FULLMAG_FEM_REQUIRE_CEED", "0"),
@@ -1527,7 +1699,12 @@ def _execute_contract(args: Any) -> int:
 
         cache = _parse_cache(native_build_dir / "CMakeCache.txt")
         expected_cache = dict(COMMON_CACHE_OPTIONS)
+        expected_cache["FULLMAG_USE_MFEM_STACK"] = mfem_stack_enabled
         expected_cache["FULLMAG_FEM_WITH_SLEPC"] = slepc_enabled
+        if source_snapshot_sha256 is not None:
+            expected_cache["FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256"] = source_snapshot_sha256
+        if profile.get("direct_compose", False):
+            expected_cache["FULLMAG_DIRECT_COMPOSE"] = "1"
         if profile["uses_slepc"]:
             expected_cache["CMAKE_PREFIX_PATH"] = INSTALL_PREFIX
         observed_cache = {name: cache.get(name) for name in expected_cache}
@@ -1663,6 +1840,7 @@ def _orchestrate(contract_profile: str) -> int:
     task_id = f"{slug}-{run_id}-{attempt}"
     owner = f"github-actions:{repository}:{run_id}.{attempt}"
     layout, env = _prepare_storage(env)
+    checkout_kind = _checkout_kind(layout)
     storage_root = Path(layout["storage_root"])
     build_dir = Path(layout["build_root"]) / f"{slug}-{run_id}-{attempt}"
     run_dir = Path(layout["runs_root"]) / slug / f"{run_id}-{attempt}"
@@ -1681,6 +1859,7 @@ def _orchestrate(contract_profile: str) -> int:
         ),
     )
     owner_finished = [False]
+    owner_recorded_plan: list[dict[str, str] | None] = [None]
 
     def finish_interrupted_owner() -> None:
         if not owner_finished[0]:
@@ -1697,6 +1876,12 @@ def _orchestrate(contract_profile: str) -> int:
                     state="review",
                 )
                 owner_finished[0] = True
+                owner_recorded_plan[0] = {
+                    "state": "review",
+                    "mode": "interrupted_review",
+                    "cleanup_state": "review_required",
+                    "reason": "Orchestration ended before terminal owner finalization; retain the receipt for review.",
+                }
             except Exception as error:
                 print(
                     f"[{slug}] could not finish storage owner: {error}",
@@ -1722,9 +1907,17 @@ def _orchestrate(contract_profile: str) -> int:
             if receipt_path.is_file():
                 try:
                     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                    owner_plan = owner_recorded_plan[0] or _owner_finish_plan(
+                        checkout_kind=checkout_kind,
+                        passed=False,
+                    )
                     receipt.setdefault("storage", {}).update(
-                        owner_state="completed" if owner_finished[0] and receipt.get("status") == "passed" else "review",
+                        checkout_kind=checkout_kind,
+                        owner_state=owner_plan["state"],
                         owner_finish_recorded=owner_finished[0],
+                        owner_finish_mode=owner_plan["mode"],
+                        owner_finish_reason=owner_plan["reason"],
+                        cleanup_state=owner_plan["cleanup_state"],
                     )
                     if receipt.get("status") == "queued":
                         receipt["status"] = "failed"
@@ -1773,6 +1966,9 @@ def _orchestrate(contract_profile: str) -> int:
             "temp_dir": str(temp_dir),
             "task_id": task_id,
             "owner": owner,
+            "checkout_kind": checkout_kind,
+            "owner_finish_mode": "pending",
+            "cleanup_state": "pending",
         },
     }
     _write_json(run_dir / "receipt.json", output)
@@ -1787,6 +1983,7 @@ def _orchestrate(contract_profile: str) -> int:
             "build_storage_root": layout["build_storage_root"],
             "managed_ext4": layout["managed_ext4"],
             "worktree_id": layout["worktree_id"],
+            "checkout_kind": checkout_kind,
         },
     )
     command = [
@@ -1904,7 +2101,8 @@ def _orchestrate(contract_profile: str) -> int:
         and receipt.get("status") == "passed"
         and post_run_identity_error is None
     )
-    owner_state = "completed" if passed else "review"
+    owner_plan = _owner_finish_plan(checkout_kind=checkout_kind, passed=passed)
+    owner_state = owner_plan["state"]
     owner_finish_recorded = False
     finish_error = None
     finish_exception: Exception | None = None
@@ -1916,20 +2114,31 @@ def _orchestrate(contract_profile: str) -> int:
             owner=owner,
             purpose=(
                 f"GitHub Actions source-contract status={receipt.get('status', 'failed')}; "
-                "next step: retain the uploaded receipt and act on its test result."
+                f"{owner_plan['reason']}"
             ),
             state=owner_state,
         )
         owner_finish_recorded = True
         owner_finished[0] = True
+        owner_recorded_plan[0] = owner_plan
     except Exception as error:
         finish_exception = error
         finish_error = f"{type(error).__name__}: {error}"
         passed = False
         owner_state = "review"
+        owner_plan = {
+            "state": "review",
+            "mode": "finish_error_review",
+            "cleanup_state": "review_required",
+            "reason": "Owner finalization failed; retain the receipt for review.",
+        }
     receipt.setdefault("storage", {}).update(
+        checkout_kind=checkout_kind,
         owner_state=owner_state,
         owner_finish_recorded=owner_finish_recorded,
+        owner_finish_mode=owner_plan["mode"],
+        owner_finish_reason=owner_plan["reason"],
+        cleanup_state=owner_plan["cleanup_state"],
     )
     if finish_error:
         receipt["storage"]["owner_finish_error"] = finish_error

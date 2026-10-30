@@ -1,3 +1,4 @@
+import { modeResultLabel } from "@/shared/domain/analysis/modeResultPresentation";
 import type { AnalysisModuleId } from "@/kernel/analysis-modules/analysisModuleContract";
 import {
   PIN_MODE_VISUALIZATION_COMMAND,
@@ -17,6 +18,7 @@ import {
 } from "@/shared/domain/analysis/frequencyDomainResultClassification";
 import {
   frequencyDomainResultContextFromManifest,
+  frequencyDomainEquilibriumIdForSample,
   buildEigenDispersionChartModel,
   buildEigenSpectrumChartModel,
   buildFrequencyResponseChartModel,
@@ -68,6 +70,7 @@ export interface PhysicsFirstResultEntry extends FrequencyDomainResultEvidence {
 }
 
 export interface PhysicsFirstAnalysisFieldTarget {
+  equilibriumId?: string;
   fieldId: string;
   frequencyHz: number;
   frequencyIndex?: number;
@@ -110,7 +113,11 @@ interface ResultResourceLike {
 }
 
 interface ResultManifestLike extends ResultResourceLike {
+  revision?: string | null;
+  mesh_generation_id?: string | null;
   payload?: unknown;
+  run_id?: string | null;
+  stage_id?: string | null;
 }
 
 export interface PhysicsFirstResultResourceInput {
@@ -341,7 +348,7 @@ function modalFieldTargets({
         fieldId: point.modeFieldId,
         frequencyHz: point.frequencyHz,
         kPathCoordinateRadPerM: point.pathS,
-        label: `Sample ${point.sampleIndex} · Mode ${point.rawModeIndex}`,
+        label: modeResultLabel(wavevectorKf, point.frequencyHz),
         ...(point.modeId ? { modeId: point.modeId } : {}),
         modeIndex: point.rawModeIndex,
         representation: "complex-vector-xyz" as const,
@@ -362,7 +369,7 @@ function modalFieldTargets({
       ? [{
           fieldId: point.modeFieldId,
           frequencyHz: point.frequencyHz,
-          label: `Sample ${point.sampleIndex} · Mode ${point.rawModeIndex}`,
+          label: modeResultLabel(fixedWavevector ?? (kSampling?.kind === "grid" ? gridWavevectorAtSample(dispersion?.path_metadata, point.sampleIndex) : undefined), point.frequencyHz),
           ...(point.modeId ? { modeId: point.modeId } : {}),
           modeIndex: point.rawModeIndex,
           representation: "complex-vector-xyz" as const,
@@ -472,28 +479,37 @@ export function physicsFirstResultsSnapshotFromResources(
   if (!runId || !payload) return { contractGaps, snapshot: emptySnapshot };
 
   const studyProduct = nonEmptyString(payload.study_product);
-  const stageId = nonEmptyString(payload.stage_id);
-  const equilibriumId = nonEmptyString(payload.equilibrium_identity);
+  const declaredEquilibriumId = nonEmptyString(payload.equilibrium_identity);
+  const hasSampleEquilibrium = payload.sample_execution_provenance != null ||
+    payload.native_provenance_by_sample != null;
   const requested = record(payload.requested_execution);
-  const boundaryContext = nonEmptyString(requested?.boundary_context);
-  if (!equilibriumId) {
+  const manifestBoundary = nonEmptyString(payload.boundary_context);
+  const requestedBoundary = nonEmptyString(requested?.boundary_context);
+  if (manifestBoundary && requestedBoundary && manifestBoundary !== requestedBoundary) {
+    addContractGap("Frequency-domain artifact has conflicting boundary_context declarations");
+    return { contractGaps, snapshot: emptySnapshot };
+  }
+  const boundaryContext = manifestBoundary ?? requestedBoundary;
+  if (!declaredEquilibriumId && !hasSampleEquilibrium) {
     addContractGap("Frequency-domain artifact does not publish equilibrium_identity");
   }
   if (boundaryContext !== "finite_open" && boundaryContext !== "floquet_periodic") {
     addContractGap("Frequency-domain artifact does not publish boundary_context");
   }
   if (
-    !stageId ||
-    !equilibriumId ||
+    (!declaredEquilibriumId && !hasSampleEquilibrium) ||
     (studyProduct !== "modal_eigen" && studyProduct !== "driven_response") ||
     (boundaryContext !== "finite_open" && boundaryContext !== "floquet_periodic")
   ) {
     return { contractGaps, snapshot: emptySnapshot };
   }
 
-  const kSampling =
-    kSamplingFromMetadata(input.dispersion?.path_metadata) ??
-    kSamplingFromRequestedExecution(requested);
+  // The native manifest publishes sampling at the top level. An explicit
+  // invalid declaration must not fall back to a different requested sample.
+  const kSampling = payload.k_sampling !== undefined
+    ? samplingFromRecord(record(payload.k_sampling))
+    : kSamplingFromMetadata(input.dispersion?.path_metadata) ??
+      kSamplingFromRequestedExecution(requested);
   if (boundaryContext === "floquet_periodic" && !kSampling) {
     addContractGap("Periodic/Floquet artifact does not publish a supported k sampling resource");
     return {
@@ -504,12 +520,29 @@ export function physicsFirstResultsSnapshotFromResources(
   const frequencyContext = frequencyDomainResultContextFromManifest({
     ...payload,
     ...(kSampling ? { k_sampling: kSamplingForFrequencyContext(kSampling) } : {}),
-    run_id: runId,
+  }, {
+    meshGenerationId: nonEmptyString(resultManifest?.mesh_generation_id),
+    runId: nonEmptyString(resultManifest?.run_id) ?? runId,
+    stageId: nonEmptyString(resultManifest?.stage_id),
   });
   for (const gap of frequencyContext.contractGaps) {
     addContractGap(gap);
   }
+  const equilibriumId = frequencyContext.equilibriumId;
+  if (!equilibriumId && frequencyContext.sampleEquilibriumProvenance !== "valid") {
+    return { contractGaps, snapshot: { ...emptySnapshot, contractGaps: [...contractGaps] } };
+  }
+  const ownerRunId = frequencyContext.runId;
+  const ownerStageId = frequencyContext.stageId;
+  if (!ownerRunId || !ownerStageId) {
+    return {
+      contractGaps,
+      snapshot: { ...emptySnapshot, contractGaps: [...contractGaps] },
+    };
+  }
+  const stageId = ownerStageId;
   const artifactRevision =
+    nonEmptyString(resultManifest?.revision) ??
     nonEmptyString(payload.revision) ?? input.currentRun?.revision ?? "unknown";
   const products: PhysicsFirstResultProducts =
     studyProduct === "modal_eigen"
@@ -535,17 +568,25 @@ export function physicsFirstResultsSnapshotFromResources(
             dispersion: input.dispersion,
             ...(kSampling ? { kSampling } : {}),
             spectrum: input.spectrum,
+          }).map((target) => {
+            const sampleEquilibriumId = frequencyDomainEquilibriumIdForSample(
+              frequencyContext, target.sampleIndex,
+            );
+            return {
+              ...target,
+              ...(sampleEquilibriumId ? { equilibriumId: sampleEquilibriumId } : {}),
+            };
           })
         : responseFieldTargets(payload, input.responseSweep, kSampling ?? undefined),
     artifactRevision,
     boundaryContext,
     ...(drive ? { drive } : {}),
-    equilibriumId,
+    ...(equilibriumId ? { equilibriumId } : {}),
     ...(kSampling ? { kSampling } : {}),
     observables: observablesFromPayload(payload.observables),
     ...(frequencyContext.normalization ? { normalization: frequencyContext.normalization } : {}),
     products,
-    runId,
+    runId: ownerRunId,
     stageId,
     stageLabel: nonEmptyString(payload.stage_label) ?? stageId,
     studyProduct,
@@ -657,7 +698,12 @@ function analysisFieldTargetNodes(
     | "results.resonance.modal.mode",
 ): ExplorerNode[] {
   const classification = classifyFrequencyDomainResult(entry);
-  return (entry.analysisFieldTargets ?? []).map((target) =>
+  // The inspector provides paged k/f selection for the full collection.
+  // Keep the tree a bounded preview, not an ever-growing mode table.
+  const targets = entry.analysisFieldTargets ?? [];
+  const visibleTargets = kind === "results.dispersion.modal.mode_at_k" || kind === "results.resonance.modal.mode"
+    ? targets.slice(0, 32) : targets;
+  return visibleTargets.map((target) =>
     node(
       `${parentId}:${target.source}:${key(target.fieldId)}`,
       kind,
@@ -670,7 +716,7 @@ function analysisFieldTargetNodes(
         analysisRunId: entry.runId,
         analysisStageId: entry.stageId,
         artifactRevision: entry.artifactRevision,
-        equilibriumId: entry.equilibriumId,
+        equilibriumId: target.equilibriumId ?? entry.equilibriumId,
         fieldId: target.fieldId,
         frequencyHz: target.frequencyHz,
         ...(target.frequencyIndex !== undefined
@@ -851,6 +897,7 @@ function kResolvedStage(
     if (entry.products.modeShapes) {
       const parentId = `${stageId}:modes-at-k`;
       children.push(leaf(stageId, "modes-at-k", "results.dispersion.modal.modes_at_k", "Modes at k", entry, {
+        badge: `${entry.analysisFieldTargets?.length ?? 0} fields · choose k/f`,
         children: analysisFieldTargetNodes(
           parentId,
           entry,
@@ -1161,12 +1208,15 @@ function rootWithChildren(
   label: string,
   parentId: string,
   children: readonly (ExplorerNode | null)[],
+  analysisRunId?: string,
 ): ExplorerNode {
   const materializedChildren = children.filter(
     (child): child is ExplorerNode => child !== null,
   );
   return node(id, kind, label, parentId, {
     children: materializedChildren,
+    collectionStudyCount: materializedChildren.length,
+    ...(analysisRunId ? { analysisRunId } : {}),
     ...(materializedChildren.length === 0
       ? {
           availability: "unavailable" as const,
@@ -1415,11 +1465,12 @@ export function buildPhysicsFirstResultsTree(snapshot: PhysicsFirstResultsSnapsh
                 "Dynamics",
                 resultsId,
                 [observationFramesRoot(`${resultsId}:dynamics`, snapshot)],
+                snapshot.resultContextRunId,
               )
             : null,
         ),
         ...publishedAnalysisRoot(
-          rootWithChildren(resonanceId, "results.resonance.root", "Resonance & FMR", resultsId, resonanceStages),
+          rootWithChildren(resonanceId, "results.resonance.root", "Resonance & FMR", resultsId, resonanceStages, snapshot.resultContextRunId),
           "analysis.resonance",
         ),
         ...publishedAnalysisRoot(
@@ -1429,6 +1480,7 @@ export function buildPhysicsFirstResultsTree(snapshot: PhysicsFirstResultsSnapsh
             "Dispersion & k-resolved response",
             resultsId,
             dispersionStages,
+            snapshot.resultContextRunId,
           ),
           "analysis.dispersion",
         ),

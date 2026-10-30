@@ -48929,6 +48929,8 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
             .expect("stage execution should exist");
         execution.stages[0].stage_id = Some("eigen-stage".into());
         execution.stages[0].kind = Some("flat_eigenmodes".into());
+        // Ownership comes from an exact artifact reference, never the stage kind.
+        execution.stages[0].artifact_refs = vec!["eigen/".into()];
         execution.stages[0].mesh_generation_id = Some("mesh-generation-eigen".into());
         execution.stages[1].stage_id = Some("later-active-stage".into());
         execution.stages[1].kind = Some("relax".into());
@@ -49826,6 +49828,36 @@ async fn frequency_domain_dispersion_missing_resource_has_no_artifact_identity()
         "path_metadata",
     ] {
         assert!(payload[field].is_null(), "missing resource has {field}");
+    }
+}
+
+#[tokio::test]
+async fn frequency_domain_dispersion_single_sampling_preserves_csv_without_inventing_path() {
+    for (sampling, expected_status) in [
+        (serde_json::json!({"kind":"single", "k_vector":[0.0, 10000000.0, 0.0]}), StatusCode::OK),
+        (serde_json::json!({"kind":"single", "k_vector":[0.0, -10000000.0, 0.0]}), StatusCode::INTERNAL_SERVER_ERROR),
+        (serde_json::json!({"kind":"single", "k_vector":[0.0, 10000000.0]}), StatusCode::INTERNAL_SERVER_ERROR),
+        (serde_json::json!({"kind":"single", "k_vector":[0.0, 10000000.0, 0.0], "points":[]}), StatusCode::INTERNAL_SERVER_ERROR),
+    ] {
+        let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+        let eigen_dir = artifact_dir.join("eigen");
+        fs::create_dir_all(eigen_dir.join("dispersion")).unwrap();
+        let csv = "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz\n0,0,0,10000000,0,,0,0,11211886649.716702\n";
+        fs::write(eigen_dir.join("dispersion.csv"), csv).unwrap();
+        fs::write(eigen_dir.join("dispersion/path.json"), serde_json::to_vec(
+            &serde_json::json!({"sampling":sampling})
+        ).unwrap()).unwrap();
+        let response = app.oneshot(Request::builder().method("GET")
+            .uri("/v2/sessions/current/analysis/frequency-domain/eigen/dispersion")
+            .body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), expected_status);
+        let payload: serde_json::Value = serde_json::from_slice(&body_bytes(response).await).unwrap();
+        if expected_status == StatusCode::OK {
+            assert_eq!(payload["status"], "ready");
+            assert_eq!(payload["text"], csv);
+            assert!(payload["path_metadata"].is_null());
+        }
+        let _ = fs::remove_dir_all(&artifact_dir);
     }
 }
 
@@ -55333,4 +55365,40 @@ async fn manual_domain_outside_blocks_readiness_and_mesh_command_before_queueing
     assert_eq!(command.status(), StatusCode::BAD_REQUEST);
     assert!(String::from_utf8_lossy(&body_bytes(command).await).contains("outside"));
     assert!(state.current_control_queue.lock().await.is_empty());
+}
+
+
+#[tokio::test]
+async fn v2_imported_modal_observation_discovery_preserves_source_boundary() {
+    let state = test_app_state_with_live_session().await;
+    state.current_live_state.write().await.as_mut().unwrap().runtime_status.code = "imported_read_only".into();
+    let app = build_v2_router().with_state(state);
+    let response = app.clone().oneshot(Request::builder()
+        .uri("/v2/sessions/current/data/observation-frames?run_id=test-run")
+        .body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["run_id"], "test-run");
+    assert_eq!(body["frames"], serde_json::json!([]));
+    for route in ["/v2/sessions/current/data/observation-frames/frame-unknown",
+                  "/v2/sessions/current/data/observation-frames/frame-unknown/magnetization"] {
+        let response = app.clone().oneshot(Request::builder().uri(route)
+            .body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(body_json(response).await["message"].as_str().unwrap().contains("imported snapshot"));
+    }
+    let response = app.oneshot(Request::builder()
+        .uri("/v2/sessions/current/data/observation-frames?run_id=foreign-run")
+        .body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn v2_live_observation_discovery_still_requires_managed_store() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v2_router().with_state(state);
+    let response = app.oneshot(Request::builder()
+        .uri("/v2/sessions/current/data/observation-frames?run_id=test-run")
+        .body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }

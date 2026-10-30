@@ -45,7 +45,7 @@ describe("EigenModeInspectorPanel model, damping, and residual fields", () => {
     expect(html).toContain("growing");
     expect(html).toContain("Lifetime");
     expect(html).toContain("Linewidth (FWHM)");
-    expect(html).toContain("not available");
+    expect(html).toContain("No decaying oscillatory resonance");
   });
 
   it("shows non-oscillating decay and lifetime without a resonance width", () => {
@@ -58,10 +58,10 @@ describe("EigenModeInspectorPanel model, damping, and residual fields", () => {
     expect(html).toContain("decaying");
     expect(html).toContain("7.958e-8 s");
     expect(html).toContain("Linewidth (FWHM)");
-    expect(html).toContain("not available");
+    expect(html).toContain("No decaying oscillatory resonance");
   });
 
-  it("renders an undamped oscillator with zero FWHM and unavailable Q", () => {
+  it("explains an undamped oscillator instead of reporting missing values", () => {
     const damping = modalDampingObservables(1.2e9, 0, "exp_minus_i_omega_t");
     const html = renderToStaticMarkup(
       <EigenModeDampingFields damping={damping} />,
@@ -70,7 +70,23 @@ describe("EigenModeInspectorPanel model, damping, and residual fields", () => {
     expect(html).toContain("undamped");
     expect(html).toContain("0 Hz");
     expect(html).toContain("Q-factor");
-    expect(html).toContain("not available");
+    expect(html).toContain("No decay in this model");
+    expect(html).toContain("Unbounded for this undamped oscillator");
+    expect(html).not.toContain("not available");
+  });
+
+  it("does not invent infinite Q when the temporal convention is unknown", () => {
+    const html = renderToStaticMarkup(<EigenModeDampingFields damping={modalDampingObservables(1.2e9, 0, null)} />);
+    expect(html).toContain("Unknown frequency or phasor convention");
+    expect(html).not.toContain("Unbounded");
+    expect(html).not.toContain("No decay in this model");
+  });
+
+  it("omits unpublished optional residuals without losing the measured relative residual", () => {
+    const html = renderToStaticMarkup(<EigenModeResidualFields residual={buildEigenResidualSummary({ residual_relative_l2: 2e-9 }, null)} />);
+    expect(html).toContain("2.000e-9");
+    expect(html).not.toContain("Absolute residual");
+    expect(html).not.toContain("Spectrum residual");
   });
 
   it("fails closed when a mode selection is incomplete", () => {

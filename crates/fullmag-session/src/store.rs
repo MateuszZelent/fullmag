@@ -2451,6 +2451,9 @@ impl SessionStore {
                     entry.path().display()
                 );
             }
+            if is_atomic_write_staging_filename(&entry.file_name()) {
+                continue;
+            }
             let file_name = entry.file_name().to_string_lossy().into_owned();
             let launch_id = file_name
                 .strip_suffix(".json")
@@ -2593,6 +2596,9 @@ impl SessionStore {
                     "unsafe preparation process exit receipt entry `{}`",
                     entry.path().display()
                 );
+            }
+            if is_atomic_write_staging_filename(&entry.file_name()) {
+                continue;
             }
             let file_name = entry.file_name().to_string_lossy().into_owned();
             let receipt_id = file_name

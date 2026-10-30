@@ -344,6 +344,9 @@ function overlayOwnerIdentityIssue(
     return "Active analysis overlay frequency identity is missing.";
   }
   if (overlay.source === "eigen-mode") {
+    if (!overlay.modeIntent) {
+      return "Active eigen mode overlay requires a canonical mode intent.";
+    }
     if (provenance?.studyProduct !== "modal_eigen") {
       return "Active analysis overlay source does not match its modal study product.";
     }
@@ -475,6 +478,9 @@ function modeFieldOverlayIntentEquals(
     left.analysisRunId === right.analysisRunId &&
     left.analysisStageId === right.analysisStageId &&
     left.artifactRevision === right.artifactRevision &&
+    left.equilibriumId === right.equilibriumId &&
+    left.sampleIndex === right.sampleIndex &&
+    left.modeIndex === right.modeIndex &&
     left.fieldId === right.fieldId &&
     left.metadataResourceKey === right.metadataResourceKey &&
     left.modeId === right.modeId &&

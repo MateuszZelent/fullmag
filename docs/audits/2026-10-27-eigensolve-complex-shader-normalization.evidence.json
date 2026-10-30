@@ -1,0 +1,234 @@
+{
+  "scope": "Regresja pikseli WebGL: projekcja zespolona i normalizacja palety; nie kwalifikacja solvera ani sprzętowego GPU",
+  "before_commit": "75b4447822f578109854dbd34de7bbf15bc1a97b",
+  "before": [
+    {
+      "name": "large-real-midrange",
+      "actual": [
+        250,
+        204,
+        5,
+        255
+      ],
+      "expected": [
+        8,
+        71,
+        58,
+        255
+      ],
+      "passed": false
+    },
+    {
+      "name": "imag-quarter-range",
+      "actual": [
+        250,
+        204,
+        5,
+        255
+      ],
+      "expected": [
+        9,
+        20,
+        55,
+        255
+      ],
+      "passed": false
+    },
+    {
+      "name": "negative-component",
+      "actual": [
+        15,
+        0,
+        23,
+        255
+      ],
+      "expected": [
+        9,
+        20,
+        55,
+        255
+      ],
+      "passed": false
+    },
+    {
+      "name": "complex-magnitude",
+      "actual": [
+        250,
+        204,
+        5,
+        255
+      ],
+      "expected": [
+        8,
+        71,
+        58,
+        255
+      ],
+      "passed": false
+    },
+    {
+      "name": "negative-phase-magnitude",
+      "actual": [
+        250,
+        204,
+        5,
+        255
+      ],
+      "expected": [
+        8,
+        43,
+        66,
+        255
+      ],
+      "passed": false
+    },
+    {
+      "name": "degenerate-range",
+      "actual": [
+        250,
+        204,
+        5,
+        255
+      ],
+      "expected": [
+        8,
+        71,
+        58,
+        255
+      ],
+      "passed": false
+    },
+    {
+      "name": "phase-animation",
+      "actual": [
+        15,
+        0,
+        23,
+        255
+      ],
+      "expected": [
+        15,
+        0,
+        23,
+        255
+      ],
+      "passed": true
+    }
+  ],
+  "after": [
+    {
+      "name": "large-real-midrange",
+      "actual": [
+        8,
+        71,
+        58,
+        255
+      ],
+      "expected": [
+        8,
+        71,
+        58,
+        255
+      ],
+      "passed": true
+    },
+    {
+      "name": "imag-quarter-range",
+      "actual": [
+        9,
+        20,
+        55,
+        255
+      ],
+      "expected": [
+        9,
+        20,
+        55,
+        255
+      ],
+      "passed": true
+    },
+    {
+      "name": "negative-component",
+      "actual": [
+        9,
+        20,
+        55,
+        255
+      ],
+      "expected": [
+        9,
+        20,
+        55,
+        255
+      ],
+      "passed": true
+    },
+    {
+      "name": "complex-magnitude",
+      "actual": [
+        8,
+        71,
+        58,
+        255
+      ],
+      "expected": [
+        8,
+        71,
+        58,
+        255
+      ],
+      "passed": true
+    },
+    {
+      "name": "negative-phase-magnitude",
+      "actual": [
+        8,
+        43,
+        66,
+        255
+      ],
+      "expected": [
+        8,
+        43,
+        66,
+        255
+      ],
+      "passed": true
+    },
+    {
+      "name": "degenerate-range",
+      "actual": [
+        8,
+        71,
+        58,
+        255
+      ],
+      "expected": [
+        8,
+        71,
+        58,
+        255
+      ],
+      "passed": true
+    },
+    {
+      "name": "phase-animation",
+      "actual": [
+        15,
+        0,
+        23,
+        255
+      ],
+      "expected": [
+        15,
+        0,
+        23,
+        255
+      ],
+      "passed": true
+    }
+  ],
+  "browser_report": "/tmp/eigen-mode-normalized.json",
+  "remaining": "Animacja rzeczywistego modu i pełny sweep nadal wymagają kwalifikacji."
+}

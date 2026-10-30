@@ -1112,9 +1112,9 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     // Schedule the frame after both surface materials have adopted the palette.
     invalidate();
   }, [
+    invalidate,
     committedScalarColorState.buffer,
     committedScalarColorState.pipeline,
-    invalidate,
     materialProfile.magneticSurface.shadeStrength,
     materialProfile.magneticSurface.toneMapped,
     scalarShaderMaterial,

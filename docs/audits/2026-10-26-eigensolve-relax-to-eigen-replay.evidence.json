@@ -1,0 +1,470 @@
+{
+  "schema": "fullmag.eigensolve-relax-to-eigen-replay-evidence.v1",
+  "runtime_commit": "a5dda59c19334a5978a13dabffe1c4d8b9ecb92f",
+  "development_attempt": "12c0e5cf9063405b8d1b138b316eddd9",
+  "activation_attempt": "c99e031df7e34fa39f40256791e6b291",
+  "run_id": "run-live-f63ba231e32a6fb77200a029c46b33430ad2b4d993ada7860029c11d8cc46b08",
+  "records": {
+    "run_catalog": {
+      "path": "/state/runs/docker-all/session-store/runs/run-live-f63ba231e32a6fb77200a029c46b33430ad2b4d993ada7860029c11d8cc46b08/run_catalog.json",
+      "sha256": "9fef45d93f85c561d7085c534d6b9f60d6ac281c1e9443b39a8d2768db478fb3",
+      "data": {
+        "schema_version": "run_catalog.v1",
+        "run_id": "run-live-f63ba231e32a6fb77200a029c46b33430ad2b4d993ada7860029c11d8cc46b08",
+        "revision": 22,
+        "updated_at": "2026-10-26T21:38:18.412160185Z",
+        "tasks": [
+          {
+            "task_id": "task-03345fa77d67e10fa5c050c1aaf2656486b6ee25d79cbadaba1e31aa4f4aa37b",
+            "input_fingerprint": "9933ba70f384565b7b8fcae9fabdd87f1a919320149d6c3353a994abfb283595",
+            "lifecycle": "succeeded",
+            "readiness": {
+              "state": "ready"
+            },
+            "observation": "reconciling",
+            "attempt_id": "attempt-afc11479e9e34fa58d2c201a00c96894",
+            "ownership_epoch": 1,
+            "artifact_ids": [
+              "accepted-field-039d011e3e81245cbaf5b5db3fa637ea705b91d2c46b042b0008cda110d3d310",
+              "accepted-field-31b634103e6ef94a75f1fb7e736ea2fe6499f946e980169e958919c852ef2a12",
+              "accepted-field-63e7cd729f188635a390100ba642013e21b5ff90d723ce063ed3e10314c4e15f",
+              "accepted-field-6e998d64b747d20f5059e25744adfa81159b3c0ddfe27153f840aa4a805e54e4",
+              "accepted-field-017f7bd5a8f0b7d29eea008aac540866ba9e1e00bf306acc52fbaeecf76ed907",
+              "accepted-field-f8c804f43cc01e5eb755a1ef91d97695ef09987a680447e9e05a1182b2fd50dc",
+              "accepted-field-d7f4c82d1104b77b5fc93f8a5b5d24a538dc02fc43ac568560c5e7b87ebd64ff",
+              "accepted-field-496e07a277026fe22d322377681277db851bac163ef1ef0e34021a5e85b354b2",
+              "accepted-field-356362cc745d002baa98a5f752e2c83447b5b8e9565d59ec13a129198139d5ea",
+              "accepted-quantities-436a84cd4af5c8b2a02c8904343d478b6ed9e363127a7f8ae1e8e30770fbff3b",
+              "artifact-5037c0fd36c4610fca446da281d69e4aa5f34bce15a8046f6b87496b485a6965",
+              "artifact-9dd2e0f5c796add4eb014b277a74529218358863ef6d1e36256fea098068d6c8",
+              "artifact-db6009e2b1be19e78e34b7eca613499b977658bc9535281a7f7fba6df57630b1",
+              "artifact-f7ab6719c123bdd24a9aef0071dcd37a3780e87760f1032cf0e23059920a9df8"
+            ],
+            "resource_id": "docker-all.compute.cpu",
+            "coordinator_watermark": {
+              "command_sequence": 5,
+              "event_sequence": 7
+            },
+            "coordinator_genesis": {
+              "run_id": "run-live-f63ba231e32a6fb77200a029c46b33430ad2b4d993ada7860029c11d8cc46b08",
+              "task_id": "task-03345fa77d67e10fa5c050c1aaf2656486b6ee25d79cbadaba1e31aa4f4aa37b",
+              "attempt_id": "attempt-afc11479e9e34fa58d2c201a00c96894",
+              "ownership_epoch": 1,
+              "lease_token": "lease-03553eb6f3ea46f285faf444d06f6192",
+              "lease_heartbeat_sequence": 0,
+              "checkpoint_sha256": "f93ecd2ee3ec057d819c281c105b8d081e369186323ed9c63e33d94b22015bc5",
+              "checkpoint": {
+                "claim": {
+                  "attempt_id": "attempt-afc11479e9e34fa58d2c201a00c96894",
+                  "lease": {
+                    "budget": {
+                      "cpu_millis": 6000,
+                      "gpu_memory_bytes": 0,
+                      "memory_bytes": 24964497408,
+                      "storage_bytes": 7516192768
+                    },
+                    "heartbeat_sequence": 0,
+                    "kind": "cpu",
+                    "lease_token": "lease-03553eb6f3ea46f285faf444d06f6192",
+                    "resource_id": "docker-all.compute.cpu"
+                  },
+                  "ownership_epoch": 1,
+                  "run_id": "run-live-f63ba231e32a6fb77200a029c46b33430ad2b4d993ada7860029c11d8cc46b08",
+                  "task_id": "task-03345fa77d67e10fa5c050c1aaf2656486b6ee25d79cbadaba1e31aa4f4aa37b"
+                },
+                "command_sequence": 0,
+                "event_sequence": 0,
+                "schema_version": "coordinator_checkpoint.v1",
+                "task": {
+                  "assessment": null,
+                  "attempt_id": "attempt-afc11479e9e34fa58d2c201a00c96894",
+                  "claim": {
+                    "attempt_id": "attempt-afc11479e9e34fa58d2c201a00c96894",
+                    "lease": {
+                      "budget": {
+                        "cpu_millis": 6000,
+                        "gpu_memory_bytes": 0,
+                        "memory_bytes": 24964497408,
+                        "storage_bytes": 7516192768
+                      },
+                      "heartbeat_sequence": 0,
+                      "kind": "cpu",
+                      "lease_token": "lease-03553eb6f3ea46f285faf444d06f6192",
+                      "resource_id": "docker-all.compute.cpu"
+                    },
+                    "ownership_epoch": 1,
+                    "run_id": "run-live-f63ba231e32a6fb77200a029c46b33430ad2b4d993ada7860029c11d8cc46b08",
+                    "task_id": "task-03345fa77d67e10fa5c050c1aaf2656486b6ee25d79cbadaba1e31aa4f4aa37b"
+                  },
+                  "input_fingerprint": "9933ba70f384565b7b8fcae9fabdd87f1a919320149d6c3353a994abfb283595",
+                  "lifecycle": "preparing",
+                  "observation": null,
+                  "ownership_epoch": 1,
+                  "readiness": {
+                    "state": "ready"
+                  },
+                  "run_id": "run-live-f63ba231e32a6fb77200a029c46b33430ad2b4d993ada7860029c11d8cc46b08",
+                  "task_id": "task-03345fa77d67e10fa5c050c1aaf2656486b6ee25d79cbadaba1e31aa4f4aa37b"
+                }
+              }
+            }
+          },
+          {
+            "task_id": "task-815fbb7b14cb0bee6c74adb0567c03d2b69c618f1b1ef8f8497ccf75b44a5855",
+            "input_fingerprint": "7000f0d1ce3ff969b6b7b9dd9bda552d5c343eefa55f3673314cce84afed911e",
+            "lifecycle": "preparing",
+            "readiness": {
+              "state": "ready"
+            },
+            "attempt_id": "attempt-97a288b9d23046c9a60fc1ee875481ed",
+            "ownership_epoch": 1,
+            "artifact_ids": [],
+            "resource_id": "docker-all.compute.cpu"
+          }
+        ]
+      }
+    },
+    "runtime_owner": {
+      "path": "/state/runs/docker-all/session-store/runtime-services/OWNER.json",
+      "sha256": "568bdfccc9f0e08af7a93769b36126e58d278fcdb237fd31bcf34693cf7ae35c",
+      "data": {
+        "schema_version": "runtime_service_owner.v1",
+        "owner_token": "48051179-166a-40d3-8b4f-4be364f2d985",
+        "process_start_token": "a5681c1e-d3f8-400a-a8d2-fc7a8ad72bdb",
+        "pid": 3209,
+        "host": "fullmag-direct-backend-12c0e5cf9063",
+        "target_id": "docker-all",
+        "protocol": "stdin-v1",
+        "state": "failed",
+        "acquired_at": "2026-10-26T21:34:29.718272377Z",
+        "heartbeat_at": "2026-10-26T21:38:18.787853917Z",
+        "compute_pool_generation": 1,
+        "preparation_pool_generation": 1,
+        "control_address": "127.0.0.1:33927",
+        "build_commit": "a5dda59c19334a5978a13dabffe1c4d8b9ecb92f",
+        "build_snapshot": "912c9ace1300929db4f198c4bbab7e7080e33a5e3f8325159e67e25516084a59",
+        "compute_pool_id": "docker-all.compute",
+        "preparation_pool_id": "docker-all.preparation",
+        "children": [
+          {
+            "role": "compute",
+            "pid": 3224,
+            "status": "exited_failure"
+          },
+          {
+            "role": "preparation",
+            "pid": 3225,
+            "status": "exited_success"
+          }
+        ]
+      }
+    },
+    "runtime_process": {
+      "path": "/opt/fullmag/runtime-control/runtime-service/process-tree.json",
+      "sha256": "8a916cec006bf472076edb2aab09b885d12a9f9b1c1d40fd4ddecfdd358dd1f9",
+      "data": {
+        "accepted_store": "/state/runs/docker-all/session-store",
+        "api_diagnostic_only": true,
+        "api_failure_fence": "/opt/fullmag/runtime-control/runtime-service/api-failure-b0b4ddc5baa34e75af05680c5a910114.json",
+        "api_pid": 3197,
+        "bootstrap": {
+          "binding": "0d68a6bc4fcfc7e892f948de50821e1de9d237596a74bda3d44a014010848dda",
+          "created": true,
+          "schema": "fullmag.docker-accepted-store-bootstrap.v1",
+          "store_root": "/state/runs/docker-all/session-store"
+        },
+        "error": "runtime service owner observation failed during supervision: runtime service owner is not ready",
+        "qualification": "NOT VERIFIED",
+        "schema": "fullmag.docker-process-tree.v1",
+        "service_owner": {
+          "acquired_at": "2026-10-26T21:34:29.718272377Z",
+          "build_commit": "a5dda59c19334a5978a13dabffe1c4d8b9ecb92f",
+          "build_snapshot": "912c9ace1300929db4f198c4bbab7e7080e33a5e3f8325159e67e25516084a59",
+          "children": [
+            {
+              "pid": 3224,
+              "role": "compute",
+              "status": "running"
+            },
+            {
+              "pid": 3225,
+              "role": "preparation",
+              "status": "running"
+            }
+          ],
+          "compute_pool_generation": 1,
+          "compute_pool_id": "docker-all.compute",
+          "control_address": "127.0.0.1:33927",
+          "heartbeat_at": "2026-10-26T21:34:33.936175023Z",
+          "host": "fullmag-direct-backend-12c0e5cf9063",
+          "owner_token": "48051179-166a-40d3-8b4f-4be364f2d985",
+          "pid": 3209,
+          "preparation_pool_generation": 1,
+          "preparation_pool_id": "docker-all.preparation",
+          "process_start_token": "a5681c1e-d3f8-400a-a8d2-fc7a8ad72bdb",
+          "protocol": "stdin-v1",
+          "schema_version": "runtime_service_owner.v1",
+          "state": "ready",
+          "target_id": "docker-all"
+        },
+        "state": "failed_outcome_retained"
+      }
+    },
+    "eigen_admission": {
+      "path": "/state/runs/docker-all/session-store/runs/run-live-f63ba231e32a6fb77200a029c46b33430ad2b4d993ada7860029c11d8cc46b08/task_admissions/task-815fbb7b14cb0bee6c74adb0567c03d2b69c618f1b1ef8f8497ccf75b44a5855/attempt-97a288b9d23046c9a60fc1ee875481ed.json",
+      "sha256": "d5cffad3582eab4bbb363263f69683a6b68a86f3daa4a16605e0b927087131c5",
+      "data": {
+        "schema_version": "task_admission.v1",
+        "expected_catalog_revision": 21,
+        "queued_task": {
+          "task_id": "task-815fbb7b14cb0bee6c74adb0567c03d2b69c618f1b1ef8f8497ccf75b44a5855",
+          "input_fingerprint": "7000f0d1ce3ff969b6b7b9dd9bda552d5c343eefa55f3673314cce84afed911e",
+          "lifecycle": "queued",
+          "readiness": {
+            "state": "ready"
+          },
+          "artifact_ids": []
+        },
+        "task": {
+          "task_id": "task-815fbb7b14cb0bee6c74adb0567c03d2b69c618f1b1ef8f8497ccf75b44a5855",
+          "input_fingerprint": "7000f0d1ce3ff969b6b7b9dd9bda552d5c343eefa55f3673314cce84afed911e",
+          "lifecycle": "preparing",
+          "readiness": {
+            "state": "ready"
+          },
+          "attempt_id": "attempt-97a288b9d23046c9a60fc1ee875481ed",
+          "ownership_epoch": 1,
+          "artifact_ids": [],
+          "resource_id": "docker-all.compute.cpu"
+        },
+        "lease": {
+          "schema_version": "resource_lease.v1",
+          "resource_id": "docker-all.compute.cpu",
+          "kind": "cpu",
+          "budget": {
+            "cpu_millis": 6000,
+            "memory_bytes": 24964497408,
+            "gpu_memory_bytes": 0,
+            "storage_bytes": 7516192768
+          },
+          "run_id": "run-live-f63ba231e32a6fb77200a029c46b33430ad2b4d993ada7860029c11d8cc46b08",
+          "task_id": "task-815fbb7b14cb0bee6c74adb0567c03d2b69c618f1b1ef8f8497ccf75b44a5855",
+          "attempt_id": "attempt-97a288b9d23046c9a60fc1ee875481ed",
+          "ownership_epoch": 1,
+          "lease_token": "lease-8e7cb5f639304663a3244b8a45d672f2",
+          "state": "active",
+          "acquired_at": "2026-10-26T21:38:18.260753450Z",
+          "heartbeat_at": "2026-10-26T21:38:18.260753450Z",
+          "heartbeat_sequence": 0,
+          "host_launch_binding": {
+            "schema_version": "host_launch_binding.v1",
+            "ledger_root": "/host-ledger/ledger",
+            "policy": {
+              "schema_version": "host_resource_ledger_policy.v2",
+              "host_id": "1214333ff671bab20699246568eee8c79420f4691df6fc025e5933ea5ec09f0d",
+              "topology_sha256": "8cea2964026e3a66592a8bed345b6dfc68238451ae48f9ab14228344b8372c6d",
+              "revision": 1,
+              "owner_epoch": 1,
+              "total_budget": {
+                "cpu_millis": 8000,
+                "memory_bytes": 33285996544,
+                "gpu_memory_bytes": 0,
+                "storage_bytes": 7516192768
+              },
+              "gpu_vram_bytes_by_uuid": {
+                "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937": 17171480576
+              },
+              "allowed_cpu_ids": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                30,
+                31,
+                32,
+                33,
+                34,
+                35,
+                36,
+                37,
+                38,
+                39
+              ]
+            },
+            "runtime_generation_sha256": "9281648fd4965acf6b42b7c7061e0f36a2b1ecf7da98307c2c5c7629270ed305"
+          }
+        },
+        "resolved_inputs_snapshot": {
+          "schema_version": "resolved_inputs_snapshot.v1",
+          "inputs": {
+            "equilibrium_handoff": {
+              "content_sha256": "b31f903a09fc5616eeea65c821253d2adb8cf6e982a2342ee79c3b61c421988f",
+              "source": "artifact-db6009e2b1be19e78e34b7eca613499b977658bc9535281a7f7fba6df57630b1",
+              "study_artifact": {
+                "artifact_id": "artifact-db6009e2b1be19e78e34b7eca613499b977658bc9535281a7f7fba6df57630b1",
+                "codec_id": "fullmag.study.fem_equilibrium_handoff",
+                "codec_version": "v1",
+                "data_kind": "artifact",
+                "object_ref": "b31f903a09fc5616eeea65c821253d2adb8cf6e982a2342ee79c3b61c421988f"
+              }
+            }
+          },
+          "content_sha256": "0a3ee6465e1fba8753ddd1ef12a0a49ebb0ac534d6c456b3b655dfdc62425ebf"
+        }
+      }
+    },
+    "relax_completed": {
+      "path": "/state/runs/docker-all/session-store/runs/run-live-f63ba231e32a6fb77200a029c46b33430ad2b4d993ada7860029c11d8cc46b08/worker-attempts/task-03345fa77d67e10fa5c050c1aaf2656486b6ee25d79cbadaba1e31aa4f4aa37b/attempt-afc11479e9e34fa58d2c201a00c96894/epoch-1/worker_execution_completed.v1.json",
+      "sha256": "dd043f748d131402d5a3b9e0f70677b7b15628a53f3af56ca6e6faf786d0f6d9",
+      "data": {
+        "schema_version": "fullmag.accepted_worker_execution.v1",
+        "identity": {
+          "schema_version": "fullmag.accepted_worker_execution.v1",
+          "claim": {
+            "run_id": "run-live-f63ba231e32a6fb77200a029c46b33430ad2b4d993ada7860029c11d8cc46b08",
+            "task_id": "task-03345fa77d67e10fa5c050c1aaf2656486b6ee25d79cbadaba1e31aa4f4aa37b",
+            "attempt_id": "attempt-afc11479e9e34fa58d2c201a00c96894",
+            "ownership_epoch": 1,
+            "lease": {
+              "resource_id": "docker-all.compute.cpu",
+              "kind": "cpu",
+              "budget": {
+                "cpu_millis": 6000,
+                "memory_bytes": 24964497408,
+                "gpu_memory_bytes": 0,
+                "storage_bytes": 7516192768
+              },
+              "lease_token": "lease-03553eb6f3ea46f285faf444d06f6192",
+              "heartbeat_sequence": 0
+            }
+          },
+          "start_message_id": "command-8522de36a12c43aeb057253f4383f789",
+          "start_sequence": 2,
+          "case_id": "default",
+          "plan_fingerprint": "87ff60d36c444b5b475b90afd7d6e06ff7489f9c2c7d64c388cdfb37fec89345"
+        },
+        "status": "completed",
+        "completed_step_count": 3,
+        "outputs": [
+          {
+            "port_id": "final_state",
+            "case_id": "default",
+            "data_kind": "state",
+            "codec_id": "fullmag.runner.field_json",
+            "codec_version": "v1",
+            "object_ref": "bcb0c335d607a6d356c379dcf2d55a5678c34cde1655678687d3f32ad7a4bdd8",
+            "byte_count": 82755
+          },
+          {
+            "port_id": "total_energy",
+            "case_id": "default",
+            "data_kind": "scalar",
+            "codec_id": "fullmag.study.scalar_json",
+            "codec_version": "v1",
+            "object_ref": "2811727ffd40a40abd624b20a6f0ac69051938ca0a33efce978c5cffc0f030c2",
+            "byte_count": 132
+          },
+          {
+            "port_id": "equilibrium_handoff",
+            "case_id": "default",
+            "data_kind": "artifact",
+            "codec_id": "fullmag.study.fem_equilibrium_handoff",
+            "codec_version": "v1",
+            "object_ref": "b31f903a09fc5616eeea65c821253d2adb8cf6e982a2342ee79c3b61c421988f",
+            "byte_count": 3154415
+          }
+        ],
+        "accepted_state_ref": {
+          "id": {
+            "run_id": "run-live-f63ba231e32a6fb77200a029c46b33430ad2b4d993ada7860029c11d8cc46b08",
+            "stage_id": "relax",
+            "accepted_step": 3,
+            "clock_digest": "sha256:2797c6d3708b9eaa4f0a698a88d849c2d0fabd3ab01e64cff2352794e64e0899",
+            "state_digest": "sha256:f00adfdb80f09f9976b5a5669bdccfb523344c1631b445b0c604c11f43d0e8c1",
+            "domain_digest": "sha256:02a14e9b6705c0b410219788166c863e6529568ff762723381d1683d3f6a5be5",
+            "plan_digest": "sha256:87ff60d36c444b5b475b90afd7d6e06ff7489f9c2c7d64c388cdfb37fec89345"
+          },
+          "generation": {
+            "runtime_epoch": 1,
+            "accepted_revision": 3
+          }
+        }
+      }
+    },
+    "relax_certificate": {
+      "path": "/state/runs/docker-all/session-store/runs/run-live-f63ba231e32a6fb77200a029c46b33430ad2b4d993ada7860029c11d8cc46b08/worker-attempts/task-03345fa77d67e10fa5c050c1aaf2656486b6ee25d79cbadaba1e31aa4f4aa37b/attempt-afc11479e9e34fa58d2c201a00c96894/epoch-1/equilibrium/recomputed_fem_linearization_certificate.v1.json",
+      "sha256": "0139e1c1131fe9cf8c49b2e32ba87f9c71fdd257b564c2311fef154f88949edf",
+      "data": {
+        "schema_version": "RecomputedFemLinearizationCertificate.v1",
+        "status": "matched",
+        "recompute_provider": "native_fem_final_state_refresh.v1",
+        "node_count": 758,
+        "equilibrium_content_sha256": "sha256:2267bbdb2c4ce7547bfd75dee2642bbe37a3f6b1d8e7cca52e5878647759262e",
+        "mesh_topology_sha256": "sha256:05d8611114104c36866cbf1831f0dacd68d6fcf6fbe4b86bf1fe11c736b2e1bd",
+        "equilibrium_material_signature": "sha256:5acf82b569d679296e01d7724e5a2a83fc60ce37d3d711afd535143c4bdad5af",
+        "equilibrium_static_physics_signature": "sha256:28f52742c10b602c1915a4dd1ee93d45a2b8dd74fd5dd7e741f91fd7c9affcf8",
+        "equilibrium_boundary_signature": "sha256:4b92cc7c3c3e2fe371d06a69778db1b806b239c095b9600ab44a6ec134bc26ca",
+        "accepted_fields_content_sha256": "sha256:0868053873b96e6a862cd507ea4c28328cd09f6ec927becdeb516b6cc6585a37",
+        "recomputed_fields_content_sha256": "sha256:9629594511c0ff1ca092b8f3b2729701c0411933e6b9c6328467460525dbeb6a",
+        "max_h_ex_difference_a_per_m": 0.0,
+        "max_h_demag_difference_a_per_m": 8.138520186984135e-24,
+        "max_h_ext_difference_a_per_m": 0.0,
+        "max_h_eff_difference_a_per_m": 8.138520186984135e-24,
+        "max_phi_difference_a": 1.5576921390203964e-30,
+        "field_absolute_tolerance_a_per_m": 1e-06,
+        "field_relative_tolerance": 1e-08,
+        "phi_absolute_tolerance_a": 1e-12,
+        "content_sha256": "sha256:28ee78d08e28f18e0efcd92500408b828642a16ab64e21c37bb2a715f39887ef"
+      }
+    },
+    "handoff_cas": {
+      "object_ref": "b31f903a09fc5616eeea65c821253d2adb8cf6e982a2342ee79c3b61c421988f",
+      "actual_sha256": "b31f903a09fc5616eeea65c821253d2adb8cf6e982a2342ee79c3b61c421988f",
+      "byte_count": 3154415,
+      "header": {
+        "schema_version": "fullmag.fem_equilibrium_handoff.v1",
+        "run_id": "run-live-f63ba231e32a6fb77200a029c46b33430ad2b4d993ada7860029c11d8cc46b08",
+        "stage_id": "relax",
+        "preparation": {
+          "schema_version": "preparation_binding.v1",
+          "preparation_id": "prep-task-03345fa77d67e10fa5c050c1aaf2656486b6ee25d79cbadaba1e31aa4f4aa37b",
+          "plan_fingerprint": "sha256:02a14e9b6705c0b410219788166c863e6529568ff762723381d1683d3f6a5be5",
+          "receipt_sha256": "sha256:d0034de7748adbbc6425c0c64cff4948f26bf314c62e5b9e1475f91cd1a65aa2"
+        },
+        "execution_plan_fingerprint": "87ff60d36c444b5b475b90afd7d6e06ff7489f9c2c7d64c388cdfb37fec89345"
+      },
+      "member_count": 7
+    },
+    "compute_error": {
+      "path": "/state/runs/docker-all/session-store/runtime-services/48051179-166a-40d3-8b4f-4be364f2d985/compute.stderr.log",
+      "sha256": "51b3a051db409c20593221b327df072804682c67df98fa35d4a9ce5e8e6edad7",
+      "tail": "{\"component\":\"accepted_compute_scheduler\",\"elapsed_ms\":0,\"event\":\"startup_phase\",\"phase\":\"beforeopen\",\"schema_version\":\"scheduler_startup_phase.v1\"}\n{\"component\":\"accepted_compute_scheduler\",\"elapsed_ms\":0,\"event\":\"startup_phase\",\"phase\":\"afteropen\",\"schema_version\":\"scheduler_startup_phase.v1\"}\n{\"component\":\"accepted_compute_scheduler\",\"elapsed_ms\":0,\"event\":\"startup_phase\",\"phase\":\"checkpoint\",\"schema_version\":\"scheduler_startup_phase.v1\"}\n{\"component\":\"accepted_compute_scheduler\",\"elapsed_ms\":0,\"event\":\"startup_phase\",\"phase\":\"firstloop\",\"schema_version\":\"scheduler_startup_phase.v1\"}\n{\"component\":\"accepted_compute_scheduler\",\"elapsed_ms\":0,\"event\":\"startup_phase\",\"phase\":\"reconcile_tentative_start\",\"schema_version\":\"scheduler_startup_phase.v1\"}\n{\"component\":\"accepted_compute_scheduler\",\"elapsed_ms\":119,\"event\":\"startup_phase\",\"phase\":\"reconcile_tentative_complete\",\"schema_version\":\"scheduler_startup_phase.v1\"}\n{\"component\":\"accepted_compute_scheduler\",\"elapsed_ms\":119,\"event\":\"startup_phase\",\"phase\":\"reconcile_released_start\",\"schema_version\":\"scheduler_startup_phase.v1\"}\n{\"component\":\"accepted_compute_scheduler\",\"elapsed_ms\":120,\"event\":\"startup_phase\",\"phase\":\"reconcile_released_complete\",\"schema_version\":\"scheduler_startup_phase.v1\"}\n{\"component\":\"accepted_compute_scheduler\",\"elapsed_ms\":120,\"event\":\"startup_phase\",\"phase\":\"reconcile_cancellation_start\",\"schema_version\":\"scheduler_startup_phase.v1\"}\n{\"component\":\"accepted_compute_scheduler\",\"elapsed_ms\":121,\"event\":\"startup_phase\",\"phase\":\"reconcile_cancellation_complete\",\"schema_version\":\"scheduler_startup_phase.v1\"}\naccepted task scheduler failed: compute scheduler: admit run `run-live-f63ba231e32a6fb77200a029c46b33430ad2b4d993ada7860029c11d8cc46b08` on resource `docker-all.compute.cpu`: study input `equilibrium_handoff` does not match its pinned artifact identity and digest\n"
+    }
+  }
+}

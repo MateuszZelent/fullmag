@@ -193,7 +193,7 @@ describe("Analysis workbench", () => {
   it("renders each selected workbench surface", () => {
     for (const activeSurface of ["dynamics", "resonance-fmr", "dispersion", "hysteresis", "comparison"] as const) {
       const html = renderToStaticMarkup(<AnalysisPlotsView {...props} activeSurface={activeSurface} />);
-      if (activeSurface === "comparison") expect(html).not.toContain('aria-label="Analysis dataset"');
+      if (activeSurface === "comparison" || activeSurface === "resonance-fmr" || activeSurface === "dispersion") expect(html).not.toContain('aria-label="Analysis dataset"');
       else expect(html).toContain('aria-label="Analysis dataset"');
     }
   });

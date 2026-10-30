@@ -1263,7 +1263,8 @@ fn eigen_solver_policy(problem: &ProblemIR) -> Result<Option<FemEigenSolverPolic
                 )],
             }
         })?;
-    if policy.residual_tolerance.is_none()
+    if policy.completeness.is_none()
+        && policy.residual_tolerance.is_none()
         && policy.max_outer_iterations.is_none()
         && policy.max_linear_iterations.is_none()
     {
@@ -5953,6 +5954,21 @@ pub(crate) fn plan_fem_eigen(
                 reasons: vec![reason],
             }
         })?;
+    if floquet_airbox_dynamic_demag_cpu_path {
+        if let Err(admission_errors) =
+            fullmag_ir::validate_bounded_floquet_dynamic_demag_admission(
+                &mesh,
+                spin_wave_bc,
+                k_sampling.as_ref(),
+            )
+        {
+            errors.extend(admission_errors.into_iter().map(|reason| {
+                format!(
+                    "fem_eigen.floquet_airbox_dynamic_demag_admission: {reason}"
+                )
+            }));
+        }
+    }
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });
     }
@@ -6039,6 +6055,7 @@ pub(crate) fn plan_fem_eigen(
         exchange_bc: ExchangeBoundaryCondition::Neumann,
         spin_wave_bc: spin_wave_bc.clone(),
         demag_realization: resolved_demag_realization,
+        demag_solver_policy: fem_hints.demag_solver_policy.clone(),
         air_box_config,
         mode_tracking: mode_tracking.clone(),
         dispersion_validation,
@@ -6719,5 +6736,20 @@ fn selected_frequency_response_periodic_pair_ids(plan: &FemFrequencyResponsePlan
             .collect()
     } else {
         requested_pair_ids.into_iter().map(str::to_string).collect()
+    }
+}
+
+#[cfg(test)]
+mod eigen_completeness_request_tests {
+    use super::*;
+
+    #[test]
+    fn completeness_only_policy_is_not_discarded_as_empty() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata.insert(
+            "modal_solver_policy".into(), serde_json::json!({"completeness":"best_effort"}),
+        );
+        let policy = eigen_solver_policy(&problem).unwrap().unwrap();
+        assert_eq!(policy.completeness, Some(fullmag_ir::FemEigenCompletenessPolicyIR::BestEffort));
     }
 }

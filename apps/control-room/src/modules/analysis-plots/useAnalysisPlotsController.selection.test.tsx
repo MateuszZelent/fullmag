@@ -8,6 +8,9 @@ import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationP
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
 import { analysisWorkspaceStore, resetAnalysisWorkspaceForTests } from "@/kernel/workspace/analysisWorkspace";
+import {
+  frequencyDomainResultContextFromManifest,
+} from "@/shared/domain/analysis/frequencyDomainChartModels";
 
 let activeSurface = "resonance-fmr";
 let frequencyRouteMode: "fmr_response" | "frequency_response" | "free_modes" = "free_modes";
@@ -23,7 +26,10 @@ vi.mock("@/kernel/selection/useSelection", () => ({ useSelectionSelector: () => 
 vi.mock("./hooks/useAnalysisDatasetData", () => ({ useAnalysisDatasetData: () => ({ rows: { status: "idle" }, tableList: { data: null }, unsupportedReason: null, visibleRevision: null, visibleTable: null }) }));
 vi.mock("./hooks/useAnalysisFrequencyData", () => ({ useAnalysisFrequencyData: () => ({ frequencyDomainDispersionModel: { points: [] }, frequencyDomainPresentation: { kind: "ready", revision: "sha256:artifact-1", physicalContext: { classification: { kContext: { kind: "gamma" } }, equilibriumId: "equilibrium-1", kSampling: { kind: "single", vectorRadPerM: [0, 0, 0] }, normalization: "unit_l2", runId: "run-1", stageId: "stage-1", studyProduct: frequencyRouteMode === "free_modes" ? "modal_eigen" : "driven_response" } }, frequencyDomainResponseModel: { points: [{ fieldId: "response-field-7", frequencyHz: 12.5e9, frequencyIndex: 7, observableId: "mx" }] }, frequencyDomainRoute: { mode: frequencyRouteMode }, frequencyDomainSeries: [{ dataRevision: 1, id: "frequency:artifact://spectrum", label: "frequency", points: [{ rowIndex: 0, x: 1, y: 9 }], quantity: "frequency", source: { kind: "analysis.frequency_domain", resourceKey: "artifact://spectrum", tableId: "frequency" }, status: "ready", unit: "GHz", xUnit: "index" }], frequencyDomainSpectrumModel: { points: [{ frequencyHz: 9e9, modeFieldId: "mode-1", modeFieldResourceKey: "field://mode-1", modeId: "sample-0000/mode-0001", rawModeIndex: 1, sampleId: "sample-0000", sampleIndex: 0 }] }, frequencyDomainStatus: "ready", frequencyDomainTitle: "Eigen", frequencyDomainUnavailableReason: null }) }));
 
-import { useAnalysisPlotsController } from "./useAnalysisPlotsController";
+import {
+  frequencyDomainSelectionFromPoint,
+  useAnalysisPlotsController,
+} from "./useAnalysisPlotsController";
 
 type TestKernel = Pick<KernelApi, "selection">;
 
@@ -64,6 +70,71 @@ function CaptureProbe({ kernel }: { kernel: TestKernel }) {
 }
 
 describe("Analysis controller frequency selection", () => {
+  it("binds a dispersion point to the equilibrium entry for its exact sample", () => {
+    const resultContext = frequencyDomainResultContextFromManifest({
+      boundary_context: "floquet_periodic",
+      geometry_identity: "geometry-1",
+      k_sampling: { kind: "path", sample_count: 2 },
+      mesh_identity: "mesh-1",
+      run_id: "run-1",
+      stage_id: "stage-1",
+      study_product: "modal_eigen",
+      sample_execution_provenance: {
+        schema_version: "frequency_domain_sample_execution_provenance.v1",
+        sample_count: 2,
+        samples: [
+          { sample_index: 0, validation: { equilibrium_artifact_sha256: "eq-sample-0" } },
+          { sample_index: 1, validation: { equilibrium_artifact_sha256: "eq-sample-1" } },
+        ],
+      },
+    });
+    const selection = frequencyDomainSelectionFromPoint({
+      artifactRevision: "sha256:dispersion-7",
+      chartId: "dispersion:artifact://dispersion",
+      dispersionModel: {
+        points: [{
+          frequencyHz: 9e9,
+          modeFieldAvailable: true,
+          modeFieldId: "field-sample-1-mode-4",
+          modeFieldResourceKey: "field://sample-1-mode-4",
+          modeId: "sample-1/mode-4",
+          rawModeIndex: 4,
+          sampleId: "sample-1",
+          sampleIndex: 1,
+          wavevectorKf: [0, 1e7, 0],
+        }],
+      } as never,
+      point: {
+        label: "Branch",
+        point: { rowIndex: 0, x: 1e7, y: 9 },
+        quantity: "frequency",
+        seriesId: "branch-a",
+        source: {
+          kind: "analysis.frequency_domain",
+          resourceKey: "artifact://dispersion",
+          tableId: "frequency-domain:eigen-dispersion",
+        },
+        unit: "GHz",
+        xUnit: "rad/m",
+      },
+      resultContext,
+      responseModel: { points: [] } as never,
+      routeMode: "dispersion_modal",
+      spectrumModel: { points: [] } as never,
+    });
+
+    expect(selection.ref).toMatchObject({
+      analysisRunId: "run-1",
+      analysisStageId: "stage-1",
+      artifactRevision: "sha256:dispersion-7",
+      equilibriumId: "eq-sample-1",
+      fieldId: "field-sample-1-mode-4",
+      modeId: "sample-1/mode-4",
+      sampleId: "sample-1",
+      sampleIndex: 1,
+    });
+  });
+
   it("exposes and persists the active contextual subview", async () => {
     activeSurface = "resonance-fmr";
     setActiveSubview.mockClear();

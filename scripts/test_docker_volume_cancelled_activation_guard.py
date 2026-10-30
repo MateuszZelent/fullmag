@@ -17,12 +17,14 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import docker_volume_cancelled_activation_guard as cancelled_guard
+import docker_volume_cancelled_activation as cancelled_activation
 import docker_volume_unclaimed_cancellation as unclaimed_cancellation
 from docker_build_control import BuildControlError, canonical
 
 
 ACTIVATION_ATTEMPT = "a" * 32
 DEVELOPMENT_ATTEMPT = "d" * 32
+ITERATION_ATTEMPT = "8" * 32
 ARCHIVE_ATTEMPT_A = "e" * 32
 ARCHIVE_ATTEMPT_B = "f" * 32
 CONFIG_SHA256 = "1" * 64
@@ -263,6 +265,203 @@ class CancelledActivationRecoveryGuardTests(unittest.TestCase):
         ] = []
         with self.assertRaisesRegex(BuildControlError, "evidence changed"):
             cancelled_guard.read_record(control)
+
+    def test_multi_task_inventory_and_base_continuation_pin_are_closed(self) -> None:
+        tasks = [
+            {
+                "task_id": "task-relax",
+                "input_fingerprint": "1" * 64,
+                "lifecycle": "cancelled",
+                "readiness": {"state": "blocked", "reason": "awaiting dependency resolution"},
+                "artifact_ids": [],
+            },
+            {
+                "task_id": "task-eigen",
+                "input_fingerprint": "2" * 64,
+                "lifecycle": "cancelled",
+                "readiness": {"state": "blocked", "reason": "accepted_task_awaiting_preparation"},
+                "artifact_ids": [],
+            },
+        ]
+
+        def preparation(task_id: str, number: int, *, outcome: str) -> dict[str, object]:
+            launch_id = f"launch-{number}"
+            resource_id = f"resource-{number}"
+            lease_token = f"lease-{number}"
+            receipt_path = (
+                f"task_preparation_receipts/{task_id}.json" if outcome == "succeeded" else None
+            )
+            stage_path = (
+                f"accepted_stage_preparation_receipts/{task_id}.json" if outcome == "succeeded" else None
+            )
+            return {
+                "task_id": task_id,
+                "outcome": outcome,
+                "launch_id": launch_id,
+                "preparation_attempt_id": f"prep-{number}",
+                "resource_id": resource_id,
+                "lease_token": lease_token,
+                "launch_path": f"preparation_process_launches/{launch_id}.json",
+                "launch_sha256": "3" * 64,
+                "exit_path": f"preparation_process_exit_receipts/prep-exit-{launch_id}.json",
+                "exit_sha256": "4" * 64,
+                "lease_path": f"preparation_resource_leases/{resource_id}/{lease_token}.json",
+                "lease_sha256": "5" * 64,
+                "lease_heartbeat_sequence": number,
+                "exit_code": 0 if outcome == "succeeded" else 1,
+                "timed_out": False,
+                "lease_state": "released",
+                "released_at": "2026-10-25T10:03:00Z",
+                "task_receipt_path": receipt_path,
+                "task_receipt_sha256": "6" * 64 if receipt_path else None,
+                "stage_receipt_path": stage_path,
+                "stage_receipt_sha256": "7" * 64 if stage_path else None,
+            }
+
+        inventory = {"task_inventory": tasks, "preparation_inventory": [
+            preparation("task-relax", 1, outcome="succeeded"),
+            preparation("task-eigen", 2, outcome="failed"),
+        ]}
+        cancelled_guard._validate_inventory(inventory)
+
+        cases = []
+        duplicate_task = deepcopy(inventory)
+        duplicate_task["task_inventory"][1]["task_id"] = "task-relax"
+        cases.append(duplicate_task)
+        output_task = deepcopy(inventory)
+        output_task["task_inventory"][1]["artifact_ids"] = ["artifact-output"]
+        cases.append(output_task)
+        unknown_preparation_field = deepcopy(inventory)
+        unknown_preparation_field["preparation_inventory"][0]["claimed"] = True
+        cases.append(unknown_preparation_field)
+        inconsistent_lease = deepcopy(inventory)
+        inconsistent_lease["preparation_inventory"][1]["lease_token"] = "other-lease"
+        cases.append(inconsistent_lease)
+        for candidate in cases:
+            with self.subTest(candidate=candidate):
+                with self.assertRaises(BuildControlError):
+                    cancelled_guard._validate_inventory(candidate)
+
+        control, record = _record_fixture()
+        record.update({
+            "continuation_phase": "development",
+            "continuation_attempt": DEVELOPMENT_ATTEMPT,
+            "iteration_attempt": None,
+        })
+        record.update(inventory)
+        record_raw = _raw(record)
+        control.raw_files[cancelled_guard.RECORD] = record_raw
+        control.raw_files[
+            f"verification/cancelled-activation-{ACTIVATION_ATTEMPT}/terminal.json"
+        ] = record_raw
+        terminal = control.files[
+            f"activation/attempts/{ACTIVATION_ATTEMPT}/terminal.json"
+        ]
+        assert isinstance(terminal, dict)
+        terminal["cancelled_recovery_sha256"] = hashlib.sha256(record_raw).hexdigest()
+        self.assertEqual(
+            cancelled_guard.read_record(control)["continuation_phase"], "development"
+        )
+
+        all_success = {
+            "task_inventory": deepcopy(tasks),
+            "preparation_inventory": [
+                preparation("task-relax", 1, outcome="succeeded"),
+                preparation("task-eigen", 2, outcome="succeeded"),
+            ],
+        }
+        all_success_record = deepcopy(record)
+        all_success_record.update(all_success)
+        all_success_record.update({
+            "cancellation_mode": cancelled_guard.CANCEL_BEFORE_START_MODE,
+            "start_release_absent": True,
+            "task_admissions_empty": True,
+            "execution_state": "not-started",
+            "retained_current_run_total_steps": 2,
+            "proof": {
+                "preparation_mode": cancelled_guard.CANCEL_BEFORE_START_MODE,
+                "start_release_absent": True,
+                "task_admissions_empty": True,
+                "execution_state": "not-started",
+                "retained_current_run_total_steps": 2,
+            },
+        })
+        cancelled_guard._validate_inventory(all_success_record)
+
+        for mutation in (
+            {"cancellation_mode": None},
+            {"preparation_inventory": [
+                preparation("task-relax", 1, outcome="failed"),
+                preparation("task-eigen", 2, outcome="succeeded"),
+            ]},
+            {"proof": {
+                "preparation_mode": cancelled_guard.CANCEL_BEFORE_START_MODE,
+                "start_release_absent": False,
+                "task_admissions_empty": True,
+                "execution_state": "not-started",
+                "retained_current_run_total_steps": 2,
+            }},
+        ):
+            candidate = deepcopy(all_success_record)
+            candidate.update(mutation)
+            with self.assertRaises(BuildControlError):
+                cancelled_guard._validate_inventory(candidate)
+
+    def test_legacy_iteration_journal_projects_to_guard_without_empty_inventory(self) -> None:
+        control, fixture = _record_fixture()
+        target = {
+            "compose_project": control.project,
+            "control_volume": control.volume,
+            "control_namespace": control.namespace,
+            "development_attempt": DEVELOPMENT_ATTEMPT,
+            "iteration_attempt": ITERATION_ATTEMPT,
+            "activation_attempt": ACTIVATION_ATTEMPT,
+            "config_sha256": CONFIG_SHA256,
+            "source_root": SOURCE_ROOT,
+            "image_id": IMAGE_ID,
+            "backend_container": BACKEND_ID,
+            "backend_started_at": BACKEND_STARTED_AT,
+            "frontend_container": FRONTEND_ID,
+            "frontend_started_at": "2026-10-25T10:11:13.123456789Z",
+            "state_root": STATE_ROOT,
+            "request_id": fixture["request_id"],
+            "source_sha256": "5" * 64,
+            "original_receipt_sha256": fixture["original_receipt_sha256"],
+            "helper_container_id": "6" * 64,
+            "run_id": "run-legacy-iteration",
+            "session_id": "session-legacy-iteration",
+            "task_id": "task-legacy-iteration",
+        }
+        plan = {
+            "schema": cancelled_activation.PLAN_SCHEMA,
+            "state": "ready-for-explicit-apply",
+            "target": target,
+            "cancellation_proof": {},
+        }
+        plan["plan_sha256"] = hashlib.sha256(_raw(plan)[:-1]).hexdigest()
+        journal = {
+            "schema": cancelled_activation.JOURNAL_SCHEMA,
+            "journal_path": cancelled_activation._journal_path(ACTIVATION_ATTEMPT),
+            "plan": plan,
+            "drain": {"backend_exit_code": 0},
+        }
+        projected = cancelled_activation._record_from_journal(journal)
+        self.assertEqual(projected["continuation_phase"], "iteration")
+        self.assertEqual(projected["continuation_attempt"], ITERATION_ATTEMPT)
+        self.assertNotIn("task_inventory", projected)
+        self.assertNotIn("preparation_inventory", projected)
+
+        record_raw = _raw(projected)
+        control.raw_files[cancelled_guard.RECORD] = record_raw
+        control.raw_files[
+            f"verification/cancelled-activation-{ACTIVATION_ATTEMPT}/terminal.json"
+        ] = record_raw
+        terminal = control.files[
+            f"activation/attempts/{ACTIVATION_ATTEMPT}/terminal.json"
+        ]
+        assert isinstance(terminal, dict)
+        terminal["cancelled_recovery_sha256"] = hashlib.sha256(record_raw).hexdigest()
+        self.assertEqual(cancelled_guard.read_record(control), projected)
 
     def test_duplicate_recovery_record_key_is_rejected(self) -> None:
         control, record = _record_fixture()

@@ -1972,6 +1972,7 @@ fn eigen_sampling_from(base: &fullmag_ir::SamplingIR, mode_count: u32) -> fullma
                 fullmag_ir::OutputIR::EigenSpectrum { .. }
                     | fullmag_ir::OutputIR::EigenMode { .. }
                     | fullmag_ir::OutputIR::DispersionCurve { .. }
+                    | fullmag_ir::OutputIR::EigenDiagnostics { .. }
             )
         })
         .cloned()
@@ -2215,7 +2216,25 @@ pub fn materialize_pipeline_eigenmodes(
     let mut ir = base_ir.clone();
     let mut dynamics = required_study_dynamics(&ir.study, "eigenmodes pipeline stage")?;
     apply_dynamics_overrides(&mut dynamics, payload)?;
-    let sampling = ir.study.sampling().clone();
+    let mut sampling = ir.study.sampling().clone();
+    if let Some(value) = payload.get("sampling") {
+        let snapshot = value.as_object().context("eigen sampling must be an object")?;
+        if snapshot.keys().any(|key| key != "outputs") {
+            bail!("eigen sampling contains unsupported fields");
+        }
+        let outputs: Vec<fullmag_ir::OutputIR> = serde_json::from_value(
+            snapshot.get("outputs").cloned().unwrap_or_else(|| serde_json::json!([])),
+        ).context("eigen sampling outputs are invalid")?;
+        if outputs.iter().any(|output| !matches!(output,
+            fullmag_ir::OutputIR::EigenSpectrum { .. }
+                | fullmag_ir::OutputIR::EigenMode { .. }
+                | fullmag_ir::OutputIR::DispersionCurve { .. }
+                | fullmag_ir::OutputIR::EigenDiagnostics { .. }
+        )) {
+            bail!("eigen sampling contains a non-modal output");
+        }
+        sampling.outputs = outputs;
+    }
     let entrypoint_kind = payload_string(payload, "entrypoint_kind")
         .unwrap_or_else(|| "study_pipeline_eigenmodes".to_string());
     let current_eigen = match &base_ir.study {
@@ -2265,6 +2284,10 @@ pub fn materialize_pipeline_eigenmodes(
         .as_ref()
         .map(|current| current.7.clone())
         .unwrap_or_default();
+    let default_operator_kind = match &base_ir.study {
+        fullmag_ir::StudyIR::Eigenmodes { operator, .. } => operator.kind,
+        _ => fullmag_ir::EigenOperatorIR::LinearizedLlg,
+    };
     let bias_field_sweep = match &base_ir.study {
         fullmag_ir::StudyIR::Eigenmodes {
             bias_field_sweep, ..
@@ -2278,6 +2301,7 @@ pub fn materialize_pipeline_eigenmodes(
         _ => fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
     };
     let solver_policy_keys = [
+        "eigen_solver_completeness",
         "eigen_solver_rtol",
         "eigen_solver_max_outer_iterations",
         "eigen_solver_max_linear_iterations",
@@ -2337,12 +2361,27 @@ pub fn materialize_pipeline_eigenmodes(
                 bail!("{key} must fit the native signed iteration limit");
             }
         }
+        let completeness = if payload.contains_key("eigen_solver_completeness") {
+            match payload.get("eigen_solver_completeness") {
+                Some(Value::Null) => None,
+                Some(Value::String(value)) if value.trim().is_empty() => None,
+                Some(value) => Some(
+                    serde_json::from_value::<fullmag_ir::FemEigenCompletenessPolicyIR>(value.clone())
+                        .context("invalid eigen_solver_completeness")?,
+                ),
+                None => None,
+            }
+        } else {
+            base_solver_policy.as_ref().and_then(|policy| policy.completeness)
+        };
         let solver_policy = fullmag_ir::FemEigenSolverPolicyIR {
+            completeness,
             residual_tolerance,
             max_outer_iterations,
             max_linear_iterations,
         };
-        if solver_policy.residual_tolerance.is_none()
+        if solver_policy.completeness.is_none()
+            && solver_policy.residual_tolerance.is_none()
             && solver_policy.max_outer_iterations.is_none()
             && solver_policy.max_linear_iterations.is_none()
         {
@@ -2364,12 +2403,15 @@ pub fn materialize_pipeline_eigenmodes(
             .map(|current| current.0.include_demag)
             .unwrap_or(true)
     });
+    let operator_kind = payload_eigen_operator(payload)?.unwrap_or(default_operator_kind);
+    let magnetostatic_bc = payload_eigen_magnetostatic_bc(payload)?
+        .unwrap_or(default_magnetostatic_bc);
 
     ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
     ir.study = fullmag_ir::StudyIR::Eigenmodes {
         dynamics,
         operator: fullmag_ir::EigenOperatorConfigIR {
-            kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+            kind: operator_kind,
             include_demag,
         },
         count,
@@ -2383,7 +2425,7 @@ pub fn materialize_pipeline_eigenmodes(
         normalization: payload_eigen_normalization(payload)?.unwrap_or(default_normalization),
         damping_policy: payload_eigen_damping_policy(payload)?.unwrap_or(default_damping_policy),
         spin_wave_bc: payload_spin_wave_bc(payload)?.unwrap_or(default_spin_wave_bc),
-        magnetostatic_bc: default_magnetostatic_bc,
+        magnetostatic_bc,
         sampling: eigen_sampling_from(&sampling, count),
         mode_tracking: None,
     };
@@ -2539,6 +2581,7 @@ fn frequency_payload_as_eigen_payload(
         ),
         ("frequency_damping_policy", "eigen_damping_policy"),
         ("frequency_k_vector", "eigen_k_vector"),
+        ("frequency_k_path", "eigen_k_path"),
         ("frequency_spin_wave_bc", "eigen_spin_wave_bc"),
         ("frequency_spin_wave_bc_config", "eigen_spin_wave_bc_config"),
     ] {
@@ -3646,10 +3689,72 @@ fn payload_k_sampling(
         }
         _ => bail!("eigen_k_vector must be a comma-separated string or 3-element array"),
     };
-    Ok(match parsed {
-        Some(k_vector) => Some(fullmag_ir::KSamplingIR::Single { k_vector }),
-        None => default_sampling,
-    })
+    let path = match payload.get("eigen_k_path") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) if value.trim().is_empty() => None,
+        Some(Value::String(value)) => Some(parse_pipeline_k_path(value)?),
+        _ => bail!("eigen_k_path must be a path string"),
+    };
+    if parsed.is_some() && path.is_some() {
+        bail!("cannot set both eigen_k_vector and eigen_k_path");
+    }
+    if let Some(k_vector) = parsed {
+        if !k_vector.iter().all(|value| value.is_finite()) {
+            bail!("eigen_k_vector components must be finite");
+        }
+        return Ok(Some(fullmag_ir::KSamplingIR::Single { k_vector }));
+    }
+    Ok(path.or(default_sampling))
+}
+
+fn parse_pipeline_k_path(raw: &str) -> Result<fullmag_ir::KSamplingIR> {
+    let (point_text, options) = raw.split_once('|').unwrap_or((raw, ""));
+    let mut points = Vec::new();
+    for entry in point_text.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+        let fallback = format!("k{}", points.len());
+        let (label, vector) = entry.split_once(':').unwrap_or((&fallback, entry));
+        let components = vector.split(',').map(|part| part.trim().parse::<f64>())
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .context("invalid eigen_k_path vector")?;
+        if components.len() != 3 || !components.iter().all(|v| v.is_finite()) {
+            bail!("eigen_k_path vectors must contain three finite components");
+        }
+        points.push(fullmag_ir::KPointIR {
+            label: Some(if label.trim().is_empty() { fallback } else { label.trim().to_string() }),
+            k_vector: [components[0], components[1], components[2]],
+        });
+    }
+    if points.len() < 2 { bail!("eigen_k_path requires at least two control points"); }
+    let mut samples: Option<Vec<u32>> = None;
+    let mut closed: Option<bool> = None;
+    for option in options.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+        let (key, value) = option.split_once('=').context("invalid eigen_k_path option")?;
+        match key.trim().to_ascii_lowercase().as_str() {
+            "samples" | "samples_per_segment" => {
+                if samples.is_some() { bail!("duplicate eigen_k_path samples option"); }
+                let counts = value.split(',').map(|part| part.trim().parse::<u32>())
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .context("invalid eigen_k_path sample counts")?;
+                if counts.iter().any(|count| *count == 0) { bail!("eigen_k_path samples must be positive"); }
+                samples = Some(counts);
+            }
+            "closed" => {
+                if closed.is_some() { bail!("duplicate eigen_k_path closed option"); }
+                closed = Some(match value.trim().to_ascii_lowercase().as_str() {
+                    "true" | "1" | "yes" => true,
+                    "false" | "0" | "no" => false,
+                    _ => bail!("invalid eigen_k_path closed option"),
+                });
+            }
+            _ => bail!("unknown eigen_k_path option: {}", key.trim()),
+        }
+    }
+    let closed = closed.unwrap_or(false);
+    let segments = if closed { points.len() } else { points.len() - 1 };
+    let mut samples_per_segment = samples.unwrap_or_else(|| vec![41; segments]);
+    if samples_per_segment.len() == 1 { samples_per_segment.resize(segments, samples_per_segment[0]); }
+    if samples_per_segment.len() != segments { bail!("eigen_k_path segment/sample count mismatch"); }
+    Ok(fullmag_ir::KSamplingIR::Path { points, samples_per_segment, closed })
 }
 
 fn payload_spin_wave_bc(
@@ -3669,6 +3774,28 @@ fn payload_spin_wave_bc(
             .map(Some),
         None => Ok(None),
     }
+}
+
+fn payload_eigen_operator(
+    payload: &BTreeMap<String, Value>,
+) -> Result<Option<fullmag_ir::EigenOperatorIR>> {
+    let Some(value) = payload.get("eigen_operator") else {
+        return Ok(None);
+    };
+    serde_json::from_value(value.clone())
+        .context("invalid eigen_operator in study pipeline payload")
+        .map(Some)
+}
+
+fn payload_eigen_magnetostatic_bc(
+    payload: &BTreeMap<String, Value>,
+) -> Result<Option<fullmag_ir::MagnetostaticBoundaryConditionIR>> {
+    let Some(value) = payload.get("eigen_magnetostatic_bc") else {
+        return Ok(None);
+    };
+    serde_json::from_value(value.clone())
+        .context("invalid eigen_magnetostatic_bc in study pipeline payload")
+        .map(Some)
 }
 
 fn payload_frequency_magnetostatic_bc(
@@ -4320,6 +4447,96 @@ mod eigen_sampling_selector_tests {
 mod pipeline_eigen_solver_policy_tests {
     use super::*;
 
+    #[test]
+    fn pipeline_eigen_signed15_preserves_k_path_through_materialization() {
+        let ks = [-25, -20, -15, -10, -7, -5, -2, 0, 2, 5, 7, 10, 15, 20, 25];
+        let text = ks.iter().map(|k| format!("DE{k}:0,{},0", k * 1_000_000))
+            .collect::<Vec<_>>().join("; ") + " | samples=1";
+        let payload = BTreeMap::from([("eigen_k_path".into(), Value::String(text))]);
+        let stage = materialize_pipeline_eigenmodes(&time_evolution_base(), &payload).unwrap();
+        let fullmag_ir::StudyIR::Eigenmodes { k_sampling: Some(fullmag_ir::KSamplingIR::Path {
+            points, samples_per_segment, closed }), .. } = stage.ir.study else {
+            panic!("materialization lost signed k path");
+        };
+        assert!(!closed);
+        assert_eq!(samples_per_segment, vec![1; 14]);
+        assert_eq!(points.len(), 15);
+        for (point, k) in points.iter().zip(ks) {
+            assert_eq!(point.k_vector, [0.0, f64::from(k) * 1e6, 0.0]);
+            assert_eq!(point.label.as_deref(), Some(format!("DE{k}").as_str()));
+        }
+        assert_eq!(points[7].k_vector, [0.0; 3]);
+    }
+
+    #[test]
+    fn pipeline_k_path_rejects_ambiguous_or_invalid_inputs() {
+        for text in ["G:0,0,0", "G:0,0,0;X:0,NaN,0 | samples=1",
+            "G:0,0,0;X:0,1,0 | samples=0", "G:0,0,0;X:0,1,0 | samples=1,2",
+            "G:0,0,0;X:0,1,0 | unknown=1", "G:0,0,0;X:0,1,0 | closed=maybe"] {
+            assert!(parse_pipeline_k_path(text).is_err(), "accepted {text}");
+        }
+        let payload = BTreeMap::from([
+            ("eigen_k_path".into(), serde_json::json!("G:0,0,0;X:0,1,0 | samples=1")),
+            ("eigen_k_vector".into(), serde_json::json!([0, 1, 0])),
+        ]);
+        assert!(payload_k_sampling(&payload, None).is_err());
+        let fullmag_ir::KSamplingIR::Path { samples_per_segment, closed, .. } =
+            parse_pipeline_k_path("G:0,0,0;X:0,1,0 | samples=2;closed=true").unwrap() else {
+                panic!("expected path");
+            };
+        assert!(closed);
+        assert_eq!(samples_per_segment, vec![2, 2]);
+    }
+
+    #[test]
+    fn pipeline_eigen_sampling_preserves_mode_selectors_and_diagnostics() {
+        let outputs = serde_json::json!([
+            {"kind":"eigen_mode", "field":"mode", "indices":[0],
+             "sample_selector":{"sample_indices":[0,2],"sample_labels":["Gamma"]}},
+            {"kind":"eigen_diagnostics", "include_tracking":false,
+             "include_residuals":true,"include_overlaps":false,
+             "include_tangent_leakage":true,"include_orthogonality":false}
+        ]);
+        let payload = BTreeMap::from([("sampling".into(), serde_json::json!({"outputs":outputs}))]);
+        let stage = materialize_pipeline_eigenmodes(&time_evolution_base(), &payload).unwrap();
+        let expected: Vec<fullmag_ir::OutputIR> = serde_json::from_value(outputs).unwrap();
+        assert_eq!(stage.ir.study.sampling().outputs, expected);
+        for invalid in [serde_json::json!(false), serde_json::json!({"unexpected":1}),
+            serde_json::json!({"outputs":[{"kind":"unknown"}]}),
+            serde_json::json!({"outputs":[{"kind":"field","name":"m","every_seconds":1e-12}]})] {
+            assert!(materialize_pipeline_eigenmodes(&time_evolution_base(),
+                &BTreeMap::from([("sampling".into(), invalid)])).is_err());
+        }
+    }
+
+    #[test]
+    fn pipeline_eigen_completeness_preserves_inherits_clears_and_rejects() {
+        let mut base = time_evolution_base();
+        base.problem_meta.runtime_metadata.insert("modal_solver_policy".into(),
+            serde_json::json!({"completeness":"certified_count", "residual_tolerance":1e-8}));
+        for (value, expected) in [
+            (serde_json::json!("best_effort"), Some(fullmag_ir::FemEigenCompletenessPolicyIR::BestEffort)),
+            (Value::Null, None),
+            (serde_json::json!(""), None),
+        ] {
+            let payload = BTreeMap::from([("eigen_solver_completeness".into(), value)]);
+            let stage = materialize_pipeline_eigenmodes(&base, &payload).unwrap();
+            let policy = policy_from_stage(&stage).unwrap();
+            assert_eq!(policy.completeness, expected);
+            assert_eq!(policy.residual_tolerance, Some(1e-8));
+        }
+        let inherited = materialize_pipeline_eigenmodes(&base,
+            &BTreeMap::from([("eigen_solver_rtol".into(), serde_json::json!(2e-8))])).unwrap();
+        assert_eq!(policy_from_stage(&inherited).unwrap().completeness,
+            Some(fullmag_ir::FemEigenCompletenessPolicyIR::CertifiedCount));
+        for value in [serde_json::json!(false), serde_json::json!({}), serde_json::json!("invalid")] {
+            let error = materialize_pipeline_eigenmodes(&base,
+                &BTreeMap::from([("eigen_solver_completeness".into(), value)])).unwrap_err();
+            assert!(error.to_string().contains("eigen_solver_completeness"));
+        }
+    }
+
+
     fn time_evolution_base() -> ProblemIR {
         let base = ProblemIR::bootstrap_example();
         assert!(matches!(
@@ -4371,6 +4588,81 @@ mod pipeline_eigen_solver_policy_tests {
         .expect("eigenmodes pipeline should materialize");
         assert_eq!(stages.len(), 1, "expected exactly one pipeline stage");
         stages.remove(0)
+    }
+
+    fn assert_eigen_operator_and_magnetostatic_bc(
+        stage: &ResolvedScriptStage,
+        expected_operator: fullmag_ir::EigenOperatorIR,
+        expected_magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR,
+    ) {
+        let fullmag_ir::StudyIR::Eigenmodes {
+            operator,
+            magnetostatic_bc,
+            ..
+        } = &stage.ir.study
+        else {
+            panic!("expected materialized eigenmodes study");
+        };
+        assert_eq!(operator.kind, expected_operator);
+        assert_eq!(*magnetostatic_bc, expected_magnetostatic_bc);
+    }
+
+    #[test]
+    fn pipeline_eigenmodes_payload_overrides_operator_and_magnetostatic_bc() {
+        let base = time_evolution_base();
+        let payload = BTreeMap::from([
+            ("eigen_operator".to_string(), serde_json::json!("full_2x2")),
+            (
+                "eigen_magnetostatic_bc".to_string(),
+                serde_json::json!("floquet_airbox"),
+            ),
+        ]);
+
+        let stage = materialize_pipeline_eigenmodes(&base, &payload).unwrap();
+        assert_eigen_operator_and_magnetostatic_bc(
+            &stage,
+            fullmag_ir::EigenOperatorIR::Full2x2,
+            fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox,
+        );
+    }
+
+    #[test]
+    fn pipeline_eigenmodes_without_payload_inherit_existing_eigen_operator_and_bc() {
+        let base = materialize_pipeline_eigenmodes(
+            &time_evolution_base(),
+            &BTreeMap::from([
+                ("eigen_operator".to_string(), serde_json::json!("full_2x2")),
+                (
+                    "eigen_magnetostatic_bc".to_string(),
+                    serde_json::json!("floquet_airbox"),
+                ),
+            ]),
+        )
+        .unwrap()
+        .ir;
+
+        let stage = materialize_pipeline_eigenmodes(&base, &BTreeMap::new()).unwrap();
+        assert_eigen_operator_and_magnetostatic_bc(
+            &stage,
+            fullmag_ir::EigenOperatorIR::Full2x2,
+            fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox,
+        );
+    }
+
+    #[test]
+    fn pipeline_eigenmodes_reject_invalid_operator_and_magnetostatic_bc_payloads() {
+        let base = time_evolution_base();
+        for (key, value) in [
+            ("eigen_operator", serde_json::json!(3)),
+            ("eigen_operator", serde_json::json!("unsupported")),
+            ("eigen_magnetostatic_bc", serde_json::json!(null)),
+            ("eigen_magnetostatic_bc", serde_json::json!("unsupported")),
+        ] {
+            let payload = BTreeMap::from([(key.to_string(), value)]);
+            let error = materialize_pipeline_eigenmodes(&base, &payload)
+                .expect_err("an explicit invalid eigen field must be rejected");
+            assert!(error.to_string().contains(key), "{error}");
+        }
     }
 
     #[test]

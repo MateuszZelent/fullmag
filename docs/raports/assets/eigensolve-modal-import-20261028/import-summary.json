@@ -1,0 +1,79 @@
+{
+  "schema": "fullmag.eigensolve.modal-ui-file-restore.v1",
+  "backend_source_sha": "b37856f71a404f2b79bc21072a993aea340afd39",
+  "frontend_source_sha": "e37cb2b520753e4212d649db844f9b5c7ea0bb6e",
+  "compose_project": "fullmag-worktree-eigensolve-integration-ui-202610-78b341212cbdaa7d",
+  "development_attempt": "cc134fbe27ed4b31841062bbf63ac960",
+  "config_sha256": "e4f313108c9775973ae6ba008e2a52d14c94a632e44bbd94f8abdf631739b423",
+  "archive": {
+    "bytes": 158456496,
+    "sha256": "2338882b585bc40f9911ec3334676e672cb23c2a55448d4945e711533b57b6cf"
+  },
+  "cold_import": {
+    "operation": "replace_project",
+    "inspect_http": 200,
+    "commit_http": 200,
+    "observation": "response body evicted by browser navigation; reconciled by status and spectrum, no replay"
+  },
+  "visualization_import": {
+    "inspect_http": 200,
+    "commit_http": 200,
+    "query": "restore_mode=visualization_only",
+    "before_script": "/opt/fullmag/runtime-control/local-live/session-store/imports/docker-startup-dd62c87abc74113ead93cc5b36b99d5043bd50acf2814ce577f899bd3ccdc268-18e28a5eb8475be300000c61/project/main.py",
+    "after_script": "/opt/fullmag/runtime-control/local-live/session-store/imports/docker-startup-dd62c87abc74113ead93cc5b36b99d5043bd50acf2814ce577f899bd3ccdc268-18e28aa13b5784b500000c61/project/main.py",
+    "scope": "same known archive reopened after cold import; not a second cold process"
+  },
+  "spectrum": {
+    "run_id": "run-live-93df870d6af7a8e9d70a3742a0de6e7860b5a072c98b7359c3463c18b49113de",
+    "stage_id": "eigenmodes",
+    "generation_id": "sha256:094bf14b5f4e43d1622336ab43a09cbdce64b3e558519dfbb6c616473a5c215b",
+    "sample_count": 15,
+    "modes_per_sample": 1,
+    "frequency_k_sample_raw_mode_parity_with_python_csv": "exact",
+    "max_frequency_difference_hz": 0.0,
+    "gamma_hz": 9299249697.073517
+  },
+  "browser": {
+    "workbench": "passed after cold import",
+    "verified_samples": [
+      0,
+      3,
+      7,
+      11,
+      14
+    ],
+    "complex_values_each": 5127,
+    "reference_curves": 2,
+    "errors": [],
+    "http_failures": [],
+    "renderer": "SwiftShader",
+    "strict_after_compute_guard": "incomplete: real/imag passed, abs binding timeout; subsequent API/Docker unavailable",
+    "mutation_attempts_after_guard": []
+  },
+  "ci": {
+    "backend": {
+      "run": 40605186626,
+      "status": "success"
+    },
+    "frontend_latest": {
+      "run": 40610859641,
+      "status": "success"
+    },
+    "frontend_empty_scope": {
+      "run": 40608536084,
+      "status": "success",
+      "files": 53,
+      "tests": 1247
+    },
+    "python_launcher_regressions": {
+      "tests": 10,
+      "status": "passed"
+    }
+  },
+  "runtime_current": "unavailable: Docker daemon socket not responding; no Docker processes visible; user asked whether restart is in progress",
+  "remaining": [
+    "recover dedicated runtime after Docker is available",
+    "complete strict Gamma all representations and animation without solver mutations",
+    "main plan I0/I1/I5/I6/I7 not closed"
+  ]
+}

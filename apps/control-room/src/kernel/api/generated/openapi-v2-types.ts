@@ -20,6 +20,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/persistence/imports/file-inspections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Upload the original ZIP bytes; no base64 expansion or JSON body buffer. */
+        post: operations["persistence_post_persistence_imports_file_inspections"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/persistence/imports/inspections": {
         parameters: {
             query?: never;
@@ -4347,6 +4364,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/persistence/file-imports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["persistence_post_sessions_current_persistence_file_imports"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/persistence/imports": {
         parameters: {
             query?: never;
@@ -8416,6 +8449,11 @@ export interface components {
         };
         /** @enum {string} */
         FixedSolverIntegratorRequest: "auto" | "heun" | "rk4" | "rk23" | "rk45" | "abm3";
+        /**
+         * Format: binary
+         * @description Owned binary upload. OpenAPI describes the bytes, not a JSON number array.
+         */
+        FmsFileUpload: string;
         /** @description One saved frame of a results folder (an entry of `frames.json`). */
         FrameEntry: {
             /** Format: int64 */
@@ -8556,6 +8594,40 @@ export interface components {
             production_cpu_gamma_k_path: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             production_gpu: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             reference_cpu: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+        };
+        /** @description One requested diagnostic section in the user-facing eigen diagnostics artifact. */
+        FrequencyDomainEigenDiagnosticSectionPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            available: boolean;
+            data?: unknown;
+            status: string;
+            unavailable_reason?: string | null;
+        };
+        FrequencyDomainEigenDiagnosticsDispersionPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            /** Format: int64 */
+            mode_count: number;
+            /** Format: int64 */
+            mode_count_requested?: number | null;
+            /** Format: int64 */
+            sample_count: number;
+        };
+        /**
+         * @description Schema for the user-requested eigen diagnostics projection. This differs
+         *     from solver diagnostics, which report execution completion and interruption.
+         */
+        FrequencyDomainEigenDiagnosticsV2ArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            dispersion: components["schemas"]["FrequencyDomainEigenDiagnosticsDispersionPayload"];
+            /** Format: int64 */
+            mode_count: number;
+            orthogonality: components["schemas"]["FrequencyDomainEigenDiagnosticSectionPayload"];
+            overlaps: components["schemas"]["FrequencyDomainEigenDiagnosticSectionPayload"];
+            residuals: components["schemas"]["FrequencyDomainEigenDiagnosticSectionPayload"];
+            /** Format: int64 */
+            sample_count: number;
+            schema_version: string;
+            solver_model: string;
+            solver_model_scope: string;
+            tangent_leakage: components["schemas"]["FrequencyDomainEigenDiagnosticSectionPayload"];
+            tracking: components["schemas"]["FrequencyDomainEigenDiagnosticSectionPayload"];
         };
         FrequencyDomainFieldResource: {
             artifact_path: string;
@@ -8749,7 +8821,7 @@ export interface components {
          *     backward compatible with the existing artifact files: the artifact's
          *     `schema_version` remains the discriminator on the wire.
          */
-        FrequencyDomainJsonArtifactPayload: components["schemas"]["FrequencyDomainManifestArtifactPayload"] | components["schemas"]["FrequencyDomainSpectrumV3ArtifactPayload"] | components["schemas"]["FrequencyDomainSpectrumArtifactPayload"] | components["schemas"]["FrequencyDomainBranchesArtifactPayload"] | components["schemas"]["FrequencyDomainFieldSweepArtifactPayload"] | components["schemas"]["FrequencyDomainDiagnosticsArtifactPayload"] | components["schemas"]["FrequencyDomainModeArtifactPayload"] | components["schemas"]["FrequencyDomainResponseSweepArtifactPayload"] | components["schemas"]["FrequencyDomainResponsePointPayload"] | components["schemas"]["FrequencyDomainFmrPeaksArtifactPayload"] | components["schemas"]["FrequencyDomainResonanceFitsArtifactPayload"] | components["schemas"]["FrequencyDomainKittelFitArtifactPayload"];
+        FrequencyDomainJsonArtifactPayload: components["schemas"]["FrequencyDomainManifestArtifactPayload"] | components["schemas"]["FrequencyDomainSpectrumV3ArtifactPayload"] | components["schemas"]["FrequencyDomainSpectrumArtifactPayload"] | components["schemas"]["FrequencyDomainBranchesArtifactPayload"] | components["schemas"]["FrequencyDomainFieldSweepArtifactPayload"] | components["schemas"]["FrequencyDomainDiagnosticsArtifactPayload"] | components["schemas"]["FrequencyDomainEigenDiagnosticsV2ArtifactPayload"] | components["schemas"]["FrequencyDomainModeArtifactPayload"] | components["schemas"]["FrequencyDomainResponseSweepArtifactPayload"] | components["schemas"]["FrequencyDomainResponsePointPayload"] | components["schemas"]["FrequencyDomainFmrPeaksArtifactPayload"] | components["schemas"]["FrequencyDomainResonanceFitsArtifactPayload"] | components["schemas"]["FrequencyDomainKittelFitArtifactPayload"];
         FrequencyDomainJsonArtifactResource: {
             artifact_path: string;
             /** @description Opaque identity of the canonical artifact directory shared by its files. */
@@ -17248,6 +17320,59 @@ export interface operations {
         responses: {
             /** @description V2 API discovery index */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_post_persistence_imports_file_inspections: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Original .fms ZIP bytes; nonempty, at most 512 MiB */
+        requestBody: {
+            content: {
+                "application/octet-stream": components["schemas"]["FmsFileUpload"];
+            };
+        };
+        responses: {
+            /** @description Project archive inspection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionImportInspectResponse"];
+                };
+            };
+            /** @description Invalid archive */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Upload timed out */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Archive exceeds the file upload limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unsupported upload content type or encoding */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -31290,6 +31415,72 @@ export interface operations {
             };
             /** @description No active workspace or artifact not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_post_sessions_current_persistence_file_imports: {
+        parameters: {
+            query: {
+                /** @description Explicit archive restore policy */
+                restore_mode: components["schemas"]["SessionRestoreMode"];
+            };
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Original .fms ZIP bytes; nonempty, at most 512 MiB */
+        requestBody: {
+            content: {
+                "application/octet-stream": components["schemas"]["FmsFileUpload"];
+            };
+        };
+        responses: {
+            /** @description Session import committed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionImportCommitResponse"];
+                };
+            };
+            /** @description Invalid archive or restore policy */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Upload timed out */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Current session changed or restore is unsupported */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Archive exceeds the file upload limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unsupported upload content type or encoding */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -296,6 +296,10 @@ mod recovery_tests {
             fixture.context.compute_snapshot_admission_failure().unwrap(),
             Some("compute-node snapshot is missing".into())
         );
+        let rejection = fixture.context.ensure_committed_request(&fixture.request).unwrap_err();
+        assert!(rejection.is::<ComputeNodeSampleNotCurrent>());
+        assert_eq!(rejection.to_string(),
+            "process spawn requires a current compute-node sample for this boot: compute-node snapshot is missing");
     }
 
     #[test]
@@ -356,6 +360,14 @@ mod recovery_tests {
             fixture.context.compute_snapshot_admission_failure().unwrap(),
             Some("shared host inventory owner is not active".into())
         );
+        assert_eq!(
+            fixture
+                .context
+                .ensure_committed_request(&fixture.request)
+                .unwrap_err()
+                .to_string(),
+            "process spawn requires a current compute-node sample for this boot: shared host inventory owner is not active"
+        );
     }
 
     #[test]
@@ -375,6 +387,18 @@ mod recovery_tests {
 
         assert!(!fixture.context.has_current_compute_snapshot().unwrap());
         assert!(fixture.context.current_compute_node_snapshot().unwrap().is_none());
+        let current_boot_id =
+            crate::compute_node_probe::current_host_boot_id(chrono::Utc::now()).unwrap();
+        assert_eq!(
+            fixture
+                .context
+                .ensure_committed_request(&fixture.request)
+                .unwrap_err()
+                .to_string(),
+            format!(
+                "process spawn requires a current compute-node sample for this boot: compute-node boot differs: sample=previous-host-boot, current={current_boot_id}"
+            )
+        );
     }
 
     #[test]
@@ -390,6 +414,7 @@ mod recovery_tests {
         snapshot.sample.collected_at =
             now.clone() - chrono::Duration::seconds(31);
         snapshot.sample.refresh_freshness_at(now);
+        let collected_at = snapshot.sample.collected_at.to_rfc3339();
         fixture
             .ledger
             .publish_compute_node_snapshot_with_owner(&fixture.inventory_owner, &snapshot)
@@ -405,6 +430,21 @@ mod recovery_tests {
         assert!(reason.contains("freshness is Stale"));
         assert!(reason.contains("collected_at="));
         assert!(reason.contains("observed_at="));
+        let error = fixture
+            .context
+            .ensure_committed_request(&fixture.request)
+            .unwrap_err()
+            .to_string();
+        let expected_prefix = format!(
+            "process spawn requires a current compute-node sample for this boot: compute-node sample freshness is Stale: collected_at={collected_at}, observed_at="
+        );
+        let observed_at = error
+            .strip_prefix(&expected_prefix)
+            .expect("spawn rejection must preserve the complete stale-sample reason");
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(observed_at).is_ok(),
+            "observed_at must remain a precise RFC 3339 timestamp"
+        );
     }
 
     fn seed_ready_queued_catalog(fixture: &RecoveryFixture, ownership_epoch: Option<u64>) {
@@ -1728,7 +1768,7 @@ impl HostRuntimeAdmission {
                 claim.lease.lease_token.as_str(),
             )?
             .context("handoff recovery has no durable local lease")?;
-        if !self.ledger.worker_has_pending_launch(store, &lease)? {
+        if !self.has_current_compute_snapshot()? {
             return Ok(false);
         }
         if claim.lease.kind == fullmag_application::ResourceKind::Gpu
@@ -1737,6 +1777,13 @@ impl HostRuntimeAdmission {
             // Keep the durable reservation and launch gate for exact recovery,
             // but do not turn a transiently unavailable GPU into a scheduler
             // failure or a worker spawn attempt.
+            return Ok(false);
+        }
+        // Only this scheduler recovery path may revalidate an unused durable
+        // admission after the inventory producer restarted. Normal reserve and
+        // spawn retain their exact owner fences and one-use launch token.
+        self.ledger.reconcile_pending_worker_inventory_owner(store, &lease)?;
+        if !self.ledger.worker_has_pending_launch(store, &lease)? {
             return Ok(false);
         }
         self.ensure_solver_claim_committed(store, claim)?;
@@ -1838,7 +1885,12 @@ impl HostRuntimeAdmission {
     fn ensure_committed_request(&self, request: &HostReservationRequest) -> Result<()> {
         let current_snapshot = self
             .required_current_compute_node_snapshot()
-            .context("process spawn requires a current compute-node sample for this boot")?;
+            .map_err(|error| {
+                // Keep the typed source for admission deferral and its reason
+                // in the boundary Display used by process-spawn diagnostics.
+                let detail = format!("process spawn requires a current compute-node sample for this boot: {error}");
+                error.context(detail)
+            })?;
         if !request.exclusive_gpu_uuids.is_empty() {
             match &current_snapshot.gpus {
                 Reported::Available { value } if !value.is_empty() => {}

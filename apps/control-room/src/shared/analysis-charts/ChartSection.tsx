@@ -12,6 +12,8 @@ import type { ChartSeriesSourceIdentity } from "@/shared/domain/analysis/chartSe
 export type { ChartScientificTrust } from "./chartScientificTrust";
 
 export interface ChartSectionStatus {
+  /** Keep technical provenance available without displacing the scientific chart. */
+  collapseMetadata?: boolean;
   /** Primary status text (e.g. "Live", "Paused", "Loading…", "Error") */
   primary: string;
   /** Whether this status is an error/alert condition */
@@ -85,6 +87,38 @@ export function ChartSection({
         ? "fm-chart-section__status--stale"
         : "fm-chart-section__status--ok";
 
+  const provenance = <>
+            {displayedStatus?.revision != null ? (
+              <span className="fm-chart-section__revision">
+                rev {displayedStatus?.revision}
+              </span>
+            ) : null}
+            {displayedStatus?.requestedRevision != null ? (
+              <span className="fm-chart-section__revision">
+                → {displayedStatus?.requestedRevision}
+              </span>
+            ) : null}
+            {displayedStatus?.detail ? (
+              <span className="fm-chart-section__status-detail">
+                {displayedStatus?.detail}
+              </span>
+            ) : null}
+            {status?.sourceIdentity ? (
+              <span className="fm-chart-section__source-identity">
+                Artifact: {status.sourceIdentity.artifactPath ?? "unknown"}
+                {" · "}Schema: {status.sourceIdentity.schemaVersion ?? "unknown"}
+                {" · "}Digest: {status.sourceIdentity.contentDigest ?? "unknown"}
+                {" · "}Run: {status.sourceIdentity.runId ?? "unknown"}
+                {" · "}Stage: {status.sourceIdentity.stageId ?? "unknown"}
+                {" · "}Backend: {status.sourceIdentity.backend ?? "unknown"}
+                {" · "}Device: {status.sourceIdentity.device ?? "unknown"}
+                {" · "}Precision: {status.sourceIdentity.precision ?? "unknown"}
+                {" · "}Qualification: {status.sourceIdentity.qualification}
+                {" · "}Provenance: {status.sourceIdentity.provenance ?? "unknown"}
+              </span>
+            ) : null}
+  </>;
+
   return (
     <section
       aria-label={title}
@@ -121,35 +155,13 @@ export function ChartSection({
                 {status.pointSummary}
               </span>
             ) : null}
-            {displayedStatus.revision != null ? (
-              <span className="fm-chart-section__revision">
-                rev {displayedStatus.revision}
-              </span>
-            ) : null}
-            {displayedStatus.requestedRevision != null ? (
-              <span className="fm-chart-section__revision">
-                → {displayedStatus.requestedRevision}
-              </span>
-            ) : null}
-            {displayedStatus.detail ? (
-              <span className="fm-chart-section__status-detail">
-                {displayedStatus.detail}
-              </span>
-            ) : null}
-            {status?.sourceIdentity ? (
-              <span className="fm-chart-section__source-identity">
-                Artifact: {status.sourceIdentity.artifactPath ?? "unknown"}
-                {" · "}Schema: {status.sourceIdentity.schemaVersion ?? "unknown"}
-                {" · "}Digest: {status.sourceIdentity.contentDigest ?? "unknown"}
-                {" · "}Run: {status.sourceIdentity.runId ?? "unknown"}
-                {" · "}Stage: {status.sourceIdentity.stageId ?? "unknown"}
-                {" · "}Backend: {status.sourceIdentity.backend ?? "unknown"}
-                {" · "}Device: {status.sourceIdentity.device ?? "unknown"}
-                {" · "}Precision: {status.sourceIdentity.precision ?? "unknown"}
-                {" · "}Qualification: {status.sourceIdentity.qualification}
-                {" · "}Provenance: {status.sourceIdentity.provenance ?? "unknown"}
-              </span>
-            ) : null}
+            {status?.collapseMetadata ? (
+              <details className="fm-chart-section__provenance">
+                <summary>Provenance</summary>
+                <div className="fm-chart-section__provenance-content">{provenance}</div>
+              </details>
+            ) : provenance}
+
           </div>
         ) : null}
         {toolbar ? (

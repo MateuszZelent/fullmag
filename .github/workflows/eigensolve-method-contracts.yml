@@ -2,15 +2,25 @@ name: eigensolve-method-contracts
 
 on:
   workflow_dispatch:
+    inputs:
+      contract_scope:
+        description: Run all method contracts or a focused hosted suite.
+        type: choice
+        default: all
+        options: [all, runner, plan]
   push:
     branches: [master, main]
     paths:
       - 'crates/fullmag-runner/**'
+      - 'crates/fullmag-plan/**'
+      - 'crates/fullmag-ir/**'
       - 'docs/physics/0600-fem-eigenmodes-linearized-llg*'
       - '.github/workflows/eigensolve-method-contracts.yml'
   pull_request:
     paths:
       - 'crates/fullmag-runner/**'
+      - 'crates/fullmag-plan/**'
+      - 'crates/fullmag-ir/**'
       - 'docs/physics/0600-fem-eigenmodes-linearized-llg*'
       - '.github/workflows/eigensolve-method-contracts.yml'
 
@@ -23,6 +33,7 @@ concurrency:
 
 jobs:
   source-contracts:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.contract_scope != 'plan' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -57,7 +68,56 @@ jobs:
                   f"FULLMAG_PROJECT_STORAGE_ROOT={layout['storage_root']}\n"
               )
           PY
+      - name: Validate independent native tracking metric replay
+        run: python3 -B -m unittest discover -s scripts -p "test_comsol_tracking_metric.py" -v
+
       - name: Run complete default-feature runner contracts
         env:
           RUST_MIN_STACK: 16777216
         run: cargo test -p fullmag-runner --lib --no-fail-fast
+
+      - name: Verify persisted checkpoint with the configured Python inspector
+        env:
+          RUST_MIN_STACK: 16777216
+          FULLMAG_CHECKPOINT_INSPECTOR_PYTHON: python3
+        run: |
+          set -euo pipefail
+          cargo test -p fullmag-runner --lib fem::single_k_checkpoint::tests::checkpoint_inspector_accepts_actual_persisted_manifest -- --exact --ignored --nocapture | tee "$RUNNER_TEMP/eigen-checkpoint-inspector.log"
+          grep -F "test result: ok. 1 passed;" "$RUNNER_TEMP/eigen-checkpoint-inspector.log"
+
+  planning-contracts:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.contract_scope != 'runner' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Install existing Python authoring runtime
+        run: python -m pip install -e packages/fullmag-py
+      - name: Resolve storage for planning fixtures
+        run: |
+          python -B - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+
+          result = subprocess.run(
+              [sys.executable, "-B", "scripts/fullmag_storage.py", "resolve",
+               "--profile", "ci-rust-contracts", "--create"],
+              check=True, capture_output=True, text=True,
+          )
+          layout = json.loads(result.stdout)
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
+              environment.write(
+                  f"FULLMAG_PROJECT_STORAGE_ROOT={layout['storage_root']}\n"
+              )
+          PY
+      - name: Run complete default-feature planning contracts
+        env:
+          RUST_MIN_STACK: 16777216
+        run: cargo test -p fullmag-plan --lib --no-fail-fast

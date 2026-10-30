@@ -1194,6 +1194,23 @@ pub fn materialize_accepted_worker_execution_plan(
         let artifact = input.study_artifact.as_ref().with_context(|| {
             format!("resolved study input `{port_id}` has no typed CAS artifact binding")
         })?;
+        if port.data_kind == StudyPortDataKind::Artifact
+            && port.port_id == fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT
+        {
+            if !matches!(
+                &execution_plan.backend_plan,
+                fullmag_ir::BackendPlanIR::FemEigen(_)
+            )
+                || artifact.data_kind != "artifact"
+                || artifact.codec_id != fullmag_application::FEM_EQUILIBRIUM_HANDOFF_CODEC_ID
+                || artifact.codec_version != fullmag_application::FEM_EQUILIBRIUM_HANDOFF_CODEC_VERSION
+                || !matches!(&port.source, fullmag_authoring::StudyInputSource::StepOutput { port, case_id, .. }
+                    if port == fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT && case_id == "default")
+            { bail!("equilibrium input differs from the FEM eigen StepOutput contract"); }
+            // The modal adapter replays this exact typed certificate and binds
+            // its m0; it must never be treated as a generic field-state input.
+            continue;
+        }
         let expected_data_kind = match port.data_kind {
             StudyPortDataKind::InitialState => "initial_state",
             StudyPortDataKind::State => "state",
@@ -1790,6 +1807,29 @@ fn publish_study_outputs_internal(
                 )
             })?;
         let data_kind = study_port_data_kind_label(&declared.data_kind);
+        if crate::study_modal::is_modal_step(step)
+            || output.codec_id == fullmag_application::MODAL_EIGEN_BUNDLE_CODEC_ID {
+            if accepted_state_ref.is_some() || observation_source.is_some()
+                || output.port_id != fullmag_application::MODAL_EIGEN_OUTPUT_PORT
+                || output.case_id != "default"
+                || output.codec_id != fullmag_application::MODAL_EIGEN_BUNDLE_CODEC_ID
+                || output.codec_version != fullmag_application::MODAL_EIGEN_BUNDLE_CODEC_VERSION {
+                bail!("modal publication cannot fabricate magnetic state or another codec/case");
+            }
+            crate::study_modal::validate_bundle(&output.bytes, claim, step)?;
+        }
+        if output.port_id == fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT
+            || output.codec_id == fullmag_application::FEM_EQUILIBRIUM_HANDOFF_CODEC_ID
+        {
+            if output.port_id != fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT
+                || data_kind != "artifact" || output.case_id != "default"
+                || output.codec_id != fullmag_application::FEM_EQUILIBRIUM_HANDOFF_CODEC_ID
+                || output.codec_version != fullmag_application::FEM_EQUILIBRIUM_HANDOFF_CODEC_VERSION
+            { bail!("FEM equilibrium publication differs from its declared typed output"); }
+            crate::study_equilibrium::validate_handoff_publication(
+                &output.bytes, store, accepted, claim, step,
+            )?;
+        }
         if output.codec_id==fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID {
             if accepted_state_ref.is_some() || observation_source.is_some() || output.port_id!="inspection" || output.case_id!="default" { bail!("inspection output cannot fabricate magnetic state or another case"); }
             let problem=accepted.catalog.entries().iter().find(|entry|entry.step_id()==step_id).context("inspection publication ProblemIR missing")?.problem();
@@ -2301,7 +2341,15 @@ pub(crate) fn read_study_task_completion_for_snapshot(
         }
         let inspection=matches!(source_step.kind,fullmag_authoring::StudyStepKind::ClosedLoopInspection { .. });
         let maximum=if inspection { Some(crate::study_inspection::inspection_bundle_budget(claim)?) } else {None};
-        let output_bytes = if let Some(maximum)=maximum {
+        let modal = crate::study_modal::is_modal_step(source_step);
+        let equilibrium = output.port_id == fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT
+            || output.codec_id == fullmag_application::FEM_EQUILIBRIUM_HANDOFF_CODEC_ID;
+        let output_bytes = if equilibrium {
+            store.cas().get_bounded(&output.object_ref,
+                crate::study_equilibrium::handoff_budget(claim.lease.budget.storage_bytes) as u64)?
+        } else if modal {
+            store.cas().get_bounded(&output.object_ref, crate::study_modal::bundle_budget(claim) as u64)?
+        } else if let Some(maximum)=maximum {
             store.cas().get_bounded(&output.object_ref,maximum as u64)?
         } else { store.cas().get(&output.object_ref)? }.with_context(|| {
             format!(
@@ -2309,6 +2357,25 @@ pub(crate) fn read_study_task_completion_for_snapshot(
                 output.artifact_id
             )
         })?;
+        if equilibrium {
+            if output.port_id != fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT
+                || data_kind != "artifact" || output.case_id != "default"
+                || output.codec_id != fullmag_application::FEM_EQUILIBRIUM_HANDOFF_CODEC_ID
+                || output.codec_version != fullmag_application::FEM_EQUILIBRIUM_HANDOFF_CODEC_VERSION
+            { bail!("FEM equilibrium completion differs from its declared typed output"); }
+            crate::study_equilibrium::validate_handoff_publication(
+                &output_bytes, store, accepted, claim, source_step,
+            )?;
+        }
+        if modal || output.codec_id == fullmag_application::MODAL_EIGEN_BUNDLE_CODEC_ID {
+            if manifest.accepted_state_ref.is_some() || manifest.observation_source.is_some()
+                || output.port_id != fullmag_application::MODAL_EIGEN_OUTPUT_PORT || output.case_id != "default"
+                || output.codec_id != fullmag_application::MODAL_EIGEN_BUNDLE_CODEC_ID
+                || output.codec_version != fullmag_application::MODAL_EIGEN_BUNDLE_CODEC_VERSION {
+                bail!("modal completion cannot accept a different codec, case or magnetic state");
+            }
+            crate::study_modal::validate_bundle(&output_bytes, claim, source_step)?;
+        }
         if let Some(maximum)=maximum {
             if output.codec_id!=fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID || output.codec_version!=fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_VERSION || output.case_id!="default" || manifest.accepted_state_ref.is_some() || manifest.observation_source.is_some() { bail!("inspection completion cannot accept solver outputs or state"); }
             let problem=accepted.catalog.entries().iter().find(|entry|entry.step_id()==source_step.step_id).context("inspection completion ProblemIR missing")?.problem();
@@ -2670,6 +2737,16 @@ fn bind_step_output_manifests(
             codec_id: selected.codec_id.clone(),
             codec_version: selected.codec_version.clone(),
         };
+        if resolved
+            .study_artifact
+            .as_ref()
+            .is_some_and(|supplied| supplied != &study_artifact)
+        {
+            bail!(
+                "resolved StepOutput `{}` typed binding differs from its current manifest",
+                input.port_id
+            );
+        }
         let artifact_bytes = store
             .cas()
             .get(&study_artifact.object_ref)?
@@ -2788,18 +2865,23 @@ fn resolve_step_output_inputs(
                 port.port_id
             );
         }
-        let from_catalog = ResolvedInput {
+        let mut from_catalog = ResolvedInput {
             source: artifact.artifact_id.clone(),
             content_sha256: artifact.content_sha256.clone(),
             study_artifact: None,
         };
         if let Some(supplied) = supplied_inputs.get(&port.port_id) {
-            if supplied != &from_catalog {
+            if supplied.source != from_catalog.source
+                || supplied.content_sha256 != from_catalog.content_sha256
+            {
                 bail!(
                     "study input `{}` does not match its pinned artifact identity and digest",
                     port.port_id
                 );
             }
+            // Queueing already enriched this identity from the typed manifest.
+            // Preserve it for exact revalidation below during Prepare/recovery.
+            from_catalog.study_artifact = supplied.study_artifact.clone();
         }
         resolved.insert(port.port_id.clone(), from_catalog);
     }
@@ -3237,6 +3319,129 @@ mod dependency_tests {
             Some(&wrong_output),
         )
         .is_err());
+    }
+
+    #[test]
+    fn step_output_typed_binding_roundtrip_is_idempotent_and_rejects_drift() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let run_catalog = catalog(FmsTaskLifecycle::Succeeded);
+        let mut ports = ports();
+        ports[0].data_kind = StudyPortDataKind::Scalar;
+        let source: StudyStep = serde_json::from_value(serde_json::json!({
+            "step_id": "source-step", "label": "source",
+            "kind": {"kind": "primitive", "stage_kind": "run"},
+            "model": {"model_id": "m", "version": "v1"},
+            "solver_config": {"preset_id": "s", "version": "v1"},
+            "discretization": {"recipe_id": "d", "version": "v1"},
+            "execution_profile": {"profile_id": "e", "version": "v1"},
+            "acceptance": {"kind": "any"}, "acquisition": "exclusive",
+            "outputs": [{"port_id": "final_state", "data_kind": "scalar"}]
+        }))
+        .unwrap();
+        let steps = vec![source];
+        let bytes = fullmag_application::encode_study_scalar_artifact(
+            "E_total", "J", -1.25e-18, 3, 1.5e-14,
+        )
+        .unwrap();
+        let object_ref = store.cas().put(&bytes).unwrap();
+        let mut artifacts = artifact_catalog();
+        let entry = &mut artifacts.entries[1];
+        entry.artifact_type = "scalar".into();
+        entry.content_sha256 = object_ref.clone();
+        entry.object_ref = Some(object_ref.clone());
+        let manifest = fullmag_session::FmsStudyOutputManifest {
+            schema_version: fullmag_session::FMS_STUDY_OUTPUT_MANIFEST_SCHEMA.into(),
+            run_id: run_catalog.run_id.clone(),
+            task_id: entry.task_id.clone(),
+            step_id: "source-step".into(),
+            attempt_id: entry.attempt_id.clone(),
+            ownership_epoch: entry.ownership_epoch,
+            accepted_state_ref: None,
+            observation_source: None,
+            outputs: vec![fullmag_session::FmsStudyOutputManifestEntry {
+                port_id: "final_state".into(),
+                case_id: "default".into(),
+                data_kind: "scalar".into(),
+                codec_id: fullmag_application::STUDY_SCALAR_CODEC_ID.into(),
+                codec_version: fullmag_application::STUDY_SCALAR_CODEC_VERSION.into(),
+                artifact_id: entry.artifact_id.clone(),
+                object_ref: object_ref.clone(),
+                content_sha256: object_ref.clone(),
+            }],
+        };
+        let manifest_ref = store
+            .cas()
+            .put(&serde_json::to_vec(&manifest).unwrap())
+            .unwrap();
+        let mut manifest_entry = entry.clone();
+        manifest_entry.artifact_id = "artifact-manifest".into();
+        manifest_entry.artifact_type = "study_output_manifest".into();
+        manifest_entry.logical_path = "outputs/current/manifest.json".into();
+        manifest_entry.object_ref = Some(manifest_ref.clone());
+        manifest_entry.content_sha256 = manifest_ref.clone();
+        manifest_entry.study_output = None;
+        artifacts.entries.push(manifest_entry);
+        let resolve = |supplied: &BTreeMap<String, ResolvedInput>| {
+            let mut resolved = resolve_step_output_inputs(
+                &run_catalog.run_id,
+                &ports,
+                supplied,
+                &run_catalog,
+                Some(&artifacts),
+            )?;
+            bind_step_output_manifests(
+                &store,
+                &run_catalog.run_id,
+                &steps,
+                &ports,
+                &mut resolved,
+                &run_catalog,
+                Some(&artifacts),
+            )?;
+            Ok::<_, anyhow::Error>(resolved)
+        };
+        let first = resolve(&BTreeMap::new()).unwrap();
+        assert!(first["initial_state"].study_artifact.is_some());
+        // Queue/admission captures the typed binding. Prepare and recovery
+        // deserialize it and must revalidate it without rejecting enrichment.
+        let captured = serde_json::from_slice(&serde_json::to_vec(&first).unwrap()).unwrap();
+        assert_eq!(resolve(&captured).unwrap(), first);
+        assert_eq!(resolve(&first).unwrap(), first);
+        for field in [
+            "source",
+            "content_sha256",
+            "artifact_id",
+            "object_ref",
+            "data_kind",
+            "codec_id",
+            "codec_version",
+        ] {
+            let mut forged = first.clone();
+            let input = forged.get_mut("initial_state").unwrap();
+            match field {
+                "source" => input.source = "foreign-artifact".into(),
+                "content_sha256" => input.content_sha256 = "f".repeat(64),
+                _ => {
+                    let artifact = input.study_artifact.as_mut().unwrap();
+                    match field {
+                        "artifact_id" => artifact.artifact_id = "foreign-artifact".into(),
+                        "object_ref" => artifact.object_ref = "f".repeat(64),
+                        "data_kind" => artifact.data_kind = "state".into(),
+                        "codec_id" => artifact.codec_id = "foreign.codec".into(),
+                        "codec_version" => artifact.codec_version = "v99".into(),
+                        _ => unreachable!(),
+                    }
+                }
+            }
+            assert!(resolve(&forged).is_err(), "accepted forged {field}");
+        }
+        let object_path = store.root().join("objects/sha256").join(&object_ref);
+        std::fs::remove_file(&object_path).unwrap();
+        assert!(resolve(&first).is_err(), "accepted missing payload");
+        store.cas().put(&bytes).unwrap();
+        std::fs::remove_file(store.root().join("objects/sha256").join(manifest_ref)).unwrap();
+        assert!(resolve(&first).is_err(), "accepted missing manifest");
     }
 
     #[test]

@@ -1,0 +1,7 @@
+{
+  "points": 15,
+  "max_frequency_difference_hz": 0.0,
+  "generation_id": "sha256:094bf14b5f4e43d1622336ab43a09cbdce64b3e558519dfbb6c616473a5c215b",
+  "before_script": "/opt/fullmag/runtime-control/local-live/session-store/imports/docker-startup-dd62c87abc74113ead93cc5b36b99d5043bd50acf2814ce577f899bd3ccdc268-18e28a5eb8475be300000c61/project/main.py",
+  "after_script": "/opt/fullmag/runtime-control/local-live/session-store/imports/docker-startup-dd62c87abc74113ead93cc5b36b99d5043bd50acf2814ce577f899bd3ccdc268-18e28aa13b5784b500000c61/project/main.py"
+}

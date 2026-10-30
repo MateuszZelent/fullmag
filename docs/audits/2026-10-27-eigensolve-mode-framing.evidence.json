@@ -1,0 +1,2930 @@
+{
+  "schemaVersion": "fullmag.eigen_mode_ui_verification.v1",
+  "status": "passed",
+  "startedAt": "2026-10-27T04:42:25.661Z",
+  "config": {
+    "apiBase": "http://127.0.0.1:3217",
+    "expectedRunId": "run-live-b70fc554a63f31f13ed0759ca17dfcfc93dd1580de0a173dd283c00e353b3162",
+    "expectedStageId": "eigenmodes",
+    "modeIndex": 0,
+    "output": "/tmp/eigen-mode-magnetic-fit.json",
+    "sampleIndex": 0,
+    "selectMode": true,
+    "timeoutMs": 120000,
+    "url": "http://127.0.0.1:3217/workspace"
+  },
+  "api": {
+    "observations": [
+      {
+        "bodyBytes": 12010,
+        "elapsedMs": 2725,
+        "error": null,
+        "method": "GET",
+        "ok": true,
+        "path": "/v2/sessions/current/status",
+        "status": 200
+      },
+      {
+        "bodyBytes": 757,
+        "elapsedMs": 178,
+        "error": null,
+        "method": "GET",
+        "ok": true,
+        "path": "/v2/sessions/current/simulation/runs/current",
+        "status": 200
+      },
+      {
+        "bodyBytes": 1688,
+        "elapsedMs": 279,
+        "error": null,
+        "method": "GET",
+        "ok": true,
+        "path": "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/0/0/meta",
+        "status": 200
+      },
+      {
+        "bodyBytes": 17706,
+        "elapsedMs": 284,
+        "error": null,
+        "method": "GET",
+        "ok": true,
+        "path": "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
+        "status": 200
+      },
+      {
+        "bodyBytes": 6136,
+        "elapsedMs": 375,
+        "error": null,
+        "method": "GET",
+        "ok": true,
+        "path": "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
+        "status": 200
+      },
+      {
+        "bodyBytes": 75563,
+        "elapsedMs": 377,
+        "error": null,
+        "method": "GET",
+        "ok": true,
+        "path": "/v2/sessions/current/analysis/frequency-domain/eigen/modes/0/0",
+        "status": 200
+      }
+    ]
+  },
+  "browser": {
+    "console": {
+      "errors": [],
+      "warnings": [
+        "THREE.Clock: This module has been deprecated. Please use THREE.Timer instead.",
+        "[.WebGL-0x250c18a8b000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+        "[.WebGL-0x250c18a8b000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+        "[.WebGL-0x250c18a8b000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+        "[.WebGL-0x250c18a8b000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)",
+        "THREE.Clock: This module has been deprecated. Please use THREE.Timer instead."
+      ],
+      "pageErrors": []
+    },
+    "requests": [
+      {
+        "method": "GET",
+        "path": "/v2/sessions",
+        "query": {},
+        "observedAtMs": 1793076159403,
+        "sessionScopeHeader": null
+      },
+      {
+        "method": "GET",
+        "path": "/v2/platform/instances",
+        "query": {},
+        "observedAtMs": 1793076159404,
+        "sessionScopeHeader": null
+      },
+      {
+        "method": "GET",
+        "path": "/v2/platform/health",
+        "query": {},
+        "observedAtMs": 1793076159411,
+        "sessionScopeHeader": null
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/status",
+        "query": {},
+        "observedAtMs": 1793076159481,
+        "sessionScopeHeader": null
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/readiness",
+        "query": {},
+        "observedAtMs": 1793076159899,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/geometry/validation",
+        "query": {},
+        "observedAtMs": 1793076159932,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/builds/current",
+        "query": {},
+        "observedAtMs": 1793076159969,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/meshes/shared-domain/manifest",
+        "query": {},
+        "observedAtMs": 1793076160000,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/simulation/solver/status",
+        "query": {},
+        "observedAtMs": 1793076160027,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/simulation/stages/execution",
+        "query": {},
+        "observedAtMs": 1793076160053,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/visualization/state",
+        "query": {},
+        "observedAtMs": 1793076160087,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/simulation/preparation",
+        "query": {},
+        "observedAtMs": 1793076160123,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/platform/health",
+        "query": {},
+        "observedAtMs": 1793076160125,
+        "sessionScopeHeader": null
+      },
+      {
+        "method": "GET",
+        "path": "/v2/platform/health",
+        "query": {},
+        "observedAtMs": 1793076160794,
+        "sessionScopeHeader": null
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions",
+        "query": {},
+        "observedAtMs": 1793076160871,
+        "sessionScopeHeader": null
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/readiness",
+        "query": {},
+        "observedAtMs": 1793076160901,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/geometry/validation",
+        "query": {},
+        "observedAtMs": 1793076160925,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/builds/current",
+        "query": {},
+        "observedAtMs": 1793076160972,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/geometry/capabilities",
+        "query": {},
+        "observedAtMs": 1793076161103,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/builds/latest-successful",
+        "query": {},
+        "observedAtMs": 1793076161123,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/capabilities",
+        "query": {},
+        "observedAtMs": 1793076161132,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/summary",
+        "query": {},
+        "observedAtMs": 1793076161194,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/semantics",
+        "query": {},
+        "observedAtMs": 1793076161203,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/persistence/checkpoints",
+        "query": {},
+        "observedAtMs": 1793076161266,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/planar-monitors",
+        "query": {},
+        "observedAtMs": 1793076161319,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/frozen-spins",
+        "query": {},
+        "observedAtMs": 1793076161334,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/scene",
+        "query": {},
+        "observedAtMs": 1793076161375,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/domain/meta",
+        "query": {},
+        "observedAtMs": 1793076161411,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/policies/universe",
+        "query": {},
+        "observedAtMs": 1793076161454,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/regions",
+        "query": {},
+        "observedAtMs": 1793076161516,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/material-fields",
+        "query": {},
+        "observedAtMs": 1793076161561,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/couplings",
+        "query": {},
+        "observedAtMs": 1793076161600,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/physics-graph",
+        "query": {},
+        "observedAtMs": 1793076161653,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/current-transports",
+        "query": {},
+        "observedAtMs": 1793076161687,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/meshes/shared-domain/quality-gates",
+        "query": {},
+        "observedAtMs": 1793076161753,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields",
+        "query": {},
+        "observedAtMs": 1793076161767,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/scalars",
+        "query": {
+          "columns": "step,time,mx,my,mz,e_total",
+          "limit": "1",
+          "tail": "true"
+        },
+        "observedAtMs": 1793076161803,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/analysis/frequency-domain/response/progress.v1",
+        "query": {},
+        "observedAtMs": 1793076161845,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep",
+        "query": {},
+        "observedAtMs": 1793076161848,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/simulation/runs/current",
+        "query": {},
+        "observedAtMs": 1793076161852,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/simulation/solver/status",
+        "query": {},
+        "observedAtMs": 1793076137598,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/meshes/shared-domain/manifest",
+        "query": {},
+        "observedAtMs": 1793076165320,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/visualization/state",
+        "query": {},
+        "observedAtMs": 1793076165387,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/simulation/stages/execution",
+        "query": {},
+        "observedAtMs": 1793076165491,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/status",
+        "query": {},
+        "observedAtMs": 1793076166808,
+        "sessionScopeHeader": null
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/visualization/mode-compositions/active",
+        "query": {},
+        "observedAtMs": 1793076166817,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/universe",
+        "query": {},
+        "observedAtMs": 1793076166823,
+        "sessionScopeHeader": null
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/domain/topology",
+        "query": {},
+        "observedAtMs": 1793076166832,
+        "sessionScopeHeader": null
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/fields",
+        "query": {},
+        "observedAtMs": 1793076166851,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/quantities",
+        "query": {},
+        "observedAtMs": 1793076166858,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/mesh/periodic_pairs.v1",
+        "query": {},
+        "observedAtMs": 1793076166988,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/simulation/objects/film/metrics",
+        "query": {},
+        "observedAtMs": 1793076167118,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/domain/topology",
+        "query": {},
+        "observedAtMs": 1793076167715,
+        "sessionScopeHeader": null
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/status",
+        "query": {},
+        "observedAtMs": 1793076167903,
+        "sessionScopeHeader": null
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/simulation/preparation",
+        "query": {},
+        "observedAtMs": 1793076172130,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/fields/m/samples/vector",
+        "query": {
+          "component": "full",
+          "scope_id": "part:film_geom",
+          "scope_kind": "part"
+        },
+        "observedAtMs": 1793076172165,
+        "sessionScopeHeader": null
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/fields/m/samples/vector",
+        "query": {
+          "component": "full",
+          "scope_kind": "full"
+        },
+        "observedAtMs": 1793076172179,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/tables",
+        "query": {},
+        "observedAtMs": 1793076173166,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
+        "query": {},
+        "observedAtMs": 1793076173307,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/artifacts",
+        "query": {},
+        "observedAtMs": 1793076173323,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/observation-frames",
+        "query": {
+          "limit": "50",
+          "run_id": "run-live-b70fc554a63f31f13ed0759ca17dfcfc93dd1580de0a173dd283c00e353b3162"
+        },
+        "observedAtMs": 1793076173338,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
+        "query": {},
+        "observedAtMs": 1793076173345,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/analysis/postprocessing/definitions",
+        "query": {},
+        "observedAtMs": 1793076173359,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/analysis/results/runs/run-live-b70fc554a63f31f13ed0759ca17dfcfc93dd1580de0a173dd283c00e353b3162/datasets",
+        "query": {},
+        "observedAtMs": 1793076173374,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
+        "query": {},
+        "observedAtMs": 1793076173384,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
+        "query": {},
+        "observedAtMs": 1793076173397,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/analysis/frequency-domain/eigen/modes/0/0",
+        "query": {},
+        "observedAtMs": 1793076174846,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/0/0/meta",
+        "query": {},
+        "observedAtMs": 1793076174857,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/visualization/mode-compositions/active",
+        "query": {},
+        "observedAtMs": 1793076175538,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/domain/meta",
+        "query": {},
+        "observedAtMs": 1793076175549,
+        "sessionScopeHeader": null
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/regions",
+        "query": {},
+        "observedAtMs": 1793076175561,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/universe",
+        "query": {},
+        "observedAtMs": 1793076175569,
+        "sessionScopeHeader": null
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/domain/topology",
+        "query": {},
+        "observedAtMs": 1793076175579,
+        "sessionScopeHeader": null
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/fields",
+        "query": {},
+        "observedAtMs": 1793076175587,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/quantities",
+        "query": {},
+        "observedAtMs": 1793076175597,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/mesh/periodic_pairs.v1",
+        "query": {},
+        "observedAtMs": 1793076175614,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/fields/m/samples/vector",
+        "query": {
+          "component": "full",
+          "scope_id": "part:film_geom",
+          "scope_kind": "part"
+        },
+        "observedAtMs": 1793076175817,
+        "sessionScopeHeader": null
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/fields/m/samples/vector",
+        "query": {
+          "component": "full",
+          "scope_kind": "full"
+        },
+        "observedAtMs": 1793076176003,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "POST",
+        "path": "/v2/sessions/current/visualization/client-acks",
+        "query": {},
+        "observedAtMs": 1793076176215,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/analysis/frequency-domain/eigen/modes/0/0",
+        "query": {},
+        "observedAtMs": 1793076176346,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/0/0/meta",
+        "query": {},
+        "observedAtMs": 1793076180126,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0000%3Amode-0000/samples/vector",
+        "query": {
+          "component": "full",
+          "expected_artifact_generation_id": "sha256:40c3b4c4650072d8cd32bde59096e022d0b6fed9c54195aee2b6b989c9114ff0",
+          "scope_kind": "full",
+          "view": "complex"
+        },
+        "observedAtMs": 1793076180156,
+        "sessionScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1"
+      }
+    ],
+    "responses": [
+      {
+        "method": "GET",
+        "path": "/v2/sessions",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076159439,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/platform/health",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076159483,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/platform/instances",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076159507,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/status",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076159514,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/readiness",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076160246,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/geometry/validation",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076160250,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/builds/current",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076160256,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/simulation/solver/status",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076161893,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/meshes/shared-domain/manifest",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076161893,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/visualization/state",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076161894,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/simulation/stages/execution",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076161966,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/platform/health",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076161966,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076161966,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/readiness",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076161967,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/geometry/validation",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076161967,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/builds/current",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076161968,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/geometry/capabilities",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076161969,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/builds/latest-successful",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076161969,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/capabilities",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076161970,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/summary",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076161971,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/semantics",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076161971,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/persistence/checkpoints",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076161971,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/frozen-spins",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076161972,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/planar-monitors",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076161972,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/scene",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076161972,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/domain/meta",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076161972,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/policies/universe",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076161972,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/regions",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076161987,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/material-fields",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076161988,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/couplings",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076161988,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/physics-graph",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076161988,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/current-transports",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076162001,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/meshes/shared-domain/quality-gates",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076162002,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076162002,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/scalars",
+        "query": {
+          "columns": "step,time,mx,my,mz,e_total",
+          "limit": "1",
+          "tail": "true"
+        },
+        "status": 200,
+        "observedAtMs": 1793076162002,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/analysis/frequency-domain/response/progress.v1",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076162002,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076162004,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/simulation/runs/current",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076162004,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/simulation/solver/status",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076166786,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/meshes/shared-domain/manifest",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076166786,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/visualization/state",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076166786,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/simulation/stages/execution",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076166806,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/visualization/mode-compositions/active",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076167123,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/universe",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076167123,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/domain/topology",
+        "query": {},
+        "status": 206,
+        "observedAtMs": 1793076167124,
+        "headers": {
+          "content-type": "application/octet-stream",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4",
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/status",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076167124,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/fields",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076167124,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/quantities",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076167125,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/mesh/periodic_pairs.v1",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076171644,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/simulation/objects/film/metrics",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076171645,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/domain/topology",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076171648,
+        "headers": {
+          "content-type": "application/octet-stream",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4",
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/status",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076171753,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/simulation/preparation",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076172328,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/fields/m/samples/vector",
+        "query": {
+          "component": "full",
+          "scope_id": "part:film_geom",
+          "scope_kind": "part"
+        },
+        "status": 200,
+        "observedAtMs": 1793076172340,
+        "headers": {
+          "content-type": "application/octet-stream",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": "full",
+          "x-fullmag-domain-generation-id": "8623634477479487831",
+          "x-fullmag-encoding": "FMVP;version=3",
+          "x-fullmag-field-indexing": "explicit_node_indices",
+          "x-fullmag-field-revision": "6",
+          "x-fullmag-mesh-topology-hash": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4",
+          "x-fullmag-n-comp": "3",
+          "x-fullmag-point-count": "396",
+          "x-fullmag-quantity-id": "m",
+          "x-fullmag-scope-kind": "part",
+          "x-fullmag-value-count": "1188"
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/fields/m/samples/vector",
+        "query": {
+          "component": "full",
+          "scope_kind": "full"
+        },
+        "status": 200,
+        "observedAtMs": 1793076172340,
+        "headers": {
+          "content-type": "application/octet-stream",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": "full",
+          "x-fullmag-domain-generation-id": "8623634477479487831",
+          "x-fullmag-encoding": "FMVP;version=3",
+          "x-fullmag-field-indexing": "full_domain",
+          "x-fullmag-field-revision": "6",
+          "x-fullmag-mesh-topology-hash": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4",
+          "x-fullmag-n-comp": "3",
+          "x-fullmag-point-count": "1709",
+          "x-fullmag-quantity-id": "m",
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": "5127"
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/tables",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076173178,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076173400,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/artifacts",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076173400,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/observation-frames",
+        "query": {
+          "limit": "50",
+          "run_id": "run-live-b70fc554a63f31f13ed0759ca17dfcfc93dd1580de0a173dd283c00e353b3162"
+        },
+        "status": 200,
+        "observedAtMs": 1793076173401,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076173401,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/analysis/postprocessing/definitions",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076173402,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/analysis/results/runs/run-live-b70fc554a63f31f13ed0759ca17dfcfc93dd1580de0a173dd283c00e353b3162/datasets",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076173402,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076173403,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076173501,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/analysis/frequency-domain/eigen/modes/0/0",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076174862,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/0/0/meta",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076174880,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/visualization/mode-compositions/active",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076175691,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/domain/meta",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076175692,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/regions",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076175692,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/model/universe",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076175693,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/domain/topology",
+        "query": {},
+        "status": 304,
+        "observedAtMs": 1793076175694,
+        "headers": {
+          "content-type": null,
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4",
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/fields",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076175694,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/quantities",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076175694,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/v2/sessions/current/visualization/client-acks",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076180022,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/fields/m/samples/vector",
+        "query": {
+          "component": "full",
+          "scope_id": "part:film_geom",
+          "scope_kind": "part"
+        },
+        "status": 304,
+        "observedAtMs": 1793076180027,
+        "headers": {
+          "content-type": null,
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": "full",
+          "x-fullmag-domain-generation-id": "8623634477479487831",
+          "x-fullmag-encoding": "FMVP;version=3",
+          "x-fullmag-field-indexing": "explicit_node_indices",
+          "x-fullmag-field-revision": "6",
+          "x-fullmag-mesh-topology-hash": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4",
+          "x-fullmag-n-comp": "3",
+          "x-fullmag-point-count": "396",
+          "x-fullmag-quantity-id": "m",
+          "x-fullmag-scope-kind": "part",
+          "x-fullmag-value-count": "1188"
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/meshing/mesh/periodic_pairs.v1",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076180028,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/analysis/frequency-domain/eigen/modes/0/0",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076180041,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/0/0/meta",
+        "query": {},
+        "status": 200,
+        "observedAtMs": 1793076180153,
+        "headers": {
+          "content-type": "application/json",
+          "x-fullmag-artifact-generation-id": null,
+          "x-fullmag-component": null,
+          "x-fullmag-domain-generation-id": null,
+          "x-fullmag-encoding": null,
+          "x-fullmag-field-indexing": null,
+          "x-fullmag-field-revision": null,
+          "x-fullmag-mesh-topology-hash": null,
+          "x-fullmag-n-comp": null,
+          "x-fullmag-point-count": null,
+          "x-fullmag-quantity-id": null,
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0000%3Amode-0000/samples/vector",
+        "query": {
+          "component": "full",
+          "expected_artifact_generation_id": "sha256:40c3b4c4650072d8cd32bde59096e022d0b6fed9c54195aee2b6b989c9114ff0",
+          "scope_kind": "full",
+          "view": "complex"
+        },
+        "status": 200,
+        "observedAtMs": 1793076180170,
+        "headers": {
+          "content-type": "application/octet-stream",
+          "x-fullmag-artifact-generation-id": "sha256:40c3b4c4650072d8cd32bde59096e022d0b6fed9c54195aee2b6b989c9114ff0",
+          "x-fullmag-component": "full",
+          "x-fullmag-domain-generation-id": "8623634477479487831",
+          "x-fullmag-encoding": "FMVP;version=5",
+          "x-fullmag-field-indexing": "full_domain",
+          "x-fullmag-field-revision": "1312716055989950425",
+          "x-fullmag-mesh-topology-hash": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4",
+          "x-fullmag-n-comp": "6",
+          "x-fullmag-point-count": "1709",
+          "x-fullmag-quantity-id": "analysis:eigen:sample-0000:mode-0000",
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": "10254"
+        }
+      }
+    ]
+  },
+  "safety": {
+    "mutationAttempts": [],
+    "mutationRequestsAborted": true,
+    "visualizationRequests": [
+      {
+        "method": "POST",
+        "path": "/v2/sessions/current/visualization/client-acks",
+        "url": "http://127.0.0.1:3217/v2/sessions/current/visualization/client-acks"
+      }
+    ],
+    "permittedApiMethods": [
+      "GET",
+      "HEAD",
+      "OPTIONS"
+    ],
+    "permittedVisualizationMutations": [
+      "PATCH /v2/sessions/current/visualization/state",
+      "POST /v2/sessions/current/visualization/client-acks"
+    ]
+  },
+  "run": {
+    "requested": "run-live-b70fc554a63f31f13ed0759ca17dfcfc93dd1580de0a173dd283c00e353b3162",
+    "status": "completed",
+    "currentRun": {
+      "runId": "run-live-b70fc554a63f31f13ed0759ca17dfcfc93dd1580de0a173dd283c00e353b3162",
+      "revision": 26,
+      "status": "completed"
+    },
+    "session": {
+      "header": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1",
+      "sessionId": "docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789",
+      "sessionEpoch": "docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789@1793074082533",
+      "requestScopeEpoch": "a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9:1"
+    }
+  },
+  "artifacts": {
+    "owner": {
+      "artifactSetId": "sha256:626ec36eeafef735085489e33c8b25f13d4c02750b9b49b1616ff6d4ad36ee79",
+      "sessionId": "docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789",
+      "runId": "run-live-b70fc554a63f31f13ed0759ca17dfcfc93dd1580de0a173dd283c00e353b3162",
+      "stageId": "eigenmodes"
+    },
+    "generationId": "sha256:40c3b4c4650072d8cd32bde59096e022d0b6fed9c54195aee2b6b989c9114ff0",
+    "members": {
+      "manifest": {
+        "artifactPath": "frequency_domain/manifest.v1.json",
+        "contentDigest": "sha256:cca55df812f7984643cea697ed9635f5233997177640448ac5a11590d794eba5",
+        "generationId": "sha256:40c3b4c4650072d8cd32bde59096e022d0b6fed9c54195aee2b6b989c9114ff0",
+        "generationStatus": "member_verified_owner_bound",
+        "label": "manifest result",
+        "resourceKey": "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
+        "revision": "sha256:cca55df812f7984643cea697ed9635f5233997177640448ac5a11590d794eba5",
+        "stageId": "eigenmodes",
+        "status": "ready"
+      },
+      "spectrum": {
+        "artifactPath": "eigen/spectrum.v2.json",
+        "contentDigest": "sha256:f47978deaa71d7230ae0dbe7ee93b70c9a3c441e9abf24b32c5d941f1c8975cd",
+        "generationId": "sha256:40c3b4c4650072d8cd32bde59096e022d0b6fed9c54195aee2b6b989c9114ff0",
+        "generationStatus": "member_verified_owner_bound",
+        "label": "spectrum",
+        "resourceKey": "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
+        "revision": "sha256:f47978deaa71d7230ae0dbe7ee93b70c9a3c441e9abf24b32c5d941f1c8975cd",
+        "stageId": "eigenmodes",
+        "status": "ready"
+      },
+      "mode": {
+        "artifactPath": "eigen/modes/sample_0000/mode_0000.json",
+        "contentDigest": "sha256:ae4ebdd3c82618c4aa606482253e6e82555545ef956282e16ae65350cf9791cb",
+        "generationId": "sha256:40c3b4c4650072d8cd32bde59096e022d0b6fed9c54195aee2b6b989c9114ff0",
+        "generationStatus": "member_verified_owner_bound",
+        "label": "mode",
+        "resourceKey": "/v2/sessions/current/analysis/frequency-domain/eigen/modes/0/0",
+        "revision": "sha256:ae4ebdd3c82618c4aa606482253e6e82555545ef956282e16ae65350cf9791cb",
+        "stageId": "eigenmodes",
+        "status": "ready"
+      },
+      "field": {
+        "artifactPath": "eigen/mode_fields.zarr/sample_0000/mode_0000/vector_xyz_complex/0.0.0",
+        "contentDigest": "sha256:842f29bea2edd615523e32a3186982e000e300d9417bc7fbe10015df1841a40c",
+        "generationId": "sha256:40c3b4c4650072d8cd32bde59096e022d0b6fed9c54195aee2b6b989c9114ff0",
+        "generationStatus": "member_verified_owner_bound",
+        "label": "mode field metadata",
+        "resourceKey": "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector?view=phase_rotated_real&phase_rad=0&expected_artifact_generation_id=sha256:40c3b4c4650072d8cd32bde59096e022d0b6fed9c54195aee2b6b989c9114ff0",
+        "revision": "sha256:842f29bea2edd615523e32a3186982e000e300d9417bc7fbe10015df1841a40c",
+        "stageId": null,
+        "status": "ready"
+      }
+    },
+    "sample": {
+      "sampleId": "k-sample-0000",
+      "sampleIndex": 0
+    },
+    "mode": {
+      "fieldId": "analysis:eigen:sample-0000:mode-0000",
+      "modeId": "sample-0000/mode-0000",
+      "modeIndex": 0,
+      "frequencyHz": 11211886649.715792,
+      "payloadSampleIndex": 0,
+      "payloadRawModeIndex": 0
+    }
+  },
+  "ui": {
+    "pageUrl": "http://127.0.0.1:3217/session/eigen-mode-ui-de-k10",
+    "visibleField": {
+      "activeField": null,
+      "activeView": "Plot selected eigen mode with phase-rotated real display",
+      "inspectorText": "Eigen Mode Control\nsample 0, mode 0\nCanonical object\nEigenmodes mode\nMode identity\nsample 0, mode 0\nFrequency\n11.21 GHz\nImaginary frequency\n0 Hz\nDecay rate Γ / 2π (Hz)\n0 Hz\nStability\nundamped\nLifetime\nnot available\nLinewidth (FWHM)\n0 Hz\nQ-factor\nnot available\nAngular frequency\n7.045e+10 rad/s\nMode field\nanalysis:eigen:sample-0000:mode-0000; ready for spatial XYZ field\nMode field resource\n/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector?view=phase_rotated_real&phase_rad=0\nAvailable field views\ncomplex, real, imag, abs, amplitude, phase, phase_rotated_real\nAbsolute residual (L2)\nnot available\nRelative residual (L2)\n1.602e-13\nResidual scope\nFull projected weak form and periodic seams\nSpectrum residual (type unspecified)\nnot available\nTangent leakage max\n7.238e-25\nDominant polarization\nuniform\n3D workflow\nphasor reconstruction; 1709 real samples, 1709 imag samples\nEigen Mode 3D Visualization\n3D field ready\nField ID\nanalysis:eigen:sample-0000:mode-0000\nField resource\n/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector?view=phase_rotated_real&phase_rad=0\nDefault view\nPhase-rotated real\nPhase convention\nnot available\nShared style preset\none shared eigen/response mode visualization preset; switching modes keeps color, shader, vector, phase, and colormap controls\nVolume inspection roadmap\nclip planes and shader opacity remain planned for internal-mode inspection\nMode field view\nPhase-rotated real\nComplex (abs)\nReal\nImag\nPhase\nMode component\n|delta m|\ndelta m_x\ndelta m_y\ndelta m_z\nDisplay passes\nSurface\nVectors\nMode color source\nSolid (plain material)\nHSL orientation\nComponent X\nComponent Y\nComponent Z\nMagnitude |m|\nColormap\nMode solid color\nMode colormap\nViridis\nInferno\nMagma\nCoolwarm\nJet\nColor range\nAuto\nSymmetric\nManual\nColor minimum\nColor maximum\nDisplay gain\nVector budget\nVector scope\nSurface\nFull\nVector scale\n\nVisualization only — these controls do not change the computed mode.\n\nRotated\nReal\nImag\nAbs\nPhase\nAnimate\nStop animate",
+      "webgl": {
+        "canvasHeight": 516,
+        "canvasWidth": 617,
+        "context": "webgl2",
+        "cssHeight": 516.453125,
+        "cssWidth": 617.234375,
+        "drawingBufferHeight": 516,
+        "drawingBufferWidth": 617,
+        "isContextLost": false
+      }
+    },
+    "analysisSurface": null,
+    "analysisChartCanvas": [],
+    "modeFieldBinary": {
+      "path": "/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0000%3Amode-0000/samples/vector",
+      "query": {
+        "component": "full",
+        "expected_artifact_generation_id": "sha256:40c3b4c4650072d8cd32bde59096e022d0b6fed9c54195aee2b6b989c9114ff0",
+        "scope_kind": "full",
+        "view": "complex"
+      },
+      "requestObservedAtMs": 1793076180156,
+      "requestScopeHeader": "session=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789&epoch=docker-startup-bb5e212ca8b6d127c4b10e0c1a12c27f4e26223cd7d863b58b968eae5fba7789%401793074082533&request_scope_epoch=a3febe3e-9275-4c99-8d1c-fbb3c27e3ed9%3A1",
+      "response": {
+        "method": "GET",
+        "path": "/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0000%3Amode-0000/samples/vector",
+        "query": {
+          "component": "full",
+          "expected_artifact_generation_id": "sha256:40c3b4c4650072d8cd32bde59096e022d0b6fed9c54195aee2b6b989c9114ff0",
+          "scope_kind": "full",
+          "view": "complex"
+        },
+        "status": 200,
+        "observedAtMs": 1793076180170,
+        "headers": {
+          "content-type": "application/octet-stream",
+          "x-fullmag-artifact-generation-id": "sha256:40c3b4c4650072d8cd32bde59096e022d0b6fed9c54195aee2b6b989c9114ff0",
+          "x-fullmag-component": "full",
+          "x-fullmag-domain-generation-id": "8623634477479487831",
+          "x-fullmag-encoding": "FMVP;version=5",
+          "x-fullmag-field-indexing": "full_domain",
+          "x-fullmag-field-revision": "1312716055989950425",
+          "x-fullmag-mesh-topology-hash": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4",
+          "x-fullmag-n-comp": "6",
+          "x-fullmag-point-count": "1709",
+          "x-fullmag-quantity-id": "analysis:eigen:sample-0000:mode-0000",
+          "x-fullmag-scope-kind": null,
+          "x-fullmag-value-count": "10254"
+        }
+      }
+    },
+    "modeFieldController": {
+      "name": "viewport-3d.mode-field-overlay.resource-state",
+      "lane": "viewport-3d",
+      "timestampMs": 1793076180189,
+      "detail": {
+        "controllerStatus": "ready",
+        "controllerHasError": false,
+        "enabled": true,
+        "hasIntent": true,
+        "hasSession": true,
+        "hasTopology": true,
+        "topologyIdentityComplete": true
+      }
+    },
+    "modeViewportBounds": "{\"center\":[0,0,0],\"radius\":2.8722813232690143e-8,\"size\":[4e-8,4e-8,1e-8]}",
+    "requiredApiPaths": [
+      {
+        "path": "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
+        "requested": true,
+        "responded": true
+      },
+      {
+        "path": "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
+        "requested": true,
+        "responded": true
+      },
+      {
+        "path": "/v2/sessions/current/analysis/frequency-domain/eigen/modes/0/0",
+        "requested": true,
+        "responded": true
+      },
+      {
+        "path": "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/0/0/meta",
+        "requested": true,
+        "responded": true
+      }
+    ],
+    "modeControllerDiagnostics": [
+      {
+        "byteLength": null,
+        "detail": {
+          "enabled": false,
+          "hasIntent": false,
+          "hasSession": true,
+          "hasTopology": false,
+          "ownerReason": null,
+          "ownerResultRunId": null,
+          "ownerStatus": "inactive",
+          "topologyCurrent": false,
+          "topologyIdentityComplete": false
+        },
+        "droppedCount": 0,
+        "durationMs": null,
+        "id": "diagnostic-1793076165592-789",
+        "kind": "mark",
+        "lane": "viewport-3d",
+        "name": "viewport-3d.mode-field-overlay.owner-gate",
+        "severity": "info",
+        "startTimeMs": null,
+        "timestampMs": 1793076165592
+      },
+      {
+        "byteLength": null,
+        "detail": {
+          "enabled": false,
+          "hasIntent": false,
+          "hasSession": true,
+          "hasTopology": false,
+          "ownerReason": null,
+          "ownerResultRunId": null,
+          "ownerStatus": "inactive",
+          "topologyCurrent": true,
+          "topologyIdentityComplete": false
+        },
+        "droppedCount": 0,
+        "durationMs": null,
+        "id": "diagnostic-1793076166587-973",
+        "kind": "mark",
+        "lane": "viewport-3d",
+        "name": "viewport-3d.mode-field-overlay.owner-gate",
+        "severity": "info",
+        "startTimeMs": null,
+        "timestampMs": 1793076166587
+      },
+      {
+        "byteLength": null,
+        "detail": {
+          "controllerHasError": false,
+          "controllerErrorName": null,
+          "controllerErrorMessage": null,
+          "controllerStatus": "idle",
+          "enabled": false,
+          "hasIntent": false,
+          "hasSession": true,
+          "hasTopology": true,
+          "topologyIdentityComplete": true
+        },
+        "droppedCount": 0,
+        "durationMs": null,
+        "id": "diagnostic-1793076171986-1484",
+        "kind": "mark",
+        "lane": "viewport-3d",
+        "name": "viewport-3d.mode-field-overlay.resource-state",
+        "severity": "info",
+        "startTimeMs": null,
+        "timestampMs": 1793076171986
+      },
+      {
+        "byteLength": null,
+        "detail": {
+          "enabled": false,
+          "hasIntent": false,
+          "hasSession": true,
+          "hasTopology": true,
+          "ownerReason": null,
+          "ownerResultRunId": null,
+          "ownerStatus": "inactive",
+          "topologyCurrent": true,
+          "topologyIdentityComplete": true
+        },
+        "droppedCount": 0,
+        "durationMs": null,
+        "id": "diagnostic-1793076171986-1485",
+        "kind": "mark",
+        "lane": "viewport-3d",
+        "name": "viewport-3d.mode-field-overlay.owner-gate",
+        "severity": "info",
+        "startTimeMs": null,
+        "timestampMs": 1793076171986
+      },
+      {
+        "byteLength": null,
+        "detail": {
+          "controllerHasError": false,
+          "controllerErrorName": null,
+          "controllerErrorMessage": null,
+          "controllerStatus": "idle",
+          "enabled": false,
+          "hasIntent": false,
+          "hasSession": true,
+          "hasTopology": false,
+          "topologyIdentityComplete": false
+        },
+        "droppedCount": 0,
+        "durationMs": null,
+        "id": "diagnostic-1793076174991-1795",
+        "kind": "mark",
+        "lane": "viewport-3d",
+        "name": "viewport-3d.mode-field-overlay.resource-state",
+        "severity": "info",
+        "startTimeMs": null,
+        "timestampMs": 1793076174991
+      },
+      {
+        "byteLength": null,
+        "detail": {
+          "enabled": false,
+          "hasIntent": false,
+          "hasSession": true,
+          "hasTopology": false,
+          "ownerReason": null,
+          "ownerResultRunId": "run-live-b70fc554a63f31f13ed0759ca17dfcfc93dd1580de0a173dd283c00e353b3162",
+          "ownerStatus": "inactive",
+          "topologyCurrent": true,
+          "topologyIdentityComplete": false
+        },
+        "droppedCount": 0,
+        "durationMs": null,
+        "id": "diagnostic-1793076174991-1796",
+        "kind": "mark",
+        "lane": "viewport-3d",
+        "name": "viewport-3d.mode-field-overlay.owner-gate",
+        "severity": "info",
+        "startTimeMs": null,
+        "timestampMs": 1793076174991
+      },
+      {
+        "byteLength": null,
+        "detail": {
+          "controllerHasError": false,
+          "controllerErrorName": null,
+          "controllerErrorMessage": null,
+          "controllerStatus": "idle",
+          "enabled": false,
+          "hasIntent": false,
+          "hasSession": true,
+          "hasTopology": true,
+          "topologyIdentityComplete": true
+        },
+        "droppedCount": 0,
+        "durationMs": null,
+        "id": "diagnostic-1793076175707-2147",
+        "kind": "mark",
+        "lane": "viewport-3d",
+        "name": "viewport-3d.mode-field-overlay.resource-state",
+        "severity": "info",
+        "startTimeMs": null,
+        "timestampMs": 1793076175707
+      },
+      {
+        "byteLength": null,
+        "detail": {
+          "enabled": false,
+          "hasIntent": false,
+          "hasSession": true,
+          "hasTopology": true,
+          "ownerReason": null,
+          "ownerResultRunId": "run-live-b70fc554a63f31f13ed0759ca17dfcfc93dd1580de0a173dd283c00e353b3162",
+          "ownerStatus": "inactive",
+          "topologyCurrent": true,
+          "topologyIdentityComplete": true
+        },
+        "droppedCount": 0,
+        "durationMs": null,
+        "id": "diagnostic-1793076175708-2148",
+        "kind": "mark",
+        "lane": "viewport-3d",
+        "name": "viewport-3d.mode-field-overlay.owner-gate",
+        "severity": "info",
+        "startTimeMs": null,
+        "timestampMs": 1793076175708
+      },
+      {
+        "byteLength": null,
+        "detail": {
+          "controllerHasError": false,
+          "controllerErrorName": null,
+          "controllerErrorMessage": null,
+          "controllerStatus": "idle",
+          "enabled": true,
+          "hasIntent": true,
+          "hasSession": true,
+          "hasTopology": true,
+          "topologyIdentityComplete": true
+        },
+        "droppedCount": 0,
+        "durationMs": null,
+        "id": "diagnostic-1793076176315-2208",
+        "kind": "mark",
+        "lane": "viewport-3d",
+        "name": "viewport-3d.mode-field-overlay.resource-state",
+        "severity": "info",
+        "startTimeMs": null,
+        "timestampMs": 1793076176315
+      },
+      {
+        "byteLength": null,
+        "detail": {
+          "enabled": true,
+          "hasIntent": true,
+          "hasSession": true,
+          "hasTopology": true,
+          "ownerReason": null,
+          "ownerResultRunId": "run-live-b70fc554a63f31f13ed0759ca17dfcfc93dd1580de0a173dd283c00e353b3162",
+          "ownerStatus": "compatible",
+          "topologyCurrent": true,
+          "topologyIdentityComplete": true
+        },
+        "droppedCount": 0,
+        "durationMs": null,
+        "id": "diagnostic-1793076176316-2209",
+        "kind": "mark",
+        "lane": "viewport-3d",
+        "name": "viewport-3d.mode-field-overlay.owner-gate",
+        "severity": "info",
+        "startTimeMs": null,
+        "timestampMs": 1793076176316
+      },
+      {
+        "byteLength": null,
+        "detail": {
+          "controllerHasError": false,
+          "controllerErrorName": null,
+          "controllerErrorMessage": null,
+          "controllerStatus": "loading",
+          "enabled": true,
+          "hasIntent": true,
+          "hasSession": true,
+          "hasTopology": true,
+          "topologyIdentityComplete": true
+        },
+        "droppedCount": 0,
+        "durationMs": null,
+        "id": "diagnostic-1793076176324-2210",
+        "kind": "mark",
+        "lane": "viewport-3d",
+        "name": "viewport-3d.mode-field-overlay.resource-state",
+        "severity": "info",
+        "startTimeMs": null,
+        "timestampMs": 1793076176324
+      },
+      {
+        "byteLength": null,
+        "detail": {
+          "controllerHasError": false,
+          "controllerErrorName": null,
+          "controllerErrorMessage": null,
+          "controllerStatus": "ready",
+          "enabled": true,
+          "hasIntent": true,
+          "hasSession": true,
+          "hasTopology": true,
+          "topologyIdentityComplete": true
+        },
+        "droppedCount": 0,
+        "durationMs": null,
+        "id": "diagnostic-1793076180189-2254",
+        "kind": "mark",
+        "lane": "viewport-3d",
+        "name": "viewport-3d.mode-field-overlay.resource-state",
+        "severity": "info",
+        "startTimeMs": null,
+        "timestampMs": 1793076180189
+      }
+    ]
+  },
+  "screenshot": "/tmp/eigen-mode-magnetic-fit.png",
+  "finishedAt": "2026-10-27T04:43:29.671Z"
+}

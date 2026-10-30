@@ -731,7 +731,9 @@ fn normalize_terminal_outcome(outcome: &str) -> &str {
 
 fn open_retirement_store(state: &AppState) -> Result<fullmag_session::SessionStore, ApiError> {
     let root = retirement_store_root(state)?;
-    fullmag_session::SessionStore::open_existing(root).map_err(|error| {
+    fullmag_runtime_control::retry_store_writer_busy(|| {
+        fullmag_session::SessionStore::open_existing(&root)
+    }).map_err(|error| {
         ApiError::conflict_with_code(
             "live_retirement_terminal_evidence_unknown",
             format!("cannot open the accepted run store: {error:#}"),
@@ -828,10 +830,14 @@ fn open_retirement_ledger(
         bail!("runtime service configuration belongs to another session store");
     }
     let binding = config.host_execution.context("runtime service has no host binding")?;
-    fullmag_session::host_resource_ledger::HostResourceLedger::open_for_current_application(
-        &binding.ledger_root,
-        binding.policy,
-    )
+    // Read/validation admission may wait for typed writer contention. The
+    // caller executes its evidence callback once, after this open succeeds.
+    fullmag_runtime_control::retry_store_writer_busy(|| {
+        fullmag_session::host_resource_ledger::HostResourceLedger::open_for_current_application(
+            &binding.ledger_root,
+            binding.policy.clone(),
+        )
+    })
 }
 
 fn collect_terminal_evidence(
@@ -1642,6 +1648,7 @@ mod tests {
             runtime_generation_sha256: None,
             compute_node_owner_id: None,
             compute_node_owner_epoch: None,
+            pending_inventory_recovery_sha256: None,
             topology_sha256: digest(b't'),
             budget: fullmag_session::FmsResourceBudget {
                 cpu_millis: 1,

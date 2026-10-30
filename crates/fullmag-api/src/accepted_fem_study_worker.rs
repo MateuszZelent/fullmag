@@ -8,8 +8,7 @@ use anyhow::{bail, Context, Result};
 use fullmag_application::{DecodedStudyArtifact, PreparationBinding};
 use fullmag_authoring::{StudyAcceptancePolicy, StudyOutputPort, StudyPortDataKind};
 use fullmag_ir::{
-    BackendPlanIR, BackendTarget, ExecutionMode, ExecutionPrecision, RelaxationAlgorithmIR,
-    StudyIR,
+    BackendPlanIR, BackendTarget, ExecutionMode, ExecutionPrecision, RelaxationAlgorithmIR, StudyIR,
 };
 use fullmag_runner::{RunStatus, StageFemMeshAsset, StepAction};
 use fullmag_runtime_control::{AcceptedStudySnapshot, AcceptedWorkerStep, StudyOutputPayload};
@@ -21,8 +20,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
-use crate::accepted_fem_state::FemCpuAcceptedStateSnapshotV1;
 use crate::accepted_fem_gpu_state::FemGpuAcceptedStateSnapshotV1;
+use crate::accepted_fem_state::FemCpuAcceptedStateSnapshotV1;
 
 /// Result returned before the common worker publishes typed outputs and emits
 /// its terminal completion event.
@@ -63,6 +62,34 @@ pub(crate) struct AcceptedFemPreparedExecution {
     pub(crate) gpu_uuid: Option<String>,
 }
 
+/// Name a newly executed accepted relaxation before the runner publishes its
+/// scientific producer certificate. Existing/imported certificates are never renamed.
+fn bind_accepted_fem_relaxation_producer(
+    metadata: &mut std::collections::BTreeMap<String, serde_json::Value>,
+    run_id: &str,
+    stage_id: &str,
+) -> Result<()> {
+    fullmag_session::repository_path::validate_store_id(run_id)?;
+    fullmag_session::repository_path::validate_store_id(stage_id)?;
+    let owner = [
+        ("producer_run_id", run_id),
+        ("producer_stage_id", stage_id),
+        ("producer_stage_kind", "relaxation"),
+    ];
+    for (key, expected) in owner {
+        if metadata
+            .get(key)
+            .is_some_and(|old| old.as_str() != Some(expected))
+        {
+            bail!("accepted FEM relaxation producer {key} conflicts with its exact task owner");
+        }
+    }
+    for (key, value) in owner {
+        metadata.insert(key.into(), serde_json::json!(value));
+    }
+    Ok(())
+}
+
 /// Resolve and validate every deterministic accepted FEM admission input
 /// without creating files or invoking the solver.
 pub(crate) fn prepare_accepted_fem_execution(
@@ -96,7 +123,22 @@ pub(crate) fn prepare_accepted_fem_execution(
     let execution_plan =
         crate::accepted_study_worker::materialize_resolved_study_inputs(store, accepted_step)
             .context("materialize accepted FEM CAS inputs for the runner")?;
+    if study_step
+        .outputs
+        .iter()
+        .any(|port| port.port_id == fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT)
+        && !matches!(&execution_plan.backend_plan, BackendPlanIR::Fem(fem) if fem.relaxation.is_some())
+    {
+        bail!("equilibrium_handoff output requires an accepted FEM Relax plan");
+    }
     let mut problem = accepted_step.problem.clone();
+    if matches!(&execution_plan.backend_plan, BackendPlanIR::Fem(fem) if fem.relaxation.is_some()) {
+        bind_accepted_fem_relaxation_producer(
+            &mut problem.problem_meta.runtime_metadata,
+            accepted_step.claim.run_id.as_str(),
+            &accepted_step.step_id,
+        )?;
+    }
     problem.problem_meta.runtime_metadata.insert(
         "runtime_device_override".into(),
         serde_json::json!({
@@ -167,7 +209,12 @@ pub(crate) fn execute_accepted_fem_attempt(
     live_observation.finish();
     let result = runner_result
         .map_err(|error| anyhow::anyhow!(error.to_string()))
-        .with_context(|| format!("execute accepted native FEM {} runner plan", prepared.resolved_device))?;
+        .with_context(|| {
+            format!(
+                "execute accepted native FEM {} runner plan",
+                prepared.resolved_device
+            )
+        })?;
     if result.status == RunStatus::Cancelled {
         return Ok(AcceptedFemExecutionOutcome::Cancelled {
             completed_step_count: result.steps.len(),
@@ -175,15 +222,24 @@ pub(crate) fn execute_accepted_fem_attempt(
         });
     }
     if result.status != RunStatus::Completed {
-        bail!("accepted FEM {} runner did not complete successfully", prepared.resolved_device);
+        bail!(
+            "accepted FEM {} runner did not complete successfully",
+            prepared.resolved_device
+        );
     }
     let terminal_stats = result.steps.last().cloned();
 
     // The shared output collector performs the metadata-size preflight before
     // allocating each explicit artifact. Reuse its owned state bytes instead
     // of reading m_final.json a second time.
-    let outputs = crate::accepted_study_worker::collect_runner_study_outputs(
-        &prepared.output_ports,
+    let state_ports: Vec<_> = prepared
+        .output_ports
+        .iter()
+        .filter(|port| port.port_id != fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT)
+        .cloned()
+        .collect();
+    let mut outputs = crate::accepted_study_worker::collect_runner_study_outputs(
+        &state_ports,
         &prepared.case_id,
         &result,
         &attempt_output_dir,
@@ -257,6 +313,19 @@ pub(crate) fn execute_accepted_fem_attempt(
         )?;
         accepted_state_ref
     };
+
+    if prepared
+        .output_ports
+        .iter()
+        .any(|port| port.port_id == fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT)
+    {
+        outputs.push(crate::accepted_relax_equilibrium::collect_handoff(
+            accepted_step,
+            prepared,
+            &result,
+            attempt_output_dir,
+        )?);
+    }
 
     Ok(AcceptedFemExecutionOutcome::Completed(
         AcceptedFemExecution {
@@ -471,9 +540,7 @@ fn validate_projected_gradient_bb_receipt(
         ("energy_minimizer_realization", "native_cuda_pgbb"),
     ] {
         if provenance.get(key).and_then(serde_json::Value::as_str) != Some(expected) {
-            bail!(
-                "accepted FEM GPU ProjectedGradientBb receipt has {key} other than `{expected}`"
-            );
+            bail!("accepted FEM GPU ProjectedGradientBb receipt has {key} other than `{expected}`");
         }
     }
     if provenance
@@ -550,14 +617,22 @@ fn validate_native_fem_preflight(
         bail!("accepted FEM preflight requires a time-domain FEM plan");
     };
     if !fem_plan.mesh.periodic_node_pairs.is_empty() {
-        // The runner's FemStaticPbcLane is crate-private and its reference
-        // reduction is not an accepted native producer contract. Refuse every
-        // periodic lane here until the runner exports an immutable native-lane
-        // attestation; this keeps ReferenceReduction and hidden fallback out of
-        // the accepted attempt before any solver side effect.
-        bail!(
-            "accepted FEM preflight rejects static PBC without a native FemStaticPbcLane attestation; ReferenceReduction and fallback are forbidden"
-        );
+        let attestation = fullmag_runner::attest_accepted_fem_static_pbc(
+            execution_plan,
+            accepted_runtime.resolved_device.as_str(),
+        )
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
+        .context("accepted FEM static PBC native attestation")?;
+        if attestation.mesh_topology_fingerprint != fem_plan.mesh.topology_fingerprint_v6() {
+            bail!(
+                "accepted FEM static PBC attestation mesh fingerprint differs from the exact execution plan"
+            );
+        }
+        if attestation.periodic_node_pair_count != fem_plan.mesh.periodic_node_pairs.len() {
+            bail!(
+                "accepted FEM static PBC attestation periodic node-pair count differs from the exact execution plan"
+            );
+        }
     }
     Ok(())
 }
@@ -596,8 +671,10 @@ pub(crate) fn validate_declared_outputs(outputs: &[StudyOutputPort]) -> Result<(
                 final_state = true;
             }
             StudyPortDataKind::Scalar if output.port_id == "total_energy" => {}
+            StudyPortDataKind::Artifact
+                if output.port_id == fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT => {}
             _ => bail!(
-                "accepted FEM CPU study output `{}` is outside final_state/total_energy contract",
+                "accepted FEM CPU study output `{}` is outside final_state/total_energy/equilibrium_handoff contract",
                 output.port_id
             ),
         }
@@ -629,11 +706,80 @@ fn is_truthy(value: &str) -> bool {
 
 #[cfg(test)]
 mod source_contract_tests {
-    use super::{
-        accepted_gpu_relaxation_algorithm, validate_projected_gradient_bb_receipt,
-    };
+    use super::{accepted_gpu_relaxation_algorithm, validate_projected_gradient_bb_receipt};
     use fullmag_ir::RelaxationAlgorithmIR;
     use serde_json::json;
+
+    #[test]
+    fn accepted_fem_equilibrium_output_is_narrow_and_requires_final_state() {
+        use fullmag_authoring::{StudyOutputPort, StudyPortDataKind};
+        let state = StudyOutputPort {
+            port_id: "final_state".into(),
+            data_kind: StudyPortDataKind::State,
+        };
+        let handoff = StudyOutputPort {
+            port_id: fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT.into(),
+            data_kind: StudyPortDataKind::Artifact,
+        };
+        assert!(super::validate_declared_outputs(&[state.clone(), handoff.clone()]).is_ok());
+        assert!(super::validate_declared_outputs(&[handoff.clone()]).is_err());
+        assert!(
+            super::validate_declared_outputs(&[state.clone(), handoff.clone(), handoff]).is_err()
+        );
+        assert!(super::validate_declared_outputs(&[
+            state.clone(),
+            StudyOutputPort {
+                port_id: "inspection".into(),
+                data_kind: StudyPortDataKind::Artifact,
+            }
+        ])
+        .is_err());
+        assert!(super::validate_declared_outputs(&[
+            state,
+            StudyOutputPort {
+                port_id: fullmag_application::FEM_EQUILIBRIUM_HANDOFF_PORT.into(),
+                data_kind: StudyPortDataKind::State,
+            }
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn accepted_relaxation_producer_binds_exact_owner_and_preserves_matching_metadata() {
+        let mut metadata = std::collections::BTreeMap::new();
+        super::bind_accepted_fem_relaxation_producer(&mut metadata, "run-exact", "relax-exact")
+            .unwrap();
+        assert_eq!(metadata["producer_run_id"], json!("run-exact"));
+        assert_eq!(metadata["producer_stage_id"], json!("relax-exact"));
+        assert_eq!(metadata["producer_stage_kind"], json!("relaxation"));
+        let original = metadata.clone();
+        super::bind_accepted_fem_relaxation_producer(&mut metadata, "run-exact", "relax-exact")
+            .unwrap();
+        assert_eq!(metadata, original);
+    }
+
+    #[test]
+    fn accepted_relaxation_producer_rejects_foreign_or_malformed_owner_atomically() {
+        for (key, value) in [
+            ("producer_run_id", json!("run-foreign")),
+            ("producer_stage_id", json!("stage-001")),
+            ("producer_stage_kind", json!("eigenmodes")),
+            ("producer_run_id", serde_json::Value::Null),
+        ] {
+            let mut metadata = std::collections::BTreeMap::<String, serde_json::Value>::from([(
+                key.into(),
+                value,
+            )]);
+            let original = metadata.clone();
+            assert!(super::bind_accepted_fem_relaxation_producer(
+                &mut metadata,
+                "run-exact",
+                "relax-exact"
+            )
+            .is_err());
+            assert_eq!(metadata, original);
+        }
+    }
 
     #[test]
     fn accepted_gpu_scope_admits_pgbb_and_rejects_unqualified_direct_minimizers() {
@@ -725,8 +871,22 @@ mod source_contract_tests {
             .expect("source contracts follow the production execution adapter")
             .0;
         assert!(source.contains("AcceptedFemExecutionOutcome::Cancelled"));
-        assert!(source.contains("FemStaticPbcLane attestation"));
+        assert!(source.contains("attest_accepted_fem_static_pbc"));
         assert!(!source.contains("runner was cancelled before final-state publication"));
+    }
+
+    #[test]
+    fn static_pbc_preflight_consumes_runner_attestation_and_exact_mesh_identity() {
+        let source = include_str!("accepted_fem_study_worker.rs")
+            .split_once("#[cfg(test)]")
+            .expect("source contract follows the production execution adapter")
+            .0;
+        assert!(source.contains("attest_accepted_fem_static_pbc"));
+        assert!(source.contains("attestation.mesh_topology_fingerprint"));
+        assert!(source.contains("attestation.periodic_node_pair_count"));
+        assert!(!source.contains(
+            "accepted FEM preflight rejects static PBC without a native FemStaticPbcLane attestation"
+        ));
     }
 
     #[test]
@@ -791,7 +951,10 @@ mod source_contract_tests {
             "rebuilt != snapshot",
             "authoritative device UUID",
         ] {
-            assert!(source.contains(needle), "missing GPU recovery fence: {needle}");
+            assert!(
+                source.contains(needle),
+                "missing GPU recovery fence: {needle}"
+            );
         }
     }
 
@@ -820,8 +983,7 @@ fn persist_accepted_state_snapshot<T: Serialize>(
         Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
         Ok(_) => bail!("accepted FEM solver receipt directory is not a real directory"),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir(&solver_dir)
-                .context("create accepted FEM solver receipt directory")?;
+            fs::create_dir(&solver_dir).context("create accepted FEM solver receipt directory")?;
         }
         Err(error) => {
             return Err(error).context("inspect accepted FEM solver receipt directory");
@@ -834,12 +996,7 @@ fn persist_accepted_state_snapshot<T: Serialize>(
         .write(true)
         .create_new(true)
         .open(&path)
-        .with_context(|| {
-            format!(
-                "create {label} state snapshot `{}`",
-                path.display()
-            )
-        })?;
+        .with_context(|| format!("create {label} state snapshot `{}`", path.display()))?;
     file.write_all(&bytes)
         .with_context(|| format!("write {label} state snapshot `{}`", path.display()))?;
     file.sync_all()

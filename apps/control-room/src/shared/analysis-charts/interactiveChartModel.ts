@@ -185,6 +185,8 @@ function quantityLabelForUnit(
   ) {
     return "Normalized magnetization m";
   }
+  if (["Hz", "kHz", "MHz", "GHz", "THz"].includes(unit) &&
+    labels.every((label) => ["frequency", "analytic_frequency", "reference_frequency"].includes(label))) return "Frequency";
   if (sameUnit.length === 1) return match.label || match.quantity;
   if (labels.every((label) => label.includes("torque"))) return "Torque";
   if (labels.every((label) => label.includes("residual"))) return "Residual";

@@ -4,7 +4,7 @@ use super::eigen_equilibrium_contract::{
 };
 use super::eigen_math::{cross, vector_norm};
 use super::eigen_policy::resolved_demag_realization;
-use super::eigen_reduction::validate_tangent_frame_transport_support;
+use super::eigen_reduction::validate_materialized_tangent_frame_transport;
 use super::eigen_shared_domain::max_vector_field_difference;
 use super::eigen_shared_domain_geometry::shared_domain_robin_beta_m;
 use super::eigen_types::AcceptedEquilibriumCriterion;
@@ -416,7 +416,9 @@ pub(super) fn materialize_equilibrium(
         message: format!("MeshTopology: {}", error),
     })?;
     let magnetic_node_volumes = topology.magnetic_node_volumes.clone();
-    validate_tangent_frame_transport_support(plan, &topology, &equilibrium_guess)?;
+    // Validate before new_state applies static periodic constraints: otherwise
+    // inconsistent provided/artifact vectors could be silently projected away.
+    validate_materialized_tangent_frame_transport(plan, &topology, &equilibrium_guess)?;
     let material = MaterialParameters::new(
         plan.material.saturation_magnetisation,
         plan.material.exchange_stiffness,

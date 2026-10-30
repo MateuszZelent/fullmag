@@ -9,6 +9,10 @@ use crate::antenna_inspection_bundle::{
     ANTENNA_INSPECTION_BUNDLE_CODEC_VERSION, ANTENNA_INSPECTION_BUNDLE_MAX_BYTES,
 };
 use crate::execution::{ExecutionError, ResolvedStudyArtifact};
+use crate::fem_equilibrium_handoff::{
+    decode_fem_equilibrium_handoff, FemEquilibriumHandoff, FEM_EQUILIBRIUM_HANDOFF_CODEC_ID,
+    FEM_EQUILIBRIUM_HANDOFF_CODEC_VERSION,
+};
 use fullmag_quantities::fem_state_field::FemP1MagnetizationFieldSemantics;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -214,6 +218,8 @@ pub enum DecodedStudyArtifact {
     MagnetizationState(MagnetizationStateArtifact),
     FrozenMagnetizationState(FrozenMagnetizationStateArtifact),
     Scalar(StudyScalarArtifact),
+    ModalEigen(crate::ModalEigenBundle),
+    FemEquilibriumHandoff(FemEquilibriumHandoff),
     AntennaClosedLoopInspection(AntennaInspectionBundle),
     AntennaInspection(AntennaInspectionArtifact),
 }
@@ -336,6 +342,18 @@ pub fn decode_study_artifact(
             )
             .map(DecodedStudyArtifact::AntennaInspection)
             .map_err(|error| invalid(format!("decode antenna inspection package: {error}")))
+        }
+        ("artifact", crate::MODAL_EIGEN_BUNDLE_CODEC_ID, crate::MODAL_EIGEN_BUNDLE_CODEC_VERSION) => {
+            crate::decode_modal_eigen_bundle(bytes, crate::MODAL_EIGEN_BUNDLE_MAX_BYTES)
+                .map(DecodedStudyArtifact::ModalEigen)
+        }
+        (
+            "artifact",
+            FEM_EQUILIBRIUM_HANDOFF_CODEC_ID,
+            FEM_EQUILIBRIUM_HANDOFF_CODEC_VERSION,
+        ) => {
+            decode_fem_equilibrium_handoff(bytes, crate::FEM_EQUILIBRIUM_HANDOFF_MAX_BYTES)
+                .map(DecodedStudyArtifact::FemEquilibriumHandoff)
         }
         _ => Err(invalid("unsupported study artifact codec")),
     }

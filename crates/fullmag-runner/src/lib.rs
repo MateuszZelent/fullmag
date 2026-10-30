@@ -97,6 +97,11 @@ pub use dispatch::{stage_step_time_frame, StageStepTimeFrame};
 pub mod eigen;
 mod fdm;
 mod accepted_materialization;
+mod accepted_relax_replay;
+pub use accepted_relax_replay::{
+    materialize_accepted_fem_relaxation_target, replay_accepted_fem_relaxation,
+    ReplayedFemRelaxation,
+};
 pub use accepted_materialization::{
     accepted_observation_quantity_ids, capture_solver_observables,
     materialize_captured_observables, CapturedSolverObservables,
@@ -205,6 +210,11 @@ mod time_envelope;
 mod time_events;
 mod timestep_qualification;
 mod types;
+
+pub use solvers::fem::pbc::{
+    attest_accepted_fem_static_pbc, AcceptedFemStaticPbcNativeAttestation,
+    AcceptedFemStaticPbcNativeLane, ACCEPTED_FEM_STATIC_PBC_NATIVE_ATTESTATION_SCHEMA,
+};
 
 use types::TimestepExecutionLane;
 
@@ -4632,6 +4642,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         on_step,
         None,
         None,
+        None,
     )
 }
 
@@ -4666,6 +4677,35 @@ pub fn run_planned_problem_with_live_preview_and_artifact_identity(
         on_step,
         Some(artifact_identity),
         None,
+        None,
+    )
+}
+
+/// Execute a modal target using the exact certified accepted Relax endpoint.
+/// Keeps live observation, interrupt handling and autosave ownership unchanged.
+pub fn run_planned_problem_with_live_preview_and_relax_handoff(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    autosave_root: &Path,
+    field_every_n: u64,
+    display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    initial_snapshot: bool,
+    relax_handoff: &AcceptedFemRelaxStageHandoff,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    if !matches!(&plan.backend_plan, BackendPlanIR::FemEigen(_)) {
+        return Err(RunError {
+            message: "accepted Relax handoff requires a FEM eigen target".into(),
+        });
+    }
+    run_planned_problem_with_live_preview_artifact_context(
+        problem, plan, fem_mesh_identity, until_seconds, output_dir, autosave_root,
+        field_every_n, display_selection, interrupt_requested, initial_snapshot,
+        on_step, None, Some(relax_handoff), None,
     )
 }
 
@@ -4704,7 +4744,7 @@ pub fn run_planned_problem_with_live_preview_and_frozen_stage_context_and_observ
     let display_selection = DisplaySelectionState::default;
     run_planned_problem_with_live_preview_artifact_context(problem, plan, None, until_seconds,
         output_dir, autosave_root, field_every_n, &display_selection, interrupt_requested,
-        false, on_step, None, Some((frozen, source_frozen_plan)))
+        false, on_step, None, None, Some((frozen, source_frozen_plan)))
 }
 
 fn run_planned_problem_with_live_preview_artifact_context(
@@ -4720,6 +4760,7 @@ fn run_planned_problem_with_live_preview_artifact_context(
     initial_snapshot: bool,
     on_step: impl FnMut(StepUpdate) -> StepAction + Send,
     artifact_identity: Option<&eigen::FrequencyDomainArtifactIdentity>,
+    relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
     frozen_stage: Option<(&constraints::FrozenStageContextV1, Option<&fullmag_ir::ResolvedFrozenSpinsPlanIR>)>,
 ) -> Result<RunResult, RunError> {
     let mut on_step = bind_live_magnetization_layout(plan, on_step);
@@ -4899,15 +4940,27 @@ fn run_planned_problem_with_live_preview_artifact_context(
                         .and_then(|context| context.generation_id()),
                 ))
             };
-            dispatch::execute_fem_eigen_with_progress_and_producer_identity_and_parallel_policy(
-                execution,
-                fem,
-                &runtime_outputs,
-                &mut progress_callback,
-                producer_identity.as_ref(),
-                &parallel_execution.policy,
-                Some(output_dir),
-            )
+            match relax_handoff {
+                Some(handoff) => dispatch::execute_fem_eigen_with_progress_and_stage_handoff_and_producer_identity_and_parallel_policy(
+                    execution,
+                    fem,
+                    &runtime_outputs,
+                    &mut progress_callback,
+                    handoff,
+                    producer_identity.as_ref(),
+                    &parallel_execution.policy,
+                    Some(output_dir),
+                ),
+                None => dispatch::execute_fem_eigen_with_progress_and_producer_identity_and_parallel_policy(
+                    execution,
+                    fem,
+                    &runtime_outputs,
+                    &mut progress_callback,
+                    producer_identity.as_ref(),
+                    &parallel_execution.policy,
+                    Some(output_dir),
+                ),
+            }
         }
         BackendPlanIR::AntennaExternalLeadInspection(_) => {
             Err(antenna_plan_requires_dedicated_inspection())
@@ -5176,7 +5229,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     }
     run_planned_problem_with_live_preview_artifact_context(problem, plan, fem_mesh_identity,
         until_seconds, output_dir, autosave_root, field_every_n, display_selection,
-        interrupt_requested, initial_snapshot, on_step, None, frozen_stage)
+        interrupt_requested, initial_snapshot, on_step, None, None, frozen_stage)
 }
 
 /// Run an FDM problem using a persistent interactive runtime for low-latency
@@ -11936,4 +11989,12 @@ mod tests {
             )
         );
     }
+}
+
+/// Validate immutable modal references with the same rules as the native writer.
+/// Byte membership and owner identity are validated by the generation capture.
+pub fn validate_modal_artifact_closure(
+    members: &std::collections::BTreeMap<String, Vec<u8>>,
+) -> std::io::Result<()> {
+    artifacts::validate_modal_artifact_closure(members)
 }

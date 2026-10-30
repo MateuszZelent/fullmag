@@ -1184,6 +1184,33 @@ pub(super) fn modal_v6_part_identities(
     Ok((registry.magnetic_identity, registry.air_identity))
 }
 
+/// Infer the axis mask shared by v6 certificate binding and native admission.
+/// Valid hints take precedence; translation fallback requires one finite axis.
+pub(super) fn modal_v6_pair_axis_mask(
+    pair: &fullmag_ir::MeshPeriodicBoundaryPairIR,
+) -> Option<u32> {
+    let hinted = match pair.axis_hint.as_deref() {
+        Some("x") => Some(1),
+        Some("y") => Some(2),
+        Some("z") => Some(4),
+        _ => None,
+    };
+    if hinted.is_some() {
+        return hinted;
+    }
+    let translation = pair.translation?;
+    if !translation.iter().all(|value| value.is_finite()) {
+        return None;
+    }
+    let mut axes = translation
+        .iter()
+        .enumerate()
+        .filter(|(_, value)| value.abs() > 1.0e-15)
+        .map(|(axis, _)| 1_u32 << axis);
+    let axis = axes.next()?;
+    axes.next().is_none().then_some(axis)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_owned_modal_certificate_v6_binding(
     mesh: &fullmag_ir::MeshIR,
@@ -1232,26 +1259,7 @@ pub(super) fn build_owned_modal_certificate_v6_binding(
     let magnetic_mask = part_registry.magnetic_mask;
     let mut axis_by_pair = BTreeMap::<String, u32>::new();
     for pair in &mesh.periodic_boundary_pairs {
-        let axis = pair
-            .axis_hint
-            .as_deref()
-            .and_then(|axis| match axis {
-                "x" => Some(1),
-                "y" => Some(2),
-                "z" => Some(4),
-                _ => None,
-            })
-            .or_else(|| {
-                pair.translation.and_then(|translation| {
-                    let nonzero = translation
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, value)| value.abs() > 1.0e-15)
-                        .map(|(axis, _)| 1_u32 << axis)
-                        .collect::<Vec<_>>();
-                    (nonzero.len() == 1).then_some(nonzero[0])
-                })
-            })
+        let axis = modal_v6_pair_axis_mask(pair)
             .ok_or_else(|| modal_v6_error("periodic_axis_ambiguous"))?;
         if axis_by_pair
             .insert(pair.pair_id.clone(), axis)

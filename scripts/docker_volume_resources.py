@@ -288,7 +288,8 @@ def _resource_lock(control, root, attempt):
     try:
         if control._line(process) != "READY":
             raise BuildControlError("Backend resource adjustment lock is unavailable")
-        yield
+        # Callers may observe liveness while a long child operation is running.
+        yield process
     finally:
         if process.stdin and not process.stdin.closed:
             process.stdin.close()

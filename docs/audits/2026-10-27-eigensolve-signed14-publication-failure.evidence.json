@@ -1,0 +1,446 @@
+{
+  "run": {
+    "run_id": "run-live-78af971e5683452fdac585a84f99efc0496abce914a05474c3b4e270fb267279",
+    "status": "failed"
+  },
+  "runtime_commit": "7cabba8c7ef3c10747a7d7a282cfdbb0732f5ef6",
+  "activation_attempt": "094965cd3f41459183df988d75f4248a",
+  "checkpoint_samples": [
+    {
+      "k_vector_rad_m": [
+        0.0,
+        -25000000.0,
+        0.0
+      ],
+      "frequency_hz": 13560765016.846203,
+      "residuals": {
+        "backend_reported_residual": null,
+        "certification_tolerance": 1e-08,
+        "certified": true,
+        "eps_full": 2.7172922182445158e-11,
+        "eps_gauge": null,
+        "eps_phi": 1.2275663336633423e-14,
+        "eps_q": 2.717296429403178e-11,
+        "eps_reduced": 2.717296429403178e-11,
+        "floquet_cartesian_magnetic_seam_relative_residual": 1.724260258882892e-36,
+        "floquet_equilibrium_pair_relative_residual": 0.0,
+        "floquet_full_magnetic_relative_residual": 2.7172922182445158e-11,
+        "floquet_full_potential_relative_residual": 1.2317340054273929e-14,
+        "floquet_gauge_policy_satisfied": true,
+        "floquet_scalar_phase_seam_relative_residual": 0.0,
+        "floquet_seam_frame_certified": true,
+        "floquet_tangent_frame_seam_relative_residual": 0.0,
+        "full_descriptor_certified": true,
+        "reduced_pencil_certified": true,
+        "scope": "full_projected_weak_form_and_periodic_seams"
+      },
+      "source_spectrum_path": "/state/runs/docker-all/session-store/runs/run-live-78af971e5683452fdac585a84f99efc0496abce914a05474c3b4e270fb267279/worker-attempts/task-2d405bc521805acd05f5f85cadcf8d282c9291433a2f45dda03083cdee6a4817/attempt-15d96b22a0f246f989a2872ce36df368/epoch-1/eigen/raw-checkpoint-attempts/attempt-6439-1793082298118350058-0/eigen/sample-checkpoints/sample-0000/artifacts/eigen/spectrum.v2.json",
+      "source_spectrum_sha256": "f87746a8ede06e8351f3646585727d6f091db9f3d9f1b8d1f43a6c40a87337bd"
+    },
+    {
+      "k_vector_rad_m": [
+        0.0,
+        -20000000.0,
+        0.0
+      ],
+      "frequency_hz": 12819133185.02152,
+      "residuals": {
+        "backend_reported_residual": null,
+        "certification_tolerance": 1e-08,
+        "certified": true,
+        "eps_full": 9.902895307477595e-12,
+        "eps_gauge": null,
+        "eps_phi": 1.4769488984080314e-14,
+        "eps_q": 9.902929216018456e-12,
+        "eps_reduced": 9.902929216018456e-12,
+        "floquet_cartesian_magnetic_seam_relative_residual": 2.3023985476375136e-36,
+        "floquet_equilibrium_pair_relative_residual": 0.0,
+        "floquet_full_magnetic_relative_residual": 9.902895307477595e-12,
+        "floquet_full_potential_relative_residual": 1.469985735638184e-14,
+        "floquet_gauge_policy_satisfied": true,
+        "floquet_scalar_phase_seam_relative_residual": 0.0,
+        "floquet_seam_frame_certified": true,
+        "floquet_tangent_frame_seam_relative_residual": 0.0,
+        "full_descriptor_certified": true,
+        "reduced_pencil_certified": true,
+        "scope": "full_projected_weak_form_and_periodic_seams"
+      },
+      "source_spectrum_path": "/state/runs/docker-all/session-store/runs/run-live-78af971e5683452fdac585a84f99efc0496abce914a05474c3b4e270fb267279/worker-attempts/task-2d405bc521805acd05f5f85cadcf8d282c9291433a2f45dda03083cdee6a4817/attempt-15d96b22a0f246f989a2872ce36df368/epoch-1/eigen/raw-checkpoint-attempts/attempt-6439-1793082298118350058-0/eigen/sample-checkpoints/sample-0001/artifacts/eigen/spectrum.v2.json",
+      "source_spectrum_sha256": "6785c85e5ecf5f887a41629a0442bc029f31d4ef6c3345dac515b9fa8beafdd2"
+    },
+    {
+      "k_vector_rad_m": [
+        0.0,
+        -15000000.0,
+        0.0
+      ],
+      "frequency_hz": 12041290552.066849,
+      "residuals": {
+        "backend_reported_residual": null,
+        "certification_tolerance": 1e-08,
+        "certified": true,
+        "eps_full": 1.7151149929308806e-12,
+        "eps_gauge": null,
+        "eps_phi": 1.620103035129225e-14,
+        "eps_q": 1.7151032900688986e-12,
+        "eps_reduced": 1.7151032900688986e-12,
+        "floquet_cartesian_magnetic_seam_relative_residual": 1.6671689992377112e-36,
+        "floquet_equilibrium_pair_relative_residual": 0.0,
+        "floquet_full_magnetic_relative_residual": 1.7151149929308806e-12,
+        "floquet_full_potential_relative_residual": 1.6122326774428858e-14,
+        "floquet_gauge_policy_satisfied": true,
+        "floquet_scalar_phase_seam_relative_residual": 0.0,
+        "floquet_seam_frame_certified": true,
+        "floquet_tangent_frame_seam_relative_residual": 0.0,
+        "full_descriptor_certified": true,
+        "reduced_pencil_certified": true,
+        "scope": "full_projected_weak_form_and_periodic_seams"
+      },
+      "source_spectrum_path": "/state/runs/docker-all/session-store/runs/run-live-78af971e5683452fdac585a84f99efc0496abce914a05474c3b4e270fb267279/worker-attempts/task-2d405bc521805acd05f5f85cadcf8d282c9291433a2f45dda03083cdee6a4817/attempt-15d96b22a0f246f989a2872ce36df368/epoch-1/eigen/raw-checkpoint-attempts/attempt-6439-1793082298118350058-0/eigen/sample-checkpoints/sample-0002/artifacts/eigen/spectrum.v2.json",
+      "source_spectrum_sha256": "4e315dda0fd49854b2059502dae5db954b83daf745f4f456f79fcd3dc7e2d72f"
+    },
+    {
+      "k_vector_rad_m": [
+        0.0,
+        -10000000.0,
+        0.0
+      ],
+      "frequency_hz": 11211849791.651201,
+      "residuals": {
+        "backend_reported_residual": null,
+        "certification_tolerance": 1e-08,
+        "certified": true,
+        "eps_full": 2.414522889528399e-11,
+        "eps_gauge": null,
+        "eps_phi": 1.933983454519204e-14,
+        "eps_q": 2.4145269648724995e-11,
+        "eps_reduced": 2.4145269648724995e-11,
+        "floquet_cartesian_magnetic_seam_relative_residual": 1.4540350038913889e-36,
+        "floquet_equilibrium_pair_relative_residual": 0.0,
+        "floquet_full_magnetic_relative_residual": 2.414522889528399e-11,
+        "floquet_full_potential_relative_residual": 1.953998516419507e-14,
+        "floquet_gauge_policy_satisfied": true,
+        "floquet_scalar_phase_seam_relative_residual": 0.0,
+        "floquet_seam_frame_certified": true,
+        "floquet_tangent_frame_seam_relative_residual": 0.0,
+        "full_descriptor_certified": true,
+        "reduced_pencil_certified": true,
+        "scope": "full_projected_weak_form_and_periodic_seams"
+      },
+      "source_spectrum_path": "/state/runs/docker-all/session-store/runs/run-live-78af971e5683452fdac585a84f99efc0496abce914a05474c3b4e270fb267279/worker-attempts/task-2d405bc521805acd05f5f85cadcf8d282c9291433a2f45dda03083cdee6a4817/attempt-15d96b22a0f246f989a2872ce36df368/epoch-1/eigen/raw-checkpoint-attempts/attempt-6439-1793082298118350058-0/eigen/sample-checkpoints/sample-0003/artifacts/eigen/spectrum.v2.json",
+      "source_spectrum_sha256": "d47a48aa8b879268073d3ab394613edf063a0d81770945a09e96634da515bf6f"
+    },
+    {
+      "k_vector_rad_m": [
+        0.0,
+        -7000000.0,
+        0.0
+      ],
+      "frequency_hz": 10681045691.954409,
+      "residuals": {
+        "backend_reported_residual": null,
+        "certification_tolerance": 1e-08,
+        "certified": true,
+        "eps_full": 2.4610942448452422e-11,
+        "eps_gauge": null,
+        "eps_phi": 2.348247698593056e-14,
+        "eps_q": 2.4610913655303138e-11,
+        "eps_reduced": 2.4610913655303138e-11,
+        "floquet_cartesian_magnetic_seam_relative_residual": 8.95532957124957e-37,
+        "floquet_equilibrium_pair_relative_residual": 0.0,
+        "floquet_full_magnetic_relative_residual": 2.4610942448452422e-11,
+        "floquet_full_potential_relative_residual": 2.3356310488855585e-14,
+        "floquet_gauge_policy_satisfied": true,
+        "floquet_scalar_phase_seam_relative_residual": 0.0,
+        "floquet_seam_frame_certified": true,
+        "floquet_tangent_frame_seam_relative_residual": 0.0,
+        "full_descriptor_certified": true,
+        "reduced_pencil_certified": true,
+        "scope": "full_projected_weak_form_and_periodic_seams"
+      },
+      "source_spectrum_path": "/state/runs/docker-all/session-store/runs/run-live-78af971e5683452fdac585a84f99efc0496abce914a05474c3b4e270fb267279/worker-attempts/task-2d405bc521805acd05f5f85cadcf8d282c9291433a2f45dda03083cdee6a4817/attempt-15d96b22a0f246f989a2872ce36df368/epoch-1/eigen/raw-checkpoint-attempts/attempt-6439-1793082298118350058-0/eigen/sample-checkpoints/sample-0004/artifacts/eigen/spectrum.v2.json",
+      "source_spectrum_sha256": "e164448d1fa3804929c5d90de961427a00612e92292a098111fce0c2a9f9ff0b"
+    },
+    {
+      "k_vector_rad_m": [
+        0.0,
+        -5000000.0,
+        0.0
+      ],
+      "frequency_hz": 10310201976.016174,
+      "residuals": {
+        "backend_reported_residual": null,
+        "certification_tolerance": 1e-08,
+        "certified": true,
+        "eps_full": 7.494532641082661e-12,
+        "eps_gauge": null,
+        "eps_phi": 2.5266776980274895e-14,
+        "eps_q": 7.494482179274099e-12,
+        "eps_reduced": 7.494482179274099e-12,
+        "floquet_cartesian_magnetic_seam_relative_residual": 1.5196256929995616e-36,
+        "floquet_equilibrium_pair_relative_residual": 0.0,
+        "floquet_full_magnetic_relative_residual": 7.494532641082661e-12,
+        "floquet_full_potential_relative_residual": 2.5400185940045403e-14,
+        "floquet_gauge_policy_satisfied": true,
+        "floquet_scalar_phase_seam_relative_residual": 0.0,
+        "floquet_seam_frame_certified": true,
+        "floquet_tangent_frame_seam_relative_residual": 0.0,
+        "full_descriptor_certified": true,
+        "reduced_pencil_certified": true,
+        "scope": "full_projected_weak_form_and_periodic_seams"
+      },
+      "source_spectrum_path": "/state/runs/docker-all/session-store/runs/run-live-78af971e5683452fdac585a84f99efc0496abce914a05474c3b4e270fb267279/worker-attempts/task-2d405bc521805acd05f5f85cadcf8d282c9291433a2f45dda03083cdee6a4817/attempt-15d96b22a0f246f989a2872ce36df368/epoch-1/eigen/raw-checkpoint-attempts/attempt-6439-1793082298118350058-0/eigen/sample-checkpoints/sample-0005/artifacts/eigen/spectrum.v2.json",
+      "source_spectrum_sha256": "d65978f735aeca94b224a12a0cc60b8ab02db1e759368923b64e8e9f9629f2e8"
+    },
+    {
+      "k_vector_rad_m": [
+        0.0,
+        -2000000.0,
+        0.0
+      ],
+      "frequency_hz": 9724035208.05018,
+      "residuals": {
+        "backend_reported_residual": null,
+        "certification_tolerance": 1e-08,
+        "certified": true,
+        "eps_full": 5.226171682890313e-13,
+        "eps_gauge": null,
+        "eps_phi": 3.2942340899429415e-14,
+        "eps_q": 5.226358953652524e-13,
+        "eps_reduced": 5.226358953652524e-13,
+        "floquet_cartesian_magnetic_seam_relative_residual": 1.2035478404806705e-36,
+        "floquet_equilibrium_pair_relative_residual": 0.0,
+        "floquet_full_magnetic_relative_residual": 5.226171682890313e-13,
+        "floquet_full_potential_relative_residual": 3.4318049470477045e-14,
+        "floquet_gauge_policy_satisfied": true,
+        "floquet_scalar_phase_seam_relative_residual": 0.0,
+        "floquet_seam_frame_certified": true,
+        "floquet_tangent_frame_seam_relative_residual": 0.0,
+        "full_descriptor_certified": true,
+        "reduced_pencil_certified": true,
+        "scope": "full_projected_weak_form_and_periodic_seams"
+      },
+      "source_spectrum_path": "/state/runs/docker-all/session-store/runs/run-live-78af971e5683452fdac585a84f99efc0496abce914a05474c3b4e270fb267279/worker-attempts/task-2d405bc521805acd05f5f85cadcf8d282c9291433a2f45dda03083cdee6a4817/attempt-15d96b22a0f246f989a2872ce36df368/epoch-1/eigen/raw-checkpoint-attempts/attempt-6439-1793082298118350058-0/eigen/sample-checkpoints/sample-0006/artifacts/eigen/spectrum.v2.json",
+      "source_spectrum_sha256": "0e22cc96197e6ab4efc865af6107b95936578eecb7e15c6b45be51bf8fa83b68"
+    },
+    {
+      "k_vector_rad_m": [
+        0.0,
+        2000000.0,
+        0.0
+      ],
+      "frequency_hz": 9724074783.19701,
+      "residuals": {
+        "backend_reported_residual": null,
+        "certification_tolerance": 1e-08,
+        "certified": true,
+        "eps_full": 2.0922970479044578e-13,
+        "eps_gauge": null,
+        "eps_phi": 3.027524738259923e-14,
+        "eps_q": 2.092073954761439e-13,
+        "eps_reduced": 2.092073954761439e-13,
+        "floquet_cartesian_magnetic_seam_relative_residual": 1.5234807564048018e-36,
+        "floquet_equilibrium_pair_relative_residual": 0.0,
+        "floquet_full_magnetic_relative_residual": 2.0922970479044578e-13,
+        "floquet_full_potential_relative_residual": 3.0442344779394765e-14,
+        "floquet_gauge_policy_satisfied": true,
+        "floquet_scalar_phase_seam_relative_residual": 0.0,
+        "floquet_seam_frame_certified": true,
+        "floquet_tangent_frame_seam_relative_residual": 0.0,
+        "full_descriptor_certified": true,
+        "reduced_pencil_certified": true,
+        "scope": "full_projected_weak_form_and_periodic_seams"
+      },
+      "source_spectrum_path": "/state/runs/docker-all/session-store/runs/run-live-78af971e5683452fdac585a84f99efc0496abce914a05474c3b4e270fb267279/worker-attempts/task-2d405bc521805acd05f5f85cadcf8d282c9291433a2f45dda03083cdee6a4817/attempt-15d96b22a0f246f989a2872ce36df368/epoch-1/eigen/raw-checkpoint-attempts/attempt-6439-1793082298118350058-0/eigen/sample-checkpoints/sample-0007/artifacts/eigen/spectrum.v2.json",
+      "source_spectrum_sha256": "d51f545a96eb569d853f3ba1924f3afaf97d33d04570b0a7a7e6e5806a5f13cf"
+    },
+    {
+      "k_vector_rad_m": [
+        0.0,
+        5000000.0,
+        0.0
+      ],
+      "frequency_hz": 10310352014.352716,
+      "residuals": {
+        "backend_reported_residual": null,
+        "certification_tolerance": 1e-08,
+        "certified": true,
+        "eps_full": 1.713417264219637e-11,
+        "eps_gauge": null,
+        "eps_phi": 2.6287728553550604e-14,
+        "eps_q": 1.713416387557476e-11,
+        "eps_reduced": 1.713416387557476e-11,
+        "floquet_cartesian_magnetic_seam_relative_residual": 1.915536551088861e-36,
+        "floquet_equilibrium_pair_relative_residual": 0.0,
+        "floquet_full_magnetic_relative_residual": 1.713417264219637e-11,
+        "floquet_full_potential_relative_residual": 2.680597673273742e-14,
+        "floquet_gauge_policy_satisfied": true,
+        "floquet_scalar_phase_seam_relative_residual": 0.0,
+        "floquet_seam_frame_certified": true,
+        "floquet_tangent_frame_seam_relative_residual": 0.0,
+        "full_descriptor_certified": true,
+        "reduced_pencil_certified": true,
+        "scope": "full_projected_weak_form_and_periodic_seams"
+      },
+      "source_spectrum_path": "/state/runs/docker-all/session-store/runs/run-live-78af971e5683452fdac585a84f99efc0496abce914a05474c3b4e270fb267279/worker-attempts/task-2d405bc521805acd05f5f85cadcf8d282c9291433a2f45dda03083cdee6a4817/attempt-15d96b22a0f246f989a2872ce36df368/epoch-1/eigen/raw-checkpoint-attempts/attempt-6439-1793082298118350058-0/eigen/sample-checkpoints/sample-0008/artifacts/eigen/spectrum.v2.json",
+      "source_spectrum_sha256": "f14b8581f1a6746fc5b7510bf11166b061549737b6d1d196cce0b51fe840394a"
+    },
+    {
+      "k_vector_rad_m": [
+        0.0,
+        7000000.0,
+        0.0
+      ],
+      "frequency_hz": 10681152764.14336,
+      "residuals": {
+        "backend_reported_residual": null,
+        "certification_tolerance": 1e-08,
+        "certified": true,
+        "eps_full": 1.8202316388657814e-11,
+        "eps_gauge": null,
+        "eps_phi": 2.3518562224678757e-14,
+        "eps_q": 1.8202323015147725e-11,
+        "eps_reduced": 1.8202323015147725e-11,
+        "floquet_cartesian_magnetic_seam_relative_residual": 1.3895022418183382e-36,
+        "floquet_equilibrium_pair_relative_residual": 0.0,
+        "floquet_full_magnetic_relative_residual": 1.8202316388657814e-11,
+        "floquet_full_potential_relative_residual": 2.3151907714064978e-14,
+        "floquet_gauge_policy_satisfied": true,
+        "floquet_scalar_phase_seam_relative_residual": 0.0,
+        "floquet_seam_frame_certified": true,
+        "floquet_tangent_frame_seam_relative_residual": 0.0,
+        "full_descriptor_certified": true,
+        "reduced_pencil_certified": true,
+        "scope": "full_projected_weak_form_and_periodic_seams"
+      },
+      "source_spectrum_path": "/state/runs/docker-all/session-store/runs/run-live-78af971e5683452fdac585a84f99efc0496abce914a05474c3b4e270fb267279/worker-attempts/task-2d405bc521805acd05f5f85cadcf8d282c9291433a2f45dda03083cdee6a4817/attempt-15d96b22a0f246f989a2872ce36df368/epoch-1/eigen/raw-checkpoint-attempts/attempt-6439-1793082298118350058-0/eigen/sample-checkpoints/sample-0009/artifacts/eigen/spectrum.v2.json",
+      "source_spectrum_sha256": "26757be10cd0bc6e481b496e1c590e9ed61cbf6b8f29b10eea05438039bb8cb8"
+    },
+    {
+      "k_vector_rad_m": [
+        0.0,
+        10000000.0,
+        0.0
+      ],
+      "frequency_hz": 11211886649.578224,
+      "residuals": {
+        "backend_reported_residual": null,
+        "certification_tolerance": 1e-08,
+        "certified": true,
+        "eps_full": 1.255135717070378e-11,
+        "eps_gauge": null,
+        "eps_phi": 1.9476426960617194e-14,
+        "eps_q": 1.2551328792633702e-11,
+        "eps_reduced": 1.2551328792633702e-11,
+        "floquet_cartesian_magnetic_seam_relative_residual": 1.6345537176231646e-36,
+        "floquet_equilibrium_pair_relative_residual": 0.0,
+        "floquet_full_magnetic_relative_residual": 1.255135717070378e-11,
+        "floquet_full_potential_relative_residual": 1.952669596819893e-14,
+        "floquet_gauge_policy_satisfied": true,
+        "floquet_scalar_phase_seam_relative_residual": 0.0,
+        "floquet_seam_frame_certified": true,
+        "floquet_tangent_frame_seam_relative_residual": 0.0,
+        "full_descriptor_certified": true,
+        "reduced_pencil_certified": true,
+        "scope": "full_projected_weak_form_and_periodic_seams"
+      },
+      "source_spectrum_path": "/state/runs/docker-all/session-store/runs/run-live-78af971e5683452fdac585a84f99efc0496abce914a05474c3b4e270fb267279/worker-attempts/task-2d405bc521805acd05f5f85cadcf8d282c9291433a2f45dda03083cdee6a4817/attempt-15d96b22a0f246f989a2872ce36df368/epoch-1/eigen/raw-checkpoint-attempts/attempt-6439-1793082298118350058-0/eigen/sample-checkpoints/sample-0010/artifacts/eigen/spectrum.v2.json",
+      "source_spectrum_sha256": "4bde46355e0f9de2f46e938029d1ff4526727c501b0157d67de2e20a21ec5568"
+    },
+    {
+      "k_vector_rad_m": [
+        0.0,
+        15000000.0,
+        0.0
+      ],
+      "frequency_hz": 12041315829.63064,
+      "residuals": {
+        "backend_reported_residual": null,
+        "certification_tolerance": 1e-08,
+        "certified": true,
+        "eps_full": 4.268388066386643e-12,
+        "eps_gauge": null,
+        "eps_phi": 1.6643344801676717e-14,
+        "eps_q": 4.26837945694393e-12,
+        "eps_reduced": 4.26837945694393e-12,
+        "floquet_cartesian_magnetic_seam_relative_residual": 1.5139869002132152e-36,
+        "floquet_equilibrium_pair_relative_residual": 0.0,
+        "floquet_full_magnetic_relative_residual": 4.268388066386643e-12,
+        "floquet_full_potential_relative_residual": 1.6757506938386382e-14,
+        "floquet_gauge_policy_satisfied": true,
+        "floquet_scalar_phase_seam_relative_residual": 0.0,
+        "floquet_seam_frame_certified": true,
+        "floquet_tangent_frame_seam_relative_residual": 0.0,
+        "full_descriptor_certified": true,
+        "reduced_pencil_certified": true,
+        "scope": "full_projected_weak_form_and_periodic_seams"
+      },
+      "source_spectrum_path": "/state/runs/docker-all/session-store/runs/run-live-78af971e5683452fdac585a84f99efc0496abce914a05474c3b4e270fb267279/worker-attempts/task-2d405bc521805acd05f5f85cadcf8d282c9291433a2f45dda03083cdee6a4817/attempt-15d96b22a0f246f989a2872ce36df368/epoch-1/eigen/raw-checkpoint-attempts/attempt-6439-1793082298118350058-0/eigen/sample-checkpoints/sample-0011/artifacts/eigen/spectrum.v2.json",
+      "source_spectrum_sha256": "e4ae30f73d1fac0f9816277787f3f99704dadd4430edd98a7dee4ed9793c20db"
+    },
+    {
+      "k_vector_rad_m": [
+        0.0,
+        20000000.0,
+        0.0
+      ],
+      "frequency_hz": 12819200390.629957,
+      "residuals": {
+        "backend_reported_residual": null,
+        "certification_tolerance": 1e-08,
+        "certified": true,
+        "eps_full": 1.4746312549623184e-11,
+        "eps_gauge": null,
+        "eps_phi": 1.5930551608649244e-14,
+        "eps_q": 1.474633589804952e-11,
+        "eps_reduced": 1.474633589804952e-11,
+        "floquet_cartesian_magnetic_seam_relative_residual": 1.6001245471907564e-36,
+        "floquet_equilibrium_pair_relative_residual": 0.0,
+        "floquet_full_magnetic_relative_residual": 1.4746312549623184e-11,
+        "floquet_full_potential_relative_residual": 1.5769980288024677e-14,
+        "floquet_gauge_policy_satisfied": true,
+        "floquet_scalar_phase_seam_relative_residual": 0.0,
+        "floquet_seam_frame_certified": true,
+        "floquet_tangent_frame_seam_relative_residual": 0.0,
+        "full_descriptor_certified": true,
+        "reduced_pencil_certified": true,
+        "scope": "full_projected_weak_form_and_periodic_seams"
+      },
+      "source_spectrum_path": "/state/runs/docker-all/session-store/runs/run-live-78af971e5683452fdac585a84f99efc0496abce914a05474c3b4e270fb267279/worker-attempts/task-2d405bc521805acd05f5f85cadcf8d282c9291433a2f45dda03083cdee6a4817/attempt-15d96b22a0f246f989a2872ce36df368/epoch-1/eigen/raw-checkpoint-attempts/attempt-6439-1793082298118350058-0/eigen/sample-checkpoints/sample-0012/artifacts/eigen/spectrum.v2.json",
+      "source_spectrum_sha256": "01644932ce7e0a889375db21df4c198266de0b67b42c83056eafd023c3d7cc5b"
+    },
+    {
+      "k_vector_rad_m": [
+        0.0,
+        25000000.0,
+        0.0
+      ],
+      "frequency_hz": 13560913969.2644,
+      "residuals": {
+        "backend_reported_residual": null,
+        "certification_tolerance": 1e-08,
+        "certified": true,
+        "eps_full": 1.2631874100668894e-11,
+        "eps_gauge": null,
+        "eps_phi": 1.309806611520694e-14,
+        "eps_q": 1.2631868407572304e-11,
+        "eps_reduced": 1.2631868407572304e-11,
+        "floquet_cartesian_magnetic_seam_relative_residual": 1.395475486415948e-36,
+        "floquet_equilibrium_pair_relative_residual": 0.0,
+        "floquet_full_magnetic_relative_residual": 1.2631874100668894e-11,
+        "floquet_full_potential_relative_residual": 1.3132389284290926e-14,
+        "floquet_gauge_policy_satisfied": true,
+        "floquet_scalar_phase_seam_relative_residual": 0.0,
+        "floquet_seam_frame_certified": true,
+        "floquet_tangent_frame_seam_relative_residual": 0.0,
+        "full_descriptor_certified": true,
+        "reduced_pencil_certified": true,
+        "scope": "full_projected_weak_form_and_periodic_seams"
+      },
+      "source_spectrum_path": "/state/runs/docker-all/session-store/runs/run-live-78af971e5683452fdac585a84f99efc0496abce914a05474c3b4e270fb267279/worker-attempts/task-2d405bc521805acd05f5f85cadcf8d282c9291433a2f45dda03083cdee6a4817/attempt-15d96b22a0f246f989a2872ce36df368/epoch-1/eigen/raw-checkpoint-attempts/attempt-6439-1793082298118350058-0/eigen/sample-checkpoints/sample-0013/artifacts/eigen/spectrum.v2.json",
+      "source_spectrum_sha256": "7192c9a50071f9f3ce3c0c53eb616a7b4459d6e4288558fcd536f23e96b9ae0c"
+    }
+  ],
+  "failure": "deferred physical-potential artifact ownership is inconsistent at eigen/mode_fields/sample_0000/mode_0000/physical_potential.v1.json",
+  "qualification": "14 numerical checkpoints certified; final publication failed; Gamma not included"
+}

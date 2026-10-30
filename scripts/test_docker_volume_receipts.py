@@ -95,6 +95,55 @@ class VolumeReceiptTests(IsolatedReceiptTests):
                                 dev._retained_operation(args, recreate_services=True)
                             capture.assert_not_called()
 
+    def test_recreation_validates_old_operator_pins_before_deriving_floquet_override(self):
+        from types import SimpleNamespace
+        import hashlib
+        import docker_volume_dev as dev
+        import docker_volume_cancelled_activation_guard
+        import docker_dev
+        import docker_build_control
+        project_name = "fullmag-master"
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory).resolve()
+            document = {"name": project_name, "services": {
+                "backend": {"environment": {"FULLMAG_DEVELOPMENT_INPUTS_PATH":
+                    "/opt/fullmag/control/frontend/development-inputs.json"}},
+            }}
+            args = SimpleNamespace(
+                repo_root=source,
+                source_root=source,
+                attempt="a" * 32,
+                config_sha256=hashlib.sha256(dev.canonical(document)).hexdigest(),
+                floquet_diagnostics="schur-action",
+                modal_shifted_ksp_type="fgmres",
+            )
+            previous = {
+                "state": "failed-confirmed",
+                "compose_project": project_name,
+                "inputs": {"source_root": str(source), "image_id": "sha256:" + "b" * 64},
+            }
+            control = mock.Mock(project=project_name)
+            control.read.side_effect = [previous, document, None]
+            configuration = {"services": {"fem-gpu-toolchain": {"build": {"args": {
+                "FULLMAG_CUDA_BASE_IMAGE": "unused"}}}}}
+            with mock.patch.object(docker_dev, "_select_source", return_value=(source, {})), \
+                 mock.patch.object(docker_dev, "_compose_identity", return_value={}), \
+                 mock.patch.object(docker_build_control, "toolchain_configuration",
+                                   return_value=configuration), \
+                 mock.patch.object(dev, "BuildControl", return_value=control), \
+                 mock.patch.object(docker_volume_cancelled_activation_guard,
+                                   "_read_control_bytes", return_value=None), \
+                 mock.patch.object(dev, "_operator_probe_record_from_retained",
+                                   side_effect=BuildControlError("invalid retained probe pin")), \
+                 mock.patch.object(dev, "_floquet_diagnostic_successor_record") as derive, \
+                 mock.patch.object(dev, "_modal_shifted_ksp_type_successor_record") as ksp_derive, \
+                 mock.patch.object(dev, "compose_capture") as capture:
+                with self.assertRaisesRegex(BuildControlError, "invalid retained probe pin"):
+                    dev._retained_operation(args, recreate_services=True)
+            derive.assert_not_called()
+            ksp_derive.assert_not_called()
+            capture.assert_not_called()
+
     def test_runtime_supervisor_accepts_only_fixed_provenance_locations(self):
         path = Path(__file__).resolve().parents[1] / 'docker/all-in-one/runtime_service.py'
         spec = importlib.util.spec_from_file_location('volume_runtime_paths_test', path)
@@ -224,6 +273,421 @@ class VolumeReceiptTests(IsolatedReceiptTests):
             dev._operator_probe_record_from_retained(record, changed)
         with self.assertRaisesRegex(BuildControlError, 'digest'):
             dev._operator_probe_record_from_fields({**record, 'operator_probe_environment_sha256': '0'*64}, label='test')
+
+    def test_floquet_operator_controls_are_strict_optional_and_resume_from_saved_intent(self):
+        import hashlib
+        import json
+        import os
+        import docker_dev
+        import docker_volume_dev as dev
+        import fullmag_docker_runtime as runtime
+
+        legacy_values = {
+            "FULLMAG_MIXED_P1_DEVICE": "gpu",
+            "FULLMAG_ARTIFACT_FIELD_STORAGE": "json",
+        }
+        legacy_record = dev._operator_probe_record(legacy_values)
+        canonical_legacy = json.dumps(
+            {"schema": "fullmag.operator-probe-environment.v1",
+             "values": legacy_values},
+            ensure_ascii=True, sort_keys=True, separators=(",", ":"),
+        ) + "\n"
+        self.assertEqual(
+            legacy_record["operator_probe_environment_sha256"],
+            hashlib.sha256(canonical_legacy.encode("utf-8")).hexdigest(),
+        )
+        self.assertEqual(legacy_record["operator_probe_environment"], legacy_values)
+        self.assertEqual(
+            legacy_record["operator_probe_environment_schema"],
+            "fullmag.operator-probe-environment.v1",
+        )
+
+        with mock.patch.object(
+                docker_dev, "_operator_probe_environment_from_host",
+                side_effect=AssertionError("retained starts must not reread host controls")) as host:
+            self.assertEqual(
+                dev._operator_probe_record_for_start(
+                    {"operator_probe_environment_record": legacy_record}
+                ),
+                legacy_record,
+            )
+            explicit_successor = dev._operator_probe_record_for_start(
+                None, dev._operator_probe_record(
+                    docker_dev._operator_probe_environment_for_floquet_profile(
+                        legacy_values, "schur-action"
+                    )
+                )
+            )
+        host.assert_not_called()
+        self.assertEqual(
+            explicit_successor["operator_probe_environment"][
+                "FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC"
+            ],
+            "1",
+        )
+
+        dense_record, dense_selection = dev._floquet_diagnostic_successor_record(
+            legacy_record, "dense-oracle"
+        )
+        schur_record, _ = dev._floquet_diagnostic_successor_record(
+            dense_record, "schur-action"
+        )
+        compose_record, _ = dev._modal_shifted_ksp_type_successor_record(
+            schur_record, "fgmres"
+        )
+        disabled_record, _ = dev._floquet_diagnostic_successor_record(
+            dense_record, "disabled"
+        )
+        dense_flag = "FULLMAG_FLOQUET_DENSE_ORACLE"
+        schur_flag = "FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC"
+        self.assertEqual(dense_record["operator_probe_environment"][dense_flag], "1")
+        self.assertNotIn(schur_flag, dense_record["operator_probe_environment"])
+        self.assertNotIn(dense_flag, schur_record["operator_probe_environment"])
+        self.assertEqual(schur_record["operator_probe_environment"][schur_flag], "1")
+        self.assertNotIn(dense_flag, disabled_record["operator_probe_environment"])
+        self.assertNotIn(schur_flag, disabled_record["operator_probe_environment"])
+        for candidate in (dense_record, schur_record, disabled_record):
+            values = candidate["operator_probe_environment"]
+            self.assertEqual(
+                {key: value for key, value in values.items()
+                 if key not in {dense_flag, schur_flag}},
+                legacy_values,
+            )
+            self.assertEqual(runtime._normalize_operator_probe_environment(values), values)
+
+        self.assertEqual(dense_selection["requested_profile"], "dense-oracle")
+        self.assertEqual(dense_selection["old_operator_probe_environment_sha256"],
+                         legacy_record["operator_probe_environment_sha256"])
+        self.assertEqual(dense_selection["new_operator_probe_environment_sha256"],
+                         dense_record["operator_probe_environment_sha256"])
+        self.assertEqual(
+            dev._floquet_diagnostic_successor_from_metadata(
+                legacy_record, dense_selection
+            ),
+            dense_record,
+        )
+        with mock.patch.dict(os.environ, {schur_flag: "1"}, clear=True):
+            self.assertEqual(
+                dev._floquet_diagnostic_successor_from_metadata(dense_record, None),
+                dense_record,
+            )
+        changed_selection = {**dense_selection,
+                             "new_operator_probe_environment_sha256": "0" * 64}
+        with self.assertRaisesRegex(BuildControlError, "selection"):
+            dev._floquet_diagnostic_successor_from_metadata(
+                legacy_record, changed_selection
+            )
+
+        for invalid in ("0", " 1 ", True):
+            with self.subTest(invalid=invalid), self.assertRaises(docker_dev.DirectDockerError):
+                docker_dev._normalize_operator_probe_environment(
+                    {**legacy_values, dense_flag: invalid}
+                )
+            with self.subTest(runtime_invalid=invalid), self.assertRaises(ValueError):
+                runtime._normalize_operator_probe_environment(
+                    {**legacy_values, dense_flag: invalid}
+                )
+        with self.assertRaisesRegex(docker_dev.DirectDockerError, "mutually exclusive"):
+            docker_dev._normalize_operator_probe_environment(
+                {**legacy_values, dense_flag: "1", schur_flag: "1"}
+            )
+        with self.assertRaisesRegex(ValueError, "mutually exclusive"):
+            runtime._normalize_operator_probe_environment(
+                {**legacy_values, dense_flag: "1", schur_flag: "1"}
+            )
+        with self.assertRaisesRegex(docker_dev.DirectDockerError, "exactly"):
+            docker_dev._normalize_operator_probe_environment(
+                {**legacy_values, "FULLMAG_FLOQUET_UNKNOWN": "1"}
+            )
+        with self.assertRaisesRegex(ValueError, "exactly"):
+            runtime._normalize_operator_probe_environment(
+                {**legacy_values, "FULLMAG_FLOQUET_UNKNOWN": "1"}
+            )
+        with self.assertRaisesRegex(docker_dev.DirectDockerError, "unsupported"):
+            docker_dev._operator_probe_environment_for_floquet_profile(
+                legacy_values, "unexpected"
+            )
+
+        with mock.patch.dict(os.environ,
+                             {dense_flag: "1", "UNRELATED_SECRET": "never-copy"},
+                             clear=True):
+            captured = docker_dev._operator_probe_environment_from_host()
+        self.assertEqual(captured[dense_flag], "1")
+        self.assertNotIn("UNRELATED_SECRET", captured)
+        with mock.patch.dict(os.environ,
+                             {dense_flag: "1", schur_flag: "1"}, clear=True):
+            with self.assertRaisesRegex(docker_dev.DirectDockerError, "mutually exclusive"):
+                docker_dev._operator_probe_environment_from_host()
+
+        document = {"services": {"backend": {"environment": {
+            dense_flag: "1", schur_flag: "1", "FULLMAG_KEEP": "value",
+        }}, "frontend": {"environment": {}, "volumes": [{
+            "source": "build-control", "target": "/opt/fullmag/control",
+            "read_only": True, "volume": {"subpath": "frontend"},
+        }]}}}
+        dev._reassert_operator_probe_environment(document, schur_record)
+        backend_environment = document["services"]["backend"]["environment"]
+        self.assertNotIn(dense_flag, backend_environment)
+        self.assertEqual(backend_environment[schur_flag], "1")
+        self.assertEqual(backend_environment["FULLMAG_KEEP"], "value")
+        self.assertEqual(
+            backend_environment["FULLMAG_OPERATOR_PROBE_ENVIRONMENT_SHA256"],
+            schur_record["operator_probe_environment_sha256"],
+        )
+
+        compose_document = {
+            "services": {
+                "backend": {"environment": {dense_flag: "1", schur_flag: "1"}},
+                "frontend": {"environment": {}},
+            },
+            "networks": {},
+        }
+        backend_start = {
+            "backend_cache": {
+                "state": "ready",
+                "compose_overlay": None,
+                "environment": {"FULLMAG_BACKEND_PACKAGE": "/opt/fullmag/package"},
+            },
+            "package_root": "/opt/fullmag/package",
+            "source_root": "/workspace/fullmag",
+            "git_common_dir": "/workspace/fullmag/.git",
+            "operator_probe_environment": compose_record["operator_probe_environment"],
+            "operator_probe_environment_schema": compose_record[
+                "operator_probe_environment_schema"
+            ],
+            "operator_probe_environment_sha256": compose_record[
+                "operator_probe_environment_sha256"
+            ],
+        }
+
+        def fake_compose(*args, **kwargs):
+            self.assertNotIn("UNRELATED_SECRET", kwargs["environment"])
+            return json.dumps(compose_document)
+
+        with mock.patch.dict(os.environ, {"UNRELATED_SECRET": "never-copy"}), \
+             mock.patch.object(runtime, "docker", side_effect=fake_compose), \
+             mock.patch.object(runtime, "_backend_cache_kind", return_value=("v2", None)), \
+             mock.patch.object(runtime, "_validate_backend_volume_cache", return_value=None):
+            configured = runtime.compose_spec(
+                "sha256:" + "c" * 64,
+                Path("/state"),
+                3197,
+                Path("/owned/host-certificate.json"),
+                repo=Path("/workspace/fullmag"),
+                workspace_state_root=Path("/owned/user-data"),
+                package="/opt/fullmag/package",
+                provenance="/opt/fullmag/package/provenance.json",
+                inputs_path="/opt/fullmag/control/frontend/development-inputs.json",
+                backend_start=backend_start,
+                device_access="cpu",
+            )
+        rendered_environment = configured["services"]["backend"]["environment"]
+        self.assertNotIn(dense_flag, rendered_environment)
+        self.assertEqual(rendered_environment[schur_flag], "1")
+        self.assertEqual(rendered_environment["FULLMAG_MODAL_SHIFTED_KSP_TYPE"], "fgmres")
+        self.assertEqual(
+            rendered_environment["FULLMAG_OPERATOR_PROBE_ENVIRONMENT_SHA256"],
+            compose_record["operator_probe_environment_sha256"],
+        )
+
+    def test_modal_shifted_ksp_selection_preserves_and_replays_the_pinned_record(self):
+        import os
+        import docker_dev
+        import docker_volume_dev as dev
+        import fullmag_docker_runtime as runtime
+
+        ksp_flag = "FULLMAG_MODAL_SHIFTED_KSP_TYPE"
+        base_values = {
+            "FULLMAG_MIXED_P1_DEVICE": "gpu",
+            "FULLMAG_ARTIFACT_FIELD_STORAGE": "json",
+            "FULLMAG_MODAL_GMRES_RESTART": "30",
+            "FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC": "1",
+        }
+        legacy_record = dev._operator_probe_record(base_values)
+        preserved, no_selection = dev._modal_shifted_ksp_type_successor_record(
+            legacy_record, None
+        )
+        self.assertEqual(preserved, legacy_record)
+        self.assertIsNone(no_selection)
+
+        existing_type_record = dev._operator_probe_record(
+            {**base_values, ksp_flag: "fgmres"}
+        )
+        frozen_old_values = dict(existing_type_record["operator_probe_environment"])
+        frozen_old_sha256 = existing_type_record["operator_probe_environment_sha256"]
+        self.assertEqual(
+            dev._modal_shifted_ksp_type_successor_record(existing_type_record, None),
+            (existing_type_record, None),
+        )
+
+        default_successor, default_selection = (
+            dev._modal_shifted_ksp_type_successor_record(existing_type_record, "default")
+        )
+        self.assertEqual(default_selection["requested_type"], "default")
+        self.assertEqual(
+            default_selection["old_operator_probe_environment_sha256"], frozen_old_sha256
+        )
+        self.assertEqual(
+            default_selection["new_operator_probe_environment_sha256"],
+            default_successor["operator_probe_environment_sha256"],
+        )
+        self.assertNotIn(ksp_flag, default_successor["operator_probe_environment"])
+        self.assertEqual(default_successor["operator_probe_environment"], base_values)
+        self.assertEqual(default_successor, legacy_record)
+        self.assertEqual(existing_type_record["operator_probe_environment"], frozen_old_values)
+        self.assertEqual(existing_type_record["operator_probe_environment_sha256"], frozen_old_sha256)
+        no_override_default, no_override_selection = (
+            dev._modal_shifted_ksp_type_successor_record(legacy_record, "default")
+        )
+        self.assertEqual(no_override_default, legacy_record)
+        self.assertEqual(no_override_selection["requested_type"], "default")
+        self.assertEqual(
+            no_override_selection["old_operator_probe_environment_sha256"],
+            no_override_selection["new_operator_probe_environment_sha256"],
+        )
+        with mock.patch.dict(
+                os.environ, {ksp_flag: "gmres", "UNRELATED_SECRET": "never-copy"},
+                clear=True):
+            self.assertEqual(
+                dev._modal_shifted_ksp_type_successor_from_metadata(
+                    existing_type_record, default_selection
+                ),
+                default_successor,
+            )
+            self.assertEqual(
+                dev._modal_shifted_ksp_type_successor_from_metadata(
+                    legacy_record, no_override_selection
+                ),
+                legacy_record,
+            )
+        for requested_type in ("gmres", "fgmres"):
+            with self.subTest(requested_type=requested_type):
+                successor, selection = dev._modal_shifted_ksp_type_successor_record(
+                    existing_type_record, requested_type
+                )
+                successor_values = successor["operator_probe_environment"]
+                self.assertEqual(successor_values[ksp_flag], requested_type)
+                self.assertEqual(
+                    {key: value for key, value in successor_values.items()
+                     if key != ksp_flag},
+                    base_values,
+                )
+                self.assertEqual(
+                    runtime._normalize_operator_probe_environment(successor_values),
+                    successor_values,
+                )
+                self.assertEqual(
+                    selection["old_operator_probe_environment_sha256"],
+                    existing_type_record["operator_probe_environment_sha256"],
+                )
+                self.assertEqual(selection["requested_type"], requested_type)
+                self.assertEqual(
+                    selection["new_operator_probe_environment_sha256"],
+                    successor["operator_probe_environment_sha256"],
+                )
+                with mock.patch.dict(
+                        os.environ, {ksp_flag: "fgmres", "UNRELATED_SECRET": "never-copy"},
+                        clear=True):
+                    self.assertEqual(
+                        dev._modal_shifted_ksp_type_successor_from_metadata(
+                            existing_type_record, selection
+                        ),
+                        successor,
+                    )
+
+        with mock.patch.dict(os.environ, {ksp_flag: "gmres"}, clear=True):
+            self.assertEqual(
+                dev._modal_shifted_ksp_type_successor_from_metadata(
+                    legacy_record, None
+                ),
+                legacy_record,
+            )
+        _, floquet_selection = dev._floquet_diagnostic_successor_record(
+            existing_type_record, "dense-oracle"
+        )
+        floquet_successor = dev._floquet_diagnostic_successor_from_metadata(
+            existing_type_record, floquet_selection
+        )
+        combined_successor, ksp_selection = dev._modal_shifted_ksp_type_successor_record(
+            floquet_successor, "gmres"
+        )
+        self.assertEqual(
+            ksp_selection["old_operator_probe_environment_sha256"],
+            floquet_successor["operator_probe_environment_sha256"],
+        )
+        self.assertEqual(
+            combined_successor["operator_probe_environment"][
+                "FULLMAG_FLOQUET_DENSE_ORACLE"
+            ],
+            "1",
+        )
+        self.assertNotIn(
+            "FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC",
+            combined_successor["operator_probe_environment"],
+        )
+        self.assertEqual(
+            dev._recreation_successor_operator_probe_record(
+                existing_type_record,
+                {"floquet_diagnostic_selection": floquet_selection,
+                 "modal_shifted_ksp_type_selection": ksp_selection},
+            ),
+            combined_successor,
+        )
+        preserved_intent = dev._recreation_operation_inputs(
+            "a" * 32, "b" * 64, existing_type_record
+        )
+        self.assertEqual(
+            {key: preserved_intent[key] for key in existing_type_record},
+            existing_type_record,
+        )
+        self.assertNotIn("modal_shifted_ksp_type_selection", preserved_intent)
+        self.assertNotIn("floquet_diagnostic_selection", preserved_intent)
+        selected_intent = dev._recreation_operation_inputs(
+            "a" * 32,
+            "b" * 64,
+            existing_type_record,
+            floquet_selection=floquet_selection,
+            modal_shifted_ksp_type_selection=ksp_selection,
+        )
+        self.assertEqual(
+            {key: selected_intent[key] for key in existing_type_record},
+            existing_type_record,
+        )
+        self.assertEqual(selected_intent["modal_shifted_ksp_type_selection"], ksp_selection)
+        self.assertEqual(selected_intent["floquet_diagnostic_selection"], floquet_selection)
+
+        changed_selection = {
+            **ksp_selection,
+            "new_operator_probe_environment_sha256": "0" * 64,
+        }
+        with self.assertRaisesRegex(BuildControlError, "selection hashes"):
+            dev._modal_shifted_ksp_type_successor_from_metadata(
+                floquet_successor, changed_selection
+            )
+        for invalid in ("bicgstab", "GMRES", " gmres"):
+            with self.subTest(invalid=invalid), self.assertRaises(BuildControlError):
+                dev._modal_shifted_ksp_type_successor_record(
+                    existing_type_record, invalid
+                )
+        with self.assertRaises(docker_dev.DirectDockerError):
+            docker_dev._normalize_operator_probe_environment(
+                {**base_values, "FULLMAG_MODAL_SHIFTED_KSP_TYPE": "bicgstab"}
+            )
+        # The legacy alias is not part of the frozen v1 allowlist. Default
+        # selection must validate the old record before removing allowed keys.
+        with self.assertRaises(docker_dev.DirectDockerError):
+            docker_dev._operator_probe_environment_for_modal_shifted_ksp_type(
+                {**base_values, "FULLMAG_FLOQUET_SHIFTED_KSP_TYPE": "fgmres"},
+                "default",
+            )
+        with self.assertRaisesRegex(BuildControlError, "malformed"):
+            dev._modal_shifted_ksp_type_successor_from_metadata(
+                legacy_record, {**selection, "extra": "untrusted"}
+            )
+        with self.assertRaisesRegex(BuildControlError, "exactly"):
+            dev._operator_probe_record(
+                {**base_values, "FULLMAG_MODAL_SHIFTED_KSP_UNKNOWN": "fgmres"}
+            )
 
     def test_previous_package_is_ignored_until_current_start_handoff(self):
         import json

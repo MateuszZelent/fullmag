@@ -554,6 +554,7 @@ pub(super) fn eigen_path_reduced_node_mass_weights(
 pub(super) fn eigen_path_consistent_tracking_metric(
     topology: &MeshTopology,
     mesh: &fullmag_ir::MeshIR,
+    use_native: bool,
 ) -> Result<std::sync::Arc<crate::eigen::types::ConsistentP1TrackingMetric>, RunError> {
     let fail = |message: String| RunError {
         message: format!("eigen path consistent mass: {message}"),
@@ -564,6 +565,30 @@ pub(super) fn eigen_path_consistent_tracking_metric(
         .enumerate()
         .filter_map(|(node, volume)| (*volume > 0.0).then_some(node))
         .collect::<Vec<_>>();
+    let identity = mesh.mixed_topology_fingerprint_v3().map_err(&fail)?;
+    if use_native {
+        #[cfg(any(feature = "fem-native", feature = "fem-gpu"))]
+        {
+            let mask = topology
+                .magnetic_element_mask
+                .iter()
+                .map(|selected| u8::from(*selected))
+                .collect::<Vec<_>>();
+            // Each immutable per-mesh snapshot starts at generation one. Its
+            // identity also binds geometry, mask, CSR and the compiled sources.
+            let snapshot = crate::native_fem::TrackingMassSnapshot::from_mesh(mesh, &mask, 1)
+                .map_err(&fail)?;
+            let metric = crate::eigen::types::ConsistentP1TrackingMetric::from_native_snapshot(
+                identity, nodes, &snapshot,
+            )
+            .map_err(&fail)?;
+            return Ok(std::sync::Arc::new(metric));
+        }
+        #[cfg(not(any(feature = "fem-native", feature = "fem-gpu")))]
+        return Err(fail(
+            "native tracking mass requires the fem-native build feature".into(),
+        ));
+    }
     let mut mapping = vec![None; topology.n_nodes];
     for (local, node) in nodes.iter().copied().enumerate() {
         mapping[node] = Some(local);
@@ -587,7 +612,6 @@ pub(super) fn eigen_path_consistent_tracking_metric(
         tetra.push(mapped);
         volumes.push(topology.element_volumes[index]);
     }
-    let identity = mesh.mixed_topology_fingerprint_v3().map_err(fail)?;
     let metric =
         crate::eigen::types::ConsistentP1TrackingMetric::new(identity, nodes, tetra, &volumes)
             .map_err(fail)?;
@@ -2323,7 +2347,8 @@ pub(crate) fn parse_worker_single_k_result(
         diagnostics.insert(
             "tracking_mass_metric".into(),
             serde_json::json!({
-                "definition_id": "consistent_p1_tet4_cartesian_nodal_envelope.v1",
+                "definition_id": tracking_metric.definition_id(),
+                "native_snapshot_identity_sha256": tracking_metric.native_snapshot_identity_sha256(),
                 "source_mesh_topology_sha256": tracking_metric.mesh_identity(),
                 "physical_magnetic_node_count": tracking_active_nodes.len(),
                 "projection_scope": "nodal_P1_envelope",
@@ -2396,7 +2421,11 @@ pub(super) fn track_bias_field_sweep_samples(
     })?;
     let tracking_reduction =
         build_reduction_map(&tracking_topology, &plan.spin_wave_bc, plan.k_sampling.as_ref())?;
-    let tracking_metric = eigen_path_consistent_tracking_metric(&tracking_topology, &plan.mesh)?;
+    let tracking_metric = eigen_path_consistent_tracking_metric(
+        &tracking_topology,
+        &plan.mesh,
+        engine == FemEngine::NativeGpu || native_cpu_modal_window_enabled(plan),
+    )?;
     let tracking_outputs = eigen_path_tracking_outputs(outputs, plan.count);
     let mut samples = Vec::with_capacity(completed_count);
     let mut mode_artifacts = Vec::new();
@@ -2514,7 +2543,9 @@ pub(super) fn track_bias_field_sweep_samples(
     )?;
     retain_selected_eigen_path_mode_artifacts(&mut mode_artifacts, selection.field_mode_ids());
     validate_eigen_path_selected_mode_artifacts(&mode_artifacts, selection.field_mode_ids())?;
-    bind_eigen_path_tracked_mode_metadata(&mut mode_artifacts, &path_result)?;
+    bind_eigen_path_tracked_mode_metadata(
+        &mut mode_artifacts, &path_result, eigen_path_sample_id_prefix(plan),
+    )?;
     let mode_output_selection_path = append_eigen_mode_output_selection(
         &mut mode_artifacts,
         selection.field_mode_ids_by_field(),
@@ -3460,23 +3491,13 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
                         message: format!("eigen path tracking mesh identity: {message}"),
                     })?;
             let cached_tracking_metric = self.tracking_metric.borrow().clone();
-            let tracking_metric = match cached_tracking_metric {
-                Some(metric) if metric.mesh_identity() != expected_tracking_mesh.as_str() => {
-                    return Err(RunError {
-                        message: "eigen path tracking mesh changed between samples".into(),
-                    });
-                }
-                Some(metric) => metric,
-                None => {
-                    let metric = eigen_path_consistent_tracking_metric(
-                        &tracking_topology,
-                        &point_plan.mesh,
-                    )?;
-                    *self.tracking_metric.borrow_mut() = Some(metric.clone());
-                    metric
-                }
-            };
-            let tracking_active_nodes = tracking_metric.node_indices();
+            if cached_tracking_metric.as_ref().is_some_and(|metric| {
+                metric.mesh_identity() != expected_tracking_mesh.as_str()
+            }) {
+                return Err(RunError {
+                    message: "eigen path tracking mesh changed between samples".into(),
+                });
+            }
             // A non-sweep path consumes the immutable Relax-stage handoff for
             // every k point. A bias-field path owns a separate accepted
             // equilibrium and therefore takes the per-sample relaxation route
@@ -3551,6 +3572,22 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
                     return Ok(SingleKSolveOutcome::Interrupted(action));
                 }
             }
+            // Equilibrium admission, native solve and raw checkpoint happen
+            // before native tracking allocation. In particular, an invalid
+            // equilibrium must not be hidden by a postprocessing feature error.
+            let tracking_metric = match cached_tracking_metric {
+                Some(metric) => metric,
+                None => {
+                    let metric = eigen_path_consistent_tracking_metric(
+                        &tracking_topology,
+                        &point_plan.mesh,
+                        self.engine == FemEngine::NativeGpu || native_cpu_modal_window_enabled(&point_plan),
+                    )?;
+                    *self.tracking_metric.borrow_mut() = Some(metric.clone());
+                    metric
+                }
+            };
+            let tracking_active_nodes = tracking_metric.node_indices();
             {
                 let final_magnetization = &executed.result.final_magnetization;
                 if final_magnetization.len() != plan.mesh.nodes.len()
@@ -3742,7 +3779,8 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
                 diagnostics.insert(
                     "tracking_mass_metric".into(),
                     serde_json::json!({
-                        "definition_id": "consistent_p1_tet4_cartesian_nodal_envelope.v1",
+                        "definition_id": tracking_metric.definition_id(),
+                "native_snapshot_identity_sha256": tracking_metric.native_snapshot_identity_sha256(),
                         "source_mesh_topology_sha256": tracking_metric.mesh_identity(),
                         "physical_magnetic_node_count": tracking_active_nodes.len(),
                         "projection_scope": "nodal_P1_envelope",
@@ -4036,7 +4074,9 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
 
     retain_selected_eigen_path_mode_artifacts(&mut mode_artifacts, selection.field_mode_ids());
     validate_eigen_path_selected_mode_artifacts(&mode_artifacts, selection.field_mode_ids())?;
-    bind_eigen_path_tracked_mode_metadata(&mut mode_artifacts, &path_result)?;
+    bind_eigen_path_tracked_mode_metadata(
+        &mut mode_artifacts, &path_result, eigen_path_sample_id_prefix(plan),
+    )?;
     let mode_output_selection_path = append_eigen_mode_output_selection(
         &mut mode_artifacts,
         selection.field_mode_ids_by_field(),

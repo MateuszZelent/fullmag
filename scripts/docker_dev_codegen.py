@@ -549,22 +549,11 @@ def _validate_mounts(
 
 
 def _source_mount_matches_selected(value: object, selected: Path) -> bool:
-    """Keep exact host identity while admitting inode-proven Docker Desktop WSL aliases."""
+    """Use the canonical inode proof for Docker Desktop's rewritten WSL binds."""
     if _path_identity(value) == _path_identity(str(selected)):
         return True
-    if not isinstance(value, str):
-        return False
-    match = re.fullmatch(
-        r"/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/([A-Za-z0-9][A-Za-z0-9._-]*)/([0-9a-f]{64})",
-        value,
-    )
-    if match is None:
-        return False
-    local_alias = Path("/mnt/wsl/docker-desktop-bind-mounts") / match.group(1) / match.group(2)
-    try:
-        return local_alias.is_dir() and selected.is_dir() and local_alias.samefile(selected)
-    except OSError:
-        return False
+    from docker_dev_browser_qa import _source_mount_matches_selected as matches_selected
+    return matches_selected(value, selected)
 
 
 def _running_service(

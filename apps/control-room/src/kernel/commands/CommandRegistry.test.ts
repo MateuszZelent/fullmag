@@ -34,6 +34,44 @@ function setupWithDiagnostics() {
 }
 
 describe("CommandRegistry", () => {
+  it.each([false, true])("requires an explicit empty-session opt-in (%s)", async (allowsEmptySession) => {
+    const { registry } = setupWithBus();
+    registry.attachSessionScopeSource({ getScopeKey: () => null, subscribe: () => () => {} });
+    let current: boolean | undefined;
+    registry.register(command("open", { allowsEmptySession, run: context => {
+      current = context.isCurrentSessionScope?.();
+      return { status: "completed" };
+    } }));
+    await registry.execute("open", { source: "test", sessionScopeKey: null });
+    expect(current).toBe(allowsEmptySession);
+  });
+
+  it("permanently fences an empty-session opener across null to session to null", async () => {
+    const { registry } = setupWithBus();
+    let scope: string | null = null;
+    let observe: (() => void) | undefined;
+    registry.attachSessionScopeSource({ getScopeKey: () => scope, subscribe: callback => {
+      observe = callback;
+      return () => {};
+    } });
+    let captured: CommandContext | undefined;
+    let finish: (() => void) | undefined;
+    const pending = new Promise<void>(resolve => { finish = resolve; });
+    registry.register(command("open", { allowsEmptySession: true, run: async context => {
+      captured = context;
+      await pending;
+      return { status: "completed" };
+    } }));
+    const operation = registry.execute("open", { source: "test", sessionScopeKey: null });
+    expect(captured?.isCurrentSessionScope?.()).toBe(true);
+    scope = "session=new&epoch=1"; observe?.();
+    scope = null; observe?.();
+    expect(captured?.isCurrentSessionScope?.()).toBe(false);
+    finish?.();
+    await operation;
+    expect(captured?.isCurrentSessionScope?.()).toBe(false);
+  });
+
   it("reports obsolete-session cancellation without relabeling it as a failure", async () => {
     const { bus, registry } = setupWithBus();
     const completed = vi.fn();

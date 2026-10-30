@@ -160,15 +160,6 @@ class BuildSpaceAdmissionTests(unittest.TestCase):
             fake.events.append("construct")
             return fake
 
-        class BuildControlFactory:
-            def __call__(self, *args, **kwargs):
-                return make_control(*args, **kwargs)
-
-            @staticmethod
-            def assert_windows_pre_pull_space():
-                fake.events.append("windows-pre-pull")
-
-        build_control_factory = BuildControlFactory()
         with mock.patch.object(control, "require_host"), \
              mock.patch.object(control, "validate_host_path", return_value=repo), \
              mock.patch.object(control, "local_volume"), \
@@ -177,7 +168,7 @@ class BuildSpaceAdmissionTests(unittest.TestCase):
              mock.patch.object(control, "compose_capture", side_effect=pull) as compose, \
              mock.patch.object(control, "bounded_capture", return_value=subprocess.CompletedProcess(
                  [], 0, json.dumps(MANIFEST).encode(), b"")), \
-             mock.patch.object(control, "BuildControl", new=build_control_factory), \
+             mock.patch.object(control, "BuildControl", autospec=True, side_effect=make_control) as build_control, \
              mock.patch.object(storage, "resolve_layout", return_value={"worktree_id": "test"}), \
              mock.patch.object(compose_identity, "compose_project_identity", return_value={
                  "project_name": "fullmag-cache-test"}), \
@@ -185,6 +176,9 @@ class BuildSpaceAdmissionTests(unittest.TestCase):
              mock.patch.object(bootstrap, "tracked_input_files", return_value=tracked), \
              mock.patch.object(bootstrap, "input_files", return_value=tracked), \
              mock.patch.object(bootstrap, "read_input", side_effect=lambda _repo, path: source_bytes[path.as_posix()]):
+            build_control.assert_windows_pre_pull_space.side_effect = lambda: fake.events.append(
+                "windows-pre-pull"
+            )
             result = control.build_volume_toolchain(repo)
         return result, compose
 

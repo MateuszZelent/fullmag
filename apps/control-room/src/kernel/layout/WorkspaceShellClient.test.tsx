@@ -9,6 +9,7 @@ import type {
 } from "../api/apiTypes";
 import { SESSIONS_PATH } from "../api/apiPaths";
 import { CommandRegistry } from "../commands/CommandRegistry";
+import { SelectionController } from "../selection/SelectionController";
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import { KernelContext } from "../KernelContext";
@@ -801,6 +802,7 @@ function makeKernel(
     diagnosticRecorder: new DiagnosticRecorderController({ config: { enabled: false } }),
     realtimeConnection: new RealtimeConnectionController(),
     layout: new LayoutController(bus),
+    selection: new SelectionController(bus),
     modules,
     resources: new ResourceInvalidationController(bus),
   } as unknown as KernelApi;

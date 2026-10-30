@@ -32,6 +32,7 @@ export function referenceOverlaySeries(
   const template = computed[0];
   const divisor = template ? FREQUENCY_DIVISORS[template.unit] : undefined;
   if (!template || !divisor || !identity.runId || !identity.stageId || identity.artifactRevision === null) return [];
+  const wavevectorAtPath = publishedWavevectorInterpolator(computed);
   return definitions.flatMap((definition): ChartSeries[] => {
     if (
       definition.module_id !== "analysis.dispersion" ||
@@ -50,6 +51,8 @@ export function referenceOverlaySeries(
         label: `${definition.label} (reference)`,
         points: points.map(([path, frequency], rowIndex) => ({
           rowIndex,
+          pathS: path,
+          wavevectorKf: wavevectorAtPath(path),
           x: path,
           y: frequency / divisor,
         })),
@@ -61,4 +64,47 @@ export function referenceOverlaySeries(
       },
     ];
   });
+}
+
+/** Interpolate only a uniquely published straight segment; no extrapolation across bends or gaps. */
+export function publishedWavevectorInterpolator(series: readonly ChartSeries[]) {
+  type Vector = readonly [number, number, number];
+  const samples = new Map<number, Vector>();
+  const segmentStarts = new Set<number>();
+  let invalid = false;
+  for (const entry of series) {
+    if (entry.hasCompleteWavevectorKf === false) invalid = true;
+    for (const point of entry.points) {
+      const path = point.pathS;
+      const vector = point.wavevectorKf;
+      if (path == null || !Number.isFinite(path) || !vector || !vector.every(Number.isFinite)) {
+        invalid = true;
+        continue;
+      }
+      const previous = samples.get(path);
+      if (previous && previous.some((value, index) => value !== vector[index])) invalid = true;
+      samples.set(path, vector);
+      if (point.breakBefore) segmentStarts.add(path);
+    }
+  }
+  const nodes = [...samples].sort(([a], [b]) => a - b);
+  return (path: number): Vector | null => {
+    if (invalid || !Number.isFinite(path)) return null;
+    const exact = samples.get(path);
+    if (exact) return exact;
+    // Binary search preserves bounded work for dense imported reference curves.
+    let low = 0, high = nodes.length;
+    while (low < high) {
+      const mid = (low + high) >>> 1;
+      if (nodes[mid]![0] < path) low = mid + 1;
+      else high = mid;
+    }
+    const left = nodes[low - 1], right = nodes[low];
+    if (!left || !right || segmentStarts.has(right[0])) return null;
+    const distance = right[0] - left[0];
+    const chord = Math.hypot(...right[1].map((value, index) => value - left[1][index]!));
+    if (Math.abs(distance - chord) > 1e-9 * Math.max(distance, chord, 1)) return null;
+    const t = (path - left[0]) / distance;
+    return [0, 1, 2].map((index) => left[1][index]! + t * (right[1][index]! - left[1][index]!)) as [number, number, number];
+  };
 }

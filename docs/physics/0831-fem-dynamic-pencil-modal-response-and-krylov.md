@@ -2115,7 +2115,7 @@ earlier restart; the resolved value is reported with the subwindow solver
 policy. The experiment retains the same right preconditioning, shifts,
 tolerances, original-block gate and measurement of each completed inner solve.
 
-The shifted Floquet GMRES sets its default restart length to `8` and PETSc's
+The shifted Floquet GMRES sets its default restart length to `30` and PETSc's
 restart-breakdown tolerance to `2.0`, reporting both values. At every restart,
 PETSc compares the explicitly recomputed residual with the recursive residual
 against the residual norm at the beginning of the cycle. The Floquet Schur
@@ -5703,6 +5703,7 @@ log SHA256 `db05b54dbe361a6ba77273e79721f60dd9ab233af3edee5c30a0a0ecb626ffd0`.
 
 | Ścieżka | Symbol | Zakres |
 |---|---|---|
+| `backends/fem/cpu/frequency_domain/modal/shifted_ksp_certified_recovery.hpp` | `report_floquet_failed_action_probe` | Diagnostic-only repeatability and scaling after rejected solve; runtime pending |
 | `backends/fem/cpu/frequency_domain/modal/shifted_ksp_certified_recovery.hpp` | `create_floquet_shifted_ksp_certified_recovery_shell` | Public PETSc owner/reference; implementation pending hosted proof |
 | `backends/fem/cpu/frequency_domain/modal/shifted_ksp_certified_recovery.hpp` | `floquet_shifted_certified_recovery_shell_apply` | Original RHS threshold i cumulative requested budget |
 | `backends/fem/cpu/frequency_domain/modal/shifted_ksp_certified_recovery.hpp` | `destroy_floquet_shifted_ksp_certified_recovery_shell` | Checked destruction/quarantine; first/cleanup errors oddzielne |
@@ -6214,3 +6215,91 @@ kwalifikacji dynamic demag, DE/BV lub A1.
 | `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md` | `DOC-ANCHOR:g5-sparse-recovery-dense-bridge-boundary` | Zatwierdzony kontrakt; runtime do oddzielnej weryfikacji |
 | `backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp` | `void modal_shared_domain_floquet_mixed_dense_real_split_contract` | Oddzielny sparse recovery i caller-dense descriptor validation |
 | `backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp` | `void modal_certified_recovery_controlled_breakdown_contract` | Deterministyczny rzeczywisty sparse-owner recovery i niezależny residual |
+
+
+### Jawny wybór kompletności w publicznym authoringu (27.10.2026)
+
+`study.stages.add_eigenmodes(solver_completeness="best_effort")` przekazuje
+żądanie przez `FemEigenSolverPolicy.completeness`, SceneDocument
+`eigen_solver_completeness` i typowany `FemEigenSolverPolicyIR` do obu
+adapterów native window. Alternatywą jest `certified_count`. Pominięcie
+zachowuje dotychczasowe strict (`certified_count`); null/puste pole sceny
+usuwa override. Nieznane wartości są odrzucane. Stare plany bez pola
+pozostają czytelne; żadna migracja wyników ani endpointów nie jest wymagana.
+Eksport sceny i canonical rewrite muszą zachować jawny wybór.
+
+Wybór nie zmienia residualów, budżetu iteracji ani reguł opisanych w sekcji
+„Bounded NEV refill w native Floquet”. `best_effort` nie gwarantuje sukcesu,
+pełnego pasma ani wymaganej liczby modów. Provenance rozróżnia requested i
+resolved completeness; native diagnostics pozostają dowodem wykonania.
+Nowe pole jest obsługiwane w zapisanej scenie i eksporcie; ten etap nie
+wprowadza osobnej kontrolki Inspectora. Runtime pozostaje NOT VERIFIED do
+uruchomienia nowego builda i odczytu rzeczywistych artefaktów.
+
+
+### Oddzielny cel refillu dla best_effort Floquet (A17)
+
+W produkcyjnym FEM CPU Floquet rozmiar początkowej puli EPS i cel refillu
+są odrębnymi liczbami. `guard_modes_per_shift` nadal ustala początkowe NEV,
+NCV/MPD i maksymalną pulę finalizatora. Dla jawnego best_effort cel refillu
+wynosi min(publiczne count, guard_modes_per_shift). Dopiero po zbieżnym EPS,
+pełnych residualach deskryptora, rekonstrukcji potencjału i deduplikacji
+w dodatniej metryce masy można zatrzymać refill po osiągnięciu tego celu.
+Nadwyżka już znalezionych modów pozostaje w puli do scalania całego okna;
+nie obcinamy kandydatów przed końcową deduplikacją. Wszystkie podokna nadal
+są wykonywane. Nie jest to dowód kompletności: complete=false,
+certification_method=none i additional_modes_may_exist=true pozostają jawne.
+
+Nowe pole wewnętrznego żądania `SLEPcSparseGyrotropicModalEigenRequest::
+certified_refill_target` ma wartość 0 dla dotychczasowego zachowania;
+niezerowy cel musi należeć do [1, requested_mode_count]. Ustawia go tylko
+`production_cpu_modal_eigen.cpp::solve_sparse_production_modal_window_payload` dla
+shared-domain Floquet best_effort. Funkcja `solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context`
+nie interpretuje wyczerpania iteracji, anulowania, błędu EPS ani błędu
+rekonstrukcji jako osiągnięcia nowego celu. Bez override i przy strict
+zachowujemy dotychczasowy cel guard. Budżety iteracji i progi residualu
+pozostają niezmienione. Początkowe wymiary Kryłowa pozostają niezmienione.
+
+Nie zmienia to równań LLG, znaku fazy Floqueta, operatora demag, jednostek
+ani siatki. FDM oraz FEM GPU nie używają tej zmiany. Publiczny Python/IR
+pozostaje kontraktem A16; C ABI i schematy sesji nie zmieniają się.
+Diagnostyka refillu ujawnia zastosowany cel i liczbę unikalnych modów po
+pierwszej finalizacji. Walidacja obejmuje natywny fixture real-split z jednym
+modem w pierwszej puli, późniejszym drugim modem, niezmienionymi wymiarami,
+nieprawidłowym celem i wyczerpaniem budżetu. Testy kompilowane tylko w CI.
+Runtime, rzeczywiste mody i dyspersja po tej poprawce pozostają NOT VERIFIED.
+
+
+| Źródło A17 | Ścieżka | Symbol | Odpowiedzialność i dowód |
+| --- | --- | --- | --- |
+| Native refill | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context` | Cel po finalizacji; residuale i błędy pozostają bramką |
+| Dispatcher window | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` | `solve_sparse_production_modal_payload` | Wejście do adaptera okna z odrębnym celem best_effort |
+| Regresja SLEPc | `backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` | `void refills_native_floquet_nev_before_tangent_mass_cap` | Jeden/wiele modów, wymiary, walidacja celu i budżet; wykonanie CI oczekuje |
+
+
+### Eksperyment odtworzenia signed15 — 27.10.2026
+
+Dla k_y=−25e6 rad/m runtime8c048d36d zakończył pierwszy solve GMRES
+po8 iteracjach z reason−5. Rzeczywisty residual3.84823e−13 przekraczał
+normę RHS1.24195e−13; próg1.24195e−24 nie został spełniony.
+Zwiększono domyślną przestrzeń restartu do30 jako kontrolowany eksperyment
+numeryczny. Nie zmieniono tolerancji, budżetu iteracji, preconditionera,
+bramek true-residual ani pełnego deskryptora. Potrzebne nowe CI i runtime;
+sama zmiana parametru nie dowodzi rozwiązania breakdown ani kwalifikacji.
+Dokumentacja PETSc: https://petsc.org/release/manualpages/KSP/KSPGMRESSetRestart/.
+Dowód wejściowy: docs/audits/2026-10-27-eigensolve-signed15-native-failure.evidence.json.
+
+
+### Diagnostyka działania operatora po odrzuconym solve
+
+`report_floquet_failed_action_probe` wykonuje trzy działania rzeczywistego
+operatora shifted KSP: dwa dla tego samego kandydata x oraz jedno dla
+x/||x||. Raportuje ||A(x)−A(x)|| z niezależnych wywołań i
+||||x||A(x/||x||)−A(x)||. Własne cztery wektory robocze mają koszt pamięci
+O(n); nie materializuje macierzy i nie zmienia kandydata. Pomiar następuje
+wyłącznie po zakończonym, odrzuconym solve; nie nadaje certyfikatu i nie
+zmienia progu ani pierwotnego błędu. Błąd API/cleanup sondy oznacza
+niebezpieczny stan grafu i kończy dalszą obsługę PETSc. Wynik trafia do
+stderr workera z prefiksem FULLMAG_SHIFTED_FAILED_ACTION_PROBE.
+Regresja diagonalnego operatora sprawdza normy i niezmienność kandydata.
+Runtime tej diagnostyki pozostaje NOT VERIFIED do nowego wykonania.

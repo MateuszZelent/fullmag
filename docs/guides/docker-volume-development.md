@@ -749,6 +749,109 @@ wybranego checkoutu i nowe jawne żądanie skryptu. Implementacja i kontrola
 interpretowana nie zastępują dowodu runtime tej trasy: NOT VERIFIED do
 zakończenia rzeczywistego preflight→apply→API→browser.
 
+
+## Uzgodnienie zakończonego Failed workera
+
+Jeżeli diagnostyczny backend ma historyczny Failed task z autorytatywnym
+niezerowym process-exit receipt, lokalnym Active lease i Quarantined host
+reservation, zarządzana komenda `scripts/docker_dev.py reconcile-failed-worker`
+obsługuje wyłącznie ten przypadek. Nie służy do anulowania żywego workera,
+naprawiania wyników ani ponawiania Solve.
+
+Wymagane piny: `--source-root`, `--attempt`, `--iteration-attempt` (udana bieżąca
+iteracja), `--pending-activation` (helper nadal posiadający blokadę),
+`--config-sha256`, `--port`, `--run-id`, `--task-id`, `--exit-receipt-id`.
+Przypnij również `--request-id` jako jeden UUID dla przygotowania i apply.
+Bez flagi wykonania otrzymujesz preview. `--prepare-candidate` buduje i natywnie
+waliduje izolowany pakiet w istniejącym backendzie; `--apply` wykorzystuje ten
+sam niezmienny request i pakiet. Nie zmieniaj źródeł między tymi fazami.
+
+Receipty przygotowania i apply są oddzielne oraz niezmienne, zapisane pod
+pierwotną aktywacją w wolumenie control. Domyślny preview nie zwalnia zasobów.
+Przed wywołaniem sprawdzane są źródła i rzeczywisty inventory pakietu, a
+runtime-service jest wykonywany z otwartego pliku o potwierdzonym SHA.
+
+Protokół ma dwie fazy: lokalny release, następnie normalny host release proof.
+Przerwanie może pozostawić lokalny Released i host Quarantined. Natywny protokół
+obsługuje dokładny replay, ale obecny wrapper zatrzymuje się, gdy istnieje
+`apply-start.json` bez potwierdzonego terminala. Sprawdź oba magazyny i liveness;
+zarządzane wznowienie tego przypadku jest osobnym krokiem zadania 3. Błąd po
+wywołaniu native oznacza nieznany wynik, nie brak skutków. Katalog Failed i artefakty pozostają zachowane.
+Dopiero potwierdzony normalny proof odblokowuje istniejący diagnostic stop oraz
+zachowujące historię odtworzenie usług. Nie zapisuj ręcznie stanów lease/proof.
+
+
+Izolowany pakiet maintenance spoza kanonicznego runtime wymaga jawnego typowanego
+`FailedWorkerMaintenanceStorageAdmission`, przekazanego tylko do dwóch metod
+uzgadniania Failed. Native CLI otrzymuje `--candidate-receipt` (dokładna kopia
+w control pod tym samym UUID) oraz `--candidate-receipt-sha256`. Obie opcje są
+wymagane razem; nie zastępują raw pinów requestu ani sprawdzenia plików.
+Nowy program potwierdza zarówno historyczny runtime/provenance względem
+Failed ownera, jak i własny pakiet względem skompilowanej tożsamości źródeł.
+Zwykły storage admission nie przyjmuje alternatywnego SHA lub source commit.
+Ta dodatkowa ścieżka jest jawnie ograniczona do linux-native-v1; pozostałe
+profile zachowują normalne kontrole i wymagają osobnej implementacji.
+
+
+## Zapisane ustawienia Kryłowa dla reprodukcji modalnej
+
+Nowy start DEV może opcjonalnie przejąć z jawnego środowiska operatora cztery
+parametry obsługiwane już przez `modal_krylov_tuning.hpp`:
+
+| Zmienna | Dozwolone wartości | Historyczny DE 04.10 |
+| --- | --- | --- |
+| `FULLMAG_MODAL_EPS_PREFILTER_ABS` | `1e-6` … `1e-13` (całkowite wykładniki) | `1e-9` |
+| `FULLMAG_MODAL_SHIFTED_KSP_RTOL` | `1e-6` … `1e-13` (całkowite wykładniki) | `1e-9` |
+| `FULLMAG_MODAL_GMRES_RESTART` | `8`, `10`, `12`, `16`, `30` | `8`; osobna próba +15: `30` |
+| `FULLMAG_MODAL_SHIFTED_KSP_TYPE` | `gmres`, `fgmres` | `fgmres` |
+
+To ustawienia iteracji, nie zmiana progu certyfikacji pełnego residualu ani
+fizyki. Brak zmiennej zachowuje natywny default; stare dwupolowe dokumenty
+`fullmag.operator-probe-environment.v1` zachowują dokładnie ten sam hash.
+Opcjonalne wartości są normalizowane, walidowane, włączone do tego dokumentu
+i jego SHA-256, a następnie do środowiska backendu. Nie trafiają do frontendu.
+Nieznany klucz, token lub niezapisana wartość w zachowanej konfiguracji jest
+odrzucana. Nakładka cache nie może nadpisać zapisanego wyboru.
+
+Istniejący kontener, resume i recreate nadal zachowują przypięty dokument:
+sam eksport zmiennych na hoście **nie aktualizuje działającego runtime**.
+Zmiana wymaga jawnego nowego startu przez zarządzaną procedurę z zachowaniem
+wyników i kontroli aktywnych workerów. Nie edytuj ręcznie receiptów ani
+środowiska uruchomionego kontenera. Ostatecznym dowodem zastosowania są
+konfiguracja nowego kontenera oraz diagnostyka wykonanego solvera.
+
+Kontrole źródłowe: `scripts/test_modal_launcher_tuning.py`,
+`scripts/test_docker_cpu_access.py`, `scripts/test_docker_volume_receipts.py`.
+Na etapie wdrożenia tej granicy nie potwierdzono jeszcze nowego wykonania
+historycznego sweepa z tymi ustawieniami.
+
+
+## Linux/WSL: ponowne potwierdzenie numeru urządzenia po restarcie
+
+Kernelowy `st_dev` może zmienić się po restarcie WSL. Zwykły resume nadal
+odrzuca niezgodny certyfikat. Dla tej jednej zmiany istnieje odrębna operacja:
+
+```sh
+python3 -B scripts/docker_dev.py reattest-linux-device --source-root "$source" --attempt "$attempt" --config-sha256 "$config"
+# Po odczycie planu powtórz te same piny z:
+# --apply --expected-plan-sha256 <plan_sha256>
+```
+
+Wymagane są zatrzymane oba dokładne kontenery, brak aktywnych konsumentów
+wybranego storage oraz zgodny silnik, obraz, właściciel, inode i ścieżka.
+Sentinel, restart readback i poprzedni probe muszą wiązać ten sam certyfikat.
+Plan przypina także hashe implementacji. Pod blokadą BuildControl następuje
+ponowna walidacja i trzy uruchomienia istniejącego testu storage w izolowanych
+kontenerach bez sieci, API i solvera. Certyfikat zachowuje inode bindu;
+zmienia się numer urządzenia oraz przechodzi ponownie bramka restart readback.
+Lease i wyniki naukowe pozostają niezmienione. Receipt oraz kopia starych
+technicznych dowodów trafiają do `linux-device-reattest/attempts` w control.
+
+Timeout procesu testującego nie jest sukcesem ani dowodem jego zakończenia.
+W takim przypadku operacja zachowuje nieznany wynik i dowody do uzgodnienia;
+nie wolno ponawiać publikacji ani ręcznie poprawiać OWNER/certyfikatu.
+Po sukcesie użyj normalnego pinned `resume-volume`; re-atestacja sama nie
+uruchamia instancji ani nie ponawia Solve.
 ### Zmiana numeru urządzenia po restarcie WSL
 
 Numer host_device (st_dev) może zmienić się po restarcie WSL. Zwykłe resume
@@ -783,6 +886,16 @@ Po sukcesie użyj zwykłego przypiętego resume-volume --restart-backend.
 Inne zmiany tożsamości, aktywny/nieznany konsument albo różne piny blokują zapis.
 
 
+## Wznowienie po awarii z zatrzymanym frontendem
+
+`stop-restarted-terminal-volume` dopuszcza także dokładnie przypięty frontend w stanie `exited`, z PID 0 i bez paused/restarting/dead. Domyślny stop diagnostyczny nadal wymaga obu usług działających. Recovery sprawdza zakończone katalogi zadań, potwierdzone zwolnienia rezerwacji, tożsamość poprzedniego właściciela oraz brak jego procesów. Po zatrzymaniu backendu sieć obu zatrzymanych usług musi być pusta; obcy lub pozostały endpoint blokuje operację. Zmiana lifecycle/procesu frontendu blokuje apply, lecz aktualizacja samego health logu nie oznacza nowej inkarnacji.
+
+Po zatwierdzonym preview tej operacji `--apply` zatrzymuje jedynie diagnostyczny backend i zachowuje wszystkie wyniki, właścicieli oraz receipty. Następnie zarządzane `recreate-volume --fresh-state` archiwizuje stary namespace. Wyniki FMS można otworzyć przez UI jako `visualization_only`, bez Solve.
+
+
+### Restart pustego runtime po utracie hosta
+
+`stop-restarted-terminal-volume` rozpoznaje także dokładny błąd rotacji konfiguracji po udanym odtworzeniu cgroup. Ten wariant wymaga dowodu `worker-cgroup-ready` z failed resume, przypiętego do tego backendu, obrazu i grupy; ponadto store musi mieć wyłącznie dopuszczone techniczne pliki i katalogi pustego namespace, a ledger v4 nie może zawierać rezerwacji. Podgląd i apply porównują hashe store oraz poprzedniego właściciela i sprawdzają wyłącznie diagnostyczne drzewo procesów. Nie powstaje sztuczny receipt drain. Nie jest usuwany helper cgroup, gdy jego odtworzenie się udało. Dalsze `recreate-volume --fresh-state` zachowuje poprzednie dane i nie ponawia Solve. Wariant z niepustymi katalogami zakończonych zadań zachowuje wcześniejsze wymagania.
 ## Authored input after accepted recovery
 
 Accepted live runs retain the authored SceneDocument in the immutable project
@@ -846,3 +959,73 @@ CAS. Każdy ponowny odczyt zatrzymanej pary sprawdza identyfikator, obraz,
 fingerprint, `StartedAt` oraz poprawne zakończenie kontenera. Dotychczasowe
 bramki natywnego admission, ledgeru i magazynu wszystkich runów nadal obowiązują.
 Opcje nie są dostępne dla zwykłego readmission ani udanego terminala.
+
+
+### Jawny profil diagnostyki Floqueta dla jednej grupy
+
+`recreate-volume` przyjmuje opcjonalne `--floquet-diagnostics`:
+`disabled`, `schur-action` albo `dense-oracle`. Ostatni opcjonalny argument
+recepty `docker-dev-recreate-volume` ma tę samą nazwę z podkreśleniem.
+Bez argumentu zachowuje się dokładnie zamrożony rekord poprzedniej grupy;
+`up`, `resume` i zwykły restart nie przechwytują ponownie środowiska hosta.
+
+Profil wybiera najwyżej jedną flagę `FULLMAG_FLOQUET_*` z wartością1.
+`disabled` usuwa obie flagi, zachowując pozostałe sterowania. Launcher
+najpierw sprawdza stare kontenery, receipty i drain, a potem wylicza rekord
+następcy. Profil oraz stary i nowy hash trafiają do immutable intentu
+recreation; wznowienie odtwarza ten wybór z intentu. Powtórzony argument,
+nieznana wartość albo nadpisywanie ukończonej/recovery próby są odrzucane.
+Operacja wymaga tych samych dowodów zatrzymania co zwykłe recreate i nie
+uruchamia automatycznie Solve. Wybór dotyczy tylko grupy wskazanego checkoutu.
+
+Przykład argumentów po zweryfikowanym, zarządzanym zatrzymaniu grupy:
+
+```text
+python -B scripts/docker_dev.py --repo-root <checkout> recreate-volume --attempt <development-attempt> --config-sha256 <compose-sha256> --source-root <checkout> --port <port> --floquet-diagnostics schur-action
+```
+
+Aktywna obsługa native oraz jej limity są niezależne od samego przekazania
+flagi: niedostępny pomiar ma pozostać unavailable. Dla nieudanej próby
+ograniczone scalar diagnostics trafiają do `native_failure_diagnostic.v1.json`
+w prywatnym worker attempt pod SessionStore; nie stanowią zaakceptowanego
+widma ani certyfikatu zbieżności. Profil zwiększa pracę diagnostyczną i nie
+zmienia docelowego residualu lub fizyki.
+
+
+### Jawny typ shifted KSP dla jednej grupy
+
+`recreate-volume` przyjmuje również opcjonalne `--modal-shifted-ksp-type`
+z wartością `gmres` albo `fgmres`. Ostatni opcjonalny argument recepty
+`docker-dev-recreate-volume` to `modal_shifted_ksp_type`; pusty argument
+zachowuje poprzedni rekord. Wybór może współistnieć z `--floquet-diagnostics`.
+
+Bez wyboru grupa następcy zachowuje dokładnie zapisany typ lub brak jawnego
+typu. Launcher najpierw waliduje stare kontenery, receipty i dowód drain, a
+dopiero potem zmienia wyłącznie `FULLMAG_MODAL_SHIFTED_KSP_TYPE` w rekordzie
+następcy. Stary rekord nadal pozostaje przypięty w immutable intencie
+recreation. Intent przechowuje wybrany typ oraz stare i nowe SHA-256; wznowienie
+odtwarza wybór z tego intentu, bez ponownego odczytu środowiska hosta. Starsze
+intenty bez tego pola pozostają poprawne i zachowują wcześniejszy rekord.
+Powtórzony lub nieznany argument oraz próba dodania wyboru do resume,
+ukończonej recreation albo recovery są odrzucane.
+
+Jawne `--modal-shifted-ksp-type default` usuwa tylko przypięty klucz typu KSP
+z rekordu następcy. Pozostałe ustawienia i stary rekord pozostają zachowane;
+intent wiąże żądanie oraz oba hashe, a replay nie korzysta z ambient env.
+Wartość `default` jest operacją launchera, nie wartością zmiennej PETSc.
+
+Gdy typ nie jest jawnie przypięty, natywna sparse shared-domain ścieżka Floqueta
+wybiera FGMRES, jeśli rzeczywisty split q przekracza istniejący limit 512 dla
+dokładnego Schura. Mały exact-Schur pozostaje przy GMRES. Automatyczny wybór nie
+zmienia K0/Gamma ani ścieżki dense, tolerancji, restartu, budżetu iteracji lub
+bramek akceptacji.
+
+Przykład jawnego eksperymentu z FGMRES i diagnostyką Schur dla następcy:
+
+```text
+python -B scripts/docker_dev.py --repo-root <checkout> recreate-volume --attempt <development-attempt> --config-sha256 <compose-sha256> --source-root <checkout> --port <port> --floquet-diagnostics schur-action --modal-shifted-ksp-type fgmres
+```
+
+Wybór typu solvera umożliwia kontrolowany eksperyment numeryczny. Sam wybór
+FGMRES nie dowodzi rozwiązania problemu zbieżności i nie zmienia progów
+akceptacji, geometrii ani domyślnych ustawień innych grup.

@@ -64,6 +64,21 @@ enum AcceptedPreparationPublicationMode {
     TerminalObservation(crate::development_accepted_restore::AcceptedRunReattachIdentity),
 }
 
+fn apply_preparation_publication_snapshot(
+    snapshot: &mut SessionStateResponse,
+    request: CurrentLiveSnapshotRequest,
+    mode: &AcceptedPreparationPublicationMode,
+) -> Result<(), ApiError> {
+    match mode {
+        AcceptedPreparationPublicationMode::Active => {
+            crate::session::apply_current_live_preparation_snapshot(snapshot, request)
+        }
+        AcceptedPreparationPublicationMode::TerminalObservation(_) => {
+            crate::session::apply_current_live_snapshot(snapshot, request)
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AcceptedPreparationPublicationFence {
     mode: AcceptedPreparationPublicationMode,
@@ -884,7 +899,7 @@ pub(crate) async fn prepare_current_live_scene_with_transition(
         let (metadata, fem_mesh) = prepared_domain_publication(snapshot, &read_model)?;
         let session_status = preparation_session_status(snapshot);
         let mut prepared_snapshot = snapshot.clone();
-        crate::session::apply_current_live_snapshot(
+        crate::session::apply_current_live_preparation_snapshot(
             &mut prepared_snapshot,
             CurrentLiveSnapshotRequest {
                 session_id: context.session_id.clone(),
@@ -1311,6 +1326,157 @@ pub(crate) fn ensure_preparation_run_is_active(snapshot: &SessionStateResponse) 
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FinalizedAcceptedPreparationFailure {
+    preparation_attempt_id: String,
+    receipt_id: String,
+    reason: String,
+}
+
+/// Return the exact durable preparation failure that is still holding an
+/// accepted task, if any. A missing task receipt is not enough evidence by
+/// itself: an authorized retry may be waiting for the scheduler or may already
+/// own a new lease. The session store's authorization sequence is the retry
+/// fence; the exit, lease, and launch identities below prove that the failure
+/// was finalized rather than inferred from process logs or liveness.
+fn finalized_accepted_preparation_failure_for_task(
+    store: &fullmag_session::SessionStore,
+    run_id: &str,
+    task_id: &str,
+) -> anyhow::Result<Option<FinalizedAcceptedPreparationFailure>> {
+    // Keep the catalog, retry authorization, process exit, and lease reads on
+    // one native store snapshot. A retry decision or lease acquisition cannot
+    // interleave with these checks, so the result describes one coherent
+    // durable observation.
+    let _writer = match store.write_transaction() {
+        Ok(writer) => writer,
+        Err(error)
+            if error
+                .chain()
+                .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>()) =>
+        {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
+    let Some(catalog) = store.read_run_catalog(run_id)? else {
+        return Ok(None);
+    };
+    if catalog.run_id != run_id {
+        anyhow::bail!("preparation failure catalog belongs to another run");
+    }
+    let Some(task) = catalog.tasks.iter().find(|task| task.task_id == task_id) else {
+        return Ok(None);
+    };
+    if task.lifecycle != fullmag_session::FmsTaskLifecycle::Accepted
+        || !matches!(
+            &task.readiness,
+            fullmag_session::FmsTaskReadiness::Blocked { reason }
+                if reason == fullmag_session::FMS_TASK_AWAITING_PREPARATION_REASON
+        )
+        || task.attempt_id.is_some()
+        || task.ownership_epoch.is_some()
+        || task.resource_id.is_some()
+        || store
+            .read_task_preparation_receipt(run_id, task_id)?
+            .is_some()
+    {
+        return Ok(None);
+    }
+
+    // `Some(sequence)` means the initial attempt or a newer explicit retry is
+    // authorized. `None` is the durable held-failure state, unless an active
+    // lease makes the current attempt non-terminal (handled below).
+    if store
+        .preparation_attempt_authorization_sequence(run_id, task_id)?
+        .is_some()
+    {
+        return Ok(None);
+    }
+
+    let decisions = store.list_preparation_retry_decisions(run_id)?;
+    let failures = store
+        .list_preparation_process_exit_receipts(run_id)?
+        .into_iter()
+        .filter(|receipt| {
+            receipt.task_id == task_id
+                && !receipt.status_success
+                && !decisions.iter().any(|decision| {
+                    decision.task_id == task_id
+                        && decision.failed_preparation_attempt_id
+                            == receipt.preparation_attempt_id
+                })
+        })
+        .collect::<Vec<_>>();
+    if failures.is_empty() {
+        return Ok(None);
+    }
+    if failures.len() != 1 {
+        anyhow::bail!(
+            "accepted preparation failure requires one exact un-retried process exit, found {}",
+            failures.len()
+        );
+    }
+    let receipt = &failures[0];
+    receipt.validate()?;
+    if receipt.run_id != run_id || receipt.task_id != task_id {
+        anyhow::bail!("accepted preparation process exit identity differs from the requested task");
+    }
+    let lease = store
+        .read_preparation_resource_lease(run_id, &receipt.resource_id, &receipt.lease_token)?
+        .ok_or_else(|| anyhow::anyhow!("accepted preparation failure has no exact resource lease"))?;
+    lease.validate()?;
+    if lease.run_id != run_id
+        || lease.task_id != task_id
+        || lease.preparation_attempt_id != receipt.preparation_attempt_id
+        || lease.resource_id != receipt.resource_id
+        || lease.lease_token != receipt.lease_token
+        || lease.heartbeat_sequence != receipt.lease_heartbeat_sequence
+    {
+        anyhow::bail!("accepted preparation failure does not match its exact lease");
+    }
+    if lease.state != fullmag_session::FmsResourceLeaseState::Released {
+        // A durable exit can briefly precede finalization. It is not an
+        // authoritative terminal failure until its exact lease is released.
+        return Ok(None);
+    }
+
+    let launches = store
+        .list_preparation_process_launches(run_id)?
+        .into_iter()
+        .filter(|launch| {
+            launch.task_id == task_id
+                && launch.preparation_attempt_id == receipt.preparation_attempt_id
+        })
+        .collect::<Vec<_>>();
+    if launches.len() != 1 {
+        anyhow::bail!(
+            "accepted preparation failure requires exactly one matching durable launch"
+        );
+    }
+    let launch = &launches[0];
+    launch.validate()?;
+    if launch.run_id != run_id
+        || launch.task_id != task_id
+        || launch.resource_id != receipt.resource_id
+        || launch.lease_token != receipt.lease_token
+        || launch.lease_heartbeat_sequence > receipt.lease_heartbeat_sequence
+    {
+        anyhow::bail!("accepted preparation launch identity differs from its exit proof");
+    }
+
+    let reason = receipt
+        .failure_reason
+        .as_deref()
+        .unwrap_or("native preparation process failed")
+        .replace(&receipt.lease_token, "[redacted lease token]");
+    Ok(Some(FinalizedAcceptedPreparationFailure {
+        preparation_attempt_id: receipt.preparation_attempt_id.clone(),
+        receipt_id: receipt.receipt_id.clone(),
+        reason,
+    }))
+}
+
 // Normal pending polls avoid rebuilding the immutable Study. A failed exit
 // triggers the same task-level proof validation used by development restore.
 fn observe_accepted_preparation_failure(
@@ -1511,16 +1677,15 @@ async fn publish_accepted_task_preparation_with_mode(
         // durable integrity failure and must surface immediately; mapping it
         // to pending would hide tampering or invalid native evidence behind a
         // thirty-minute wait while the manual Compute gate remains closed.
-        if store
+        let task_preparation_receipt = store
             .read_task_preparation_receipt(typed_run_id.as_str(), &task_id)
             .map_err(|error| {
                 ApiError::conflict_with_code(
                     "accepted_preparation_receipt_invalid",
                     format!("accepted task preparation receipt read failed: {error:#}"),
                 )
-            })?
-            .is_none()
-        {
+            })?;
+        if task_preparation_receipt.is_none() {
             let failure = observe_accepted_preparation_failure(
                 &store, &typed_run_id, &step_id_for_worker, &task_id, &specification,
             ).map_err(|error| {
@@ -1708,7 +1873,7 @@ async fn publish_accepted_task_preparation_with_mode(
     };
     let (metadata, fem_mesh) = prepared_domain_publication(&prepared_snapshot, &read_model)?;
     let session_status = if terminal_observation { None } else { preparation_session_status(&prepared_snapshot) };
-    crate::session::apply_current_live_snapshot(
+    apply_preparation_publication_snapshot(
         &mut prepared_snapshot,
         CurrentLiveSnapshotRequest {
             session_id: context.session_id.clone(),
@@ -1732,6 +1897,7 @@ async fn publish_accepted_task_preparation_with_mode(
             solver_profile: None,
             fem_mesh,
         },
+        &mode,
     )?;
     // A restored terminal run must never briefly publish prepared step0 over
     // its completed solver clock. The output projector installs the verified
@@ -2747,6 +2913,128 @@ mod tests {
         format!("sha256:{}", character.to_string().repeat(64))
     }
 
+    fn preparation_snapshot(preparation_id: &str, revision: u64) -> SimulationPreparationSnapshot {
+        SimulationPreparationSnapshot {
+            preparation_id: preparation_id.into(),
+            revision,
+            status: "ready".into(),
+            active_stage_id: None,
+            started_at_unix_ms: 1_700_000_000_000,
+            completed_at_unix_ms: Some(1_700_000_000_001),
+            stages: Vec::new(),
+            log_tail: Vec::new(),
+            failure: None,
+        }
+    }
+
+    fn preparation_publication_request(
+        preparation_id: &str,
+        revision: u64,
+    ) -> CurrentLiveSnapshotRequest {
+        serde_json::from_value(json!({
+            "session_id": "preparation-reset-session",
+            "simulation_preparation": preparation_snapshot(preparation_id, revision),
+        }))
+        .expect("preparation publication request should deserialize")
+    }
+
+    fn preparation_test_snapshot(preparation_id: &str) -> SessionStateResponse {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(json!({
+            "session_id": "preparation-reset-session",
+        }))
+        .expect("empty live snapshot request should deserialize");
+        let mut snapshot = crate::session::default_current_live_state(&request);
+        snapshot.simulation_preparation = Some(preparation_snapshot(preparation_id, 1));
+        snapshot.simulation_preparation_revision = 1;
+        snapshot
+    }
+
+    fn preparation_test_preview_field(quantity: &str) -> fullmag_runner::LivePreviewField {
+        fullmag_runner::LivePreviewField {
+            active_mask: None,
+            applied_layer_stride: 1,
+            applied_x_chosen_size: 1,
+            applied_y_chosen_size: 1,
+            auto_downscale_message: None,
+            auto_downscaled: false,
+            config_revision: 1,
+            source_step: 7,
+            source_time_seconds: Some(7.0e-12),
+            source_revision: 1,
+            materialized_at_unix_ms: 7,
+            materialization_wall_time_ns: 0,
+            original_grid: [1, 1, 1],
+            preview_grid: [1, 1, 1],
+            quantity: quantity.to_string(),
+            quantity_domain: "cell".to_string(),
+            spatial_kind: "vector".to_string(),
+            unit: "A/m".to_string(),
+            vector_field_values: vec![0.0, 0.0, 1.0],
+            x_chosen_size: 1,
+            y_chosen_size: 1,
+        }
+    }
+
+    fn seed_accepted_field_carriers(
+        snapshot: &mut SessionStateResponse,
+    ) -> crate::schemas::common::AcceptedObservationFrameRef {
+        let frame = crate::session::accepted_observation_frame_ref(snapshot, 7, Some(7.0e-12));
+        snapshot.latest_fields = serde_json::from_value(json!({
+            "m": {
+                "values": [[0.0, 0.0, 1.0]],
+                "source_step": 7,
+                "source_time_seconds": 7.0e-12,
+                "observation_frame": frame.clone()
+            },
+            "H_eff": {
+                "values": [[1.0, 0.0, 0.0]],
+                "source_step": 7,
+                "source_time_seconds": 7.0e-12,
+                "observation_frame": frame.clone()
+            },
+            "mode_shape": {
+                "values": [[0.0, 1.0, 0.0]],
+                "source_step": 7,
+                "source_time_seconds": 7.0e-12,
+                "observation_frame": frame.clone()
+            },
+            "frequency_response_real": {
+                "values": [[0.0, 0.0, 1.0]],
+                "source_step": 7,
+                "source_time_seconds": 7.0e-12,
+                "observation_frame": frame.clone()
+            }
+        }))
+        .expect("accepted field fixtures");
+        let preview = preparation_test_preview_field("H_eff");
+        snapshot.preview_cache.insert(preview.clone());
+        snapshot
+            .preview_cache
+            .remember_accepted_source(&preview, frame.clone());
+        snapshot
+            .preview_cache
+            .remember_accepted_latest_source("H_eff", frame.clone());
+        snapshot.field_publication_bundles.insert(
+            "H_eff".into(),
+            crate::schemas::common::FieldPublicationBundle::for_response(
+                frame.clone(),
+                1,
+                1,
+                1,
+                1,
+                "topology",
+                "H_eff",
+                "full",
+                "full_domain",
+                None::<String>,
+                "carrier",
+                "fingerprint",
+            ),
+        );
+        snapshot.coupled_checkpoint = Some(json!({ "accepted": true }));
+        frame
+    }
+
     #[test]
     fn completed_preparation_uses_canonical_stages_and_ready_log_stage() {
         let now = 1_700_000_000_123;
@@ -3485,6 +3773,117 @@ mod tests {
         }
     }
 
+    fn prepared_fem_eigen_read_model() -> LiveScenePreparationReadModel {
+        let mut model = prepared_fem_read_model(true);
+        let fullmag_ir::BackendPlanIR::Fem(fem) = &model.execution_plan.backend_plan else {
+            unreachable!();
+        };
+        let fem = fem.clone();
+        model.execution_plan.backend_plan =
+            fullmag_ir::BackendPlanIR::FemEigen(fullmag_ir::FemEigenPlanIR {
+                mesh_name: fem.mesh_name,
+                mesh_source: fem.mesh_source,
+                mesh: fem.mesh,
+                object_segments: fem.object_segments,
+                mesh_parts: fem.mesh_parts,
+                mesh_build_report: fem.mesh_build_report,
+                domain_mesh_mode: fem.domain_mesh_mode,
+                domain_frame: fem.domain_frame,
+                fe_order: fem.fe_order,
+                hmax: fem.hmax,
+                equilibrium_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+                material: fem.material,
+                operator: fullmag_ir::EigenOperatorConfigIR {
+                    kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                    include_demag: false,
+                },
+                count: 2,
+                target: fullmag_ir::EigenTargetIR::Lowest,
+                equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+                k_sampling: None,
+                bias_field_samples: Vec::new(),
+                normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
+                damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
+                enable_exchange: true,
+                enable_demag: false,
+                interfacial_dmi: None,
+                dmi_interface_normal: None,
+                bulk_dmi: None,
+                external_field: None,
+                gyromagnetic_ratio: 1.0,
+                precision: fullmag_ir::ExecutionPrecision::Double,
+                exchange_bc: fullmag_ir::ExchangeBoundaryCondition::Neumann,
+                spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+                demag_realization: None,
+                demag_solver_policy: None,
+                air_box_config: None,
+                mode_tracking: None,
+                dispersion_validation: None,
+                k0_kittel_validation: None,
+                solver_policy: None,
+            });
+        model
+    }
+
+    fn prepared_fem_frequency_response_read_model() -> LiveScenePreparationReadModel {
+        let mut model = prepared_fem_read_model(true);
+        let fullmag_ir::BackendPlanIR::Fem(fem) = &model.execution_plan.backend_plan else {
+            unreachable!();
+        };
+        let fem = fem.clone();
+        model.execution_plan.backend_plan = fullmag_ir::BackendPlanIR::FemFrequencyResponse(
+            fullmag_ir::FemFrequencyResponsePlanIR {
+                mesh_name: fem.mesh_name,
+                mesh_source: fem.mesh_source,
+                mesh: fem.mesh,
+                object_segments: fem.object_segments,
+                mesh_parts: fem.mesh_parts,
+                mesh_build_report: fem.mesh_build_report,
+                domain_mesh_mode: fem.domain_mesh_mode,
+                domain_mesh_workflow_mode: None,
+                domain_frame: fem.domain_frame,
+                fe_order: fem.fe_order,
+                hmax: fem.hmax,
+                equilibrium_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+                material: fem.material,
+                operator: fullmag_ir::EigenOperatorConfigIR {
+                    kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                    include_demag: false,
+                },
+                equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+                k_sampling: None,
+                normalization: fullmag_ir::FrequencyResponseNormalizationIR::UnitL2,
+                damping_policy: fullmag_ir::EigenDampingPolicyIR::Include,
+                spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+                magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
+                excitation: fullmag_ir::FrequencyExcitationIR {
+                    field_au_per_m: [0.0, 0.0, 1.0],
+                    phase_rad: 0.0,
+                },
+                frequencies_hz: fullmag_ir::FrequencySweepIR {
+                    values_hz: vec![1.0e9],
+                },
+                solver_policy: None,
+                enable_exchange: true,
+                enable_demag: false,
+                interfacial_dmi: None,
+                dmi_interface_normal: None,
+                bulk_dmi: None,
+                external_field: None,
+                gyromagnetic_ratio: 1.0,
+                precision: fullmag_ir::ExecutionPrecision::Double,
+                requested_device: fullmag_ir::ExecutionDevice::Auto,
+                exchange_bc: fullmag_ir::ExchangeBoundaryCondition::Neumann,
+                demag_realization: None,
+                air_box_config: None,
+                demag_solver_policy: None,
+                periodic_constraint_sets: Vec::new(),
+                equilibrium_provenance: None,
+            },
+        );
+        model
+    }
+
     fn prepared_field_only_read_model() -> LiveScenePreparationReadModel {
         let mut model = prepared_fem_read_model(true);
         let fullmag_ir::BackendPlanIR::Fem(fem) = &model.execution_plan.backend_plan else {
@@ -3510,6 +3909,153 @@ mod tests {
             },
         );
         model
+    }
+
+    fn install_prepared_mesh(
+        snapshot: &mut SessionStateResponse,
+        model: &LiveScenePreparationReadModel,
+    ) {
+        snapshot.fem_mesh = prepared_fem_mesh(&model.execution_plan).map(Into::into);
+    }
+
+    fn publish_test_preparation_snapshot(
+        snapshot: &mut SessionStateResponse,
+        model: &LiveScenePreparationReadModel,
+        preparation_id: &str,
+        mode: &AcceptedPreparationPublicationMode,
+    ) {
+        let (metadata, fem_mesh) = prepared_domain_publication(snapshot, model).unwrap();
+        let current_revision = snapshot.simulation_preparation_revision;
+        let mut request = preparation_publication_request(preparation_id, current_revision + 1);
+        request.metadata = Some(metadata.into());
+        request.fem_mesh = fem_mesh;
+        apply_preparation_publication_snapshot(snapshot, request, mode).unwrap();
+    }
+
+    #[test]
+    fn new_modal_and_frequency_preparation_clears_prior_fields_before_noop_initial_publish() {
+        let cases = [
+            ("prep-modal-new", prepared_fem_eigen_read_model()),
+            (
+                "prep-frequency-new",
+                prepared_fem_frequency_response_read_model(),
+            ),
+        ];
+        for (preparation_id, model) in cases {
+            let mut snapshot = preparation_test_snapshot("prep-previous");
+            install_prepared_mesh(&mut snapshot, &model);
+            seed_accepted_field_carriers(&mut snapshot);
+            let mode = AcceptedPreparationPublicationMode::Active;
+
+            publish_test_preparation_snapshot(&mut snapshot, &model, preparation_id, &mode);
+            publish_prepared_initial_state(&mut snapshot, &model)
+                .expect("modal/frequency initial-state publisher is intentionally a no-op");
+
+            assert!(snapshot.latest_fields.entries().next().is_none());
+            assert!(snapshot.preview_cache.is_empty());
+            assert!(snapshot.field_publication_bundles.is_empty());
+            assert!(snapshot.coupled_checkpoint.is_none());
+            assert_eq!(
+                snapshot.metadata.as_ref().unwrap()["execution_plan"]["backend_plan"]["kind"],
+                if matches!(
+                    model.execution_plan.backend_plan,
+                    fullmag_ir::BackendPlanIR::FemEigen(_)
+                ) {
+                    "fem_eigen"
+                } else {
+                    "fem_frequency_response"
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn active_preparation_replay_keeps_new_solve_fields_and_cache() {
+        let model = prepared_fem_eigen_read_model();
+        let mut snapshot = preparation_test_snapshot("prep-replay");
+        install_prepared_mesh(&mut snapshot, &model);
+        let frame = seed_accepted_field_carriers(&mut snapshot);
+        let mode = AcceptedPreparationPublicationMode::Active;
+
+        publish_test_preparation_snapshot(&mut snapshot, &model, "prep-replay", &mode);
+        publish_prepared_initial_state(&mut snapshot, &model)
+            .expect("modal initial-state publisher is a no-op");
+
+        assert_eq!(
+            snapshot.latest_fields.get("m").unwrap()["values"],
+            json!([[0.0, 0.0, 1.0]])
+        );
+        assert_eq!(
+            snapshot.latest_fields.get("H_eff").unwrap()["values"],
+            json!([[1.0, 0.0, 0.0]])
+        );
+        assert!(snapshot.latest_fields.get("mode_shape").is_some());
+        assert!(snapshot
+            .latest_fields
+            .get("frequency_response_real")
+            .is_some());
+        assert!(snapshot.preview_cache.get("H_eff").is_some());
+        let preview = snapshot.preview_cache.get("H_eff").unwrap();
+        assert_eq!(
+            snapshot.preview_cache.accepted_source_frame(preview),
+            Some(&frame)
+        );
+        assert_eq!(
+            snapshot.preview_cache.accepted_latest_source_frame("H_eff"),
+            Some(&frame)
+        );
+        assert!(snapshot.field_publication_bundles.contains_key("H_eff"));
+        assert_eq!(
+            snapshot.coupled_checkpoint.as_ref().unwrap()["accepted"],
+            true
+        );
+    }
+
+    #[test]
+    fn terminal_observation_publication_preserves_accepted_fields_cache_and_checkpoint() {
+        let model = prepared_fem_frequency_response_read_model();
+        let mut snapshot = preparation_test_snapshot("prep-before-restore");
+        install_prepared_mesh(&mut snapshot, &model);
+        let frame = seed_accepted_field_carriers(&mut snapshot);
+        let mode = AcceptedPreparationPublicationMode::TerminalObservation(
+            crate::development_accepted_restore::AcceptedRunReattachIdentity {
+                run_id: snapshot.session.run_id.clone(),
+                session_id: snapshot.session.session_id.clone(),
+                session_epoch: 0,
+                scene_revision: 7,
+                proof_sha256: "a".repeat(64),
+            },
+        );
+
+        publish_test_preparation_snapshot(&mut snapshot, &model, "prep-restored", &mode);
+
+        assert_eq!(
+            snapshot.latest_fields.get("m").unwrap()["values"],
+            json!([[0.0, 0.0, 1.0]])
+        );
+        assert_eq!(
+            snapshot.latest_fields.get("H_eff").unwrap()["values"],
+            json!([[1.0, 0.0, 0.0]])
+        );
+        assert!(snapshot.latest_fields.get("mode_shape").is_some());
+        assert!(snapshot
+            .latest_fields
+            .get("frequency_response_real")
+            .is_some());
+        let preview = snapshot.preview_cache.get("H_eff").unwrap();
+        assert_eq!(
+            snapshot.preview_cache.accepted_source_frame(preview),
+            Some(&frame)
+        );
+        assert_eq!(
+            snapshot.preview_cache.accepted_latest_source_frame("H_eff"),
+            Some(&frame)
+        );
+        assert!(snapshot.field_publication_bundles.contains_key("H_eff"));
+        assert_eq!(
+            snapshot.coupled_checkpoint.as_ref().unwrap()["accepted"],
+            true
+        );
     }
 
     #[test]
@@ -4117,5 +4663,182 @@ mod tests {
                 .is_ok()
         );
         assert!(validate_requested_device_value("cpu", Some("gpu")).is_err());
+    }
+
+    fn finalized_preparation_failure_fixture() -> (
+        tempfile::TempDir,
+        fullmag_session::SessionStore,
+        String,
+        String,
+        fullmag_session::FmsPreparationProcessExitReceipt,
+    ) {
+        let temporary = tempfile::tempdir().unwrap();
+        let store = fullmag_session::SessionStore::open(temporary.path().join("store")).unwrap();
+        let run_id = "run-live-preparation-failure".to_owned();
+        let task_id = "task-live-preparation-failure".to_owned();
+        store
+            .commit_run_catalog(&fullmag_session::FmsRunCatalog {
+                schema_version: fullmag_session::FMS_RUN_CATALOG_SCHEMA.into(),
+                run_id: run_id.clone(),
+                revision: 1,
+                updated_at: chrono::Utc::now(),
+                tasks: vec![fullmag_session::FmsTaskCatalogEntry {
+                    task_id: task_id.clone(),
+                    input_fingerprint: "a".repeat(64),
+                    lifecycle: fullmag_session::FmsTaskLifecycle::Accepted,
+                    readiness: fullmag_session::FmsTaskReadiness::Blocked {
+                        reason: fullmag_session::FMS_TASK_AWAITING_PREPARATION_REASON.into(),
+                    },
+                    observation: None,
+                    attempt_id: None,
+                    ownership_epoch: None,
+                    resolved_input_fingerprint: None,
+                    artifact_ids: Vec::new(),
+                    resource_id: None,
+                    coordinator_watermark: None,
+                    coordinator_genesis: None,
+                }],
+            })
+            .unwrap();
+        let now = chrono::Utc::now();
+        let lease = fullmag_session::FmsPreparationResourceLease {
+            schema_version: fullmag_session::FMS_PREPARATION_RESOURCE_LEASE_SCHEMA.into(),
+            resource_id: "prep-resource-live-test".into(),
+            budget: fullmag_session::FmsResourceBudget {
+                cpu_millis: 100,
+                memory_bytes: 1024,
+                gpu_memory_bytes: 0,
+                storage_bytes: 4096,
+            },
+            run_id: run_id.clone(),
+            task_id: task_id.clone(),
+            preparation_attempt_id: "prep-attempt-live-failure".into(),
+            lease_token: "prep-lease-live-failure".into(),
+            state: fullmag_session::FmsResourceLeaseState::Active,
+            acquired_at: now,
+            heartbeat_at: now,
+            heartbeat_sequence: 0,
+            released_at: None,
+            host_launch_binding: None,
+        };
+        assert_eq!(
+            store.commit_preparation_resource_lease(&lease).unwrap(),
+            fullmag_session::PreparationResourceLeaseCommitDisposition::Acquired
+        );
+        let launch = fullmag_session::FmsPreparationProcessLaunch {
+            schema_version: fullmag_session::FMS_PREPARATION_PROCESS_LAUNCH_SCHEMA.into(),
+            launch_id: "prep-launch-live-failure".into(),
+            run_id: run_id.clone(),
+            task_id: task_id.clone(),
+            preparation_attempt_id: lease.preparation_attempt_id.clone(),
+            resource_id: lease.resource_id.clone(),
+            lease_token: lease.lease_token.clone(),
+            lease_heartbeat_sequence: lease.heartbeat_sequence,
+            supervisor_process_id: 41,
+            supervisor_start_token: Some("supervisor-live-failure".into()),
+            created_at: now,
+        };
+        store.commit_preparation_process_launch(&launch).unwrap();
+        let exit = fullmag_session::FmsPreparationProcessExitReceipt {
+            schema_version: fullmag_session::FMS_PREPARATION_PROCESS_EXIT_RECEIPT_SCHEMA.into(),
+            receipt_id: "prep-exit-live-failure".into(),
+            run_id: run_id.clone(),
+            task_id: task_id.clone(),
+            preparation_attempt_id: lease.preparation_attempt_id.clone(),
+            resource_id: lease.resource_id.clone(),
+            lease_token: lease.lease_token.clone(),
+            lease_heartbeat_sequence: lease.heartbeat_sequence,
+            process_id: 42,
+            process_start_token: Some("preparer-live-failure".into()),
+            status_success: false,
+            exit_code: Some(17),
+            timed_out: false,
+            failure_reason: Some("native preparation failed".into()),
+            observed_at: now,
+        };
+        store
+            .commit_preparation_process_exit_receipt(&exit)
+            .unwrap();
+        assert_eq!(
+            store.finalize_preparation_process_exit(&exit).unwrap(),
+            fullmag_session::PreparationProcessFinalizationDisposition::Failed
+        );
+        (temporary, store, run_id, task_id, exit)
+    }
+
+    #[test]
+    fn finalized_failed_preparation_is_not_reported_as_pending() {
+        let (_temporary, store, run_id, task_id, exit) = finalized_preparation_failure_fixture();
+
+        let failure = finalized_accepted_preparation_failure_for_task(&store, &run_id, &task_id)
+            .unwrap()
+            .expect("a finalized native preparation failure must be authoritative");
+        assert_eq!(failure.preparation_attempt_id, exit.preparation_attempt_id);
+        assert_eq!(failure.receipt_id, exit.receipt_id);
+        assert_eq!(failure.reason, "native preparation failed");
+    }
+
+    #[test]
+    fn authorized_preparation_retry_remains_pending_after_previous_failure() {
+        let (_temporary, store, run_id, task_id, exit) = finalized_preparation_failure_fixture();
+        let decision = fullmag_session::FmsPreparationRetryDecision {
+            schema_version: fullmag_session::FMS_PREPARATION_RETRY_DECISION_SCHEMA.into(),
+            decision_id: "prep-retry-live-failure".into(),
+            run_id: run_id.clone(),
+            task_id: task_id.clone(),
+            failed_preparation_attempt_id: exit.preparation_attempt_id,
+            retry_sequence: 1,
+            max_attempts: 2,
+            reason: "operator approved one retry".into(),
+            created_at: chrono::Utc::now(),
+        };
+        assert_eq!(
+            store.commit_preparation_retry_decision(&decision).unwrap(),
+            fullmag_session::PreparationRetryDecisionCommitDisposition::Accepted
+        );
+        assert_eq!(
+            store
+                .preparation_attempt_authorization_sequence(&run_id, &task_id)
+                .unwrap(),
+            Some(1)
+        );
+        assert!(
+            finalized_accepted_preparation_failure_for_task(&store, &run_id, &task_id)
+                .unwrap()
+                .is_none(),
+            "an authorized newer retry must keep the live wait pending"
+        );
+
+        let retry_now = chrono::Utc::now();
+        let retry_lease = fullmag_session::FmsPreparationResourceLease {
+            schema_version: fullmag_session::FMS_PREPARATION_RESOURCE_LEASE_SCHEMA.into(),
+            resource_id: "prep-resource-live-test".into(),
+            budget: fullmag_session::FmsResourceBudget {
+                cpu_millis: 100,
+                memory_bytes: 1024,
+                gpu_memory_bytes: 0,
+                storage_bytes: 4096,
+            },
+            run_id: run_id.clone(),
+            task_id: task_id.clone(),
+            preparation_attempt_id: "prep-attempt-live-retry".into(),
+            lease_token: "prep-lease-live-retry".into(),
+            state: fullmag_session::FmsResourceLeaseState::Active,
+            acquired_at: retry_now,
+            heartbeat_at: retry_now,
+            heartbeat_sequence: 0,
+            released_at: None,
+            host_launch_binding: None,
+        };
+        assert_eq!(
+            store.commit_preparation_resource_lease(&retry_lease).unwrap(),
+            fullmag_session::PreparationResourceLeaseCommitDisposition::Acquired
+        );
+        assert!(
+            finalized_accepted_preparation_failure_for_task(&store, &run_id, &task_id)
+                .unwrap()
+                .is_none(),
+            "an active authorized retry must keep the live wait pending"
+        );
     }
 }

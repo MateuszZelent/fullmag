@@ -88,6 +88,7 @@ pub(super) fn retain_selected_eigen_path_mode_artifacts(
 pub(super) fn bind_eigen_path_tracked_mode_metadata(
     artifacts: &mut [AuxiliaryArtifact],
     result: &crate::eigen::PathSolveResult,
+    sample_id_prefix: &str,
 ) -> Result<(), RunError> {
     let branches = result
         .samples
@@ -127,6 +128,9 @@ pub(super) fn bind_eigen_path_tracked_mode_metadata(
                     serde_json::json!(branches.get(&id).copied().flatten()),
                 );
                 object.insert("sample_index".into(), serde_json::json!(id.sample_index));
+                // Match spectrum/dispersion identity after promoting a single-k solve.
+                object.insert("sample_id".into(),
+                    serde_json::json!(format!("{sample_id_prefix}-{:04}", id.sample_index)));
                 object.insert(
                     "raw_mode_index".into(),
                     serde_json::json!(id.raw_mode_index),
@@ -277,6 +281,7 @@ mod output_publication_tests {
             exchange_bc: fullmag_ir::ExchangeBoundaryCondition::Neumann,
             spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
             demag_realization: None,
+            demag_solver_policy: None,
             air_box_config: None,
             mode_tracking: None,
             dispersion_validation: None,
@@ -344,6 +349,8 @@ mod output_publication_tests {
             crate::eigen::EigenSolverModel::ReferenceScalarTangent,
             None,
         );
+        assert_eq!(v2["mode_id"], v3["mode_id"]);
+        assert!(v2["mode_id"].as_str().is_some_and(|id| id.starts_with("sample-0000/mode-")));
         for value in [&v2, &v3] {
             assert_eq!(value["residual_absolute_l2"], 1.0e-9);
             assert_eq!(value["residual_relative_l2"], 2.5e-10);
@@ -969,6 +976,21 @@ mod output_publication_tests {
             k0_kittel_validation: None, solver_policy: None,
             dispersion_analytic_reference: None, k0_kittel_periodic_airbox_demag: None,
         };
+        for prefix in ["k-path-sample", "bias-field-sample", "k-sample"] {
+            let mut mode_artifacts = vec![AuxiliaryArtifact {
+                relative_path: "eigen/modes/sample_0002/mode_0007.json".into(),
+                bytes: serde_json::to_vec(&serde_json::json!({
+                    "sample_id": "k-sample-0000", "sample_index": 0,
+                    "raw_mode_index": 7, "equilibrium_artifact_sha256": "sha256:retained",
+                })).unwrap(),
+            }];
+            bind_eigen_path_tracked_mode_metadata(&mut mode_artifacts, &result, prefix).unwrap();
+            let mode: Value = serde_json::from_slice(&mode_artifacts[0].bytes).unwrap();
+            assert_eq!(mode["sample_id"], format!("{prefix}-0002"));
+            assert_eq!(mode["sample_index"], 2);
+            assert_eq!(mode["raw_mode_index"], 7);
+            assert_eq!(mode["equilibrium_artifact_sha256"], "sha256:retained");
+        }
         for version in ["v1", "v2"] {
             let mut artifacts = Vec::new();
             for sample_index in [0, 2, 7] {
@@ -1001,6 +1023,15 @@ mod output_publication_tests {
             let manifest = build_eigen_path_frequency_domain_manifest(
                 FemEngine::CpuNative, &result, &artifacts,
                 &residual_transport_test_plan(), &[]);
+            let manifest_plan = residual_transport_test_plan();
+            assert_eq!(manifest["boundary_context"],
+                crate::fem::eigen_output::modal_boundary_context(&manifest_plan));
+            assert_eq!(manifest["k_sampling"],
+                crate::fem::eigen_output::modal_k_sampling_manifest(manifest_plan.k_sampling.as_ref()));
+            assert_eq!(manifest["mesh_identity"],
+                crate::artifacts::solver_mesh_signature(&manifest_plan.mesh));
+            assert!(manifest.get("session_id").is_none(),
+                "native path output must not fabricate a live-session identity");
             assert_eq!(manifest["requested_execution"]["outputs"], serde_json::json!([]));
             assert!(manifest["artifacts"]["eigen_diagnostics_v2_path"].is_null());
             assert!(manifest["resources"]["eigen_diagnostics_resource_key"].is_null());
@@ -2995,6 +3026,7 @@ pub(super) fn eigen_path_mode_json(
     };
 
     let mut value = serde_json::json!({
+        "mode_id": format!("sample-{:04}/mode-{:04}", sample.sample_index, mode.raw_mode_index),
         "index": mode.raw_mode_index,
         "raw_mode_index": mode.raw_mode_index,
         "branch_id": mode.branch_id,

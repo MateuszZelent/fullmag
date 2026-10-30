@@ -1,3 +1,4 @@
+import { useInspectorActiveTab } from "../../InspectorTabState";
 import type { ComponentType } from "react";
 
 import { ReferenceImportSection } from "../analysis-results/ReferenceImportSection";
@@ -34,10 +35,36 @@ function ScientificFrameRoute({
   props: InspectorPanelProps;
 }) {
   return (
-    <PhysicsFirstResultInspectorFrame selection={props.selection}>
+    <PhysicsFirstResultInspectorFrame selection={props.selection} contentTabs={Panel === EigenModeInspectorPanel ? ["overview", "data", "diagnostics", "provenance"] : ["overview"]}>
       <Panel {...props} />
     </PhysicsFirstResultInspectorFrame>
   );
+}
+
+const DISPERSION_REFERENCE_SELECTION_KINDS = new Set([
+  "results.eigen.dispersion",
+  "results.dispersion.modal.relation",
+]);
+
+export function hasStableDispersionReferenceOwner(
+  selection: InspectorPanelProps["selection"],
+): boolean {
+  const ref = selection.ref;
+  if (
+    ref?.type !== "frequency-domain" ||
+    !DISPERSION_REFERENCE_SELECTION_KINDS.has(selection.kind ?? "") ||
+    ref.kind !== selection.kind ||
+    typeof ref.analysisRunId !== "string" ||
+    !ref.analysisRunId.trim() ||
+    typeof ref.analysisStageId !== "string" ||
+    !ref.analysisStageId.trim()
+  ) {
+    return false;
+  }
+
+  return typeof ref.artifactRevision === "string"
+    ? ref.artifactRevision.trim().length > 0
+    : typeof ref.artifactRevision === "number" && Number.isFinite(ref.artifactRevision);
 }
 
 export function DynamicsResultInspector(props: InspectorPanelProps) {
@@ -219,17 +246,13 @@ export function ResonanceDrivenProvenanceResultInspector(props: InspectorPanelPr
 }
 
 export function DispersionOverviewResultInspector(props: InspectorPanelProps) {
+  const ref = props.selection.ref?.type === "frequency-domain" ? props.selection.ref : null;
   return (
     <PhysicsFirstResultInspectorFrame selection={props.selection}>
-      <InspectorGroup title="Wavevector products" badge="k-resolved">
-        <FieldRow label="Modal relation" value="Modal relation fₙ(k) from eigenfrequency branches" />
-        <FieldRow label="Driven map" value="Driven map A(k,f), χ(k,f) or P_abs(k,f), with the published observable unit" />
-        <FieldRow label="k context" value="Fixed k, k path or k grid; a single nonzero-k sample is not a dispersion relation" />
-      </InspectorGroup>
-      <InspectorGroup title="Product boundary" badge="Physics-first">
-        <FieldRow label="Meaning" value="A driven response map is not a modal dispersion relation" />
-        <FieldRow label="Modal handoff" value="Open branches, modes at k and the exact complex mode field" />
-        <FieldRow label="Driven handoff" value="Open response map, frequency points and response field at k" />
+      <InspectorGroup title="Wavevector-resolved results">
+        {ref?.collectionStudyCount !== undefined ? <FieldRow label="Published studies" value={String(ref.collectionStudyCount)} /> : null}
+        <p className="fm-result-inspector__help">Open a study in Results, choose its dispersion chart, then select a point to inspect the mode at that wavevector.</p>
+        <p className="fm-result-inspector__help">Modal relation fₙ(k) lists eigenfrequencies. Driven map A(k,f) shows forced response and is not a modal dispersion relation. Axes, units and available fields are shown with the selected dataset.</p>
       </InspectorGroup>
     </PhysicsFirstResultInspectorFrame>
   );
@@ -248,10 +271,19 @@ export function DispersionKSamplingResultInspector(props: InspectorPanelProps) {
 }
 
 export function DispersionRelationResultInspector(props: InspectorPanelProps) {
+  const tab = useInspectorActiveTab();
   return (
     <>
       <ScientificFrameRoute Panel={EigenDispersionInspectorPanel} props={props} />
-      <ReferenceImportSection />
+      {tab === "data" ? (
+        hasStableDispersionReferenceOwner(props.selection) ? (
+          <ReferenceImportSection />
+        ) : (
+          <p className="fm-result-inspector__help">
+            Reference import requires a dispersion result with a published run, stage, and artifact revision.
+          </p>
+        )
+      ) : null}
     </>
   );
 }

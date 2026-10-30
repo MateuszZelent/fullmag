@@ -18,6 +18,7 @@ import {
   buildEigenBranchPointModeSelectionRef,
   buildEigenBranchesModel,
   eigenModeFieldAvailable,
+  frequencyDomainEquilibriumIdForSample,
   frequencyDomainManifestPayload,
   frequencyDomainResultContextFromManifest,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
@@ -88,11 +89,9 @@ export function buildEigenBranchResultManifestOwner(
 
   return {
     artifactSetId,
-    resultContext: frequencyDomainResultContextFromManifest({
-      ...payload,
-      // The owned resource envelope is authoritative over legacy payload placeholders.
-      run_id: runId,
-      stage_id: stageId,
+    resultContext: frequencyDomainResultContextFromManifest(payload, {
+      runId,
+      stageId,
     }),
     runId,
     sessionId,
@@ -117,7 +116,10 @@ export function buildEigenBranchModePlotHandoff(
   const artifactPath = artifact?.artifact_path;
   const resourceRef = point.modeFieldResourceKey;
   const manifestContext = manifestOwner?.resultContext;
-  const equilibriumId = manifestContext?.equilibriumId;
+  const equilibriumId = frequencyDomainEquilibriumIdForSample(
+    manifestContext,
+    point.sampleIndex,
+  );
   const kContextKind = manifestContext?.classification?.kContext.kind;
   const studyProduct = manifestContext?.studyProduct;
   const wavevectorKf = point.wavevectorKf;
@@ -246,7 +248,10 @@ function buildEigenBranchModeOpenSelectionRef(
   const artifactRevision = artifact?.revision;
   const artifactPath = artifact?.artifact_path;
   const manifestContext = manifestOwner?.resultContext;
-  const equilibriumId = manifestContext?.equilibriumId;
+  const equilibriumId = frequencyDomainEquilibriumIdForSample(
+    manifestContext,
+    point.sampleIndex,
+  );
   const kContextKind = manifestContext?.classification?.kContext.kind;
   if (
     !isNonEmptyString(branchId) ||

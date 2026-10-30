@@ -9,6 +9,7 @@ import {
   buildEigenBranchSelectionRef,
   buildEigenDispersionPointSelectionRef,
   type EigenBranch,
+  type FrequencyDomainResultContext,
   type FrequencyDomainSelectionContext,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import type { EigenDispersionPoint } from "@/shared/domain/analysis/frequencyDomainChartModels";
@@ -18,6 +19,7 @@ import { FrequencyDomainBranchTable } from "../FrequencyDomainTables";
 import { ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH } from "@/kernel/api/apiPaths";
 import {
   buildEigenDispersionPointViewModel,
+  eigenDispersionPointEquilibriumId,
   useEigenDispersionInspectorSummary,
 } from "./EigenDispersionInspectorModel";
 
@@ -32,9 +34,10 @@ export function EigenDispersionInspectorPanel({
     : null;
 
   const selectPoint = (point: EigenDispersionPoint): void => {
-    const ref = buildEigenDispersionPointSelectionRef(
+    const ref = buildEigenDispersionPointSelectionRefFromSelection(
       point,
-      buildEigenDispersionPointHandoffContext(selection),
+      selection,
+      summary.resultContext,
     );
     kernel.selection.set(
       {
@@ -71,23 +74,14 @@ export function EigenDispersionInspectorPanel({
         metrics={[
           { label: "Points", value: summary.badge, tone: summary.dispersionPointCount > 0 ? "success" : "neutral" },
           { label: "Branches", value: String(summary.branchCount), tone: "neutral" },
-          {
-            label: "Comparison",
-            value: summary.referenceComparisonStatus.replaceAll("_", " "),
-            tone: summary.referenceComparisonStatus === "matching"
-              ? "success"
-              : summary.referenceComparisonStatus === "no_data"
-                ? "neutral"
-                : "warning",
-          },
-          { label: "Selected", value: selectedPoint ? dispersionPointLabel(selectedPoint) : "none", tone: selectedPoint ? "success" : "neutral" },
+
         ]}
         primary={
           <>
             <FieldRow label="Frequency range" value={summary.frequencyRange} />
             <FieldRow label="k-path span" value={summary.kPathSpan} />
             <FieldRow label="Path sampling" value={summary.pathSampling} />
-            <FieldRow label="Path labels" value={summary.pathLabels} />
+            <p className="fm-result-inspector__help">Select a chart point to inspect its mode. Published branches do not establish spectrum completeness.</p>
             <FieldRow
               label="Branch tracking"
               value={`${summary.branchCount} branch(es), ${summary.trackedPointCount} tracked point(s)`}
@@ -99,7 +93,7 @@ export function EigenDispersionInspectorPanel({
         sections={[
           {
             id: "reference",
-            defaultOpen: true,
+            defaultOpen: false,
             title: "Reference & comparison",
             icon: <Scale size={16} strokeWidth={1.5} />,
             summary: summary.referenceComparisonStatus.replaceAll("_", " "),
@@ -108,12 +102,16 @@ export function EigenDispersionInspectorPanel({
                 <FieldRow label="Analytic reference" value={summary.analyticReference} />
                 <FieldRow label="Comparison status" value={summary.referenceComparison} />
                 <FieldRow label="Validation intent" value={summary.validationIntent} />
+                <FieldRow
+                  label="Import reference"
+                  value="Open the Data tab to import CSV or COMSOL reference data."
+                />
               </>
             ),
           },
           {
             id: "selected-point",
-            defaultOpen: true,
+            defaultOpen: Boolean(selectedPoint),
             title: "Selected Dispersion Point",
             icon: <Target size={16} strokeWidth={1.5} />,
             summary: selectedPoint ? dispersionPointLabel(selectedPoint) : "not selected",
@@ -156,7 +154,7 @@ export function EigenDispersionInspectorPanel({
           },
           {
             id: "chart",
-            defaultOpen: true,
+            defaultOpen: false,
             title: "Dispersion Chart",
             icon: <LineChart size={16} strokeWidth={1.5} />,
             summary: summary.badge,
@@ -169,7 +167,7 @@ export function EigenDispersionInspectorPanel({
           },
           {
             id: "branches",
-            defaultOpen: true,
+            defaultOpen: false,
             title: "Dispersion Branch Table",
             icon: <GitBranch size={16} strokeWidth={1.5} />,
             summary: `${summary.branchCount} branch(es)`,
@@ -218,6 +216,28 @@ export function buildEigenDispersionPointHandoffContext(
     datasetRevision: ownerRef?.datasetRevision,
     resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
   };
+}
+
+export function buildEigenDispersionPointSelectionRefFromSelection(
+  point: EigenDispersionPoint,
+  selection: InspectorPanelProps["selection"],
+  resultContext: FrequencyDomainResultContext | null | undefined,
+) {
+  const context = buildEigenDispersionPointHandoffContext(selection);
+  const equilibriumId = eigenDispersionPointEquilibriumId(
+    resultContext,
+    context.analysisRunId,
+    context.analysisStageId,
+    context.artifactRevision,
+    point.sampleIndex,
+  );
+  const safePoint = equilibriumId
+    ? point
+    : { ...point, modeFieldAvailable: false };
+  return buildEigenDispersionPointSelectionRef(safePoint, {
+    ...context,
+    equilibriumId,
+  });
 }
 
 function selectedDispersionPoint(

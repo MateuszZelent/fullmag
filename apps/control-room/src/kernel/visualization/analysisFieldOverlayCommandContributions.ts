@@ -10,7 +10,7 @@ import {
   analysisResultFieldOverlayAdapter,
   createAnalysisResultFieldOverlayIntent,
 } from "./AnalysisResultFieldOverlayIntent";
-import { createModeFieldOverlayIntent } from "./ModeFieldOverlayIntent";
+import { createModeFieldOverlayIntent, type ModeFieldOverlayIntent } from "./ModeFieldOverlayIntent";
 
 import type {
   AnalysisFieldOverlayAppearanceState,
@@ -264,6 +264,8 @@ function fieldIdFromContext(context: CommandContext): string | null {
     stringValue(input.fieldId) ??
     selectedFrequencyDomainRef(context)?.fieldId ??
     selectedAnalysisResultRef(context)?.fieldId ??
+    (selectedOverlayIdentityRef(context)?.type === "mode-visualization"
+      ? selectedOverlayIdentityRef(context)?.fieldId : null) ??
     null
   );
 }
@@ -409,6 +411,62 @@ function overlayQueryWithDefaultViewFromContext(
   };
 }
 
+function analysisResultIntentFromContext(context: CommandContext, fieldId: string) {
+  const selected = selectedAnalysisResultRef(context);
+  if (selected) {
+    const intent = createAnalysisResultFieldOverlayIntent(selected);
+    return intent?.fieldId === fieldId ? intent : null;
+  }
+  if (selectedFrequencyDomainRef(context)) return null;
+  const visualized = selectedOverlayIdentityRef(context);
+  const active = context.analysisFieldOverlay?.getSnapshot();
+  const intent = active?.fieldId === fieldId ? active.analysisResultFieldIntent : null;
+  if (!intent || visualized?.type !== "mode-visualization" || visualized.fieldId !== fieldId ||
+    (visualized.analysisRunId !== undefined && visualized.analysisRunId !== intent.analysisRunId) ||
+    (visualized.analysisStageId !== undefined && visualized.analysisStageId !== intent.analysisStageId)) return null;
+  return intent;
+}
+
+/** Reusing an active mode changes presentation only. A newly selected result
+ * must prove its own full identity and cannot fall back to the active field. */
+function modeIntentFromContext(
+  context: CommandContext,
+  fieldId: string,
+): ModeFieldOverlayIntent | null {
+  if (selectedAnalysisResultRef(context)) return null;
+  const selected = selectedFrequencyDomainRef(context);
+  if (selected) {
+    const intent = createModeFieldOverlayIntent(selected);
+    return intent?.fieldId === fieldId ? intent : null;
+  }
+  const active = context.analysisFieldOverlay?.getSnapshot();
+  const intent = active?.source === "eigen-mode" && active.fieldId === fieldId
+    ? active.modeIntent : null;
+  if (!intent?.equilibriumId || intent.fieldId !== fieldId) return null;
+  const visualized = selectedOverlayIdentityRef(context);
+  if (visualized?.type === "mode-visualization") {
+    if (visualized.fieldId !== fieldId ||
+      (visualized.analysisRunId !== undefined && visualized.analysisRunId !== intent.analysisRunId) ||
+      (visualized.analysisStageId !== undefined && visualized.analysisStageId !== intent.analysisStageId) ||
+      (visualized.equilibriumId !== undefined && visualized.equilibriumId !== intent.equilibriumId) ||
+      (visualized.sampleIndex !== undefined && visualized.sampleIndex !== intent.sampleIndex) ||
+      (visualized.modeIndex !== undefined && visualized.modeIndex !== intent.modeIndex)) return null;
+  }
+  return intent;
+}
+
+function eigenModeIdentityReason(
+  context: CommandContext,
+  fallback: AnalysisFieldOverlaySource,
+): string | null {
+  const fieldId = fieldIdFromContext(context);
+  if (!fieldId || overlaySourceFromContext(context, fallback) !== "eigen-mode" ||
+    !selectedFieldMatchesSource(context, "eigen-mode")) return null;
+  const result = analysisResultIntentFromContext(context, fieldId);
+  if (result?.fieldId === fieldId || modeIntentFromContext(context, fieldId)) return null;
+  return "Eigen mode requires exact run, stage, sample, mode, field and equilibrium identity.";
+}
+
 function overlayStateFromContext(
   context: CommandContext,
   source: AnalysisFieldOverlaySource,
@@ -430,18 +488,14 @@ function overlayStateFromContext(
     activeOverlay?.query.phase_rad ??
     0;
   const selectedRef = selectedFrequencyDomainRef(context);
-  const selectedResultRef = selectedAnalysisResultRef(context);
-  const modeIntent =
-    resolvedSource === "eigen-mode"
-      ? createModeFieldOverlayIntent(selectedRef)
-      : null;
-  const analysisResultFieldIntent = createAnalysisResultFieldOverlayIntent(
-    selectedResultRef,
-  );
+  const modeIntent = resolvedSource === "eigen-mode"
+    ? modeIntentFromContext(context, fieldId) : null;
+  const analysisResultFieldIntent = analysisResultIntentFromContext(context, fieldId);
   const resultSource = analysisResultFieldIntent?.source ?? resolvedSource;
+  if (resultSource === "eigen-mode" && !modeIntent && analysisResultFieldIntent?.fieldId !== fieldId) return null;
   const identityRef = selectedOverlayIdentityRef(context);
   const activeIdentityOverlay =
-    identityRef?.type === "mode-visualization" &&
+    (identityRef?.type === "mode-visualization" || modeIntent === activeOverlay?.modeIntent) &&
     activeOverlay?.fieldId === fieldId
       ? activeOverlay
       : null;
@@ -458,35 +512,35 @@ function overlayStateFromContext(
     (identityRef?.wavevectorKf ? [...identityRef.wavevectorKf] as [number, number, number] : null) ??
     activeIdentityOverlay?.wavevectorKf;
   const artifactRevision =
-    analysisResultFieldIntent?.datasetRevision ??
+    modeIntent?.artifactRevision ?? analysisResultFieldIntent?.datasetRevision ??
     identityRef?.artifactRevision ??
     input.artifactRevision ??
     undefined;
   const equilibriumId =
-    identityRef?.equilibriumId ?? stringValue(input.equilibriumId) ?? undefined;
+    modeIntent?.equilibriumId ?? identityRef?.equilibriumId ?? stringValue(input.equilibriumId) ?? activeIdentityOverlay?.provenance?.equilibriumId;
   const kContextKind =
-    identityRef?.kContextKind ?? kContextKindValue(input.kContextKind) ?? undefined;
+    identityRef?.kContextKind ?? kContextKindValue(input.kContextKind) ?? activeIdentityOverlay?.provenance?.kContextKind;
   const resourceRef =
     analysisResultFieldIntent?.fieldRef.resource_key ??
     identityRef?.resourceRef ??
-    stringValue(input.resourceRef) ??
+    stringValue(input.resourceRef) ?? activeIdentityOverlay?.provenance?.resourceRef ??
     undefined;
   const representation =
     representationValue(identityRef?.representation) ??
-    representationValue(input.representation) ??
+    representationValue(input.representation) ?? activeIdentityOverlay?.provenance?.representation ??
     (analysisResultFieldIntent ? "complex-vector-xyz" : undefined);
   const runId =
-    analysisResultFieldIntent?.analysisRunId ??
+    modeIntent?.analysisRunId ?? analysisResultFieldIntent?.analysisRunId ??
     identityRef?.analysisRunId ??
     stringValue(input.runId) ??
     undefined;
   const stageId =
-    analysisResultFieldIntent?.analysisStageId ??
+    modeIntent?.analysisStageId ?? analysisResultFieldIntent?.analysisStageId ??
     identityRef?.analysisStageId ??
     stringValue(input.stageId) ??
     undefined;
   const studyProduct =
-    identityRef?.studyProduct ?? stringValue(input.studyProduct) ?? undefined;
+    identityRef?.studyProduct ?? stringValue(input.studyProduct) ?? activeIdentityOverlay?.provenance?.studyProduct;
   const normalization =
     identityRef?.normalization ?? stringValue(input.normalization) ?? activeIdentityOverlay?.provenance?.normalization;
   return {
@@ -494,24 +548,24 @@ function overlayStateFromContext(
     ...(cellOrigin ? { cellOrigin } : {}),
     fieldId,
     ...(floquetSpatialConvention ? { floquetSpatialConvention } : {}),
-    ...((numberValue(input.frequencyIndex) ?? identityRef?.frequencyIndex) !== undefined
+    ...((numberValue(input.frequencyIndex) ?? identityRef?.frequencyIndex ?? activeIdentityOverlay?.frequencyIndex) !== undefined
       ? {
           frequencyIndex:
-            numberValue(input.frequencyIndex) ?? identityRef?.frequencyIndex,
+            numberValue(input.frequencyIndex) ?? identityRef?.frequencyIndex ?? activeIdentityOverlay?.frequencyIndex,
         }
       : {}),
-    ...((numberValue(input.frequencyHz) ?? identityRef?.frequencyHz) !== undefined
-      ? { frequencyHz: numberValue(input.frequencyHz) ?? identityRef?.frequencyHz }
+    ...((numberValue(input.frequencyHz) ?? identityRef?.frequencyHz ?? activeIdentityOverlay?.frequencyHz) !== undefined
+      ? { frequencyHz: numberValue(input.frequencyHz) ?? identityRef?.frequencyHz ?? activeIdentityOverlay?.frequencyHz }
       : {}),
-    ...((numberValue(input.kPathCoordinateRadPerM) ?? identityRef?.kPathCoordinateRadPerM) !== undefined
+    ...((numberValue(input.kPathCoordinateRadPerM) ?? identityRef?.kPathCoordinateRadPerM ?? activeIdentityOverlay?.kPathCoordinateRadPerM) !== undefined
       ? {
           kPathCoordinateRadPerM:
-            numberValue(input.kPathCoordinateRadPerM) ?? identityRef?.kPathCoordinateRadPerM,
+            numberValue(input.kPathCoordinateRadPerM) ?? identityRef?.kPathCoordinateRadPerM ?? activeIdentityOverlay?.kPathCoordinateRadPerM,
         }
       : {}),
     label: overlayLabelFromContext(context, resolvedSource),
-    ...((numberValue(input.modeIndex) ?? identityRef?.modeIndex) !== undefined
-      ? { modeIndex: numberValue(input.modeIndex) ?? identityRef?.modeIndex }
+    ...((modeIntent?.modeIndex ?? numberValue(input.modeIndex) ?? identityRef?.modeIndex ?? activeIdentityOverlay?.modeIndex) !== undefined
+      ? { modeIndex: modeIntent?.modeIndex ?? numberValue(input.modeIndex) ?? identityRef?.modeIndex ?? activeIdentityOverlay?.modeIndex }
       : {}),
     ...(modeIntent?.fieldId === fieldId ? { modeIntent } : {}),
     ...(analysisResultFieldIntent?.fieldId === fieldId
@@ -522,8 +576,8 @@ function overlayStateFromContext(
       ? overlayQueryFromContext(context, phaseRad)
       : overlayQueryWithDefaultViewFromContext(context, defaultView, phaseRad),
     source: resultSource,
-    ...((numberValue(input.sampleIndex) ?? identityRef?.sampleIndex) !== undefined
-      ? { sampleIndex: numberValue(input.sampleIndex) ?? identityRef?.sampleIndex }
+    ...((modeIntent?.sampleIndex ?? numberValue(input.sampleIndex) ?? identityRef?.sampleIndex ?? activeIdentityOverlay?.sampleIndex) !== undefined
+      ? { sampleIndex: modeIntent?.sampleIndex ?? numberValue(input.sampleIndex) ?? identityRef?.sampleIndex ?? activeIdentityOverlay?.sampleIndex }
       : {}),
     visualizationPhaseRad: phaseRad,
     ...(identityRef || artifactRevision !== undefined || runId
@@ -571,7 +625,11 @@ function rebindTargetFromContext(
 }
 
 function activateViewport3D(context: CommandContext): void {
-  context.layout?.setActiveViewportMainModule("viewport-3d");
+  // A visible companion is already the single 3D instance. Activating it as
+  // the primary tab would collapse the user's chart + field workspace.
+  if (context.layout?.get().viewportCompanion?.moduleId !== "viewport-3d") {
+    context.layout?.setActiveViewportMainModule("viewport-3d");
+  }
   context.layout?.setFocusedSlot("viewport-main");
 }
 
@@ -716,9 +774,12 @@ function setOverlayAnimationCommand(options: {
           message: options.missingMessage,
         };
       }
-      const overlay =
-        existingOverlay ??
-        overlayStateFromContext(context, options.defaultSource);
+      // An explicit target must resolve its own owner. Never animate a stale
+      // active field merely because another result has already been displayed.
+      const explicitTarget = stringValue(overlayCommandInput(context).fieldId);
+      const overlay = explicitTarget
+        ? overlayStateFromContext(context, options.defaultSource)
+        : existingOverlay ?? overlayStateFromContext(context, options.defaultSource);
       if (!overlay) {
         return {
           status: "failed",
@@ -749,7 +810,7 @@ function setOverlayAnimationCommand(options: {
             }
           : overlay.query,
       };
-      if (existingOverlay) {
+      if (existingOverlay && !explicitTarget) {
         controller.update(nextOverlay);
       } else {
         controller.set(nextOverlay);
@@ -840,7 +901,7 @@ function plotCommand(
         }
         return "Selected analysis field is not a time-domain response field.";
       }
-      return fieldIdFromContext(context) ? null : "No analysis field is selected.";
+      return eigenModeIdentityReason(context, source) ?? (fieldIdFromContext(context) ? null : "No analysis field is selected.");
     },
     group: "analysis.frequency-domain",
     isEnabled: (context) =>
@@ -848,13 +909,15 @@ function plotCommand(
         context.analysisFieldOverlay &&
           fieldIdFromContext(context) &&
           selectedFieldMatchesSource(context, source) &&
-          !unsupported3DPlotReason(context),
+          !unsupported3DPlotReason(context) && !eigenModeIdentityReason(context, source),
       ),
     run: async (context) => {
       const unsupportedReason = unsupported3DPlotReason(context);
       if (unsupportedReason) {
         return { status: "failed", message: unsupportedReason };
       }
+      const identityReason = eigenModeIdentityReason(context, source);
+      if (identityReason) return { status: "failed", message: identityReason };
       const state = overlayStateFromContext(context, source, defaultView);
       if (!state || !context.analysisFieldOverlay) {
         return { status: "failed", message: "No analysis field is selected." };

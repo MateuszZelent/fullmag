@@ -1,6 +1,7 @@
 import { finiteModalScalar } from "./modalDampingObservables";
 import { fieldVectorResourceKey as canonicalFieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
 import type { AnalysisChartResourceRef } from "./chartCursorPoint";
+import type { DispersionChartPointMetadata } from "./chartSeries";
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
@@ -122,6 +123,7 @@ export function frequencyDomainChartRouteOverrideFromSelection(
 
 export function frequencyDomainChartRouteOverrideFromSubview(
   subview: AnalysisSubview | null | undefined,
+  classification?: Pick<FrequencyDomainResultClassification, "relationKind"> | null,
 ): Pick<FrequencyDomainChartRoute, "mode" | "primaryChart"> | null {
   switch (subview) {
     case "resonance.eigenmodes":
@@ -131,6 +133,11 @@ export function frequencyDomainChartRouteOverrideFromSubview(
     case "resonance.modal-driven":
       return { mode: "fmr_modal_driven", primaryChart: "comparison" };
     case "dispersion.modal":
+      // A single nonzero k belongs to the k-resolved family, but publishes
+      // a frequency spectrum at that k, not a sampled dispersion relation.
+      return classification?.relationKind === "fixed_k_modal"
+        ? FREE_MODES_SELECTION_ROUTE
+        : DISPERSION_MODAL_SELECTION_ROUTE;
     case "dispersion.branches":
       return { mode: "dispersion_modal", primaryChart: "dispersion" };
     case "dispersion.driven-map":
@@ -145,6 +152,9 @@ export interface FrequencyDomainResultContext {
   classification: FrequencyDomainResultClassification | null;
   contractGaps: string[];
   equilibriumId: string | null;
+  sampleEquilibriumIds: Readonly<Record<number, string>> | null;
+  sampleEquilibriumProvenance: "absent" | "invalid" | "valid";
+  sampleCount: number | null;
   evidence: FrequencyDomainResultEvidence | null;
   geometryId: string | null;
   kSampling: FrequencyDomainResultEvidence["kSampling"] | null;
@@ -169,9 +179,23 @@ export function frequencyDomainResultContextFromManifest(
   const manifest = record(manifestPayload);
   const requested = record(manifest?.requested_execution);
   const contractGaps: string[] = [];
-  const runId = stringValue(manifest?.run_id) ?? stringValue(owner.runId);
-  const stageId = stringValue(manifest?.stage_id) ?? stringValue(owner.stageId);
-  const equilibriumId = stringValue(
+  const manifestRunId = stringValue(manifest?.run_id);
+  const manifestStageId = stringValue(manifest?.stage_id);
+  const hasHistoricalOwnerPlaceholderPair =
+    manifestRunId === "current" && manifestStageId === "eigenmodes";
+  const runOwner = reconcileManifestOwner(
+    manifestRunId,
+    owner.runId,
+    "current",
+  );
+  const stageOwner = reconcileManifestOwner(
+    manifestStageId,
+    owner.stageId,
+    hasHistoricalOwnerPlaceholderPair ? "eigenmodes" : null,
+  );
+  const runId = runOwner.value;
+  const stageId = stageOwner.value;
+  const declaredCommonEquilibriumId = stringValue(
     manifest?.equilibrium_identity ?? manifest?.equilibrium_artifact_sha256,
   );
   const studyProduct = manifest?.study_product === "modal_eigen" || manifest?.study_product === "driven_response"
@@ -188,19 +212,52 @@ export function frequencyDomainResultContextFromManifest(
   const meshId = stringValue(manifest?.mesh_identity) ?? stringValue(owner.meshGenerationId);
   const observables = typedObservableEvidence(manifest?.observables);
   const kSampling = typedKSampling(manifest?.k_sampling ?? requested?.k_sampling);
-  if (!runId) contractGaps.push("run identity unavailable");
-  if (!stageId) contractGaps.push("stage identity unavailable");
-  if (!equilibriumId) contractGaps.push("equilibrium identity unavailable");
+  const sampleEquilibrium = sampleEquilibriumProvenanceFromManifest(
+    manifest,
+    kSampling,
+    declaredCommonEquilibriumId,
+  );
+  const equilibriumId = sampleEquilibrium.provenance === "invalid"
+    ? null
+    : sampleEquilibrium.commonEquilibriumId;
+  if (runOwner.conflict) {
+    contractGaps.push("run identity conflicts with artifact owner");
+  } else if (!runId) {
+    contractGaps.push("run identity unavailable");
+  }
+  if (stageOwner.conflict) {
+    contractGaps.push("stage identity conflicts with artifact owner");
+  } else if (!stageId) {
+    contractGaps.push("stage identity unavailable");
+  }
+  if (!equilibriumId && sampleEquilibrium.provenance !== "valid") {
+    contractGaps.push("equilibrium identity unavailable");
+  }
+  if (sampleEquilibrium.provenance === "invalid") {
+    contractGaps.push("sample equilibrium provenance invalid");
+  }
   if (!studyProduct) contractGaps.push("study product unavailable");
   if (!boundaryContext) contractGaps.push("boundary context unavailable");
   if (!geometryId) contractGaps.push("geometry identity unavailable");
   if (!meshId) contractGaps.push("mesh identity unavailable");
-  if (!runId || !stageId || !equilibriumId || !studyProduct || !boundaryContext) {
+  if (
+    runOwner.conflict ||
+    stageOwner.conflict ||
+    !runId ||
+    !stageId ||
+    (!equilibriumId && sampleEquilibrium.provenance !== "valid") ||
+    sampleEquilibrium.provenance === "invalid" ||
+    !studyProduct ||
+    !boundaryContext
+  ) {
     return {
       boundaryContext,
       classification: null,
       contractGaps,
       equilibriumId,
+      sampleEquilibriumIds: sampleEquilibrium.ids,
+      sampleEquilibriumProvenance: sampleEquilibrium.provenance,
+      sampleCount: sampleEquilibrium.sampleCount,
       evidence: null,
       geometryId,
       kSampling,
@@ -217,7 +274,7 @@ export function frequencyDomainResultContextFromManifest(
   const evidence: FrequencyDomainResultEvidence = {
     boundaryContext,
     ...(drive ? { drive } : {}),
-    equilibriumId,
+    ...(equilibriumId ? { equilibriumId } : {}),
     ...(kSampling ? { kSampling } : {}),
     ...(normalization ? { normalization } : {}),
     observables,
@@ -231,6 +288,9 @@ export function frequencyDomainResultContextFromManifest(
       classification: classifyFrequencyDomainResult(evidence),
       contractGaps,
       equilibriumId,
+      sampleEquilibriumIds: sampleEquilibrium.ids,
+      sampleEquilibriumProvenance: sampleEquilibrium.provenance,
+      sampleCount: sampleEquilibrium.sampleCount,
       evidence,
       geometryId,
       kSampling,
@@ -247,6 +307,9 @@ export function frequencyDomainResultContextFromManifest(
       classification: null,
       contractGaps: [...contractGaps, "k context unavailable"],
       equilibriumId,
+      sampleEquilibriumIds: sampleEquilibrium.ids,
+      sampleEquilibriumProvenance: sampleEquilibrium.provenance,
+      sampleCount: sampleEquilibrium.sampleCount,
       evidence,
       geometryId,
       kSampling,
@@ -258,6 +321,115 @@ export function frequencyDomainResultContextFromManifest(
       studyProduct,
     };
   }
+}
+
+/** Resolves only an exact sample identity, with a common legacy id for one-sample results. */
+export function frequencyDomainEquilibriumIdForSample(
+  context: FrequencyDomainResultContext | null | undefined,
+  sampleIndex: number | null | undefined,
+): string | null {
+  if (!context || !Number.isSafeInteger(sampleIndex) || (sampleIndex ?? -1) < 0) {
+    return null;
+  }
+  if (context.sampleEquilibriumProvenance === "invalid") return null;
+  if (context.sampleEquilibriumProvenance === "valid") {
+    return context.sampleEquilibriumIds?.[sampleIndex as number] ?? null;
+  }
+  const sampleCount = context.sampleCount ?? (context.kSampling?.kind === "single"
+    ? 1
+    : context.kSampling?.sampleCount ?? null);
+  return sampleCount === 1 && sampleIndex === 0
+    ? context.equilibriumId
+    : null;
+}
+
+function sampleEquilibriumProvenanceFromManifest(
+  manifest: JsonRecord | null,
+  kSampling: FrequencyDomainResultEvidence["kSampling"] | null,
+  declaredCommonEquilibriumId: string | null,
+): {
+  commonEquilibriumId: string | null;
+  ids: Readonly<Record<number, string>> | null;
+  provenance: "absent" | "invalid" | "valid";
+  sampleCount: number | null;
+} {
+  const samplingCount = kSampling?.kind === "single"
+    ? 1
+    : kSampling?.sampleCount ?? null;
+  const hasProvenance = manifest !== null &&
+    Object.prototype.hasOwnProperty.call(manifest, "sample_execution_provenance");
+  if (!hasProvenance) {
+    return {
+      commonEquilibriumId: declaredCommonEquilibriumId,
+      ids: null,
+      provenance: "absent",
+      sampleCount: samplingCount,
+    };
+  }
+
+  const provenance = record(manifest?.sample_execution_provenance);
+  const count = provenance?.sample_count;
+  const samples = provenance?.samples;
+  if (
+    provenance?.schema_version !== "frequency_domain_sample_execution_provenance.v1" ||
+    typeof count !== "number" || !Number.isSafeInteger(count) || count < 1 ||
+    !Array.isArray(samples) || samples.length !== count ||
+    (samplingCount !== null && samplingCount !== count)
+  ) {
+    return {
+      commonEquilibriumId: null,
+      ids: null,
+      provenance: "invalid",
+      sampleCount: samplingCount ?? (typeof count === "number" ? count : null),
+    };
+  }
+
+  const ids: Record<number, string> = {};
+  for (const sampleValue of samples) {
+    const sample = record(sampleValue);
+    const validation = record(sample?.validation);
+    const index = sample?.sample_index;
+    const equilibriumId = stringValue(validation?.equilibrium_artifact_sha256);
+    if (
+      typeof index !== "number" || !Number.isSafeInteger(index) || index < 0 || index >= count ||
+      Object.prototype.hasOwnProperty.call(ids, index) || !equilibriumId
+    ) {
+      return { commonEquilibriumId: null, ids: null, provenance: "invalid", sampleCount: count };
+    }
+    ids[index] = equilibriumId;
+  }
+  if (Object.keys(ids).length !== count) {
+    return { commonEquilibriumId: null, ids: null, provenance: "invalid", sampleCount: count };
+  }
+  const orderedIds = Array.from({ length: count }, (_, index) => ids[index]);
+  if (orderedIds.some((equilibriumId) => !equilibriumId)) {
+    return { commonEquilibriumId: null, ids: null, provenance: "invalid", sampleCount: count };
+  }
+  if (declaredCommonEquilibriumId && orderedIds.some((id) => id !== declaredCommonEquilibriumId)) {
+    return { commonEquilibriumId: null, ids: null, provenance: "invalid", sampleCount: count };
+  }
+  const commonEquilibriumId = orderedIds.every((id) => id === orderedIds[0])
+    ? orderedIds[0] ?? null
+    : null;
+  return { commonEquilibriumId, ids, provenance: "valid", sampleCount: count };
+}
+
+/** Ignore only the exact historical payload aliases; conflicting exact IDs invalidate ownership. */
+function reconcileManifestOwner(
+  manifestValue: unknown,
+  wrapperValue: unknown,
+  historicalPayloadPlaceholder: string | null,
+): { conflict: boolean; value: string | null } {
+  const manifestId = stringValue(manifestValue);
+  const wrapperId = stringValue(wrapperValue);
+  const exactManifestId = historicalPayloadPlaceholder !== null &&
+    manifestId === historicalPayloadPlaceholder
+    ? null
+    : manifestId;
+  if (exactManifestId && wrapperId && exactManifestId !== wrapperId) {
+    return { conflict: true, value: null };
+  }
+  return { conflict: false, value: wrapperId ?? exactManifestId };
 }
 
 function typedDriveEvidence(value: unknown): FrequencyDomainResultEvidence["drive"] | null {
@@ -290,6 +462,31 @@ function typedKSampling(value: unknown): FrequencyDomainResultEvidence["kSamplin
   if (sampling?.kind === "single" && Array.isArray(sampling.vector_rad_per_m) &&
     sampling.vector_rad_per_m.length === 3 && sampling.vector_rad_per_m.every((item) => typeof item === "number" && Number.isFinite(item))) {
     return { kind: "single", vectorRadPerM: sampling.vector_rad_per_m as [number, number, number] };
+  }
+  // Native KSamplingIR publishes control points and segment subdivisions,
+  // rather than the legacy UI summary's sample_count. Validate that wire
+  // contract before deriving the count; never infer a path from its mode rows.
+  if (sampling?.kind === "path" &&
+    ("points" in sampling || "samples_per_segment" in sampling || "closed" in sampling)) {
+    const points = sampling.points;
+    const counts = sampling.samples_per_segment;
+    const closed = sampling.closed ?? false;
+    if (!Array.isArray(points) || points.length < 2 ||
+      points.some((point) => {
+        const vector = record(point)?.k_vector;
+        return !Array.isArray(vector) || vector.length !== 3 ||
+          vector.some((value) => typeof value !== "number" || !Number.isFinite(value));
+      }) ||
+      typeof closed !== "boolean" || !Array.isArray(counts) ||
+      counts.length !== points.length - (closed ? 0 : 1) ||
+      counts.some((count) => typeof count !== "number" || !Number.isSafeInteger(count) || count < 1 || count > 0xffffffff)) {
+      return null;
+    }
+    const sampleCount = counts.reduce((total: number, count: number) => total + count, 1);
+    if (!Number.isSafeInteger(sampleCount) ||
+      (sampling.sample_count !== undefined && sampling.sample_count !== sampleCount)) return null;
+    const label = stringValue(sampling.label);
+    return { kind: "path", sampleCount, ...(label ? { label } : {}) };
   }
   if ((sampling?.kind === "path" || sampling?.kind === "grid") &&
     typeof sampling.sample_count === "number" && Number.isSafeInteger(sampling.sample_count) && sampling.sample_count > 0) {
@@ -348,7 +545,7 @@ export function frequencyResponseSeriesUnit(
   return model.series.find((series) => series.quantity === quantity)?.unit ?? NOT_PUBLISHED_UNIT;
 }
 
-export interface FrequencyDomainChartPoint {
+export interface FrequencyDomainChartPoint extends DispersionChartPointMetadata {
   breakBefore?: boolean;
   label?: string | null;
   linewidthHz?: number | null;
@@ -358,6 +555,7 @@ export interface FrequencyDomainChartPoint {
 }
 
 export interface FrequencyDomainChartSeries {
+  hasCompleteWavevectorKf?: boolean;
   id: string;
   kind?: "line" | "scatter";
   label: string;
@@ -558,6 +756,7 @@ export interface FrequencyDomainSelectionContext {
   calculationMode?: FrequencyDomainCalculationMode | null;
   equilibriumId?: string | null;
   kContextKind?: AnalysisFieldOverlayKContextKind | null;
+  kPathCoordinateRadPerM?: number | null;
   nodeId?: string | null;
   normalization?: string | null;
   representation?: AnalysisFieldOverlayRepresentation | null;
@@ -1014,8 +1213,10 @@ export function buildEigenSpectrumChartModel(
     series: [
       {
         id: "analysis.frequency-domain:eigen:spectrum:frequency",
+        kind: "scatter",
         label: "Eigen frequency",
         points: points.map((point, rowIndex) => ({
+          ...point,
           rowIndex,
           x: point.displayModeIndex,
           y: point.frequencyHz / frequencyScale.divisor,
@@ -1054,6 +1255,7 @@ export function buildEigenModeSelectionRef(
     frequencyHz: point.frequencyHz,
     equilibriumId: context.equilibriumId ?? undefined,
     kContextKind: context.kContextKind ?? undefined,
+    kPathCoordinateRadPerM: context.kPathCoordinateRadPerM ?? undefined,
     kind: "results.eigen.mode",
     modeId: point.modeId ?? undefined,
     modeIndex: point.rawModeIndex,
@@ -1117,6 +1319,8 @@ export function buildEigenDispersionChartModel(
     const dispersionSeriesKind: NonNullable<FrequencyDomainChartSeries["kind"]> =
       branchId === "raw" ? "scatter" : "line";
     const numericalSeries = {
+      hasCompleteWavevectorKf: branchPoints.length > 0 &&
+        branchPoints.every(({ point }) => point.wavevectorKf?.every(Number.isFinite) === true),
       id: `analysis.frequency-domain:eigen:dispersion:${branchId}`,
       kind: dispersionSeriesKind,
       label: branchLabel,
@@ -1128,6 +1332,7 @@ export function buildEigenDispersionChartModel(
             : {}),
           ...(point.sampleLabel ? { label: point.sampleLabel } : {}),
           ...(point.linewidthHz != null ? { linewidthHz: point.linewidthHz } : {}),
+          ...dispersionChartPointMetadata(point),
           rowIndex,
           x: point.pathS,
           y: point.frequencyHz / frequencyScale.divisor,
@@ -1149,6 +1354,7 @@ export function buildEigenDispersionChartModel(
           ? { breakBefore: true }
           : {}),
         ...(point.sampleLabel ? { label: point.sampleLabel } : {}),
+        ...dispersionChartPointMetadata(point),
         rowIndex,
         x: point.pathS,
         y: point.analyticFrequencyHz! / frequencyScale.divisor,
@@ -1158,6 +1364,8 @@ export function buildEigenDispersionChartModel(
     return [
       numericalSeries,
       {
+        hasCompleteWavevectorKf: analyticBranchPoints.length > 0 &&
+          analyticBranchPoints.every(({ point }) => point.wavevectorKf?.every(Number.isFinite) === true),
         id: `analysis.frequency-domain:eigen:dispersion:${branchId}:analytic`,
         kind: dispersionSeriesKind,
         label: `${branchLabel} analytic`,
@@ -1176,6 +1384,31 @@ export function buildEigenDispersionChartModel(
     droppedPointCount: parsed.droppedPointCount,
     points,
     series,
+  };
+}
+
+function dispersionChartPointMetadata(
+  point: EigenDispersionPoint,
+): DispersionChartPointMetadata {
+  return {
+    analyticFrequencyHz: point.analyticFrequencyHz,
+    branchId: point.branchId,
+    frequencyHz: point.frequencyHz,
+    itemId: point.modeId ?? null,
+    modeFieldAvailable: point.modeFieldAvailable,
+    modeFieldId: point.modeFieldId,
+    modeFieldResourceKey: point.modeFieldResourceKey,
+    modeId: point.modeId ?? null,
+    overlap: point.overlap,
+    pathS: point.pathS,
+    rawModeIndex: point.rawModeIndex,
+    relativeError: point.relativeError,
+    residualNorm: point.residualNorm,
+    sampleId: point.sampleId ?? null,
+    sampleIndex: point.sampleIndex,
+    sampleLabel: point.sampleLabel ?? null,
+    validationGeometry: point.validationGeometry,
+    wavevectorKf: point.wavevectorKf ?? null,
   };
 }
 

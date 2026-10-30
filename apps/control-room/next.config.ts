@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 import { realpathSync } from "node:fs";
 import path from "node:path";
+import { MAX_FMS_FILE_BYTES, FMS_PROXY_TIMEOUT_MS } from "./src/shared/domain/persistence/fmsFileTransport";
 
 function controlRoomApiProxyTarget(): string {
   return (
@@ -409,7 +410,6 @@ function securityHeaders() {
 export const CONTROL_ROOM_SYNC_COMMAND_PROXY_TIMEOUT_MS = (30 + 90 + 1800) * 1000 + 250;
 
 const nextConfig: NextConfig = {
-  experimental: { proxyTimeout: CONTROL_ROOM_SYNC_COMMAND_PROXY_TIMEOUT_MS },
   allowedDevOrigins,
   distDir,
   env: {
@@ -419,6 +419,12 @@ const nextConfig: NextConfig = {
   },
   // R3F v9 force-loses WebGL during React development strict remounts.
   reactStrictMode: false,
+  // Next otherwise truncates rewritten uploads at 10 MiB. The backend's
+  // binary routes count actual bytes; ordinary JSON retains its 128 MiB cap.
+  ...(staticExport ? {} : { experimental: {
+    proxyClientMaxBodySize: MAX_FMS_FILE_BYTES,
+    proxyTimeout: Math.max(FMS_PROXY_TIMEOUT_MS, CONTROL_ROOM_SYNC_COMMAND_PROXY_TIMEOUT_MS),
+  } }),
   ...(staticExport
     ? {
         output: "export" as const,

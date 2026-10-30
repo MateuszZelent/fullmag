@@ -2710,6 +2710,10 @@ pub(super) fn write_eigen_v2_bundle_with_outputs(
                 object.remove("component_participation");
                 remove_floquet_reference_fields(object);
                 object.insert(
+                    "mode_id".to_string(),
+                    serde_json::json!(format!("sample-{sample_index:04}/mode-{raw_mode_index:04}")),
+                );
+                object.insert(
                     "raw_mode_index".to_string(),
                     serde_json::json!(raw_mode_index),
                 );
@@ -2995,6 +2999,8 @@ pub(super) fn write_eigen_v2_bundle_with_outputs(
         let mut metadata = serde_json::json!({
             "schema_version": "eigen_mode.v2",
             "solver_model": summary_payload["solver_kind"],
+            "sample_id": modal_sample_id(plan, sample_index),
+            "mode_id": format!("sample-{sample_index:04}/mode-{raw_mode_index:04}"),
             "sample_index": sample_index,
             "raw_mode_index": raw_mode_index,
             "branch_id": raw_mode_index,
@@ -3575,7 +3581,7 @@ pub(super) fn write_eigen_v2_bundle_with_outputs(
     Ok(())
 }
 
-fn modal_boundary_context(plan: &FemEigenPlanIR) -> &'static str {
+pub(super) fn modal_boundary_context(plan: &FemEigenPlanIR) -> &'static str {
     match plan.spin_wave_bc.kind() {
         SpinWaveBoundaryKindIR::Periodic | SpinWaveBoundaryKindIR::Floquet => "floquet_periodic",
         SpinWaveBoundaryKindIR::Free
@@ -3584,7 +3590,7 @@ fn modal_boundary_context(plan: &FemEigenPlanIR) -> &'static str {
     }
 }
 
-fn modal_k_sampling_manifest(k_sampling: Option<&KSamplingIR>) -> serde_json::Value {
+pub(super) fn modal_k_sampling_manifest(k_sampling: Option<&KSamplingIR>) -> serde_json::Value {
     match k_sampling {
         Some(KSamplingIR::Single { k_vector }) => serde_json::json!({
             "kind": "single",

@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <new>
@@ -15,6 +16,61 @@
 #include <petscksp.h>
 
 namespace fullmag::fem::frequency_domain::detail {
+
+// O(n) scratch storage, three operator actions; diagnostic only: never changes the supplied candidate or acceptance.
+// Called only after a completed inner solve failed independent certification.
+struct FloquetFailedActionProbeResult {
+    PetscReal action_norm = 0.0;
+    PetscReal repeat_defect = 0.0;
+    PetscReal scale_defect = 0.0;
+};
+
+inline PetscErrorCode report_floquet_failed_action_probe(
+    KSP ksp, Vec candidate, FloquetFailedActionProbeResult *result = nullptr)
+{
+    Mat op = nullptr;
+    Vec unit = nullptr, action = nullptr, repeated = nullptr, scaled = nullptr;
+    PetscReal norm = 0.0, action_norm = 0.0, repeat_defect = 0.0, scale_defect = 0.0;
+    PetscErrorCode error = KSPGetOperators(ksp, &op, nullptr);
+    if (error == PETSC_SUCCESS && op == nullptr) error = PETSC_ERR_ARG_NULL;
+    if (error == PETSC_SUCCESS) error = VecNorm(candidate, NORM_2, &norm);
+    if (error == PETSC_SUCCESS && (!std::isfinite(static_cast<double>(norm)) || norm <= 0.0 ||
+        !std::isfinite(static_cast<double>(1.0 / norm))))
+        error = PETSC_ERR_ARG_OUTOFRANGE;
+    if (error == PETSC_SUCCESS) error = VecDuplicate(candidate, &unit);
+    if (error == PETSC_SUCCESS) error = VecDuplicate(candidate, &action);
+    if (error == PETSC_SUCCESS) error = VecDuplicate(candidate, &repeated);
+    if (error == PETSC_SUCCESS) error = VecDuplicate(candidate, &scaled);
+    if (error == PETSC_SUCCESS) error = VecCopy(candidate, unit);
+    if (error == PETSC_SUCCESS) error = VecScale(unit, static_cast<PetscScalar>(1.0 / norm));
+    if (error == PETSC_SUCCESS) error = MatMult(op, candidate, action);
+    if (error == PETSC_SUCCESS) error = MatMult(op, candidate, repeated);
+    if (error == PETSC_SUCCESS) error = MatMult(op, unit, scaled);
+    if (error == PETSC_SUCCESS) error = VecScale(scaled, static_cast<PetscScalar>(norm));
+    if (error == PETSC_SUCCESS) error = VecNorm(action, NORM_2, &action_norm);
+    if (error == PETSC_SUCCESS) error = VecAXPY(repeated, -1.0, action);
+    if (error == PETSC_SUCCESS) error = VecAXPY(scaled, -1.0, action);
+    if (error == PETSC_SUCCESS) error = VecNorm(repeated, NORM_2, &repeat_defect);
+    if (error == PETSC_SUCCESS) error = VecNorm(scaled, NORM_2, &scale_defect);
+    if (error == PETSC_SUCCESS && (!std::isfinite(static_cast<double>(action_norm)) ||
+        !std::isfinite(static_cast<double>(repeat_defect)) ||
+        !std::isfinite(static_cast<double>(scale_defect)))) error = PETSC_ERR_FP;
+    if (error == PETSC_SUCCESS && result != nullptr)
+        *result = {action_norm, repeat_defect, scale_defect};
+    PetscErrorCode cleanup_error = PETSC_SUCCESS;
+    for (Vec *vec : {&unit, &action, &repeated, &scaled}) {
+        const PetscErrorCode current = VecDestroy(vec);
+        if (cleanup_error == PETSC_SUCCESS) cleanup_error = current;
+    }
+    std::fprintf(stderr,
+        "FULLMAG_SHIFTED_FAILED_ACTION_PROBE error=%d cleanup_error=%d "
+        "candidate_norm=%.17g action_norm=%.17g repeat_defect_l2=%.17g "
+        "rescaled_unit_action_defect_l2=%.17g scope=diagnostic_only\n",
+        static_cast<int>(error), static_cast<int>(cleanup_error),
+        static_cast<double>(norm), static_cast<double>(action_norm),
+        static_cast<double>(repeat_defect), static_cast<double>(scale_defect));
+    return cleanup_error != PETSC_SUCCESS ? cleanup_error : error;
+}
 
 // This snapshot is intentionally a plain value object. `inner_ksp` is a
 // borrowed identity while the owning PCSHELL context remains alive; callers
@@ -958,6 +1014,20 @@ inline PetscErrorCode floquet_shifted_certified_recovery_shell_apply(
                ? PETSC_SUCCESS
                : PETSC_ERR_NOT_CONVERGED);
     record_floquet_certified_recovery_primary_error(context, solve_failure);
+    if (solve_failure == PETSC_ERR_NOT_CONVERGED &&
+        context->snapshot.final_residual_available &&
+        !context->snapshot.unsafe && !context->snapshot.last_certified) {
+        // A probe cannot rescue a rejected solve. Any probe failure also keeps
+        // this graph unsafe; the primary numerical failure remains unchanged.
+        const PetscErrorCode probe_error = report_floquet_failed_action_probe(
+            context->inner_ksp, solution);
+        if (probe_error != PETSC_SUCCESS) {
+            mark_floquet_certified_recovery_unsafe(context, probe_error);
+            context->applying = false;
+            ++context->snapshot.failed_count;
+            return context->snapshot.primary_error;
+        }
+    }
     const PetscErrorCode settings_restore_error =
         restore_floquet_certified_recovery_settings(context);
     context->applying = false;

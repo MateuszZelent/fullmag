@@ -5,7 +5,7 @@ import type { ChartSeries } from "@/shared/domain/analysis/chartSeries";
 
 import { selectionRefFromNode } from "@/modules/explorer/explorerSelection";
 
-import { publishedReferenceDatasetRevision, referenceOverlaySeries } from "./referenceOverlaySeries";
+import { publishedReferenceDatasetRevision, referenceOverlaySeries, publishedWavevectorInterpolator } from "./referenceOverlaySeries";
 
 const computed = [{
   id: "analysis.frequency-domain:eigen:dispersion:b1",
@@ -85,4 +85,33 @@ describe("reference overlay series", () => {
     expect(referenceOverlaySeries(computed, [reference], { artifactRevision: 7, runId: "run-2", stageId: "eigen" })).toEqual([]);
     expect(referenceOverlaySeries(computed, [reference], { artifactRevision: 7, runId: "run-1", stageId: "other" })).toEqual([]);
   });
+});
+
+
+describe("published reference k coordinates", () => {
+  const path = [{ ...computed[0]!, points: [
+    { rowIndex: 0, x: 0, pathS: 0, y: 13, wavevectorKf: [0, -25e6, 0] as const },
+    { rowIndex: 1, x: 50e6, pathS: 50e6, y: 13, wavevectorKf: [0, 25e6, 0] as const },
+  ] }];
+  it("maps Gamma and signed k only inside a proven straight path segment", () => {
+    const at = publishedWavevectorInterpolator(path);
+    expect(at(25e6)).toEqual([0, 0, 0]);
+    expect(at(15e6)).toEqual([0, -10e6, 0]);
+    expect(at(-1)).toBeNull();
+    expect(at(50e6 + 1)).toBeNull();
+  });
+  it("rejects conflicting branches and unobserved bends", () => {
+    expect(publishedWavevectorInterpolator([...path, { ...path[0]!, points: [
+      { ...path[0]!.points[0]!, wavevectorKf: [0, 0, 0] },
+    ] }])(25e6)).toBeNull();
+    expect(publishedWavevectorInterpolator([{ ...path[0]!, points: [
+      path[0]!.points[0]!, { ...path[0]!.points[1]!, wavevectorKf: [0, 0, 0] },
+    ] }])(25e6)).toBeNull();
+  });
+});
+
+
+it("pins a reference to the published manifest digest, never the producer's reusable count label", () => {
+  expect(publishedReferenceDatasetRevision({ revision: "sha256:manifest-a", payload: { revision: "eigen:15:15" } })).toBe("sha256:manifest-a");
+  expect(publishedReferenceDatasetRevision({ revision: "sha256:manifest-b", payload: { revision: "eigen:15:15" } })).toBe("sha256:manifest-b");
 });

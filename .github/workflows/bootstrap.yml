@@ -150,6 +150,7 @@ jobs:
           cargo test -p fullmag-plan --lib preparation::tests::fdm_
           cargo test -p fullmag-api --bin fullmag-api docker_startup::tests
           cargo test -p fullmag-api --bin fullmag-api live_retirement --no-fail-fast
+          cargo test -p fullmag-api --bin fullmag-api development_restart::tests --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api session_output_target_tests --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api live_accepted_execution::tests
           cargo test -p fullmag-api --bin fullmag-api live_execution_binding::tests
@@ -157,6 +158,7 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api development_accepted_restore::tests
           cargo test -p fullmag-runtime-control --lib scheduler::accepted_start_tests
           cargo test -p fullmag-api --bin fullmag-api live_accepted_projection::tests
+          cargo test -p fullmag-api --bin fullmag-api router_v2::handlers::data::artifacts::tests
           cargo test -p fullmag-api --bin fullmag-api accepted_fem_study_worker::source_contract_tests
           cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_fem_study_worker::source_contract_tests
           cargo test -p fullmag-api --bin fullmag-api live_scene_preparation::tests
@@ -198,6 +200,9 @@ jobs:
       - name: Run complete session reachability and archive contracts
         run: cargo test -p fullmag-session --lib --no-fail-fast
 
+      - name: Run preparation process receipt staging scanner contracts
+        run: cargo test -p fullmag-session --test p0_preparation_process_receipts --no-fail-fast
+
       - name: Verify accepted provenance archive export and read-only import
         if: ${{ !cancelled() && steps.install-rust.outcome == 'success' && steps.install-python-runtime.outcome == 'success' }}
         env:
@@ -232,6 +237,16 @@ jobs:
       - name: Run deterministic eigen worker input contracts
         run: cargo test -p fullmag-runner eigen_k_worker --no-fail-fast
 
+      - name: Verify reference mode reconstruction and periodic publication
+        run: |
+          set -euo pipefail
+          cargo test -p fullmag-runner --lib scalar_projection_tests -- --nocapture | tee "$RUNNER_TEMP/eigen-projection.log"
+          grep -F "test result: ok. 5 passed" "$RUNNER_TEMP/eigen-projection.log"
+          cargo test -p fullmag-runner --lib materialized_full2x2_guard_ -- --nocapture | tee "$RUNNER_TEMP/eigen-materialized-frame.log"
+          grep -F "test result: ok. 2 passed" "$RUNNER_TEMP/eigen-materialized-frame.log"
+          cargo test -p fullmag-runner --lib reference_mode_publication_ -- --nocapture | tee "$RUNNER_TEMP/eigen-reference-publication.log"
+          grep -F "test result: ok. 2 passed" "$RUNNER_TEMP/eigen-reference-publication.log"
+
       - name: Run native modal cancellation completion contract
         run: cargo test -p fullmag-runner native_modal_run_result_completion_matches_status --lib
 
@@ -261,7 +276,8 @@ jobs:
           cargo test -p fullmag-runner actual_path_manifest_distinguishes_numeric_solve_from_comparison --lib
           cargo test -p fullmag-runner eigen_path_single_k_solver_model_ --lib
           cargo test -p fullmag-runner relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_without_per_sample_relaxation --lib
-          cargo test -p fullmag-runner floquet_dynamic_demag_provider_requires_exact_requested_pair_set --lib
+          cargo test -p fullmag-runner floquet_dynamic_demag_provider_ --lib
+          cargo test -p fullmag-runner modal_v6_pair_axis_mask_ --lib
           cargo test -p fullmag-runner spectrum_quantity_ --lib
 
       - name: Run diagnostic flag contracts through real single-k publishers
@@ -290,6 +306,7 @@ jobs:
       - name: Run tracking confidence and branch writer contracts
         run: |
           cargo test -p fullmag-runner eigen::tracking::tests --lib --no-fail-fast
+          cargo test -p fullmag-runner eigen::tracking_mass --lib --no-fail-fast
           cargo test -p fullmag-runner tracked_pair_overlap_is_published_as_confidence_in_json_and_csv --lib
           cargo test -p fullmag-runner tracking_only_mode_contributes_to_overlap_summary_without_public_mode_selection --lib
 
@@ -340,6 +357,7 @@ jobs:
         run: |
           cargo test -p fullmag-plan fem_eigen_modal_solver_policy --lib
           cargo test -p fullmag-plan fem_eigen_floquet --lib
+          cargo test -p fullmag-ir strict_floquet_admission --lib
           cargo test -p fullmag-runner floquet_payload_tests --lib
           cargo test -p fullmag-runner terminal_action_after_completed_pool_does_not_interrupt_but_active_actions_do --lib
           cargo test -p fullmag-runner fem::eigen_progress::tests --lib
@@ -351,6 +369,18 @@ jobs:
           cargo test -p fullmag-runner shared_domain_modal_scope_rejects_uncertified_local_tangent_terms --lib
           cargo test -p fullmag-runner material_identity_tests --lib
           cargo test -p fullmag-runner shared_domain_payload_omits_zero_anisotropy_after_certified_linearization --lib
+
+      - name: Run eigen bias-sample demag policy and M0 acceptance contracts
+        run: |
+          set -euo pipefail
+          cargo test --locked -p fullmag-plan fem_eigen_bias_sample_ --lib -- --nocapture | tee "$RUNNER_TEMP/eigen-bias-demag-policy-plan.log"
+          grep -q '^test result: ok\. 2 passed; 0 failed;' "$RUNNER_TEMP/eigen-bias-demag-policy-plan.log"
+          cargo test --locked -p fullmag-runner bias_field_sample_relax_plan_carries_demag_policy_without_changing_llg_budget --lib -- --nocapture | tee "$RUNNER_TEMP/eigen-bias-demag-policy-runner.log"
+          grep -q '^test result: ok\. 1 passed; 0 failed;' "$RUNNER_TEMP/eigen-bias-demag-policy-runner.log"
+          cargo test --locked -p fullmag-runner --lib relaxation::convergence::tests::max_steps_is_terminal_but_not_converged -- --exact --nocapture | tee "$RUNNER_TEMP/eigen-bias-max-steps.log"
+          grep -q '^test result: ok\. 1 passed; 0 failed;' "$RUNNER_TEMP/eigen-bias-max-steps.log"
+          cargo test --locked -p fullmag-runner --lib fem::eigen_tests::accepted_relax_stage_handoff_rejects_nonconvergent_and_incoherent_completions -- --exact --nocapture | tee "$RUNNER_TEMP/eigen-bias-m0-handoff.log"
+          grep -q '^test result: ok\. 1 passed; 0 failed;' "$RUNNER_TEMP/eigen-bias-m0-handoff.log"
 
       - name: Run scene periodic boundary intent contracts
         run: cargo test -p fullmag-authoring scene_pbc --lib
@@ -375,12 +405,23 @@ jobs:
           # the other router contracts using this existing worker stack size.
           RUST_MIN_STACK: 8388608
         run: |
+          set -euo pipefail
           cargo test -p fullmag-api --bin fullmag-api field_sweep_items_keep_their_owner_identity_and_encode_resource_paths
           cargo test -p fullmag-api --bin fullmag-api spectrum_v3_items_project_durable_field_identity_without_mutating_payload
           cargo test -p fullmag-api --bin fullmag-api openapi_mode_field_availability_is_optional_boolean
           cargo test -p fullmag-api --bin fullmag-api openapi_field_sweep_schema_exposes_typed_dataset_and_sample_contract
           cargo test -p fullmag-api --bin fullmag-api quantities::tests
           cargo test -p fullmag-api --bin fullmag-api frequency_domain_
+          cargo test -p fullmag-api --bin fullmag-api spectrum_v3_projection_field_link_is_bound_to_the_captured_binary_generation -- --nocapture | tee "$RUNNER_TEMP/frequency-owner-field-parity.log"
+          grep -F "test result: ok. 1 passed" "$RUNNER_TEMP/frequency-owner-field-parity.log"
+          cargo test -p fullmag-api --bin fullmag-api immutable_result_owner_uses_only_the_exact_commit_producer -- --nocapture | tee "$RUNNER_TEMP/frequency-owner-immutable.log"
+          grep -F "test result: ok. 1 passed" "$RUNNER_TEMP/frequency-owner-immutable.log"
+          cargo test -p fullmag-api --bin fullmag-api legacy_result_owner_binds_exact_records_and_rejects_foreign_run -- --nocapture | tee "$RUNNER_TEMP/frequency-owner-legacy.log"
+          grep -F "test result: ok. 1 passed" "$RUNNER_TEMP/frequency-owner-legacy.log"
+          cargo test -p fullmag-runner --lib manifest_owner_ -- --nocapture | tee "$RUNNER_TEMP/frequency-manifest-owner.log"
+          grep -F "test result: ok. 3 passed" "$RUNNER_TEMP/frequency-manifest-owner.log"
+          cargo test -p fullmag-runner --lib fem_eigen_writer_publishes_two_immutable_generations_and_preserves_legacy_root -- --nocapture | tee "$RUNNER_TEMP/frequency-owner-writer-publication.log"
+          grep -F "test result: ok. 1 passed" "$RUNNER_TEMP/frequency-owner-writer-publication.log"
           cargo test -p fullmag-api --bin fullmag-api authoring_study_runtime_parallel_patch
           cargo test -p fullmag-api --bin fullmag-api authoring_transaction_ack_
           cargo test -p fullmag-api --bin fullmag-api modal_history_tests
@@ -396,6 +437,7 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api accepted_fem_
           cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparer preparation_writer_retry_retries_typed_busy_but_not_other_errors
           cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_fem_
+          cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_worker::native_failure_diagnostic::tests
           cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparation-scheduler typed_writer_busy_retry_preserves_preparation_launch_identity
           cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparation-scheduler pre_admission_snapshot_deferral_classifies_only_typed_busy
           cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparation-scheduler deferred_recovery_retains_and_joins_an_owned_supervisor
@@ -410,7 +452,16 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api-accepted-scheduler accepted_study_supervisor::tests::inactive_inventory_owner_retries_before_spawn_without_releasing_claim -- --exact
           cargo test -p fullmag-api --bin fullmag-api-accepted-scheduler accepted_study_supervisor::tests::exhausted_stale_sample_retry_defers_second_read_and_authorization_without_consuming_claim_start_lease -- --exact
           cargo test -p fullmag-api --bin fullmag-api-accepted-scheduler scheduler_writer_busy_tests
+          cargo test -p fullmag-api --bin fullmag-api-accepted-scheduler worker_failure_reason
+          cargo test -p fullmag-api --bin fullmag-api-accepted-scheduler worker_output_diagnostic::tests
+          cargo test -p fullmag-ir --lib fem_eigen_completeness_policy
+          cargo test -p fullmag-plan --lib eigen_completeness_request_tests
+          cargo test -p fullmag-runner --lib completeness_tests
           cargo test -p fullmag-runtime-control --lib worker_inbox::tests
+          cargo test -p fullmag-runtime-control --lib study::dependency_tests
+          cargo test -p fullmag-session --lib pending_inventory_recovery
+          cargo test -p fullmag-session --lib host_reservation_cannot_cross_compute_node_owner_epoch
+          cargo test -p fullmag-runtime-control --lib host_runtime::recovery_tests
           cargo test -p fullmag-api --bin fullmag-runtime-service orphan_teardown_
           cargo test -p fullmag-runtime-control --lib claim::host_binding_tests::fresh_v2_host_claim_receives_the_canonical_runtime_generation_binding -- --exact
           cargo test -p fullmag-runner --lib fem_gpu_execution_receipt_contract_tests
@@ -854,6 +905,10 @@ jobs:
 
       - name: Verify Docker storage probes and runtime lifecycle contracts
         run: |
+          # Aggregate exit remains fail-closed: any failed unit command fails this step.
+          set +e
+          failed_test_commands=0
+          trap 'failed_test_commands=$((failed_test_commands + 1))' ERR
           python -B scripts/test_fullmag_docker_runtime.py -v
           python -B scripts/test_fem_cpu_hypre_host_policy.py -v
           python -B scripts/test_docker_backend_dev.py -v
@@ -887,6 +942,7 @@ jobs:
           python -B scripts/test_runtime_service_snapshot.py -v
           python -B scripts/test_docker_volume_abrupt_stop_recovery.py -v
           python -B scripts/test_docker_windows_bind_isolation.py -v
+          python -B scripts/test_docker_windows_absent_bind_isolation.py -v
           python -B scripts/test_docker_prepare_container_recovery.py -v
           python -B scripts/test_docker_foreign_bind_identity.py -v
           python -B scripts/test_docker_stopped_network.py -v
@@ -897,7 +953,9 @@ jobs:
           python -B scripts/test_docker_volume_dev_runtime_state.py -v
           python -B scripts/test_docker_volume_dev_cancelled_activation.py -v
           python -B scripts/test_docker_volume_readiness_receipt.py -v
+          python -B scripts/test_docker_volume_stop_bootstrap.py -v
           python -B scripts/test_docker_volume_stop_failed.py -v
+          python -B scripts/test_docker_volume_stop_startup_iteration.py -v
           python -B scripts/test_docker_volume_no_spawn_cancellation.py -v
           python -B scripts/test_docker_volume_no_spawn_loader_reconcile.py -v
           python -B scripts/test_docker_volume_linux_supervision_stop.py -v
@@ -964,6 +1022,12 @@ jobs:
           python -B scripts/test_docker_orphan_recovery.py -v
           python -B scripts/test_recover_docker_orphan.py -v
           python -B scripts/test_just_orphan_recovery_shell.py -v
+          trap - ERR
+          set -e
+          if [ "$failed_test_commands" -ne 0 ]; then
+            printf 'Unit-test commands failed: %s\n' "$failed_test_commands" >&2
+            exit 1
+          fi
 
       - name: Audit managed FEM CPU-only verification configuration
         run: python scripts/test_audit_fem_cpu_only_runtime.py -v
@@ -1055,6 +1119,9 @@ jobs:
 
       - name: Run bounded mesh failure diagnostic contracts
         run: python -B -m unittest discover -s packages/fullmag-py/tests -p 'test_meshing.py' -k MeshFailureDiagnosticTests -v
+
+      - name: Run eigen completeness authoring roundtrip contracts
+        run: python -B -m unittest discover -s packages/fullmag-py/tests -p test_eigen_completeness.py -v
 
       - name: Run Python API tests
         run: python -m unittest discover -s packages/fullmag-py/tests -p 'test_api.py' -v
@@ -1278,5 +1345,5 @@ jobs:
         run: python -B scripts/test_local_runner_docker_logs.py -v
 
   native-receipt-contracts:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.contract_scope == 'native-receipt' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.contract_scope == 'native-receipt' }}
     uses: ./.github/workflows/eigensolve-native-receipt-contracts.yml

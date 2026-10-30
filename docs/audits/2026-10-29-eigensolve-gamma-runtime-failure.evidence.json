@@ -1,0 +1,106 @@
+{
+  "schema_version": "eigen-gamma-failure-terminal-evidence.v1",
+  "captured_at_utc": "2026-10-29T15:40:12Z",
+  "source": {
+    "backend_container": "fullmag-worktree-eigensolve-integration-ui-202610-78b341212cbdaa7d-backend-1",
+    "source_commit": "acb0330ea4f051d1f4bb3cc6181529ef9ba09851",
+    "store_root": "/home/kkingstoun/git/fullmag/storage/runtimes/eigensolve-integration-ui-202610-78b341212cbdaa7d/docker-volume-dev/c2810c89e195482eac664f37379919a2/runs/docker-all/session-store"
+  },
+  "run": {
+    "run_id": "run-live-ffe91832f1f9a883c7ac8f0b227e89bbed56580f3304d119a6bfdef7734720be",
+    "task_id": "task-fe20a4e45fecfffd680e1ec73f06cb5e322fe9b390b0bd4023e338db5a3f34af",
+    "attempt_id": "attempt-bc0e8905b27c4f44b1ee93b6afaf92f7",
+    "ownership_epoch": 1,
+    "run_catalog_path": "/home/kkingstoun/git/fullmag/storage/runtimes/eigensolve-integration-ui-202610-78b341212cbdaa7d/docker-volume-dev/c2810c89e195482eac664f37379919a2/runs/docker-all/session-store/runs/run-live-ffe91832f1f9a883c7ac8f0b227e89bbed56580f3304d119a6bfdef7734720be/run_catalog.json",
+    "run_catalog_revision": 1935,
+    "run_catalog_updated_at": "2026-10-29T15:18:26.113299423Z",
+    "eigen_lifecycle": "failed",
+    "eigen_observation": "disconnected",
+    "eigen_artifact_ids": []
+  },
+  "terminal": {
+    "receipt_path": "/home/kkingstoun/git/fullmag/storage/runtimes/eigensolve-integration-ui-202610-78b341212cbdaa7d/docker-volume-dev/c2810c89e195482eac664f37379919a2/runs/docker-all/session-store/runs/run-live-ffe91832f1f9a883c7ac8f0b227e89bbed56580f3304d119a6bfdef7734720be/worker_process_exit_receipts/worker-process-exit-34d9c0025aa46ac36a52aba3a814aabee91bc9fbb5e40a3328d653f19841d68b.json",
+    "receipt_sha256": "53cf248aa8a04ac77ef6e483544283a19701a7056cc62fea5165ee972d1fb5dc",
+    "receipt_bytes": 1933,
+    "receipt_observed_at": "2026-10-29T15:18:22.845214649Z",
+    "exit_code": 1,
+    "status_success": false,
+    "timed_out": false,
+    "stop_requested": false,
+    "event_path": "/home/kkingstoun/git/fullmag/storage/runtimes/eigensolve-integration-ui-202610-78b341212cbdaa7d/docker-volume-dev/c2810c89e195482eac664f37379919a2/runs/docker-all/session-store/runs/run-live-ffe91832f1f9a883c7ac8f0b227e89bbed56580f3304d119a6bfdef7734720be/coordinator_journal/event/6a504ff0ffb84eb1b2e5a0f2164026fb.json",
+    "event_sha256": "d8fc0b6b6845c43f9331b8ae134c22f14e728d7514ba33514cec65a869b598af",
+    "event_bytes": 4671,
+    "event_created_at": "2026-10-29T15:18:24.470609201Z",
+    "event_sequence": 956,
+    "event_terminal": true,
+    "event_kind": "failed",
+    "retryable": true
+  },
+  "native_failure": {
+    "error_prefix": "native FEM modal_eigen production CPU solve failed: production shared-domain K0 Schur window preserved no complete base cluster",
+    "diagnostics_schema_version": "poisson_airbox_modal_eigen_schur_slepc.v1",
+    "status": "solve_error",
+    "complete": false,
+    "solve_succeeded": false,
+    "fields_available": false,
+    "reason": "frequency_window_subwindow_failed",
+    "slepc_converged_reason": "not_available",
+    "slepc_converged_reason_code": 0,
+    "stop_reason": "frequency_window_subwindow_failed",
+    "eps_solve_error_code_available": false,
+    "eps_solve_error_code": 0,
+    "slepc_process_quarantined": false,
+    "operator_context_invalidated": false,
+    "eps_lifetime_unsafe": false,
+    "execution_lane": "production_cpu",
+    "solver_adapter": "k0_poisson_airbox_cpu_schur_slepc",
+    "certificate_availability": {
+      "in_persisted_receipt": false,
+      "in_persisted_terminal_event": false,
+      "in_target_run_artifacts": false,
+      "native_generation_observed_for_this_run": false
+    },
+    "executed_subwindows_available": false,
+    "native_json_complete_in_persisted_failure_reason": false,
+    "failure_reason_chars": 1073,
+    "failure_reason_truncated_at_supervisor": true,
+    "truncation_seam": "crates/fullmag-api/src/accepted_study_supervisor.rs:2997-3012"
+  },
+  "persistence_audit": {
+    "target_eigen_attempt_files": [
+      "field-storage.v1.json",
+      "worker_execution_started.v1.json"
+    ],
+    "target_eigen_attempt_named_stream_or_diagnostic_files": 0,
+    "run_has_unrelated_non_eigen_certificate_files": 1,
+    "live_observation_present": false,
+    "worker_execution_completed_receipt_present": false,
+    "raw_stderr_file_present": false,
+    "raw_stdout_file_present": false,
+    "window_certificate_file_present": false,
+    "executed_subwindows_file_present": false,
+    "artifact_catalog_eigen_entries": 0,
+    "docker_logs_full_native_diagnostics_present": false,
+    "docker_logs_generic_worker_failed_line_count": 1,
+    "search_scope_note": "Scoped to the target eigen attempt, target run directory, target runtime volume, target user-data root, and backend container logs; one certificate under a different relax task in the same run was not treated as eigen evidence, and unrelated runtime volumes contain other runs."
+  },
+  "source_seam": {
+    "worker_error_construction": "crates/fullmag-runner/src/fem/eigen_native_window.rs:987-1004",
+    "supervisor_bound": "crates/fullmag-api/src/accepted_study_supervisor.rs:2997-3012",
+    "native_certificate_generation": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp:5310-5433",
+    "recommended_minimal_change": "Before the supervisor's 1024-character bounded failure report, preserve a small structured window-failure summary (stop_reason, first failed subwindow/reason, certificate status and schedule counts) alongside failure_reason; retain fail-closed solver behavior and do not dump full native JSON."
+  },
+  "test_source_cases": [
+    "crates/fullmag-api/src/accepted_study_supervisor.rs:3530-3552",
+    "backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp:2066-2109",
+    "backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp:2138-2193",
+    "backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp:2195-2224"
+  ],
+  "constraints": {
+    "repository_modified": false,
+    "tests_run": false,
+    "builds_run": false,
+    "runtime_mutated": false,
+    "lease_or_inbox_fields_included": false
+  }
+}

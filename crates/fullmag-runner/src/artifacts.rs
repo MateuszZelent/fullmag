@@ -1,5 +1,8 @@
 //! Artifact writing: metadata, scalars CSV, field snapshots.
 
+#[path = "frequency_domain_owner.rs"]
+mod frequency_domain_owner;
+
 use crate::artifact_pipeline::ArtifactPipelineSummary;
 use crate::dispatch::{
     effective_fem_device_request, normalized_runtime_element_markers,
@@ -2071,16 +2074,24 @@ fn frequency_publication_owner(
 fn validate_immutable_generation_references(
     member_bytes: &[(String, Vec<u8>)],
 ) -> std::io::Result<()> {
-    let member_paths = member_bytes
-        .iter()
-        .map(|(path, _)| path.as_str())
-        .collect::<BTreeSet<_>>();
-    let member_payload = |relative: &str| {
-        member_bytes
-            .iter()
-            .find(|(path, _)| path == relative)
-            .map(|(_, bytes)| bytes.as_slice())
-    };
+    validate_immutable_generation_reference_map(member_bytes.iter()
+        .map(|(path, bytes)| (path.as_str(), bytes.as_slice())).collect())
+}
+
+/// The accepted transport and the original writer share one semantic closure
+/// check. Borrow payloads so validation never duplicates large mode fields.
+pub(crate) fn validate_modal_artifact_closure(
+    member_bytes: &BTreeMap<String, Vec<u8>>,
+) -> std::io::Result<()> {
+    validate_immutable_generation_reference_map(member_bytes.iter()
+        .map(|(path, bytes)| (path.as_str(), bytes.as_slice())).collect())
+}
+
+fn validate_immutable_generation_reference_map(
+    member_bytes: BTreeMap<&str, &[u8]>,
+) -> std::io::Result<()> {
+    let member_paths = member_bytes.keys().copied().collect::<BTreeSet<_>>();
+    let member_payload = |relative: &str| member_bytes.get(relative).copied();
     let require_member = |relative: &str, context: &str| -> std::io::Result<()> {
         if relative.trim().is_empty() || !member_paths.contains(relative) {
             return Err(Error::new(
@@ -2361,11 +2372,18 @@ pub(crate) fn write_artifacts(
         .auxiliary_artifacts
         .iter()
         .any(|artifact| artifact.relative_path.starts_with("eigen/"));
-    let immutable_producer = if immutable_fem_eigen_publication {
+    let publication_owner = if has_frequency_generation_artifacts {
         frequency_publication_owner(problem)?
     } else {
         None
     };
+    let immutable_producer = if immutable_fem_eigen_publication {
+        publication_owner.clone()
+    } else {
+        None
+    };
+    let mut auxiliary_artifacts = executed.auxiliary_artifacts.clone();
+    frequency_domain_owner::bind_manifest_owner(&mut auxiliary_artifacts, publication_owner.as_ref())?;
     let frequency_publication_lease = if has_frequency_generation_artifacts {
         if !immutable_fem_eigen_publication {
             // Other artifact producers remain on the mutable v1 path. Do not
@@ -2581,7 +2599,6 @@ pub(crate) fn write_artifacts(
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error))?;
     }
 
-    let mut auxiliary_artifacts = executed.auxiliary_artifacts.clone();
     if let Some(producer_provenance) =
         fem_relaxation_producer_provenance_artifact(problem, plan, executed)?
     {
@@ -2730,7 +2747,7 @@ pub(crate) fn write_artifacts(
         }
         crate::artifact_generation::publish(
             output_dir,
-            frequency_publication_owner(problem)?,
+            publication_owner,
             members,
         )?;
     }
@@ -7906,6 +7923,7 @@ mod tests {
                 exchange_bc: ExchangeBoundaryCondition::Neumann,
                 spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
                 demag_realization: None,
+                demag_solver_policy: None,
                 air_box_config: None,
                 mode_tracking: None,
                 dispersion_validation: None,
@@ -8156,6 +8174,11 @@ mod tests {
             .expect("first immutable generation should be current");
         assert_immutable_fem_eigen_references_resolve(&output_dir, &first_capture);
         assert_eq!(first_capture.commit.content.producer.as_ref(), Some(&expected_owner));
+        let published_manifest: serde_json::Value = serde_json::from_slice(
+            &first_capture.read_member(&output_dir, "frequency_domain/manifest.v1.json").unwrap(),
+        ).unwrap();
+        assert_eq!(published_manifest["run_id"], expected_owner.run_id);
+        assert_eq!(published_manifest["stage_id"], expected_owner.stage_id);
         let first_generation_id = first_capture.commit.generation_id.clone();
         let first_member_bytes = first_capture
             .commit
@@ -8210,6 +8233,19 @@ mod tests {
 
         let pointer_path = output_dir.join(crate::artifact_generation::IMMUTABLE_COMMIT_PATH);
         let pointer_before_failure = fs::read(&pointer_path).unwrap();
+
+        let mut conflicting_owner_run = final_execution_test_run(provenance.clone());
+        conflicting_owner_run.auxiliary_artifacts = test_fem_eigen_generation_artifacts(b"conflicting owner");
+        let manifest = conflicting_owner_run.auxiliary_artifacts.iter_mut()
+            .find(|artifact| artifact.relative_path == "frequency_domain/manifest.v1.json").unwrap();
+        let mut value: serde_json::Value = serde_json::from_slice(&manifest.bytes).unwrap();
+        value["run_id"] = serde_json::json!("foreign-run");
+        value["stage_id"] = serde_json::json!("eigen-stage");
+        manifest.bytes = serde_json::to_vec(&value).unwrap();
+        let conflict = write_artifacts(&output_dir, &problem, &plan, &conflicting_owner_run, Some(&summary))
+            .expect_err("an exact manifest conflict must not publish a generation");
+        assert!(conflict.to_string().contains("conflicts with execution owner"));
+        assert_eq!(fs::read(&pointer_path).unwrap(), pointer_before_failure);
 
         let mut invalid_owner_problem = problem.clone();
         invalid_owner_problem

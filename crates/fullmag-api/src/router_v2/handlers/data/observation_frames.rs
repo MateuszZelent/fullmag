@@ -53,6 +53,22 @@ fn active_run_id(
     Ok(run_id.to_owned())
 }
 
+/// Imported snapshots expose their sealed fields through the archive readers.
+/// They are not members of this process's managed observation store, even if
+/// a historical run id happens to match one of that store's runs.
+async fn has_managed_observation_source(
+    state: &Arc<AppState>,
+    context: &CurrentLiveRequestContext,
+) -> Result<bool, ApiError> {
+    let current = state.current_live_state.read().await;
+    let snapshot = current.as_ref().ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(
+        snapshot, context,
+        state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire),
+    )?;
+    Ok(snapshot.runtime_status.code != "imported_read_only")
+}
+
 fn managed_store_root(state: &AppState) -> Result<PathBuf, ApiError> {
     state
         .submit_store_root
@@ -257,13 +273,17 @@ pub async fn list_observation_frames(
 ) -> Result<Json<ObservationFrameListResource>, ApiError> {
     let context = crate::capture_current_live_request_context(&state).await?;
     let run_id = active_run_id(&context, query.run_id.as_deref())?;
-    let store_root = managed_store_root(&state)?;
-    let mut frames = tokio::task::spawn_blocking({
-        let run_id = run_id.clone();
-        move || load_observation_frames(store_root, run_id)
-    })
-    .await
-    .map_err(|error| ApiError::internal(format!("observation frame reader failed: {error}")))??;
+    let mut frames = if has_managed_observation_source(&state, &context).await? {
+        let store_root = managed_store_root(&state)?;
+        tokio::task::spawn_blocking({
+            let run_id = run_id.clone();
+            move || load_observation_frames(store_root, run_id)
+        })
+        .await
+        .map_err(|error| ApiError::internal(format!("observation frame reader failed: {error}")))??
+    } else {
+        Vec::new()
+    };
     crate::validate_current_live_request_context(&state, &context).await?;
 
     if let Some(stage_id) = query.stage_id.as_deref() {
@@ -312,6 +332,9 @@ pub async fn get_observation_frame(
 ) -> Result<Json<ObservationFrameResource>, ApiError> {
     let context = crate::capture_current_live_request_context(&state).await?;
     let run_id = active_run_id(&context, None)?;
+    if !has_managed_observation_source(&state, &context).await? {
+        return Err(ApiError::not_found("imported snapshot has no managed observation source"));
+    }
     let store_root = managed_store_root(&state)?;
     let frame = tokio::task::spawn_blocking(move || {
         load_observation_frames(store_root, run_id)?
@@ -344,6 +367,9 @@ pub async fn get_observation_frame_magnetization(
 ) -> Result<Response, ApiError> {
     let context = crate::capture_current_live_request_context(&state).await?;
     let run_id = active_run_id(&context, None)?;
+    if !has_managed_observation_source(&state, &context).await? {
+        return Err(ApiError::not_found("imported snapshot has no managed observation source"));
+    }
     let store_root = managed_store_root(&state)?;
     let (resource, values, accepted_state_ref, topology_hash) =
         tokio::task::spawn_blocking(move || {

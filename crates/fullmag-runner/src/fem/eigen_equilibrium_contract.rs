@@ -1257,7 +1257,7 @@ impl AcceptedFemRelaxStageHandoff {
     /// accepts only the authored `RelaxedInitialState`/single-k shape; the
     /// caller must run the separate provided-continuation validator after it
     /// changes the source marker.
-    pub(super) fn validate_target_plan(&self, plan: &FemEigenPlanIR) -> Result<(), RunError> {
+    pub(crate) fn validate_target_plan(&self, plan: &FemEigenPlanIR) -> Result<(), RunError> {
         self.validate_plan_binding(plan, false)
     }
 
@@ -1266,7 +1266,7 @@ impl AcceptedFemRelaxStageHandoff {
     /// sweep sample is a different physical equilibrium.  All m0, mesh,
     /// material, static-physics, boundary and handoff digests are still
     /// checked by the shared binding routine.
-    pub(super) fn validate_provided_continuation_plan(
+    pub(crate) fn validate_provided_continuation_plan(
         &self,
         plan: &FemEigenPlanIR,
     ) -> Result<(), RunError> {

@@ -426,7 +426,7 @@ class WindowsIsolationTests(unittest.TestCase):
         self.assertNotIn("FileId $currentDir", walk)
         self.assertIn("FileId $root", walk)
 
-    def test_descendant_walk_limits_item_provider_to_reparse_entries_and_bounds_budget_calls(self):
+    def test_descendant_walk_limits_item_provider_to_links_and_bounds_work(self):
         ancestor = isolation.WINDOWS_PROVIDER.split("function NoReparse(", 1)[1].split("function FileId(", 1)[0]
         walk = isolation.WINDOWS_PROVIDER.split("function Descendants(", 1)[1].split("function Identity(", 1)[0]
         self.assertNotIn("Get-Item", ancestor)
@@ -441,10 +441,12 @@ class WindowsIsolationTests(unittest.TestCase):
         self.assertIn("if ($tag -ceq '0xa0000003')", link_branch)
         self.assertIn("elseif ($tag -ceq '0xa000000c')", link_branch)
         self.assertIn("if ($links.Count -ge 256)", link_branch)
+        self.assertEqual(isolation.MAX_RELATIVE_LINKS, 256)
         entries = walk.split("foreach ($entry in $directory.EnumerateFileSystemInfos())", 1)[1]
         entries = entries.split("NoReparse $currentDir", 1)[0]
         self.assertEqual(entries.count("DescendantBudget $clock"), 1)
         self.assertIn("if ($entryCount -gt 100000 -or $clock.ElapsedMilliseconds -ge 15000)", entries)
+        self.assertIn("if (($relative.Split('\\')).Length -gt 128)", entries)
 
     def test_descendant_budget_failure_has_observation_counters(self):
         budget = isolation.WINDOWS_PROVIDER.split("function DescendantBudget(", 1)[1].split("function Descendants(", 1)[0]

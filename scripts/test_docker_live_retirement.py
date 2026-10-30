@@ -203,6 +203,13 @@ class RetirementTransportTests(unittest.TestCase):
                     with self.assertRaises(helper.RetirementOutcomeUnknown):
                         helper._retire_current_workspace_transport("docker-volume-op-1")
 
+    def test_imported_read_only_retirement_is_not_reported_as_a_completed_solve(self):
+        response = _retirement()
+        response["terminal_outcome"] = "imported_read_only"
+        _patch_opener(self.monkeypatch, [_Response(200, _status()), _Response(200, response)])
+        result = helper._retire_current_workspace_transport("docker-volume-op-1")
+        self.assertEqual(result["terminal_outcome"], "imported_read_only")
+
     def test_empty_current_workspace_is_a_safe_noop(self):
         monkeypatch = self.monkeypatch
         opener = _patch_opener(
@@ -703,6 +710,9 @@ class RetirementFinalizeTests(unittest.TestCase):
             "control_volume": self.volume,
             "helper_container": "fullmag-control-" + self.operation,
         }
+        self.receipt.update(development_attempt="c" * 32, config_sha256="d" * 64,
+                            backend_container="e" * 64, image_id="sha256:" + "f" * 64,
+                            source_root="C:/git/fullmag")
         self.receipt_raw = activate.canonical(self.receipt) + b"\n"
         self.result = {"state": "retirement-only", "retirement": {"state": "retired"}}
         self.terminal = dict(
@@ -721,6 +731,7 @@ class RetirementFinalizeTests(unittest.TestCase):
             "compose_project": self.project,
             "control_volume": self.volume,
         }
+        self.previous_terminal.update({key: self.receipt[key] for key in activate.RETIREMENT_CURRENT_POINTER_PINS})
         self.previous_raw = activate.canonical(self.previous_terminal) + b"\n"
         (self.root / "active").write_bytes(self.operation.encode("ascii") + b"\n")
         (self.root / "operation.lock").touch()
@@ -792,7 +803,25 @@ class RetirementFinalizeTests(unittest.TestCase):
             [self.result_raw, self.terminal_raw, self.terminal_raw],
         )
         self.assertEqual((self.root / "active").read_bytes(), self.operation.encode("ascii") + b"\n")
-        self.assertNotIn("flock", commands[0][-1])
+        self.assertNotIn("exec 9>/control/operation.lock", commands[0][-1])
+        self.assertNotIn("exec 9</registry/operation.lock", commands[0][-1])
+        self.assertIn("flock -n 8", commands[0][-1])
+
+    def test_target_and_predecessor_of_a_foreign_group_never_reach_cas(self):
+        self.terminal["compose_project"] = "foreign-group"
+        previous = dict(self.previous_terminal, compose_project="foreign-group")
+        previous_raw = activate.canonical(previous) + b"\n"
+        (self.root / "activation/current.json").write_bytes(previous_raw)
+        previous_path = self.root / "activation/attempts" / self.previous_operation / "terminal.json"
+        previous_path.write_bytes(previous_raw)
+        with patch("docker_volume_activation_reconcile._probe_helper_absence", return_value={"state": "absent"}), \
+             patch.object(activate, "_read_control_bytes", side_effect=self._read_control), \
+             patch.object(activate, "bounded_capture") as shell:
+            with self.assertRaisesRegex(activate.ControlOutcomeUnknown, "not a terminal of this group"):
+                self._finalize()
+        shell.assert_not_called()
+        self.assertTrue((self.root / "active").exists())
+        self.assertFalse((self.attempt / "result.json").exists())
 
     def test_absent_logger_cas_accepts_producer_lf_and_releases_lease(self):
         with patch("docker_volume_activation_reconcile._probe_helper_absence", return_value={"state": "absent"}), \
@@ -902,6 +931,84 @@ class RetirementFinalizeTests(unittest.TestCase):
 
 
 @unittest.skipUnless(fcntl is not None and all(shutil.which(tool) for tool in ("bash", "flock", "sync", "sha256sum")), "requires Linux shell CAS tools")
+
+
+class PreservedRetirementPointerGuards(unittest.TestCase):
+    operation = "b" * 32
+    previous_operation = "a" * 32
+
+    def terminal(self, attempt, state):
+        return {
+            "schema": activate.OPERATION_SCHEMA,
+            "phase": "activation",
+            "state": state,
+            "attempt": attempt,
+            "compose_project": "fullmag-worktree-demo",
+            "control_volume": "fullmag-build-control-demo",
+            "development_attempt": "c" * 32,
+            "config_sha256": "d" * 64,
+            "backend_container": "e" * 64,
+            "image_id": "sha256:" + "f" * 64,
+            "source_root": "C:/git/fullmag",
+        }
+
+    def test_current_pointer_validation_rejects_foreign_malformed_and_pin_drift(self):
+        control = Mock()
+        terminal = self.terminal(self.operation, "failed-confirmed")
+        previous = self.terminal("a" * 32, "succeeded")
+        previous_raw = activate._record_payload(previous, "previous terminal")
+        for current_raw, previous_terminal_raw in (
+            (b"not-json", previous_raw),
+            (activate._record_payload(dict(previous, config_sha256="0" * 64), "current"), previous_raw),
+            (previous_raw, b"different-terminal"),
+        ):
+            with self.subTest(current_raw=current_raw, previous_terminal_raw=previous_terminal_raw), \
+                 patch.object(activate, "_read_control_bytes", side_effect=[previous_terminal_raw]):
+                with self.assertRaises(activate.BuildControlError):
+                    activate._retirement_current_pointer_preimage(
+                        control,
+                        operation_id=self.operation,
+                        current_raw=current_raw,
+                        target_raw=activate._record_payload(terminal, "target"),
+                        terminal=terminal,
+                    )
+
+    def test_active_lease_validator_accepts_legacy_and_writer_newline_forms(self):
+        self.assertEqual(
+            activate._validate_active_lease(self.operation.encode()),
+            self.operation,
+        )
+        self.assertEqual(
+            activate._validate_active_lease(self.operation.encode() + b"\n"),
+            self.operation,
+        )
+
+    def test_active_lease_validator_rejects_foreign_and_noncanonical_bytes(self):
+        for raw in (
+            self.operation.encode() + b"\r\n",
+            self.operation.encode() + b"\n\n",
+            self.operation.encode() + b"\t",
+            self.operation.encode() + b" ",
+        ):
+            with self.subTest(raw=raw):
+                with self.assertRaises(activate.BuildControlError):
+                    activate._validate_active_lease(raw)
+        with self.assertRaises(activate.ControlOutcomeUnknown):
+            activate._validate_active_lease(b"c" * 32, expected_operation_id=self.operation)
+
+    def test_wait_accepts_writer_newline_before_lease_disappears(self):
+        control = Mock()
+        with patch.object(
+            activate,
+            "_read_control_bytes",
+            side_effect=[self.operation.encode() + b"\n", None],
+        ), patch.object(activate.time, "sleep"):
+            self.assertTrue(
+                activate._wait_retirement_lease_release(
+                    control, operation_id=self.operation, timeout=1
+                )
+            )
+
 class RetirementCasTests(unittest.TestCase):
     operation = "b" * 32
 
@@ -916,6 +1023,10 @@ class RetirementCasTests(unittest.TestCase):
                          "current_raw": b'{"state":"succeeded"}'}
         (self.root / "active").write_bytes(self.payloads["active_raw"])
         (self.attempt / "receipt.json").write_bytes(self.payloads["receipt_raw"])
+        self.previous_raw = activate.canonical({"attempt": "a" * 32, "state": "succeeded"}) + b"\n"
+        previous_root = self.root / "activation/attempts" / ("a" * 32)
+        previous_root.mkdir(parents=True)
+        (previous_root / "terminal.json").write_bytes(self.previous_raw)
 
     def run_cas(self):
         script = activate._retirement_cas_script(operation_id=self.operation, **self.payloads)
@@ -944,6 +1055,140 @@ class RetirementCasTests(unittest.TestCase):
         replay = self.run_cas()
         self.assertEqual(replay.returncode, 0, replay.stderr)
         self.assertIn(b"ALREADY_FINALIZED\n", replay.stdout)
+
+    def test_publish_and_exact_replay_with_writer_newline(self):
+        self.payloads["active_raw"] = self.operation.encode() + b"\n"
+        (self.root / "active").write_bytes(self.payloads["active_raw"])
+        first = self.run_cas()
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertIn(b"FINALIZED\n", first.stdout)
+        self.assert_complete()
+        replay = self.run_cas()
+        self.assertEqual(replay.returncode, 0, replay.stderr)
+        self.assertIn(b"ALREADY_FINALIZED\n", replay.stdout)
+
+    def test_cas_rejects_noncanonical_active_lease_bytes(self):
+        for raw in (
+            self.operation.encode() + b"\r\n",
+            self.operation.encode() + b"\n\n",
+            self.operation.encode() + b"\t",
+            self.operation.encode() + b" ",
+        ):
+            with self.subTest(raw=raw), self.assertRaises(activate.BuildControlError):
+                activate._retirement_cas_script(
+                    operation_id=self.operation,
+                    active_raw=raw,
+                    receipt_raw=self.payloads["receipt_raw"],
+                    result_raw=self.payloads["result_raw"],
+                    terminal_raw=self.payloads["terminal_raw"],
+                    current_raw=self.payloads["current_raw"],
+                )
+        self.assertTrue((self.root / "active").exists())
+        self.assertFalse((self.attempt / "terminal.json").exists())
+
+    def test_cas_replaces_exact_previous_current_pointer(self):
+        previous_attempt = "a" * 32
+        previous_root = self.root / "activation/attempts" / previous_attempt
+        previous_root.mkdir(parents=True, exist_ok=True)
+        previous_raw = self.previous_raw
+        (previous_root / "terminal.json").write_bytes(previous_raw)
+        (self.root / "activation/current.json").write_bytes(previous_raw)
+        script = activate._retirement_cas_script(
+            operation_id=self.operation,
+            expected_current_raw=previous_raw,
+            **self.payloads,
+        )
+        script = script.replace("/control", str(self.root))
+        result = subprocess.run(["bash", "-c", script], capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_complete()
+
+    def test_cas_previous_current_drift_is_rejected_without_terminal(self):
+        previous_raw = self.previous_raw
+        (self.root / "activation/current.json").write_bytes(b'foreign\n')
+        script = activate._retirement_cas_script(
+            operation_id=self.operation,
+            expected_current_raw=previous_raw,
+            **self.payloads,
+        )
+        script = script.replace("/control", str(self.root))
+        result = subprocess.run(["bash", "-c", script], capture_output=True, timeout=5)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual((self.root / "activation/current.json").read_bytes(), b"foreign\n")
+        self.assertFalse((self.attempt / "terminal.json").exists())
+
+    def test_live_pointer_cas_replaces_exact_previous_without_global_lock(self):
+        previous_raw = self.previous_raw
+        (self.root / "activation/current.json").write_bytes(previous_raw)
+        script = activate._retirement_cas_script(
+            logger_present=True,
+            result_raw=self.payloads["result_raw"],
+            terminal_raw=self.payloads["terminal_raw"],
+            operation_id=self.operation,
+            active_raw=self.payloads["active_raw"],
+            receipt_raw=self.payloads["receipt_raw"],
+            current_raw=self.payloads["current_raw"],
+            expected_current_raw=previous_raw,
+        )
+        self.assertNotIn("exec 9>/control/operation.lock", script)
+        script = script.replace("/control", str(self.root))
+        result = subprocess.run(["bash", "-c", script], capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(b"RECORDS_PUBLISHED\n", result.stdout)
+        self.assertEqual((self.root / "activation/current.json").read_bytes(), self.payloads["current_raw"])
+        self.assertTrue((self.root / "active").exists())
+
+    def test_live_logger_operation_lock_contention_preserves_all_records(self):
+        with (self.attempt / "retirement-finalization.lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            script = activate._retirement_cas_script(
+                operation_id=self.operation, logger_present=True, **self.payloads)
+            result = subprocess.run(
+                ["bash", "-c", script.replace("/control", str(self.root))],
+                capture_output=True, timeout=5)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue((self.root / "active").exists())
+        self.assertFalse((self.attempt / "result.json").exists())
+        self.assertFalse((self.attempt / "terminal.json").exists())
+
+    def test_live_pointer_cas_foreign_current_is_rejected(self):
+        previous_raw = self.previous_raw
+        foreign = b"foreign\n"
+        (self.root / "activation/current.json").write_bytes(foreign)
+        script = activate._retirement_cas_script(
+            logger_present=True,
+            result_raw=self.payloads["result_raw"],
+            terminal_raw=self.payloads["terminal_raw"],
+            operation_id=self.operation,
+            active_raw=self.payloads["active_raw"],
+            receipt_raw=self.payloads["receipt_raw"],
+            current_raw=self.payloads["current_raw"],
+            expected_current_raw=previous_raw,
+        )
+        script = script.replace("/control", str(self.root))
+        result = subprocess.run(["bash", "-c", script], capture_output=True, timeout=5)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual((self.root / "activation/current.json").read_bytes(), foreign)
+
+    def test_live_pointer_cas_rejects_symlinked_attempts_parent(self):
+        attempts = self.root / "activation/attempts"
+        real_attempts = self.root / "activation/attempts-real"
+        attempts.rename(real_attempts)
+        attempts.symlink_to(real_attempts, target_is_directory=True)
+        script = activate._retirement_cas_script(
+            logger_present=True,
+            result_raw=self.payloads["result_raw"],
+            terminal_raw=self.payloads["terminal_raw"],
+            operation_id=self.operation,
+            active_raw=self.payloads["active_raw"],
+            receipt_raw=self.payloads["receipt_raw"],
+            current_raw=self.payloads["current_raw"],
+        )
+        script = script.replace("/control", str(self.root))
+        result = subprocess.run(["bash", "-c", script], capture_output=True, timeout=5)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(attempts.is_symlink())
+        self.assertTrue((real_attempts / self.operation / "receipt.json").exists())
 
     def test_namespaced_cas_requires_registry_lock_and_digest(self):
         with self.assertRaises(activate.BuildControlError):
@@ -1050,7 +1295,6 @@ class RetirementCasTests(unittest.TestCase):
         self.assertEqual(self.run_cas().returncode, 0)
         os.link(self.attempt / "terminal.json", self.root / "foreign-terminal")
         self.assertNotEqual(self.run_cas().returncode, 0)
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -1085,6 +1085,7 @@ fn inspect_live_snapshot_object_refs(value: &Value) -> Result<Vec<String>, Strin
     }
     let mut scan_value = value.clone();
     exempt_declared_scene_asset_references(&mut scan_value)?;
+    exempt_accepted_field_state_references(&mut scan_value)?;
     for (key, scene) in [("scene_document", true), ("builder_adapter", false)] {
         if let Some(document) = scan_value.get_mut(key).filter(|value| !value.is_null()) {
             mask_authored_document(document, scene)
@@ -1092,6 +1093,43 @@ fn inspect_live_snapshot_object_refs(value: &Value) -> Result<Vec<String>, Strin
         }
     }
     scan_inline_with_artifact_paths(&scan_value, true, true)
+}
+
+/// AcceptedStateRef is a typed logical identity, not a CAS address. Only
+/// field payloads and their declared provenance carry this wire member.
+/// Validate and remove it from the private scan copy; preserve original bytes
+/// and keep every other reference (including state_object_ref) reachable.
+fn exempt_accepted_field_state_references(snapshot: &mut Value) -> Result<(), String> {
+    let run_id = snapshot.get("session").and_then(|session| session.get("run_id"))
+        .and_then(Value::as_str).map(str::to_owned);
+    let Some(fields) = snapshot.get_mut("latest_fields").and_then(Value::as_object_mut) else {
+        return Ok(());
+    };
+    for field in fields.values_mut() {
+        let Some(field) = field.as_object_mut() else { continue; };
+        validate_accepted_state_identity_member(field, run_id.as_deref())?;
+        if let Some(provenance) = field.get_mut("provenance").and_then(Value::as_object_mut) {
+            validate_accepted_state_identity_member(provenance, run_id.as_deref())?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_accepted_state_identity_member(
+    parent: &mut serde_json::Map<String, Value>,
+    run_id: Option<&str>,
+) -> Result<(), String> {
+    let Some(value) = parent.get("accepted_state_ref") else { return Ok(()); };
+    if !value.is_null() {
+        let reference: fullmag_quantities::AcceptedStateRef = serde_json::from_value(value.clone())
+            .map_err(|error| format!("invalid accepted_state_ref: {error}"))?;
+        reference.validate().map_err(|error| format!("invalid accepted_state_ref: {error}"))?;
+        if Some(reference.id.run_id.as_str()) != run_id {
+            return Err("accepted_state_ref belongs to another snapshot run".into());
+        }
+    }
+    parent.remove("accepted_state_ref");
+    Ok(())
 }
 
 fn declared_scene_asset_ids(
@@ -1540,6 +1578,41 @@ mod tests {
         local["stage_execution"] = json!({"checkpoint_ref": {"nested": 1}});
         assert!(inspect_live_snapshot(&serde_json::to_vec(&local).unwrap())
             .object_refs.is_err());
+    }
+
+    #[test]
+    fn accepted_field_state_identity_is_typed_without_hiding_cas_edges() {
+        let reference = json!({
+            "id": { "run_id": "run-1", "stage_id": "relax", "accepted_step": 3,
+                "clock_digest": format!("sha256:{}", "a".repeat(64)),
+                "state_digest": format!("sha256:{}", "b".repeat(64)),
+                "domain_digest": format!("sha256:{}", "c".repeat(64)),
+                "plan_digest": format!("sha256:{}", "d".repeat(64)) },
+            "generation": { "runtime_epoch": 2, "accepted_revision": 4 }
+        });
+        let object = "e".repeat(64);
+        let mut value = snapshot();
+        value["latest_fields"]["m"] = json!({
+            "accepted_state_ref": reference.clone(), "state_object_ref": object.clone(),
+            "provenance": { "accepted_state_ref": reference.clone() }
+        });
+        let bytes = serde_json::to_vec(&value).unwrap();
+        assert_eq!(inspect_live_snapshot(&bytes).object_refs, Ok(vec![object]));
+        assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), value);
+
+        for invalid in [
+            { let mut x = reference.clone(); x["id"]["run_id"] = json!("other-run"); x },
+            { let mut x = reference.clone(); x["id"]["clock_digest"] = json!("invalid"); x },
+            { let mut x = reference.clone(); x["id"]["payload_ref"] = json!("f".repeat(64)); x },
+            { let mut x = reference.clone(); x["payload_ref"] = json!("f".repeat(64)); x },
+        ] {
+            value["latest_fields"]["m"]["accepted_state_ref"] = invalid;
+            assert!(inspect_live_snapshot(&serde_json::to_vec(&value).unwrap()).object_refs.is_err());
+        }
+        value["latest_fields"]["m"]["accepted_state_ref"] = reference.clone();
+        value["metadata"] = json!({"accepted_state_ref": reference});
+        assert!(inspect_live_snapshot(&serde_json::to_vec(&value).unwrap()).object_refs.is_err(),
+            "the typed exemption must not spread into unknown metadata");
     }
 
     #[test]

@@ -1,0 +1,810 @@
+{
+  "run": {
+    "run_id": "run-live-afe29d88b930ee8c5c0f1c0bb68b3f31aa603b7d457a871334e08155fc281c6d",
+    "session_id": "docker-startup-470fb8528921ea3b5bcd466ecf96c010f7fa0f2b50e25d6257bb920e61cbbdd4",
+    "revision": 121,
+    "status": "completed",
+    "started_at": "1793101276881",
+    "total_steps": 2,
+    "solver_time_seconds": 1.5e-14,
+    "final_total_energy": -1.2800000000000022e-18,
+    "artifact_dir": "/opt/fullmag/runtime-control/local-live/current/runs/run-docker-startup-470fb8528921ea3b5bcd466ecf96c010f7fa0f2b50e25d6257bb920e61cbbdd4",
+    "requested_backend": "fem",
+    "requested_device": "cpu",
+    "requested_precision": "double",
+    "requested_mode": "strict",
+    "resolved_backend": "fem",
+    "resolved_device": "cpu",
+    "resolved_precision": "double",
+    "resolved_mode": "strict",
+    "resolved_engine_id": "fem_cpu_native",
+    "total_stages": 2
+  },
+  "execution": {
+    "session_id": "docker-startup-470fb8528921ea3b5bcd466ecf96c010f7fa0f2b50e25d6257bb920e61cbbdd4",
+    "session_epoch": "docker-startup-470fb8528921ea3b5bcd466ecf96c010f7fa0f2b50e25d6257bb920e61cbbdd4@1793101276881",
+    "request_scope_epoch": "31f81b0d-9b9a-424a-a88f-25e2b8df106c:1",
+    "run_id": "run-live-afe29d88b930ee8c5c0f1c0bb68b3f31aa603b7d457a871334e08155fc281c6d",
+    "revision": 121,
+    "runtime_state": "completed",
+    "total_stages": 2,
+    "completed_stage_indexes": [
+      0,
+      1
+    ],
+    "stage_statuses": [
+      "completed",
+      "completed"
+    ],
+    "stages": [
+      {
+        "stage_id": "relax",
+        "index": 0,
+        "label": "Stage 1",
+        "status": "completed",
+        "completed_step": 3,
+        "converged": false
+      },
+      {
+        "stage_id": "eigenmodes",
+        "index": 1,
+        "label": "Stage 2",
+        "status": "completed",
+        "converged": false
+      }
+    ]
+  },
+  "manifest": {
+    "schema_version": "frequency_domain_manifest.v1",
+    "existing_frequency_response_namespace_preserved": true,
+    "family_namespace": "frequencyDomain",
+    "eigen_namespace": "eigen",
+    "response": {
+      "status": "ok",
+      "study_kind": "frequency_response",
+      "driven_response_available": true,
+      "modal_solver_available": false,
+      "static_periodic_response_available": true,
+      "floquet_modal_available": false,
+      "floquet_response_available": false,
+      "dynamic_demag_k_available": false,
+      "gpu_available": false,
+      "reason": "",
+      "diagnostics_json": "{\"schema_version\":\"frequency_domain_availability.v1\",\"driven_response_available\":true,\"modal_solver_available\":false,\"static_periodic_response_available\":true,\"floquet_modal_available\":false,\"floquet_response_available\":false,\"dynamic_demag_k_available\":false,\"gpu_available\":false,\"execution_lane\":\"native_fem_mfem_frequency_domain_cpu\",\"scope\":\"gamma_free_or_static_periodic_magnetic_response_with_provider_demag_and_dmi_slices\"}"
+    },
+    "eigenmodes": {
+      "status": "unavailable",
+      "study_kind": "eigenmodes",
+      "driven_response_available": false,
+      "modal_solver_available": false,
+      "static_periodic_response_available": false,
+      "floquet_modal_available": false,
+      "floquet_response_available": false,
+      "dynamic_demag_k_available": false,
+      "gpu_available": false,
+      "reason": "nonzero-k Floquet dynamic demag is not implemented for native FEM frequency-domain",
+      "diagnostics_json": "{\"schema_version\":\"frequency_domain_availability.v1\",\"driven_response_available\":false,\"modal_solver_available\":false,\"static_periodic_response_available\":false,\"floquet_modal_available\":false,\"floquet_response_available\":false,\"dynamic_demag_k_available\":false,\"gpu_available\":false}"
+    },
+    "floquet_nonzero_k_response_supported": false,
+    "floquet_nonzero_k_demag_supported": false,
+    "capabilities": {
+      "schema_version": "frequency_domain_capabilities.v1",
+      "modal": {
+        "reference_cpu": {
+          "status": "reference_executable",
+          "reason": "runner FEM eigen reference path emits modal artifacts"
+        },
+        "production_cpu": {
+          "status": "unsupported",
+          "reason": "not implemented in the current production frequency-domain backend"
+        },
+        "production_gpu": {
+          "status": "unsupported",
+          "reason": "not implemented in the current production frequency-domain backend"
+        },
+        "k_path": {
+          "status": "reference_executable",
+          "reason": "runner FEM eigen reference path emits k-path dispersion artifacts"
+        },
+        "mode_tracking": {
+          "status": "reference_executable",
+          "reason": "runner FEM eigen reference path emits branch tracking artifacts"
+        },
+        "mode_field_payload": {
+          "status": "reference_executable",
+          "reason": "mode metadata and binary mode-field payloads are artifact-backed"
+        },
+        "linewidths": {
+          "status": "reference_executable",
+          "reason": "modal artifacts preserve imaginary-frequency linewidth metadata"
+        },
+        "absorption_from_modes": {
+          "status": "unsupported",
+          "reason": "not implemented in the current production frequency-domain backend"
+        }
+      },
+      "boundary": {
+        "static_periodic": {
+          "status": "partial_production_executable",
+          "reason": "k=0 static-periodic driven response is production-enforced on the native FEM response lanes when mesh.periodic_node_pairs metadata is present; nonzero-k no-demag Floquet response is a separate phase-projected slice and Floquet dynamic demag-k remains unsupported"
+        },
+        "floquet_modal": {
+          "status": "semantic_only",
+          "reason": "Floquet modal semantics exist, but production operator enforcement is not available"
+        },
+        "floquet_response": {
+          "status": "partial_production_executable",
+          "reason": "driven nonzero-k Floquet response is executable for the no-demag phase-projected tangent slice; dynamic demag-k remains gated"
+        },
+        "periodic_pair_diagnostics": {
+          "status": "reference_executable",
+          "reason": "mesh periodic-pair diagnostics are exposed as session resources"
+        }
+      },
+      "demag": {
+        "static_periodic_pbc": {
+          "status": "semantic_only",
+          "reason": "static FEM demag PBC semantics are documented but not promoted for frequency-domain production solves"
+        },
+        "floquet_dynamic_k": {
+          "status": "unsupported",
+          "reason": "nonzero-k Floquet demag requires a phase-aware dynamic demag-k operator"
+        }
+      },
+      "dispersion": {
+        "reference_cpu": {
+          "status": "reference_executable",
+          "reason": "reference/MVP FEM modal k-path dispersion emits spectrum, branches, dispersion.csv, and mode-field artifacts on the CPU reference lane"
+        },
+        "production_cpu": {
+          "status": "partial_production_executable",
+          "reason": "managed native CPU selected-spectrum no-demag Full2x2 Floquet k-path dispersion is executable for the labelled Bloch/Floquet tangent payload slice; dynamic demag-k, broader sparse/matrix-free validation, and production GPU remain gated"
+        },
+        "production_cpu_gamma_k_path": {
+          "status": "partial_production_executable",
+          "reason": "managed production CPU selected-spectrum adapter is validated for gamma-equivalent k-path samples; this is a provenance bridge and not nonzero-k Bloch/Floquet dispersion"
+        },
+        "production_gpu": {
+          "status": "unsupported",
+          "reason": "native modal GPU dispersion is unavailable until a real modal GPU eigensolver and matching Floquet operator exist; driven-response GPU Floquet smoke must not be reused as modal dispersion"
+        },
+        "k_path": {
+          "status": "reference_executable",
+          "reason": "runner FEM eigen reference path emits dispersion.csv"
+        },
+        "branch_tracking": {
+          "status": "reference_executable",
+          "reason": "runner FEM eigen reference path emits branches.v2 artifacts"
+        }
+      },
+      "validation": {
+        "fmr_k0": {
+          "status": "source_visible",
+          "reason": "validation artifacts and tests are being assembled; no production FMR gate is complete"
+        }
+      },
+      "response": {
+        "magnetic_cpu": {
+          "status": "partial_production_executable",
+          "reason": "native FEM production CPU response executes gamma/free-boundary, provider-backed dynamic demag, k=0 static-periodic, and no-demag nonzero-k Floquet tangent slices for supported exchange/Zeeman/uniaxial-anisotropy/interfacial-DMI/bulk-DMI/damping payloads; dynamic demag-k and missing periodic mesh-pair metadata are rejected before dense validation fallback"
+        },
+        "magnetic_gpu": {
+          "status": "partial_production_executable",
+          "reason": "native_fem_mfem_frequency_domain_gpu executes gamma/free and k=0 static-periodic driven-response slices with provider-backed dynamic demag and supported P1 DMI; nonzero-k Floquet dynamic demag remains gated"
+        },
+        "frequency_sweep": {
+          "status": "partial_production_executable",
+          "reason": "production CPU, production GPU, and dense validation lanes emit per-frequency artifacts and progress for supported response slices"
+        },
+        "mode_projected": {
+          "status": "unsupported",
+          "reason": "not implemented in the current production frequency-domain backend"
+        },
+        "magnetoelastic_quasistatic": {
+          "status": "unsupported",
+          "reason": "not implemented in the current production frequency-domain backend"
+        },
+        "magnetoelastic_elastodynamic": {
+          "status": "unsupported",
+          "reason": "not implemented in the current production frequency-domain backend"
+        }
+      },
+      "visualization": {
+        "modal_spectrum_chart": {
+          "status": "reference_executable",
+          "reason": "artifact-backed spectrum chart resources are exposed"
+        },
+        "modal_dispersion_chart": {
+          "status": "reference_executable",
+          "reason": "artifact-backed dispersion chart resources are exposed"
+        },
+        "mode_table": {
+          "status": "reference_executable",
+          "reason": "artifact-backed modal table resources are exposed"
+        },
+        "mode_3d_overlay": {
+          "status": "reference_executable",
+          "reason": "artifact-backed mode-field payloads can be projected in 3D"
+        },
+        "response_sweep_chart": {
+          "status": "reference_executable",
+          "reason": "artifact-backed response sweep chart resources are exposed"
+        },
+        "response_field_3d_overlay": {
+          "status": "reference_executable",
+          "reason": "artifact-backed response field payloads can be projected in 3D"
+        }
+      }
+    },
+    "response_progress": {
+      "schema_version": "frequency_domain_sweep_progress.v1",
+      "status": "missing",
+      "state": "completed",
+      "complete": true,
+      "total_frequency_points": 0,
+      "completed_frequency_points": 0,
+      "written_frequency_point_artifacts": 0,
+      "current_frequency_hz": null,
+      "partial_artifacts_available": false,
+      "latest_artifact_manifest_path": "frequency_domain/manifest.v1.json",
+      "missing_reason": "response sweep progress artifacts are not present",
+      "progress_json": "{\"complete\":true,\"completed_frequency_points\":0,\"current_frequency_hz\":null,\"frequency_max_hz\":null,\"frequency_min_hz\":null,\"latest_artifact_manifest_path\":\"frequency_domain/manifest.v1.json\",\"partial_artifacts_available\":false,\"schema_version\":\"frequency_domain_sweep_progress.v1\",\"state\":\"completed\",\"status\":\"missing\",\"total_frequency_points\":0,\"written_frequency_point_artifacts\":0}"
+    },
+    "response_cancel_requested": null,
+    "result_manifest": {
+      "schema_version": "frequency_domain_manifest.v1",
+      "status": "ready",
+      "artifact_path": "frequency_domain/manifest.v1.json",
+      "resource_key": "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
+      "payload": {
+        "schema_version": "frequency_domain_manifest.v1",
+        "analysis_family": "magnetic_frequency_domain",
+        "study_product": "modal_eigen",
+        "engine_id": "native_fem.frequency_domain.k0_poisson_airbox_cpu_schur_slepc.v1",
+        "solve_succeeded": true,
+        "fields_available": true,
+        "spectrum_completeness": "incomplete_window",
+        "window_complete": false,
+        "candidate_identity": {
+          "schema_version": "frequency_domain_candidate_identity.v1",
+          "mesh_id": "study_domain",
+          "mesh_generation_id": "5e7608e94cf557751d029b7a4da40e1b811ec13062adf97de1f385d115e85b8b",
+          "topology_fingerprint": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4",
+          "equilibrium_artifact_sha256": "sha256:32b27cf149a5f9eb47dfd32b322d72d077d1248a8df887c32e4f07102388b0a2",
+          "engine_id": "native_fem.frequency_domain.k0_poisson_airbox_cpu_schur_slepc.v1",
+          "device": "cpu",
+          "source_identity": {
+            "built_at_utc": "2026-10-27T11:37:18Z",
+            "git_commit": "eb15c85205eac95ea6f16a3fdcb2c16471b3a24c",
+            "source_snapshot_sha256": "a022ecddc01bf6b6f7889a3727c85f926d68c6ffc70c2f6006e4afb533e00ef5",
+            "worktree_state": "clean"
+          }
+        },
+        "artifacts": {
+          "accepted_fem_equilibrium_fields_v1_paths": [
+            "eigen/metadata/sample_0000/accepted_fem_equilibrium_fields.v1.json"
+          ],
+          "accepted_fem_equilibrium_fields_v2_paths": [],
+          "branches_v2_path": "eigen/branches.v2.json",
+          "certified_fem_equilibrium_fields_v1_paths": [
+            "eigen/metadata/sample_0000/certified_fem_equilibrium_fields.v1.json"
+          ],
+          "certified_fem_equilibrium_fields_v2_paths": [],
+          "consumer_plan_snapshot_v1_path": "eigen/metadata/sample_0000/consumer_plan_snapshot.v1.json",
+          "consumer_plan_snapshot_v1_paths": [
+            "eigen/metadata/sample_0000/consumer_plan_snapshot.v1.json"
+          ],
+          "dispersion_csv_path": "eigen/dispersion.csv",
+          "eigen_diagnostics_v2_path": "eigen/diagnostics.v2.json",
+          "equilibrium_artifact_v7_path": "eigen/metadata/equilibrium_artifact.v7.json",
+          "linearization_identity_preimage_v1_path": "eigen/metadata/sample_0000/linearization_identity_preimage.v1.json",
+          "linearization_identity_preimage_v1_paths": [
+            "eigen/metadata/sample_0000/linearization_identity_preimage.v1.json"
+          ],
+          "linearization_identity_sha256_by_sample": {
+            "0": "sha256:af55ee38ffcc513a26b461c792f7faf08cf8667e1cdf8b9f75250264c59e2f3b"
+          },
+          "linearization_identity_v2_path": "eigen/metadata/sample_0000/linearization_identity.v2.json",
+          "linearization_identity_v2_paths": [
+            "eigen/metadata/sample_0000/linearization_identity.v2.json"
+          ],
+          "linearization_state_v6_path": "eigen/metadata/linearization_state.v6.json",
+          "mode_field_storage_format": "zarr",
+          "mode_field_zarr_store_path": "eigen/mode_fields.zarr",
+          "mode_metadata_paths": [
+            "eigen/modes/sample_0000/mode_0000.json"
+          ],
+          "mode_output_selection_path": "eigen/mode_output_selection.v1.json",
+          "producer_provenance_v1_path": "eigen/metadata/sample_0000/producer_provenance.v1.json",
+          "producer_provenance_v1_paths": [
+            "eigen/metadata/sample_0000/producer_provenance.v1.json"
+          ],
+          "recomputed_fem_linearization_certificate_v1_paths": [
+            "eigen/metadata/sample_0000/recomputed_fem_linearization_certificate.v1.json"
+          ],
+          "recomputed_fem_linearization_certificate_v2_paths": [],
+          "solver_diagnostics_path": "eigen/diagnostics/solver.v1.json",
+          "spectrum_v2_path": "eigen/spectrum.v2.json"
+        },
+        "assembly_kind": "mfem_weak_form_shared_domain",
+        "block_residuals": {
+          "backend_reported_residual": 1.7947320013943493e-13,
+          "certification_tolerance": 1e-08,
+          "certified": true,
+          "eps_full": 1.652629543376944e-13,
+          "eps_gauge": 0.0,
+          "eps_phi": 1.0113397934967384e-14,
+          "eps_q": 1.652629543376944e-13
+        },
+        "boundary_context": "floquet_periodic",
+        "boundary_gauge": {
+          "eta_row_present": false,
+          "gauge_policy": "none",
+          "gauge_reason": "coercive_outer_boundary",
+          "magnetostatic_bc": "periodic_airbox_k0",
+          "outer_boundary_kind": "poisson_dirichlet",
+          "robin_beta": 0,
+          "robin_beta_unit": "1/m"
+        },
+        "complete": true,
+        "cross_artifact_refs": [
+          {
+            "artifact": "eigen/spectrum.v2.json",
+            "relation": "source_spectrum",
+            "revision": "sha256:9a66955d0b892b6892ec26d03c217fcd722e0a599f63911cc4b52317b4d9f3e9"
+          },
+          {
+            "artifact": "eigen/branches.v2.json",
+            "relation": "source_branches",
+            "revision": "sha256:497450586d597b27367499eedb25dc6e0e453e337fca0d7c41147504a46a4fb4"
+          }
+        ],
+        "device_transfer_audit": {
+          "control_scalar_d2h_bytes": null,
+          "device_resident_claim": false,
+          "final_d2h_transfer_count": 0,
+          "hot_loop_d2h_bytes": null,
+          "hot_loop_h2d_bytes": null,
+          "hot_loop_host_sync_count": 0,
+          "setup_h2d_transfer_count": 0
+        },
+        "diagnostics": {
+          "modal_overlap_available": false,
+          "nonshared_floquet_native_input_diagnostics_replay": {
+            "computed_sample_indices": [
+              0
+            ],
+            "missing_keys": [],
+            "native_operator_replay": "NOT_VERIFIED",
+            "qualification": "NOT_VERIFIED",
+            "reason": "native-input diagnostic sidecars are absent from this manifest",
+            "scientific_qualification": "NOT_VERIFIED",
+            "sidecar_paths_by_key": {
+              "nonshared_floquet_native_input_diagnostics_preimage_v1_paths": [],
+              "nonshared_floquet_native_input_diagnostics_v1_paths": []
+            },
+            "status": "historical",
+            "structural_complete": false
+          },
+          "nonshared_floquet_replay": {
+            "computed_sample_indices": [
+              0
+            ],
+            "missing_keys": [],
+            "operator_replay": "NOT_VERIFIED",
+            "qualification": "NOT_VERIFIED",
+            "reason": "non-shared Floquet sidecars are absent from this manifest",
+            "scientific_qualification": "NOT_VERIFIED",
+            "status": "historical",
+            "structural_complete": false
+          },
+          "r4_replay": {
+            "accepted_family": "v1",
+            "accepted_sample_indices": [
+              0
+            ],
+            "computed_sample_indices": [
+              0
+            ],
+            "identity_content_sha256_by_sample": {
+              "0": "sha256:af55ee38ffcc513a26b461c792f7faf08cf8667e1cdf8b9f75250264c59e2f3b"
+            },
+            "identity_sample_indices": [
+              0
+            ],
+            "missing_recomputed_keys": [],
+            "payload_replay": "NOT_VERIFIED",
+            "qualification": "NOT_VERIFIED",
+            "reason": "R4 sidecar paths and exact identity links are structurally consistent; physical payload replay remains a separate gate",
+            "status": "payload_replay_pending",
+            "structural_complete": true
+          },
+          "tracking_score_source": "seed_only"
+        },
+        "equilibrium_artifact_sha256": "sha256:32b27cf149a5f9eb47dfd32b322d72d077d1248a8df887c32e4f07102388b0a2",
+        "equilibrium_identity": "sha256:32b27cf149a5f9eb47dfd32b322d72d077d1248a8df887c32e4f07102388b0a2",
+        "implementation_state": "executable",
+        "k_sampling": {
+          "kind": "single",
+          "vector_rad_per_m": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "linearization_identity_sha256": "sha256:af55ee38ffcc513a26b461c792f7faf08cf8667e1cdf8b9f75250264c59e2f3b",
+        "linearization_state_sha256": "sha256:3f29bbc79b1abe5d9b0233996006d028d160c9f056e4444ee844c55e3ffe4f0c",
+        "mesh_identity": "5e7608e94cf557751d029b7a4da40e1b811ec13062adf97de1f385d115e85b8b",
+        "operator_dictionary_version": "FrequencyOperatorDictionary.v1",
+        "operator_input_signature_sha256": "sha256:d42a0d9f4c4b41225bea66235b6f34db63c0ce0a510c484021a27725f2e434aa",
+        "periodic_mesh_certificate_sha256": "sha256:02a7e9885701c12b9938bc046f60029d06d0701337c0ce114c1e6d13be12cee7",
+        "phase_constraint_sha256": "sha256:d60fc00719ca0fcf518d5e64e18c7c403d965606d3585be065c0b74d609c448a",
+        "physics": {
+          "analysis_family": "magnetic_frequency_domain",
+          "field_units": "dimensionless_delta_m",
+          "frequency_units": "Hz",
+          "normalization": "unit_l2",
+          "phase_convention": "exp_plus_i_omega_t"
+        },
+        "physics_contract_version": "micromagnetics_frequency_domain_v5",
+        "requested_execution": {
+          "backend": "fem",
+          "device": "cpu",
+          "engine": "auto",
+          "execution_mode": "strict",
+          "include_demag": true,
+          "magnetostatic_bc": "periodic_airbox_k0",
+          "precision": "double",
+          "preconditioner": "lu",
+          "solver_family": "modal_eigen",
+          "solver_method": "targeted_spectrum",
+          "study_product": "modal_eigen"
+        },
+        "resolved_execution": {
+          "backend": "fem",
+          "demag_realization": "fem_poisson_dirichlet",
+          "device": "cpu",
+          "device_residency": "host",
+          "engine": "k0_poisson_airbox_cpu_schur_slepc",
+          "fallback_from_engine": "auto",
+          "fallback_reason": null,
+          "fallback_to_engine": "k0_poisson_airbox_cpu_schur_slepc",
+          "fallback_used": false,
+          "implementation_id": "k0_poisson_airbox_cpu_schur_slepc",
+          "krylov_residency": "host",
+          "native_backend": "native_cpu",
+          "operator_residency": "host",
+          "precision": "double",
+          "preconditioner_residency": "host",
+          "reference_or_production": "production",
+          "selection_reason": "fem_eigen.k0_periodic_airbox.explicit_cpu",
+          "solve_kind": "modal_eigen",
+          "solver_algorithm": "k0_poisson_airbox_cpu_schur_slepc",
+          "solver_library": "SLEPc/PETSc",
+          "status": "ok",
+          "vector_residency": "host"
+        },
+        "resources": {
+          "branches_resource_key": "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
+          "dispersion_resource_key": "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
+          "eigen_diagnostics_resource_key": "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2",
+          "mode_field_resources": [
+            "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/0/0/meta"
+          ],
+          "spectrum_resource_key": "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2"
+        },
+        "run_id": "run-live-afe29d88b930ee8c5c0f1c0bb68b3f31aa603b7d457a871334e08155fc281c6d",
+        "source_mesh_topology_sha256": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4",
+        "spectral": {
+          "spectral_pencil_kind": "real_frequency_rotated",
+          "spectral_scalar_mode": "real_split",
+          "spectral_transform": "shift_invert",
+          "target_representation": "tau=omega_target",
+          "tau_rad_per_s": 76969020012.94994
+        },
+        "spectrum_output_scopes": [
+          "per_sample"
+        ],
+        "stage_id": "eigenmodes",
+        "stage_kind": "eigenmodes",
+        "status": "ready",
+        "validated_scope": "fem_k0_periodic_airbox_p1_double_cpu_slepc",
+        "validation": {},
+        "validation_state": "unvalidated"
+      },
+      "revision": "sha256:0b1259f28a674ce9f555e84706f39f108724ef6c9d20874f2d7960debc7dc0b4",
+      "generation_id": "sha256:a930b1a5c7d95e8766d4889bb70dc428a76a73708bedc9d8ab17273ee5b3b3ba",
+      "generation_status": "member_verified_owner_bound",
+      "content_digest": "sha256:0b1259f28a674ce9f555e84706f39f108724ef6c9d20874f2d7960debc7dc0b4",
+      "artifact_set_id": "sha256:25b53a4cade3a06899563e606f7282391dd865d64ecc56fbf04ddae2d440abd9",
+      "session_id": "docker-startup-470fb8528921ea3b5bcd466ecf96c010f7fa0f2b50e25d6257bb920e61cbbdd4",
+      "run_id": "run-live-afe29d88b930ee8c5c0f1c0bb68b3f31aa603b7d457a871334e08155fc281c6d",
+      "stage_id": "eigenmodes",
+      "mesh_generation_id": "8623634477479487831",
+      "missing_reason": null
+    }
+  },
+  "spectrum": {
+    "schema_version": "frequency_domain_eigen_spectrum.v1",
+    "status": "ready",
+    "artifact_path": "eigen/spectrum.v2.json",
+    "resource_key": "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
+    "payload": {
+      "schema_version": "eigen_spectrum.v2",
+      "samples": [
+        {
+          "sample_id": "k-sample-0000",
+          "sample_index": 0,
+          "modes": [
+            {
+              "mode_id": "sample-0000/mode-0000",
+              "branch_id": 0,
+              "raw_mode_index": 0,
+              "frequency_hz": 9299249697.073517,
+              "frequency_real_hz": 9299249697.073517,
+              "angular_frequency_imag_rad_per_s": 0.0,
+              "angular_frequency_rad_per_s": 58428909064.44654,
+              "assembly_kind": "mfem_weak_form_shared_domain",
+              "block_residuals": {
+                "backend_reported_residual": 1.7947320013943493e-13,
+                "certification_tolerance": 1e-08,
+                "certified": true,
+                "eps_full": 1.652629543376944e-13,
+                "eps_gauge": 0.0,
+                "eps_phi": 1.0113397934967384e-14,
+                "eps_q": 1.652629543376944e-13,
+                "eps_reduced": null,
+                "floquet_cartesian_magnetic_seam_relative_residual": null,
+                "floquet_equilibrium_pair_relative_residual": null,
+                "floquet_full_magnetic_relative_residual": null,
+                "floquet_full_potential_relative_residual": null,
+                "floquet_gauge_policy_satisfied": false,
+                "floquet_scalar_phase_seam_relative_residual": null,
+                "floquet_seam_frame_certified": false,
+                "floquet_tangent_frame_seam_relative_residual": null,
+                "full_descriptor_certified": true,
+                "reduced_pencil_certified": false,
+                "scope": "native_descriptor"
+              },
+              "cluster_id": 0,
+              "cluster_size": 1,
+              "dominant_polarization": "uniform",
+              "eigenvalue_field_au_per_m": 264264.62715715304,
+              "eigenvalue_imag": 58428909064.44654,
+              "eigenvalue_mapping": "lambda_imag_positive_frequency",
+              "eigenvalue_real": 0.0,
+              "equilibrium_artifact_sha256": "sha256:32b27cf149a5f9eb47dfd32b322d72d077d1248a8df887c32e4f07102388b0a2",
+              "external_field_a_per_m": [
+                79577.47154594767,
+                0.0,
+                0.0
+              ],
+              "frequency_imag_hz": 0.0,
+              "gamma0_rad_s_per_A_m": 221100.0,
+              "gamma_rad_s_T": 175945789588.0903,
+              "index": 0,
+              "k_vector": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "linearization_state_sha256": "sha256:3f29bbc79b1abe5d9b0233996006d028d160c9f056e4444ee844c55e3ffe4f0c",
+              "mass_norm": 0.9999999999999691,
+              "max_amplitude": 250000000000.0078,
+              "mode_field_available": true,
+              "mode_field_id": "analysis:eigen:sample-0000:mode-0000",
+              "mode_field_resource_key": "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector?view=phase_rotated_real&phase_rad=0",
+              "mu0_T_m_per_A": 1.2566370614359173e-06,
+              "multiplicity": 1,
+              "native_q_phi_payload": true,
+              "nonshared_floquet_matrix_pencil_sha256": null,
+              "nonshared_floquet_operator_identity_sha256": null,
+              "nonshared_floquet_source_state_sha256": null,
+              "norm": 4974937185533.028,
+              "omega_rad_s": 58428909064.44654,
+              "operator_input_signature_sha256": "sha256:d42a0d9f4c4b41225bea66235b6f34db63c0ce0a510c484021a27725f2e434aa",
+              "periodic_mesh_certificate_sha256": "sha256:02a7e9885701c12b9938bc046f60029d06d0701337c0ce114c1e6d13be12cee7",
+              "phase_constraint_sha256": "sha256:d60fc00719ca0fcf518d5e64e18c7c403d965606d3585be065c0b74d609c448a",
+              "phasor_convention": "exp_plus_i_omega_t",
+              "phi_dof_count": 1173,
+              "q_dof_count": 656,
+              "relax_to_eigen_handoff_sha256": "sha256:ad480cb2a28171f13d3e49ab8ab0fd31d849e2c36d78c3f832046f325044e7a1",
+              "relax_to_eigen_source_mesh_topology_sha256": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4",
+              "residual_absolute_l2": null,
+              "residual_linf": null,
+              "residual_norm": null,
+              "residual_relative_l2": 1.652629543376944e-13,
+              "sample_index": 0,
+              "source_mesh_topology_sha256": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4",
+              "tangent_leakage_max_abs": 8.271806125530277e-25,
+              "tangent_leakage_mean_abs": 1.8126389565931757e-26,
+              "tangent_leakage_weighted_relative_l2": 7.696353230782015e-37
+            }
+          ],
+          "external_field_a_per_m": [
+            79577.47154594767,
+            0.0,
+            0.0
+          ],
+          "k_vector": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "label": "\u0393",
+          "mesh_id": "study_domain",
+          "path_s": 0.0,
+          "segment_index": 0,
+          "t_in_segment": 0.0,
+          "topology_revision": "sha256:ae3673c034a06e7b18150c4502f2dcffa685d59b06708513abe3f6c20eb5d3fc"
+        }
+      ],
+      "engine_id": "native_fem.frequency_domain.k0_poisson_airbox_cpu_schur_slepc.v1",
+      "solve_succeeded": true,
+      "fields_available": true,
+      "spectrum_completeness": "incomplete_window",
+      "window_complete": false,
+      "candidate_identity": {
+        "schema_version": "frequency_domain_candidate_identity.v1",
+        "mesh_id": "study_domain",
+        "mesh_generation_id": "5e7608e94cf557751d029b7a4da40e1b811ec13062adf97de1f385d115e85b8b",
+        "topology_fingerprint": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4",
+        "equilibrium_artifact_sha256": "sha256:32b27cf149a5f9eb47dfd32b322d72d077d1248a8df887c32e4f07102388b0a2",
+        "engine_id": "native_fem.frequency_domain.k0_poisson_airbox_cpu_schur_slepc.v1",
+        "device": "cpu",
+        "source_identity": {
+          "built_at_utc": "2026-10-27T11:37:18Z",
+          "git_commit": "eb15c85205eac95ea6f16a3fdcb2c16471b3a24c",
+          "source_snapshot_sha256": "a022ecddc01bf6b6f7889a3727c85f926d68c6ffc70c2f6006e4afb533e00ef5",
+          "worktree_state": "clean"
+        }
+      },
+      "mode_count": 1,
+      "sample_count": 1,
+      "solver_model": "k0_poisson_airbox_cpu_schur_slepc"
+    },
+    "revision": "sha256:a41b61fad646c7efedf3ee2213d9fed61dafad4bab3daed91bd735bd78384f05",
+    "generation_id": "sha256:a930b1a5c7d95e8766d4889bb70dc428a76a73708bedc9d8ab17273ee5b3b3ba",
+    "generation_status": "member_verified_owner_bound",
+    "content_digest": "sha256:a41b61fad646c7efedf3ee2213d9fed61dafad4bab3daed91bd735bd78384f05",
+    "artifact_set_id": "sha256:25b53a4cade3a06899563e606f7282391dd865d64ecc56fbf04ddae2d440abd9",
+    "session_id": "docker-startup-470fb8528921ea3b5bcd466ecf96c010f7fa0f2b50e25d6257bb920e61cbbdd4",
+    "run_id": "run-live-afe29d88b930ee8c5c0f1c0bb68b3f31aa603b7d457a871334e08155fc281c6d",
+    "stage_id": "eigenmodes",
+    "mesh_generation_id": "8623634477479487831",
+    "missing_reason": null
+  },
+  "activation": {
+    "api_instance_id": "31f81b0d-9b9a-424a-a88f-25e2b8df106c",
+    "attempt": "cddca28e50fd4bceaf176a1d384c41fd",
+    "config_sha256": "42b32463f1a205b05121d6af4a49b47a5669e3e47c3a99072fa314b4fe0b8649",
+    "exit_code": 0,
+    "message": "Script accepted; the API and UI remain available.",
+    "outcome": "interactive_accepted",
+    "request_id": "eigensolve-gamma-window-floor32-prelaunch-fixed-20261027",
+    "run_id": "run-live-afe29d88b930ee8c5c0f1c0bb68b3f31aa603b7d457a871334e08155fc281c6d",
+    "schema": "fullmag.docker-dev-run-script.v1",
+    "session_id": "docker-startup-470fb8528921ea3b5bcd466ecf96c010f7fa0f2b50e25d6257bb920e61cbbdd4",
+    "source_sha256": "bdfc957bdc1b53e71b6365bf01b150266a26356248b636654e8d782a8a3eeefc",
+    "state": "interactive",
+    "status": "accepted"
+  },
+  "analytic_comparison": {
+    "parameters": {
+      "geometry": "DE",
+      "bias_field_a_per_m": 79577.47154594767,
+      "film_thickness_m": 1e-08,
+      "air_padding_each_side_m": 2e-06,
+      "exchange_stiffness_j_per_m": 1.3e-11,
+      "saturation_magnetisation_a_per_m": 800000.0,
+      "gamma0_rad_s_per_a_m": 221100.0,
+      "mu0_t_m_a": 1.2566370614359173e-06
+    },
+    "finite_dirichlet_n0_hz": 9299249697.068401,
+    "difference_percent": 5.5000448639930255e-11,
+    "qualification": "Selected frequency comparison; no mesh/airbox or complete-spectrum qualification"
+  },
+  "native_summary": {
+    "window_certificate": {
+      "accepted_cluster_frequencies_hz": [
+        9299249697.073517
+      ],
+      "accepted_mode_count": 1,
+      "base_schedule": {
+        "cancelled": false,
+        "completed_subwindow_count": 16,
+        "failed_subwindow_count": 0,
+        "first_shift_hz": 8734375000,
+        "last_shift_hz": 15765625000,
+        "planned_subwindow_count": 16,
+        "state": "completed"
+      },
+      "base_schedule_summary_ref": "executed_subwindows_json#pass=base",
+      "cluster_ranks": [
+        1
+      ],
+      "count_certificate": {
+        "count": null,
+        "method": null,
+        "status": "not_performed"
+      },
+      "coverage_margins_hz": {
+        "lower": 117187500,
+        "upper": 117187500
+      },
+      "discovered_mode_count": 2,
+      "krylov_subspace_policy": "bounded_quadruple_nev_floor32_window_v3",
+      "method": "shift_nev_refinement_subspace_v1",
+      "min_subspace_overlap": 1,
+      "perturbation_result": "stable",
+      "refined_ncv": 32,
+      "refined_nev": 8,
+      "refined_requested_mode_count": 2,
+      "refinement_schedule": {
+        "cancelled": false,
+        "completed_subwindow_count": 34,
+        "failed_subwindow_count": 0,
+        "first_shift_hz": 8382812500,
+        "last_shift_hz": 16117187500,
+        "planned_subwindow_count": 34,
+        "state": "completed"
+      },
+      "refinement_schedule_summary_ref": "executed_subwindows_json#pass=refinement",
+      "requested_max_hz": 16000000000,
+      "requested_min_hz": 8500000000,
+      "requested_mode_count": 1,
+      "requested_ncv": 32,
+      "requested_nev": 4,
+      "schema_version": "poisson_airbox_frequency_window_certificate.v2",
+      "search_stability": {
+        "requested_cluster_limit_covered": true,
+        "status": "stable"
+      },
+      "spectrum_scope": "selected",
+      "status": "not_certified",
+      "stop_reason": "selected_spectrum_stable_count_unavailable",
+      "subspace_overlap_threshold": 0.999999,
+      "window_complete": false
+    },
+    "window_completeness": {
+      "completed_subwindow_count": 50,
+      "empty_subwindow_count": 0,
+      "failed_subwindow_count": 0,
+      "status": "not_certified",
+      "subwindow_count": 50
+    },
+    "modal_krylov_tuning": {
+      "eps_dimensions": {
+        "mpd": 32,
+        "ncv": 32,
+        "nev": 4,
+        "query_succeeded": true
+      },
+      "eps_max_iterations": 2000,
+      "eps_tolerance": 1e-09,
+      "phase": "queried_after_eps",
+      "shifted_ksp_max_iterations": 1000,
+      "shifted_ksp_restart": 8,
+      "shifted_ksp_rtol": 1e-09,
+      "shifted_ksp_type": "fgmres"
+    },
+    "modal_solver_policy": {
+      "delegates_to_native_defaults": false,
+      "requested_completeness": "best_effort",
+      "requested_max_linear_iterations": null,
+      "requested_max_outer_iterations": 2000,
+      "requested_residual_tolerance": 1e-08,
+      "resolved_completeness": "best_effort",
+      "source": "resolved_fem_eigen_plan"
+    },
+    "static_demag_substitution": false,
+    "demag_kind": "periodic_airbox_k0",
+    "execution_lane": "production_cpu",
+    "native_execution_attestation": {
+      "fallback_used": false,
+      "requested_target": "production_cpu",
+      "resolved_engine_id": "k0_poisson_airbox_cpu_schur_slepc",
+      "resolved_target": "production_cpu"
+    }
+  }
+}

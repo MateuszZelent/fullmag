@@ -707,6 +707,7 @@ export type SelectionRef =
       type: "mode-composition-object";
     }
   | {
+      collectionStudyCount?: number;
       analysisRunId?: string;
       analysisStageId?: string;
       artifactRevision?: number | string;
@@ -1415,6 +1416,7 @@ export function selectionRefEquals(
         nullableStringEquals(left.source, right.source) &&
         nullableStringEquals(left.studyProduct, right.studyProduct) &&
         nullableStringEquals(left.viewId, right.viewId) &&
+        left.collectionStudyCount === right.collectionStudyCount &&
         centroidEquals(left.wavevectorKf, right.wavevectorKf)
       );
     case "mode-visualization":

@@ -5,6 +5,7 @@ import type {
   LiveStatusResource,
   ObjectMetricsResource,
   SceneResource,
+  ScalarWindowResource,
   SolverStatusResource,
   StageExecutionResource,
 } from "@/kernel/api/apiTypes";
@@ -538,6 +539,21 @@ describe("FooterTelemetry", () => {
       revision: 1,
       status: "ready",
     });
+    const scalarWindow: ScalarWindowResource = {
+      columns: ["step", "time", "mx", "my", "mz", "e_total"],
+      current_observation: {
+        request_scope_epoch: "test-api:0",
+        run_id: "run-1",
+        scalar_revision: 22,
+        session_id: "session-1",
+        source_step: 99,
+      },
+      observation_frames: [],
+      returned_rows: 1,
+      revision: 22,
+      rows: [[99, 1.25e-9, 0.25, -0.5, 0.75, 1.5]],
+      total_rows: 1,
+    };
     const model = buildFooterTelemetryModel(
       telemetryStatus,
       objectMetrics,
@@ -546,21 +562,7 @@ describe("FooterTelemetry", () => {
       null,
       null,
       null,
-      {
-        columns: ["step", "time", "mx", "my", "mz"],
-        current_observation: {
-          request_scope_epoch: "test-api:0",
-          run_id: "run-1",
-          scalar_revision: 22,
-          session_id: "session-1",
-          source_step: 99,
-        },
-        observation_frames: [],
-        returned_rows: 1,
-        revision: 22,
-        rows: [[99, 1.25e-9, 0.25, -0.5, 0.75]],
-        total_rows: 1,
-      },
+      scalarWindow,
     );
     const byId = Object.fromEntries(model.metrics.map((metric) => [metric.id, metric]));
 
@@ -1227,6 +1229,9 @@ describe("FooterTelemetry", () => {
         },
       );
       expect(model.metrics.find(({ id }) => id === "avg-mx")?.value).toBe("0.500000");
+      expect(model.metrics.find(({ id }) => id === "avg-mx")?.subdetail).toBe(
+        "Accepted scalar observation",
+      );
       expect(model.metrics.find(({ id }) => id === "step")?.value).toBe("12");
     },
   );

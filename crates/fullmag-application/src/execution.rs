@@ -1310,6 +1310,12 @@ fn is_supported_study_artifact_codec(data_kind: &str, codec_id: &str, version: &
         || (data_kind == "artifact"
             && codec_id == crate::study_artifact::STUDY_ANTENNA_INSPECTION_CODEC_ID
             && version == crate::study_artifact::STUDY_ANTENNA_INSPECTION_CODEC_VERSION)
+        || (data_kind == "artifact"
+            && codec_id == crate::fem_equilibrium_handoff::FEM_EQUILIBRIUM_HANDOFF_CODEC_ID
+            && version == crate::fem_equilibrium_handoff::FEM_EQUILIBRIUM_HANDOFF_CODEC_VERSION)
+        || (data_kind == "artifact"
+            && codec_id == crate::modal_eigen_bundle::MODAL_EIGEN_BUNDLE_CODEC_ID
+            && version == crate::modal_eigen_bundle::MODAL_EIGEN_BUNDLE_CODEC_VERSION)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -2257,6 +2263,27 @@ mod tests {
         artifact.validate().unwrap();
         let mut invalid=artifact.clone();invalid.data_kind="state".into();assert!(invalid.validate().is_err());
         let mut invalid=artifact;invalid.codec_version="v99".into();assert!(invalid.validate().is_err());
+    }
+    #[test]
+    fn modal_eigen_artifact_registry_accepts_only_exact_tuple() {
+        let artifact = ResolvedStudyArtifact {
+            artifact_id: "modal-eigen".into(),
+            object_ref: "a".repeat(64),
+            data_kind: "artifact".into(),
+            codec_id: crate::MODAL_EIGEN_BUNDLE_CODEC_ID.into(),
+            codec_version: crate::MODAL_EIGEN_BUNDLE_CODEC_VERSION.into(),
+        };
+        artifact
+            .validate()
+            .expect("the canonical modal eigen codec must be registered");
+
+        let mut wrong_version = artifact.clone();
+        wrong_version.codec_version = "v99".into();
+        assert!(wrong_version.validate().is_err());
+
+        let mut wrong_kind = artifact;
+        wrong_kind.data_kind = "state".into();
+        assert!(wrong_kind.validate().is_err());
     }
     #[test]
     fn resolved_operation_schema_and_preparation_binding_cannot_mix() {

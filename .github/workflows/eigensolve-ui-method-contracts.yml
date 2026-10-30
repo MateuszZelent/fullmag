@@ -44,6 +44,11 @@ on:
       - 'apps/control-room/src/kernel/visualization/AnalysisResultFieldOverlayIntent*'
       - 'apps/control-room/src/modules/inspector/panels/StudyInspectorPanel*'
       - 'apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels*'
+      - 'apps/control-room/src/shared/domain/analysis/eigenModeBrowser*'
+      - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenModePicker*'
+      - 'apps/control-room/src/modules/inspector/panels/FrequencyDomainModeDisplayControls*'
+      - 'apps/control-room/src/kernel/visualization/analysisFieldOverlayCommandContributions*'
+      - 'apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts'
       - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel*'
       - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenBranchInspectorPanel*'
       - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenDispersionInspectorPanel*'
@@ -51,6 +56,16 @@ on:
       - 'apps/control-room/src/kernel/selection/selectionTypes*'
       - 'apps/control-room/src/kernel/analysis-modules/analysisNodeKindAliases*'
       - 'apps/control-room/src/kernel/analysis-modules/analysisSurfaceRouting*'
+      - 'apps/control-room/src/kernel/layout/ViewportTabHost*'
+      - 'apps/control-room/src/kernel/layout/simulationPreparationModel*'
+      - 'apps/control-room/src/kernel/layout/WorkspaceDockLayout*'
+      - 'apps/control-room/src/kernel/layout/workspaceDocking*'
+      - 'apps/control-room/src/kernel/layout/DockAnchor*'
+      - 'apps/control-room/src/design/styles/layout.css'
+      - 'apps/control-room/src/kernel/layout/viewportDocking*'
+      - 'apps/control-room/src/shared/ui/Resizable*'
+      - 'apps/control-room/src/shared/ui/PanelFrame*'
+      - 'apps/control-room/src/design/styles/slots.css'
       - 'apps/control-room/src/modules/inspector/inspectorRouteCatalog*'
       - 'apps/control-room/src/modules/inspector/inspectorRegistry*'
       - '.github/workflows/eigensolve-ui-method-contracts.yml'
@@ -97,6 +112,11 @@ on:
       - 'apps/control-room/src/kernel/visualization/AnalysisResultFieldOverlayIntent*'
       - 'apps/control-room/src/modules/inspector/panels/StudyInspectorPanel*'
       - 'apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels*'
+      - 'apps/control-room/src/shared/domain/analysis/eigenModeBrowser*'
+      - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenModePicker*'
+      - 'apps/control-room/src/modules/inspector/panels/FrequencyDomainModeDisplayControls*'
+      - 'apps/control-room/src/kernel/visualization/analysisFieldOverlayCommandContributions*'
+      - 'apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts'
       - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel*'
       - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenBranchInspectorPanel*'
       - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenDispersionInspectorPanel*'
@@ -104,6 +124,16 @@ on:
       - 'apps/control-room/src/kernel/selection/selectionTypes*'
       - 'apps/control-room/src/kernel/analysis-modules/analysisNodeKindAliases*'
       - 'apps/control-room/src/kernel/analysis-modules/analysisSurfaceRouting*'
+      - 'apps/control-room/src/kernel/layout/ViewportTabHost*'
+      - 'apps/control-room/src/kernel/layout/simulationPreparationModel*'
+      - 'apps/control-room/src/kernel/layout/WorkspaceDockLayout*'
+      - 'apps/control-room/src/kernel/layout/workspaceDocking*'
+      - 'apps/control-room/src/kernel/layout/DockAnchor*'
+      - 'apps/control-room/src/design/styles/layout.css'
+      - 'apps/control-room/src/kernel/layout/viewportDocking*'
+      - 'apps/control-room/src/shared/ui/Resizable*'
+      - 'apps/control-room/src/shared/ui/PanelFrame*'
+      - 'apps/control-room/src/design/styles/slots.css'
       - 'apps/control-room/src/modules/inspector/inspectorRouteCatalog*'
       - 'apps/control-room/src/modules/inspector/inspectorRegistry*'
       - '.github/workflows/eigensolve-ui-method-contracts.yml'
@@ -150,6 +180,11 @@ jobs:
         run: >-
           python -B scripts/fullmag_storage.py run --profile linux-host --
           pnpm --dir apps/control-room exec vitest run
+          src/kernel/commands/CommandRegistry.test.ts
+          src/kernel/commands/projectWorkspaceCommandPolicy.test.ts
+          next.config.test.ts
+          src/shared/domain/persistence/fmsFileTransport.test.ts
+          src/kernel/runtime/studyRuntimeCommandContributions.test.ts
           src/shared/analysis-charts/frequencyRenderModels.test.ts
           src/shared/analysis-charts/chartRenderer.test.ts
           src/shared/analysis-charts/InteractiveChartSurface.test.tsx
@@ -180,6 +215,10 @@ jobs:
           src/modules/viewport-3d/viewport3dResources.test.ts src/modules/viewport-3d/model/modeCompositionViewportProjection.test.ts src/modules/viewport-3d/layers/MeshPartLayer.test.ts
           src/modules/analysis-plots/referenceOverlaySeries.test.ts
           src/modules/analysis-plots/referenceChartQuantity.test.ts
+          src/shared/domain/analysis/modeResultPresentation.test.ts
+          src/shared/domain/analysis/eigenModeBrowser.test.ts
+          src/kernel/visualization/analysisFieldOverlayCommandContributions.test.ts
+          src/modules/viewport-3d/viewport3dRenderModel.test.ts
           src/shared/domain/analysis/modalDampingObservables.test.ts
           src/shared/domain/analysis/phasorConventionAdapter.test.ts
           src/shared/domain/analysis/referenceImport.test.ts
@@ -187,12 +226,19 @@ jobs:
           src/modules/inspector/panels/StudyInspectorPanelModel.test.ts
           src/modules/inspector/panels/StudyInspectorPanel.test.tsx
           src/shared/domain/analysis/frequencyDomainChartModels.test.ts
+          src/modules/inspector/panels/FrequencyDomainModeDisplayControls.test.tsx
           src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel.test.tsx
           src/modules/inspector/panels/frequency-domain/EigenBranchInspectorPanel.test.tsx
           src/modules/inspector/panels/frequency-domain/EigenDispersionInspectorPanel.test.tsx
           src/modules/explorer/builders/catalogAnalysisFamilies.test.ts
           src/modules/explorer/builders/resultsExplorerNodes.test.ts
           src/modules/explorer/explorerSelection.test.ts
+          src/kernel/layout/ViewportTabHost.test.tsx
+          src/kernel/layout/simulationPreparationModel.test.ts
+          src/kernel/layout/viewportDocking.test.ts
+          src/shared/ui/Resizable.test.ts
+          src/kernel/layout/WorkspaceDockLayout.test.tsx
+          src/kernel/layout/workspaceDocking.test.ts
           src/kernel/selection/selectionTypes.modeVisualization.test.ts
           src/kernel/analysis-modules/analysisSurfaceRouting.test.ts
           src/modules/inspector/inspectorRegistry.test.tsx

@@ -1,0 +1,400 @@
+{
+  "schema": "fullmag.eigensolve-results-ux-audit.v1",
+  "date": "2026-10-28",
+  "scope": "Read-only Results UX audit and standalone mockup; no app implementation or solver qualification",
+  "repository": "/home/kkingstoun/git/fullmag/worktrees/eigensolve-integration-ui-20261026",
+  "source_commit": "09e14a42a33c6fc1d4ead93dfe5eafc182a0de30",
+  "runtime_version": "0.1.0-dev.20261028.g7abc39f3ba46+9797",
+  "url": "http://localhost:3217/session/eigen-mode-ui-de-signed15",
+  "artifact_root": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/eigensolve-results-ux-audit-20261028",
+  "source_files": [
+    {
+      "path": "apps/control-room/src/modules/inspector/InspectorShell.tsx",
+      "sha256": "5ae7d5c521b921af2574268de68420c561ee63be7dbe65d2834795717ee6b91d"
+    },
+    {
+      "path": "apps/control-room/src/modules/inspector/InspectorTabState.ts",
+      "sha256": "62812122ce83621e9983445977b2cc0fe3c3343e394b33f3a053bae177d3a15d"
+    },
+    {
+      "path": "apps/control-room/src/modules/inspector/panels/physics-first/PhysicsFirstResultInspectors.tsx",
+      "sha256": "76ee18c9beee7750a2bbf46c23a47dc054c632c6872cacb09a17a07a288a72e7"
+    },
+    {
+      "path": "apps/control-room/src/modules/inspector/panels/physics-first/PhysicsFirstResultInspectorPanel.tsx",
+      "sha256": "6f3ab563d9fb522cc3312cb2e5fd7aee17880c8f70837c1bac846f09cd831859"
+    },
+    {
+      "path": "apps/control-room/src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel.tsx",
+      "sha256": "e94ba72f0cd2708adf580acfe963f954dcfb83420ac19fbb38ae1ba982dd9dba"
+    },
+    {
+      "path": "apps/control-room/src/shared/domain/analysis/modalDampingObservables.ts",
+      "sha256": "5adcf179355fb5fa94596dbfb975e43c71e8656675a48f09c660d381d61ecfed"
+    },
+    {
+      "path": "apps/control-room/src/modules/explorer/builders/resultsExplorerNodes.ts",
+      "sha256": "5e1ed91c19d82a505e529c6389ef9850b5ab68a1abbf9bc8b493a7f8c40285f8"
+    },
+    {
+      "path": "apps/control-room/src/modules/inspector/components/ScientificInspectorTemplate.tsx",
+      "sha256": "b0f04ca4045470f8991d7de60806cb264f739ea8282e1590f2cf89a231a1f22d"
+    },
+    {
+      "path": "apps/control-room/src/shared/domain/analysis/eigenResidualSummary.ts",
+      "sha256": "3b42766d02c3b2a23a4b05c3276c166176dd7f0c431d4aca9b77429fcf7651a3"
+    },
+    {
+      "path": "apps/control-room/src/modules/inspector/panels/FrequencyDomainModeDisplayControls.tsx",
+      "sha256": "3dd1b90ec3b2d514c55c17f5d0f9173b095088073ce11833bd6cc83d793fbd66"
+    },
+    {
+      "path": "apps/control-room/src/modules/footer/FooterTelemetry.tsx",
+      "sha256": "f1c0e2575839201884493f1575a628b261f65d910cebd338290ef6c1272e31a0"
+    },
+    {
+      "path": "apps/control-room/src/modules/inspector/InspectorFooter.tsx",
+      "sha256": "6dedaf19149200ce05e35b3fba36e14dd915986bf13909d8092b8bb5628bae86"
+    },
+    {
+      "path": "docs/specs/frontend-v2/13-inspector-and-property-editing.md",
+      "sha256": "532e48ebfce9cb613a265e203e268954f754448c88a5c190624cf766d7ff3802"
+    },
+    {
+      "path": "docs/specs/frontend-v2/32-results-analysis-feature-modules.md",
+      "sha256": "1450d28eaa1b554ea3cb3b513640504ce28378c8f30c59dda03aad82ab21035f"
+    },
+    {
+      "path": "docs/specs/frontend-v2/33-ui-glossary.md",
+      "sha256": "330e44fcef0864fae43aefbf5512b6d1a1c6a8c00e1effac72a5e0b073cf4208"
+    },
+    {
+      "path": "apps/control-room/src/design/styles/theme.css",
+      "sha256": "5df5744378840fbec40a187f6881548892215fb6cee61bf9eef4f66b6d326b95"
+    },
+    {
+      "path": "apps/control-room/src/design/styles/tokens.css",
+      "sha256": "77694c204d4d34371703db6274204fd3de0f94dff57f3e52d945b18b8707bceb"
+    }
+  ],
+  "mode_sample_5": {
+    "sample_index": 5,
+    "raw_mode_index": 0,
+    "k_vector": [
+      0.0,
+      -5000000.0,
+      0.0
+    ],
+    "frequency_hz": 10310201976.016174,
+    "frequency_imag_hz": 0.0,
+    "damping_policy": "ignore",
+    "phasor_convention": "exp_plus_i_omega_t",
+    "residual_relative_l2": 7.494532641082661e-12,
+    "block_residuals": {
+      "backend_reported_residual": null,
+      "certification_tolerance": 1e-08,
+      "certified": true,
+      "eps_full": 7.494532641082661e-12,
+      "eps_gauge": null,
+      "eps_phi": 2.5266776980274895e-14,
+      "eps_q": 7.494482179274099e-12,
+      "eps_reduced": 7.494482179274099e-12,
+      "floquet_cartesian_magnetic_seam_relative_residual": 1.5196256929995616e-36,
+      "floquet_equilibrium_pair_relative_residual": 0.0,
+      "floquet_full_magnetic_relative_residual": 7.494532641082661e-12,
+      "floquet_full_potential_relative_residual": 2.5400185940045403e-14,
+      "floquet_gauge_policy_satisfied": true,
+      "floquet_scalar_phase_seam_relative_residual": 0.0,
+      "floquet_seam_frame_certified": true,
+      "floquet_tangent_frame_seam_relative_residual": 0.0,
+      "full_descriptor_certified": true,
+      "reduced_pencil_certified": true,
+      "scope": "full_projected_weak_form_and_periodic_seams"
+    },
+    "normalization": "unit_l2",
+    "candidate_identity": {
+      "schema_version": "frequency_domain_candidate_identity.v1",
+      "mesh_id": "study_domain",
+      "mesh_generation_id": "5e7608e94cf557751d029b7a4da40e1b811ec13062adf97de1f385d115e85b8b",
+      "topology_fingerprint": "sha256:75a7d9c14c05a4fd702c1bee09e776dfdc246e9680f8a36628c57f2395264aa4",
+      "equilibrium_artifact_sha256": "sha256:28452f3944223e4e4f9e6bcec7463cdbaa485b6497ae858e45e18ff56191dc2d",
+      "device": "cpu",
+      "source_identity": {
+        "built_at_utc": "2026-10-27T22:39:54Z",
+        "git_commit": "a63b4e44e6f408544f2a3adb0aa046c1a44ee28b",
+        "source_snapshot_sha256": "53f20b09770bf17dd2930c2b3221107a44e89eb7d0b8e1128e6d1256c01b7157",
+        "worktree_state": "clean"
+      }
+    }
+  },
+  "browser": {
+    "captured_at": "2026-10-28T10:27:58.118Z",
+    "views": [
+      {
+        "name": "category",
+        "unavailableCount": 4,
+        "notApplicableCount": 2,
+        "controlCount": 9,
+        "activeTab": "Overview",
+        "scrollableDescendants": [
+          {
+            "className": "fm-scroll-area__viewport",
+            "clientHeight": 459,
+            "scrollHeight": 858
+          }
+        ],
+        "bodyClientHeight": 459,
+        "bodyScrollHeight": 459,
+        "text_sha256": "09b2388a176b8083dace62ba4b7c7263e29f1b75d324ce6b2fa72d962f55c1a5",
+        "text_length": 1070
+      },
+      {
+        "name": "mode-overview",
+        "unavailableCount": 5,
+        "notApplicableCount": 0,
+        "controlCount": 31,
+        "activeTab": "Overview",
+        "scrollableDescendants": [
+          {
+            "className": "fm-scroll-area__viewport",
+            "clientHeight": 459,
+            "scrollHeight": 2691
+          }
+        ],
+        "bodyClientHeight": 459,
+        "bodyScrollHeight": 459,
+        "text_sha256": "bb4ee2961ddc388973175e1051d1fd4270830826bce82a2daf52bf2d62bfc5d4",
+        "text_length": 2893
+      },
+      {
+        "name": "mode-data",
+        "unavailableCount": 5,
+        "notApplicableCount": 0,
+        "controlCount": 31,
+        "activeTab": "Data",
+        "scrollableDescendants": [
+          {
+            "className": "fm-scroll-area__viewport",
+            "clientHeight": 459,
+            "scrollHeight": 2691
+          }
+        ],
+        "bodyClientHeight": 459,
+        "bodyScrollHeight": 459,
+        "text_sha256": "bb4ee2961ddc388973175e1051d1fd4270830826bce82a2daf52bf2d62bfc5d4",
+        "text_length": 2893
+      },
+      {
+        "name": "mode-provenance",
+        "unavailableCount": 5,
+        "notApplicableCount": 0,
+        "controlCount": 31,
+        "activeTab": "Provenance",
+        "scrollableDescendants": [
+          {
+            "className": "fm-scroll-area__viewport",
+            "clientHeight": 459,
+            "scrollHeight": 2691
+          }
+        ],
+        "bodyClientHeight": 459,
+        "bodyScrollHeight": 459,
+        "text_sha256": "bb4ee2961ddc388973175e1051d1fd4270830826bce82a2daf52bf2d62bfc5d4",
+        "text_length": 2893
+      },
+      {
+        "name": "mode-diagnostics",
+        "unavailableCount": 5,
+        "notApplicableCount": 0,
+        "controlCount": 31,
+        "activeTab": "Diagnostics",
+        "scrollableDescendants": [
+          {
+            "className": "fm-scroll-area__viewport",
+            "clientHeight": 459,
+            "scrollHeight": 2691
+          }
+        ],
+        "bodyClientHeight": 459,
+        "bodyScrollHeight": 459,
+        "text_sha256": "bb4ee2961ddc388973175e1051d1fd4270830826bce82a2daf52bf2d62bfc5d4",
+        "text_length": 2893
+      }
+    ],
+    "page_errors": [],
+    "blocked_mutations": [],
+    "failure": null
+  },
+  "prototype": {
+    "scope": "Standalone UX prototype only; not integrated Fullmag UI or WebGL verification",
+    "errors": [],
+    "checks": [
+      {
+        "name": "15 FEM points",
+        "pass": true
+      },
+      {
+        "name": "Click selects exact -5 value",
+        "pass": true
+      },
+      {
+        "name": "Exact frequency displayed",
+        "pass": true
+      },
+      {
+        "name": "Gamma view is visible",
+        "pass": true
+      },
+      {
+        "name": "Gamma image loaded",
+        "pass": true
+      },
+      {
+        "name": "Data tab displays 15 data rows",
+        "pass": true
+      },
+      {
+        "name": "Tab keyboard navigation",
+        "pass": true
+      },
+      {
+        "name": "No horizontal overflow 1600",
+        "pass": true
+      },
+      {
+        "name": "No horizontal overflow 1440",
+        "pass": true
+      },
+      {
+        "name": "No horizontal overflow 1100",
+        "pass": true
+      },
+      {
+        "name": "No horizontal overflow 820",
+        "pass": true
+      },
+      {
+        "name": "No horizontal overflow 390",
+        "pass": true
+      },
+      {
+        "name": "No browser errors",
+        "pass": true
+      }
+    ],
+    "layouts": [
+      {
+        "width": 1600,
+        "documentWidth": 1600,
+        "chartWidth": 1078,
+        "chartHeight": 420
+      },
+      {
+        "width": 1440,
+        "documentWidth": 1440,
+        "chartWidth": 918,
+        "chartHeight": 420
+      },
+      {
+        "width": 1100,
+        "documentWidth": 1100,
+        "chartWidth": 662,
+        "chartHeight": 370
+      },
+      {
+        "width": 820,
+        "documentWidth": 820,
+        "chartWidth": 780,
+        "chartHeight": 340
+      },
+      {
+        "width": 390,
+        "documentWidth": 390,
+        "chartWidth": 350,
+        "chartHeight": 280
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "path": "browser-audit.json",
+      "sha256": "bdc692003257a64561a182606ad76fa278c445077e965cd3fd7f739b20661d21",
+      "bytes": 16517
+    },
+    {
+      "path": "current-category.png",
+      "sha256": "6dfcc1b323ea8d52dc8e75a87249ccc68af17e725fb1a71ef775ab60f3323427",
+      "bytes": 260316
+    },
+    {
+      "path": "current-mode-data.png",
+      "sha256": "2a45de520d6e7f48628c88a0cc972ff387176bd807890281a9346b1870a96425",
+      "bytes": 292610
+    },
+    {
+      "path": "current-mode-diagnostics.png",
+      "sha256": "fe28e2cdabc4ca575da2f31094f97c6055919a68a0ecd1b11d0f5c346dd1ee18",
+      "bytes": 292896
+    },
+    {
+      "path": "current-mode-overview.png",
+      "sha256": "b03607fb67b02fe863160eaa1e2505701bad62a9d8c4eea7e3d9abea4820a498",
+      "bytes": 292527
+    },
+    {
+      "path": "current-mode-provenance.png",
+      "sha256": "550e0e149bd80f689abca21d6032547f8e6308ed4e5d7cf66094b608075162e8",
+      "bytes": 292976
+    },
+    {
+      "path": "gamma-verified-screenshot.png",
+      "sha256": "de76d974d3907811bf5890f5c60b81a4046922a3ca21ca168e50aaea4b79d2b5",
+      "bytes": 45618
+    },
+    {
+      "path": "propozycja-1100.png",
+      "sha256": "6f76c1d3a7af1b8e3544725e74fa43c768cc26a89047996f178ce5fae4e14df5",
+      "bytes": 129002
+    },
+    {
+      "path": "propozycja-dyspersja.png",
+      "sha256": "4eaa791b541eb079ecff68fae8f0149a53dd393348e60e6e3720f7073504d460",
+      "bytes": 135921
+    },
+    {
+      "path": "propozycja-mod-gamma.png",
+      "sha256": "a6dac882cc9742e2ae84f4550433d96499ec599181f5f27d0ed6a682ed80f937",
+      "bytes": 153823
+    },
+    {
+      "path": "propozycja-results.html",
+      "sha256": "b4cc0f694f320777451dbd5542c38ea4c75bcb4a651025b8356f398a60346f24",
+      "bytes": 35647
+    },
+    {
+      "path": "prototype-check.json",
+      "sha256": "0fbddce5f631228a49b0cce53c0ea0db7a903650f610c38c69bf2ad175b735a7",
+      "bytes": 1667
+    },
+    {
+      "path": "runtime-evidence.json",
+      "sha256": "150bb49c59f81f293c503176629a8739bf2e862b90f3797a9ad93f6921e0dea6",
+      "bytes": 145468
+    },
+    {
+      "path": "user-1.png",
+      "sha256": "e38d7f2bdabff92d33c95337110c1275df4d25c0cfae60c0eb34c14206798d65",
+      "bytes": 86893
+    },
+    {
+      "path": "user-2.png",
+      "sha256": "e38d7f2bdabff92d33c95337110c1275df4d25c0cfae60c0eb34c14206798d65",
+      "bytes": 86893
+    },
+    {
+      "path": "user-3.png",
+      "sha256": "b9b9fb996d681816c8e286f604dfbeca54eb19b1e299049f5e25089697de5147",
+      "bytes": 68066
+    }
+  ]
+}
