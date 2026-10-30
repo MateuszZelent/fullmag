@@ -324,5 +324,50 @@
       "guard": "hide connecting only for settled ready/null resource and classified terminal solver",
       "runtime_input_caveat": "prior browser evidence lacks raw successful preparation response; new browser repro required"
     }
+  },
+  "runtime_89bb_20261030": {
+    "source_commit": "89bbdf499c8a64c9dfd4fa55b707f1782dac55f4",
+    "source_snapshot": "569e347ed2be6da535fc7e68ac3e18c0918646d96fabaaeea707985f5167200d",
+    "run_id": "run-live-30e4b1695d3e88a7fccf98afb628125f58b58556b8a2520d3e6a59fec7ffdd85",
+    "frequency_hz": 9299249697.067736,
+    "analytic_finite_dirichlet_hz": 9299249697.068401,
+    "relative_analytic_error": 7.158262166693018e-14,
+    "residual_relative_l2": 2.734737633559983e-13,
+    "mode_field_browser_pass": true,
+    "webgl": {
+      "width": 888,
+      "height": 573,
+      "contextLost": false,
+      "visible": true
+    },
+    "animation_frame_hashes_differ": true,
+    "palette_frame_hashes_differ": true,
+    "browser_scope": "Chromium SwiftShader; not a hardware-GPU claim",
+    "diagnostics_http": 200,
+    "spectrum_scope": "selected_only; no window-completeness claim",
+    "fms_export": {
+      "session_id": "docker-startup-fea0f37f5fd46f98152ae6beb606f7f0147ac2a8943893a81cdccd9afaa8070b",
+      "profile": "solved",
+      "size_bytes": 3402395,
+      "sha256": "7c93f43df7f7416d62b5866affc7fe1e5b0ef8815af3bf83f9450fda55de4b34",
+      "path": "/mnt/c/Users/Mateusz/.codex/visualizations/2026/10/26/01a1770e-c06b-7282-9514-c818c5e8dfc1/final-integration-20261030/de-gamma-89bbdf499-20261030.fms"
+    },
+    "goal_complete": false,
+    "development_attempt": "c628b5470ea84f1fb34a9f9a281e9674",
+    "config_sha256": "20d55ce7b337d48e60e75f21ed28be7730b798ec3a6425773df7ad9470ec97e5",
+    "gamma_activation": "b801cdf93fba47c9a89e1dfabeda9831",
+    "signed15_activation": "57c502343b5e4df38609030026e87bcf",
+    "signed15_run": "run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e",
+    "signed15_state": "running; observed with is_busy=true",
+    "ui_ci": {
+      "run": 41040360146,
+      "status": "success"
+    },
+    "api_ci": {
+      "run": 41040357851,
+      "status": "failed",
+      "reason": "new test fixture lacked accepted physical observation for incoming m; guard correctly rejected; fixture corrected with physical scalar row; rerun pending"
+    },
+    "frontend_first_navigation": "cold Next compile 49s; warm 141ms; browser then PASS"
   }
 }

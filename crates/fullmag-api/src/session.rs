@@ -4639,6 +4639,7 @@ mod tests {
         request.latest_fields = Some(serde_json::from_value(json!({
             "m": {"values": [[0.0, 0.0, 1.0]], "source_step": 0}
         })).unwrap());
+        request.latest_scalar_row = Some(scalar_row(0, 0.0));
         request.coupled_checkpoint = Some(json!({"new_run": true}));
         apply_current_live_preparation_snapshot(&mut current, request).unwrap();
         assert_eq!(current.latest_fields.get("m").unwrap()["values"], json!([[0.0, 0.0, 1.0]]));

@@ -648,3 +648,38 @@ faktyczny running preparation pozostają widoczne. Surowej odpowiedzi
 preparation poprzedni browser probe nie zachował, więc przyczynę tego
 konkretnego ekranu trzeba jeszcze potwierdzić po nowym starcie.
 Obie poprawki mają parser/diff PASS; nowe testy hosted i runtime są otwarte.
+
+
+## Runtime i GUI po poprawkach — 30.10.2026
+
+Build `89bbdf499`, snapshot `569e347ed2be6da535fc7e68ac3e18c0918646d96fabaaeea707985f5167200d`,
+start DEV `c628b5470ea84f1fb34a9f9a281e9674` succeeded. Gamma ponowiono:
+`run-live-30e4b1695d3e88a7fccf98afb628125f58b58556b8a2520d3e6a59fec7ffdd85`.
+Częstotliwość 9,299249697 GHz i residual 2,7347e-13 są identyczne z poprzednim
+wynikiem. Nowy typed diagnostics reader zwraca HTTP200. Brak abs/Linf jest
+jawnie raportowany jako partial, bez wymyślania metryk.
+
+Przeglądarka: rzeczywisty mod Gamma wybrany z Resonance & FMR, 5127 wartości
+zespolonych, surface film_geom, poprawny owner i quantity. Fit mode obejmuje
+sam ferromagnetyk. WebGL 888×573, contextLost=false; zmiana fazy i palety
+zmienia obrazy canvas. Brak page errors i niedozwolonych mutacji. SwiftShader
+nie jest dowodem sprzętowego GPU. Cold frontend kompilował /workspace 49s;
+po rozgrzaniu odpowiadał 141–198ms. Automatyzacja została dostosowana do
+pojedynczego Gamma w rodzinie Resonance & FMR, zamiast błędnie wymagać
+wielopunktowej rodziny k-resolved. Nie zmieniano w tym celu UI produkcyjnego.
+
+Zapisano solved FMS `de-gamma-89bbdf499-20261030.fms` (3402395B), SHA256
+`7c93f43df7f7416d62b5866affc7fe1e5b0ef8815af3bf83f9450fda55de4b34`,
+w zewnętrznym `final-integration-20261030`. Wynik nie zależy już od bieżącej
+sesji do zachowania danych. Screenshot i pełny browser JSON są obok.
+
+UI CI `41040360146` PASS. API CI `41040357851` wykryło błąd nowego fixture'u:
+request z nowym m nie miał zaakceptowanej obserwacji fizycznej. Produkcyjna
+bramka odrzuciła go poprawnie. Dodano fizyczny ScalarRow step0 zgodny z m;
+nie zmieniono guardu ani produkcyjnego algorytmu. Powtórzenie CI jest wymagane.
+
+Signed15 z oryginalnym oknem 8,5–16GHz i wszystkimi piętnastoma ±k/Gamma
+uruchomiono jako `run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e`,
+activation `57c502343b5e4df38609030026e87bcf`; potwierdzono running/is_busy=true.
+Obserwator R6 pracuje na tym samym run ID. Jego pełny odbiór oraz wynik
+signed sweepa wymagają oddzielnego końcowego sprawdzenia; nie deklarujemy PASS.
