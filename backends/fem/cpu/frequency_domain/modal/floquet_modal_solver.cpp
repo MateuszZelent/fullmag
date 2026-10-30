@@ -8039,10 +8039,11 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     result.problem_type = "gnhep";
     result.spectral_transform = "shift_invert";
     result.which_eigenpairs = "target_magnitude";
-    result.ksp_type = "gmres";
+    // The selected type is resolved after operator setup and local tuning
+    // overrides; an earlier failure must not report a solver that never ran.
+    result.ksp_type = "not_configured";
     result.ksp_orthogonalization = "classical_gram_schmidt_refine_always";
-    result.ksp_breakdown_tolerance =
-        static_cast<double>(kFloquetShiftedGmresBreakdownTolerance);
+    result.ksp_breakdown_tolerance = std::numeric_limits<double>::quiet_NaN();
     result.pc_type = "lu";
     result.factorization_package = "petsc_default_lu";
     result.factorization_shift_policy = "pending_preconditioner_norm";
@@ -8653,11 +8654,18 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         static_cast<PetscReal>(1.0e-13),
         std::min(static_cast<PetscReal>(1.0e-8),
                  static_cast<PetscReal>(1.0e-3 * eigen_tolerance)));
+    // The exact Schur preconditioner is materialized through the existing
+    // dimension limit; larger systems use the sparse magnetic-only P. Keep
+    // GMRES with exact small Schur and use FGMRES for that large sparse route.
+    const char *const default_shifted_ksp_type =
+        split_dimension > kFloquetExactSchurPreconditionerMaxDimension
+            ? "fgmres"
+            : "gmres";
     const ModalKrylovTuning default_tuning{
         static_cast<double>(default_eps_absolute_tolerance),
         static_cast<double>(default_shifted_ksp_tolerance),
         static_cast<int>(kFloquetShiftedGmresDefaultRestart),
-        "gmres"};
+        default_shifted_ksp_type};
     ModalKrylovTuning resolved_tuning{};
     if (!resolve_modal_krylov_tuning(default_tuning, true, &resolved_tuning)) {
         result.status = "validation_error";
@@ -8678,6 +8686,9 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         // FGMRES does not use the GMRES residual-gap breakdown control.
         result.ksp_breakdown_tolerance =
             std::numeric_limits<double>::quiet_NaN();
+    } else {
+        result.ksp_breakdown_tolerance =
+            static_cast<double>(kFloquetShiftedGmresBreakdownTolerance);
     }
     result.eps_normalized_absolute_tolerance =
         static_cast<double>(eps_absolute_tolerance);

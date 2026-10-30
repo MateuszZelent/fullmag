@@ -1009,6 +1009,12 @@ intenty bez tego pola pozostają poprawne i zachowują wcześniejszy rekord.
 Powtórzony lub nieznany argument oraz próba dodania wyboru do resume,
 ukończonej recreation albo recovery są odrzucane.
 
+Gdy typ nie jest jawnie przypięty, natywna sparse shared-domain ścieżka Floqueta
+wybiera FGMRES, jeśli rzeczywisty split q przekracza istniejący limit 512 dla
+dokładnego Schura. Mały exact-Schur pozostaje przy GMRES. Automatyczny wybór nie
+zmienia K0/Gamma ani ścieżki dense, tolerancji, restartu, budżetu iteracji lub
+bramek akceptacji.
+
 Przykład jawnego eksperymentu z FGMRES i diagnostyką Schur dla następcy:
 
 ```text

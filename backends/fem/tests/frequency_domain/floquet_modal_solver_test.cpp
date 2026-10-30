@@ -351,6 +351,35 @@ struct SavedEnvironmentValue {
     }
 };
 
+struct ScopedFloquetModalKrylovEnvironment {
+    std::array<SavedEnvironmentValue, 8> values{
+        SavedEnvironmentValue("FULLMAG_MODAL_EPS_PREFILTER_ABS"),
+        SavedEnvironmentValue("FULLMAG_MODAL_SHIFTED_KSP_RTOL"),
+        SavedEnvironmentValue("FULLMAG_MODAL_GMRES_RESTART"),
+        SavedEnvironmentValue("FULLMAG_MODAL_SHIFTED_KSP_TYPE"),
+        SavedEnvironmentValue("FULLMAG_FLOQUET_EPS_PREFILTER_ABS"),
+        SavedEnvironmentValue("FULLMAG_FLOQUET_SHIFTED_KSP_RTOL"),
+        SavedEnvironmentValue("FULLMAG_FLOQUET_GMRES_RESTART"),
+        SavedEnvironmentValue("FULLMAG_FLOQUET_SHIFTED_KSP_TYPE")};
+    bool ready = true;
+
+    ScopedFloquetModalKrylovEnvironment()
+    {
+        for (const SavedEnvironmentValue &value : values) {
+            if (clear_floquet_diagnostic_environment_value(value.name) != 0) {
+                ready = false;
+            }
+        }
+    }
+
+    ~ScopedFloquetModalKrylovEnvironment()
+    {
+        for (const SavedEnvironmentValue &value : values) {
+            value.restore();
+        }
+    }
+};
+
 struct ScopedFloquetDiagnosticEnvironment {
     SavedEnvironmentValue dense_oracle{
         "FULLMAG_FLOQUET_DENSE_ORACLE"};
@@ -1076,6 +1105,10 @@ void reports_opt_in_action_diagnostic_unavailable_before_setup()
     }
 
     const auto &diagnostic = result.floquet_schur_action_diagnostic;
+    check(result.ksp_type != nullptr &&
+              std::strcmp(result.ksp_type, "not_configured") == 0 &&
+              std::isnan(result.ksp_breakdown_tolerance),
+          "pre-setup failure does not report a shifted KSP that was never selected");
     check(diagnostic.requested && !diagnostic.available &&
               std::strcmp(diagnostic.status, "unavailable") == 0 &&
               std::strcmp(
@@ -1094,6 +1127,9 @@ void reports_opt_in_action_diagnostic_unavailable_before_setup()
 
 void executes_native_sparse_matshell_above_dense_bound(bool force_inner_failure = false)
 {
+    ScopedFloquetModalKrylovEnvironment ksp_environment;
+    check(ksp_environment.ready,
+          "large sparse KSP default regression clears common and legacy tuning overrides");
     constexpr std::size_t q_dimension = 514u;
     // Keep the synthetic fixture well away from exact zero; the 1 MHz
     // frequency makes shifted selection deterministic without encoding a
@@ -1187,6 +1223,23 @@ void executes_native_sparse_matshell_above_dense_bound(bool force_inner_failure 
     previous_action_diagnostic.restore();
     previous_dense_oracle.restore();
 #if FULLMAG_FEM_WITH_SLEPC
+    SLEPcTinyGyrotropicModalEigenResult explicit_gmres_result{};
+    if (!force_inner_failure) {
+        check(clear_floquet_diagnostic_environment_value(
+                  previous_dense_oracle.name) == 0 &&
+                  clear_action_diagnostic_environment() == 0,
+              "explicit GMRES override regression disables diagnostic opt-ins");
+        check(set_floquet_diagnostic_environment_value(
+                  "FULLMAG_MODAL_SHIFTED_KSP_TYPE", "gmres") == 0,
+              "large sparse KSP regression can select the explicit GMRES override");
+        explicit_gmres_result = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
+            operator_view, spectral);
+        check(clear_floquet_diagnostic_environment_value(
+                  "FULLMAG_MODAL_SHIFTED_KSP_TYPE") == 0,
+              "large sparse KSP regression clears its explicit GMRES override");
+        previous_action_diagnostic.restore();
+        previous_dense_oracle.restore();
+    }
     check(result.floquet_schur_action_diagnostic.requested,
           "native regression records that the action-only diagnostic was requested");
     check(result.floquet_schur_action_diagnostic.pre_eps_only &&
@@ -1235,6 +1288,9 @@ void executes_native_sparse_matshell_above_dense_bound(bool force_inner_failure 
               "forced inner failure scenario must start before any process-unsafe solver state");
         check(!result.ok && result.accepted_modes.empty(),
               "inner KSP failure must remain fail-closed");
+        check(result.ksp_type != nullptr &&
+                  std::strcmp(result.ksp_type, "fgmres") == 0,
+              "forced inner failure reports the resolved large sparse FGMRES default");
         check(!result.ksp_diagnostics_available &&
                   !result.ksp_converged_reason_available &&
                   !result.ksp_last_true_residual_available,
@@ -1471,18 +1527,26 @@ void executes_native_sparse_matshell_above_dense_bound(bool force_inner_failure 
                   result.poisson_iteration_semantics,
                   "preonly_factorization_no_iterative_convergence") == 0,
           "native Floquet result distinguishes Poisson factorization from iteration");
+#if FULLMAG_FEM_WITH_SLEPC
     check(result.ksp_type != nullptr &&
-              std::strcmp(result.ksp_type, "gmres") == 0 &&
+              std::strcmp(result.ksp_type, "fgmres") == 0 &&
               result.pc_type != nullptr &&
               std::strcmp(result.pc_type, "lu") == 0 &&
               result.factorization_package != nullptr &&
               std::strcmp(result.factorization_package, "petsc_default_lu") == 0,
-          "native Floquet result exposes the shifted GMRES/LU policy");
-#if FULLMAG_FEM_WITH_SLEPC
+          "above-bound shared-domain Floquet defaults to shifted FGMRES with the existing LU policy");
     check(result.ksp_restart == 30 &&
-              std::abs(result.ksp_breakdown_tolerance - 2.0) <=
+              std::isnan(result.ksp_breakdown_tolerance),
+          "large sparse FGMRES keeps the existing restart and reports no GMRES-only breakdown tolerance");
+    check(!force_inner_failure && explicit_gmres_result.ok &&
+              explicit_gmres_result.ksp_type != nullptr &&
+              std::strcmp(explicit_gmres_result.ksp_type, "gmres") == 0 &&
+              explicit_gmres_result.accepted_mode_count == 1 &&
+              explicit_gmres_result.max_candidate_relative_residual <=
+                  spectral.residual_tolerance &&
+              std::abs(explicit_gmres_result.ksp_breakdown_tolerance - 2.0) <=
                   std::numeric_limits<double>::epsilon(),
-          "native Floquet result exposes the bounded GMRES restart and residual replacement policy");
+          "large sparse shared-domain Floquet preserves an explicit GMRES override and original acceptance gate");
     check(result.factorization_shift_policy != nullptr &&
               std::strstr(result.factorization_shift_policy,
                           "magnetic_only_") ==
@@ -1640,6 +1704,9 @@ void finalizes_certified_candidates_by_tangent_mass_before_nearest_cap()
 
 void normalizes_si_scale_floquet_pencil()
 {
+    ScopedFloquetModalKrylovEnvironment ksp_environment;
+    check(ksp_environment.ready,
+          "small exact-Schur regression clears common and legacy tuning overrides");
 #if FULLMAG_FEM_WITH_SLEPC
     constexpr std::size_t q_dimension = 8u;
     constexpr double coefficient_scale = 1.0e-60;
@@ -1691,6 +1758,11 @@ void normalizes_si_scale_floquet_pencil()
                           "exact_schur_materialized_") ==
                   result.factorization_shift_policy,
           "small native Floquet systems precondition with the materialized exact Schur action");
+    check(result.ksp_type != nullptr &&
+              std::strcmp(result.ksp_type, "gmres") == 0 &&
+              std::abs(result.ksp_breakdown_tolerance - 2.0) <=
+                  std::numeric_limits<double>::epsilon(),
+          "small exact-Schur Floquet path retains the GMRES default and its breakdown policy");
     check(std::isfinite(result.factorization_shift_amount) &&
               result.factorization_shift_amount > 0.0,
           "preconditioner LU reports its resolved positive shift amount");
