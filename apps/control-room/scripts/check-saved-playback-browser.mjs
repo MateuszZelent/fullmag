@@ -16,6 +16,20 @@ const version=require("playwright/package.json").version;
 assert.equal(version,process.env.CONTROL_ROOM_EXPECTED_PLAYWRIGHT_VERSION);
 const sha=value=>createHash("sha256").update(value).digest("hex");
 const arrayPathSegment=arrayId=>encodeURIComponent(arrayId);
+async function seekResultSample(page,slider,index,sampleCount) {
+  if(index===0)await slider.press("Home");
+  else if(index===sampleCount-1)await slider.press("End");
+  else {
+    const bounds=await slider.boundingBox();assert(bounds);
+    await page.mouse.click(bounds.x+bounds.width/2,bounds.y+bounds.height/2);
+    for(let step=0;step<8;step++) {
+      const value=Number(await slider.inputValue());
+      if(value===index)break;
+      await slider.press(value<index?"ArrowRight":"ArrowLeft");
+    }
+  }
+  assert.equal(Number(await slider.inputValue()),index);
+}
 const scriptSha=sha(await readFile(fileURLToPath(import.meta.url)));
 assert.equal(scriptSha,process.env.CONTROL_ROOM_BROWSER_QA_SAVED_PLAYBACK_SCRIPT_SHA256);
 const errors=[],hookErrors=[],payloads=new Map(),solverRequests=[];
@@ -381,20 +395,9 @@ try {
   await component.click();await page.getByRole("option",{name:"x",exact:true}).click();
   const resultCanvasHashes=[];
   const resultInspectorHandle=await outputInspector.elementHandle();
-  for(const index of [0,currentArray.sample_count-1,0]) {
+  for(const index of [...resultIndices,0]) {
     const slider=outputInspector.getByRole("slider",{name:"Saved sample"});
-    if(index===0)await slider.press("Home");
-    else if(index===selectedOutput.array.sample_count-1)await slider.press("End");
-    else {
-      const bounds=await slider.boundingBox();assert(bounds);
-      await page.mouse.click(bounds.x+bounds.width/2,bounds.y+bounds.height/2);
-      for(let step=0;step<8;step++) {
-        const value=Number(await slider.inputValue());
-        if(value===index)break;
-        await slider.press(value<index?"ArrowRight":"ArrowLeft");
-      }
-      assert.equal(Number(await slider.inputValue()),index);
-    }
+    await seekResultSample(page,slider,index,selectedOutput.array.sample_count);
     await page.waitForFunction(index=>document.querySelector('[data-results-snapshot-status="ready"]')?.getAttribute("data-results-snapshot-index")===String(index),index);
     await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
     assert.equal(await slider.getAttribute("aria-valuetext"),`Sample ${index+1} of ${selectedOutput.array.sample_count}`,"Results slider announces the data index instead of the sample ordinal.");
@@ -893,7 +896,7 @@ try {
   await outputInspector.getByRole("button",{name:"Load into 3D",exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('[data-results-snapshot-status="ready"]'));
   for(const index of [...resultIndices,0]) {
-    await outputInspector.getByRole("slider",{name:"Saved sample"}).press(index===0?"Home":"End");
+    await seekResultSample(page,outputInspector.getByRole("slider",{name:"Saved sample"}),index,currentArray.sample_count);
     await page.waitForFunction(index=>document.querySelector('[data-results-snapshot-status="ready"]')?.getAttribute("data-results-snapshot-index")===String(index),index);
     const key=currentArray.id+":"+index;
     for(let attempt=0;attempt<500&&!resultPayloads.has(key);attempt++)await page.waitForTimeout(20);

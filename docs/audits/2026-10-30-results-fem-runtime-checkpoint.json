@@ -1,0 +1,146 @@
+{
+  "schema": "fullmag.results-runtime-checkpoint.v1",
+  "source_commit": "20cf98cba0ff3b9fea78c2bd07c8111b5fd690c9",
+  "runtime_bundle_version": "0.1.0-dev.20261030.g20cf98cba0ff+9799",
+  "iteration_attempt": "4ce315bd949c4c44af7e8a4fe7c66069",
+  "activation_attempt": "dd63c6a7535c473a98cefd4eec680faf",
+  "run_id": "run-live-17b18da65b729890de8f3aa782778129e76dd52e6877b8b33cd274c81b72259f",
+  "solver_state": "completed",
+  "solver_steps": 101,
+  "solver_time_s": 1e-10,
+  "workspace_item_id": "12",
+  "catalog_entries": 39,
+  "fields": {
+    "H_eff": {
+      "shape": [
+        6,
+        1377
+      ],
+      "sample_count": 6,
+      "unit": "A/m",
+      "component_count": 3,
+      "can_read_values": true,
+      "can_visualize_3d": true,
+      "geometry": {
+        "kind": "fem_p1",
+        "component_count": 3,
+        "node_count": 459,
+        "cell_count": 1688,
+        "playback_geometry_sha256": "55f2edfa6e0576ca2949fdc611deb75b039732f494f2b7cd1ec5c44316525f23",
+        "fem_mesh": {
+          "node_count": 459,
+          "cell_count": 1688,
+          "facet_count": 816,
+          "geometry_sha256": "55f2edfa6e0576ca2949fdc611deb75b039732f494f2b7cd1ec5c44316525f23",
+          "topology_byte_length": 101240,
+          "topology_sha256": "9a6816be703466f4d2ec0717ef27872cb473946e3384012c74b3fd2f33b743cb",
+          "support_byte_length": 82,
+          "support_sha256": "e06f23b1a2d76b70deeac17872a11258f6c5c1db3ee4c668c9b4c35584df3a28"
+        }
+      }
+    },
+    "m": {
+      "shape": [
+        6,
+        1377
+      ],
+      "sample_count": 6,
+      "unit": "1",
+      "component_count": 3,
+      "can_read_values": true,
+      "can_visualize_3d": true,
+      "geometry": {
+        "kind": "fem_p1",
+        "component_count": 3,
+        "node_count": 459,
+        "cell_count": 1688,
+        "playback_geometry_sha256": "0211c523a264cc6d2d8cc1e1b38c431534030528e49e8f460944b5ceb7890d7c",
+        "fem_mesh": {
+          "node_count": 459,
+          "cell_count": 1688,
+          "facet_count": 816,
+          "geometry_sha256": "0211c523a264cc6d2d8cc1e1b38c431534030528e49e8f460944b5ceb7890d7c",
+          "topology_byte_length": 101240,
+          "topology_sha256": "9a6816be703466f4d2ec0717ef27872cb473946e3384012c74b3fd2f33b743cb",
+          "support_byte_length": 82,
+          "support_sha256": "04d95c588737716e24c2a67dab46430f2b3d57f8987d36bcaff60b3b7744fe39"
+        }
+      }
+    }
+  },
+  "browser": {
+    "attempt": "e776efb142ec42479158d0e352c09714",
+    "state": "partial-failed",
+    "harness_sha256": "e7b53419fe112626aadaf2e5e5b6eb14ce0f92f25c44a0f7668159503aba1914",
+    "passed": {
+      "source_details_disclosure_verified": true,
+      "array_metadata_default_collapsed": true,
+      "metadata_search_preserves_expansion": true,
+      "folder_details_keyboard_verified": true,
+      "output_inspector_continuous_sections_verified": true,
+      "closed_values_preview_no_sample_request": true,
+      "pending_snapshot_retained_verified": true,
+      "sample_read_error_retained_verified": true,
+      "sample_read_error_reselection_recovered": true,
+      "results_browser_verified": true,
+      "per_snapshot_settings_retained": true,
+      "saved_panels_hide_restore_verified": true,
+      "saved_folder_float_dock_verified": true,
+      "saved_camera_fit_verified": true,
+      "live_return_verified": true,
+      "results_canvas_changed": true,
+      "object_draft_cancel_preserved": true,
+      "object_draft_saved_folder_guarded": true,
+      "object_draft_discard_verified": true,
+      "airbox_draft_cancel_preserved": true,
+      "airbox_draft_saved_folder_guarded": true,
+      "airbox_draft_discard_verified": true,
+      "model_inspector_historical_context_verified": true,
+      "return_live_preserves_model_draft": true,
+      "current_exit_without_panels_or_3d_verified": true,
+      "sample_reselection_verified": true,
+      "current_heff_3d_verified": true,
+      "current_heff_constant_samples_verified": true
+    },
+    "sample_indices": [
+      0,
+      2,
+      5
+    ],
+    "m_sample_sha256": [
+      "34c8450f5f48001905d88989767b5736793d72d38ce7fd7c52742a6b87932b10",
+      "d8066cae2540766f0a4a0a31770270778b35483b8a9ef3ec8a6be1fed71e2bf4",
+      "b2e5d8be07368ae5380bc462872c60067edac8ed307016917711673249fcc7a5"
+    ],
+    "H_eff": {
+      "unit": "A/m",
+      "component_count": 3,
+      "sample_count": 6,
+      "geometry_sha256": "55f2edfa6e0576ca2949fdc611deb75b039732f494f2b7cd1ec5c44316525f23",
+      "sample_indices": [
+        0,
+        5
+      ],
+      "sample_sha256": [
+        "b3fb92b5d7097d4ced39ab2541dcb57cda3b8b836fbb818249f020a881bf6eda",
+        "b3fb92b5d7097d4ced39ab2541dcb57cda3b8b836fbb818249f020a881bf6eda"
+      ],
+      "drawing_buffer": [
+        519,
+        496
+      ]
+    },
+    "session_mutations": [],
+    "errors": [
+      "locator.fill: Timeout 180000ms exceeded.\nCall log:\n  - waiting for getByPlaceholder('Search commands')\n\n    at /state/development/workspace/apps/control-room/scripts/check-saved-playback-browser.mjs:1014:50"
+    ]
+  },
+  "ci": {
+    "run": 41086844597,
+    "rust_job": 124170109106,
+    "rust_conclusion": "success",
+    "python_job": 124170108921,
+    "python_conclusion": "failure",
+    "python_remaining_failure": "test_builder_draft_exports_flat_stage_sequence expects two nodes but canonical Scene preserves Autosave before Relax/Run; assertion migration prepared"
+  }
+}

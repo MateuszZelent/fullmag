@@ -1,7 +1,7 @@
 {
   "schema": "fullmag.results-fem-nodal-source-checkpoint.v1",
-  "observed_at": "2026-10-30T16:06:07.804013+00:00",
-  "head": "a3e341c64fb2a455db6e389035210d110ef904c3",
+  "observed_at": "2026-10-30T16:46:45.275585+00:00",
+  "head": "20cf98cba0ff3b9fea78c2bd07c8111b5fd690c9",
   "source_sha256": {
     "crates/fullmag-quantities/src/fem_nodal_field.rs": "5852067389b8b9408dc9a41750e22e9fa7e7611cea37bc1acd9d64b1652ed5cd",
     "crates/fullmag-quantities/src/lib.rs": "a77045805d298eff2d6be7c03a193bab40026a8e2f424564342b8e2615aac877",
@@ -47,15 +47,18 @@
     "crates/fullmag-application/src/script_pipeline_acceptance.rs": "bd8e1f743e456aeca0eaad8ff6b62f95e683c3fd4e5575751db53ea1e2164913",
     "packages/fullmag-py/tests/test_scene_execution_config.py": "4d3c470a46fb23417b158fb5861c7f5f932f50537b86d38e8561091e7b1790f7",
     "crates/fullmag-runner/src/artifacts.rs": "5eee619eb19d96c5245647895dfb00fed4d96ff96cecadc7b17fd34d22717f44",
-    "apps/control-room/scripts/check-saved-playback-browser.mjs": "9dc1a7f61d4e9b200bd34274634b583db9633a6eb14eab4a3aac268a192fa3a8"
+    "apps/control-room/scripts/check-saved-playback-browser.mjs": "e7b53419fe112626aadaf2e5e5b6eb14ce0f92f25c44a0f7668159503aba1914",
+    "packages/fullmag-py/tests/test_api.py": "90e4a20fd84215a0901ba73444ad93de19f5941edf8c88f499e7f56d374cec8a",
+    "apps/control-room/src/kernel/commands/commandShortcuts.ts": "45f782970046134cd32597180e460e01bef3b99706e94694964a6c52d19e1bdb",
+    "apps/control-room/src/kernel/commands/commandShortcuts.test.ts": "475b3f82243e8418e98197a86883fe4c47792c0543c8173a1b5380024c070280"
   },
-  "scope": "FEM producer/reader/API, accepted-output collection, aggregate discovery budget and cross-revision snapshot preferences implemented in source; compilation and current UI verification pending",
+  "scope": "FEM producer/reader/API, accepted-output collection and bounded discovery implemented and Rust CI passed; fresh native FEM and partial real browser proof retained. Full browser/remaining formats still open.",
   "checks": {
     "rustfmt_owned_files": "passed (skip_children=true)",
     "git_diff_check": "passed",
-    "cargo_tests": "Complete Rust job124149102501 PASS at a3e341/run41080812632, including accepted Autosave and Python capture-to-plan tests. New provenance-finalization regression explicitly added to CI; pending next run.",
-    "new_runtime": "Clean a3e341 deployed; owned FEM completed 101steps/100ps,6m+6H_eff+6table samples. Terminal scalar provenance passed API read. 3D blocked by provenance finalizer rewriting immutable CAS geometry; source repair pending deployment.",
-    "new_browser": "NOT RUN on current deployment; CI browser fixtures passed separately.",
+    "cargo_tests": "Complete Rust job124170109106 PASS at20cf98/run41086844597, including the exact producer-finalization CAS regression and saved FDM/FEM reader/API contracts.",
+    "new_runtime": "Clean20cf98 deployed; fresh owned FEM completed101steps/100ps. Six m+H_eff snapshots both validate3D, with459nodes/1688cells. Scalar terminal provenance matches.",
+    "new_browser": "Partial real managed browser proof at item12: saved/current scrubbing, per-series settings, m/H_eff3D, return-live, drafts, tables and responsive checks passed. Failed at Ctrl+Shift+P from focused range input; narrow shortcut fix pending deployed UI. See2026-10-30-results-fem-runtime-checkpoint.json.",
     "review": "Payload/hash API and Windows directory replacement findings addressed in source; Windows execution NOT VERIFIED",
     "adapter_review": "Independent source review and scalar metadata delta PASS. Router fixture covers M, H_eff and DemagPhi, transport identities and stale/mismatched unit rejection; tests NOT RUN.",
     "reader_review": "Primary source review: no legacy inference for present binding including catalog, lazy hidden geometry objects remain revisioned, hash/length/budget/nofollow guards. Parser-only rustfmt and diff check passed; reader tests NOT RUN. Subsequent full inspect/API/runner autosave CI at2569 PASS; actual runtime/browser limits remain as noted.",
@@ -84,18 +87,16 @@
     "proof": "Each file matched rustfmt(HEAD) byte-for-byte; restored original bytes. lib.rs retained only module declaration."
   },
   "runtime_blocker": {
-    "phase": "published-fem-geometry-integrity",
-    "state": "source-fix-awaiting-ci-and-fresh-run",
-    "run_id": "run-live-8b8de26deb5970dc4fd272ad9f310153484b2ac4e932eeeba865ba7da42d9de9",
-    "deployed_source": "a3e341c64fb2a455db6e389035210d110ef904c3",
-    "qualification": "FEM terminal/scalar API proven; published mesh bytes differ from reference. Strict 3D refusal is correct. Fix finalization and repeat with a fresh owned run before browser qualification."
+    "phase": "browser-command-palette-from-slider",
+    "state": "source-fix-awaiting-ci-and-frontend-refresh",
+    "deployed_source": "20cf98cba0ff3b9fea78c2bd07c8111b5fd690c9",
+    "qualification": "Core playback and live-return assertions passed; full browser remains failed until shortcut fix and remaining assertions pass."
   },
   "remaining": [
-    "Deploy final reviewed source to recovered owned group3298 and activate one fresh FEM run through receipt-validated script route",
-    "Pass merged Rust/UI CI including quantities/session/runner/inspect/API tests and canonical lockfile checks",
-    "Verify FEM M/H_eff snapshots, units/support, scrubbing and Return to Live in actual UI",
-    "Verify active publication watermarks and multiple accepted output leaves across stages/retries",
-    "Complete FDM/YIG, tables/modes, responsive/accessibility matrix, review and integration"
+    "Deploy narrow global command-palette shortcut fix and finish managed browser QA",
+    "Pass CI after Python canonical Autosave assertion migration and shortcut regression tests",
+    "Verify active publication and multiple accepted leaves in runtime",
+    "Complete FDM/YIG, paged tables/saved analysis and accessibility acceptance; review/integration"
   ],
   "launcher_baseline_tests": {
     "command": "just docker-dev-offline-check <source-root> test_docker_volume_reconcile",
@@ -427,7 +428,7 @@
     "api_retained_results": "item11 playback/catalog HTTP200;6 m frames,6 H_eff samples,6 table rows. Old m has3D mapping; old H_eff correctly lacks3D capability withoutpersisted mapping.",
     "api_current_session": "GET sessions200 empty; current/status404 no active local live workspace"
   },
-  "source_state": "Reviewed working-tree changes after head; source_sha256 binds the pending source, CI not yet run for these edits.",
+  "source_state": "reviewed_working_tree_before_commit; source_sha256 pins exact source bytes",
   "fresh_fem_a3e341": {
     "iteration_attempt": "ae05fb226c494fc6b6ee792e99995e29",
     "activation_attempt": "f6c755b837eb4ea0911aace95af8819d",
@@ -442,5 +443,17 @@
     "terminal_scalar_provenance": "API verified",
     "geometry_integrity": "FAILED: mesh113716 declared vs309145 published; finalizer changed bytes",
     "actual_browser": "NOT VERIFIED"
+  },
+  "runtime_blocker_before_fresh20cf98": {
+    "phase": "published-fem-geometry-integrity",
+    "state": "source-fix-awaiting-ci-and-fresh-run",
+    "run_id": "run-live-8b8de26deb5970dc4fd272ad9f310153484b2ac4e932eeeba865ba7da42d9de9",
+    "deployed_source": "a3e341c64fb2a455db6e389035210d110ef904c3",
+    "qualification": "FEM terminal/scalar API proven; published mesh bytes differ from reference. Strict 3D refusal is correct. Fix finalization and repeat with a fresh owned run before browser qualification."
+  },
+  "fresh_fem_20cf98": {
+    "evidence": "2026-10-30-results-fem-runtime-checkpoint.json",
+    "run_id": "run-live-17b18da65b729890de8f3aa782778129e76dd52e6877b8b33cd274c81b72259f",
+    "workspace_item_id": "12"
   }
 }

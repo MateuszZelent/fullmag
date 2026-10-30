@@ -169,6 +169,144 @@ describe("commandShortcuts", () => {
     ).toBe(false);
   });
 
+  it("allows the registered global command palette shortcut from editable targets", () => {
+    const commands = new CommandRegistry();
+    let executions = 0;
+    let prevented = 0;
+    const palette = command("workspace.command-palette", "Ctrl+Shift+P");
+    commands.register({
+      ...palette,
+      run: () => {
+        executions += 1;
+        return { status: "completed" };
+      },
+    });
+    const editableTargets = [
+      { tagName: "INPUT" },
+      { tagName: "INPUT", type: "range" },
+      { tagName: "TEXTAREA" },
+      { tagName: "SELECT" },
+      { tagName: "DIV", isContentEditable: true },
+      {
+        tagName: "DIV",
+        getAttribute: (name: string) => name === "contenteditable" ? "true" : null,
+      },
+    ] as unknown as EventTarget[];
+
+    for (const target of editableTargets) {
+      expect(
+        dispatchShortcutCommand(
+          commands,
+          {
+            ctrlKey: true,
+            shiftKey: true,
+            key: "p",
+            target,
+            preventDefault: () => {
+              prevented += 1;
+            },
+          },
+          { source: "shortcut" },
+        ),
+      ).toBe(true);
+    }
+
+    expect(executions).toBe(editableTargets.length);
+    expect(prevented).toBe(editableTargets.length);
+  });
+
+  it("keeps disabled and already-prevented palette shortcuts blocked from editable targets", () => {
+    const disabledCommands = new CommandRegistry();
+    let disabledExecutions = 0;
+    let disabledPrevented = false;
+    disabledCommands.register({
+      ...command("workspace.command-palette", "Ctrl+Shift+P"),
+      isEnabled: () => false,
+      run: () => {
+        disabledExecutions += 1;
+        return { status: "completed" };
+      },
+    });
+    const input = { tagName: "INPUT" } as unknown as EventTarget;
+    expect(
+      dispatchShortcutCommand(
+        disabledCommands,
+        {
+          ctrlKey: true,
+          shiftKey: true,
+          key: "p",
+          target: input,
+          preventDefault: () => {
+            disabledPrevented = true;
+          },
+        },
+        { source: "shortcut" },
+      ),
+    ).toBe(false);
+    expect(disabledExecutions).toBe(0);
+    expect(disabledPrevented).toBe(false);
+
+    const enabledCommands = new CommandRegistry();
+    let enabledExecutions = 0;
+    let prevented = false;
+    enabledCommands.register({
+      ...command("workspace.command-palette", "Ctrl+Shift+P"),
+      run: () => {
+        enabledExecutions += 1;
+        return { status: "completed" };
+      },
+    });
+    expect(
+      dispatchShortcutCommand(
+        enabledCommands,
+        {
+          ctrlKey: true,
+          shiftKey: true,
+          key: "p",
+          target: input,
+          defaultPrevented: true,
+          preventDefault: () => {
+            prevented = true;
+          },
+        },
+        { source: "shortcut" },
+      ),
+    ).toBe(false);
+    expect(enabledExecutions).toBe(0);
+    expect(prevented).toBe(false);
+  });
+
+  it("still blocks enabled scientific shortcuts from editable targets", () => {
+    const commands = new CommandRegistry();
+    let executed = false;
+    let prevented = false;
+    commands.register({
+      ...command("mesh.build-selected", "Ctrl+B"),
+      scope: "selection",
+      run: () => {
+        executed = true;
+        return { status: "completed" };
+      },
+    });
+
+    expect(
+      dispatchShortcutCommand(
+        commands,
+        {
+          ctrlKey: true,
+          key: "b",
+          target: { tagName: "INPUT" } as unknown as EventTarget,
+          preventDefault: () => {
+            prevented = true;
+          },
+        },
+        { source: "shortcut" },
+      ),
+    ).toBe(false);
+    expect(executed).toBe(false);
+    expect(prevented).toBe(false);
+  });
+
   it("ignores already-prevented shortcut events", () => {
     const commands = new CommandRegistry();
     let executed = false;
