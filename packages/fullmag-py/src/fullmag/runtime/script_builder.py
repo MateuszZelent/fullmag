@@ -8459,6 +8459,46 @@ def _render_stages(
         if previous_dynamics_signature is not None and dynamics_signature != previous_dynamics_signature:
             if stage_dynamics is not None:
                 stage_solver_override = dict(solver_override)
+                timestep_policy_keys = (
+                    "fixed_timestep",
+                    "adaptive_timestep",
+                    "dt_initial",
+                    "dt_min",
+                    "dt_max",
+                    "max_err",
+                )
+                has_stage_fixed_policy = (
+                    _number_or_none(stage_override.get("fixed_timestep"))
+                    is not None
+                )
+                has_stage_adaptive_policy = isinstance(
+                    stage_override.get("adaptive_timestep"), dict
+                )
+                has_stage_convenience_policy = any(
+                    _number_or_none(stage_override.get(key)) is not None
+                    for key in ("dt_initial", "dt_min", "dt_max", "max_err")
+                )
+                # A stage policy replaces the inherited study policy as one
+                # choice. Keep conflicting stage-authored choices intact so
+                # _render_solver_call still rejects them as ambiguous.
+                if has_stage_fixed_policy and not (
+                    has_stage_adaptive_policy or has_stage_convenience_policy
+                ):
+                    for key in timestep_policy_keys:
+                        if key != "fixed_timestep":
+                            stage_solver_override.pop(key, None)
+                elif has_stage_adaptive_policy and not (
+                    has_stage_fixed_policy or has_stage_convenience_policy
+                ):
+                    for key in timestep_policy_keys:
+                        if key != "adaptive_timestep":
+                            stage_solver_override.pop(key, None)
+                elif has_stage_convenience_policy and not (
+                    has_stage_fixed_policy or has_stage_adaptive_policy
+                ):
+                    for key in timestep_policy_keys:
+                        if key not in {"dt_initial", "dt_min", "dt_max", "max_err"}:
+                            stage_solver_override.pop(key, None)
                 for key in (
                     "integrator",
                     "fixed_timestep",
