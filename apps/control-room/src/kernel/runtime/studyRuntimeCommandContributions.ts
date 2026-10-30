@@ -1118,7 +1118,7 @@ function invalidateRestoredStateResources(
   context.resources?.invalidate(DATA_SCALARS_PATH, revision);
   context.resources?.invalidatePrefix(DATA_SCALARS_PATH, revision);
   context.resources?.invalidate(SIMULATION_SOLVER_ENERGIES_CURRENT_PATH, revision);
-  context.resources?.invalidate(SIMULATION_SOLVER_ENERGIES_HISTORY_PATH, revision);
+  context.resources?.invalidatePrefix(SIMULATION_SOLVER_ENERGIES_HISTORY_PATH, revision);
   context.resources?.invalidatePrefix(
     SIMULATION_OBJECT_METRICS_PATH.split("{object_id}")[0],
     revision,

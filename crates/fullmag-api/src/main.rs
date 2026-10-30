@@ -41,7 +41,9 @@ mod accepted_fem_study_worker;
 mod accepted_antenna_inspection_worker;
 use accepted_study_worker::accepted_solver_profile;
 mod accepted_study_worker;
+mod accepted_live_demand;
 mod accepted_observation_spool;
+mod live_field_demand;
 mod accepted_field_binary;
 mod accepted_project_storage;
 mod analysis;
@@ -2063,7 +2065,7 @@ pub(crate) async fn publish_current_live_realtime_batch_changed(
     .await
 }
 
-async fn publish_current_live_realtime_batch_changed_since(
+pub(crate) async fn publish_current_live_realtime_batch_changed_since(
     state: &AppState,
     realtime_state: &CurrentLiveRealtimeState,
     previous_revisions: Option<&RealtimeResourceRevisionMap>,

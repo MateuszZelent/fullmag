@@ -73,6 +73,7 @@ const intentionalResponseDropRequests = new WeakSet();
 const resourceResponses = [];
 const femAirboxVectorResponses = [];
 const blockedMutations = [];
+let visualizationClientAckRequestCount = 0;
 let displayPatchRequestCount = 0;
 const httpErrors = [];
 let harnessSourceHashes = null;
@@ -269,8 +270,25 @@ const readFemAirboxDebugDom = () => {
   const panel = document.querySelector(".fm-visualization-debug-panel");
   if (!panel) return false;
   const health = panel.querySelector(".fm-visualization-debug-health");
-  if (health?.getAttribute("data-disposition") !== "ready" ||
+  const panelDisposition = health?.getAttribute("data-disposition");
+  if (!["ready", "unknown"].includes(panelDisposition) ||
       panel.querySelector('.fm-inspector-feedback[role="alert"]')) return false;
+  // A sampled query has no exact backend-statistics comparison. Require the
+  // canonical render snapshot to be complete instead of treating panel-wide
+  // scientific comparison availability as proof of rendering.
+  let exported;
+  try {
+    exported = JSON.parse(panel.querySelector(".fm-visualization-debug-json code")?.textContent ?? "");
+  } catch {
+    return false;
+  }
+  if (exported.schemaVersion !== "fullmag.visualization-debug.v2" ||
+      exported.issues?.length !== 0 || !Array.isArray(exported.model?.viewports) ||
+      !Array.isArray(exported.model?.issues) || exported.model.issues.some((issue) =>
+        issue.code !== "backend-meta-incomparable" || issue.severity !== "info")) return false;
+  const snapshots = exported.model.viewports.flatMap((viewport) => viewport.snapshots ?? [])
+    .filter((snapshot) => snapshot.target?.kind === "airbox" && snapshot.target.id === "airbox");
+  if (snapshots.length !== 1 || snapshots[0].disposition !== "ready") return false;
   const fieldRows = (container) => [...container.querySelectorAll(".fm-inspector-field-row")]
     .map((row) => ({
       label: row.querySelector(".fm-inspector-field-row__label")?.textContent?.trim() ?? "",
@@ -324,7 +342,7 @@ const readFemAirboxDebugDom = () => {
     const fieldBuffer = rowValue(render.rows, "Vector field buffer") ?? "";
     const [fieldBufferState, ...fieldBufferIdParts] = fieldBuffer.split(" · ");
     const fieldBufferId = fieldBufferIdParts.join(" · ").trim();
-    if (fieldBufferState !== "ready" || !fieldBufferId || fieldBufferId === "not adopted") continue;
+    if (fieldBufferState !== "target-buffer" || !fieldBufferId || fieldBufferId === "not adopted") continue;
     const vectors = rowValue(render.rows, "Vectors") ?? "";
     const vectorMatch = vectors.match(/^(.+?) · ([0-9][0-9,]*) segments · (.*)$/);
     if (!vectorMatch || vectorMatch[1] === "not built") continue;
@@ -336,6 +354,10 @@ const readFemAirboxDebugDom = () => {
         Number(pointValueMatch[2].replaceAll(",", "")) <= 0) continue;
     return {
       health_disposition: "ready",
+      health_scope: "render-snapshot",
+      render_snapshot_frame_commit_id: snapshots[0].viewport?.frameCommitId ?? null,
+      panel_health_disposition: panelDisposition,
+      panel_comparison_limitations: exported.model.issues.map((issue) => issue.code),
       target_id: "airbox",
       target_kind: "airbox",
       selection_kind: "airbox.visualization.debug",
@@ -446,6 +468,10 @@ const proveFemAirboxVectors = async (page, initialRunIdentity, primaryBefore) =>
       ?.getAttribute("aria-pressed") === "true",
   null, { timeout });
 
+  // Fit the selected Airbox through the same display action available to users.
+  await page.locator(".fm-inspector__action-bar")
+    .getByRole("button", { name: "Fit view", exact: true }).click();
+
   const debugSelector = '[data-node-id="model:airbox:visualization:debug"]';
   const debugNode = page.locator(debugSelector).first();
   await debugNode.waitFor({ state: "visible", timeout });
@@ -454,7 +480,25 @@ const proveFemAirboxVectors = async (page, initialRunIdentity, primaryBefore) =>
   await page.waitForFunction((selector) =>
     document.querySelector(selector)?.getAttribute("aria-selected") === "true",
   debugSelector, { timeout });
-  await page.waitForFunction(readFemAirboxDebugDom, null, { timeout });
+  await page.locator(".fm-visualization-debug-panel")
+    .getByRole("button", { name: "Raw bounded JSON", exact: true }).click();
+  try {
+    await page.waitForFunction(readFemAirboxDebugDom, null, { timeout });
+  } catch (error) {
+    const rawToggle = page.locator(".fm-visualization-debug-panel")
+      .getByRole("button", { name: "Raw bounded JSON", exact: true });
+    if (await rawToggle.count() === 1 && (await rawToggle.getAttribute("aria-expanded")) !== "true") {
+      await rawToggle.click();
+    }
+    partialProof.fem_airbox_debug_snapshot_json = await page
+      .locator(".fm-visualization-debug-json code").innerText({ timeout: 3000 }).catch(() => null);
+    partialProof.fem_airbox_debug = await page.locator(".fm-visualization-debug-panel")
+      .evaluate((panel) => ({ state: panel.dataset.state, text: panel.innerText.slice(0, 24000) }))
+      .catch(() => null);
+    partialProof.fem_airbox_vector_responses = femAirboxVectorResponses.slice(-16);
+    partialProof.fem_airbox_canvas_screenshot = await captureCanvasScreenshot(page, null);
+    throw error;
+  }
   const debug = await page.evaluate(readFemAirboxDebugDom);
   if (!debug || typeof debug !== "object") throw new Error("Airbox debug panel did not expose accepted FEM vector observations");
 
@@ -480,6 +524,10 @@ const proveFemAirboxVectors = async (page, initialRunIdentity, primaryBefore) =>
   return {
     schema: "fullmag.fem-airbox-vector-observation.v1",
     health_disposition: debug.health_disposition,
+    health_scope: debug.health_scope,
+    render_snapshot_frame_commit_id: debug.render_snapshot_frame_commit_id,
+    panel_health_disposition: debug.panel_health_disposition,
+    panel_comparison_limitations: debug.panel_comparison_limitations,
     solver_family: "fem",
     session_run_identity_before: initialRunIdentity,
     session_run_identity_after: runIdentityAfter,
@@ -508,6 +556,7 @@ const proveFemAirboxVectors = async (page, initialRunIdentity, primaryBefore) =>
     rendered_vector_segment_count: debug.rendered_vector_segment_count,
     vector_degradation: debug.vector_degradation,
     display_state_patch_count: displayPatchRequestCount,
+    visualization_client_ack_request_count: visualizationClientAckRequestCount,
     blocked_mutation_count: blockedMutations.length,
     canvas,
   };
@@ -914,6 +963,13 @@ const main = async () => {
         const url = new URL(request.url());
         if (method === "PATCH" && url.origin === loopbackProxy.origin &&
             url.pathname === "/v2/sessions/current/visualization/state") {
+          return route.continue();
+        }
+        // The viewport acknowledges display adoption through this resource;
+        // its handler records client diagnostics and cannot start computation.
+        if (method === "POST" && url.origin === loopbackProxy.origin &&
+            url.pathname === "/v2/sessions/current/visualization/client-acks") {
+          visualizationClientAckRequestCount += 1;
           return route.continue();
         }
         if (blockedMutations.length < 16) blockedMutations.push({ method, path: url.pathname });

@@ -160,6 +160,8 @@ pub mod frames_index;
 pub mod hysteresis;
 pub mod interactive;
 mod interactive_runtime;
+mod live_demand;
+pub use live_demand::{live_quantity_demand, set_live_quantity_demand};
 mod native_fem;
 #[cfg(feature = "fem-native")]
 pub use native_fem::prepare_fem_mesh_space;

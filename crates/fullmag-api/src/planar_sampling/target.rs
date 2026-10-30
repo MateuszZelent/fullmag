@@ -287,6 +287,7 @@ pub(crate) fn resolve_spatial_target(
             grid_fingerprint,
             membership,
             membership_error,
+            coverage,
             ..
         } => {
             if matches!(operator, PlanarOperatorIR::SurfaceProjection { .. }) {
@@ -329,6 +330,10 @@ pub(crate) fn resolve_spatial_target(
                     },
                 )?;
                 intersect_masks(&mut selected, &region);
+            }
+            if let Some(coverage) = coverage {
+                // A composite multilayer grid has cells no native layer covers.
+                intersect_masks(&mut selected, coverage);
             }
             let carrier_identity = grid_fingerprint
                 .clone()

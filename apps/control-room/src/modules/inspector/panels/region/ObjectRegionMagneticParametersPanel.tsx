@@ -113,7 +113,22 @@ function getParentParamInfo(
       return { value: `${field.field?.kind ?? "authored"} field`, unit };
     }
   }
-  
+
+  if (param.toLowerCase() === "ku1") {
+    const anisotropy = sceneData?.objects
+      ?.find((object) => object.id === objectId)
+      ?.physics_stack?.find((entry) => entry.kind === "uniaxial_anisotropy");
+    const params = anisotropy?.params;
+    if (params && typeof params === "object" && !Array.isArray(params)) {
+      const ku1 = (params as Record<string, unknown>).ku1;
+      if (typeof ku1 === "number" && Number.isFinite(ku1)) {
+        // This panel shows the authored parent value, even when the saved term
+        // is disabled. Activation is a separate physics-stack property.
+        return { value: ku1, unit: defaultMaterialOverrideUnit(param) };
+      }
+    }
+  }
+
   if (sceneData?.materials) {
     const material = sceneData.materials.find((m) => m.id === materialRef);
     if (material?.properties) {

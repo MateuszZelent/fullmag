@@ -12,6 +12,7 @@
 #include "cpu/mfem/interactions/effective_field.hpp"
 #include "cpu/mfem/runtime/aos_field.hpp"
 #include "cpu/mfem/runtime/mfem_host_access.hpp"
+#include "fem_common.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 
@@ -104,10 +105,13 @@ int copy_torque_observable_f64(
     }
 
     constexpr double kMu0 = 1.2566370614359172953850573533118e-6;
-    const double alpha = ctx.material_fields.material.damping;
-    const double scale = -1.0 / (1.0 + alpha * alpha);
     for (uint64_t i = 0; i < ctx.mesh.n_nodes; ++i) {
         const size_t base = static_cast<size_t>(3ull * i);
+        const double alpha = scalar_field_value(
+            ctx.material_fields.alpha_field,
+            static_cast<size_t>(i),
+            ctx.material_fields.material.damping);
+        const double scale = -1.0 / (1.0 + alpha * alpha);
         const double mx = ctx.state.m_xyz[base + 0];
         const double my = ctx.state.m_xyz[base + 1];
         const double mz = ctx.state.m_xyz[base + 2];

@@ -29,6 +29,53 @@ pub struct RunIntentAuthoring {
     pub requested_execution: RequestedExecution,
 }
 
+/// A validated, immutable handoff from final accepted-study materialization
+/// to durable RunIntent preparation. Its borrowed inputs cannot be changed
+/// while its canonical Study, planner result, and catalog bytes are consumed.
+///
+/// This type intentionally does not implement Serialize or Deserialize and
+/// keeps all fields private. Construct it with
+/// [`prepare_run_intent_materialization`].
+pub struct PreparedRunIntentMaterialization<'a> {
+    definition: &'a ProjectEnvelope,
+    study: &'a StudyPlan,
+    catalog: &'a StudyProblemCatalog,
+    intent: RunIntent,
+    execution_plan: fullmag_plan::StudyExecutionPlan,
+    study_bytes: Vec<u8>,
+    catalog_bytes: Vec<u8>,
+}
+
+impl<'a> PreparedRunIntentMaterialization<'a> {
+    /// Consume the materialization as typed input for the API persistence
+    /// adapter. Only the validating constructor can produce this value.
+    pub fn into_parts(
+        self,
+    ) -> (
+        RunIntent,
+        &'a ProjectEnvelope,
+        &'a StudyPlan,
+        &'a StudyProblemCatalog,
+        fullmag_plan::StudyExecutionPlan,
+        Vec<u8>,
+        Vec<u8>,
+    ) {
+        (
+            self.intent,
+            self.definition,
+            self.study,
+            self.catalog,
+            self.execution_plan,
+            self.study_bytes,
+            self.catalog_bytes,
+        )
+    }
+
+    fn into_intent(self) -> RunIntent {
+        self.intent
+    }
+}
+
 /// Compile the final submission identity without publishing it. Study/ProblemIR
 /// compilation and profile lookup precede this boundary. Durable Submit must
 /// still validate published profiles and validate_requested_execution against
@@ -40,9 +87,21 @@ pub fn materialize_run_intent(
     authored: RunIntentAuthoring,
     asset_paths: &BTreeMap<String, String>,
 ) -> Result<RunIntent> {
+    prepare_run_intent_materialization(definition, study, catalog, authored, asset_paths)
+        .map(|prepared| prepared.into_intent())
+}
+
+/// Validate the final immutable accepted inputs and retain the expensive
+/// planner and canonical-catalog results for the persistence boundary.
+pub fn prepare_run_intent_materialization<'a>(
+    definition: &'a ProjectEnvelope,
+    study: &'a StudyPlan,
+    catalog: &'a StudyProblemCatalog,
+    authored: RunIntentAuthoring,
+    asset_paths: &BTreeMap<String, String>,
+) -> Result<PreparedRunIntentMaterialization<'a>> {
     let snapshot = ProjectSnapshot::from_envelope(definition)?;
     study.validate_for_execution()?;
-    catalog.validate_for(study)?;
     for entry in catalog.entries() {
         if let Some(execution) = entry.execution_materialization() {
             crate::validate_execution_materialization(execution)
@@ -52,6 +111,7 @@ pub fn materialize_run_intent(
                 })?;
         }
     }
+    // The canonical lowerer owns the first full catalog validation.
     let planned = fullmag_plan::lower_study_plan_with_catalog(study, catalog)?;
     for step in planned
         .steps
@@ -73,12 +133,16 @@ pub fn materialize_run_intent(
             .for_problem(entry.problem())
             .with_context(|| format!("study step `{}` requested execution", step.step_id))?;
     }
+    let study_bytes = study.canonical_json_bytes()?;
+    let study_sha256 = format!("{:x}", Sha256::digest(&study_bytes));
     let study_reference = StudyReference {
         study_id: StudyId::parse(study.study_id.clone())?,
         plan_version: study.schema_version.clone(),
-        plan_sha256: study.canonical_sha256()?,
+        plan_sha256: study_sha256,
     };
-    let catalog_digest = fullmag_ir::canonical_ir_json_sha256(&serde_json::to_value(catalog)?)?;
+    let catalog_value = serde_json::to_value(catalog)?;
+    let catalog_bytes = fullmag_ir::canonical_ir_json_bytes(&catalog_value)?;
+    let catalog_digest = format!("{:x}", Sha256::digest(&catalog_bytes));
     let mut specification = RunSpecification::new(
         snapshot,
         study_reference,
@@ -107,7 +171,15 @@ pub fn materialize_run_intent(
     }
     let intent = RunIntent::new(authored.idempotency_key, specification);
     intent.validate()?;
-    Ok(intent)
+    Ok(PreparedRunIntentMaterialization {
+        definition,
+        study,
+        catalog,
+        intent,
+        execution_plan: planned,
+        study_bytes,
+        catalog_bytes,
+    })
 }
 
 #[cfg(test)]

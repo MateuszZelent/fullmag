@@ -35,7 +35,7 @@ uruchamia solvera. UI używa wspólnych resource hooks i bieżącej tożsamości
   potwierdzono Docker Desktop 29.9.2, 40 CPU i około 196,6 GiB RAM.
   Oba dotychczasowe kontenery mastera są zatrzymane z exit255 po przerwie
   silnika; nie jest to zgoda na replay ich starego zadania.
-- [ ] **2. Odtworzenie siatki i pól bez obliczeń.** Root odpowiada za
+- [x] **2. Odtworzenie siatki i pól bez obliczeń.** Root odpowiada za
   `development_accepted_restore/terminal_observation.rs`,
   `live_accepted_projection.rs`, `live_scene_preparation.rs` i wymaganych
   konsumentów. Najpierw prześledzić odmowę publikacji terminalnej domeny.
@@ -318,3 +318,184 @@ niepełny. Raport końcowy oddziela źródła, build, runtime, render i fizykę.
 - Odtworzenie po nowym runie, pomiar CoFeB, 10 iteracji FEM, 10 kroków obu
   wariantów FDM, odbiór przeglądarki i kwalifikowana retencja nadal oczekują
   na wykonanie. Żaden z tych odbiorów nie wynika z samego builda lub health.
+
+### Checkpoint: rzeczywiste 10 iteracji CoFeB i bieżące braki
+
+- Zwykły commit `4b60cdbfa00a9c219dcb0baf90547b8944fef572` przeszedł hook po
+  jednorazowej zgodzie użytkownika i trafił na remote. Następnie lokalny master
+  zaktualizowano fast-forward do `9f6505a1ee428d84bbd5626dee0e522326dc37b9`;
+  incoming nie przecinał cudzych niezacommitowanych ścieżek. Zachowano także
+  równoległe zmiany obu submodułów i audyt materiałów/interakcji.
+- Iteracja `4e627e71268548b48614f94b1fc12fc7` zbudowała commit `4b60cdbfa00a`
+  w stałym backendzie: make exit0, 88 794 ms, snapshot
+  `74838fcf57a27e0ee24c4d53cc5c08a1bad5773d0717c55c444581d6da561871`.
+  Kontenery zachowały ID, backend 128 GiB / 16 CPU oraz API Ready.
+  Późniejszy fast-forward źródeł nie jest dowodem przebudowania backendu.
+- Aktywacja `42873af4f9934a07a5b149ae1d6cad4a` i jeden przyjęty Solve
+  `fm-faf0da66-6dce-49c9-a1e2-10e9ed7392e6` zakończyły run
+  `run-live-38f03054f1ca457a14dca4a95cbf08006998b8b67bd334a9e6eac017b5f8a0d4`
+  w stanie completed, dokładnie 10 iteracji, FEM / GPU / double / strict,
+  `fem_native_gpu`. Limit iteracji nie oznacza zbieżności naukowej.
+- Siatka: 1 087 250 komórek, 183 764 węzły, fingerprint topologii
+  `1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e`.
+  Odczyt FMVP potwierdził skończone `m` oraz niezerowe `H_demag` i `H_eff`
+  na 157 393 węzłach Airboxa. FieldMeta wiąże je z końcowym krokiem 10.
+  Dowód binarny w control tej grupy:
+  `backend/six-points-runtime/cofeb-terminal-fields-841da5bf4ad143eeb65e85f40954f43f.json`.
+- Całe przygotowanie nie przyspieszyło: materializacja 429 105 ms i native
+  domain preparation 200 702 ms, razem 629 807 ms, wobec 586 414 ms poprzednio.
+  Python/Gmsh zakończył się po około 148 s; późniejsze powtórne walidacje,
+  lowering i kodowanie nadal pozostają znaczącą pracą. Nie zmniejszano siatki.
+- API nadal ma potwierdzony błąd końcowej historii skalarów: run i pola mają
+  krok 10, ale jedyny wiersz `scalar_history` pochodzi z prepared kroku 0.
+  Poprawiona stopka odrzuca ten wiersz i pokazuje brak średniej magnetyzacji.
+  Przyczyna źródłowa: pełne końcowe StepStats są w usuwanym sidecarze;
+  zaakceptowany stan CAS i energia nie zawierają kompletu statystyk.
+  Naprawa wymaga trwałego, przypiętego artefaktu, bez przelabelowania kroku 0.
+- Odbiór przeglądarkowy nadal **NOT VERIFIED**. Pierwsza próba zatrzymała się
+  na timeout zimnej strony; druga ujawniła blokadę diagnostycznego POST
+  `visualization/client-acks` w samym skrypcie QA. Handler ACK zapisuje jedynie
+  stan klienta, bez zlecania obliczeń. Guard dopuszcza teraz dokładnie ten
+  same-origin endpoint obok display PATCH, nadal blokując inne mutacje.
+  Kolejna próba nie miała błędów HTTP/JS, lecz oczekiwała na spójny Debug
+  Airboxa; dodano zapis dokładnego panelu i obrazu przy timeout. Nie obniżono
+  warunków gotowości ani wymagań dotyczących bufora/wektorów/WebGL.
+- Otwarte pozostają: trwałe końcowe skalary, pomiar optymalizacji na tej samej
+  topologii, kontrolowany restart z odtworzeniem bez Solve, odbiór renderu FEM,
+  nowe próby obu wariantów FDM oraz wykonana kwalifikowana retencja. Bez testów
+  jednostkowych i bez nowych worktree. Nie powtarzać zakończonego Solve.
+
+### Checkpoint: pozytywny odbiór renderu i gotowe poprawki źródeł
+
+- Odbiór `57e1efc6a57b430e9f7210c4c92a602f` zakończył się `succeeded`.
+  Przeglądarka zachowała sesję, run i epoch przez przejście Home; primary `m`
+  pozostało dostępne. Scoped FEM Airbox `H_demag` zwrócił HTTP 200, przyjęty
+  `target-buffer` i 1200 segmentów. Widoczny canvas miał niezagubiony kontekst
+  oraz dodatni drawing buffer. Obejrzano obraz po dopasowaniu Airboxa do kamery.
+  Dowód dotyczy backendu `4b60cdbfa00a` i bieżących źródeł frontendu z poprawką
+  HMR; nie kwalifikuje jeszcze nowej aplikacji backendowej ani fizyki.
+- Rzeczywisty odbiór ujawnił dwa błędy diagnostyki: porównanie zapisu SHA-256
+  zamiast skrótu oraz odczyt cache po publicznym URL zamiast kluczu konkretnej
+  sesji/epoch/request scope. Debug korzysta teraz z tego samego normalizera co
+  renderer i dokładnego klucza przeniesionego wraz z buforem. Nie korzysta
+  z globalnej bieżącej sesji, aby przypisać staremu buforowi nową tożsamość.
+- Skrypt odbioru wymaga pełnego kanonicznego render snapshotu `ready`.
+  Oddzielnie raportuje `unknown` panelu porównań, gdy jedynym ograniczeniem jest
+  `backend-meta-incomparable`: statystyki próbkowanego żądania nie są tożsame
+  ze statystykami całego pola. Nie przepisuje stanu panelu i nie deklaruje
+  kompletności takiego porównania. Inne problemy nadal blokują odbiór.
+- Typecheck i focused ESLint we frontendzie przeszły:
+  `backend/source-checks/a6056dff087447f5b69ac4d046c78e1f.json`.
+  Późniejsze zmiany skryptu QA przeszły Node syntax i Python AST.
+  Przypięty React Doctor wykazał dwa istniejące ostrzeżenia pętli w
+  `viewport3dRenderModel.ts`; diff zmienia w tym pliku tylko przeniesienie
+  `cacheResourceKey`. Scan nie jest raportowany jako całkowicie zielony.
+- Odczytowa natywna inspekcja rzeczywistego terminalnego runu potwierdziła
+  `mutations_applied=false`, `solve_replayed=false`, native config
+  `4bfee3acb8bcec75b46cd2f1a98b913acbeb032f7bc956ed8ddcf56a4e0e0f5e`
+  i terminal evidence `79e8b6722f7f30c2f6ea4468dc59d696f693ffdc2f0f6df071b83b9d3fc257c4`.
+  Receipt: `backend/six-points-runtime/terminal-inspection-7ba55f768e1649cbb7d38c368d0a29d3.json`.
+  To wejście do kontrolowanego odtworzenia, jeszcze nie dowód restartu.
+- Przygotowano dwa fragmenty Rust do wspólnego buildu: sealed immutable
+  materialization usuwa powtórny lowering/serializację przed commit, zachowując
+  walidację pierwszego wejścia i wszystkie kontrole publikacji. Trwałe końcowe
+  StepStats mają osobny auxiliary artifact `accepted_terminal_scalar_stats`,
+  ścisłe CAS/claim/clock i istniejący katalog/piny; quantity bundle v1 nie
+  zmienia schematu. Starsze czytniki pomijają nowy typ. Review granicy CAS,
+  rollbacku i retencji: PASS źródła. Parser/diff przechodzą; build, nowe
+  końcowe skalary i pomiar poprawy czasu pozostają **NOT VERIFIED**.
+
+### Checkpoint: rzeczywisty drain i proof odtworzenia
+
+- Commit UI `9f70be04f8e60a55c5c321d26c2e2fde41798d4c` jest na remote.
+  Użytkownik dopuścił niezmieniony hostowy hook przy kolejnych commitach tego
+  zadania. Normalny hook zgłosił dwa bounded lookup ostrzeżenia w skrypcie QA;
+  nie zmieniano hooka, PATH ani reguł skanera.
+- Pierwsza próba stopu wygasła w odczycie namespace przed utworzeniem
+  operation. Inspekcja potwierdziła stary start, oba healthy, API 200 i brak
+  nowej iteration; nie potraktowano timeoutu jako zakończenia kontenera.
+  Ponowiony pełny preflight/drain `3e3997a9af064c53ab134b3a003277c8`
+  zakończył się `succeeded`; oba kontenery mają exit0 i `OOMKilled=false`.
+- Rzeczywisty receipt zawiera parę historycznych
+  `container_recovery` / `container_recovery_authorization`. Zamknięty zestaw
+  pól starego walidatora ich nie uwzględniał. Host i Rust dopuszczają teraz
+  wyłącznie pełną parę ze znanymi schematami/outcome, statusem `recovered`,
+  tym samym request ID i czterema zgodnymi digestami. Cały process pozostaje
+  objęty canonical+LF SHA; Ready/Drained owner, children i terminal-run fence
+  są sprawdzane niezależnie. Historyczne recovery nie jest nową autoryzacją
+  ani operacją do ponowienia. Review: PASS źródła, bez testów.
+- Producer na rzeczywistym preflighcie i store zakończył się kodem 0:
+  `verification/terminal-observation-six-points-6146e07161af45f8b7a4741ec0c774a8.json`,
+  SHA `3d100be0ad4bdcc0ee24f31bad55b32c5a711011a8997957c20c79d706b225e5`.
+  Ten proof dotyczy powyższego runu 10 iteracji i potwierdzonego drain;
+  nie zastępuje odbioru jego instalacji po nowym starcie.
+- Źródłowa optymalizacja materializacji zapisana jako `1bddc0bae`.
+  Kontrolowany restart/nowy build ma zachować backend 128 GiB / 16 CPU oraz
+  istniejący frontend 16 GiB / 4 CPU. Oba serwisy celowo pozostają zatrzymane
+  między drain a odtworzeniem. Pozostałe grupy i dane pozostają zachowane.
+
+
+### Checkpoint: rzeczywiste odtworzenie terminalnego CoFeB
+
+- Backend `34df0e44a2eb00f109940f6bcb3e1cb06820f834` zbudowano
+  w stałym kontenerze `fullmag-master-backend-1`: make 288 573 ms, 24 pliki
+  zweryfikowanego pakietu, snapshot
+  `cd8acc586bed087ab48f9acf27f5d11158fc77d2b6cfff3dfaf1b97ee78b0972`.
+  Zarządzane wznowienie `a2f0d98c797440e2a79a0d007ea89a67` zakończyło się
+  `succeeded`; API Ready i kontenery healthy, backend 128 GiB/16 CPU.
+- Naprawiono błąd kompilacji E0507 w ponawianej publikacji terminalnych
+  skalarów oraz ścisłe rozpoznawanie schematu receiptu V3. Nie zmieniono
+  schematu istniejącego quantity bundle V1. Pierwszy nieudany build pozostaje
+  zapisany; poprawka przeszła rzeczywisty kolejny build, bez testów jednostkowych.
+- Nowe API `d44d0702-b589-4797-b77e-ea84509f15a4` odtworzyło ten sam run
+  `run-live-38f03054f1ca457a14dca4a95cbf08006998b8b67bd334a9e6eac017b5f8a0d4`,
+  publiczny epoch, krok 10 i domenę 1 087 250 elementów/183 764 węzłów.
+  Hashe wartości m oraz Airbox H_demag/H_eff, indeksów węzłów i observation
+  frames są identyczne z odczytem sprzed drain. Katalog zadania zachował SHA
+  `7f176485debdb3e5251978643051965baa6197ccf9ebce1e425e2f8bb802c4bb`;
+  wszystkie zadania nadal succeeded. Nie zlecono nowego Solve ani Compute Fields.
+- Dowód porównania: `backend/six-points-runtime/terminal-restoration-comparison-d017211205db4bbf9ea1f5e0e3b87ddd.json`
+  w wolumenie control grupy. Odbiór przeglądarkowy po odtworzeniu:
+  `browser-qa/attempts/30cd774feb3540bbbe66b6392891a9e8`, succeeded.
+  Pierwsza próba po zimnym starcie frontendu zakończyła się na odczycie
+  loopback; zachowano receipt, odczyt /workspace potwierdził HTTP 200 przed
+  następną próbą. Krótka degradacja obserwacji native ustąpiła po 4 s bez
+  zatrzymania API.
+- Ten stary run nie zawiera nowego artefaktu terminalnego StepStats; po
+  odtworzeniu historia skalarów jest pusta, zamiast fałszywego prepared Step 0.
+  Odbiór trwałych końcowych skalarów wymaga nowego runu i pozostaje otwarty.
+- Scalenie `origin/master` z poprawką mapowania FDM multilayer w 2D zapisano
+  i wypchnięto jako `25e5d76e9766aa3ba924cd4a7528fe5713abcfb1`.
+  Kontrola parserów pięciu produkcyjnych plików Rust i JSON source-map przeszła;
+  testów nie uruchamiano. Wszystkie siedem obcych plików nadal ma hashe
+  manifestu początkowego. Wdrożenie tego scalenia, nowe przebiegi FDM/FEM,
+  pomiar materializacji i kwalifikowana retencja pozostają do wykonania.
+
+- Kolejny potwierdzony drain: `8695f842b5d141be99c72caddfa326c3`, oba
+  kontenery exit0. Jawny fresh-state zatrzymał się przed usunięciem usług:
+  `4544fbee491444dfad9947f2c21a94a1`, failed-confirmed. Preflight wybierał pusty
+  recovery context dla archiwizacji, ale kontrola pod lease ponownie wybierała
+  retained recovery i odrzucała historyczny capability. Wybór pod lease jest
+  teraz zgodny z preflightem. Nie zmieniono walidatora retained recovery;
+  zachowano kontrolę dokładnych zatrzymanych inkarnacji i atomowe archiwum
+  starego runtime/ledgera/danych. Python AST/diff przechodzi; ponowne wykonanie
+  tej zarządzanej ścieżki i nowy build nadal oczekują na odbiór.
+
+- Jawne archiwum `88b6a68101a342c4ac2e13b48fe8d9c8` zakończyło się
+  succeeded i zachowało stary katalog CoFeB z tym samym SHA-256. Obrazy
+  toolchain/development/backend były cache hit. Kolejny start zatrzymał się
+  przed stworzeniem nowego backendu: walidator retirement wymagał sukcesu
+  pierwotnego development `1123...`, mimo rzeczywistego udanego resume `a2f0...`.
+  Nie zmieniono historycznego failed-confirmed ani gotowego archiwum.
+- Walidacja dopuszcza teraz dokładny udany, niezmienny resume: zgodny
+  parent/config, source/provenance, namespace/volume, state root i oba
+  usunięte container ID. Enumeracja jest ograniczona do 256 rekordów,
+  mount control jest readonly, terminal musi odpowiadać canonical receipt.
+  Pozostałe piny archiwum oraz genuine native drain nadal są sprawdzane.
+  Ścieżka pierwotnego succeeded nie zmienia zachowania. Niezależne review
+  wykryło nieobsługiwany argument helpera; poprawiono go na istniejący
+  adapter readonly i ponowne review zakończyło się PASS źródła.
+- Rzeczywisty odczyt archiwum i powiązanego resume przeszedł bez mutacji;
+  startup i nowe przebiegi nadal wymagają dalszego odbioru. Nie powtarzać
+  fresh-state ani usuwania kontenerów archiwum `88b6...`: stary runtime
+  jest już zachowany, a kolejny krok to zwykły zarządzany start nowej sesji.

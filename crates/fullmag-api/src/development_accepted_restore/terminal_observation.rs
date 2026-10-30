@@ -251,10 +251,38 @@ fn restore(
     equal(&drain, "backend_container_id", string(&operation, "backend_container")?)?;
     validate_container_id(string(&drain, "backend_container_id")?, "historical backend")?;
     let process = drain.get("process_receipt").context("terminal drain has no native process receipt")?;
-    let expected_process_fields = [
+    let mut expected_process_fields = [
         "schema", "state", "api_pid", "api_exit_code", "accepted_store",
         "bootstrap", "qualification", "service_owner", "terminal_service_owner",
     ].into_iter().collect::<std::collections::BTreeSet<_>>();
+    let historical_recovery = process.get("container_recovery");
+    let historical_authorization = process.get("container_recovery_authorization");
+    match (historical_recovery, historical_authorization) {
+        (None, None) => {}
+        (Some(recovered), Some(authorized)) => {
+            // These annotations bind only a completed historical recovery;
+            // they cannot replace the current owner/drain or terminal fence.
+            recovered.as_object().context("historical recovery is not an object")?;
+            authorized.as_object().context("historical recovery authorization is not an object")?;
+            equal(recovered, "schema_version", "runtime_service_container_recovery.v1")?;
+            equal(authorized, "schema_version", "fullmag.docker-container-recovery-authorization.v1")?;
+            equal(recovered, "status", "recovered")?;
+            if !matches!(string(recovered, "outcome")?,
+                "retained_attempt_history_recovered" | "retained_manual_held_runs_recovered"
+                | "retained_terminal_runs_recovered" | "empty_namespace_recovered"
+                | "retained_cancelled_runs_recovered") {
+                bail!("historical recovery outcome is unsupported");
+            }
+            fullmag_session::repository_path::validate_store_id(string(recovered, "request_id")?)?;
+            for key in ["request_id", "request_sha256", "config_sha256", "attestation_sha256", "owner_sha256_after"] {
+                let value = string(recovered, key)?;
+                equal(authorized, key, value)?;
+                if key != "request_id" { validate_digest(value, "historical recovery binding")?; }
+            }
+            expected_process_fields.extend(["container_recovery", "container_recovery_authorization"]);
+        }
+        _ => bail!("historical recovery annotations are incomplete"),
+    }
     if process.as_object().context("native process receipt is not an object")?
         .keys().map(String::as_str).collect::<std::collections::BTreeSet<_>>()
         != expected_process_fields

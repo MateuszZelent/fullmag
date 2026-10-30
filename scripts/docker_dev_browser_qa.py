@@ -1196,6 +1196,7 @@ def _validate_fem_airbox_vector_observation(
         raise BuildControlError("Browser helper omitted the FEM Airbox vector observation schema")
     if (value.get("solver_family") != "fem"
             or value.get("health_disposition") != "ready"
+            or value.get("health_scope") != "render-snapshot"
             or value.get("target_id") != "airbox"
             or value.get("target_kind") != "airbox"
             or value.get("selection_kind") != "airbox.visualization.debug"
@@ -1203,6 +1204,14 @@ def _validate_fem_airbox_vector_observation(
             or value.get("component") != "full"
             or value.get("scope_kind") != "airbox"):
         raise BuildControlError("Browser helper FEM Airbox target identity differs")
+    limitations = value.get("panel_comparison_limitations")
+    if (value.get("panel_health_disposition") not in ("ready", "unknown")
+            or not isinstance(limitations, list) or len(limitations) > 8
+            or any(item != "backend-meta-incomparable" for item in limitations)
+            or (value.get("panel_health_disposition") == "unknown" and not limitations)
+            or not isinstance(value.get("render_snapshot_frame_commit_id"), str)
+            or not value["render_snapshot_frame_commit_id"]):
+        raise BuildControlError("Browser helper FEM render snapshot or comparison limitations differ")
     scope_id = value.get("scope_id")
     carrier_id = value.get("carrier_id")
     resource_key = value.get("resource_key")
@@ -1245,7 +1254,7 @@ def _validate_fem_airbox_vector_observation(
         raise BuildControlError("Browser helper decoded FEM Airbox payload identity or dimensions differ")
     adopted_field_buffer_id = value.get("adopted_field_buffer_id")
     vector_build_key = value.get("vector_build_key")
-    if (value.get("field_buffer_state") != "ready"
+    if (value.get("field_buffer_state") != "target-buffer"
             or not isinstance(adopted_field_buffer_id, str)
             or not adopted_field_buffer_id or len(adopted_field_buffer_id) > 512
             or value.get("adopted_resource_key") != resource_key

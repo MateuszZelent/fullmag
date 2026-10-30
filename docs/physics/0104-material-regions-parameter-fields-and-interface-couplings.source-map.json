@@ -712,6 +712,27 @@
       "symbol": "single_grid_material_scalar_dmi_is_lowered_on_cpu_and_cuda",
       "responsibility": "Regresja descriptorów CPU/CUDA, bez dowodu wykonania urządzenia.",
       "evidence_status": "implemented"
+    },
+    {
+      "id": "fem-resolved-material-metadata",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "gather_fem_material_field_plans",
+      "responsibility": "Lokalizacja i statystyki zgodne z rozwiązaną reprezentacją współczynnika.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fem-element-material-metadata-regression",
+      "path": "crates/fullmag-plan/src/tests/material_audit_fem.rs",
+      "symbol": "fem_material_field_metadata_tracks_resolved_element_coefficients",
+      "responsibility": "Regresja lokalizacji i statystyk DG0 niezależnie od kolejności regionów.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fem-element-material-artifact-regression",
+      "path": "crates/fullmag-runner/src/artifacts.rs",
+      "symbol": "fem_element_material_artifact_preserves_location_and_values",
+      "responsibility": "Zapis współczynnika elementowego bez pominięcia ani projekcji węzłowej.",
+      "evidence_status": "implemented"
     }
   ],
   "public_api": {

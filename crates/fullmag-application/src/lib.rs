@@ -103,7 +103,10 @@ pub use run_spec::{
     RunDependency, RunId, RunIntent, RunIntentLedger, RunSpecError, RunSpecification, StudyId,
     StudyReference, SubmitDisposition, SubmitReceipt, RUN_INTENT_SCHEMA, RUN_SPEC_SCHEMA,
 };
-pub use run_intent_materialization::{materialize_run_intent, RunIntentAuthoring};
+pub use run_intent_materialization::{
+    materialize_run_intent, prepare_run_intent_materialization, PreparedRunIntentMaterialization,
+    RunIntentAuthoring,
+};
 pub use script_antenna_inspection_planning::plan_script_antenna_inspection;
 pub use script_pipeline_compilation::{
     materialize_script_pipeline_with_output_policy_bounded, CompiledScriptExecution,

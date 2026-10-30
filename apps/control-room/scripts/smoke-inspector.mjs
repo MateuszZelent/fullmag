@@ -1329,16 +1329,65 @@ async function qualifyRegionMaterialMetadataStability(page, inspector, fixture) 
       "Linear/radial profiles were not preserved as read-only removable overrides.",
     );
 
+    const ku1ParentRegionId = "material-audit-ku1-parent";
+    const ku1ParentRegionNodeId = "model:object:film:regions:" + ku1ParentRegionId;
+    const ku1ParentMaterialNodeId = ku1ParentRegionNodeId + ":magnetic-parameters";
+    const owner = fixture.scene.objects.find((item) => item.id === "film");
+    const ownerPhysicsStack = structuredClone(owner?.physics_stack ?? []);
+    await selectInspectorNode(page, inspector, ku1ParentRegionNodeId, {
+      owner: "object-region", label: "Ku1 parent region",
+    });
+    await expandInspectorNode(page, ku1ParentRegionNodeId, fixture);
+    await page.locator('[data-node-id="' + ku1ParentMaterialNodeId + '"]').click();
+    await inspector.getByRole("heading", { name: "Material Overrides", exact: true }).waitFor();
+    const inheritedKu1Text = async () => inspector.locator(".fm-inspector-field-row").evaluateAll((rows) => {
+      const row = rows.find((item) =>
+        item.querySelector(".fm-inspector-field-row__label")?.textContent?.trim() === "ku1",
+      );
+      return row?.querySelector(".fm-inspector-field-row__value")?.textContent?.trim() ?? null;
+    });
+    const inheritedKu1 = await inheritedKu1Text();
+    assert(
+      inheritedKu1 === "31000 J/m^3 (inherits parent)",
+      "Region did not display the owner physics_stack Ku1 value, including its disabled entry.",
+    );
+
+    const interactionRequestStart = fixture.requests.length;
+    await inspector.getByRole("button", { name: "Add Override", exact: true }).click();
+    const ku1Override = inspector.locator(".fm-region-override").last();
+    await ku1Override.locator("select").first().selectOption("ku1");
+    await ku1Override.locator('input[aria-label="Local override"]').waitFor({ state: "visible" });
+    await ku1Override.getByText("Inherited parent", { exact: true }).waitFor();
+    const localOverrideParent = await ku1Override.locator(".fm-inspector-field-row").evaluate((row) =>
+      row.querySelector(".fm-inspector-field-row__value")?.textContent?.trim() ?? null,
+    );
+    const interactionPatches = fixture.requests.slice(interactionRequestStart).filter((request) =>
+      request.startsWith("PATCH /v2/sessions/current/model/objects/film/interactions/"),
+    );
+    assert(
+      await ku1Override.locator("select").first().inputValue() === "ku1" &&
+        localOverrideParent === "31000 J/m^3" && interactionPatches.length === 0 &&
+        JSON.stringify(owner?.physics_stack ?? []) === JSON.stringify(ownerPhysicsStack),
+      "Adding a local Ku1 draft changed its inherited parent or mutated the owner interaction.",
+    );
+    const ku1Inheritance = {
+      inherited_ku1: inheritedKu1,
+      local_override_parent: localOverrideParent,
+      interaction_patch_count: interactionPatches.length,
+      owner_stack_unchanged: JSON.stringify(owner?.physics_stack ?? []) === JSON.stringify(ownerPhysicsStack),
+    };
+
     const screenshot = "region-material-metadata-stability.png";
     await inspector.screenshot({ path: resolve(outputDir, screenshot) });
     await writeFile(resolve(outputDir, "region-material-metadata-browser-proof.json"), JSON.stringify({
       schema: "material_boundary_region_metadata_browser_proof.v1",
       fixture_only: true, live_api_verified: false, science_verified: false, gpu_verified: false,
       region_id: regionId, acknowledged_name: renamedRegion, retained_overrides: submitted,
+      ku1_inheritance: ku1Inheritance,
       scalar_overrides_visible: scalarOverrides, preserved_profiles: profiles.map((item) => item.text),
       requests, baseline, during, afterAck, screenshot,
     }, null, 2) + "\n", "utf8");
-    return { screenshot, regionId, requestCount: requests.length, scalarOverrides };
+    return { screenshot, regionId, requestCount: requests.length, scalarOverrides, ku1Inheritance };
   } finally {
     fixture.regionPatchDelayMs = 0;
     await page.setViewportSize({ width: 1600, height: 900 });
@@ -4046,12 +4095,25 @@ function createInspectorFixture() {
     name: "Material Audit Core", priority: 2, region_id: "material-audit-core",
     shape: { kind: "box", center: [0, 0, 0], size: [40e-9, 20e-9, 1e-9] },
   };
+  const materialAuditKu1ParentRegion = {
+    enabled: true, frame: "object", material_overrides: [],
+    name: "Ku1 Parent", priority: 3, region_id: "material-audit-ku1-parent",
+    shape: { kind: "box", center: [65e-9, 0, 0], size: [20e-9, 20e-9, 1e-9] },
+  };
   const materialAuditRegionResources = materialBoundaryAuditEnabled ? [{
     bounds_max: [20e-9, 10e-9, 0.5e-9], bounds_min: [-20e-9, -10e-9, -0.5e-9],
     enabled: true, interaction_refs: [], material_overrides: structuredClone(materialAuditOriginalOverrides),
     material_ref: "unassigned", mesh_part_ids: [], name: materialAuditSceneRegion.name,
     owner_object_id: "film", priority: materialAuditSceneRegion.priority,
     region_id: materialAuditSceneRegion.region_id, shape: structuredClone(materialAuditSceneRegion.shape),
+    source: "authored_object_region", source_body_ids: [], source_object_ids: ["film"],
+  }, {
+    bounds_max: [75e-9, 10e-9, 0.5e-9], bounds_min: [55e-9, -10e-9, -0.5e-9],
+    enabled: true, interaction_refs: [], material_overrides: [],
+    material_ref: "unassigned", mesh_part_ids: [], name: materialAuditKu1ParentRegion.name,
+    owner_object_id: "film", priority: materialAuditKu1ParentRegion.priority,
+    region_id: materialAuditKu1ParentRegion.region_id,
+    shape: structuredClone(materialAuditKu1ParentRegion.shape),
     source: "authored_object_region", source_body_ids: [], source_object_ids: ["film"],
   }] : [];
   const scene = {
@@ -4103,7 +4165,7 @@ function createInspectorFixture() {
         name: "Film",
         region_name: "film",
         regions: materialBoundaryAuditEnabled
-          ? [structuredClone(materialAuditSceneRegion)]
+          ? [structuredClone(materialAuditSceneRegion), structuredClone(materialAuditKu1ParentRegion)]
           : [],
         role: "magnet",
         physics_stack: [
@@ -4112,6 +4174,11 @@ function createInspectorFixture() {
             kind: "interfacial_dmi",
             params: { dind: 0.003 },
           },
+          ...(materialBoundaryAuditEnabled ? [{
+            enabled: false,
+            kind: "uniaxial_anisotropy",
+            params: { axis: [0, 0, 1], ku1: 31_000 },
+          }] : []),
         ],
         tags: ["mesh:ready"],
         transform: {
@@ -4202,7 +4269,9 @@ function createInspectorFixture() {
   };
 }
 
-function inspectorMaterialAuditMembership(fixture) {
+function inspectorMaterialAuditMembership(fixture, regionId) {
+  // Authored regions share the coarse fixture element. This smoke checks
+  // authoring and Inspector behavior, not geometric region classification.
   return {
     boundary_face_indices: [4, 5, 6, 7],
     element_indices: [1],
@@ -4216,7 +4285,7 @@ function inspectorMaterialAuditMembership(fixture) {
     realization: "certified",
     realization_method: "fixture-authored-region",
     realization_warnings: [],
-    region_id: "material-audit-core",
+    region_id: regionId,
     region_membership_revision: fixture.revision,
     source: "fixture",
     topology_fingerprint: fixture.manifest.topology_fingerprint,
@@ -4784,7 +4853,8 @@ async function installInspectorFixtureApi(page, fixture) {
       return fulfillJson(route, {
         mesh_id: "inspector-fixture-mesh",
         mesh_revision: fixture.manifest.revision,
-        memberships: [inspectorMaterialAuditMembership(fixture)],
+        memberships: fixture.materialAuditRegionResources.map((region) =>
+          inspectorMaterialAuditMembership(fixture, region.region_id)),
         unresolved_regions: [],
       });
     }
@@ -4794,10 +4864,13 @@ async function installInspectorFixtureApi(page, fixture) {
       fixture.materialBoundaryAuditEnabled &&
       request.method() === "GET" &&
       materialMembershipMatch &&
-      decodeURIComponent(materialMembershipMatch[1]) === "material-audit-core" &&
+      fixture.materialAuditRegionResources.some((region) =>
+        region.region_id === decodeURIComponent(materialMembershipMatch[1])) &&
       url.searchParams.get("owner_object_id") === "film"
     ) {
-      return fulfillJson(route, inspectorMaterialAuditMembership(fixture));
+      return fulfillJson(route, inspectorMaterialAuditMembership(
+        fixture, decodeURIComponent(materialMembershipMatch[1]),
+      ));
     }
     if (path === "/v2/sessions/current/model/material-fields") return fulfillJson(route, { fields: [], revision: fixture.revision });
     if (path === "/v2/sessions/current/model/couplings") return fulfillJson(route, { couplings: [], revision: fixture.revision });

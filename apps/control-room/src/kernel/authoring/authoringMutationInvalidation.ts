@@ -95,6 +95,7 @@ export function acknowledgedAuthoringSceneRevision(response: {
 export function invalidateAuthoringMutationDependents(
   resources: {
     invalidate(resourceKey: string, revision: ResourceRevision): void;
+    invalidatePrefix?(resourcePrefix: string, revision: ResourceRevision): unknown;
   },
   kind: AuthoringMutationKind,
   revision: ResourceRevision,
@@ -107,4 +108,6 @@ export function invalidateAuthoringMutationDependents(
         : revision,
     );
   }
+  // History keys carry a `?limit=` window that exact invalidation never reaches.
+  resources.invalidatePrefix?.(SIMULATION_SOLVER_ENERGIES_HISTORY_PATH, revision);
 }

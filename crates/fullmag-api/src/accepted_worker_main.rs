@@ -7,6 +7,7 @@ mod accepted_fem_study_worker;
 mod accepted_antenna_inspection_worker;
 mod accepted_field_binary;
 mod accepted_field_materialization_worker;
+mod accepted_live_demand;
 mod accepted_observation_spool;
 mod error;
 #[path = "accepted_study_worker.rs"]

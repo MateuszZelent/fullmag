@@ -8,6 +8,7 @@ pub mod antenna;
 pub mod antenna_inspection;
 pub mod artifacts;
 pub mod domain;
+pub(crate) mod fdm_multilayer_composite;
 pub mod fdm_region_membership;
 pub(crate) mod field_resolution;
 pub mod fields;

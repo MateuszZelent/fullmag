@@ -16,7 +16,7 @@ use super::field_resolution::{
     fem_nodal_visualization_projection_allowed, field_value_count_matches_current_domain,
     flatten_current_field_values, is_fdm_snapshot, json_field_grid, json_field_value_count,
 };
-use crate::artifacts::read_json_artifact_value;
+use crate::artifacts::{read_json_artifact_value, try_resolve_artifact_path};
 use crate::error::ApiError;
 use crate::router_v2::handlers::sessions::status::{
     domain_generation_revision, fdm_grid_geometry, fdm_grid_shape,
@@ -132,6 +132,9 @@ pub(crate) enum SpatialFieldCarrier<'a> {
         /// targets report it instead of a generic missing-membership error.
         membership_error: Option<String>,
         multilayer_scope: Option<FdmMultilayerScopeCarrier<'a>>,
+        /// Cells that carry a value; `None` means every cell. Uncovered cells
+        /// are outside every planar target, `domain` included.
+        coverage: Option<Vec<bool>>,
     },
     FemNodes {
         topology: &'a FemMeshPayload,
@@ -477,6 +480,7 @@ impl ResolvedSpatialField<'_> {
                 membership,
                 membership_error: _,
                 multilayer_scope,
+                coverage,
             } => {
                 validate_grid_count(*cells, local_count, &self.quantity_id)?;
                 if origin_m.is_some() != cell_size_m.is_some()
@@ -490,6 +494,9 @@ impl ResolvedSpatialField<'_> {
                         .as_ref()
                         .is_some_and(|membership| membership.cell_membership.len() != local_count)
                     || (membership.is_some() && grid_fingerprint.is_none())
+                    || coverage
+                        .as_ref()
+                        .is_some_and(|coverage| coverage.len() != local_count)
                     || multilayer_scope.is_some_and(|scope| {
                         scope
                             .artifact_layout
@@ -1363,6 +1370,43 @@ pub(crate) fn native_layer_membership_generation_id(
     Ok(format!("sha256:{:x}", Sha256::digest(payload)))
 }
 
+/// Plan-derived native membership of one multilayer layer, checked only
+/// against the artifact-layout identity. The plan is the realization the solver
+/// ran, so sampling the live field does not wait for the persisted mask copy.
+pub(crate) fn planned_fdm_multilayer_native_layer_membership(
+    snapshot: &SessionStateResponse,
+    requested_layer_id: &str,
+) -> Result<Option<FdmNativeLayerMembershipCarrier>, ApiError> {
+    let Some(metadata) = snapshot.metadata.as_ref() else {
+        return Ok(None);
+    };
+    let Some(plan_layer) = planned_native_layer(metadata, requested_layer_id)? else {
+        return Ok(None);
+    };
+    let carrier = planned_native_layer_membership(snapshot, plan_layer)?;
+    if let Some(artifact_layer) = persisted_native_layer(snapshot, &carrier.layer_id)? {
+        cross_check_planned_layer_identity(&carrier, artifact_layer)?;
+    }
+    Ok(Some(carrier))
+}
+
+/// Persisted copy of an artifact the execution-plan layout already declares.
+/// The plan is the authority and the runner writes this copy from its private
+/// attempt output, so a live run declares it before the run artifact root
+/// holds it: an absent copy is not yet published, a present one must parse.
+fn published_planned_layer_artifact(
+    snapshot: &SessionStateResponse,
+    relative_path: &str,
+) -> Result<Option<serde_json::Value>, ApiError> {
+    let Some(artifact_dir) = current_artifact_dir(snapshot) else {
+        return Ok(None);
+    };
+    if try_resolve_artifact_path(&artifact_dir, relative_path)?.is_none() {
+        return Ok(None);
+    }
+    read_json_artifact_value(&artifact_dir, relative_path).map(Some)
+}
+
 fn persisted_native_layer<'a>(
     snapshot: &'a SessionStateResponse,
     layer_id: &str,
@@ -1472,15 +1516,15 @@ fn cross_check_planned_membership(
             "multilayer FDM membership mask and legend refer to different artifacts",
         ));
     }
-    let artifact_dir = current_artifact_dir(snapshot).ok_or_else(|| {
-        ApiError::conflict("declared native multilayer membership has no artifact root")
-    })?;
-    let payload = read_json_artifact_value(&artifact_dir, membership_path).map_err(|_| {
+    let Some(payload) = published_planned_layer_artifact(snapshot, membership_path).map_err(|_| {
         ApiError::conflict(format!(
-            "declared native membership artifact is missing or corrupt for layer '{}'",
+            "declared native membership artifact is corrupt for layer '{}'",
             carrier.layer_id
         ))
-    })?;
+    })?
+    else {
+        return Ok(());
+    };
     validate_layer_payload_identity(
         &payload,
         "fdm_multilayer_region_membership.v1",
@@ -1570,18 +1614,16 @@ fn cross_check_planned_material(
     else {
         return Ok(());
     };
-    let artifact_dir = current_artifact_dir(snapshot).ok_or_else(|| {
-        ApiError::conflict(format!(
-            "declared multilayer material field '{quantity_id}' has no artifact root"
-        ))
-    })?;
     let material_path = required_string(descriptor, "artifact_path", "material descriptor")?;
-    let payload = read_json_artifact_value(&artifact_dir, material_path).map_err(|_| {
+    let Some(payload) = published_planned_layer_artifact(snapshot, material_path).map_err(|_| {
         ApiError::conflict(format!(
-            "declared multilayer material field '{quantity_id}' artifact is missing or corrupt for layer '{}'",
+            "declared multilayer material field '{quantity_id}' artifact is corrupt for layer '{}'",
             carrier.layer_id
         ))
-    })?;
+    })?
+    else {
+        return Ok(());
+    };
     validate_layer_payload_identity(
         &payload,
         "fdm_multilayer_material_field.v1",
@@ -2392,6 +2434,7 @@ fn resolve_spatial_field_metadata<'a>(
             membership: membership.as_ref().map(FdmCellMembership::from),
             membership_error,
             multilayer_scope,
+            coverage: None,
         }
     } else {
         let mesh = snapshot.fem_mesh.as_ref().ok_or_else(|| {
@@ -2739,6 +2782,7 @@ mod tests {
                 membership: None,
                 membership_error: None,
                 multilayer_scope: None,
+                coverage: None,
             },
         }
     }

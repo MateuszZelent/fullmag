@@ -15,6 +15,7 @@ import {
 import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
+import { useLayoutSelector } from "@/kernel/layout/useLayout";
 import { runFdmGridRefreshOperation } from "@/kernel/authoring/geometryLifecycleCommandContributions";
 import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import {
@@ -802,9 +803,12 @@ export function useStudyInspectorPanelController(
   const energyCurrent = useSolverEnergyCurrentResource({
     enabled: shouldLoadRuntimeScalars(true, runtimeStatus),
   });
+  // The Inspector stays mounted while hidden; its 120-row energy window would
+  // otherwise refetch on every scalar row of a running solve.
+  const inspectorVisible = useLayoutSelector((layout) => layout.panelVisible.right);
   const energyHistory = useSolverEnergyHistoryResource(
     120,
-    { enabled: shouldLoadRuntimeScalars(true, runtimeStatus) },
+    { enabled: inspectorVisible && shouldLoadRuntimeScalars(true, runtimeStatus) },
   );
   const commandDetail = useCommandDetailResource(state.selectedCommandId);
   const checkpoints = checkpointCatalog.data?.checkpoints ?? [];

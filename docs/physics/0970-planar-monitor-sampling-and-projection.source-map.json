@@ -148,6 +148,11 @@
       "id": "PM-N25",
       "status": "unqualified",
       "requirement": "A line profile reproduces an affine FEM field at uniform and element-face crossing points, includes every in-plane face crossing, equals FDM cell values, and leaves outside/empty points without values."
+    },
+    {
+      "id": "PM-N29",
+      "status": "unqualified",
+      "requirement": "An FDM multilayer composite reproduces the covering native cell values bitwise, leaves uncovered gap cells empty under the domain target, spans the composite lattice in the Default section, and rejects unequal spacing, half-cell shifts and overlapping native grids with planar_scope_unsupported."
     }
   ],
   "equations": [
@@ -314,6 +319,29 @@
       "sources": [
         "planar-streamlines"
       ]
+    },
+    {
+      "id": "eq-planar-multilayer-shift",
+      "symbols": [
+        "o_l",
+        "h_vec",
+        "s_l"
+      ],
+      "sources": [
+        "fdm-multilayer-composite"
+      ]
+    },
+    {
+      "id": "eq-planar-multilayer-embedding",
+      "symbols": [
+        "qc",
+        "s_l",
+        "C_cov"
+      ],
+      "sources": [
+        "fdm-multilayer-composite",
+        "api-build"
+      ]
     }
   ],
   "symbols": [
@@ -460,6 +488,30 @@
       "latex": "h_\\perp",
       "meaning": "Navigation step of a continuous FEM section: median normal extent of the cut target elements",
       "si_unit": "m"
+    },
+    {
+      "id": "h_vec",
+      "latex": "\\mathbf h",
+      "meaning": "Shared native cell spacing of all FDM multilayer grids",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "o_l",
+      "latex": "\\mathbf o_l",
+      "meaning": "Edge origin of native multilayer grid l",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "s_l",
+      "latex": "\\mathbf s_l",
+      "meaning": "Integral cell shift of native grid l in the composite lattice",
+      "si_unit": "1"
+    },
+    {
+      "id": "C_cov",
+      "latex": "\\mathcal C",
+      "meaning": "Composite cells covered by a native multilayer cell",
+      "si_unit": "1"
     }
   ],
   "sources": [
@@ -796,6 +848,13 @@
       "symbol": "ElementBvh",
       "responsibility": "AABB hierarchy over selected FEM elements for batched point location (profiles); candidates in ascending element order so results equal the direct scan.",
       "evidence_status": "implemented-compiled-unit-tests-not-run"
+    },
+    {
+      "id": "fdm-multilayer-composite",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/fdm_multilayer_composite.rs",
+      "symbol": "resolve_fdm_multilayer_composite",
+      "responsibility": "Embeds equal-spacing, lattice-aligned FDM multilayer native grids into one composite carrier with coverage and merged membership for monitor_target/region planar scopes and the Default section bounds; fails closed on unequal spacing, misalignment, overlap or legend conflict.",
+      "evidence_status": "implemented-unit-tests-not-run"
     }
   ],
   "public_api": {

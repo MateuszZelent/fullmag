@@ -28,6 +28,7 @@ use crate::{
             is_fdm_multilayer_snapshot, load_fdm_multilayer_airbox_carrier_for_quantity, persisted_hysteresis_magnetization_values,
             resolved_fdm_multilayer_airbox_field, validate_hysteresis_snapshot_stage_scope,
         },
+        data::fdm_multilayer_composite::resolve_fdm_multilayer_composite,
         data::resolved_spatial_field::{
             resolve_current_spatial_field, resolve_fdm_multilayer_native_layer_field,
             resolve_spatial_field_from_values, SpatialFieldProvenance, SpatialFieldSourceKind,
@@ -511,9 +512,15 @@ async fn build_planar_field_from_source(
     let planar_state = presentation
         .visualization_planar
         .unwrap_or_else(crate::schemas::visualization_state::default_planar_visualization_state);
+    // Ok(None) unless the plan is an FDM multilayer; an error matters only to
+    // the scopes that sample the composite carrier.
+    let multilayer_composite = resolve_fdm_multilayer_composite(snapshot);
     let resolved_source = match &source {
         PlanarDataSource::Default => {
-            let domain = super::domain::domain_meta_for_snapshot(snapshot);
+            let mut domain = super::domain::domain_meta_for_snapshot(snapshot);
+            if let Ok(Some(composite)) = &multilayer_composite {
+                composite.apply_to_domain(&mut domain);
+            }
             let stops = snapshot
                 .fem_mesh
                 .as_ref()
@@ -639,6 +646,18 @@ async fn build_planar_field_from_source(
                 "quantity_not_materialized: field '{quantity_id}' is not published"
             ))
         })?
+    };
+    let resolved_field = if matches!(
+        query.scope_kind.as_deref().unwrap_or("monitor_target"),
+        "monitor_target" | "region"
+    ) {
+        match multilayer_composite {
+            Ok(Some(composite)) => composite.embed(resolved_field)?,
+            Ok(None) => resolved_field,
+            Err(error) => return Err(error),
+        }
+    } else {
+        resolved_field
     };
     let field_revision = resolved_field.quantity_revision;
     let source_revision = resolved_source.identity.source_revision;

@@ -1876,7 +1876,8 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
                 writes.append((path, deepcopy(value)))
 
         browser_id = "sha256:" + "b" * 64
-        observed = {"Id": browser_id}
+        browser_command = ["node", "browser-qa.mjs"]
+        observed = {"Id": browser_id, "Config": {"Cmd": browser_command}}
         compose_result = SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
 
         def fake_daemon(*args, **_kwargs):
@@ -1901,7 +1902,7 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
                 qa._run(
                     operation,
                     FakeControl(),
-                    {"services": {}},
+                    {"services": {"browser-qa": {"command": browser_command}}},
                     {"project_name": "fullmag-worktree-fixture"},
                     ROOT,
                     "fullmag-frontend-state",

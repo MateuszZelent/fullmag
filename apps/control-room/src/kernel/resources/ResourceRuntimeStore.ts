@@ -65,6 +65,8 @@ interface ResourceRuntimeEntry<TData> {
   controller: AbortController | null;
   inflight: Promise<ResourceRuntimeSnapshot<TData>> | null;
   inflightExternalRevision: ResourceRevision | null;
+  /** Request of the running load, kept so a predicate pause can replay it. */
+  inflightRequest: ResourceRuntimeLoadRequest<TData> | null;
   lastSettledAtMs: number;
   listeners: Set<ResourceRuntimeListener>;
   pendingRequest: ResourceRuntimeLoadRequest<TData> | null;
@@ -108,6 +110,7 @@ function createEntry<TData>(): ResourceRuntimeEntry<TData> {
     controller: null,
     inflight: null,
     inflightExternalRevision: null,
+    inflightRequest: null,
     lastSettledAtMs: 0,
     listeners: new Set<ResourceRuntimeListener>(),
     pendingRequest: null,
@@ -409,6 +412,7 @@ export class ResourceRuntimeStore<TData = unknown> {
     entry.controller = null;
     entry.inflight = null;
     entry.inflightExternalRevision = null;
+    entry.inflightRequest = null;
     entry.pendingRequest = null;
     entry.pendingTimer = null;
   }
@@ -422,9 +426,19 @@ export class ResourceRuntimeStore<TData = unknown> {
   }
 
   pauseMatching(predicate: (resourceKey: ResourceKey) => boolean): void {
-    for (const resourceKey of this.entries.keys()) {
+    for (const [resourceKey, stored] of this.entries) {
       if (predicate(resourceKey)) {
+        const entry = stored as unknown as ResourceRuntimeEntry<unknown>;
+        // A predicate pause (camera gesture, inactive module) interrupts a
+        // running load; keep its request so releasing the pause replays it
+        // instead of waiting for the next invalidation.
+        const interrupted =
+          entry.pendingRequest ??
+          (entry.inflight && entry.inflightRequest
+            ? { ...entry.inflightRequest, force: false, retrying: false }
+            : null);
         this.pauseLoad(resourceKey);
+        entry.pendingRequest = interrupted;
       }
     }
   }
@@ -586,6 +600,16 @@ export class ResourceRuntimeStore<TData = unknown> {
     entry.pendingRequest = null;
     entry.sequence = sequence;
     entry.inflightExternalRevision = externalRevision;
+    entry.inflightRequest = {
+      abortStaleInflight,
+      externalRevision,
+      force,
+      load,
+      minRefetchIntervalMs,
+      retryPolicy,
+      resolveRevision,
+      resourceKey,
+    };
     if (retryPolicy) {
       if (
         entry.retryDeadlineAtMs <= 0 ||
@@ -737,6 +761,7 @@ export class ResourceRuntimeStore<TData = unknown> {
         entry.controller = null;
         entry.inflight = null;
         entry.inflightExternalRevision = null;
+        entry.inflightRequest = null;
         this.notify(entry);
         if (
           pendingRequest &&

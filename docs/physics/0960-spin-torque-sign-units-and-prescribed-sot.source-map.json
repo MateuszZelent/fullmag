@@ -82,8 +82,8 @@
     {"id": "fem-gpu-bootstrap", "path": "backends/fem/gpu/cuda/runtime/gpu_state_runtime.cpp", "symbol": "initialize_context_gpu_state", "responsibility": "Upload the target mask during GPU bootstrap."},
     {"id": "fdm-sot-gpu-helper", "path": "backends/fdm/include/spin_torque.hpp", "symbol": "prescribed_sot_explicit_rhs", "responsibility": "Evaluate the canonical prescribed-SOT source and one explicit Gilbert conversion in CUDA precision lanes."},
     {"id": "fdm-sot-gpu-context", "path": "backends/fdm/include/context.hpp", "symbol": "sot_params_from_ctx", "responsibility": "Normalize the SOT spin axis and construct the signed SI rate prefactor for native FDM kernels."},
-    {"id": "fdm-sot-cpu-scales", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "prescribed_sot_scales", "responsibility": "Construct independent CPU-reference canonical and legacy SOT scales."},
-    {"id": "fdm-sot-cpu-torque", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "sot_torque", "responsibility": "Apply the CPU-reference SOT torque with global active-mask and target-mask intersection."},
+    {"id": "fdm-sot-cpu-scales", "path": "crates/fullmag-engine/src/fdm/cpu/fields/direct_torques.rs", "symbol": "prescribed_sot_scales", "responsibility": "Construct independent CPU-reference canonical and legacy SOT scales."},
+    {"id": "fdm-sot-cpu-torque", "path": "crates/fullmag-engine/src/fdm/cpu/fields/direct_torques.rs", "symbol": "sot_torque", "responsibility": "Apply the CPU-reference SOT torque with global active-mask and target-mask intersection."},
     {"id": "fdm-sot-cpp-contract", "path": "backends/fdm/tests/prescribed_sot_contract.cpp", "symbol": "main", "responsibility": "Run the native algebraic prescribed-SOT sign and Gilbert-conversion contract."},
     {"id": "fdm-sot-cuda-contract", "path": "backends/fdm/tests/prescribed_sot_cuda_runtime.cu", "symbol": "main", "responsibility": "Run the managed native FP64/FP32 prescribed-SOT CUDA runtime contract."},
     {"id": "fdm-sot-trajectory", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs", "symbol": "native_fdm_prescribed_sot_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available", "responsibility": "Compare eight fixed FP64 CUDA SOT steps with independent CPU-reference prefixes."},
@@ -119,7 +119,9 @@
     {"id": "fem-sot-abi-header", "path": "native/include/fullmag_fem.h", "symbol": "fullmag_fem_backend_create", "responsibility": "FEM ABI entry point consuming the append-only prescribed-SOT plan descriptor."},
     {"id": "fem-sot-abi-rust", "path": "crates/fullmag-fem-sys/src/lib.rs", "symbol": "fullmag_fem_backend_create", "responsibility": "Rust FFI declaration consuming the append-only prescribed-SOT descriptor."},
     {"id": "fem-sot-abi-test", "path": "crates/fullmag-fem-sys/src/lib.rs", "symbol": "versioned_stt_extension_is_append_only_after_legacy_plan_prefix", "responsibility": "ABI contract proving the SOT envelope descriptor remains append-only and self-describing."},
-    {"id": "stt-source-contract", "path": "backends/fem/tests/stt_contract.cpp", "symbol": "main", "responsibility": "Source ownership and descriptor-completeness contract."}
+    {"id": "stt-source-contract", "path": "backends/fem/tests/stt_contract.cpp", "symbol": "main", "responsibility": "Source ownership and descriptor-completeness contract."},
+    {"id": "fem-conformal-torque-target-mask", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "materialize_fem_spin_torque_target_masks", "responsibility": "Maska STT/SOT z connectivity wszystkich elementów wybranego ownera.", "evidence_status": "implemented"},
+    {"id": "fem-conformal-torque-target-mask-regression", "path": "crates/fullmag-plan/src/tests/material_boundary_stt.rs", "symbol": "fem_torque_object_target_mask_covers_conformal_regions_per_owner_and_order", "responsibility": "Regresja STT/SOT dla dwóch regionów, obu kolejności i odrębnego ownera.", "evidence_status": "implemented"}
   ],
   "public_api": {
     "parameters": [

@@ -294,9 +294,28 @@ def build_proof(read_control: Read, read_store: Read, *, iteration: str,
             and drain.get("backend_container_id") == operation.get("backend_container"),
             "native drain belongs to another backend")
     process = drain.get("process_receipt", {})
-    require(set(process) == {"schema", "state", "api_pid", "api_exit_code", "accepted_store",
-                            "bootstrap", "qualification", "service_owner", "terminal_service_owner"},
+    process_fields = {"schema", "state", "api_pid", "api_exit_code", "accepted_store",
+                      "bootstrap", "qualification", "service_owner", "terminal_service_owner"}
+    annotations = {"container_recovery", "container_recovery_authorization"}
+    require(set(process) in (process_fields, process_fields | annotations),
             "native process receipt is partial or unsupported")
+    if annotations <= set(process):
+        # Historical annotations are not new recovery authority. The current
+        # native owner and terminal evidence remain independently fenced below.
+        recovered, authorized = process["container_recovery"], process["container_recovery_authorization"]
+        require(isinstance(recovered, dict) and isinstance(authorized, dict)
+                and recovered.get("schema_version") == "runtime_service_container_recovery.v1"
+                and authorized.get("schema_version") == "fullmag.docker-container-recovery-authorization.v1"
+                and recovered.get("status") == "recovered"
+                and recovered.get("outcome") in {
+                    "retained_attempt_history_recovered", "retained_manual_held_runs_recovered",
+                    "retained_terminal_runs_recovered", "empty_namespace_recovered",
+                    "retained_cancelled_runs_recovered"}, "historical recovery annotations are invalid")
+        portable(recovered.get("request_id"))
+        for key in ("request_id", "request_sha256", "config_sha256", "attestation_sha256", "owner_sha256_after"):
+            require(recovered.get(key) == authorized.get(key), "historical recovery annotation binding differs")
+            if key != "request_id":
+                digest(recovered.get(key))
     require(process.get("schema") == "fullmag.docker-process-tree.v1"
             and process.get("state") == "drained"
             and process.get("accepted_store") == "/state/runs/docker-all/session-store"

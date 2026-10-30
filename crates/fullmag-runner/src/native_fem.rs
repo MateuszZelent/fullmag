@@ -1143,6 +1143,9 @@ pub(crate) struct NativeFemBackend {
     adaptive_max_error: Option<f64>,
     backend_create_wall_time_ns: Option<u64>,
     rotated_dmi_only: bool,
+    /// (core periodic map revision, local node count, map SHA-256); the map is
+    /// copied and hashed again only when its native revision changes.
+    local_node_map_identity: std::sync::Mutex<Option<(u64, u64, String)>>,
 }
 
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
@@ -3772,6 +3775,7 @@ impl NativeFemBackend {
                 && plan.bulk_dmi.is_none()
                 && plan.dind_field.is_none()
                 && plan.dbulk_field.is_none(),
+            local_node_map_identity: std::sync::Mutex::new(None),
         };
         Ok(backend)
     }
@@ -4010,6 +4014,45 @@ impl NativeFemBackend {
             return Err(self.last_error_or("FEM representation receipt read failed"));
         }
         representation_receipt_from_ffi(&raw)
+    }
+
+    /// Local node count and content SHA-256 of the native local-node map.
+    ///
+    /// Live observations bind every generation to this identity. Reading the
+    /// header is cheap; the full map is copied and hashed only when the native
+    /// periodic-map revision differs from the cached one.
+    pub(crate) fn local_node_index_map_identity(&self) -> Result<(u64, String), RunError> {
+        let header = self.local_node_index_map_header()?;
+        let revision = header.core_periodic_map_revision;
+        if let Ok(cache) = self.local_node_map_identity.lock() {
+            if let Some((cached_revision, count, sha)) = cache.as_ref() {
+                if *cached_revision == revision && *count == header.local_node_count {
+                    return Ok((*count, sha.clone()));
+                }
+            }
+        }
+        let map = self.local_node_index_map()?;
+        let sha = map.content_sha256().map_err(|error| RunError {
+            message: format!("FEM local-node map digest failed: {error}"),
+        })?;
+        if let Ok(mut cache) = self.local_node_map_identity.lock() {
+            *cache = Some((map.core_periodic_map_revision, map.local_node_count, sha.clone()));
+        }
+        Ok((map.local_node_count, sha))
+    }
+
+    fn local_node_index_map_header(
+        &self,
+    ) -> Result<ffi::node_map::fullmag_fem_local_node_map_v1, RunError> {
+        use ffi::node_map::*;
+        let mut raw = fullmag_fem_local_node_map_v1::default();
+        raw.abi_version = FULLMAG_FEM_LOCAL_NODE_MAP_V1_ABI_VERSION;
+        raw.struct_size = std::mem::size_of::<fullmag_fem_local_node_map_v1>() as u32;
+        let rc = unsafe { fullmag_fem_backend_snapshot_local_node_map_v1(self.handle, &mut raw) };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM local-node map read failed"));
+        }
+        Ok(raw)
     }
 
     pub(crate) fn local_node_index_map(
