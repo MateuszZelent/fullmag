@@ -880,7 +880,16 @@ fn walk_directory(
         if metadata.is_dir() {
             let pinned = directory
                 .open_child_directory(&name)
-                .map_err(|_| ResultsError::SourceChanged)?;
+                .map_err(|_error| {
+                    #[cfg(test)]
+                    eprintln!(
+                        "results SourceChanged: directory open failed path={} error={} raw_os_error={:?}",
+                        child_path.display(),
+                        _error,
+                        _error.raw_os_error()
+                    );
+                    ResultsError::SourceChanged
+                })?;
             walk_directory(&pinned, &child_relative, depth + 1, entries)?;
         }
     }
@@ -1007,7 +1016,16 @@ fn array_payload_revision(directory: &PinnedDirectory) -> Result<Vec<[u8; 32]>, 
             if metadata.is_dir() {
                 let pinned = directory
                     .open_child_directory(&name)
-                    .map_err(|_| ResultsError::SourceChanged)?;
+                    .map_err(|_error| {
+                        #[cfg(test)]
+                        eprintln!(
+                            "results SourceChanged: array payload directory open failed path={} error={} raw_os_error={:?}",
+                            directory.logical_path().join(&name).display(),
+                            _error,
+                            _error.raw_os_error()
+                        );
+                        ResultsError::SourceChanged
+                    })?;
                 visit(&pinned, &relative, depth + 1, hashes)?;
             }
         }
@@ -1053,7 +1071,16 @@ fn revision_of(entries: &[RawEntry]) -> Result<String, ResultsError> {
             }
         }
         if matches!(entry.kind, RawKind::Array) {
-            let directory = open_directory(&entry.path).map_err(|_| ResultsError::SourceChanged)?;
+            let directory = open_directory(&entry.path).map_err(|_error| {
+                #[cfg(test)]
+                eprintln!(
+                    "results SourceChanged: array directory reopen failed path={} error={} raw_os_error={:?}",
+                    entry.path.display(),
+                    _error,
+                    _error.raw_os_error()
+                );
+                ResultsError::SourceChanged
+            })?;
             for digest in array_payload_revision(&directory)? {
                 hasher.update(digest);
             }
@@ -1108,6 +1135,13 @@ fn ensure_unchanged(root: &Path, revision: &str) -> Result<(), ResultsError> {
     if after == revision {
         Ok(())
     } else {
+        #[cfg(test)]
+        eprintln!(
+            "results SourceChanged: revision drift root={} expected={} actual={}",
+            root.display(),
+            revision,
+            after
+        );
         Err(ResultsError::SourceChanged)
     }
 }
@@ -2019,18 +2053,50 @@ fn read_exact_payload(path: &Path, expected: usize) -> Result<Vec<u8>, ResultsEr
             "payload exceeds its byte budget".into(),
         ));
     }
-    let file = open_regular(path).map_err(|_| ResultsError::SourceChanged)?;
+    let file = open_regular(path).map_err(|_error| {
+        #[cfg(test)]
+        eprintln!(
+            "results SourceChanged: payload open failed path={} error={} raw_os_error={:?}",
+            path.display(),
+            _error,
+            _error.raw_os_error()
+        );
+        ResultsError::SourceChanged
+    })?;
     let before = file
         .metadata()
         .map_err(|error| ResultsError::Io(error.to_string()))?;
     let path_before = open_regular(path)
-        .map_err(|_| ResultsError::SourceChanged)?
+        .map_err(|_error| {
+            #[cfg(test)]
+            eprintln!(
+                "results SourceChanged: payload identity-before reopen failed path={} error={} raw_os_error={:?}",
+                path.display(),
+                _error,
+                _error.raw_os_error()
+            );
+            ResultsError::SourceChanged
+        })?
         .metadata()
         .map_err(|error| ResultsError::Io(error.to_string()))?;
     if !same_file_identity(&before, &path_before) {
+        #[cfg(test)]
+        eprintln!(
+            "results SourceChanged: payload identity-before mismatch path={} opened_len={} path_len={}",
+            path.display(),
+            before.len(),
+            path_before.len()
+        );
         return Err(ResultsError::SourceChanged);
     }
     if before.len() != expected as u64 {
+        #[cfg(test)]
+        eprintln!(
+            "results SourceChanged: payload length mismatch path={} expected={} actual={}",
+            path.display(),
+            expected,
+            before.len()
+        );
         return Err(ResultsError::SourceChanged);
     }
     let mut bytes = Vec::with_capacity(expected.min(1024 * 1024));
@@ -2043,13 +2109,31 @@ fn read_exact_payload(path: &Path, expected: usize) -> Result<Vec<u8>, ResultsEr
         .metadata()
         .map_err(|error| ResultsError::Io(error.to_string()))?;
     let path_after = open_regular(path)
-        .map_err(|_| ResultsError::SourceChanged)?
+        .map_err(|_error| {
+            #[cfg(test)]
+            eprintln!(
+                "results SourceChanged: payload identity-after reopen failed path={} error={} raw_os_error={:?}",
+                path.display(),
+                _error,
+                _error.raw_os_error()
+            );
+            ResultsError::SourceChanged
+        })?
         .metadata()
         .map_err(|error| ResultsError::Io(error.to_string()))?;
     if bytes.len() != expected
         || !same_file_identity(&before, &after)
         || !same_file_identity(&path_before, &path_after)
     {
+        #[cfg(test)]
+        eprintln!(
+            "results SourceChanged: payload verification failed path={} expected_bytes={} actual_bytes={} opened_identity_matches={} path_identity_matches={}",
+            path.display(),
+            expected,
+            bytes.len(),
+            same_file_identity(&before, &after),
+            same_file_identity(&path_before, &path_after)
+        );
         return Err(ResultsError::SourceChanged);
     }
     Ok(bytes)
