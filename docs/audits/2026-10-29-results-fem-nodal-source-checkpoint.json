@@ -1,7 +1,7 @@
 {
   "schema": "fullmag.results-fem-nodal-source-checkpoint.v1",
-  "observed_at": "2026-10-30T13:17:13.228057+00:00",
-  "head": "b55376444e33a5750349add966c2a10f556d4065",
+  "observed_at": "2026-10-30T14:39:48.838722+00:00",
+  "head": "0e81b4b5056bcd66318190e348e7539df54c9e2d",
   "source_sha256": {
     "crates/fullmag-quantities/src/fem_nodal_field.rs": "5852067389b8b9408dc9a41750e22e9fa7e7611cea37bc1acd9d64b1652ed5cd",
     "crates/fullmag-quantities/src/lib.rs": "a77045805d298eff2d6be7c03a193bab40026a8e2f424564342b8e2615aac877",
@@ -39,13 +39,16 @@
     "crates/fullmag-api/src/router_v2/tests.rs": "5db8da554e17181364fd8a9bc8715f5b1ac7a2de709a37e1d9f6ca6055d10bea",
     "scripts/test_docker_volume_receipts.py": "d18fd4459201f96fd16311f32bc3d40baab021fb5886e4a04b91a9c291425f84",
     "apps/control-room/scripts/smoke-analysis-plots.mjs": "318e519131f703784e1a7809ac5c9e1e5885940fd4a6cf30f3db170d13254891",
-    "apps/control-room/src/modules/viewport-3d/SavedResultsPlaybackViewport.tsx": "2276340fb358e25df01349be58877fc11a25f01b9924963dd749f5f6bbc9c102"
+    "apps/control-room/src/modules/viewport-3d/SavedResultsPlaybackViewport.tsx": "4575fcc994c49996ea8fe868b3b542d8bee3cf8afa7f73998e5bd9c129ae7844",
+    "packages/fullmag-py/src/fullmag/runtime/script_builder.py": "a00e05c1781b9bd92b84e8eca1b701a539ada9cf143d71f060e17a43bfd849d7",
+    "packages/fullmag-py/tests/test_script_builder_roundtrip.py": "35f669778bdbd1cbce318a14187f9e46a867912186011de0761ce8ff65c216b8",
+    "apps/control-room/src/modules/start/model/aboutFullmag.ts": "82414a5ba9d739be3c899a1ce3abd409ccec7fe1837772bc6e0e34541feab510"
   },
   "scope": "FEM producer/reader/API, accepted-output collection, aggregate discovery budget and cross-revision snapshot preferences implemented in source; compilation and current UI verification pending",
   "checks": {
     "rustfmt_owned_files": "passed (skip_children=true)",
     "git_diff_check": "passed",
-    "cargo_tests": "Run41057502235 b553: startup/projection, 28/28 receipt regressions and read-only FDM/FEM playback/binary routes PASS. Later broad API suite 1201 passed/1 failed/3 ignored: exact OpenAPI tag list missing new workspace_results. Expectation corrected; full rerun pending.",
+    "cargo_tests": "Complete rust-contracts job124083777114 PASS in run41061996491 (bd4); includes saved FDM/FEM playback, binary routes and full API/CLI/quantity contracts. Earlier28/28 receipt regressions remain passed.",
     "new_runtime": "NOT RUN",
     "new_browser": "NOT RUN",
     "review": "Payload/hash API and Windows directory replacement findings addressed in source; Windows execution NOT VERIFIED",
@@ -63,21 +66,24 @@
     "browser_harness": "Responsive chart assertions passed; later reference-import Results root hidden behind closed accordion. Idempotent opening and full current catalog DTO added; full browser rerun pending.",
     "completed_run_identity": "Exact completed-stage manifest binding implemented; two test assertion parse errors fixed after UI run41048512203. Tests pending.",
     "recovery_sources": "Owned six-file recovery delta preserved in15fb39d23; Python parser and justfile parse PASS. Earlier managed tests remain historical; master integration and renewed recovery qualification pending.",
-    "chart_layout": "Responsive chart assertions PASS in run41057502235; full browser gate failed later in another fixture.",
+    "chart_layout": "Responsive chart and complete browser fixture PASS in run41061996491.",
     "completion_merge": "Independent source recheck PASS after undefined serde helper, scalar lineage and positive durable-dt findings were addressed. Explicit canonical/legacy dispatch and compatibility preserved; source regressions added. Cargo/CI/runtime pending.",
     "receipt_ci_coverage": "28/28 accepted_final_step_stats_tests PASS on accepted-worker binary in run41057502235, including legacy refs/dt and real-CAS tampering.",
-    "react_doctor": "First merge scan incomplete due oxlint AST decoder error; second scan two incoming QA lookup warnings. No suppression. Project lint/typecheck still required in CI."
+    "react_doctor": "Verified artifact12979512623: effect-needs-cleanup falsely classifies Vector3.sub as a subscription. Prior disposer hypothesis was wrong. Equivalent subVectors computation applied; no suppression or fake cleanup; rerun pending.",
+    "browser_fixture": "Complete browser-fixture-smoke job124083778123 and Inspector actions job124083778037 PASS in run41061996491. Actual owned runtime UI not yet qualified.",
+    "remaining_ci": "bd4 Python lifecycle fixture PASS; ordered-stage roundtrip exposed legacy sampling loss and needs contract-correct fix. UI contracts failed only README/About license drift; source aligned after integrating e5a1c01864. Doctor subVectors fix awaits CI.",
+    "scene_sampling": "Source fix rejects unrepresentable legacy base TimeEvolution outputs at authoring export and preserves direct IR. Canonical Run uses a five-field renderable subset of Rust fields; output_every_seconds is explicitly unsupported in this renderer. Independent review findings addressed with action enable/replace/disable/table coverage and an unrecorded-delta refusal. CI pending."
   },
   "formatter_recovery": {
     "unintended_files": 104,
     "proof": "Each file matched rustfmt(HEAD) byte-for-byte; restored original bytes. lib.rs retained only module declaration."
   },
   "runtime_blocker": {
-    "phase": "managed-container-recovery",
-    "state": "started-awaiting-result",
+    "phase": "recovered-runtime-qualification",
+    "state": "recovered-awaiting-current-run-qa",
     "preparation_operation_state": "succeeded",
-    "native_recovery_executed": "in progress; outcome not yet inspected",
-    "qualification": "Current-source deployment and actual UI remain NOT VERIFIED"
+    "native_recovery_executed": "succeeded; new development b3f78da7d700482694724d74b19a30d3 built source0e81b4b5056bcd66318190e348e7539df54c9e2d (cache miss)",
+    "qualification": "API serves retained Results; current-session list empty. Fresh completed FEM run and actual snapshot/Return-to-Live UI remain NOT VERIFIED."
   },
   "remaining": [
     "Complete authorized owned runtime recovery and deploy current source without changing foreign groups",
@@ -406,5 +412,14 @@
     "application_started": false,
     "compute_started": false,
     "operation_attempt": "ba1746e116c94044a54f057ab228a73f"
+  },
+  "recovery_completed_20261030": {
+    "development_attempt": "b3f78da7d700482694724d74b19a30d3",
+    "config_sha256": "24818b7110d2a4c97220a3e13b9442d9c1a550561f43b8b8e13c0c23c2940315",
+    "state": "succeeded",
+    "source_commit": "0e81b4b5056bcd66318190e348e7539df54c9e2d",
+    "backend_package_cache_hit": false,
+    "api_retained_results": "item11 playback/catalog HTTP200;6 m frames,6 H_eff samples,6 table rows. Old m has3D mapping; old H_eff correctly lacks3D capability withoutpersisted mapping.",
+    "api_current_session": "GET sessions200 empty; current/status404 no active local live workspace"
   }
 }

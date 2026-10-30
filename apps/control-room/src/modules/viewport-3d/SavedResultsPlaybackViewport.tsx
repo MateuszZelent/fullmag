@@ -135,7 +135,7 @@ function SavedCamera({geometry,frameIndex}: {geometry:Geometry|ReturnType<typeof
     if(size.width<=0 || size.height<=0)return;
     const controls=controlsRef.current;
     const target=controls?.target ?? new Vector3(...geometry.center);
-    const direction=camera.position.clone().sub(target);
+    const direction=new Vector3().subVectors(camera.position,target);
     if(direction.lengthSq()<=Number.EPSILON) direction.copy(SAVED_CAMERA_DEFAULT_DIRECTION);
     applySavedCameraPose({
       aspect:size.width/size.height,
