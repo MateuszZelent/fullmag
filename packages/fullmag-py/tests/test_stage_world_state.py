@@ -1,11 +1,17 @@
 """Script stages keep the b_ext they saw when called, like mumax3 (not the last one)."""
 
+import json
 import textwrap
 
 import pytest
 
 from fullmag.runtime.loader import load_problem_from_script
-from fullmag.runtime.script_builder import export_study_pipeline_document
+from fullmag.runtime.scene_document import build_scene_document_from_builder
+from fullmag.runtime.script_builder import (
+    export_builder_draft,
+    export_study_pipeline_document,
+    render_scene_document_as_script,
+)
 
 HEADER = """
 import fullmag as fm
@@ -86,6 +92,29 @@ def test_relax_alpha_is_not_a_material_change(tmp_path):
         """,
     )
     assert payloads["relax"]["relax_alpha"] == "1"
+
+
+def test_relax_alpha_equal_to_the_material_damping_exports_no_override(tmp_path):
+    # relax() defaults to relax_alpha=1.0; only a damping that differs travels.
+    payloads = _pipeline(tmp_path, "fm.relax(relax_alpha=0.02, tolT=1e-5, max_steps=1000)\n")
+    assert "relax_alpha" not in payloads["relax"]
+    assert _pipeline(tmp_path, "fm.relax(tolT=1e-5, max_steps=1000)\n")["relax"]["relax_alpha"] == "1"
+
+
+def test_relax_alpha_survives_the_scene_round_trip(tmp_path):
+    script = tmp_path / "stages.py"
+    script.write_text(
+        textwrap.dedent(HEADER)
+        + 'fm.relax(relax_alpha=1.0, solver="rk45", dt=1e-13, tolT=1e-5, max_steps=1000)\n',
+        encoding="utf-8",
+    )
+    loaded = load_problem_from_script(script, lightweight_assets=True)
+    scene = json.loads(json.dumps(build_scene_document_from_builder(export_builder_draft(loaded))))
+    rendered = tmp_path / "rendered.py"
+    rendered.write_text(render_scene_document_as_script(scene), encoding="utf-8")
+    reloaded = load_problem_from_script(rendered, lightweight_assets=True)
+    (relax,) = reloaded.stages
+    assert {magnet.material.alpha for magnet in relax.problem.magnets} == {1.0}
 
 
 def test_material_change_between_stages_is_rejected(tmp_path):

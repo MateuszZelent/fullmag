@@ -2823,11 +2823,11 @@ def _bind_stage_world_state(
         return
     stage_kind = _infer_pipeline_stage_kind(payload)
     study = stage.problem.study
-    _reject_stage_material_changes(
-        stage,
-        base_problem,
-        ignore_alpha=isinstance(study, Relaxation) and study.algorithm == "llg_overdamped",
-    )
+    relax_alpha_stage = isinstance(study, Relaxation) and study.algorithm == "llg_overdamped"
+    _reject_stage_material_changes(stage, base_problem, ignore_alpha=relax_alpha_stage)
+    if relax_alpha_stage and _stage_damping_matches_base(stage, base_problem):
+        # Only an actual relax(relax_alpha=...) override needs to travel.
+        payload.pop("relax_alpha", None)
     if stage_kind == "hysteresis":
         # Every hysteresis point sets its own field.
         return
@@ -2840,6 +2840,14 @@ def _bind_stage_world_state(
             "set the field once for the whole script"
         )
     payload["external_field"] = stage_field if stage_field is not None else [0.0, 0.0, 0.0]
+
+
+def _stage_damping_matches_base(stage: LoadedStage, base_problem: Problem) -> bool:
+    base_alpha = {magnet.name: magnet.material.alpha for magnet in base_problem.magnets}
+    return all(
+        base_alpha.get(magnet.name) == magnet.material.alpha
+        for magnet in stage.problem.magnets
+    )
 
 
 def _reject_stage_material_changes(
