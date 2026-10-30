@@ -1223,7 +1223,7 @@ void executes_native_sparse_matshell_above_dense_bound(bool force_inner_failure 
     previous_action_diagnostic.restore();
     previous_dense_oracle.restore();
 #if FULLMAG_FEM_WITH_SLEPC
-    SLEPcTinyGyrotropicModalEigenResult explicit_gmres_result{};
+    fd::SLEPcTinyGyrotropicModalEigenResult explicit_gmres_result{};
     if (!force_inner_failure) {
         check(clear_floquet_diagnostic_environment_value(
                   previous_dense_oracle.name) == 0 &&
