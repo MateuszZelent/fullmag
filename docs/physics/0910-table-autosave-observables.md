@@ -9,7 +9,7 @@
 (problem-statement)=
 ## 1. Problem Statement
 
-Source-map review: `ee8456befc2a4cf6276376190ac9280ef223b0d3`.
+Source-map review: `e5a1c01864455737acc4134a650cf7861a6202c5`.
 The adjacent source map records source inspection only. All four runtime lanes
 remain **NOT VERIFIED** by this Phase 0 documentation task. Sections below
 state the intended observable contract unless they explicitly identify current
@@ -404,7 +404,7 @@ TXT field autosave is invalid at every public boundary. The error must retain
 the user's field configuration for correction; UI authoring must not silently
 delete it.
 
-**Current implementation at base `9902410b016dbe934669122ef00a7825bbd2d5b0`
+**Current implementation at base `e5a1c01864455737acc4134a650cf7861a6202c5`
 (source inspection, not runtime qualification):** Zarr uses one 2-D table
 array per stage, not one array per quantity:
 
@@ -432,13 +432,6 @@ The current index fields are `target_sample_index`, `stage_id`, `stage_index`,
 (`crates/fullmag-runner/src/autosave_storage.rs:6-11`). This index does not
 contain the previously proposed `stage_kind` or `stage_step` fields.
 Relaxation pseudotime must never be merged with physical Run time.
-
-**Future v1 contract:** [Canonical Zarr output store](../specs/output-store-zarr-v1.md)
-supersedes this Zarr storage layout for time-domain fields and tables after
-implementation and reader migration. It specifies one root field array per
-quantity and a `table/` group with one array per column. It is not implemented
-at the cited base. This supersession does not change the observable equations,
-SI units, accepted-state sampling semantics, or the separate HDF5 contract.
 
 ## 5. Runtime, OpenAPI, and UI Impact
 
@@ -584,8 +577,8 @@ existing regression definitions; none was compiled or run in this task.
 ## 10. Source-Code Index
 
 Every code entry below was inspected at
-`ee8456befc2a4cf6276376190ac9280ef223b0d3`. Resolve its immutable local source
-with `git show ee8456befc2a4cf6276376190ac9280ef223b0d3:<path>` and locate
+`e5a1c01864455737acc4134a650cf7861a6202c5`. Resolve its immutable local source
+with `git show e5a1c01864455737acc4134a650cf7861a6202c5:<path>` and locate
 the listed declaration. All source-map entries identify code or test
 sources at that revision; none uses a document-only evidence anchor.
 Publication links and rendered-page proof are outside this Phase 0 task.

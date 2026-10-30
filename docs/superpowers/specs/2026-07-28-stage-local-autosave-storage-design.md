@@ -65,7 +65,7 @@ the runtime must not silently fork or overwrite the target.
 
 ### 4.1 Zarr
 
-**Current implementation at base `9902410b016dbe934669122ef00a7825bbd2d5b0`
+**Current implementation at base `e5a1c01864455737acc4134a650cf7861a6202c5`
 (source inspection, not runtime qualification):**
 
 ```text
@@ -104,14 +104,6 @@ per-array units and spatial metadata proposed above
 `StageSampleCoordinate`, `ContinuousIndexEntry`;
 `crates/fullmag-runner/src/autosave_zarr.rs:102-184`,
 `ZarrAutosaveWriter::begin_stage`, `ZarrAutosaveWriter::append_field_sample`).
-
-**Future v1 contract:** [Canonical Zarr output store](../../specs/output-store-zarr-v1.md)
-supersedes this Zarr layout for time-domain fields and tables after writer
-integration and reader migration. It specifies root quantity arrays, a
-per-column `table/` group, and no compression by default (accepted D2).
-The source layout above remains the base behavior, not a v1 implementation.
-D6–D9 remain recommendations, not accepted decisions. This scoped supersession
-does not replace the separate HDF5/TXT contracts or authorize code changes.
 
 ### 4.2 HDF5
 
