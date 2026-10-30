@@ -452,5 +452,25 @@
       "fem_modal_eigen_hard_ksp_nearest_contract"
     ],
     "bootstrap_fixture_fixes": "ordering after e6a58cc7b; class-level static backing mock; no production admission threshold change"
+  },
+  "hosted_fixture_failures_4c8bfa91a": {
+    "source_commit": "4c8bfa91a8628c863569ecec0e8fbdbfb32caede",
+    "bootstrap_run": 41061943931,
+    "api_run": 41061956575,
+    "native_run_still_live": 41061935465,
+    "rust_test_compile_failure": "nested json macro recursion; fixture split without changing payload, assertions or crate limit",
+    "python_failure": "assert-prefixed mock attribute missing; real BuildControl autospec added",
+    "ui_failures": {
+      "file": "FooterTelemetry.test.ts",
+      "count": 3,
+      "fix": "typed HTTP window fixture and current six-decimal resource formatting; stale scope fencing retained"
+    },
+    "production_changed_by_fixture_repairs": false,
+    "local_checks": [
+      "rustfmt parser",
+      "Python AST",
+      "git diff --check"
+    ],
+    "hosted_recheck_status": "required"
   }
 }

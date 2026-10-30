@@ -828,6 +828,24 @@ mod tests {
 
     #[test]
     fn floquet_solve_error_preserves_bounded_shifted_ksp_diagnostics() {
+        let operator = serde_json::json!({
+            "schema_version":"floquet_candidate_operator_diagnostic.v1",
+            "requested":true, "status":"available", "sample_available":true,
+            "diagnostic_mode":"sparse_replay", "sparse_workspace_budget_bytes":67108864,
+            "sparse_workspace_estimated_bytes":4096, "sparse_workspace_observed_bytes":null,
+            "memory_admission_status":"estimated", "memory_admission_reason":"observed_pending",
+            "production_vs_isolated_replay_available":true,
+            "production_vs_isolated_replay_relative_defect":0.25,
+            "isolated_repeatability_available":true,
+            "isolated_repeatability_relative_defect":0.0,
+            "raw_vectors":[10,11,12], "live_pc_observation":{"raw_matrix":[[1,2]]}
+        });
+        let last_true_probe = serde_json::json!({
+            "available":true, "rtol":1e-11,
+            "true_residual_l2_norm":0.1, "rhs_l2_norm":1.0,
+            "tolerance_ratio_available":true, "true_residual_to_threshold_ratio":10.0,
+            "candidate_operator_diagnostic":operator, "raw_vectors":[7,8,9]
+        });
         let value = serde_json::json!({"subwindows": [
             {"status":"converged", "index":0, "unsupported_reason":"none"},
             {"status":"solve_error", "index":1,
@@ -838,22 +856,7 @@ mod tests {
                  "schema_version":"shifted_ksp_failure_probe.v1",
                  "scope":"internal_shifted_linear_system_not_original_descriptor",
                  "callback_count":12, "raw_vectors":[4,5,6],
-                 "last_true_probe": {"available":true,"rtol":1e-11,
-                    "true_residual_l2_norm":0.1,"rhs_l2_norm":1.0,
-                    "tolerance_ratio_available":true,"true_residual_to_threshold_ratio":10.0,
-                 "candidate_operator_diagnostic": {
-                     "schema_version":"floquet_candidate_operator_diagnostic.v1",
-                     "requested":true, "status":"available", "sample_available":true,
-                     "diagnostic_mode":"sparse_replay", "sparse_workspace_budget_bytes":67108864,
-                     "sparse_workspace_estimated_bytes":4096, "sparse_workspace_observed_bytes":null,
-                     "memory_admission_status":"estimated", "memory_admission_reason":"observed_pending",
-                     "production_vs_isolated_replay_available":true,
-                     "production_vs_isolated_replay_relative_defect":0.25,
-                     "isolated_repeatability_available":true,
-                     "isolated_repeatability_relative_defect":0.0,
-                     "raw_vectors":[10,11,12], "live_pc_observation":{"raw_matrix":[[1,2]]}
-                 },
-                    "raw_vectors":[7,8,9]}
+                 "last_true_probe":last_true_probe
              }}
         ]});
         let failure = first_failed_subwindow_projection(&value).unwrap();

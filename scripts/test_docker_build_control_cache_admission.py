@@ -171,7 +171,7 @@ class BuildSpaceAdmissionTests(unittest.TestCase):
              mock.patch.object(control, "compose_capture", side_effect=pull) as compose, \
              mock.patch.object(control, "bounded_capture", return_value=subprocess.CompletedProcess(
                  [], 0, json.dumps(MANIFEST).encode(), b"")), \
-             mock.patch.object(control, "BuildControl", side_effect=make_control) as build_control, \
+             mock.patch.object(control, "BuildControl", autospec=True, side_effect=make_control) as build_control, \
              mock.patch.object(storage, "resolve_layout", return_value={"worktree_id": "test"}), \
              mock.patch.object(compose_identity, "compose_project_identity", return_value={
                  "project_name": "fullmag-cache-test"}), \

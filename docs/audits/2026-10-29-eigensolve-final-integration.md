@@ -824,3 +824,28 @@ instancję, choć static guard czyta backing przez klasę. Poprawiono wyłączni
 fixture i forwarding mocka. Produkcyjny Windows physical32GiB guard przed
 cold pull i osobny Docker VM32GiB guard pozostają bez zmian. Ponowne CI
 musi dojść także do nowych managed-profile kontraktów.
+
+
+## CI checkpointu 4c8bfa91a — trzy przyczyny, poprawki testów
+
+GitHub Actions 41061956575: kontrakt generowany PASS, dwa zadania Rust
+nie skompilowały testów przez głębokość jednego zagnieżdżonego json! w
+fixture D1. Ten sam błąd wystąpił w bootstrap 41061943931 na Linux i Windows.
+Fixture rozdzielono na trzy mniejsze wywołania makra; payload, rzeczywista
+ścieżka last_true_probe, asercje redakcji i limit rekurencji crate pozostają.
+To poprawka kompilacji testu, bez zmiany produkcyjnego readera.
+
+Python bootstrap wykazał, że mock klasy nie udostępnia domyślnie atrybutów
+rozpoczynających się od assert_. Konstruktor ma teraz autospec rzeczywistego
+BuildControl; zachowano przekazanie guardu do rejestratora zdarzeń oraz
+asercje przed pull/construct/prepare. Produkcyjne progi miejsca bez zmian.
+
+Trzy awarie FooterTelemetry to drift fixture/oczekiwań: okno HTTP zastąpiono
+pełnym, typowanym ScalarWindowResource z rows i current_observation. Kontrakt
+API wymaga rows; nie dodano opcjonalnego fallbacku do produkcyjnego resolvera.
+Testy starego scope WebSocket oczekują bieżącego formatu 6 miejsc i sprawdzają
+źródło Scalar history resource, nadal odrzucając stare epoch/revision.
+Root przejrzał diff wszystkich trzech plików; rustfmt parser, Python AST i
+diff-check PASS. Lokalnie nie uruchomiono żadnych unit tests. Poprawki
+wymagają kolejnego hosted bootstrap/API CI. Natywna kontrola C1/SLEPc
+41061935465 pozostaje w toku; nie jest zastąpiona przez te korekty fixture.
