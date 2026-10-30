@@ -859,3 +859,22 @@ warunku MFEM+SLEPc, tak jak sąsiedni test callbacku zbieżności. Nie zmieniono
 linkowania produkcji ani profilu no-stack. Native-build-and-ctest.log nie
 zawiera startu żadnego CTest; nie jest to dowód PASS/FAIL samych asercji.
 Pełny profil Floquet/SLEPc wymaga ponowienia po tej korekcie.
+
+
+## Follow-up hosted CI b8f47197f
+
+API workflow 41066670891 PASS. Bootstrap 41066669378 dotarł dalej po
+naprawie cache-admission i ujawnił niepełny fixture abrupt Windows bind.
+Korekta dotyczy routingu: cztery ścieżki z literą dysku oraz bare host-prefix
+muszą wywołać exact physical-proof gate i odrzucić unresolved; dwa // muszą
+być unsafe przed proof. Nie zmieniono produkcyjnego recovery. Niezależny
+review potwierdził fail-closed oraz istniejące testy present Windows proof;
+brak osobnych testów absent-stopped validatora zapisano jako otwarte
+zastrzeżenie tej odrębnej ścieżki, bez twierdzenia o jej kwalifikacji.
+
+Trzy asercje UI miały jeszcze starą etykietę źródła. Aktualna selekcja
+zaakceptowanego HTTP sample publikuje Accepted scalar observation;
+skorygowano tylko etykiety, zachowując wartości, scope fencing i asercję
+źródła. Python AST/diff-check PASS; pełny bootstrap wymaga hosted recheck.
+Natywny profil po korekcie linkowania jest uruchomiony jako 41068131113
+na 84197c1b3 i pozostaje NOT VERIFIED do odczytu wyników CTest.

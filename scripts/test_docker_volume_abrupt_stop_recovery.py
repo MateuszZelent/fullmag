@@ -217,16 +217,25 @@ class AbruptStopTests(unittest.TestCase):
     def test_desktop_drive_paths_do_not_bypass_abrupt_consumer_fence(self):
         proof, _, compose = self.fixture()
         backend, frontend = proof['containers'].values()
+        control = SimpleNamespace(project=compose['name'])
         for source in ('/run/desktop/mnt/host/c/work', '/run/desktop/mnt/host/e/storage',
                        '/host_mnt/c/work', '/mnt/host/e/storage', '/run/desktop/mnt/host',
                        '//host_mnt/c/work', '//run/desktop/mnt/host/c/work'):
             foreign = {'Id': 'a' * 64, 'Mounts': [{'Type': 'bind', 'Source': source,
                        'Destination': '/data', 'RW': True}]}
+            # This routing regression models an unresolved physical proof;
+            # The Windows proof implementation has independent gates.
             with self.subTest(source=source), patch.object(r, 'docker_capture', side_effect=[
                     SimpleNamespace(stdout=('a' * 64).encode()),
-                    SimpleNamespace(stdout=json.dumps([foreign]).encode())]):
+                    SimpleNamespace(stdout=json.dumps([foreign]).encode())]), patch.object(
+                        r, '_prove_foreign_windows_bind', side_effect=r.ContainerRecoveryError(
+                            'foreign Windows bind has unresolved storage identity')) as prove:
                 with self.assertRaisesRegex(r.ContainerRecoveryError, 'Windows.*unresolved|unsafe'):
-                    r._assert_no_foreign_storage_consumers(SimpleNamespace(), backend, frontend, compose)
+                    r._assert_no_foreign_storage_consumers(control, backend, frontend, compose)
+                if source.startswith('//'):
+                    prove.assert_not_called()
+                else:
+                    prove.assert_called_once_with(control, backend, foreign, source, compose)
 
     def test_unknown_foreign_alias_uses_only_exact_disjoint_proof_and_keeps_other_guards(self):
         proof, _, compose = self.fixture()

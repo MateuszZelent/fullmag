@@ -569,7 +569,7 @@ describe("FooterTelemetry", () => {
     expect(byId["avg-mx"]?.value).toBe("0.250000");
     expect(byId["avg-my"]?.value).toBe("-0.500000");
     expect(byId["avg-mz"]?.value).toBe("0.750000");
-    expect(byId["avg-mx"]?.subdetail).toBe("Scalar history resource");
+    expect(byId["avg-mx"]?.subdetail).toBe("Accepted scalar observation");
   });
 
   it("shows pseudotime and keeps physical simulation time separate for direct minimizers", () => {
@@ -1230,7 +1230,7 @@ describe("FooterTelemetry", () => {
       );
       expect(model.metrics.find(({ id }) => id === "avg-mx")?.value).toBe("0.500000");
       expect(model.metrics.find(({ id }) => id === "avg-mx")?.subdetail).toBe(
-        "Scalar history resource",
+        "Accepted scalar observation",
       );
       expect(model.metrics.find(({ id }) => id === "step")?.value).toBe("12");
     },
