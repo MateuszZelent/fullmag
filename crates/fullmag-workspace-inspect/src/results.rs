@@ -15,6 +15,8 @@ use fullmag_session::solution_field_geometry::SavedFieldGeometryRef;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
+#[cfg(windows)]
+use std::fs::File;
 use std::fs::{self, Metadata};
 use std::io::Read;
 use std::marker::PhantomData;
@@ -740,6 +742,112 @@ struct RawEntry {
     modified: Option<SystemTime>,
 }
 
+/// A scan child opened without following links. On Windows, `DirEntry`
+/// metadata is only an enumeration snapshot and can contain stale NTFS
+/// attributes; use metadata from these pinned handles for revision inputs.
+#[cfg(windows)]
+enum PinnedChild {
+    Directory {
+        directory: PinnedDirectory,
+        metadata: Metadata,
+    },
+    File { _handle: File, metadata: Metadata },
+}
+
+#[cfg(windows)]
+fn open_pinned_child(
+    directory: &PinnedDirectory,
+    name: &OsStr,
+    path: &Path,
+    file_type: fs::FileType,
+) -> Result<PinnedChild, ResultsError> {
+    // Enumeration type is only a routing hint; the pinned handle verifies the
+    // type and supplies all size/mtime values used by the revision.
+    if file_type.is_dir() {
+        match directory.open_child_directory(name) {
+            Ok(child) => {
+                let metadata = child
+                    .metadata()
+                    .map_err(|error| ResultsError::Io(format!("{}: {error}", path.display())))?;
+                reject_reparse(path, &metadata)?;
+                if !metadata.is_dir() {
+                    return Err(ResultsError::SourceChanged);
+                }
+                Ok(PinnedChild::Directory {
+                    directory: child,
+                    metadata,
+                })
+            }
+            Err(error) => Err(pinned_child_open_error(path, error)),
+        }
+    } else if file_type.is_file() {
+        match directory.open_child_metadata_file(name) {
+            Ok(file) => {
+                let metadata = file
+                    .metadata()
+                    .map_err(|error| ResultsError::Io(format!("{}: {error}", path.display())))?;
+                reject_reparse(path, &metadata)?;
+                if !metadata.is_file() {
+                    return Err(ResultsError::SourceChanged);
+                }
+                Ok(PinnedChild::File {
+                    _handle: file,
+                    metadata,
+                })
+            }
+            Err(error) => Err(pinned_child_open_error(path, error)),
+        }
+    } else {
+        let metadata = symlink_metadata(path)?;
+        reject_reparse(path, &metadata)?;
+        if metadata.is_file() || metadata.is_dir() {
+            Err(ResultsError::SourceChanged)
+        } else {
+            Err(ResultsError::Unsupported(
+                "results contain a non-regular file".into(),
+            ))
+        }
+    }
+}
+
+#[cfg(windows)]
+fn pinned_child_open_error(
+    path: &Path,
+    error: std::io::Error,
+) -> ResultsError {
+    #[cfg(test)]
+    eprintln!(
+        "results pinned child open failed path={} error={} raw_os_error={:?}",
+        path.display(),
+        error,
+        error.raw_os_error()
+    );
+    match error.kind() {
+        std::io::ErrorKind::NotFound => ResultsError::SourceChanged,
+        std::io::ErrorKind::InvalidInput => {
+            // The no-follow handle rejected a reparse point or a type change.
+            // Use a fresh path query only to preserve the precise Link and
+            // Unsupported outcomes; never use it as revision metadata.
+            let metadata = match symlink_metadata(path) {
+                Ok(metadata) => metadata,
+                Err(ResultsError::NotFound(_)) => return ResultsError::SourceChanged,
+                Err(error) => return error,
+            };
+            if let Err(error) = reject_reparse(path, &metadata) {
+                return error;
+            }
+            if metadata.is_file() || metadata.is_dir() {
+                ResultsError::SourceChanged
+            } else {
+                ResultsError::Unsupported(
+                    "results contain a non-regular file".into(),
+                )
+            }
+        }
+        _ => ResultsError::Io(format!("{}: {error}", path.display())),
+    }
+}
+
 impl RawEntry {
     fn entry_id(&self) -> String {
         opaque_id("entry", &self.relative)
@@ -856,41 +964,65 @@ fn walk_directory(
         let name = child.file_name();
         let child_relative = relative.join(&name);
         let child_path = directory.logical_path().join(&name);
-        let metadata = child
-            .metadata()
-            .map_err(|error| ResultsError::Io(error.to_string()))?;
-        reject_reparse(&child_path, &metadata)?;
-        if !metadata.is_dir() && !metadata.is_file() {
-            return Err(ResultsError::Unsupported(
-                "results contain a non-regular file".into(),
-            ));
-        }
-        let kind = if metadata.is_dir() {
-            RawKind::Directory
-        } else {
-            RawKind::File
+        #[cfg(windows)]
+        let file_type = child
+            .file_type()
+            .map_err(|error| ResultsError::Io(format!("{}: {error}", child_path.display())))?;
+        #[cfg(windows)]
+        let (metadata, kind, pinned_child, _file_handle) =
+            match open_pinned_child(directory, &name, &child_path, file_type)? {
+                PinnedChild::Directory {
+                    directory,
+                    metadata,
+                } => (metadata, RawKind::Directory, Some(directory), None),
+                PinnedChild::File { _handle, metadata } => {
+                    (metadata, RawKind::File, None, Some(_handle))
+                }
+            };
+        #[cfg(not(windows))]
+        let (metadata, kind, pinned_child) = {
+            let metadata = child
+                .metadata()
+                .map_err(|error| ResultsError::Io(error.to_string()))?;
+            reject_reparse(&child_path, &metadata)?;
+            if !metadata.is_dir() && !metadata.is_file() {
+                return Err(ResultsError::Unsupported(
+                    "results contain a non-regular file".into(),
+                ));
+            }
+            let kind = if metadata.is_dir() {
+                RawKind::Directory
+            } else {
+                RawKind::File
+            };
+            let pinned_child = if metadata.is_dir() {
+                let pinned = directory
+                    .open_child_directory(&name)
+                    .map_err(|_error| {
+                        #[cfg(test)]
+                        eprintln!(
+                            "results SourceChanged: directory open failed path={} error={} raw_os_error={:?}",
+                            child_path.display(),
+                            _error,
+                            _error.raw_os_error()
+                        );
+                        ResultsError::SourceChanged
+                    })?;
+                Some(pinned)
+            } else {
+                None
+            };
+            (metadata, kind, pinned_child)
         };
         entries.push(RawEntry {
             relative: child_relative.clone(),
-            path: child_path.clone(),
+            path: child_path,
             kind,
             size: metadata.len(),
             modified: metadata.modified().ok(),
         });
-        if metadata.is_dir() {
-            let pinned = directory
-                .open_child_directory(&name)
-                .map_err(|_error| {
-                    #[cfg(test)]
-                    eprintln!(
-                        "results SourceChanged: directory open failed path={} error={} raw_os_error={:?}",
-                        child_path.display(),
-                        _error,
-                        _error.raw_os_error()
-                    );
-                    ResultsError::SourceChanged
-                })?;
-            walk_directory(&pinned, &child_relative, depth + 1, entries)?;
+        if let Some(pinned_child) = pinned_child {
+            walk_directory(&pinned_child, &child_relative, depth + 1, entries)?;
         }
     }
     Ok(())
@@ -985,64 +1117,58 @@ fn array_payload_revision(directory: &PinnedDirectory) -> Result<Vec<[u8; 32]>, 
             let relative = relative.join(&name);
             charge_scan_path(&relative)?;
             charge_metadata(SCAN_ENTRY_METADATA_BYTES + 32)?;
-            let metadata = child
-                .metadata()
-                .map_err(|error| ResultsError::Io(error.to_string()))?;
-            reject_reparse(&relative, &metadata)?;
-            if !metadata.is_file() && !metadata.is_dir() {
-                return Err(ResultsError::Unsupported(
-                    "array contains a non-regular chunk".into(),
-                ));
-            }
-            let mut hash = Sha256::new();
-            hash.update(relative.to_string_lossy().replace('\\', "/").as_bytes());
-            hash.update([0, u8::from(metadata.is_dir())]);
-            hash.update(metadata.len().to_le_bytes());
-            let modified = metadata.modified().ok();
-            if let Some(modified) = modified {
-                if let Ok(duration) = modified.duration_since(UNIX_EPOCH) {
-                    hash.update(duration.as_secs().to_le_bytes());
-                    hash.update(duration.subsec_nanos().to_le_bytes());
+            #[cfg(windows)]
+            let child_path = directory.logical_path().join(&name);
+            #[cfg(windows)]
+            let file_type = child
+                .file_type()
+                .map_err(|error| ResultsError::Io(format!("{}: {error}", child_path.display())))?;
+            #[cfg(windows)]
+            let (metadata, pinned_child, _file_handle) = match open_pinned_child(
+                directory,
+                &name,
+                &child_path,
+                file_type,
+            )? {
+                PinnedChild::Directory {
+                    directory,
+                    metadata,
+                } => (metadata, Some(directory), None),
+                PinnedChild::File { _handle, metadata } => (metadata, None, Some(_handle)),
+            };
+            #[cfg(not(windows))]
+            let (metadata, pinned_child) = {
+                let metadata = child
+                    .metadata()
+                    .map_err(|error| ResultsError::Io(error.to_string()))?;
+                reject_reparse(&relative, &metadata)?;
+                if !metadata.is_file() && !metadata.is_dir() {
+                    return Err(ResultsError::Unsupported(
+                        "array contains a non-regular chunk".into(),
+                    ));
                 }
-            }
-            #[cfg(all(test, windows))]
-            eprintln!(
-                "results revision payload-input path={} kind={} size={} modified={:?}",
-                directory.logical_path().join(&name).display(),
-                if metadata.is_dir() { "directory" } else { "file" },
-                metadata.len(),
-                modified
-            );
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-                hash.update(metadata.dev().to_le_bytes());
-                hash.update(metadata.ino().to_le_bytes());
-                hash.update(metadata.ctime().to_le_bytes());
-                hash.update(metadata.ctime_nsec().to_le_bytes());
-            }
-            let digest = hash.finalize();
-            #[cfg(all(test, windows))]
-            eprintln!(
-                "results revision payload-digest path={} digest={}",
-                directory.logical_path().join(&name).display(),
-                hex_bytes(&digest)
-            );
-            hashes.push(digest.into());
-            if metadata.is_dir() {
-                let pinned = directory
-                    .open_child_directory(&name)
-                    .map_err(|_error| {
-                        #[cfg(test)]
-                        eprintln!(
-                            "results SourceChanged: array payload directory open failed path={} error={} raw_os_error={:?}",
-                            directory.logical_path().join(&name).display(),
-                            _error,
-                            _error.raw_os_error()
-                        );
-                        ResultsError::SourceChanged
-                    })?;
-                visit(&pinned, &relative, depth + 1, hashes)?;
+                let pinned_child = if metadata.is_dir() {
+                    let pinned = directory
+                        .open_child_directory(&name)
+                        .map_err(|_error| {
+                            #[cfg(test)]
+                            eprintln!(
+                                "results SourceChanged: array payload directory open failed path={} error={} raw_os_error={:?}",
+                                directory.logical_path().join(&name).display(),
+                                _error,
+                                _error.raw_os_error()
+                            );
+                            ResultsError::SourceChanged
+                        })?;
+                    Some(pinned)
+                } else {
+                    None
+                };
+                (metadata, pinned_child)
+            };
+            hashes.push(array_payload_entry_hash(&relative, &metadata));
+            if let Some(pinned_child) = pinned_child {
+                visit(&pinned_child, &relative, depth + 1, hashes)?;
             }
         }
         Ok(())
@@ -1053,9 +1179,29 @@ fn array_payload_revision(directory: &PinnedDirectory) -> Result<Vec<[u8; 32]>, 
     Ok(hashes)
 }
 
+fn array_payload_entry_hash(relative: &Path, metadata: &Metadata) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(relative.to_string_lossy().replace('\\', "/").as_bytes());
+    hash.update([0, u8::from(metadata.is_dir())]);
+    hash.update(metadata.len().to_le_bytes());
+    if let Some(modified) = metadata.modified().ok() {
+        if let Ok(duration) = modified.duration_since(UNIX_EPOCH) {
+            hash.update(duration.as_secs().to_le_bytes());
+            hash.update(duration.subsec_nanos().to_le_bytes());
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        hash.update(metadata.dev().to_le_bytes());
+        hash.update(metadata.ino().to_le_bytes());
+        hash.update(metadata.ctime().to_le_bytes());
+        hash.update(metadata.ctime_nsec().to_le_bytes());
+    }
+    hash.finalize().into()
+}
+
 fn revision_of(entries: &[RawEntry]) -> Result<String, ResultsError> {
-    #[cfg(all(test, windows))]
-    eprintln!("results revision scan begin entries={}", entries.len());
     let mut hasher = Sha256::new();
     for entry in entries {
         charge_scan_path(&entry.relative)?;
@@ -1080,14 +1226,6 @@ fn revision_of(entries: &[RawEntry]) -> Result<String, ResultsError> {
                 hasher.update(duration.subsec_nanos().to_le_bytes());
             }
         }
-        #[cfg(all(test, windows))]
-        eprintln!(
-            "results revision entry-input path={} kind={:?} size={} modified={:?}",
-            entry.path.display(),
-            entry.kind,
-            entry.size,
-            entry.modified
-        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
@@ -1126,21 +1264,12 @@ fn revision_of(entries: &[RawEntry]) -> Result<String, ResultsError> {
                     .map_err(|_| ResultsError::TooLarge(entry.relative.display().to_string()))?,
             )?;
             let digest = Sha256::digest(&bytes);
-            #[cfg(all(test, windows))]
-            eprintln!(
-                "results revision critical-input path={} bytes={} sha256={}",
-                entry.path.display(),
-                bytes.len(),
-                hex_bytes(&digest)
-            );
             hasher.update([b'c']);
             hasher.update((bytes.len() as u64).to_le_bytes());
             hasher.update(digest);
         }
     }
     let revision = format!("sha256:{}", hex_bytes(&hasher.finalize()));
-    #[cfg(all(test, windows))]
-    eprintln!("results revision scan end revision={revision}");
     Ok(revision)
 }
 
@@ -3107,6 +3236,169 @@ mod tests {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
         fs::write(directory.join("0.0"), bytes).expect("chunk");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_scan_metadata_uses_handles_after_cached_enumeration() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let temp = tempfile::tempdir().expect("temp");
+        let root = temp.path();
+        write_array(root, "m", &[1.0], serde_json::json!({}));
+        let array_path = root.join("m");
+        let chunk_path = array_path.join("0.0");
+
+        // Retain the enumeration entries before changing both a file and its
+        // containing directory. Windows DirEntry metadata may reflect the
+        // older FindFirstFile attributes while handle metadata is current.
+        let cached_array = fs::read_dir(root)
+            .expect("enumerate root")
+            .map(|entry| entry.expect("root entry"))
+            .find(|entry| entry.file_name().as_os_str() == OsStr::new("m"))
+            .expect("array directory entry");
+        let cached_chunk = fs::read_dir(&array_path)
+            .expect("enumerate array")
+            .map(|entry| entry.expect("array entry"))
+            .find(|entry| entry.file_name().as_os_str() == OsStr::new("0.0"))
+            .expect("chunk entry");
+        let cached_array_modified = cached_array
+            .metadata()
+            .expect("cached array metadata")
+            .modified()
+            .expect("cached array mtime");
+        let cached_chunk_metadata = cached_chunk.metadata().expect("cached chunk metadata");
+
+        fs::write(&chunk_path, [0_u8; 16]).expect("grow chunk");
+        let future_modified = SystemTime::now() + Duration::from_secs(120);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&chunk_path)
+            .expect("open chunk for timestamp update")
+            .set_times(fs::FileTimes::new().set_modified(future_modified))
+            .expect("set chunk timestamp");
+        fs::OpenOptions::new()
+            .access_mode(0x0000_0100) // FILE_WRITE_ATTRIBUTES
+            .custom_flags(0x0200_0000) // FILE_FLAG_BACKUP_SEMANTICS
+            .open(&array_path)
+            .expect("open directory for timestamp update")
+            .set_times(fs::FileTimes::new().set_modified(future_modified))
+            .expect("set directory timestamp");
+
+        let pinned_root = open_directory(root).expect("pin root");
+        let (pinned_array, live_array_metadata) = match open_pinned_child(
+            &pinned_root,
+            OsStr::new("m"),
+            &array_path,
+            cached_array.file_type().expect("cached array type"),
+        )
+        .expect("open array child from handle")
+        {
+            PinnedChild::Directory {
+                directory,
+                metadata,
+            } => (directory, metadata),
+            PinnedChild::File { .. } => panic!("array child should be a directory"),
+        };
+        let PinnedChild::File {
+            metadata: live_chunk_metadata,
+            ..
+        } = open_pinned_child(
+            &pinned_array,
+            OsStr::new("0.0"),
+            &chunk_path,
+            cached_chunk.file_type().expect("cached chunk type"),
+        )
+        .expect("open chunk child from handle")
+        else {
+            panic!("chunk child should be a file");
+        };
+
+        assert_ne!(
+            cached_array_modified,
+            live_array_metadata.modified().expect("live array mtime")
+        );
+        assert_eq!(cached_chunk_metadata.len(), 8);
+        assert_eq!(live_chunk_metadata.len(), 16);
+        assert_ne!(
+            cached_chunk_metadata
+                .modified()
+                .expect("cached chunk mtime"),
+            live_chunk_metadata.modified().expect("live chunk mtime")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_catalog_scans_are_stable_and_mutations_still_invalidate_revisions() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let temp = tempfile::tempdir().expect("temp");
+        let root = temp.path();
+        write_array(root, "m", &[1.0], serde_json::json!({"unit":"A/m"}));
+
+        let first =
+            read_results_catalog(root, None, 100, None, WorkspaceResultsSource::WorkspaceItem)
+                .expect("first catalog");
+        let repeated =
+            read_results_catalog(root, None, 100, None, WorkspaceResultsSource::WorkspaceItem)
+                .expect("repeated catalog");
+        assert_eq!(first.revision, repeated.revision);
+
+        let attrs = root.join("m/.zattrs");
+        let original_metadata = fs::metadata(&attrs).expect("attrs metadata");
+        let original_array_modified = fs::metadata(root.join("m"))
+            .expect("array directory metadata")
+            .modified()
+            .expect("array directory mtime");
+        fs::write(&attrs, br#"{"unit":"T/m"}"#).expect("change attrs content");
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&attrs)
+            .expect("open attrs for timestamp restore")
+            .set_times(
+                fs::FileTimes::new()
+                    .set_modified(original_metadata.modified().expect("original attrs mtime")),
+            )
+            .expect("restore attrs timestamp");
+        fs::OpenOptions::new()
+            .access_mode(0x0000_0100) // FILE_WRITE_ATTRIBUTES
+            .custom_flags(0x0200_0000) // FILE_FLAG_BACKUP_SEMANTICS
+            .open(root.join("m"))
+            .expect("open array directory for timestamp restore")
+            .set_times(fs::FileTimes::new().set_modified(original_array_modified))
+            .expect("restore array directory timestamp");
+
+        let changed =
+            read_results_catalog(root, None, 100, None, WorkspaceResultsSource::WorkspaceItem)
+                .expect("catalog after mutation");
+        assert_ne!(first.revision, changed.revision);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_catalog_scans_opaque_file_while_writer_is_open() {
+        use std::io::Write;
+
+        let temp = tempfile::tempdir().expect("temp");
+        let root = temp.path();
+        write_array(root, "m", &[1.0], serde_json::json!({}));
+        let log = root.join("solver.log");
+        fs::write(&log, b"initial").expect("write log");
+        let mut writer = fs::OpenOptions::new()
+            .append(true)
+            .open(&log)
+            .expect("open log writer");
+
+        let first =
+            read_results_catalog(root, None, 100, None, WorkspaceResultsSource::WorkspaceItem)
+                .expect("catalog while writer is open");
+        writer.write_all(b" continued").expect("append log");
+        writer.flush().expect("flush log");
+        let changed =
+            read_results_catalog(root, None, 100, None, WorkspaceResultsSource::WorkspaceItem)
+                .expect("catalog after writer update");
+        assert_ne!(first.revision, changed.revision);
     }
 
     fn publish_test_prefix(directory: &Path, count: u64, coordinates: &str) {

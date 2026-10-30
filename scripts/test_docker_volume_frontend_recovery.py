@@ -256,6 +256,11 @@ class LegacyFrontendRecoveryTests(unittest.TestCase):
             if argv[:2] == ('image', 'inspect'):
                 self.assertEqual(argv[2], frontend_image)
                 return json.dumps([{'Config': {'new': 'helper'}}])
+            if argv[0] == 'exec':
+                self.assertEqual(argv[:5], ('exec', backend['Id'], '/usr/local/bin/python3', '-B', '-c'))
+                self.assertEqual(len(argv), 6)
+                self.assertIn('Frontend refresh requires an empty healthy API', argv[5])
+                return json.dumps({'status': 'ok', 'active_session': False})
             self.assertEqual(argv[0], 'inspect')
             return json.dumps([backend if argv[1] == backend['Id'] else
                                old_frontend if argv[1] == old_frontend['Id'] else new_frontend])

@@ -98,6 +98,25 @@ impl PinnedDirectory {
         }
     }
 
+    /// Open only a child's attributes on Windows, without requiring data-read
+    /// permission for files that the scanner inventories but never reads.
+    #[cfg(windows)]
+    pub(super) fn open_child_metadata_file(
+        &self,
+        name: &std::ffi::OsStr,
+    ) -> io::Result<File> {
+        let mut components = Path::new(name).components();
+        if !matches!(components.next(), Some(std::path::Component::Normal(_)))
+            || components.next().is_some()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid child file name",
+            ));
+        }
+        platform::open_metadata_file_at(self, name)
+    }
+
     pub(super) fn logical_path(&self) -> &Path {
         &self.logical_path
     }
@@ -377,6 +396,8 @@ mod platform {
     use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 
     const FILE_SHARE_READ: u32 = 0x0000_0001;
+    const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+    const FILE_READ_ATTRIBUTES: u32 = 0x0000_0080;
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
     const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
@@ -437,6 +458,25 @@ mod platform {
         Ok(handle)
     }
 
+    fn open_metadata_file(path: &Path) -> io::Result<File> {
+        let mut options = OpenOptions::new();
+        // Metadata scans may overlap a solver's append handle. Permit readers
+        // and writers, but keep the path from being replaced while pinned.
+        options
+            .access_mode(FILE_READ_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        let handle = options.open(path)?;
+        let metadata = handle.metadata()?;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(invalid_path(path, "reparse points are rejected"));
+        }
+        if !metadata.is_file() {
+            return Err(invalid_path(path, "the target is not a regular file"));
+        }
+        Ok(handle)
+    }
+
     fn ancestor_paths(path: &Path) -> io::Result<Vec<PathBuf>> {
         reject_relative_or_parent(path)?;
         let mut result = Vec::new();
@@ -486,6 +526,13 @@ mod platform {
         name: &std::ffi::OsStr,
     ) -> io::Result<File> {
         open_handle(&parent.logical_path.join(name), false)
+    }
+
+    pub(super) fn open_metadata_file_at(
+        parent: &PinnedDirectory,
+        name: &std::ffi::OsStr,
+    ) -> io::Result<File> {
+        open_metadata_file(&parent.logical_path.join(name))
     }
 }
 
