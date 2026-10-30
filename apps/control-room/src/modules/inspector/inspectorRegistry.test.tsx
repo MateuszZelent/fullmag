@@ -42,7 +42,6 @@ import {
   EigenBranchesInspectorPanel,
   EigenDiagnosticsInspectorPanel,
   EigenKPathInspectorPanel,
-  EigenDispersionInspectorPanel,
   EigenModesInspectorPanel,
   EigenOverviewInspectorPanel,
   EigenProvenanceInspectorPanel,
@@ -74,6 +73,7 @@ import {
 import {
   DispersionDrivenProvenanceResultInspector,
   DispersionModalProvenanceResultInspector,
+  DispersionRelationResultInspector,
   LegacyTimeDomainResultInspector,
   ResonanceDrivenProvenanceResultInspector,
   ResonanceModalProvenanceResultInspector,
@@ -725,7 +725,7 @@ describe("inspectorRegistry", () => {
     ).toBe(EigenKPathInspectorPanel);
     expect(
       resolveInspectorPanel({ kind: "results.eigen.dispersion" })?.component,
-    ).toBe(EigenDispersionInspectorPanel);
+    ).toBe(DispersionRelationResultInspector);
     expect(
       resolveInspectorPanel({ kind: "results.eigen.branches" })?.component,
     ).toBe(EigenBranchesInspectorPanel);

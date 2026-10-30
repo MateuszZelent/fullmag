@@ -41,6 +41,32 @@ function ScientificFrameRoute({
   );
 }
 
+const DISPERSION_REFERENCE_SELECTION_KINDS = new Set([
+  "results.eigen.dispersion",
+  "results.dispersion.modal.relation",
+]);
+
+export function hasStableDispersionReferenceOwner(
+  selection: InspectorPanelProps["selection"],
+): boolean {
+  const ref = selection.ref;
+  if (
+    ref?.type !== "frequency-domain" ||
+    !DISPERSION_REFERENCE_SELECTION_KINDS.has(selection.kind ?? "") ||
+    ref.kind !== selection.kind ||
+    typeof ref.analysisRunId !== "string" ||
+    !ref.analysisRunId.trim() ||
+    typeof ref.analysisStageId !== "string" ||
+    !ref.analysisStageId.trim()
+  ) {
+    return false;
+  }
+
+  return typeof ref.artifactRevision === "string"
+    ? ref.artifactRevision.trim().length > 0
+    : typeof ref.artifactRevision === "number" && Number.isFinite(ref.artifactRevision);
+}
+
 export function DynamicsResultInspector(props: InspectorPanelProps) {
   return (
     <PhysicsFirstResultInspectorFrame selection={props.selection}>
@@ -249,7 +275,15 @@ export function DispersionRelationResultInspector(props: InspectorPanelProps) {
   return (
     <>
       <ScientificFrameRoute Panel={EigenDispersionInspectorPanel} props={props} />
-      {tab === "data" ? <ReferenceImportSection /> : null}
+      {tab === "data" ? (
+        hasStableDispersionReferenceOwner(props.selection) ? (
+          <ReferenceImportSection />
+        ) : (
+          <p className="fm-result-inspector__help">
+            Reference import requires a dispersion result with a published run, stage, and artifact revision.
+          </p>
+        )
+      ) : null}
     </>
   );
 }

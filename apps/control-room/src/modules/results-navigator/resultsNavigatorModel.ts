@@ -201,18 +201,21 @@ function selectionIdentity(
   input: FrequencyDomainNavigatorInput,
   resource: NavigatorArtifactDescriptor | null | undefined,
 ): { artifactRevision: string; runId: string; stageId: string } | undefined {
-  if (!input.identity || !resource?.resourceRevision) return undefined;
+  const runId = input.identity?.runId;
+  const stageId = input.identity?.stageId;
+  const artifactRevision = resource?.resourceRevision;
+  if (!runId?.trim() || !stageId?.trim() || !artifactRevision?.trim()) return undefined;
   return {
-    artifactRevision: resource.resourceRevision,
-    runId: input.identity.runId,
-    stageId: input.identity.stageId,
+    artifactRevision,
+    runId,
+    stageId,
   };
 }
 
 function viewSelection(
   input: FrequencyDomainNavigatorInput,
   resource: NavigatorArtifactDescriptor | null | undefined,
-  viewId: "branches" | "field-sweep" | "response-sweep" | "spectrum",
+  viewId: "branches" | "dispersion" | "field-sweep" | "response-sweep" | "spectrum",
 ) {
   const identity = selectionIdentity(input, resource);
   return identity
@@ -539,6 +542,7 @@ function buildFrequencyDomainTree(
     label: "Dispersion",
     parentId: modalId,
     resourceKey: "analysis:eigen:dispersion",
+    selectionRef: viewSelection(input, input.resources.dispersion, "dispersion"),
     statusOverride: input.resources.states?.dispersion,
   });
   const samplesId = nodePath(modalId, "samples");

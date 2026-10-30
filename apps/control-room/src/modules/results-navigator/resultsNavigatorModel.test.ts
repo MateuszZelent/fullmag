@@ -586,6 +586,63 @@ describe("results navigator model", () => {
     });
   });
 
+  it("binds the dispersion result selection to its exact run, stage, and artifact revision", () => {
+    const tree = buildFrequencyDomainResultsTree(
+      input({
+        resources: {
+          branches: artifact(),
+          dispersion: { ...artifact(), resourceRevision: "sha256:dispersion-r7" },
+          response: artifact(),
+          spectrum: artifact(),
+        },
+      }),
+    );
+    const dispersion = collectNodes(tree).find(
+      (node) => node.kind === "results.frequency-domain.dispersion",
+    );
+
+    expect(dispersion?.selectionRef).toEqual({
+      artifactRevision: "sha256:dispersion-r7",
+      kind: "results-view",
+      runId: "run-a",
+      stageId: "stage-a",
+      viewId: "dispersion",
+    });
+  });
+
+  it("does not create an import owner selection when run, stage, or dispersion revision is missing", () => {
+    const cases: Partial<FrequencyDomainNavigatorInput>[] = [
+      { identity: null },
+      { identity: { runId: " ", stageId: "stage-a" } },
+      { identity: { runId: "run-a", stageId: " " } },
+      {
+        resources: {
+          branches: artifact(),
+          dispersion: { ...artifact(), resourceRevision: null },
+          response: artifact(),
+          spectrum: artifact(),
+        },
+      },
+      {
+        resources: {
+          branches: artifact(),
+          dispersion: { ...artifact(), resourceRevision: " " },
+          response: artifact(),
+          spectrum: artifact(),
+        },
+      },
+    ];
+
+    for (const candidate of cases) {
+      const tree = buildFrequencyDomainResultsTree(input(candidate));
+      const dispersion = collectNodes(tree).find(
+        (node) => node.kind === "results.frequency-domain.dispersion",
+      );
+
+      expect(dispersion?.selectionRef).toBeUndefined();
+    }
+  });
+
   it("fails fit artifacts closed when semantic payloads are missing, partial, or corrupt", () => {
     const resource = (
       payload: FrequencyDomainJsonArtifactResource["payload"],

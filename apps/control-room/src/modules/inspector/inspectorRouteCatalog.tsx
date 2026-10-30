@@ -63,7 +63,6 @@ import {
   FmrPeaksInspectorPanel,
 } from "./panels/frequency-domain/FrequencyDomainResultInspectors";
 import { EigenBranchInspectorPanel } from "./panels/frequency-domain/EigenBranchInspectorPanel";
-import { EigenDispersionInspectorPanel } from "./panels/frequency-domain/EigenDispersionInspectorPanel";
 import { EigenModeInspectorPanel } from "./panels/frequency-domain/EigenModeInspectorPanel";
 import { FmrModalSpectrumInspectorPanel } from "./panels/frequency-domain/FmrModalSpectrumInspectorPanel";
 import { FmrResponseSweepInspectorPanel } from "./panels/frequency-domain/FmrResponseSweepInspectorPanel";
@@ -459,7 +458,7 @@ const FREQUENCY_DOMAIN_NAMED_PANELS: Partial<
   "results.eigen.modes.visualization": EigenModesVisualizationInspectorPanel,
   "results.eigen.provenance": EigenProvenanceInspectorPanel,
   "results.eigen.spectrum": EigenSpectrumInspectorPanel,
-  "results.eigen.dispersion": EigenDispersionInspectorPanel,
+  "results.eigen.dispersion": DispersionRelationResultInspector,
   "results.eigen.k_path": EigenKPathInspectorPanel,
   "results.eigen.diagnostics": EigenDiagnosticsInspectorPanel,
   "results.frequency_domain.fmr_modal_spectrum":

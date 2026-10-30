@@ -20,8 +20,15 @@ vi.mock("@/kernel/resources/studyRuntimeResources", async (importOriginal) => {
     useFrequencyDomainResponseCancelRequestedResource: unavailable,
     useFrequencyDomainResponseProgressResource: unavailable,
     useFrequencyDomainResponseSweepResource: unavailable,
+    useFrequencyDomainEigenBranchesResource: unavailable,
+    useFrequencyDomainEigenDispersionResource: unavailable,
+    useFrequencyDomainEigenSpectrumResource: unavailable,
   };
 });
+
+vi.mock("@/kernel/resources/analyticReferenceResources", () => ({
+  useAnalyticReferenceModelsResource: () => ({ data: null, status: "unavailable" }),
+}));
 
 import { resolveInspectorRoute } from "../../inspectorRouteCatalog";
 import { PhysicsFirstResultInspectorFrame } from "./PhysicsFirstResultInspectorPanel";
@@ -75,6 +82,35 @@ function renderFrequencyRoute(
 }
 
 describe("routed postprocessing Inspectors", () => {
+  it("exposes reference import on the legacy dispersion Data route with exact result ownership", () => {
+    inspectorTab.value = "data";
+    const html = renderFrequencyRoute(
+      "results.eigen.dispersion",
+      {
+        analysisRunId: "run-7",
+        analysisStageId: "stage-2",
+        artifactRevision: "revision-3",
+        resourceRef: "artifact-revision:revision-3",
+      },
+      "Dispersion",
+    );
+
+    expect(html).toContain("Import reference");
+    expect(html).toContain("Reference file");
+  });
+
+  it("keeps reference import unavailable on the dispersion Data route without an owner", () => {
+    inspectorTab.value = "data";
+    const html = renderFrequencyRoute(
+      "results.eigen.dispersion",
+      { artifactRevision: "revision-3" },
+      "Dispersion",
+    );
+
+    expect(html).toContain("requires a dispersion result with a published run, stage, and artifact revision");
+    expect(html).not.toContain("Reference file");
+  });
+
   it.each(["overview", "data", "provenance", "diagnostics"])(
     "retains exact owner metadata independently of the visible tab (%s)", (tab) => {
       inspectorTab.value = tab;

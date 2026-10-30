@@ -102,6 +102,10 @@ export function EigenDispersionInspectorPanel({
                 <FieldRow label="Analytic reference" value={summary.analyticReference} />
                 <FieldRow label="Comparison status" value={summary.referenceComparison} />
                 <FieldRow label="Validation intent" value={summary.validationIntent} />
+                <FieldRow
+                  label="Import reference"
+                  value="Open the Data tab to import CSV or COMSOL reference data."
+                />
               </>
             ),
           },

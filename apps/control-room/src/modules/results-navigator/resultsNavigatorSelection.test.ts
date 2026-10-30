@@ -14,6 +14,7 @@ import {
   toKernelFrequencyDomainNodeSelectionRef,
   type ModalSelectionRef,
   type ResponseSelectionRef,
+  type ResultsViewSelectionRef,
 } from "./resultsNavigatorSelection";
 import {
   selectionRefEquals,
@@ -281,5 +282,63 @@ describe("results navigator stable selection references", () => {
         resourceRef: "analysis:frequency-domain:eigen:field-sweep",
       },
     });
+  });
+  it("maps the published dispersion view owner into the kernel selection", () => {
+    const dispersionSelection: ResultsViewSelectionRef = {
+      artifactRevision: "sha256:dispersion-r7",
+      kind: "results-view",
+      runId: "run-a",
+      stageId: "stage-a",
+      viewId: "dispersion",
+    };
+    const selected = kernelSelectionForResultsNavigatorNode({
+      id: "results:run:run-a:stage:stage-a:dispersion",
+      kind: "results.frequency-domain.dispersion",
+      resourceKey: "analysis:eigen:dispersion",
+      resourceRevision: "sha256:dispersion-r7",
+      selectionRef: dispersionSelection,
+    });
+
+    expect(selected).toEqual({
+      kind: "results.eigen.dispersion",
+      ref: {
+        artifactRevision: "sha256:dispersion-r7",
+        analysisRunId: "run-a",
+        analysisStageId: "stage-a",
+        kind: "results.eigen.dispersion",
+        nodeId: "results:run:run-a:stage:stage-a:dispersion",
+        resourceRef: "sha256:dispersion-r7",
+        type: "frequency-domain",
+        viewId: "dispersion",
+      },
+    });
+  });
+
+  it("withholds dispersion ownership when revision is missing or mismatches the artifact", () => {
+    const dispersionSelection: ResultsViewSelectionRef = {
+      artifactRevision: "sha256:dispersion-r6",
+      kind: "results-view",
+      runId: "run-a",
+      stageId: "stage-a",
+      viewId: "dispersion",
+    };
+    const staleSelection = kernelSelectionForResultsNavigatorNode({
+      id: "results:run:run-a:stage:stage-a:dispersion",
+      kind: "results.frequency-domain.dispersion",
+      resourceKey: "analysis:eigen:dispersion",
+      resourceRevision: "sha256:dispersion-r7",
+      selectionRef: dispersionSelection,
+    });
+    const unrevisionedSelection = kernelSelectionForResultsNavigatorNode({
+      id: "results:run:run-a:stage:stage-a:dispersion",
+      kind: "results.frequency-domain.dispersion",
+      resourceKey: "analysis:eigen:dispersion",
+      selectionRef: dispersionSelection,
+    });
+
+    for (const selected of [staleSelection, unrevisionedSelection]) {
+      expect(selected.ref).not.toHaveProperty("analysisRunId");
+      expect(selected.ref).not.toHaveProperty("analysisStageId");
+    }
   });
 });
