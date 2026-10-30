@@ -212,12 +212,14 @@ pub(crate) fn spawn(state: Arc<AppState>) {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut cursor: Option<ProjectionCursor> = None;
         let mut study_cache: Option<Arc<fullmag_runtime_control::AcceptedStudySnapshot>> = None;
+        // Last live quantity demand published beside a run (run id, quantities).
+        let mut published_demand: Option<(String, Vec<String>)> = None;
         // The poll repeats every interval; report each distinct deferral once.
         let mut last_deferral: Option<String> = None;
         let mut repeated_deferrals: u32 = 0;
         loop {
             interval.tick().await;
-            match poll_once(&state, &mut cursor, &mut study_cache).await {
+            match poll_once(&state, &mut cursor, &mut study_cache, &mut published_demand).await {
                 Ok(()) => {
                     last_deferral = None;
                     repeated_deferrals = 0;
@@ -259,6 +261,7 @@ async fn poll_once(
     state: &Arc<AppState>,
     cursor: &mut Option<ProjectionCursor>,
     study_cache: &mut Option<Arc<fullmag_runtime_control::AcceptedStudySnapshot>>,
+    published_demand: &mut Option<(String, Vec<String>)>,
 ) -> Result<(), ApiError> {
     let Some(context) = capture_context(state).await? else {
         return Ok(());
@@ -276,6 +279,15 @@ async fn poll_once(
     let Some(store_root) = state.submit_store_root.clone() else {
         return Ok(());
     };
+    // The displayed and recently read quantities bound the worker's live
+    // field capture; publish them before reading this tick's observation.
+    crate::live_field_demand::publish_live_demand(
+        state,
+        &store_root,
+        &context.run_id,
+        published_demand,
+    )
+    .await;
     let expected = context.clone();
     let previous_cursor = cursor.clone();
     let mut cached_study = study_cache.take();
@@ -828,35 +840,23 @@ fn load_durable_projection(
         .filter(|output| output.data_kind == "state")
         .max_by(|left, right| compare_magnetization_outputs(left, right))
         .cloned();
-    // A fast worker can finish between two projector ticks. Its live sidecar
-    // then disappears from the active-task selection above, leaving prepared
-    // step0 in scalar history despite a verified final CAS state at step10.
-    // Recover only a physical row from that exact succeeded task/attempt whose
-    // solver clock agrees with the immutable final state; never relabel a
-    // previous stage's last row as this run's terminal observation.
+    // A fast worker can finish between projector ticks, before its final live
+    // sidecar can be adopted. Recover terminal scalars only from the immutable
+    // quantity bundle pinned to the exact final state and task attempt. Older
+    // runs without this artifact remain unknown; prepared rows are never relabeled.
     let terminal_stats = if terminal_status {
         latest_state.as_ref().and_then(|output| {
             let fullmag_application::DecodedStudyArtifact::MagnetizationState(final_state) =
                 &output.decoded else { return None; };
-            let task = run_catalog.tasks.iter().find(|task| {
-                task.lifecycle == fullmag_session::FmsTaskLifecycle::Succeeded
-                    && task_order.get(&task.task_id) == Some(&output.task_order)
-            })?;
-            let (Some(attempt), Some(epoch)) = (task.attempt_id.as_deref(), task.ownership_epoch)
-                else { return None; };
-            let observed = match crate::accepted_study_worker::read_accepted_live_observation(
-                store_root, &context.run_id, &task.task_id, &output.step_id, attempt, epoch, None,
-            ) {
-                Ok(observed) => observed?,
-                Err(error) => {
-                    tracing::warn!(error = %error, "terminal scalar observation unavailable; final CAS state remains authoritative");
-                    return None;
-                }
-            };
-            let stats = observed.header.stats?;
-            (stats.kind.is_physical_observation() && stats.step == final_state.step
-                && stats.time == final_state.time_s && stats.dt == final_state.solver_dt_s)
-                .then_some(stats)
+            let catalog = artifact_catalog.as_ref()?;
+            terminal_stats_from_pinned_artifact(
+                &store,
+                &run_catalog,
+                catalog,
+                &task_order,
+                output,
+                final_state,
+            )
         })
     } else { None };
     let accepted_runtime_problem = if matches!(status, "completed" | "failed" | "cancelled") {
@@ -2081,6 +2081,74 @@ fn collect_modal_publications(
     Ok(candidates)
 }
 
+fn terminal_stats_from_pinned_artifact(
+    store: &fullmag_session::SessionStore,
+    run_catalog: &fullmag_session::FmsRunCatalog,
+    artifact_catalog: &fullmag_session::FmsArtifactCatalog,
+    task_order: &std::collections::BTreeMap<String, usize>,
+    output: &VerifiedOutput,
+    final_state: &fullmag_application::MagnetizationStateArtifact,
+) -> Option<fullmag_runner::StepStats> {
+    let accepted_state_ref = output.accepted_state_ref.as_ref()?;
+    let task = run_catalog.tasks.iter().find(|task| {
+        task.lifecycle == fullmag_session::FmsTaskLifecycle::Succeeded
+            && task_order.get(&task.task_id) == Some(&output.task_order)
+    })?;
+    let attempt_id = task.attempt_id.as_deref()?;
+    let ownership_epoch = task.ownership_epoch?;
+    if accepted_state_ref.id.run_id != run_catalog.run_id
+        || accepted_state_ref.id.stage_id.as_deref() != Some(output.step_id.as_str())
+        || accepted_state_ref.generation.runtime_epoch != ownership_epoch
+        || accepted_state_ref.id.accepted_step != final_state.step
+    {
+        tracing::warn!(task_id = %task.task_id,
+            "terminal scalar artifact source does not match the final accepted state identity");
+        return None;
+    }
+    let mut matches = artifact_catalog.entries.iter().filter(|entry| {
+        task.artifact_ids.contains(&entry.artifact_id)
+            && entry.task_id == task.task_id
+            && entry.attempt_id == attempt_id
+            && entry.ownership_epoch == ownership_epoch
+            && entry.artifact_type == crate::accepted_field_materialization_worker::TERMINAL_SCALAR_ARTIFACT_TYPE
+            && entry.status == fullmag_session::FmsArtifactStatus::Published
+    });
+    let Some(entry) = matches.next() else { return None; };
+    if matches.next().is_some() {
+        tracing::warn!(task_id = %task.task_id,
+            "terminal scalar artifact pin is ambiguous; scalar row remains unknown");
+        return None;
+    }
+    let stats = match crate::accepted_field_materialization_worker::read_terminal_scalar_stats(store, entry) {
+        Ok(record) => record,
+        Err(error) => {
+            tracing::warn!(task_id = %task.task_id, error = %error,
+                "terminal scalar artifact is invalid; scalar row remains unknown");
+            return None;
+        }
+    };
+    if stats.source != *accepted_state_ref
+        || stats.source.id.run_id != run_catalog.run_id
+        || stats.source.id.stage_id.as_deref() != Some(output.step_id.as_str())
+        || stats.source.generation.runtime_epoch != ownership_epoch
+        || stats.state_object_ref != output.object_ref
+        || stats.run_id != run_catalog.run_id
+        || stats.task_id != task.task_id
+        || stats.step_id != output.step_id
+        || stats.attempt_id != attempt_id
+        || stats.ownership_epoch != ownership_epoch
+        || stats.stats.step != final_state.step
+        || stats.stats.time.to_bits() != final_state.time_s.to_bits()
+        || stats.stats.dt.to_bits() != final_state.solver_dt_s.to_bits()
+        || crate::accepted_field_materialization_worker::validate_scalar_row_stats(&stats.stats).is_err()
+    {
+        tracing::warn!(task_id = %task.task_id,
+            "terminal scalar artifact does not match the pinned final state; scalar row remains unknown");
+        return None;
+    }
+    Some(stats.stats)
+}
+
 #[derive(Debug, Clone)]
 struct PreparedProjectionDomain {
     preparation_id: String,
@@ -2649,6 +2717,12 @@ async fn apply_projection(
     ensure_projection_context(state, context, &next)?;
     let publication_fence = ProjectionPublicationFence::capture(&next)?;
     let display_revision = state.current_display_selection.read().await.revision;
+    // Revisions before this projection: the realtime batch names only the
+    // resources (and field quantities) that this tick actually changed.
+    let previous_revisions =
+        crate::current_live_realtime_state_from_snapshot(state, &next, display_revision)
+            .await
+            .revisions;
 
     let profile_changed = if let Some(profile) = projection.solver_profile.as_ref() {
         // The recovered journal, rather than a default startup frame, owns a
@@ -2835,8 +2909,12 @@ async fn apply_projection(
             }
         }
     }
-    if let Some(stats) = projection.terminal_stats.as_ref().or_else(||
-        projection.live_observation.as_ref().and_then(|(_, observation)| observation.header.stats.as_ref())) {
+    let scalar_stats = if matches!(projection.status, "completed" | "failed" | "cancelled") {
+        projection.terminal_stats.as_ref()
+    } else {
+        projection.live_observation.as_ref().and_then(|(_, observation)| observation.header.stats.as_ref())
+    };
+    if let Some(stats) = scalar_stats {
         if stats.kind.is_physical_observation() {
             let row = crate::types::ScalarRow {
                 kind: stats.kind.clone(),
@@ -2866,10 +2944,20 @@ async fn apply_projection(
                 max_h_demag: stats.max_h_demag,
                 max_torque_Apm: stats.max_torque_Apm,
                 max_torque_T: stats.max_torque_T,
-                per_object_scalars: Default::default(),
+                per_object_scalars: stats.per_object_scalars.clone(),
                 table_expressions: Vec::new(),
             };
-            if row.is_physical_observation() {
+            // A worker header may repeat its latest physical stats across steps
+            // whose diagnostics were not observed; the same sample is no change.
+            let already_projected = next.scalar_rows.last().is_some_and(|last| {
+                last.step == row.step
+                    && last.time.to_bits() == row.time.to_bits()
+                    && last.e_total.to_bits() == row.e_total.to_bits()
+                    && last.mx.to_bits() == row.mx.to_bits()
+                    && last.my.to_bits() == row.my.to_bits()
+                    && last.mz.to_bits() == row.mz.to_bits()
+            });
+            if row.is_physical_observation() && !already_projected {
                 let scalar_revision = next.scalar_revision;
                 // A run's latest durable row never moves backwards, so an
                 // earlier step means a new step lineage: a run started from a
@@ -3003,22 +3091,12 @@ async fn apply_projection(
             .get("m")
             .and_then(|field| field.pointer("/provenance/observation_identity"))
             .and_then(Value::as_str);
-        let expected_sequence = projection
-            .live_observation
-            .as_ref()
-            .and_then(|(_, observation)| observation.header.magnetization.as_ref())
-            .map(|reference| reference.sequence);
-        let displayed_sequence = next
-            .latest_fields
-            .get("m")
-            .and_then(|field| field.pointer("/provenance/sequence"))
-            .and_then(Value::as_u64);
-        let stale_field = active_identity.is_some_and(|identity| {
-            displayed_identity != Some(identity)
-                || expected_sequence.is_some_and(|sequence| {
-                    displayed_sequence != Some(sequence)
-                })
-        });
+        // Only fields of another task attempt are stale. The worker replaces
+        // its payload on every published step, so a header read can name a
+        // payload that is already gone; the displayed older frame of the same
+        // observation stays valid under its own source step until the next
+        // complete read. Clearing it made m and every live field flap to 204.
+        let stale_field = active_identity.is_some_and(|identity| displayed_identity != Some(identity));
         if stale_field && next.latest_fields.get("m").is_some() {
             let mut fields = next.latest_fields.clone();
             fields.remove("m");
@@ -3233,7 +3311,14 @@ async fn apply_projection(
         }
     }
     crate::router_v2::handlers::sessions::status::record_current_live_heartbeat(state).await;
-    crate::publish_current_live_realtime_batch_changed(state, &realtime_state, true, 100).await
+    crate::publish_current_live_realtime_batch_changed_since(
+        state,
+        &realtime_state,
+        Some(&previous_revisions),
+        true,
+        100,
+    )
+    .await
 }
 
 fn accepted_output_frame(

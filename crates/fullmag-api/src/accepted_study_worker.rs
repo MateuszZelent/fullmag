@@ -52,8 +52,9 @@ const WORKER_EXECUTION_COMPLETED_RECEIPT: &str = "worker_execution_completed.v1.
 // overwritten observation sidecar in its private attempt directory; the API
 // projector reads that sidecar for a `Running` task and turns it into the
 // ordinary current-live resource revisions. The sidecar is not a durable
-// output: it is not CAS-pinned, never replaces the final accepted state, and is
-// removed when the solver returns. Transfer cost is bounded twice: the runner
+// output: it is not CAS-pinned and never replaces the final accepted state.
+// When the solver returns, the field payload is removed and only a scalar
+// header of the last step remains. Transfer cost is bounded twice: the runner
 // copies magnetization from the device only every
 // `ACCEPTED_LIVE_FIELD_EVERY_N` steps, and the worker writes at most one
 // scalar header per `ACCEPTED_LIVE_SCALAR_MIN_INTERVAL` and one magnetization
@@ -169,6 +170,9 @@ pub(crate) struct AcceptedLiveObservationWriter {
     terminal_spool: Option<crate::accepted_observation_spool::TerminalObservationSpool>,
     terminal_storage_budget: u64,
     terminal_field_budget: u64,
+    live_demand: crate::accepted_live_demand::AcceptedLiveDemandReader,
+    /// Last physical step stats, kept for the final scalar header.
+    last_stats: Option<fullmag_runner::StepStats>,
 }
 
 impl AcceptedLiveObservationWriter {
@@ -219,6 +223,11 @@ impl AcceptedLiveObservationWriter {
             terminal_spool: None,
             terminal_storage_budget: accepted_step.claim.lease.budget.storage_bytes / 4,
             terminal_field_budget: accepted_step.claim.lease.budget.memory_bytes / 16,
+            live_demand: crate::accepted_live_demand::AcceptedLiveDemandReader::new(
+                attempt_output_dir,
+                accepted_step.claim.run_id.as_str(),
+            ),
+            last_stats: None,
         }
     }
 
@@ -250,6 +259,8 @@ impl AcceptedLiveObservationWriter {
     /// Observe one runner update. Always returns without blocking the solver
     /// on a failed write.
     pub(crate) fn observe(&mut self, update: &fullmag_runner::StepUpdate) {
+        // The displayed quantities apply from the runner's next live capture.
+        self.live_demand.refresh();
         if update.terminal_field_snapshot {
             // Keep the original-context endpoint for recovery and later CAS
             // binding. It is validated against m_final, never used as state.
@@ -266,6 +277,9 @@ impl AcceptedLiveObservationWriter {
             return;
         }
         let stats = &update.stats;
+        if stats.is_physical_observation() {
+            self.last_stats = Some(stats.clone());
+        }
         self.recent_clock.push_back((stats.step, stats.time, stats.dt));
         while self.recent_clock.len() > ACCEPTED_LIVE_RECENT_CLOCK_SAMPLES {
             self.recent_clock.pop_front();
@@ -292,7 +306,15 @@ impl AcceptedLiveObservationWriter {
         let previous_magnetization = staged_magnetization
             .as_ref()
             .and_then(|reference| self.current_magnetization.replace(reference.clone()));
-        if let Err(error) = self.write_header(stats) {
+        // A lane may leave some steps' diagnostics unobserved (FDM CUDA with a
+        // requested stats policy). The header carries the latest physical
+        // stats then, so the projector does not miss them between two reads.
+        let header_stats = if stats.is_physical_observation() {
+            stats.clone()
+        } else {
+            self.last_stats.clone().unwrap_or_else(|| stats.clone())
+        };
+        if let Err(error) = self.write_header(&header_stats) {
             if let Some(staged) = staged_magnetization.as_ref() {
                 self.current_magnetization = previous_magnetization;
                 let _ = fs::remove_file(self.attempt_output_dir.join(&staged.file_name));
@@ -310,13 +332,28 @@ impl AcceptedLiveObservationWriter {
         }
     }
 
-    /// Remove the live sidecar after the solver returned. The durable output
-    /// manifest is the only source of the final accepted state.
-    pub(crate) fn finish(self) {
-        let _ = fs::remove_file(self.attempt_output_dir.join(ACCEPTED_LIVE_OBSERVATION_FILE));
-        if let Some(reference) = self.current_magnetization {
+    /// Remove the live field payload after the solver returned. The durable
+    /// output manifest is the only source of the final accepted state.
+    ///
+    /// A scalar-only header of the last step is kept: a run that ends between
+    /// two projector ticks would otherwise publish no scalar row at all, and
+    /// the projector recovers its final row only from this header.
+    pub(crate) fn finish(mut self) {
+        let payload = self.current_magnetization.take();
+        let final_stats = self.last_stats.take();
+        let kept = final_stats
+            .as_ref()
+            .is_some_and(|stats| stats.is_physical_observation())
+            && final_stats
+                .as_ref()
+                .is_some_and(|stats| self.write_header(stats).is_ok());
+        if !kept {
+            let _ = fs::remove_file(self.attempt_output_dir.join(ACCEPTED_LIVE_OBSERVATION_FILE));
+        }
+        if let Some(reference) = payload {
             let _ = fs::remove_file(self.attempt_output_dir.join(reference.file_name));
         }
+        self.live_demand.finish();
     }
 
     fn write_terminal_capture(&mut self, update: &fullmag_runner::StepUpdate) -> Result<()> {
@@ -839,6 +876,7 @@ pub(crate) struct AcceptedRunnerExecution {
     pub(crate) recovered_from_receipt: bool,
     pub(crate) accepted_state_ref: Option<AcceptedStateRef>,
     pub(crate) observation_source: Option<ObservationSourcePayload>,
+    pub(crate) terminal_stats: Option<fullmag_runner::StepStats>,
 }
 
 pub(crate) enum AcceptedWorkerProcessOutcome {
@@ -913,11 +951,55 @@ struct WorkerExecutionCompletedReceiptV2 {
     terminal_publication: fullmag_runtime_control::PreparedTerminalPublicationV4,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerExecutionCompletedReceiptV3 {
+    #[serde(deserialize_with = "deserialize_completed_worker_receipt_v3_schema")]
+    schema_version: String,
+    identity: WorkerExecutionReceiptIdentity,
+    status: RunStatus,
+    completed_step_count: usize,
+    outputs: Vec<WorkerExecutionOutputReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    accepted_state_ref: Option<AcceptedStateRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    observation_source: Option<WorkerObservationSourceReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    terminal_publication: Option<fullmag_runtime_control::PreparedTerminalPublicationV4>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    terminal_stats: Option<fullmag_runner::StepStats>,
+}
+
+fn deserialize_completed_worker_receipt_v3_schema<'de, D>(
+    deserializer: D,
+) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let version = String::deserialize(deserializer)?;
+    if version != "fullmag.accepted_worker_execution.v3" {
+        return Err(serde::de::Error::custom("expected completed worker receipt v3"));
+    }
+    Ok(version)
+}
+
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum WorkerExecutionCompletedReceiptWire {
+    V3(WorkerExecutionCompletedReceiptV3),
     V1(WorkerExecutionCompletedReceipt),
     V2(WorkerExecutionCompletedReceiptV2),
+}
+
+struct RecoveredWorkerExecutionReceipt {
+    schema_version: String,
+    identity: WorkerExecutionReceiptIdentity,
+    status: RunStatus,
+    completed_step_count: usize,
+    outputs: Vec<WorkerExecutionOutputReference>,
+    accepted_state_ref: Option<AcceptedStateRef>,
+    observation_source: Option<WorkerObservationSourceReference>,
+    terminal_stats: Option<fullmag_runner::StepStats>,
 }
 
 /// Reserve one private runner output directory for the exact active task
@@ -1849,9 +1931,10 @@ fn persist_completed_worker_execution(
     outputs: &[StudyOutputPayload],
     accepted_state_ref: Option<&AcceptedStateRef>,
     observation_source: Option<&ObservationSourcePayload>,
+    terminal_stats: Option<&fullmag_runner::StepStats>,
 ) -> Result<()> {
     persist_completed_worker_execution_with_terminal(store,attempt_output_dir,identity,declared_outputs,
-        status,completed_step_count,outputs,accepted_state_ref,observation_source,None)
+        status,completed_step_count,outputs,accepted_state_ref,observation_source,None,terminal_stats)
 }
 
 fn persist_completed_worker_execution_with_terminal(
@@ -1865,6 +1948,7 @@ fn persist_completed_worker_execution_with_terminal(
     accepted_state_ref: Option<&AcceptedStateRef>,
     observation_source: Option<&ObservationSourcePayload>,
     terminal_publication: Option<&fullmag_runtime_control::PreparedTerminalPublicationV4>,
+    terminal_stats: Option<&fullmag_runner::StepStats>,
 ) -> Result<()> {
     let mut declared = BTreeMap::new();
     for port in declared_outputs {
@@ -1898,6 +1982,25 @@ fn persist_completed_worker_execution_with_terminal(
             );
         }
     }
+    let terminal_stats = terminal_stats.and_then(|stats| {
+        let validation = accepted_state_ref
+            .context("terminal scalar statistics require an accepted state reference")
+            .and_then(|reference| validate_terminal_stats_binding(stats, reference, &identity.claim))
+            .and_then(|()| {
+                let length = serde_json::to_vec(stats)?.len() as u64;
+                if length > 256 * 1024 {
+                    bail!("terminal scalar statistics exceed their bounded receipt budget");
+                }
+                Ok(())
+            });
+        match validation {
+            Ok(()) => Some(stats),
+            Err(error) => {
+                tracing::warn!(error = %error, "accepted terminal scalar statistics omitted; physical result remains complete");
+                None
+            }
+        }
+    });
     let unique_byte_count = unique_object_sizes
         .values()
         .try_fold(0_u64, |total, size| total.checked_add(*size))
@@ -1960,15 +2063,39 @@ fn persist_completed_worker_execution_with_terminal(
             || accepted_state_ref != Some(&terminal.manifest.accepted_state_ref) {
             bail!("terminal completed receipt has incompatible legacy observation fields");
         }
-        let receipt=WorkerExecutionCompletedReceiptV2 {
-            schema_version:"fullmag.accepted_worker_execution.v2".into(),identity:identity.clone(),status,
-            completed_step_count,outputs:output_refs,accepted_state_ref:terminal.manifest.accepted_state_ref.clone(),
-            terminal_publication:terminal.clone(),
+        if let Some(stats) = terminal_stats {
+            let receipt = WorkerExecutionCompletedReceiptV3 {
+                schema_version: "fullmag.accepted_worker_execution.v3".into(),
+                identity: identity.clone(), status, completed_step_count, outputs: output_refs,
+                accepted_state_ref: accepted_state_ref.cloned(), observation_source,
+                terminal_publication: Some(terminal.clone()), terminal_stats: Some(stats.clone()),
+            };
+            if serde_json::to_vec_pretty(&receipt)?.len() as u64 > fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES {
+                bail!("terminal completed receipt exceeds the existing bounded metadata owner");
+            }
+            return write_immutable_attempt_receipt(attempt_output_dir, WORKER_EXECUTION_COMPLETED_RECEIPT, &receipt);
+        }
+        let receipt = WorkerExecutionCompletedReceiptV2 {
+            schema_version: "fullmag.accepted_worker_execution.v2".into(), identity: identity.clone(), status,
+            completed_step_count, outputs: output_refs,
+            accepted_state_ref: terminal.manifest.accepted_state_ref.clone(), terminal_publication: terminal.clone(),
         };
-        if serde_json::to_vec_pretty(&receipt)?.len() as u64>fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES {
+        if serde_json::to_vec_pretty(&receipt)?.len() as u64 > fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES {
             bail!("terminal completed receipt exceeds the existing bounded metadata owner");
         }
-        return write_immutable_attempt_receipt(attempt_output_dir,WORKER_EXECUTION_COMPLETED_RECEIPT,&receipt);
+        return write_immutable_attempt_receipt(attempt_output_dir, WORKER_EXECUTION_COMPLETED_RECEIPT, &receipt);
+    }
+    if let Some(stats) = terminal_stats {
+        let receipt = WorkerExecutionCompletedReceiptV3 {
+            schema_version: "fullmag.accepted_worker_execution.v3".into(),
+            identity: identity.clone(), status, completed_step_count, outputs: output_refs,
+            accepted_state_ref: accepted_state_ref.cloned(), observation_source,
+            terminal_publication: None, terminal_stats: Some(stats.clone()),
+        };
+        if serde_json::to_vec_pretty(&receipt)?.len() as u64 > fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES {
+            bail!("completed worker receipt exceeds the existing bounded metadata owner");
+        }
+        return write_immutable_attempt_receipt(attempt_output_dir, WORKER_EXECUTION_COMPLETED_RECEIPT, &receipt);
     }
     let receipt = WorkerExecutionCompletedReceipt {
         schema_version: WORKER_EXECUTION_RECEIPT_SCHEMA.into(),
@@ -1984,6 +2111,61 @@ fn persist_completed_worker_execution_with_terminal(
         WORKER_EXECUTION_COMPLETED_RECEIPT,
         &receipt,
     )
+}
+
+fn validate_terminal_stats_binding(
+    stats: &fullmag_runner::StepStats,
+    accepted_state_ref: &AcceptedStateRef,
+    claim: &fullmag_application::TaskClaim,
+) -> Result<()> {
+    crate::accepted_field_materialization_worker::validate_scalar_row_stats(stats)?;
+    accepted_state_ref
+        .validate()
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let clock = fullmag_quantities::ObservationClock {
+        accepted_step: stats.step,
+        time_seconds: stats.time,
+        dt_seconds: (stats.dt > 0.0).then_some(stats.dt),
+    };
+    clock.validate().map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    if accepted_state_ref.id.run_id != claim.run_id.as_str()
+        || accepted_state_ref.generation.runtime_epoch != claim.ownership_epoch.value()
+        || accepted_state_ref.id.accepted_step != stats.step
+        || accepted_state_ref.id.clock_digest
+            != clock.digest().map_err(|error| anyhow::anyhow!(error.to_string()))?
+    {
+        bail!("terminal scalar statistics differ from the exact accepted state clock or claim");
+    }
+    Ok(())
+}
+
+fn terminal_stats_is_recordable(
+    stats: &fullmag_runner::StepStats,
+    accepted_state_ref: &AcceptedStateRef,
+    claim: &fullmag_application::TaskClaim,
+) -> bool {
+    let validation = validate_terminal_stats_binding(stats, accepted_state_ref, claim)
+        .and_then(|()| {
+            if serde_json::to_vec(stats)?.len() as u64 > 256 * 1024 {
+                bail!("terminal scalar statistics exceed their bounded receipt budget");
+            }
+            Ok(())
+        });
+    if let Err(error) = validation {
+        tracing::warn!(error = %error,
+            "accepted terminal scalar statistics omitted; physical result remains complete");
+        return false;
+    }
+    true
+}
+
+fn terminal_stats_identity(
+    stats: Option<&fullmag_runner::StepStats>,
+) -> Result<Option<String>> {
+    stats.map(|stats| {
+        let value = serde_json::to_value(stats).context("serialize terminal scalar identity")?;
+        Ok(fullmag_session::canonical_json_sha256(&value))
+    }).transpose()
 }
 
 fn read_recovered_worker_object(
@@ -2034,21 +2216,44 @@ fn recover_completed_worker_execution(
         read_attempt_receipt(attempt_output_dir, WORKER_EXECUTION_COMPLETED_RECEIPT)?.context(
             "worker outcome is unknown because no completed receipt exists; refusing to rerun",
         )?;
-    let (completed,terminal_publication)=match wire {
-        WorkerExecutionCompletedReceiptWire::V1(receipt)=>(receipt,None),
-        WorkerExecutionCompletedReceiptWire::V2(receipt)=>(WorkerExecutionCompletedReceipt {
-            schema_version:receipt.schema_version,identity:receipt.identity,status:receipt.status,
-            completed_step_count:receipt.completed_step_count,outputs:receipt.outputs,
-            accepted_state_ref:Some(receipt.accepted_state_ref),observation_source:None,
-        },Some(receipt.terminal_publication)),
+    let (completed, terminal_publication) = match wire {
+        WorkerExecutionCompletedReceiptWire::V1(receipt) => (
+            RecoveredWorkerExecutionReceipt {
+                schema_version: receipt.schema_version, identity: receipt.identity, status: receipt.status,
+                completed_step_count: receipt.completed_step_count, outputs: receipt.outputs,
+                accepted_state_ref: receipt.accepted_state_ref, observation_source: receipt.observation_source,
+                terminal_stats: None,
+            },
+            None,
+        ),
+        WorkerExecutionCompletedReceiptWire::V2(receipt) => (
+            RecoveredWorkerExecutionReceipt {
+                schema_version: receipt.schema_version, identity: receipt.identity, status: receipt.status,
+                completed_step_count: receipt.completed_step_count, outputs: receipt.outputs,
+                accepted_state_ref: Some(receipt.accepted_state_ref), observation_source: None,
+                terminal_stats: None,
+            },
+            Some(receipt.terminal_publication),
+        ),
+        WorkerExecutionCompletedReceiptWire::V3(receipt) => (
+            RecoveredWorkerExecutionReceipt {
+                schema_version: receipt.schema_version, identity: receipt.identity, status: receipt.status,
+                completed_step_count: receipt.completed_step_count, outputs: receipt.outputs,
+                accepted_state_ref: receipt.accepted_state_ref, observation_source: receipt.observation_source,
+                terminal_stats: receipt.terminal_stats,
+            },
+            receipt.terminal_publication,
+        ),
     };
     let terminal_receipt = terminal_publication.as_ref();
     let version_valid = match terminal_receipt {
-        Some(terminal) => completed.schema_version == "fullmag.accepted_worker_execution.v2"
+        Some(terminal) => matches!(completed.schema_version.as_str(),
+                "fullmag.accepted_worker_execution.v2" | "fullmag.accepted_worker_execution.v3")
             && completed.observation_source.is_none() && expected_observation_grid.is_none()
             && expected_accepted_state_ref.is_none()
             && completed.accepted_state_ref.as_ref() == Some(&terminal.manifest.accepted_state_ref),
-        None => completed.schema_version == WORKER_EXECUTION_RECEIPT_SCHEMA
+        None => matches!(completed.schema_version.as_str(),
+                WORKER_EXECUTION_RECEIPT_SCHEMA | "fullmag.accepted_worker_execution.v3")
             && completed.accepted_state_ref.as_ref() == expected_accepted_state_ref,
     };
     if !version_valid
@@ -2057,6 +2262,14 @@ fn recover_completed_worker_execution(
         || completed.completed_step_count == 0
     {
         bail!("completed worker receipt is invalid for the current accepted Start");
+    }
+    if let Some(stats) = completed.terminal_stats.as_ref() {
+        let reference = completed.accepted_state_ref.as_ref()
+            .context("completed worker terminal statistics have no accepted state reference")?;
+        validate_terminal_stats_binding(stats, reference, &expected_identity.claim)?;
+        if serde_json::to_vec(stats)?.len() as u64 > 256 * 1024 {
+            bail!("completed worker terminal statistics exceed their bounded receipt budget");
+        }
     }
 
     let mut declared = BTreeMap::new();
@@ -2240,6 +2453,7 @@ fn recover_completed_worker_execution(
         recovered_from_receipt: true,
         accepted_state_ref: completed.accepted_state_ref,
         observation_source,
+        terminal_stats: completed.terminal_stats,
     })
 }
 
@@ -2688,6 +2902,7 @@ fn execute_accepted_worker_start_with_snapshot(
                 recovered_from_receipt: false,
                 accepted_state_ref: None,
                 observation_source: None,
+                terminal_stats: None,
             });
         }
         if result.status != RunStatus::Completed {
@@ -2696,6 +2911,7 @@ fn execute_accepted_worker_start_with_snapshot(
                 request.device
             );
         }
+        let terminal_stats = result.steps.last().cloned();
         let lifecycle = if frozen.is_some() {
             let bytes = read_explicit_runner_artifact(&attempt_output_dir,
                 "solver/frozen_output_lifecycle.v1.json", 64 * 1024 * 1024)?;
@@ -2716,6 +2932,11 @@ fn execute_accepted_worker_start_with_snapshot(
         let accepted_state_ref = if let Some(terminal) = &terminal_publication {
             Some(terminal.manifest.accepted_state_ref.clone())
         } else { accepted_state_ref_from_runner_snapshot(&attempt_output_dir, accepted_step, true)? };
+        let terminal_stats = terminal_stats.filter(|stats| {
+            accepted_state_ref.as_ref().is_some_and(|reference| {
+                terminal_stats_is_recordable(stats, reference, &accepted_step.claim)
+            })
+        });
         let observation_source = collect_fdm_cpu_observation_source(
             &attempt_output_dir,
             accepted_step,
@@ -2736,6 +2957,7 @@ fn execute_accepted_worker_start_with_snapshot(
             accepted_state_ref.as_ref(),
             observation_source.as_ref(),
             terminal_publication.as_ref(),
+            terminal_stats.as_ref(),
         )
         .context("persist immutable completed worker output receipt")?;
 
@@ -2748,6 +2970,7 @@ fn execute_accepted_worker_start_with_snapshot(
             recovered_from_receipt: false,
             accepted_state_ref,
             observation_source,
+            terminal_stats,
         })
     })();
     if let Some(storage) = &mut storage {
@@ -2917,7 +3140,7 @@ fn execute_accepted_closed_loop_worker_start(
         let artifacts=match result {
             Ok(artifacts)=>artifacts,
             Err(_error) if interrupt_requested.is_some_and(|flag|flag.load(Ordering::Acquire))=>return Ok(AcceptedRunnerExecution {
-        terminal_publication: None,status:RunStatus::Cancelled,completed_step_count:0,outputs:vec![],attempt_output_dir:attempt.clone(),recovered_from_receipt:false,accepted_state_ref:None,observation_source:None}),
+        terminal_publication: None,status:RunStatus::Cancelled,completed_step_count:0,outputs:vec![],attempt_output_dir:attempt.clone(),recovered_from_receipt:false,accepted_state_ref:None,observation_source:None,terminal_stats:None}),
             Err(error)=>return Err(anyhow::Error::new(error)).context("execute canonical full-volume inspection"),
         };
         let manifest_path=format!("antenna/field_solutions/{output_id}/manifest.v2.json");
@@ -2935,7 +3158,7 @@ fn execute_accepted_closed_loop_worker_start(
         fullmag_runtime_control::study_inspection::validate_accepted_inspection_bytes(&accepted_step.problem,study_step,&bytes,maximum)?;
         if interrupt_requested.is_some_and(|flag|flag.load(Ordering::Acquire)) {
             return Ok(AcceptedRunnerExecution {
-        terminal_publication: None,status:RunStatus::Cancelled,completed_step_count:0,outputs:vec![],attempt_output_dir:attempt.clone(),recovered_from_receipt:false,accepted_state_ref:None,observation_source:None});
+        terminal_publication: None,status:RunStatus::Cancelled,completed_step_count:0,outputs:vec![],attempt_output_dir:attempt.clone(),recovered_from_receipt:false,accepted_state_ref:None,observation_source:None,terminal_stats:None});
         }
         observer(fullmag_runner::AntennaOperationProgress {
             phase: fullmag_runner::AntennaOperationPhase::PublishingResult,
@@ -2952,9 +3175,9 @@ fn execute_accepted_closed_loop_worker_start(
         #[cfg(unix)]
         std::fs::File::open(root)?.sync_all()?;
         if let Some(storage)=&mut storage { storage.finish(true,&attempt)?; }
-        persist_completed_worker_execution(store,&attempt,&identity,&study_step.outputs,RunStatus::Completed,1,std::slice::from_ref(&output),None,None)?;
+        persist_completed_worker_execution(store,&attempt,&identity,&study_step.outputs,RunStatus::Completed,1,std::slice::from_ref(&output),None,None,None)?;
         Ok(AcceptedRunnerExecution {
-        terminal_publication: None,status:RunStatus::Completed,completed_step_count:1,outputs:vec![output],attempt_output_dir:attempt.clone(),recovered_from_receipt:false,accepted_state_ref:None,observation_source:None})
+        terminal_publication: None,status:RunStatus::Completed,completed_step_count:1,outputs:vec![output],attempt_output_dir:attempt.clone(),recovered_from_receipt:false,accepted_state_ref:None,observation_source:None,terminal_stats:None})
     });
     if let Some(storage)=&mut storage {
         match &execution { Ok(result) if result.status==RunStatus::Cancelled=>storage.note_outcome("cancelled",None),Err(error)=>storage.note_outcome("failed",Some(format!("{error:#}"))),_=>{} }
@@ -3135,10 +3358,14 @@ fn execute_accepted_fem_worker_start(
                 recovered_from_receipt: false,
                 accepted_state_ref: None,
                 observation_source: None,
+                terminal_stats: None,
             }),
             crate::accepted_fem_study_worker::AcceptedFemExecutionOutcome::Completed(
                 execution,
             ) => {
+                let terminal_stats = execution.terminal_stats.as_ref().filter(|stats| {
+                    terminal_stats_is_recordable(stats, &execution.accepted_state_ref, &accepted_step.claim)
+                }).cloned();
                 if let Some(storage) = &mut storage {
                     storage.finish(true, &execution.attempt_output_dir)?;
                 }
@@ -3152,6 +3379,7 @@ fn execute_accepted_fem_worker_start(
                     &execution.outputs,
                     Some(&execution.accepted_state_ref),
                     None,
+                    terminal_stats.as_ref(),
                 )
                 .context("persist immutable completed FEM worker output receipt")?;
                 Ok(AcceptedRunnerExecution {
@@ -3163,6 +3391,7 @@ fn execute_accepted_fem_worker_start(
                     recovered_from_receipt: false,
                     accepted_state_ref: Some(execution.accepted_state_ref),
                     observation_source: None,
+                    terminal_stats,
                 })
             }
         }
@@ -3303,6 +3532,7 @@ fn execute_accepted_antenna_worker_start(
                 &outputs,
                 None,
                 None,
+                None,
             )?;
         }
         Ok(AcceptedRunnerExecution {
@@ -3314,6 +3544,7 @@ fn execute_accepted_antenna_worker_start(
             recovered_from_receipt: false,
             accepted_state_ref: None,
             observation_source: None,
+            terminal_stats: None,
         })
     })();
     if let Some(storage) = &mut storage {
@@ -3729,6 +3960,8 @@ fn apply_accepted_start_effect(
         || durable_execution.outputs != execution.outputs
         || durable_execution.accepted_state_ref != execution.accepted_state_ref
         || durable_execution.terminal_publication != execution.terminal_publication
+        || terminal_stats_identity(durable_execution.terminal_stats.as_ref())?
+            != terminal_stats_identity(execution.terminal_stats.as_ref())?
     {
         bail!("worker receipt recovery differs from the completed runner output");
     }

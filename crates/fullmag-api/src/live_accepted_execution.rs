@@ -2160,7 +2160,7 @@ fn prepare_live_accepted(
         "Materializing the accepted run definition",
         "Execution plans are resolved. Materializing the accepted run definition from the validated model and Study.",
     );
-    let intent = fullmag_application::materialize_run_intent(
+    let materialization = fullmag_application::prepare_run_intent_materialization(
         &definition,
         &study,
         &catalog,
@@ -2183,19 +2183,17 @@ fn prepare_live_accepted(
         "Validating and encoding durable inputs",
         "Validating and encoding immutable run inputs before publication. Native domain preparation and Compute have not started.",
     );
-    let validated_commit = crate::run_intent_persistence::prepare_owned_run_intent_commit(
-        intent,
-        &definition,
-        &study,
-        &catalog,
-        asset_payloads,
-    )
-    .map_err(|error| {
-        ApiError::unprocessable_with_code(
-            "accepted_run_commit_failed",
-            format!("durable accepted RunIntent precommit validation failed: {error:#}"),
+    let validated_commit =
+        crate::run_intent_persistence::prepare_owned_run_intent_commit_from_materialization(
+            materialization,
+            asset_payloads,
         )
-    })?;
+        .map_err(|error| {
+            ApiError::unprocessable_with_code(
+                "accepted_run_commit_failed",
+                format!("durable accepted RunIntent precommit validation failed: {error:#}"),
+            )
+        })?;
     Ok(PreparedLiveAcceptedStudy {
         store_root: store_root.to_path_buf(),
         backlog_limit,

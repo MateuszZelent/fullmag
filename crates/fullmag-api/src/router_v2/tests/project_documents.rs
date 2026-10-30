@@ -3595,10 +3595,36 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         .collect::<Vec<_>>();
     assert_eq!(reserved_entries.len(), 1);
     let accepted_quantity_bundle = reserved_entries[0];
+    let terminal_scalar_entries = output_catalog
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.artifact_type
+                == crate::accepted_field_materialization_worker::TERMINAL_SCALAR_ARTIFACT_TYPE
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(terminal_scalar_entries.len(), 1);
+    let terminal_scalar = terminal_scalar_entries[0];
+    assert_eq!(terminal_scalar.task_id, claim.task_id.as_str());
+    assert_eq!(terminal_scalar.attempt_id, claim.attempt_id.as_str());
+    assert_eq!(
+        terminal_scalar.ownership_epoch,
+        claim.ownership_epoch.value()
+    );
+    assert_eq!(
+        terminal_scalar.status,
+        fullmag_session::FmsArtifactStatus::Published
+    );
+    assert!(terminal_scalar.study_output.is_none());
+    assert!(!solution_artifact_ids.contains(terminal_scalar.artifact_id.as_str()));
     let expected_solution_artifact_ids = output_catalog
         .entries
         .iter()
-        .filter(|entry| entry.artifact_id != accepted_quantity_bundle.artifact_id)
+        .filter(|entry| {
+            entry.artifact_id != accepted_quantity_bundle.artifact_id
+                && entry.artifact_type
+                    != crate::accepted_field_materialization_worker::TERMINAL_SCALAR_ARTIFACT_TYPE
+        })
         .map(|entry| entry.artifact_id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(solution_artifact_ids, expected_solution_artifact_ids);

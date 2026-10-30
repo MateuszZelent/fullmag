@@ -71,7 +71,10 @@ import {
 import {
   createViewport3DInactiveResourcePauseController,
 } from "./resources/inactiveViewportResourcePolicy";
-import { createHiddenInstanceTabResourcePauseController } from "./resources/hiddenInstanceTabResourcePolicy";
+import {
+  createHiddenDocumentResourcePauseController,
+  createHiddenInstanceTabResourcePauseController,
+} from "./resources/hiddenInstanceTabResourcePolicy";
 import { listenForInstanceTabVisibility } from "./layout/instanceTabVisibility";
 import { useRuntimeCommandControlResourceData } from "./resources/studyRuntimeResources";
 import { confirmedSessionResourceIdentity, sessionRequestScopeKey, sessionScopedResourceKey, type SessionResourceIdentity } from "./resources/sessionResourceIdentity";
@@ -856,10 +859,17 @@ function Viewport3DResourceLifecycleConnector({
   return null;
 }
 
-/** Pauses this page's background work while its instance tab is hidden (ADR 0069). */
+/**
+ * Pauses this page's background work while its instance tab is hidden
+ * (ADR 0069), and its live data plane while the browser tab is hidden.
+ */
 function InstanceTabVisibilityConnector() {
   useEffect(() => listenForInstanceTabVisibility(window), []);
   useEffect(() => createHiddenInstanceTabResourcePauseController(), []);
+  useEffect(
+    () => createHiddenDocumentResourcePauseController({ visibility: document }),
+    [],
+  );
 
   return null;
 }

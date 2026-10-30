@@ -62,6 +62,11 @@ use crate::{
 #[cfg(feature = "cuda")]
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+/// Wall-clock cadence of native stats snapshots for a live consumer when the
+/// native policy leaves per-step energies unfilled (projector reads at 2 Hz).
+#[cfg(feature = "cuda")]
+const LIVE_STATS_SNAPSHOT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+
 #[cfg(feature = "cuda")]
 pub(super) fn capture_full_active_cuda_fields(
     backend: &NativeFdmBackend,
@@ -73,10 +78,8 @@ pub(super) fn capture_full_active_cuda_fields(
     magnetization: Option<&[[f64; 3]]>,
 ) -> Result<Vec<LivePreviewField>, RunError> {
     let quantities = field_materialization_quantity_ids();
-    let quantities = active_fdm_preview_quantities(
-        crate::dispatch::FdmEngine::CudaFdm,
-        plan,
-        &quantities,
+    let quantities = crate::live_demand::retain_demanded_live_quantities(
+        active_fdm_preview_quantities(crate::dispatch::FdmEngine::CudaFdm, plan, &quantities),
     );
     capture_cuda_fields_for_quantities(
         backend,
@@ -866,6 +869,7 @@ pub(crate) fn execute_cuda_fdm(
         numerical_stagnation = outcome.numerical_stagnation;
     } else {
         let mut dt = initial_dt.expect("LLG execution requires a resolved timestep policy");
+        let mut last_live_stats_snapshot: Option<Instant> = None;
         while current_time < until_seconds {
             if use_adaptive_batch {
                 if current_time + OUTPUT_TIME_TOLERANCE >= until_seconds {
@@ -1008,11 +1012,35 @@ pub(crate) fn execute_cuda_fdm(
             } else if native_stats_observed {
                 stats = backend.snapshot_step_stats(plan.grid.cells)?;
             }
+            // Requested/None native policies never fill energies or torque in
+            // the step itself; such a step returns them as zeros. A live
+            // consumer therefore gets a real snapshot at a bounded wall-clock
+            // cadence, and the other steps are not labelled physical rows.
+            let native_step_unobserved = matches!(
+                observation_policy.native.mode,
+                NativeStatsMode::Requested | NativeStatsMode::None
+            ) && !native_stats_observed;
+            let live_stats_due = native_step_unobserved
+                && live.is_some()
+                && last_live_stats_snapshot
+                    .is_none_or(|last| last.elapsed() >= LIVE_STATS_SNAPSHOT_INTERVAL);
+            if live_stats_due {
+                stats = backend.snapshot_step_stats(plan.grid.cells)?;
+                last_live_stats_snapshot = Some(Instant::now());
+            }
+            let step_stats_observed = !native_step_unobserved || live_stats_due;
             ensure_single_object_scalars(&mut stats, "free");
             current_time = stats.time;
             latest_stats = Some(stats.clone());
             current_stats = stats.clone();
-            if live.is_some() {
+            if !step_stats_observed {
+                // The next loop iteration publishes these stats to the live
+                // consumer before it steps; they must not read as a measurement.
+                current_stats.kind = fullmag_quantities::StepDataKind::LegacyUnclassified;
+            }
+            // The checkpoint exists only for frozen-spin plans; without one this
+            // device-to-host copy of m on every live step had no consumer.
+            if live.is_some() && frozen_spins_state.is_some() {
                 let frozen_magnetization = backend.copy_m(cell_count)?;
                 final_frozen_checkpoint = frozen_spins_checkpoint_value(
                     plan,
@@ -1024,6 +1052,9 @@ pub(crate) fn execute_cuda_fdm(
                 )?;
             }
             let mut sampled_stats = stats.clone();
+            if !step_stats_observed {
+                sampled_stats.kind = fullmag_quantities::StepDataKind::LegacyUnclassified;
+            }
             let mut magnetization_cache: Option<Vec<[f64; 3]>> = None;
             if due_scalar_row {
                 if magnetization_cache.is_none() {

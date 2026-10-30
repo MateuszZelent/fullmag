@@ -2977,6 +2977,15 @@ fn make_multilayer_live_step_update(
     magnetization_override: Option<&[[f64; 3]]>,
     source_error: Option<&str>,
 ) -> StepUpdate {
+    // Live (non-terminal) generations carry only the demanded quantities.
+    let demanded_quantities;
+    let requested_quantities = if terminal {
+        requested_quantities
+    } else {
+        demanded_quantities =
+            crate::live_demand::retain_demanded_live_quantities(requested_quantities.to_vec());
+        demanded_quantities.as_slice()
+    };
     let publish_magnetization = fields_due || terminal;
     let publish_full_catalog = terminal || (field_every_n == 1 && fields_due);
     let mut update_stats = stats.clone();

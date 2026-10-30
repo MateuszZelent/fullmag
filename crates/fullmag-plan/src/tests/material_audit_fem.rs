@@ -768,6 +768,10 @@ fn fem_conformal_segments_materialize_fields_at_every_owner_node() {
         let BackendPlanIR::Fem(fem) = planned.backend_plan else {
             panic!("expected FEM plan");
         };
+        for field in &planned.common.material_field_plans {
+            assert_eq!(field.realization_location, fullmag_ir::MaterialFieldLocationIR::Node);
+            assert_eq!(field.statistics.as_ref().unwrap().sample_count, fem.mesh.nodes.len());
+        }
         let ms = fem
             .material
             .ms_field
@@ -809,4 +813,132 @@ fn fem_conformal_segments_materialize_fields_at_every_owner_node() {
             assert_ne!(aex[index], fem.material.exchange_stiffness);
         }
     }
+}
+
+#[test]
+fn fem_material_field_metadata_tracks_resolved_element_coefficients() {
+    use fullmag_ir::{MaterialFieldLocationIR, MaterialParameterNameIR as Parameter};
+
+    for parameter in [Parameter::Aex, Parameter::Ms] {
+        for reverse_segments in [false, true] {
+            let mut ir = conformal_absorber_problem(
+                true,
+                reverse_segments,
+                fullmag_ir::AbsorbingBoundaryFrameIR::Object,
+            );
+            ir.magnets[0].absorbing_boundary = None;
+            let (base, unit) = match parameter {
+                Parameter::Aex => (ir.materials[0].exchange_stiffness, "J/m"),
+                Parameter::Ms => (ir.materials[0].saturation_magnetisation, "A/m"),
+                _ => unreachable!(),
+            };
+            let region = &mut ir.object_regions[1];
+            region.material_transition = Some(fullmag_ir::MaterialTransitionSpecIR::Sharp);
+            region.material_overrides.push(fullmag_ir::RegionMaterialOverrideIR {
+                parameter,
+                value: fullmag_ir::MaterialParameterFieldIR::Constant {
+                    value: serde_json::json!(2.0 * base),
+                    unit: Some(unit.to_string()),
+                },
+                priority: 10,
+                conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+            });
+            region.material_overrides.push(fullmag_ir::RegionMaterialOverrideIR {
+                parameter: Parameter::Alpha,
+                value: fullmag_ir::MaterialParameterFieldIR::Constant {
+                    value: serde_json::json!(0.03),
+                    unit: Some("1".to_string()),
+                },
+                priority: 10,
+                conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+            });
+
+            let planned = plan(&ir).expect("conformal coefficient should be realized");
+            let BackendPlanIR::Fem(fem) = &planned.backend_plan else {
+                panic!("expected FEM plan");
+            };
+            let values = match parameter {
+                Parameter::Aex => fem.a_element_field.as_deref(),
+                Parameter::Ms => fem.ms_element_field.as_deref(),
+                _ => unreachable!(),
+            }.expect("sharp coefficient must remain elementwise");
+            assert_eq!(values.len(), 2);
+            assert!(values.contains(&base) && values.contains(&(2.0 * base)));
+
+            let field = planned.common.material_field_plans.iter()
+                .find(|field| field.parameter == parameter && field.object_id == "strip")
+                .expect("resolved coefficient needs metadata for artifact publication");
+            assert_eq!(field.realization_location, MaterialFieldLocationIR::Element);
+            assert_eq!(field.realization_method.as_deref(), Some("conformal_domain_element_sampling"));
+            let stats = field.statistics.as_ref().expect("resolved statistics");
+            assert_eq!(stats.sample_count, values.len());
+            assert_eq!(stats.min, base);
+            assert_eq!(stats.max, 2.0 * base);
+            assert!((stats.mean - 1.5 * base).abs() <= base.abs() * 1e-14);
+            let alpha = planned.common.material_field_plans.iter()
+                .find(|field| field.parameter == Parameter::Alpha)
+                .expect("alpha metadata");
+            assert_eq!(alpha.realization_location, MaterialFieldLocationIR::Node);
+        }
+    }
+}
+
+#[test]
+fn fem_aex_field_uniformity_uses_relative_si_tolerance() {
+    use fullmag_ir::{
+        AbsorbingBoundaryFrameIR, MaterialParameterFieldIR, MaterialParameterNameIR,
+        RegionConflictPolicyIR, RegionShapeIR,
+    };
+
+    let plan_with_aex = |base_aex: f64, region_aex: f64| {
+        let mut ir = conformal_absorber_problem(false, false, AbsorbingBoundaryFrameIR::Object);
+        ir.magnets[0].absorbing_boundary = None;
+        ir.materials[0].exchange_stiffness = base_aex;
+
+        let mut region = object_region("strip:low-aex", "low Aex");
+        region.shape = RegionShapeIR::Box {
+            size: [20e-9, 20e-9, 20e-9],
+            center: [1e-9, 0.5e-9, 0.5e-9],
+        };
+        region.material_overrides.push(fullmag_ir::RegionMaterialOverrideIR {
+            parameter: MaterialParameterNameIR::Aex,
+            value: MaterialParameterFieldIR::Constant {
+                value: serde_json::json!(region_aex),
+                unit: Some("J/m".to_string()),
+            },
+            priority: 10,
+            conflict_policy: RegionConflictPolicyIR::Error,
+        });
+        ir.object_regions.push(region);
+        plan(&ir).expect("non-sharp regional Aex should plan")
+    };
+
+    for (base_aex, region_aex, case) in [
+        (0.0, 5e-19, "zero baseline"),
+        (5e-19, 1e-18, "small nonzero baseline"),
+    ] {
+        let planned = plan_with_aex(base_aex, region_aex);
+        let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+            panic!("expected FEM plan");
+        };
+        let a_field = fem
+            .material
+            .a_field
+            .as_ref()
+            .unwrap_or_else(|| panic!("{case} regional Aex variation must remain nodal"));
+        assert_eq!(a_field.len(), fem.mesh.nodes.len());
+        assert!(
+            a_field.iter().any(|value| *value > base_aex),
+            "{case} regional Aex must differ from the base coefficient"
+        );
+    }
+
+    let homogeneous = plan_with_aex(5e-19, 5e-19);
+    let BackendPlanIR::Fem(fem) = homogeneous.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    assert!(
+        fem.material.a_field.is_none(),
+        "a homogeneous Aex field should keep using the scalar coefficient"
+    );
 }

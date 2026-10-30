@@ -35409,7 +35409,9 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
             "artifact_path": material_path
         });
     }
-    let missing_declared_material = app
+    // A live run declares the copy before the runner publishes it to the run
+    // artifact root; the plan-derived values stay authoritative until then.
+    let unpublished_declared_material = app
         .clone()
         .oneshot(
             Request::builder()
@@ -35419,7 +35421,7 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
         )
         .await
         .unwrap();
-    assert_eq!(missing_declared_material.status(), StatusCode::CONFLICT);
+    assert_eq!(unpublished_declared_material.status(), StatusCode::OK);
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1]["material_fields"] =
             serde_json::json!({});
@@ -35524,7 +35526,42 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
         )
         .await
         .unwrap();
-    assert_eq!(missing_declared_membership.status(), StatusCode::CONFLICT);
+    assert_eq!(missing_declared_membership.status(), StatusCode::OK);
+    let missing_declared_membership = body_json(missing_declared_membership).await;
+    assert_eq!(
+        missing_declared_membership["schema_version"],
+        "fdm_multilayer_region_membership.v1"
+    );
+    assert_eq!(missing_declared_membership["layer_id"], "layer:bottom");
+    assert_eq!(missing_declared_membership["object_id"], "object:bottom");
+    assert_eq!(missing_declared_membership["region_legend"], region_legend);
+    assert_eq!(missing_declared_membership["cell_count"], 2);
+    assert_eq!(missing_declared_membership["region_membership_revision"], 23);
+    assert_eq!(
+        missing_declared_membership["grid_fingerprint"],
+        descriptor["grid_fingerprint"]
+    );
+
+    let missing_declared_mask = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layers/layer%3Abottom/region-membership")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_declared_mask.status(), StatusCode::OK);
+    let missing_declared_mask = body_bytes(missing_declared_mask).await;
+    assert_eq!(&missing_declared_mask[..4], b"FMRM");
+    assert_eq!(
+        missing_declared_mask[64..]
+            .chunks_exact(4)
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect::<Vec<_>>(),
+        vec![1, 2]
+    );
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         let layer = &mut snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1];
         layer.as_object_mut().unwrap().remove("native_region_mask");
@@ -41951,11 +41988,12 @@ async fn v2_fdm_vector_respects_max_samples_when_preview_would_be_downscaled() {
     assert_eq!(response.headers()["x-fullmag-node-index-count"], "2");
     let bytes = body_bytes(response).await;
     assert_eq!(&bytes[..4], b"FMVP");
-    assert_eq!(decode_fmvp_node_indices(&bytes), vec![1, 2]);
+    // floor(i * 4 / 2): the same uniform sample the Control Room renderer draws.
+    assert_eq!(decode_fmvp_node_indices(&bytes), vec![0, 2]);
     let values = decode_fmvp_payload_f64(&bytes);
     assert_eq!(
         values,
-        vec![0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+        vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
         "sampled FDM m must preserve the live solver-grid vectors"
     );
 }
@@ -43547,7 +43585,7 @@ async fn v2_field_vector_applies_max_samples_to_part_scope() {
 }
 
 #[tokio::test]
-async fn v2_field_vector_applies_max_samples_to_unscoped_center_window() {
+async fn v2_field_vector_applies_uniform_max_samples_to_unscoped_values() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.latest_fields = serde_json::from_value(serde_json::json!({
@@ -43597,7 +43635,8 @@ async fn v2_field_vector_applies_max_samples_to_unscoped_center_window() {
         .chunks_exact(8)
         .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
         .collect();
-    assert_eq!(values, vec![1.0, 1.1, 1.2, 2.0, 2.1, 2.2, 3.0, 3.1, 3.2]);
+    // floor(i * 5 / 3) = 0, 1, 3: spread over the whole field, not a centre window.
+    assert_eq!(values, vec![0.0, 0.1, 0.2, 1.0, 1.1, 1.2, 3.0, 3.1, 3.2]);
 }
 
 #[tokio::test]

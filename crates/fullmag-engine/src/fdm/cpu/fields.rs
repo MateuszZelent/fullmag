@@ -65,6 +65,235 @@ fn anisotropy_energy_density_for_magnetization(
     energy_density
 }
 
+#[cfg(test)]
+mod spatial_ms_anisotropy_tests {
+    use super::*;
+    use crate::{
+        CellSize, CubicAnisotropyConfig, EffectiveFieldTerms, GridShape, LlgConfig,
+        MaterialParameters, UniaxialAnisotropyConfig,
+    };
+
+    const LOCAL_MS: [f64; 2] = [800.0e3, 400.0e3];
+
+    type FieldCase = (ExchangeLlgProblem, Vec<Vector3>, Vec<Vector3>);
+
+    fn terms(
+        uniaxial: Option<UniaxialAnisotropyConfig>,
+        cubic: Option<CubicAnisotropyConfig>,
+    ) -> EffectiveFieldTerms {
+        EffectiveFieldTerms {
+            exchange: false,
+            demag: false,
+            uniaxial_anisotropy: uniaxial,
+            cubic_anisotropy: cubic,
+            ..Default::default()
+        }
+    }
+
+    fn problem_with_ms_field(
+        terms: EffectiveFieldTerms,
+        ms_field: Vec<f64>,
+    ) -> ExchangeLlgProblem {
+        ExchangeLlgProblem::with_terms(
+            GridShape::new(2, 1, 1).unwrap(),
+            CellSize::new(1.0e-9, 1.0e-9, 1.0e-9).unwrap(),
+            MaterialParameters::new(800.0e3, 13.0e-12, 0.1).unwrap(),
+            LlgConfig::default(),
+            terms,
+        )
+        .with_spatial_fields(Some(ms_field), None, None)
+        .unwrap()
+    }
+
+    fn uniaxial_case(ms: [f64; 2]) -> FieldCase {
+        let ku1 = 2.0e4;
+        let ku2 = 5.0e3;
+        let projection: f64 = 0.8;
+        let expected = ms.map(|local_ms| {
+            [
+                0.0,
+                0.0,
+                (2.0 * ku1 * projection + 4.0 * ku2 * projection.powi(3))
+                    / (MU0 * local_ms),
+            ]
+        });
+        (
+            problem_with_ms_field(
+                terms(
+                    Some(UniaxialAnisotropyConfig {
+                        ku1,
+                        ku2,
+                        axis: [0.0, 0.0, 1.0],
+                    }),
+                    None,
+                ),
+                ms.to_vec(),
+            ),
+            vec![[0.6, 0.0, projection]; 2],
+            expected.to_vec(),
+        )
+    }
+
+    fn cubic_case(ms: [f64; 2]) -> FieldCase {
+        let kc3 = 4.2e4;
+        let component = 3.0_f64.sqrt().recip();
+        let expected = ms.map(|local_ms| {
+            let field_component = -8.0 * kc3 * component / (9.0 * MU0 * local_ms);
+            [field_component; 3]
+        });
+        (
+            problem_with_ms_field(
+                terms(
+                    None,
+                    Some(CubicAnisotropyConfig {
+                        kc1: 0.0,
+                        kc2: 0.0,
+                        kc3,
+                        axis1: [1.0, 0.0, 0.0],
+                        axis2: [0.0, 1.0, 0.0],
+                    }),
+                ),
+                ms.to_vec(),
+            ),
+            vec![[component; 3]; 2],
+            expected.to_vec(),
+        )
+    }
+
+    fn fused_aos_field(problem: &ExchangeLlgProblem, magnetization: &[Vector3]) -> Vec<Vector3> {
+        let mut field = vec![[0.0; 3]; magnetization.len()];
+        let mut workspace = problem.create_workspace();
+        problem.effective_field_into_ws_at_time(magnetization, &mut workspace, &mut field, 0.0);
+        field
+    }
+
+    fn fused_soa_field(problem: &ExchangeLlgProblem, magnetization: &[Vector3]) -> Vec<Vector3> {
+        let soa_magnetization = VectorFieldSoA::from_aos(magnetization);
+        let mut field = VectorFieldSoA::zeros(magnetization.len());
+        let mut workspace = problem.create_workspace();
+        problem.effective_field_into_soa_ws_at(
+            &soa_magnetization,
+            0.0,
+            &mut workspace,
+            &mut field,
+        );
+        field.gather_to_aos()
+    }
+
+    fn assert_fields_match(lane: &str, actual: &[Vector3], expected: &[Vector3]) {
+        assert_eq!(actual.len(), expected.len());
+        for cell in 0..expected.len() {
+            for component in 0..3 {
+                let tolerance = expected[cell][component].abs() * 1.0e-12 + 1.0e-12;
+                assert!(
+                    (actual[cell][component] - expected[cell][component]).abs() <= tolerance,
+                    "{lane} cell {cell} component {component}: expected {}, got {}",
+                    expected[cell][component],
+                    actual[cell][component]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fused_uniaxial_field_uses_cell_local_ms_in_aos() {
+        let (problem, magnetization, expected) = uniaxial_case(LOCAL_MS);
+        assert_fields_match("AoS", &fused_aos_field(&problem, &magnetization), &expected);
+    }
+
+    #[test]
+    fn fused_uniaxial_field_uses_cell_local_ms_in_soa() {
+        let (problem, magnetization, expected) = uniaxial_case(LOCAL_MS);
+        assert_fields_match("SoA", &fused_soa_field(&problem, &magnetization), &expected);
+    }
+
+    #[test]
+    fn fused_cubic_field_uses_cell_local_ms_in_aos() {
+        let (problem, magnetization, expected) = cubic_case(LOCAL_MS);
+        assert_fields_match("AoS", &fused_aos_field(&problem, &magnetization), &expected);
+    }
+
+    #[test]
+    fn fused_cubic_field_uses_cell_local_ms_in_soa() {
+        let (problem, magnetization, expected) = cubic_case(LOCAL_MS);
+        assert_fields_match("SoA", &fused_soa_field(&problem, &magnetization), &expected);
+    }
+
+    #[test]
+    fn fused_anisotropy_preserves_uniform_ms_control_in_aos_and_soa() {
+        let ms = 800.0e3;
+        let ku1 = 2.0e4;
+        let kc3 = 4.2e4;
+        let projection = 3.0_f64.sqrt().recip();
+        let uniaxial_component =
+            (2.0 * ku1 * projection + 4.0 * ku1 * projection.powi(3)) / (MU0 * ms);
+        let cubic_component = -8.0 * kc3 * projection / (9.0 * MU0 * ms);
+        let expected = vec![
+            [uniaxial_component + cubic_component, cubic_component, cubic_component];
+            2
+        ];
+        let problem = problem_with_ms_field(
+            terms(
+                Some(UniaxialAnisotropyConfig {
+                    ku1,
+                    ku2: ku1,
+                    axis: [1.0, 0.0, 0.0],
+                }),
+                Some(CubicAnisotropyConfig {
+                    kc1: 0.0,
+                    kc2: 0.0,
+                    kc3,
+                    axis1: [1.0, 0.0, 0.0],
+                    axis2: [0.0, 1.0, 0.0],
+                }),
+            ),
+            vec![ms; 2],
+        );
+        let magnetization = vec![[projection; 3]; 2];
+
+        assert_fields_match("AoS", &fused_aos_field(&problem, &magnetization), &expected);
+        assert_fields_match("SoA", &fused_soa_field(&problem, &magnetization), &expected);
+    }
+
+    #[test]
+    fn fused_anisotropy_skips_inactive_cell_with_zero_ms_in_aos_and_soa() {
+        let problem = ExchangeLlgProblem::with_terms_and_mask(
+            GridShape::new(3, 1, 1).unwrap(),
+            CellSize::new(1.0e-9, 1.0e-9, 1.0e-9).unwrap(),
+            MaterialParameters::new(800.0e3, 13.0e-12, 0.1).unwrap(),
+            LlgConfig::default(),
+            terms(
+                Some(UniaxialAnisotropyConfig {
+                    ku1: 2.0e4,
+                    ku2: 0.0,
+                    axis: [0.0, 0.0, 1.0],
+                }),
+                Some(CubicAnisotropyConfig {
+                    kc1: 0.0,
+                    kc2: 0.0,
+                    kc3: 4.2e4,
+                    axis1: [1.0, 0.0, 0.0],
+                    axis2: [0.0, 1.0, 0.0],
+                }),
+            ),
+            Some(vec![true, true, false]),
+        )
+        .unwrap()
+        .with_spatial_fields(Some(vec![800.0e3, 400.0e3, 0.0]), None, None)
+        .unwrap();
+        let component = 3.0_f64.sqrt().recip();
+        let magnetization = vec![[component; 3]; 3];
+
+        for (lane, actual) in [
+            ("AoS", fused_aos_field(&problem, &magnetization)),
+            ("SoA", fused_soa_field(&problem, &magnetization)),
+        ] {
+            assert!(actual.iter().flatten().all(|value| value.is_finite()), "{lane}");
+            assert_eq!(actual[2], [0.0; 3], "{lane} inactive cell must stay masked");
+        }
+    }
+}
+
 fn oersted_envelope_at_time(cfg: &OerstedCylinderConfig, time_seconds: f64) -> f64 {
     match cfg.time_dep_kind {
         0 => 1.0,
@@ -512,7 +741,6 @@ impl ExchangeLlgProblem {
         let ext = self.terms.external_field;
         let per_node_field = self.terms.per_node_field.as_ref();
         let static_field = self.static_external_field.as_ref();
-        let ms_safe = self.material.saturation_magnetisation.max(1e-30);
 
         let uni_data = self.terms.uniaxial_anisotropy.as_ref().map(|uni| {
             let n = norm(uni.axis).max(1e-30);
@@ -527,6 +755,7 @@ impl ExchangeLlgProblem {
             let c3 = cross(c1, c2);
             (c1, c2, c3, cub.kc1, cub.kc2, cub.kc3)
         });
+        let has_anisotropy = uni_data.is_some() || cub_data.is_some();
 
         // Thermal noise setup.  Ms/alpha are resolved per cell below; only
         // the temperature, geometry and timestep factors are shared.
@@ -556,6 +785,11 @@ impl ExchangeLlgProblem {
             if !self.is_active(i) {
                 return;
             }
+            let ms_safe = if has_anisotropy {
+                self.ms_at(i).max(1e-30)
+            } else {
+                1.0
+            };
             let m = &magnetization[i];
 
             // External field

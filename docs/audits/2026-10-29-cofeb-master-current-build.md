@@ -1,5 +1,13 @@
 # CoFeB na aktualnym masterze — odbiór bieżącej sesji, 29.10.2026
 
+> Aktualizacja 30.10.2026: poniżej zachowano historyczny odbiór z 29.10.
+> Jego otwarte punkty restore i telemetryczne zostały następnie zamknięte.
+> Nowy build `aee17a54d4c283f2fdf5aa3d89acc5ecdb638e19` wykonał CoFeB
+> FEM/GPU/double/strict: 10 iteracji, identyczny mesh i hashe m/H_demag/H_eff.
+> Stopka Step 10 i energia przeszły rzeczywisty reload; osobno odebrano FDM
+> GPU single i multilayer. Aktualny stan, receipty i ograniczenia zawiera
+> [odbiór sześciu punktów](../superpowers/plans/2026-10-29-master-runtime-completion.md#odbiór-końcowy-3010-sześć-punktów-zamkniętych).
+
 ## Wynik
 
 UI działa pod <http://127.0.0.1:3198/workspace>. Backend i frontend grupy

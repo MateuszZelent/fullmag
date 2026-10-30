@@ -426,22 +426,24 @@ class WindowsIsolationTests(unittest.TestCase):
         self.assertNotIn("FileId $currentDir", walk)
         self.assertIn("FileId $root", walk)
 
-    def test_descendant_walk_uses_dotnet_for_ordinary_entries_and_bounds_link_lookups(self):
+    def test_descendant_walk_limits_item_provider_to_links_and_bounds_work(self):
         ancestor = isolation.WINDOWS_PROVIDER.split("function NoReparse(", 1)[1].split("function FileId(", 1)[0]
         walk = isolation.WINDOWS_PROVIDER.split("function Descendants(", 1)[1].split("function Identity(", 1)[0]
         self.assertNotIn("Get-Item", ancestor)
         self.assertIn("[IO.File]::GetAttributes($cursor)", ancestor)
         self.assertIn("[IO.DirectoryInfo]::new($currentDir)", walk)
+        ordinary_prefix, link_and_rest = walk.split("if ($isLink) {", 1)
+        link_branch, ordinary_suffix = link_and_rest.split(
+            "if (($attributes -band 0x10) -ne 0) {", 1)
+        ordinary_entry_path = ordinary_prefix + ordinary_suffix
+        self.assertNotIn("Get-Item", ordinary_entry_path)
+        self.assertEqual(link_branch.count("Get-Item -Force -LiteralPath $entry.FullName"), 2)
+        self.assertIn("if ($tag -ceq '0xa0000003')", link_branch)
+        self.assertIn("elseif ($tag -ceq '0xa000000c')", link_branch)
+        self.assertIn("if ($links.Count -ge 256)", link_branch)
+        self.assertEqual(isolation.MAX_RELATIVE_LINKS, 256)
         entries = walk.split("foreach ($entry in $directory.EnumerateFileSystemInfos())", 1)[1]
         entries = entries.split("NoReparse $currentDir", 1)[0]
-        ordinary, link_and_after = entries.split("if ($isLink) {", 1)
-        link_observation, after_link = link_and_after.split("if (($attributes -band 0x10) -ne 0) {", 1)
-        self.assertNotIn("Get-Item", ordinary + after_link)
-        self.assertEqual(link_observation.count("Get-Item -Force -LiteralPath $entry.FullName"), 2)
-        self.assertIn("if ($tag -ceq '0xa0000003')", link_observation)
-        self.assertIn("} elseif ($tag -ceq '0xa000000c')", link_observation)
-        self.assertIn(f"if ($links.Count -ge {isolation.MAX_RELATIVE_LINKS})", link_observation)
-        self.assertEqual(isolation.MAX_RELATIVE_LINKS, 256)
         self.assertEqual(entries.count("DescendantBudget $clock"), 1)
         self.assertIn("if ($entryCount -gt 100000 -or $clock.ElapsedMilliseconds -ge 15000)", entries)
         self.assertIn("if (($relative.Split('\\')).Length -gt 128)", entries)

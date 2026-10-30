@@ -65,6 +65,7 @@ import {
   SIMULATION_COMMANDS_PATH,
   SIMULATION_OBJECT_METRICS_PATH,
   SIMULATION_PREPARATION_PATH,
+  SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
   SIMULATION_STAGE_HYSTERESIS_ORIENTATION_PATH,
@@ -543,6 +544,12 @@ export class RealtimeInvalidationBridge {
 
         if (scalarChange) {
           this.queuePrefixInvalidation(DATA_SCALARS_PATH, change.revision);
+          // Energy history keys carry a `?limit=` window; the batch names only
+          // `energies/current`, so the history must follow every scalar row.
+          this.queuePrefixInvalidation(
+            SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
+            change.revision,
+          );
           this.queuePrefixInvalidation(
             resourceFamilyPrefix(SIMULATION_OBJECT_METRICS_PATH),
             dependentResourceRevision(

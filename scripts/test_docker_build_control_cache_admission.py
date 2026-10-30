@@ -58,9 +58,6 @@ class FakeControl:
             raise StopAfterPrepare
         return {"Name": "control"}
 
-    def assert_windows_pre_pull_space(self):
-        self.events.append("windows-pre-pull")
-
     def require_build_space(self, *, operation=None):
         self.require_calls.append(operation)
         if self.require_error:
@@ -179,8 +176,8 @@ class BuildSpaceAdmissionTests(unittest.TestCase):
              mock.patch.object(bootstrap, "tracked_input_files", return_value=tracked), \
              mock.patch.object(bootstrap, "input_files", return_value=tracked), \
              mock.patch.object(bootstrap, "read_input", side_effect=lambda _repo, path: source_bytes[path.as_posix()]):
-            build_control.assert_windows_pre_pull_space.side_effect = (
-                fake.assert_windows_pre_pull_space
+            build_control.assert_windows_pre_pull_space.side_effect = lambda: fake.events.append(
+                "windows-pre-pull"
             )
             result = control.build_volume_toolchain(repo)
         return result, compose
@@ -346,9 +343,7 @@ class BuildSpaceAdmissionTests(unittest.TestCase):
         fake = FakeControl(receipt=None, events=events, stop_after_prepare=True)
         with self.assertRaises(StopAfterPrepare):
             self._run_toolchain(fake, base_present=False)
-        expected = []
-        if control.os.name == "nt":
-            expected.append("windows-pre-pull")
+        expected = ["windows-pre-pull"] if control.os.name == "nt" else []
         expected.extend(("pull", "construct", "prepare", "helper"))
         self.assertEqual(events, expected)
 
@@ -376,13 +371,11 @@ class BuildSpaceAdmissionTests(unittest.TestCase):
         ])
 
     def test_windows_pre_pull_guard_uses_physical_backing_measurement(self):
-        identity = {"project_name": "fullmag-cache-test", "worktree_id": "test"}
-        with mock.patch("docker_control_namespace.resolve_namespace", return_value=None):
-            instance = control.BuildControl(identity, HELPER)
         with mock.patch.object(control.BuildControl, "_windows_backing_volume", return_value={
-                "available_bytes": control.MIN_FREE_BUILD_BYTES - 1}):
+                "available_bytes": control.MIN_FREE_BUILD_BYTES - 1}) as backing_volume:
             with self.assertRaisesRegex(control.BuildControlError, "32 GiB"):
-                instance.assert_windows_pre_pull_space()
+                control.BuildControl.assert_windows_pre_pull_space()
+        backing_volume.assert_called_once_with()
 
     def test_development_keeps_full_32_gib_guard_and_rejects_cache_budget(self):
         identity = {"project_name": "fullmag-cache-test", "worktree_id": "test"}
