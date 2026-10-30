@@ -812,3 +812,35 @@ pozostałej kwocie na 413. Reader ma teraz typowany `MetadataByteBudgetExceeded`
 API używa go tylko dla rzeczywistego przekroczenia limitu. Brak pliku, zły typ,
 symlink i inne błędy zachowują odrębny komunikat. Regresje dodano w readerze
 oraz handlerze API. Niezależny ponowny source review: PASS, wykonanie: NOT RUN.
+
+
+### Pierwsze CI nowego etapu — HEAD 1f2980429
+
+Kod i testy opublikowano w `1f2980429f5c546f4ee2d0bca5d28efb74e80e3d`.
+Rust run [41043411407](https://github.com/MateuszZelent/fullmag/actions/runs/41043411407)
+zakończył job rust-contracts błędem kompilacji: brak importu
+`FEM_P1_NODAL_FIELD_SEMANTICS_FORMAT` w saved_fem_nodal i przesłonięcie helpera
+`reference` lokalną zmienną w teście. Oba błędy poprawiono; potrzebne ponowienie CI.
+Testy Results nie wykonały się w tej próbie. Artefakt 12971087642 zawiera Cargo.lock
+wygenerowany przez Cargo; po sprawdzeniu SHA256 ZIP i identyczności manifestów
+przeniesiono go bajtowo do repo. Zmiana to dwie wymagane zależności testowe oraz
+kanoniczna kolejność istniejących wpisów CLI; bez ręcznej edycji lockfile.
+
+UI run [41043505998](https://github.com/MateuszZelent/fullmag/actions/runs/41043505998)
+przeszedł `inspector-actions-browser-smoke`; pozostałe joby były w toku podczas
+odczytu. Obejrzano zrzuty Airbox narrow/live i Object wide/invalid z artefaktu
+12970928459. Kontrolki mają czytelną hierarchię, akcje pozostają widoczne przy
+przewijaniu, stan walidacji wyłącza Apply. Raport jawnie kwalifikuje test jako
+fixture callbacków produkcyjnego Inspectora, bez API end-to-end, runtime ani
+fizyki. Nie dowodzi to nowego przepływu Results. Zrzuty mają odznakę Next dev;
+nie traktujemy tej fixture jako wyglądu pełnego produkcyjnego workspace.
+
+Hook commita wykonał skan pięciu plików UI i zgłosił indeks jako klucz w liście
+Decoded values. W tym read-only widoku indeks jest stabilną pozycją wartości
+w tablicy; brak stanu wiersza i sortowania. Uznano ostrzeżenie za nieadekwatne
+do tej listy; nie dodano suppression. Nie jest to pełny lint ani typecheck.
+
+Job control-room-contracts potwierdził typecheck, a następnie zatrzymał się na
+jednym ostrzeżeniu ESLint (`React` nieużywane w mocku
+InspectorDirtySelectionGuard). Usunięto niepotrzebny import i async tego mocka.
+Vitest i build nie zostały przez tę próbę wykonane; obowiązuje ponowienie CI.

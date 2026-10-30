@@ -57,8 +57,7 @@ vi.mock("@/kernel/performance/reactRenderProfiler", async () => {
   };
 });
 
-vi.mock("./InspectorDirtySelectionGuard", async () => {
-  const React = await import("react");
+vi.mock("./InspectorDirtySelectionGuard", () => {
   return {
     InspectorDirtySelectionGuard: ({
       children,

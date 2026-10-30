@@ -1,11 +1,11 @@
 {
   "schema": "fullmag.results-fem-nodal-source-checkpoint.v1",
-  "observed_at": "2026-10-30T10:43:50.977465+00:00",
-  "head": "4f4eade947c21b3eed7578793013efb7f44c3230",
+  "observed_at": "2026-10-30T10:55:46.631992+00:00",
+  "head": "1f2980429f5c546f4ee2d0bca5d28efb74e80e3d",
   "source_sha256": {
     "crates/fullmag-quantities/src/fem_nodal_field.rs": "5852067389b8b9408dc9a41750e22e9fa7e7611cea37bc1acd9d64b1652ed5cd",
     "crates/fullmag-quantities/src/lib.rs": "a77045805d298eff2d6be7c03a193bab40026a8e2f424564342b8e2615aac877",
-    "crates/fullmag-session/src/saved_fem_nodal.rs": "30188b7dde47b7545bf031da4e2bcf2c326cfe80008d9defbe4796d25bdea1a5",
+    "crates/fullmag-session/src/saved_fem_nodal.rs": "0848b004d7f48db1294afc8629ac3727c809ed6e0439297a42793279d9e8212b",
     "crates/fullmag-session/src/lib.rs": "22c94d4343802179444eda4c7ee028e83cee949e15b7d295be0ad31ef51ec63f",
     "crates/fullmag-session/src/solution_field_geometry.rs": "baaef5e093bb19871f64bce5df0fc6c93f0be85d585ae2a308cebb46f1106cb9",
     "crates/fullmag-runner/src/autosave_fem_geometry.rs": "01ea3d76ccca51784bab7c403e717098d50115a506f804abd378c94c2c0d5bdf",
@@ -26,13 +26,15 @@
     "crates/fullmag-session/src/repository_path.rs": "9599d6f7e15e52b16691416e99432cde8d6a23f6e4705ad0a298a73c2e36a0ba",
     "apps/control-room/src/kernel/visualization/SnapshotVisualizationController.ts": "439c0e7af802562478a97468820ff6e8d0fbc2c2308e0e9a1d8cab5d95e19140",
     "apps/control-room/src/kernel/visualization/SnapshotVisualizationController.test.ts": "aeaf3893498be5d43a67beb7ff4b3442f0cb0c31fba1bd2fa4a7e7c0ea49c0b8",
-    ".github/workflows/bootstrap.yml": "af4b7c0639a88812080cc13fbd3c4e0c9ae51fe9f7d418e0ee356bd5d4402838"
+    ".github/workflows/bootstrap.yml": "af4b7c0639a88812080cc13fbd3c4e0c9ae51fe9f7d418e0ee356bd5d4402838",
+    "Cargo.lock": "4dbaff705d3e94f64559dd1e50c6088a9bccfe974ea1b49a013d014fe6cb5fbb",
+    "apps/control-room/src/modules/inspector/InspectorModule.test.tsx": "009ceac580ce2a962026a2e56a57c2c498f582c1598d850aa3abc97b8996bb67"
   },
   "scope": "FEM producer/reader/API, accepted-output collection, aggregate discovery budget and cross-revision snapshot preferences implemented in source; compilation and current UI verification pending",
   "checks": {
     "rustfmt_owned_files": "passed (skip_children=true)",
     "git_diff_check": "passed",
-    "cargo_tests": "NOT RUN",
+    "cargo_tests": "First CI rust-contracts FAILED compiling saved_fem_nodal: missing schema constant import and shadowed test helper. Fixed in current sources; retest pending. Results tests did not run.",
     "new_runtime": "NOT RUN",
     "new_browser": "NOT RUN",
     "review": "Payload/hash API and Windows directory replacement findings addressed in source; Windows execution NOT VERIFIED",
@@ -45,7 +47,8 @@
     "collection": "Independent source review PASS after aggregate receipt budget fix; geometry sibling/stale and aggregate-budget route tests added; NOT RUN.",
     "receipt_budget": "16 MiB aggregate per discovery, typed regular-file oversize error distinguishes missing/type/symlink/I/O failures; independent source review PASS; tests NOT RUN.",
     "snapshot_preferences": "Bounded logical appearance/sample preferences preserve explicit selections across metadata revisions; exact render keys remain revision-pinned and new definitions do not activate preview. Primary source review PASS; Vitest/typecheck/browser NOT RUN.",
-    "ci": "Existing bootstrap rust-contracts extended with Results collection and FEM autosave test filters, plus Cargo-resolved lockfile artifact; YAML parse PASS; new CI not yet dispatched."
+    "ci": "Rust run41043411407 failed compilation; UI run41043505998 control-room-contracts passed typecheck then failed lint on unused React in test mock. Both causes fixed; reruns pending. Inspector browser fixture PASS; broad browser fixture still running at last observation.",
+    "cargo_lock": "Byte-exact Cargo-produced artifact12971087642 from run41043411407, matching input manifests; sha256 4dbaff705d3e94f64559dd1e50c6088a9bccfe974ea1b49a013d014fe6cb5fbb."
   },
   "formatter_recovery": {
     "unintended_files": 104,

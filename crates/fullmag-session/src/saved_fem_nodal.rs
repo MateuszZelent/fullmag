@@ -10,7 +10,8 @@ use crate::solution_field_geometry::{
 use anyhow::{bail, Context, Result};
 use fullmag_ir::MeshIR;
 use fullmag_quantities::{
-    fem_nodal_field::FemP1NodalFieldSemantics, FieldSampleLocation, QuantityId,
+    fem_nodal_field::{FemP1NodalFieldSemantics, FEM_P1_NODAL_FIELD_SEMANTICS_FORMAT},
+    FieldSampleLocation, QuantityId,
 };
 use serde::{Deserialize, Serialize};
 
@@ -501,16 +502,16 @@ mod tests {
         let geometry = mesh_geometry(mesh());
         let value = semantics(QuantityId::HEff, &geometry.mesh, vec![true; 4]);
         let bytes = serde_json::to_vec(&value).unwrap();
-        let reference = reference(FEM_P1_NODAL_FIELD_SEMANTICS_FORMAT, &bytes);
-        let parsed = parse_saved_fem_nodal_semantics(&bytes, &reference).unwrap();
+        let semantics_ref = reference(FEM_P1_NODAL_FIELD_SEMANTICS_FORMAT, &bytes);
+        let parsed = parse_saved_fem_nodal_semantics(&bytes, &semantics_ref).unwrap();
         assert_eq!(parsed, value);
-        let mut bad_ref = reference.clone();
+        let mut bad_ref = semantics_ref.clone();
         bad_ref.object_ref = "0".repeat(64);
         assert!(parse_saved_fem_nodal_semantics(&bytes, &bad_ref).is_err());
-        bad_ref = reference.clone();
+        bad_ref = semantics_ref.clone();
         bad_ref.byte_length += 1;
         assert!(parse_saved_fem_nodal_semantics(&bytes, &bad_ref).is_err());
-        bad_ref = reference.clone();
+        bad_ref = semantics_ref.clone();
         bad_ref.schema_id = FEM_P1_MESH_GEOMETRY_SCHEMA.into();
         assert!(parse_saved_fem_nodal_semantics(&bytes, &bad_ref).is_err());
 
