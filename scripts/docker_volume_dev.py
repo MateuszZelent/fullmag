@@ -1586,7 +1586,7 @@ _MODAL_SHIFTED_KSP_TYPE_SELECTION_SCHEMA = "fullmag.modal-shifted-ksp-type-selec
 
 
 def _modal_shifted_ksp_type_successor_record(previous_record, requested_type):
-    """Derive and pin only the explicitly selected successor shifted-KSP type."""
+    """Derive and pin an explicit successor shifted-KSP selection."""
 
     from docker_dev import _operator_probe_environment_for_modal_shifted_ksp_type
 
@@ -1616,7 +1616,7 @@ def _modal_shifted_ksp_type_successor_record(previous_record, requested_type):
 
 
 def _modal_shifted_ksp_type_successor_from_metadata(previous_record, selection):
-    """Rebuild the selected shifted-KSP type from immutable recreation intent."""
+    """Rebuild the shifted-KSP selection from immutable recreation intent."""
 
     if selection is None:
         return previous_record
@@ -7195,7 +7195,7 @@ def _retained_operation(
 ):
     """Resume one exact retained start; a frontend-only recovery never restarts the backend."""
     from docker_dev import (
-        FLOQUET_DIAGNOSTIC_PROFILES, MODAL_SHIFTED_KSP_TYPES,
+        FLOQUET_DIAGNOSTIC_PROFILES, MODAL_SHIFTED_KSP_SELECTIONS,
         _select_source, _compose_identity,
     )
     requested_floquet_profile = getattr(args, "floquet_diagnostics", None)
@@ -7213,8 +7213,8 @@ def _retained_operation(
             )
     if requested_modal_shifted_ksp_type is not None:
         if (not isinstance(requested_modal_shifted_ksp_type, str)
-                or requested_modal_shifted_ksp_type not in MODAL_SHIFTED_KSP_TYPES):
-            raise BuildControlError("Unsupported --modal-shifted-ksp-type solver type")
+                or requested_modal_shifted_ksp_type not in MODAL_SHIFTED_KSP_SELECTIONS):
+            raise BuildControlError("Unsupported --modal-shifted-ksp-type selection")
         if (not recreate_services or resume_recreation_id is not None
                 or getattr(args, "completed_recreation_attempt", None)
                 or getattr(args, "completed_recreation_sha256", None)

@@ -147,6 +147,7 @@ FLOQUET_DIAGNOSTIC_PROFILES = frozenset({"disabled", "schur-action", "dense-orac
 MODAL_SHIFTED_KSP_TYPES = MODAL_KRYLOV_ENVIRONMENT_ALLOWED[
     "FULLMAG_MODAL_SHIFTED_KSP_TYPE"
 ]
+MODAL_SHIFTED_KSP_SELECTIONS = MODAL_SHIFTED_KSP_TYPES | frozenset({"default"})
 OPTIONAL_OPERATOR_PROBE_ENVIRONMENT_ALLOWED = {
     **MODAL_KRYLOV_ENVIRONMENT_ALLOWED,
     **FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED,
@@ -219,10 +220,15 @@ def _operator_probe_environment_for_modal_shifted_ksp_type(
     normalized = _normalize_operator_probe_environment(value)
     if requested_type is None:
         return normalized
-    if not isinstance(requested_type, str) or requested_type not in MODAL_SHIFTED_KSP_TYPES:
-        raise _fail("modal shifted KSP type is unsupported")
+    if not isinstance(requested_type, str) or requested_type not in MODAL_SHIFTED_KSP_SELECTIONS:
+        raise _fail("modal shifted KSP selection is unsupported")
     result = dict(normalized)
-    result["FULLMAG_MODAL_SHIFTED_KSP_TYPE"] = requested_type
+    if requested_type == "default":
+        # V1 records allow only this canonical type key; unknown legacy keys
+        # have already been rejected by normalization above.
+        result.pop("FULLMAG_MODAL_SHIFTED_KSP_TYPE", None)
+    else:
+        result["FULLMAG_MODAL_SHIFTED_KSP_TYPE"] = requested_type
     return _normalize_operator_probe_environment(result)
 
 
@@ -2615,8 +2621,8 @@ def _validate_modal_shifted_ksp_type_request(args) -> None:
     requested_type = getattr(args, "modal_shifted_ksp_type", None)
     if requested_type is None:
         return
-    if not isinstance(requested_type, str) or requested_type not in MODAL_SHIFTED_KSP_TYPES:
-        raise _fail("--modal-shifted-ksp-type has an unsupported solver type")
+    if not isinstance(requested_type, str) or requested_type not in MODAL_SHIFTED_KSP_SELECTIONS:
+        raise _fail("--modal-shifted-ksp-type has an unsupported selection")
     if getattr(args, "resume_recreation", None) is not None:
         raise _fail("--modal-shifted-ksp-type cannot override a --resume-recreation intent")
     if (getattr(args, "completed_recreation_attempt", None)
@@ -2982,10 +2988,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     recreate_volume.add_argument(
         "--modal-shifted-ksp-type",
-        choices=sorted(MODAL_SHIFTED_KSP_TYPES),
+        choices=sorted(MODAL_SHIFTED_KSP_SELECTIONS),
         action=_StoreOnce,
         default=None,
-        help="explicitly select the successor group's shifted modal KSP type",
+        help="select the successor group's shifted modal KSP type or restore its native default",
     )
     recreate_volume.add_argument(
         "--offline-reconciliation", metavar="OPERATION_TOKEN",

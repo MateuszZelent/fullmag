@@ -513,10 +513,53 @@ class VolumeReceiptTests(IsolatedReceiptTests):
         existing_type_record = dev._operator_probe_record(
             {**base_values, ksp_flag: "fgmres"}
         )
+        frozen_old_values = dict(existing_type_record["operator_probe_environment"])
+        frozen_old_sha256 = existing_type_record["operator_probe_environment_sha256"]
         self.assertEqual(
             dev._modal_shifted_ksp_type_successor_record(existing_type_record, None),
             (existing_type_record, None),
         )
+
+        default_successor, default_selection = (
+            dev._modal_shifted_ksp_type_successor_record(existing_type_record, "default")
+        )
+        self.assertEqual(default_selection["requested_type"], "default")
+        self.assertEqual(
+            default_selection["old_operator_probe_environment_sha256"], frozen_old_sha256
+        )
+        self.assertEqual(
+            default_selection["new_operator_probe_environment_sha256"],
+            default_successor["operator_probe_environment_sha256"],
+        )
+        self.assertNotIn(ksp_flag, default_successor["operator_probe_environment"])
+        self.assertEqual(default_successor["operator_probe_environment"], base_values)
+        self.assertEqual(default_successor, legacy_record)
+        self.assertEqual(existing_type_record["operator_probe_environment"], frozen_old_values)
+        self.assertEqual(existing_type_record["operator_probe_environment_sha256"], frozen_old_sha256)
+        no_override_default, no_override_selection = (
+            dev._modal_shifted_ksp_type_successor_record(legacy_record, "default")
+        )
+        self.assertEqual(no_override_default, legacy_record)
+        self.assertEqual(no_override_selection["requested_type"], "default")
+        self.assertEqual(
+            no_override_selection["old_operator_probe_environment_sha256"],
+            no_override_selection["new_operator_probe_environment_sha256"],
+        )
+        with mock.patch.dict(
+                os.environ, {ksp_flag: "gmres", "UNRELATED_SECRET": "never-copy"},
+                clear=True):
+            self.assertEqual(
+                dev._modal_shifted_ksp_type_successor_from_metadata(
+                    existing_type_record, default_selection
+                ),
+                default_successor,
+            )
+            self.assertEqual(
+                dev._modal_shifted_ksp_type_successor_from_metadata(
+                    legacy_record, no_override_selection
+                ),
+                legacy_record,
+            )
         for requested_type in ("gmres", "fgmres"):
             with self.subTest(requested_type=requested_type):
                 successor, selection = dev._modal_shifted_ksp_type_successor_record(
@@ -629,6 +672,13 @@ class VolumeReceiptTests(IsolatedReceiptTests):
         with self.assertRaises(docker_dev.DirectDockerError):
             docker_dev._normalize_operator_probe_environment(
                 {**base_values, "FULLMAG_MODAL_SHIFTED_KSP_TYPE": "bicgstab"}
+            )
+        # The legacy alias is not part of the frozen v1 allowlist. Default
+        # selection must validate the old record before removing allowed keys.
+        with self.assertRaises(docker_dev.DirectDockerError):
+            docker_dev._operator_probe_environment_for_modal_shifted_ksp_type(
+                {**base_values, "FULLMAG_FLOQUET_SHIFTED_KSP_TYPE": "fgmres"},
+                "default",
             )
         with self.assertRaisesRegex(BuildControlError, "malformed"):
             dev._modal_shifted_ksp_type_successor_from_metadata(

@@ -723,6 +723,53 @@ class CompletedRemovalNativeProofTests(unittest.TestCase):
             "fgmres",
         )
 
+    def test_recreation_resume_replays_the_persisted_native_ksp_default(self):
+        old_record = dev._operator_probe_record({
+            "FULLMAG_MIXED_P1_DEVICE": "gpu",
+            "FULLMAG_ARTIFACT_FIELD_STORAGE": "json",
+            "FULLMAG_MODAL_GMRES_RESTART": "30",
+            "FULLMAG_MODAL_SHIFTED_KSP_TYPE": "fgmres",
+            "FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC": "1",
+        })
+        old_values = dict(old_record["operator_probe_environment"])
+        successor_record, selection = dev._modal_shifted_ksp_type_successor_record(
+            old_record, "default"
+        )
+        self.assertEqual(selection["requested_type"], "default")
+        self.assertEqual(
+            selection["old_operator_probe_environment_sha256"],
+            old_record["operator_probe_environment_sha256"],
+        )
+        self.assertEqual(
+            selection["new_operator_probe_environment_sha256"],
+            successor_record["operator_probe_environment_sha256"],
+        )
+        self.assertNotIn(
+            "FULLMAG_MODAL_SHIFTED_KSP_TYPE",
+            successor_record["operator_probe_environment"],
+        )
+        self.assertEqual(
+            successor_record["operator_probe_environment"],
+            {key: value for key, value in old_values.items()
+             if key != "FULLMAG_MODAL_SHIFTED_KSP_TYPE"},
+        )
+
+        self.operator_probe_record = old_record
+        self.completed["inputs"].update(old_record)
+        self.completed["inputs"]["modal_shifted_ksp_type_selection"] = selection
+        completed_raw = dev.canonical(self.completed) + b"\n"
+        base = "recreate-services/attempts/" + self.args.completed_recreation_attempt
+        self.args.completed_recreation_sha256 = hashlib.sha256(completed_raw).hexdigest()
+        for path in (base + "/terminal.json", base + "/receipt.json",
+                     "recreate-services/current.json", "recreate-services/verified.json"):
+            self.records[path] = completed_raw
+        records = self.invoke(ordinary=True)
+        self.assertEqual(records["successor_operator_probe_record"], successor_record)
+        self.assertEqual(records["operator_probe_record"], old_record)
+        self.assertEqual(
+            records["operator_probe_record"]["operator_probe_environment"], old_values
+        )
+
     def test_completed_recreation_start_uses_the_persisted_successor_profile(self):
         old_record = dev._operator_probe_record({
             "FULLMAG_MIXED_P1_DEVICE": "gpu",
@@ -1253,7 +1300,7 @@ class FloquetDiagnosticCliTests(unittest.TestCase):
         ]
         defaulted = cli._parser().parse_args(required)
         self.assertIsNone(defaulted.modal_shifted_ksp_type)
-        for requested_type in ("gmres", "fgmres"):
+        for requested_type in ("gmres", "fgmres", "default"):
             parsed = cli._parser().parse_args(
                 required + ["--modal-shifted-ksp-type", requested_type]
             )
@@ -1269,25 +1316,28 @@ class FloquetDiagnosticCliTests(unittest.TestCase):
             ["--modal-shifted-ksp-type", "bicgstab"],
             ["--modal-shifted-ksp-type", "gmres",
              "--modal-shifted-ksp-type", "fgmres"],
+            ["--modal-shifted-ksp-type", "default",
+             "--modal-shifted-ksp-type", "gmres"],
         ):
             with self.subTest(tail=tail), self.assertRaises(SystemExit):
                 cli._parser().parse_args(required + tail)
 
-        base = required + ["--modal-shifted-ksp-type", "fgmres"]
         conflicts = (
             ["--resume-recreation", "c" * 32],
             ["--completed-recreation-attempt", "c" * 32,
              "--completed-recreation-sha256", "d" * 64],
             ["--recovery-authorization", "verification/recovery.json"],
         )
-        for conflict in conflicts:
-            with self.subTest(conflict=conflict), \
-                 contextlib.redirect_stderr(io.StringIO()), \
-                 patch.object(docker_volume_dev, "recreate") as recreate, \
-                 patch.object(docker_volume_dev, "resume_recreation") as resume:
-                self.assertEqual(cli.main(base + conflict), 2)
-                recreate.assert_not_called()
-                resume.assert_not_called()
+        for requested_type in ("gmres", "fgmres", "default"):
+            base = required + ["--modal-shifted-ksp-type", requested_type]
+            for conflict in conflicts:
+                with self.subTest(requested_type=requested_type, conflict=conflict), \
+                     contextlib.redirect_stderr(io.StringIO()), \
+                     patch.object(docker_volume_dev, "recreate") as recreate, \
+                     patch.object(docker_volume_dev, "resume_recreation") as resume:
+                    self.assertEqual(cli.main(base + conflict), 2)
+                    recreate.assert_not_called()
+                    resume.assert_not_called()
 
     def test_recreate_recipe_keeps_optional_profiles_last_and_omits_defaults(self):
         from pathlib import Path
@@ -1307,7 +1357,7 @@ class FloquetDiagnosticCliTests(unittest.TestCase):
         self.assertIn(
             '--modal-shifted-ksp-type " + quote(modal_shifted_ksp_type)', command
         )
-        for requested_type in ("gmres", "fgmres"):
+        for requested_type in ("gmres", "fgmres", "default"):
             self.assertIn(f'modal_shifted_ksp_type == "{requested_type}"', command)
 
 

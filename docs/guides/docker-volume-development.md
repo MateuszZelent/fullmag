@@ -1009,6 +1009,11 @@ intenty bez tego pola pozostają poprawne i zachowują wcześniejszy rekord.
 Powtórzony lub nieznany argument oraz próba dodania wyboru do resume,
 ukończonej recreation albo recovery są odrzucane.
 
+Jawne `--modal-shifted-ksp-type default` usuwa tylko przypięty klucz typu KSP
+z rekordu następcy. Pozostałe ustawienia i stary rekord pozostają zachowane;
+intent wiąże żądanie oraz oba hashe, a replay nie korzysta z ambient env.
+Wartość `default` jest operacją launchera, nie wartością zmiennej PETSc.
+
 Gdy typ nie jest jawnie przypięty, natywna sparse shared-domain ścieżka Floqueta
 wybiera FGMRES, jeśli rzeczywisty split q przekracza istniejący limit 512 dla
 dokładnego Schura. Mały exact-Schur pozostaje przy GMRES. Automatyczny wybór nie
