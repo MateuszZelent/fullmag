@@ -578,3 +578,73 @@ rozwiązano przez kanoniczny `metadata_cache_key` i metadane next.config.mjs
 z upstream, zachowując asercje owned labels. Pozostałe 14 chronionych plików
 pozostało identyczne; source-map przeszła statyczny validator. Finalne review,
 commit merge, hosted CI i świeża aplikacja następują po tym checkpointcie.
+
+
+## Aktualny checkpoint — 30.10.2026
+
+Master `9f70be04` scalono jako `aa81ac433`; gałąź wypchnięta. Hosted CI:
+planer `40952201408` PASS na `95787aeb8`, API/browser smoke `40943644955`
+i pełne kontrakty UI `40944251371` PASS na `aa81ac433`. Natywne źródła FEM
+nie zmieniły się w tym merge; wcześniejsze trzy natywne bramki pozostają
+oddzielnymi, datowanymi dowodami. Nie oznacza to merge PR do mastera.
+
+**Nowy realny wynik Gamma:** run
+`run-live-2e29c2a17581f8ddd1fc635be30747ff7baa955886790cd5b5d13be1e2239f48`,
+snapshot `641e1aabf7063b1497e9d2ef90447c7a2abf4ffb779b0145fc0b2383aeb54664`,
+CPU Schur/SLEPc, k=(0,0,0), f=9,299249697 GHz,
+residual względny L2=2,734737633559983e-13 < 1e-8. Zapisano jeden wybrany mod,
+`selected_only`, nearest 10 GHz. Dataset ma jeden sample/item; metadata pola
+zespolonego są `ready`, `member_verified_owner_bound`, 1709×3×2 f64.
+To dowód punktu numerycznego i publikacji metadanych, nie kompletności okna,
+sprawdzenia binarnego pola w przeglądarce ani kwalifikacji całego solvera.
+
+Dla tej samej jednorodnej geometrii i skończonego airboxu Dirichleta
+Nz=1−10nm/4010nm=0,9975062344139651; analityka daje 9,299249697068401 GHz,
+różnica względna 7,1583e-14. Wartość otwartego filmu 9,309813711 GHz odnosi
+się do innych warunków brzegowych. Porównania nie należy używać jako dowodu
+zbieżności ani zgodności z COMSOL A1. Surowe manifesty/item/spectrum/fieldmeta
+oraz `gamma-point-evidence.json` zachowano w zewnętrznym checkpointcie.
+
+R6 na tym źródle: pierwsza operacja panelu PASS; podczas drugiej solver
+zakończył obliczenia, więc pełne 14/14 pozostaje otwarte. Starsze dowody
+R6 nie zostały usunięte. Browser pokazał model i zakończone etapy, lecz okno
+przygotowania utknęło na Connecting; nowego renderu pola Gamma jeszcze
+nie zakwalifikowano.
+
+Po restarcie Dockera oba kontenery miały exit255. Przypięte resume
+`0c104244153c4c4e82c1b2634324eea2` poprawnie zbudowało aplikację `95787aeb8`
+(Make 185090ms), ale odmówiło podpięcia starego właściciela native z innego
+buildu. Istniejące `stop-bootstrap-volume` uwierzytelniło dokładny przypadek
+pre-owner, zatrzymało wyłącznie diagnostyczne API i zachowało OWNER, lease,
+store oraz wyniki. Następny start wymaga zarządzanego odtworzenia z archiwum;
+nie usunięto danych i nie ponowiono Solve.
+
+Naprawa `0fb7cf913` dodaje osobny typ dla rzeczywistego `eigen_diagnostics.v2`,
+który wcześniejszy reader błędnie traktował jako generyczny modal solver
+schema i odrzucał HTTP500. Zachowano historyczne schematy, owner/generation
+fence i dodano regresję. CI `41037878320` jest w toku; status runtime poprawki
+pozostaje NOT VERIFIED. Otwarte są także reset starych field carriers przy
+nowej aktywnej preparacji oraz terminalny fallback okna przygotowania.
+
+Pozostały pełny signed15 z Gamma i oknem 8,5–16 GHz, odbiór UI/R6,
+kompletność i zbieżność, serial/adaptive, COMSOL A1 ≤0,5%, semantyczne
+disposition I1, merge PR oraz bezpieczny cleanup. Celu nie zamknięto.
+
+
+Uzupełnienie checkpointu: CI `41037878320` zakończyło wszystkie trzy joby PASS;
+log potwierdza faktyczne wykonanie nowej regresji schematu, nie zerowy filtr.
+Cztery generowane źródła API skopiowano z artefaktu `12968064481` po kontroli
+`source-commit.txt=0fb7cf913`; zmieniły się tylko JSON i typy TS.
+
+Zaimplementowano reset przejściowych field carriers/cache/bundles/live preview
+oraz coupled checkpoint wyłącznie przy przyjętej zmianie preparation_id.
+Nowy payload jest stosowany po resecie; starsza rewizja i replay tej samej
+preparacji nie kasują nowszych danych. TerminalObservation nadal korzysta ze
+zwykłego publikatora. Dodano regresje obu modalnych planów, replayu, starszej
+rewizji, nowych fields/checkpoint i zachowania terminalnych danych.
+Osobna korekta modelu UI zwalnia fallback Connecting przy gotowym odczycie
+null i terminalnym solverze; loading/stale, brak zasobu, nowa aktywacja i
+faktyczny running preparation pozostają widoczne. Surowej odpowiedzi
+preparation poprzedni browser probe nie zachował, więc przyczynę tego
+konkretnego ekranu trzeba jeszcze potwierdzić po nowym starcie.
+Obie poprawki mają parser/diff PASS; nowe testy hosted i runtime są otwarte.

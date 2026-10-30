@@ -8595,6 +8595,40 @@ export interface components {
             production_gpu: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             reference_cpu: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
         };
+        /** @description One requested diagnostic section in the user-facing eigen diagnostics artifact. */
+        FrequencyDomainEigenDiagnosticSectionPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            available: boolean;
+            data?: unknown;
+            status: string;
+            unavailable_reason?: string | null;
+        };
+        FrequencyDomainEigenDiagnosticsDispersionPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            /** Format: int64 */
+            mode_count: number;
+            /** Format: int64 */
+            mode_count_requested?: number | null;
+            /** Format: int64 */
+            sample_count: number;
+        };
+        /**
+         * @description Schema for the user-requested eigen diagnostics projection. This differs
+         *     from solver diagnostics, which report execution completion and interruption.
+         */
+        FrequencyDomainEigenDiagnosticsV2ArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            dispersion: components["schemas"]["FrequencyDomainEigenDiagnosticsDispersionPayload"];
+            /** Format: int64 */
+            mode_count: number;
+            orthogonality: components["schemas"]["FrequencyDomainEigenDiagnosticSectionPayload"];
+            overlaps: components["schemas"]["FrequencyDomainEigenDiagnosticSectionPayload"];
+            residuals: components["schemas"]["FrequencyDomainEigenDiagnosticSectionPayload"];
+            /** Format: int64 */
+            sample_count: number;
+            schema_version: string;
+            solver_model: string;
+            solver_model_scope: string;
+            tangent_leakage: components["schemas"]["FrequencyDomainEigenDiagnosticSectionPayload"];
+            tracking: components["schemas"]["FrequencyDomainEigenDiagnosticSectionPayload"];
+        };
         FrequencyDomainFieldResource: {
             artifact_path: string;
             available_views: string[];
@@ -8787,7 +8821,7 @@ export interface components {
          *     backward compatible with the existing artifact files: the artifact's
          *     `schema_version` remains the discriminator on the wire.
          */
-        FrequencyDomainJsonArtifactPayload: components["schemas"]["FrequencyDomainManifestArtifactPayload"] | components["schemas"]["FrequencyDomainSpectrumV3ArtifactPayload"] | components["schemas"]["FrequencyDomainSpectrumArtifactPayload"] | components["schemas"]["FrequencyDomainBranchesArtifactPayload"] | components["schemas"]["FrequencyDomainFieldSweepArtifactPayload"] | components["schemas"]["FrequencyDomainDiagnosticsArtifactPayload"] | components["schemas"]["FrequencyDomainModeArtifactPayload"] | components["schemas"]["FrequencyDomainResponseSweepArtifactPayload"] | components["schemas"]["FrequencyDomainResponsePointPayload"] | components["schemas"]["FrequencyDomainFmrPeaksArtifactPayload"] | components["schemas"]["FrequencyDomainResonanceFitsArtifactPayload"] | components["schemas"]["FrequencyDomainKittelFitArtifactPayload"];
+        FrequencyDomainJsonArtifactPayload: components["schemas"]["FrequencyDomainManifestArtifactPayload"] | components["schemas"]["FrequencyDomainSpectrumV3ArtifactPayload"] | components["schemas"]["FrequencyDomainSpectrumArtifactPayload"] | components["schemas"]["FrequencyDomainBranchesArtifactPayload"] | components["schemas"]["FrequencyDomainFieldSweepArtifactPayload"] | components["schemas"]["FrequencyDomainDiagnosticsArtifactPayload"] | components["schemas"]["FrequencyDomainEigenDiagnosticsV2ArtifactPayload"] | components["schemas"]["FrequencyDomainModeArtifactPayload"] | components["schemas"]["FrequencyDomainResponseSweepArtifactPayload"] | components["schemas"]["FrequencyDomainResponsePointPayload"] | components["schemas"]["FrequencyDomainFmrPeaksArtifactPayload"] | components["schemas"]["FrequencyDomainResonanceFitsArtifactPayload"] | components["schemas"]["FrequencyDomainKittelFitArtifactPayload"];
         FrequencyDomainJsonArtifactResource: {
             artifact_path: string;
             /** @description Opaque identity of the canonical artifact directory shared by its files. */

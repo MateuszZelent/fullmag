@@ -2,6 +2,7 @@ import type {
   LiveStatusResource,
   SimulationPreparationResource,
 } from "../api/apiTypes";
+import { classifySolverState } from "../persistence/runOutcome";
 import type { ResourceResult } from "../resources/resourceTypes";
 
 const MAX_PREPARATION_LOG_ENTRIES = 200;
@@ -591,6 +592,13 @@ function resolveMissingPreparationModel(
   if (preparationError) {
     return preparationError;
   }
+  const solverPhase = classifySolverState(solverState);
+  const hasSettledTerminalPreparationAbsence =
+    preparation.status === "ready" &&
+    preparation.data === null &&
+    (solverPhase === "ready" ||
+      solverPhase === "failed" ||
+      solverPhase === "cancelled");
   const hasNonTransientSessionError =
     sessionStatus.status === "error" &&
     !isTransientStartupError(sessionStatus.error);
@@ -601,7 +609,8 @@ function resolveMissingPreparationModel(
       isBootstrapping ||
       isMaterializing ||
       pendingActivation !== null ||
-      hasPublishedPreparationRevision ||
+      (hasPublishedPreparationRevision &&
+        !hasSettledTerminalPreparationAbsence) ||
       ((preparation.status === "idle" || preparation.status === "loading") &&
         sessionStatus.data === null) ||
       (sessionStatus.status === "error" &&

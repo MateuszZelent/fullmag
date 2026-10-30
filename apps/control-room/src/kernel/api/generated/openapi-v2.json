@@ -13748,6 +13748,133 @@
         ],
         "type": "object"
       },
+      "FrequencyDomainEigenDiagnosticSectionPayload": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
+          },
+          {
+            "properties": {
+              "available": {
+                "type": "boolean"
+              },
+              "data": {},
+              "status": {
+                "type": "string"
+              },
+              "unavailable_reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "status",
+              "available"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "One requested diagnostic section in the user-facing eigen diagnostics artifact."
+      },
+      "FrequencyDomainEigenDiagnosticsDispersionPayload": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
+          },
+          {
+            "properties": {
+              "mode_count": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "mode_count_requested": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "sample_count": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "sample_count",
+              "mode_count"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "FrequencyDomainEigenDiagnosticsV2ArtifactPayload": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
+          },
+          {
+            "properties": {
+              "dispersion": {
+                "$ref": "#/components/schemas/FrequencyDomainEigenDiagnosticsDispersionPayload"
+              },
+              "mode_count": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "orthogonality": {
+                "$ref": "#/components/schemas/FrequencyDomainEigenDiagnosticSectionPayload"
+              },
+              "overlaps": {
+                "$ref": "#/components/schemas/FrequencyDomainEigenDiagnosticSectionPayload"
+              },
+              "residuals": {
+                "$ref": "#/components/schemas/FrequencyDomainEigenDiagnosticSectionPayload"
+              },
+              "sample_count": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "schema_version": {
+                "type": "string"
+              },
+              "solver_model": {
+                "type": "string"
+              },
+              "solver_model_scope": {
+                "type": "string"
+              },
+              "tangent_leakage": {
+                "$ref": "#/components/schemas/FrequencyDomainEigenDiagnosticSectionPayload"
+              },
+              "tracking": {
+                "$ref": "#/components/schemas/FrequencyDomainEigenDiagnosticSectionPayload"
+              }
+            },
+            "required": [
+              "schema_version",
+              "solver_model",
+              "solver_model_scope",
+              "sample_count",
+              "mode_count",
+              "dispersion",
+              "tracking",
+              "residuals",
+              "overlaps",
+              "tangent_leakage",
+              "orthogonality"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "Schema for the user-requested eigen diagnostics projection. This differs\nfrom solver diagnostics, which report execution completion and interruption."
+      },
       "FrequencyDomainFieldResource": {
         "properties": {
           "artifact_path": {
@@ -14735,6 +14862,9 @@
           },
           {
             "$ref": "#/components/schemas/FrequencyDomainDiagnosticsArtifactPayload"
+          },
+          {
+            "$ref": "#/components/schemas/FrequencyDomainEigenDiagnosticsV2ArtifactPayload"
           },
           {
             "$ref": "#/components/schemas/FrequencyDomainModeArtifactPayload"

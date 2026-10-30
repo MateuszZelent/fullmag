@@ -29,6 +29,7 @@ function statusResource(
   patch: {
     preparationRevision?: number;
     solverState?: string;
+    lifecycleSolver?: string;
   } = {},
 ): ResourceResult<LiveStatusResource> {
   return resource(
@@ -36,12 +37,15 @@ function statusResource(
       resources: {
         simulation_preparation_revision: patch.preparationRevision ?? 7,
       },
-      session: { name: "permalloy-relaxation" },
+      session: {
+        name: "permalloy-relaxation",
+        session_id: "session-preparation-test",
+      },
       lifecycle: {
         commandability: "allowed",
         connectivity: "connected",
         session_resource: "active",
-        solver: "idle",
+        solver: patch.lifecycleSolver ?? "idle",
       },
       solver: { state: patch.solverState ?? "bootstrapping" },
     } as LiveStatusResource,
@@ -446,6 +450,106 @@ describe("resolveSimulationPreparationViewModel", () => {
 
 // A successful optional-resource lookup carries null rather than an API error.
 describe("nullable preparation resource", () => {
+  it("releases a terminal session after a published preparation lookup settles absent", () => {
+    const model = resolveSimulationPreparationViewModel(
+      resource<SimulationPreparationResource | null>(null, "ready"),
+      statusResource("ready", {
+        preparationRevision: 3,
+        solverState: "COMPLETED",
+      }),
+      1_000,
+    );
+
+    expect(model).toMatchObject({
+      isTerminal: false,
+      isVisible: false,
+      kind: "hidden",
+    });
+  });
+
+  it.each(["loading", "stale"] as const)(
+    "keeps an unresolved published preparation lookup visible while terminal state is reported (%s)",
+    (status) => {
+      const model = resolveSimulationPreparationViewModel(
+        resource<SimulationPreparationResource | null>(null, status),
+        statusResource("ready", {
+          preparationRevision: 3,
+          solverState: "completed",
+        }),
+        1_000,
+      );
+
+      expect(model).toMatchObject({ isVisible: true, kind: "connecting" });
+    },
+  );
+
+  it("keeps a new running preparation snapshot visible after the previous solver completed", () => {
+    const model = resolveSimulationPreparationViewModel(
+      resource(
+        preparationFixture({
+          revision: 8,
+          status: "running",
+        }),
+      ),
+      statusResource("ready", {
+        preparationRevision: 8,
+        solverState: "completed",
+      }),
+      1_000,
+    );
+
+    expect(model).toMatchObject({
+      isVisible: true,
+      kind: "running",
+      preparation: { revision: 8, status: "running" },
+    });
+  });
+
+  it("keeps new pending activation visible over a previous completed preparation snapshot", () => {
+    const previousCompletedPreparation = preparationFixture({
+      active_stage_id: null,
+      completed_at_unix_ms: 20_000,
+      status: "ready",
+    });
+    const model = resolveSimulationPreparationViewModel(
+      resource(previousCompletedPreparation),
+      statusResource("ready", {
+        preparationRevision: 0,
+        solverState: "completed",
+        lifecycleSolver: "activating",
+      }),
+      1_000,
+    );
+
+    expect(model).toMatchObject({
+      detail:
+        "The backend is activating and materializing the model. Preparation details are pending.",
+      isVisible: true,
+      kind: "connecting",
+      progressLabel: "Activating model",
+      title: "Activating simulation",
+      preparation: null,
+    });
+  });
+
+  it("reports a missing published preparation resource even after the solver completed", () => {
+    const model = resolveSimulationPreparationViewModel(
+      preparationError(new ControlRoomApiError("preparation not found", 404)),
+      statusResource("ready", {
+        preparationRevision: 3,
+        solverState: "completed",
+      }),
+      1_000,
+    );
+
+    expect(model).toMatchObject({
+      isTerminal: true,
+      isVisible: true,
+      kind: "resource-error",
+      title: "Preparation status unavailable",
+    });
+  });
+
   it("releases a restored session after an expected absent preparation lookup", () => {
     const model = resolveSimulationPreparationViewModel(
       resource<SimulationPreparationResource | null>(null, "ready"),

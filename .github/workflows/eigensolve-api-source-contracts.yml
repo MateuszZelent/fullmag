@@ -46,6 +46,12 @@ jobs:
           grep -F "stream_error_and_timeout_leave_no_named_upload ... ok" "$RUNNER_TEMP/fms-file-intake.log"
       - name: Run session ownership and physical field contracts
         run: cargo test --locked -p fullmag-api --bin fullmag-api session::tests --no-fail-fast
+      - name: Preserve active preparation reset and terminal field ownership
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-api --bin fullmag-api live_scene_preparation::tests::new_modal_and_frequency_preparation_clears_prior_fields_before_noop_initial_publish -- --exact
+          cargo test --locked -p fullmag-api --bin fullmag-api live_scene_preparation::tests::active_preparation_replay_keeps_new_solve_fields_and_cache -- --exact
+          cargo test --locked -p fullmag-api --bin fullmag-api live_scene_preparation::tests::terminal_observation_publication_preserves_accepted_fields_cache_and_checkpoint -- --exact
       - name: Preserve dataset source paths and byte revisions
         run: |
           set -o pipefail
