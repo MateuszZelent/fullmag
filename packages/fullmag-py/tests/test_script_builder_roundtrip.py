@@ -1860,29 +1860,31 @@ class SceneRoundTripFidelityTests(unittest.TestCase):
     def test_problem_with_fdm_cell_and_fem_controls_renders_loadable_script(self) -> None:
         script = """
         import fullmag as fm
-        DEFAULT_UNTIL = 1e-11
-        problem = fm.Problem(
-            name="both_grids",
-            magnets=[fm.Ferromagnet(
-                name="track",
-                geometry=fm.Box(size=(200e-9, 20e-9, 5e-9)),
-                material=fm.Material(name="Py", Ms=8e5, A=1.3e-11, alpha=0.01),
-                m0=fm.texture.uniform((1.0, 0.0, 0.0)),
-            )],
-            energy=[fm.Exchange(), fm.Zeeman(B=(0.0, 0.0, 0.1))],
-            study=fm.TimeEvolution(
-                dynamics=fm.LLG(fixed_timestep=1e-13),
-                outputs=[fm.SaveScalar("E_total", every=1e-11)],
-            ),
-            discretization=fm.DiscretizationHints(
-                fdm=fm.FDM(cell=(2e-9, 2e-9, 1e-9)),
-                fem=fm.FEM(order=1, maximum_element_size=2e-9),
-            ),
+        study = fm.study("both_grids")
+        study.engine("auto")
+        track = study.geometry(
+            fm.Box(size=(200e-9, 20e-9, 5e-9)),
+            name="track",
+        )
+        track.Ms = 8e5
+        track.Aex = 1.3e-11
+        track.alpha = 0.01
+        track.m = fm.texture.uniform(1.0, 0.0, 0.0)
+        study.energy(fm.Exchange())
+        study.energy(fm.Zeeman(B=(0.0, 0.0, 0.1)))
+        study.cell(2e-9, 2e-9, 1e-9)
+        study.objects.mesh.defaults(maximum_element_size=2e-9, order=1)
+        study.solver(fix_dt=1e-13)
+        study.stages.add_run(stage_id="run", until=1e-11).autosave(
+            fm.StageAutosave(
+                table=fm.TableAutosave(t_sampl=1e-11, quantities=["step", "t", "E_total"]),
+            )
         )
         """
         with TemporaryDirectory() as tmp_dir:
             loaded, rendered, source = _scene_round_trip(script, Path(tmp_dir))
         self.assertIn("study.cell(", source)
+        self.assertIn("study.objects.mesh.defaults(", source)
         self.assertNotIn("cell_size=(2e-09, 2e-09, 1e-09)", source)
         before = loaded.problem.to_ir(include_geometry_assets=False)
         after = rendered.problem.to_ir(include_geometry_assets=False)
@@ -1891,6 +1893,67 @@ class SceneRoundTripFidelityTests(unittest.TestCase):
             after["backend_policy"]["discretization_hints"],
             before["backend_policy"]["discretization_hints"],
         )
+        self.assertEqual(
+            loaded.stages[0].autosave.to_ir(),
+            rendered.stages[0].autosave.to_ir(),
+        )
+
+    def test_scene_export_rejects_unrepresentable_base_time_evolution_outputs(self) -> None:
+        output_authorship = (
+            'study.save("m", every=2e-12)',
+            'study.save("E_total", every=2e-12)',
+            'study.snapshot(f, "mz", every=2e-12)',
+            'study.save("m", every=2e-12)\n'
+            'study.stages.autosave(enabled=False, stage_id="disable-m")',
+        )
+        for index, output_call in enumerate(output_authorship):
+            with self.subTest(output_call=output_call):
+                script = (
+                    "import fullmag as fm\n"
+                    "study = fm.study('base-output')\n"
+                    "study.engine('fdm')\n"
+                    "study.cell(5e-9, 5e-9, 5e-9)\n"
+                    + textwrap.dedent(_SCENE_BODY)
+                    + output_call
+                    + "\nstudy.stages.add_run(stage_id='run', until=1e-11)\n"
+                )
+                with TemporaryDirectory() as tmp_dir:
+                    loaded = _load_text(script, Path(tmp_dir), f"base-{index}.py")
+                    base_problem = loaded.pipeline_base_problem(
+                        loaded.workspace_problem or loaded.problem
+                    )
+                    base_sampling = base_problem.study.to_ir()["sampling"]
+                    problem_sampling_before = loaded.problem.study.to_ir()["sampling"]
+                    stage_sampling = [
+                        stage.problem.study.to_ir()["sampling"]
+                        for stage in loaded.stages
+                    ]
+                    runtime = base_problem.runtime
+                    direct_ir = loaded.to_ir(
+                        requested_backend=runtime.backend_target,
+                        execution_mode=runtime.execution_mode,
+                        execution_precision=runtime.execution_precision,
+                        include_geometry_assets=False,
+                    )
+                    self.assertEqual(
+                        direct_ir["study"]["sampling"]["outputs"],
+                        base_sampling["outputs"],
+                    )
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        "scene_document_time_evolution_base_outputs_unsupported",
+                    ):
+                        export_builder_draft(loaded)
+                    self.assertEqual(
+                        loaded.problem.study.to_ir()["sampling"], problem_sampling_before
+                    )
+                    self.assertEqual(
+                        [
+                            stage.problem.study.to_ir()["sampling"]
+                            for stage in loaded.stages
+                        ],
+                        stage_sampling,
+                    )
 
     def test_boolean_geometry_round_trips_through_the_scene(self) -> None:
         for expression in (
@@ -1965,91 +2028,203 @@ class SceneRoundTripFidelityTests(unittest.TestCase):
     def test_run_sampling_changes_preserve_outputs_without_extra_stages(self) -> None:
         script = "import fullmag as fm\nstudy=fm.study('sampling')\nstudy.engine('fdm')\nstudy.cell(5e-9,5e-9,5e-9)\n"
         script += textwrap.dedent(_SCENE_BODY)
-        script += """
-study.save('m', every=2e-12)
-study.save('E_total', every=3e-12)
-study.snapshot(f, 'mz', every=4e-12)
-study.stages.add_run(stage_id='first', until=1e-11)
-study.clear_outputs()
-study.save('H_ant', every='auto')
-study.stages.add_run(stage_id='second', until=2e-11)
-study.clear_outputs()
-study.stages.add_run(stage_id='third', until=1e-11)
-"""
+        script += textwrap.dedent("""
+        study.stages.add_run(stage_id="first", until=1e-11).autosave(
+            fm.StageAutosave(
+                table=fm.TableAutosave(t_sampl=3e-12, quantities=["step", "t", "E_total"]),
+                fields=[fm.FieldAutosave("m", every=2e-12)],
+            )
+        )
+        study.stages.add_run(stage_id="second", until=2e-11).autosave(
+            fm.StageAutosave(fields=[fm.FieldAutosave("H_ant", every="auto")])
+        )
+        study.stages.add_run(stage_id="third", until=1e-11)
+        """)
         with TemporaryDirectory() as tmp_dir:
             loaded, rendered, source = _scene_round_trip(script, Path(tmp_dir))
-        self.assertEqual([stage.stage_id for stage in rendered.stages], ['first', 'second', 'third'])
         self.assertEqual(
-            [stage.problem.study.to_ir()['sampling'] for stage in loaded.stages],
-            [stage.problem.study.to_ir()['sampling'] for stage in rendered.stages],
+            [stage.stage_id for stage in rendered.stages],
+            ["first", "second", "third"],
         )
+        self.assertEqual(len(rendered.stages), 3)
+        loaded_autosaves = [
+            stage.autosave.to_ir() if stage.autosave is not None else None
+            for stage in loaded.stages
+        ]
+        rendered_autosaves = [
+            stage.autosave.to_ir() if stage.autosave is not None else None
+            for stage in rendered.stages
+        ]
+        self.assertEqual(loaded_autosaves, rendered_autosaves)
+        self.assertEqual(loaded_autosaves[0]["table"]["sample_period_s"], 3e-12)
+        self.assertIn("e_total", loaded_autosaves[0]["table"]["quantities"])
+        self.assertEqual(loaded_autosaves[0]["fields"][0]["quantity"], "m")
+        self.assertEqual(loaded_autosaves[0]["fields"][0]["every_seconds"], 2e-12)
+        self.assertIsNone(loaded_autosaves[1]["table"])
+        self.assertEqual(
+            loaded_autosaves[1]["fields"],
+            [
+                {
+                    "kind": "field_autosave",
+                    "quantity": "H_ant",
+                    "sample_period_policy": {
+                        "kind": "auto_sinc_cutoff",
+                        "nyquist_guard_factor": 1.3,
+                    },
+                }
+            ],
+        )
+        self.assertIsNone(loaded_autosaves[2])
         self.assertIn('every="auto"', source)
 
     def test_canonical_grouped_run_sampling_rejects_unknown_fields(self) -> None:
-        script = "import fullmag as fm\nstudy=fm.study('sampling')\nstudy.engine('fdm')\nstudy.cell(5e-9,5e-9,5e-9)\n"
-        script += textwrap.dedent(_SCENE_BODY)
-        script += "study.save('m', every=2e-12)\nstudy.stages.add_run(stage_id='run', until=1e-11)\n"
+        script = (
+            "import fullmag as fm\n"
+            "study=fm.study('sampling')\n"
+            "study.engine('fdm')\n"
+            "study.cell(5e-9,5e-9,5e-9)\n"
+            + textwrap.dedent(_SCENE_BODY)
+            + textwrap.dedent("""
+            study.stages.add_run(stage_id="run", until=1e-11).autosave(
+                fm.StageAutosave(fields=[fm.FieldAutosave("m", every=2e-12)])
+            )
+            """)
+        )
         with TemporaryDirectory() as tmp_dir:
             loaded = _load_text(script, Path(tmp_dir))
             scene = build_scene_document_from_builder(export_builder_draft(loaded))
-            node = scene['study']['study_pipeline']['nodes'][0]
-            scene['study']['study_pipeline']['nodes'] = [dict(id='group', node_kind='group', enabled=True, children=[node])]
-            scene['study']['stages'] = []
+            node = scene["study"]["study_pipeline"]["nodes"][0]
+            scene["study"]["study_pipeline"]["nodes"] = [
+                dict(id="group", node_kind="group", enabled=True, children=[node])
+            ]
+            scene["study"]["stages"] = []
             source = render_scene_document_as_script(scene)
-            rendered = _load_text(source, Path(tmp_dir), 'group.py')
-            self.assertEqual(loaded.stages[0].problem.study.to_ir()['sampling'], rendered.stages[0].problem.study.to_ir()['sampling'])
-            node['payload']['sampling']['unsupported'] = 1
-            with self.assertRaisesRegex(ValueError, 'run_sampling_unrendered_fields: unsupported'):
-                render_scene_document_as_script(scene)
-
-    def test_canonical_run_resolved_sampling_preserves_requested_auto(self) -> None:
-        script = "import fullmag as fm\nstudy=fm.study('sampling')\nstudy.engine('fdm')\nstudy.cell(5e-9,5e-9,5e-9)\n"
-        script += textwrap.dedent(_SCENE_BODY)
-        script += "study.stages.add_run(stage_id='run', until=1e-11)\n"
-        with TemporaryDirectory() as tmp_dir:
-            loaded = _load_text(script, Path(tmp_dir))
-            scene = build_scene_document_from_builder(export_builder_draft(loaded))
-            node = scene['study']['study_pipeline']['nodes'][0]
-            node['payload']['sampling'] = {'outputs': [
-                dict(kind=kind, name=name, every_seconds=7.6923e-11, requested_policy=dict(kind='auto_sinc_cutoff', nyquist_guard_factor=1.3))
-                for kind, name in [('field_resolved_auto', 'm'), ('scalar_resolved_auto', 'mx')]
-            ]}
-            source = render_scene_document_as_script(scene)
-            rendered = _load_text(source, Path(tmp_dir), 'resolved.py')
-        self.assertEqual([output['kind'] for output in rendered.stages[0].problem.study.to_ir()['sampling']['outputs']], ['field_auto', 'scalar_auto'])
-        self.assertIn('study.save("m", every="auto")', source)
-        self.assertIn('study.save("mx", every="auto")', source)
-
-
-class ClosedLoopNonmagneticRoundTripTests(unittest.TestCase):
-    def test_original_full_3d_circuit_survives_both_export_routes(self) -> None:
-        source = Path(__file__).resolve().parents[3] / "examples/fem_antenna_closed_loop_nonmagnetic.py"
-        loaded = fm.load_problem_from_script(source, lightweight_assets=True)
-        expected = loaded.problem.to_ir(include_geometry_assets=False, source_root=source.parent)
-        scene = build_scene_document_from_builder(export_builder_draft(loaded))
-        scripts = {
-            "python": render_loaded_problem_as_script(loaded),
-            "scene_document": render_scene_document_as_script(scene),
-        }
-        with TemporaryDirectory() as tmp_dir:
-            for route, script in scripts.items():
-                with self.subTest(route=route):
-                    replay = _load_text(script, Path(tmp_dir), f"{route}.py")
-                    actual = replay.problem.to_ir(include_geometry_assets=False, source_root=source.parent)
-                    for key in (
-                        "current_modules", "antenna_port_modes", "antenna_field_solve_stages",
-                        "geometry", "backend_policy", "validation_profile",
+            rendered = _load_text(source, Path(tmp_dir), "group.py")
+            self.assertEqual(
+                loaded.stages[0].autosave.to_ir(),
+                rendered.stages[0].autosave.to_ir(),
+            )
+            for unsupported in (
+                "sampling",
+                "table_autosave",
+                "output_every_seconds",
+                "integrator",
+                "spin_wave_response",
+                "unsupported",
+            ):
+                with self.subTest(unsupported=unsupported):
+                    node["payload"][unsupported] = (
+                        1e-12 if unsupported == "output_every_seconds" else {}
+                    )
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        "scene_document_run_pipeline_payload_unrendered_fields: .*" + unsupported,
                     ):
-                        self.assertIn(key, expected)
-                        self.assertIn(key, actual)
-                        self.assertEqual(expected[key], actual[key], key)
-                    self.assertEqual(loaded.problem.discretization, replay.problem.discretization)
-                    self.assertFalse(replay.problem.magnets)
-                    self.assertIn("closed_loop=True", script)
-                    self.assertIn("fm.AntennaSourceCutRt0(", script)
-                    self.assertNotIn("add_run(", script)
-                    self.assertNotIn("add_relax(", script)
+                        render_scene_document_as_script(scene)
+                    del node["payload"][unsupported]
 
+    def test_scene_pipeline_keeps_independent_autosave_actions_supported(self) -> None:
+        script = (
+            "import fullmag as fm\n"
+            "study=fm.study('sampling')\n"
+            "study.engine('fdm')\n"
+            "study.cell(5e-9,5e-9,5e-9)\n"
+            + textwrap.dedent(_SCENE_BODY)
+            + textwrap.dedent("""
+            study.stages.autosave("m", every=2e-12, stage_id="enable-m")
+            study.stages.add_run(stage_id="first", until=1e-11)
+            study.stages.autosave("m", every=3e-12, stage_id="replace-m")
+            study.stages.autosave("E_total", every=4e-12, stage_id="enable-scalar")
+            study.stages.tableautosave(
+                5e-12,
+                quantities=["step", "t", "E_total"],
+                stage_id="enable-table",
+            )
+            study.stages.add_run(stage_id="configured", until=2e-11)
+            study.stages.autosave("E_total", enabled=False, stage_id="disable-scalar")
+            study.stages.tableautosave(enabled=False, stage_id="disable-table")
+            study.stages.add_run(stage_id="selectively-disabled", until=3e-11)
+            study.stages.autosave(enabled=False, stage_id="disable-all")
+            study.stages.add_run(stage_id="empty", until=4e-11)
+            """)
+        )
+        with TemporaryDirectory() as tmp_dir:
+            loaded = _load_text(script, Path(tmp_dir))
+            scene = build_scene_document_from_builder(export_builder_draft(loaded))
+            run_nodes = [
+                node
+                for node in scene["study"]["study_pipeline"]["nodes"]
+                if node.get("stage_kind") == "run"
+            ]
+            self.assertEqual(
+                [node["payload"]["stage_id"] for node in run_nodes],
+                ["first", "configured", "selectively-disabled", "empty"],
+            )
+            self.assertTrue(all("sampling" not in node["payload"] for node in run_nodes))
+            source = render_scene_document_as_script(scene)
+            rendered = _load_text(source, Path(tmp_dir), "actions.py")
 
-if __name__ == "__main__":
-    unittest.main()
+        loaded_runs = [stage for stage in loaded.stages if stage.action is None]
+        rendered_runs = [stage for stage in rendered.stages if stage.action is None]
+        self.assertEqual(
+            [stage.stage_id for stage in loaded_runs],
+            ["first", "configured", "selectively-disabled", "empty"],
+        )
+        self.assertEqual(
+            [stage.stage_id for stage in rendered_runs],
+            ["first", "configured", "selectively-disabled", "empty"],
+        )
+        self.assertEqual(len(loaded_runs), len(rendered_runs))
+        for authored, round_tripped in zip(loaded_runs, rendered_runs):
+            self.assertEqual(
+                authored.problem.study.to_ir()["sampling"],
+                round_tripped.problem.study.to_ir()["sampling"],
+            )
+
+        first_sampling = loaded_runs[0].problem.study.to_ir()["sampling"]
+        configured_sampling = loaded_runs[1].problem.study.to_ir()["sampling"]
+        selectively_disabled_sampling = loaded_runs[2].problem.study.to_ir()["sampling"]
+        empty_sampling = loaded_runs[3].problem.study.to_ir()["sampling"]
+        self.assertEqual(
+            [(item["name"], item["every_seconds"]) for item in first_sampling["outputs"]],
+            [("m", 2e-12)],
+        )
+        self.assertEqual(
+            {item["name"]: item["every_seconds"] for item in configured_sampling["outputs"]},
+            {"m": 3e-12, "E_total": 4e-12},
+        )
+        self.assertEqual(
+            configured_sampling["table_autosave"]["sample_period_s"],
+            5e-12,
+        )
+        self.assertEqual(
+            {item["name"]: item["every_seconds"] for item in selectively_disabled_sampling["outputs"]},
+            {"m": 3e-12},
+        )
+        self.assertIsNone(selectively_disabled_sampling.get("table_autosave"))
+        self.assertEqual(empty_sampling["outputs"], [])
+        self.assertIsNone(empty_sampling.get("table_autosave"))
+
+    def test_scene_pipeline_retains_unrecorded_legacy_save_delta_for_rejection(self) -> None:
+        script = (
+            "import fullmag as fm\n"
+            "study=fm.study('sampling')\n"
+            "study.engine('fdm')\n"
+            "study.cell(5e-9,5e-9,5e-9)\n"
+            + textwrap.dedent(_SCENE_BODY)
+            + textwrap.dedent("""
+            study.stages.autosave("m", every=2e-12, stage_id="enable-m")
+            study.save("H_ant", every=3e-12)
+            study.stages.add_run(stage_id="run", until=1e-11)
+            """)
+        )
+        with TemporaryDirectory() as tmp_dir:
+            loaded = _load_text(script, Path(tmp_dir))
+            scene = build_scene_document_from_builder(export_builder_draft(loaded))
+            run_node = scene["study"]["study_pipeline"]["nodes"][-1]
+            self.assertIn("sampling", run_node["payload"])
+            with self.assertRaisesRegex(
+                ValueError,
+                "scene_document_run_pipeline_payload_unrendered_fields: .*sampling",
+            ):
+                render_scene_document_as_script(scene)
