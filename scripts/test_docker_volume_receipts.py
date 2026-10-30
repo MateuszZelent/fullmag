@@ -1,5 +1,6 @@
 """Interpreted regressions for Docker-managed receipt boundaries; no native build."""
 from pathlib import Path
+from contextlib import ExitStack
 import tempfile
 import unittest
 import sys
@@ -1138,26 +1139,26 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
             if fault=='preflight-under-lease':
                 return {'schema':'fullmag.docker-frontend-preflight-rejection.v1','sha256':'p'*64}
             return None
-        with mock.patch.object(docker_build_control.subprocess,'Popen',return_value=logger), \
-             mock.patch.object(fullmag_storage,'validate_path',return_value=Path('/state')), \
-             mock.patch.object(dev,'_session_host',return_value=host), \
-             mock.patch.object(host,'read_owned_regular',side_effect=read_owner), \
-             mock.patch.object(dev,'_retained_startup_enabled',return_value=False), \
-             mock.patch.object(dev,'docker_text',side_effect=text), \
-             mock.patch.object(dev,'docker_capture',side_effect=stop) as stopped_call, \
-             mock.patch.object(dev,'_assert_private_restart_network'), \
-             mock.patch.object(docker_volume_reconcile,'fingerprint',return_value='pin'), \
-             mock.patch.object(codegen,'_backend_documents',return_value=({}, {}, 'receipt','binary')), \
-             mock.patch.object(codegen,'_validate_backend',return_value=(source,'p','b')), \
-             mock.patch.object(codegen,'_probe_source',side_effect=codegen.CodegenError('unknown',reconciliation_required=True)
-                               if fault=='unknown-source' else None,return_value=({},'probe')), \
-             mock.patch.object(codegen,'_source_matches',return_value=fault!='source-mismatch'), \
-             mock.patch.object(frontend_inputs,'describe',return_value=seed), \
-             mock.patch.object(frontend_inputs,'frontend_view',return_value={'files':[]}), \
-             mock.patch.object(preflight_rejection,'validate',side_effect=validate_preflight), \
-             mock.patch.object(dev,'_frontend',return_value=(seed,'new-volume')) as seeded, \
-             mock.patch.object(dev,'compose_capture',side_effect=compose) as composed, \
-             mock.patch.object(dev,'_validate_retained_service'):
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(docker_build_control.subprocess, 'Popen', return_value=logger))
+            stack.enter_context(mock.patch.object(fullmag_storage, 'validate_path', return_value=Path('/state')))
+            stack.enter_context(mock.patch.object(dev, '_session_host', return_value=host))
+            stack.enter_context(mock.patch.object(host, 'read_owned_regular', side_effect=read_owner))
+            stack.enter_context(mock.patch.object(dev, '_retained_startup_enabled', return_value=False))
+            stack.enter_context(mock.patch.object(dev, 'docker_text', side_effect=text))
+            stopped_call = stack.enter_context(mock.patch.object(dev, 'docker_capture', side_effect=stop))
+            stack.enter_context(mock.patch.object(dev, '_assert_private_restart_network'))
+            stack.enter_context(mock.patch.object(docker_volume_reconcile, 'fingerprint', return_value='pin'))
+            stack.enter_context(mock.patch.object(codegen, '_backend_documents', return_value=({}, {}, 'receipt', 'binary')))
+            stack.enter_context(mock.patch.object(codegen, '_validate_backend', return_value=(source, 'p', 'b')))
+            stack.enter_context(mock.patch.object(codegen, '_probe_source', side_effect=codegen.CodegenError('unknown', reconciliation_required=True) if fault == 'unknown-source' else None, return_value=({}, 'probe')))
+            stack.enter_context(mock.patch.object(codegen, '_source_matches', return_value=fault != 'source-mismatch'))
+            stack.enter_context(mock.patch.object(frontend_inputs, 'describe', return_value=seed))
+            stack.enter_context(mock.patch.object(frontend_inputs, 'frontend_view', return_value={'files': []}))
+            stack.enter_context(mock.patch.object(preflight_rejection, 'validate', side_effect=validate_preflight))
+            seeded = stack.enter_context(mock.patch.object(dev, '_frontend', return_value=(seed, 'new-volume')))
+            composed = stack.enter_context(mock.patch.object(dev, 'compose_capture', side_effect=compose))
+            stack.enter_context(mock.patch.object(dev, '_validate_retained_service'))
             try:
                 dev._refresh_frontend_services(control,args,'development/attempts/old',previous,document,
                     Path('/selected'),{'runtime_root':'/runtime'},old,{'backend':'b'*64,'frontend':'o'*64},'image',{})

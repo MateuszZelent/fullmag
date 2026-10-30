@@ -998,12 +998,21 @@ fn array_payload_revision(directory: &PinnedDirectory) -> Result<Vec<[u8; 32]>, 
             hash.update(relative.to_string_lossy().replace('\\', "/").as_bytes());
             hash.update([0, u8::from(metadata.is_dir())]);
             hash.update(metadata.len().to_le_bytes());
-            if let Ok(modified) = metadata.modified() {
+            let modified = metadata.modified().ok();
+            if let Some(modified) = modified {
                 if let Ok(duration) = modified.duration_since(UNIX_EPOCH) {
                     hash.update(duration.as_secs().to_le_bytes());
                     hash.update(duration.subsec_nanos().to_le_bytes());
                 }
             }
+            #[cfg(all(test, windows))]
+            eprintln!(
+                "results revision payload-input path={} kind={} size={} modified={:?}",
+                directory.logical_path().join(&name).display(),
+                if metadata.is_dir() { "directory" } else { "file" },
+                metadata.len(),
+                modified
+            );
             #[cfg(unix)]
             {
                 use std::os::unix::fs::MetadataExt;
@@ -1012,7 +1021,14 @@ fn array_payload_revision(directory: &PinnedDirectory) -> Result<Vec<[u8; 32]>, 
                 hash.update(metadata.ctime().to_le_bytes());
                 hash.update(metadata.ctime_nsec().to_le_bytes());
             }
-            hashes.push(hash.finalize().into());
+            let digest = hash.finalize();
+            #[cfg(all(test, windows))]
+            eprintln!(
+                "results revision payload-digest path={} digest={}",
+                directory.logical_path().join(&name).display(),
+                hex_bytes(&digest)
+            );
+            hashes.push(digest.into());
             if metadata.is_dir() {
                 let pinned = directory
                     .open_child_directory(&name)
@@ -1038,6 +1054,8 @@ fn array_payload_revision(directory: &PinnedDirectory) -> Result<Vec<[u8; 32]>, 
 }
 
 fn revision_of(entries: &[RawEntry]) -> Result<String, ResultsError> {
+    #[cfg(all(test, windows))]
+    eprintln!("results revision scan begin entries={}", entries.len());
     let mut hasher = Sha256::new();
     for entry in entries {
         charge_scan_path(&entry.relative)?;
@@ -1062,6 +1080,14 @@ fn revision_of(entries: &[RawEntry]) -> Result<String, ResultsError> {
                 hasher.update(duration.subsec_nanos().to_le_bytes());
             }
         }
+        #[cfg(all(test, windows))]
+        eprintln!(
+            "results revision entry-input path={} kind={:?} size={} modified={:?}",
+            entry.path.display(),
+            entry.kind,
+            entry.size,
+            entry.modified
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
@@ -1100,12 +1126,22 @@ fn revision_of(entries: &[RawEntry]) -> Result<String, ResultsError> {
                     .map_err(|_| ResultsError::TooLarge(entry.relative.display().to_string()))?,
             )?;
             let digest = Sha256::digest(&bytes);
+            #[cfg(all(test, windows))]
+            eprintln!(
+                "results revision critical-input path={} bytes={} sha256={}",
+                entry.path.display(),
+                bytes.len(),
+                hex_bytes(&digest)
+            );
             hasher.update([b'c']);
             hasher.update((bytes.len() as u64).to_le_bytes());
             hasher.update(digest);
         }
     }
-    Ok(format!("sha256:{}", hex_bytes(&hasher.finalize())))
+    let revision = format!("sha256:{}", hex_bytes(&hasher.finalize()));
+    #[cfg(all(test, windows))]
+    eprintln!("results revision scan end revision={revision}");
+    Ok(revision)
 }
 
 fn is_revision_metadata_path(path: &Path) -> bool {
