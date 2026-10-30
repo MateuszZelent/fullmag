@@ -198,6 +198,7 @@ jobs:
           cargo test --locked -p fullmag-api --bin fullmag-api workspace_results
           cargo test --locked -p fullmag-runner --lib autosave_fem_geometry
           cargo test --locked -p fullmag-runner --lib autosave_zarr
+          cargo test --locked -p fullmag-runner --lib artifact_pipeline::tests::fem_nodal_binding_is_published_before_first_zarr_sample -- --exact
 
       - name: Run instance discovery contracts (ADR 0069)
         run: cargo test -p fullmag-api --bin fullmag-api instance_discovery::tests --no-fail-fast

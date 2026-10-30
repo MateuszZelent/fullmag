@@ -1575,7 +1575,11 @@ def _enabled_scene_stages(stages: list[object]) -> list[object]:
             raise ValueError(
                 f"SceneDocument stages[{index}].enabled must be a boolean"
             )
-        if flag:
+        # Pipeline node activation was already checked during traversal.
+        # For output actions, payload.enabled=False is an instruction to clear
+        # a policy, not an instruction to omit the action itself.
+        is_output_action = stage.get("kind") in {"autosave", "table_autosave"}
+        if flag or is_output_action:
             enabled.append(stage)
     return enabled
 

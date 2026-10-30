@@ -9,6 +9,7 @@ use crate::dispatch::{
 };
 use fullmag_ir::BackendPlanIR;
 use fullmag_quantities::fem_state_field::FemP1MagnetizationFieldSemantics;
+use fullmag_session::saved_fem_nodal::FEM_NODAL_OBJECT_DIRECTORY;
 use sha2::{Digest, Sha256};
 
 use crate::types::{
@@ -1925,6 +1926,11 @@ fn collect_streamed_provenance_files(
     for entry in fs::read_dir(directory)? {
         let path = entry?.path();
         if path.is_dir() {
+            if path.file_name() == Some(std::ffi::OsStr::new(FEM_NODAL_OBJECT_DIRECTORY)) {
+                // Content-addressed geometry and semantics are immutable payloads,
+                // not mutable Zarr metadata. Re-serializing them changes their refs.
+                continue;
+            }
             collect_streamed_provenance_files(&path, files)?;
             continue;
         }

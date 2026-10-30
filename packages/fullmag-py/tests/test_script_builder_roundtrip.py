@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import textwrap
 import unittest
@@ -1870,8 +1871,8 @@ class SceneRoundTripFidelityTests(unittest.TestCase):
         track.Aex = 1.3e-11
         track.alpha = 0.01
         track.m = fm.texture.uniform(1.0, 0.0, 0.0)
-        study.energy(fm.Exchange())
-        study.energy(fm.Zeeman(B=(0.0, 0.0, 0.1)))
+        study.exchange()
+        study.b_ext(0.0, 0.0, 0.1)
         study.cell(2e-9, 2e-9, 1e-9)
         study.objects.mesh.defaults(maximum_element_size=2e-9, order=1)
         study.solver(fix_dt=1e-13)
@@ -2223,6 +2224,20 @@ class SceneRoundTripFidelityTests(unittest.TestCase):
             self.assertNotIn("sampling", nodes[2]["payload"])
             rendered_source = render_scene_document_as_script(scene)
             rendered = _load_text(rendered_source, root, "clear-rendered.py")
+            disabled_node_scene = copy.deepcopy(scene)
+            disabled_node_scene["study"]["study_pipeline"]["nodes"][1]["enabled"] = False
+            disabled_node = _load_text(
+                render_scene_document_as_script(disabled_node_scene), root,
+                "clear-node-disabled.py",
+            )
+            disabled_node_run = next(
+                stage for stage in disabled_node.stages if stage.action is None
+            )
+            self.assertEqual(
+                disabled_node_run.problem.study.to_ir()["sampling"]["outputs"],
+                base_sampling["outputs"],
+            )
+            self.assertNotIn("disable-m", [stage.stage_id for stage in disabled_node.stages])
         original_run = next(stage for stage in loaded.stages if stage.action is None)
         rendered_run = next(stage for stage in rendered.stages if stage.action is None)
         self.assertEqual(

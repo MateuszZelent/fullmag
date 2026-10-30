@@ -3528,55 +3528,108 @@ mod tests {
         assert_eq!(m_binding.mesh, h_binding.mesh);
         assert_ne!(m_binding.semantics, h_binding.semantics);
 
-        let mesh_bytes = fs::read(
-            store.join(
-                fullmag_session::saved_fem_nodal::object_relative_path(&m_binding.mesh)
-                    .expect("resolve shared mesh object"),
-            ),
+        let mesh_path = store.join(
+            fullmag_session::saved_fem_nodal::object_relative_path(&m_binding.mesh)
+                .expect("resolve shared mesh object"),
+        );
+        let m_semantics_path = store.join(
+            fullmag_session::saved_fem_nodal::object_relative_path(&m_binding.semantics)
+                .expect("resolve M semantics object"),
+        );
+        let h_semantics_path = store.join(
+            fullmag_session::saved_fem_nodal::object_relative_path(&h_binding.semantics)
+                .expect("resolve H_eff semantics object"),
+        );
+        let original_mesh_bytes = fs::read(&mesh_path).expect("read shared mesh object");
+        let original_m_semantics_bytes =
+            fs::read(&m_semantics_path).expect("read M semantics object");
+        let original_h_semantics_bytes =
+            fs::read(&h_semantics_path).expect("read H_eff semantics object");
+
+        runtime.finish().expect("finish FEM stage autosave runtime");
+        let request = || crate::types::ExecutionRequestProvenance {
+            backend: "fem".into(),
+            device: "cpu".into(),
+            precision: "double".into(),
+            mode: "strict".into(),
+        };
+        let resolution = crate::types::FinalExecutionResolutionProvenance {
+            authored_request: request(),
+            effective_request: request(),
+            resolved_execution: request(),
+            resolution_mode: "exact".into(),
+            fallback_occurred: false,
+            fallback_reason: None,
+        };
+        crate::artifacts::finalize_stage_autosave_provenance(&autosave_root, &resolution)
+            .expect("finalize FEM stage autosave provenance");
+
+        let mesh_bytes = fs::read(&mesh_path).expect("read finalized shared mesh object");
+        let m_semantics_bytes =
+            fs::read(&m_semantics_path).expect("read finalized M semantics object");
+        let h_semantics_bytes =
+            fs::read(&h_semantics_path).expect("read finalized H_eff semantics object");
+        assert_eq!(mesh_bytes, original_mesh_bytes);
+        assert_eq!(m_semantics_bytes, original_m_semantics_bytes);
+        assert_eq!(h_semantics_bytes, original_h_semantics_bytes);
+        for (bytes, reference) in [
+            (&mesh_bytes, &m_binding.mesh),
+            (&m_semantics_bytes, &m_binding.semantics),
+            (&h_semantics_bytes, &h_binding.semantics),
+        ] {
+            assert_eq!(bytes.len() as u64, reference.byte_length);
+            assert_eq!(fullmag_session::hex_sha256(bytes), reference.object_ref);
+        }
+
+        let (saved_mesh, m_semantics) = m_binding
+            .parse_payloads(&mesh_bytes, &m_semantics_bytes)
+            .expect("parse finalized M geometry and semantics");
+        let (h_saved_mesh, h_semantics) = h_binding
+            .parse_payloads(&mesh_bytes, &h_semantics_bytes)
+            .expect("parse finalized H_eff geometry and semantics");
+        assert_eq!(saved_mesh, h_saved_mesh);
+
+        let expected_resolution =
+            serde_json::to_value(&resolution).expect("serialize final execution resolution");
+        let root_attrs_after: serde_json::Value = serde_json::from_slice(
+            &fs::read(store.join(".zattrs")).expect("read finalized root attrs"),
         )
-        .expect("read shared mesh object");
-        let saved_mesh = fullmag_session::saved_fem_nodal::parse_saved_fem_mesh_geometry(
-            &mesh_bytes,
-            &m_binding.mesh,
+        .expect("decode finalized root attrs");
+        let stage_manifest_after: serde_json::Value = serde_json::from_slice(
+            &fs::read(stage.join("manifest.json")).expect("read finalized stage manifest"),
         )
-        .expect("parse shared mesh geometry");
-        let m_semantics_bytes = fs::read(
-            store.join(
-                fullmag_session::saved_fem_nodal::object_relative_path(&m_binding.semantics)
-                    .expect("resolve M semantics object"),
-            ),
+        .expect("decode finalized stage manifest");
+        let m_attrs_after: serde_json::Value = serde_json::from_slice(
+            &fs::read(stage.join("fields/m/.zattrs")).expect("read finalized M field attrs"),
         )
-        .expect("read M semantics object");
-        let h_semantics_bytes = fs::read(
-            store.join(
-                fullmag_session::saved_fem_nodal::object_relative_path(&h_binding.semantics)
-                    .expect("resolve H_eff semantics object"),
-            ),
+        .expect("decode finalized M field attrs");
+        let h_attrs_after: serde_json::Value = serde_json::from_slice(
+            &fs::read(stage.join("fields/H_eff/.zattrs"))
+                .expect("read finalized H_eff field attrs"),
         )
-        .expect("read H_eff semantics object");
-        let m_semantics = fullmag_session::saved_fem_nodal::parse_saved_fem_nodal_semantics(
-            &m_semantics_bytes,
-            &m_binding.semantics,
-        )
-        .expect("parse M semantics");
-        let h_semantics = fullmag_session::saved_fem_nodal::parse_saved_fem_nodal_semantics(
-            &h_semantics_bytes,
-            &h_binding.semantics,
-        )
-        .expect("parse H_eff semantics");
-        m_binding
-            .validate_payload_structure(&saved_mesh, &m_semantics)
-            .expect("validate committed M binding");
-        h_binding
-            .validate_payload_structure(&saved_mesh, &h_semantics)
-            .expect("validate committed H_eff binding");
+        .expect("decode finalized H_eff field attrs");
+        assert_eq!(
+            root_attrs_after["provenance"]["execution_resolution"],
+            expected_resolution,
+        );
+        assert_eq!(
+            stage_manifest_after["provenance"]["execution_resolution"],
+            expected_resolution,
+        );
+        assert_eq!(
+            m_attrs_after["provenance"]["execution_resolution"],
+            expected_resolution,
+        );
+        assert_eq!(
+            h_attrs_after["provenance"]["execution_resolution"],
+            expected_resolution,
+        );
         assert_eq!(
             m_semantics.active_node_mask,
             vec![true, true, true, false, true]
         );
         assert_eq!(h_semantics.active_node_mask, vec![true; 5]);
 
-        runtime.finish().expect("finish FEM stage autosave runtime");
         fs::remove_dir_all(autosave_root).expect("remove FEM nodal binding fixture");
     }
 

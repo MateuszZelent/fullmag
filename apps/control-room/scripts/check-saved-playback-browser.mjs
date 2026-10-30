@@ -15,6 +15,7 @@ const require=createRequire(import.meta.url);
 const version=require("playwright/package.json").version;
 assert.equal(version,process.env.CONTROL_ROOM_EXPECTED_PLAYWRIGHT_VERSION);
 const sha=value=>createHash("sha256").update(value).digest("hex");
+const arrayPathSegment=arrayId=>encodeURIComponent(arrayId);
 const scriptSha=sha(await readFile(fileURLToPath(import.meta.url)));
 assert.equal(scriptSha,process.env.CONTROL_ROOM_BROWSER_QA_SAVED_PLAYBACK_SCRIPT_SHA256);
 const errors=[],hookErrors=[],payloads=new Map(),solverRequests=[];
@@ -37,8 +38,11 @@ try {
   page.on("pageerror",e=>{errors.push(e.message);if(/Rendered (fewer|more) hooks|order of Hooks/i.test(e.message))hookErrors.push(e.message);});
   page.on("console",m=>{if(m.type()==="error" && /Rendered (fewer|more) hooks|Context Lost|WebGL.*error/i.test(m.text())) errors.push(m.text());});
   context.on("request",request=>{
-    const path=new URL(request.url()).pathname;
-    if(/\/results\/arrays\/[^/]+\/samples\/[0-9]+$/.test(path)) resultSampleRequests.push(path);
+    const url=new URL(request.url());
+    const path=url.pathname;
+    if(/\/results\/arrays\/[^/]+\/samples\/[0-9]+$/.test(path)) {
+      resultSampleRequests.push({path,revision:url.searchParams.get("revision")});
+    }
     // Observer leases and render acknowledgements accompany the restored live
     // viewport. Neither dispatches a command or changes scientific state.
     const observerLease=/^\/v2\/sessions\/current\/clients(?:\/[^/]+)?$/.test(path);
@@ -136,6 +140,10 @@ try {
   },{itemId});
   const detailResponse=await context.request.get(proxy.origin+"/v2/workspace/items/"+itemId);
   assert.equal(detailResponse.status(),200);
+  const savedFolderDetail=await detailResponse.json();
+  assert.equal(savedFolderDetail.item?.kind,"result","Saved playback item is not an exact result folder.");
+  assert.equal(typeof savedFolderDetail.item?.path,"string","Saved result folder has no path identity.");
+  const savedFolderPathComponents=savedFolderDetail.item.path.split(/[\\/]+/).filter(Boolean);
   const manifestResponse=await context.request.get(proxy.origin+"/v2/workspace/items/"+itemId+"/playback");
   assert.equal(manifestResponse.status(),200);
   const manifest=await manifestResponse.json();
@@ -272,10 +280,10 @@ try {
     const catalog=await response.json();outputCount=catalog.total_count;
     for(const entry of catalog.entries) {
       if(entry.kind!=="zarr_array")continue;
-      const response=await context.request.get(proxy.origin+"/v2/workspace/items/"+itemId+"/results/arrays/"+entry.array_id+"?"+new URLSearchParams({revision:catalog.revision}));
+      const response=await context.request.get(proxy.origin+"/v2/workspace/items/"+itemId+"/results/arrays/"+arrayPathSegment(entry.array_id)+"?"+new URLSearchParams({revision:catalog.revision}));
       if(!response.ok())continue;
       const array=await response.json();
-      if(array.quantity_id==="m" && array.can_visualize_3d && array.sample_count>=3) {selectedOutput={entry,array};break;}
+      if(array.quantity_id==="m" && array.can_visualize_3d && array.sample_count>=3) {selectedOutput={entry,array,catalogRevision:catalog.revision};break;}
     }
     if(selectedOutput || !catalog.next_cursor)break;
     catalogCursor=catalog.next_cursor;
@@ -296,7 +304,7 @@ try {
   }
   const expectedResults=new Map();
   for(const index of resultIndices) {
-    const response=await context.request.get(proxy.origin+"/v2/workspace/items/"+itemId+"/results/arrays/"+selectedOutput.array.id+"/samples/"+index+"?"+new URLSearchParams({revision:selectedOutput.array.revision}));
+    const response=await context.request.get(proxy.origin+"/v2/workspace/items/"+itemId+"/results/arrays/"+arrayPathSegment(selectedOutput.array.id)+"/samples/"+index+"?"+new URLSearchParams({revision:selectedOutput.array.revision}));
     assert.equal(response.status(),200);
     expectedResults.set(index,sha(await response.body()));
   }
@@ -373,7 +381,7 @@ try {
   await component.click();await page.getByRole("option",{name:"x",exact:true}).click();
   const resultCanvasHashes=[];
   const resultInspectorHandle=await outputInspector.elementHandle();
-  for(const index of [...resultIndices,0]) {
+  for(const index of [0,currentArray.sample_count-1,0]) {
     const slider=outputInspector.getByRole("slider",{name:"Saved sample"});
     if(index===0)await slider.press("Home");
     else if(index===selectedOutput.array.sample_count-1)await slider.press("End");
@@ -395,17 +403,19 @@ try {
     const key=selectedOutput.array.id+":"+index;
     for(let attempt=0;attempt<500&&!resultPayloads.has(key);attempt++)await page.waitForTimeout(20);
     assert.equal(resultPayloads.get(key),expectedResults.get(index),"Results UI received a different sample payload.");
+    const savedSamplePath="/v2/workspace/items/"+itemId+"/results/arrays/"+selectedOutput.array.id+"/samples/"+index;
+    assert(resultSampleRequests.some(request=>decodeURIComponent(request.path)===savedSamplePath && request.revision===selectedOutput.array.revision),"Saved playback did not use the selected array's pinned revision.");
     resultCanvasHashes.push(sha(await snapshotCanvas.screenshot({type:"png"})));
   }
   // Hold one uncached sample request so the real renderer must show a
   // truthful retained frame, then release the original backend response.
   let delayedIndex=null;
   for(let index=1;index<selectedOutput.array.sample_count;index++) {
-    if(!resultSampleRequests.some(path=>path.endsWith("/samples/"+index))) {delayedIndex=index;break;}
+    if(!resultSampleRequests.some(request=>request.path.endsWith("/samples/"+index))) {delayedIndex=index;break;}
   }
   assert(delayedIndex!==null,"Latency proof needs an uncached saved sample.");
-  const delayedPath="/v2/workspace/items/"+itemId+"/results/arrays/"+selectedOutput.array.id+"/samples/"+delayedIndex;
-  const delayedRoute=url=>decodeURIComponent(url.pathname)===delayedPath;
+  const delayedPath="/v2/workspace/items/"+itemId+"/results/arrays/"+arrayPathSegment(selectedOutput.array.id)+"/samples/"+delayedIndex;
+  const delayedRoute=url=>url.pathname===delayedPath;
   let releaseSample;
   let heldRequest=false;
   const sampleGate=new Promise(resolve=>{releaseSample=resolve;});
@@ -454,9 +464,9 @@ try {
   // Inject a read failure for an uncached frame. The retained image must keep
   // its actual coordinate/legend and a later selection must recover normally.
   const failedIndex=selectedOutput.array.sample_count-2;
-  assert(!resultSampleRequests.some(path=>path.endsWith("/samples/"+failedIndex)),"Error proof requires an uncached penultimate sample.");
-  const failedPath="/v2/workspace/items/"+itemId+"/results/arrays/"+selectedOutput.array.id+"/samples/"+failedIndex;
-  const failedRoute=url=>decodeURIComponent(url.pathname)===failedPath;
+  assert(!resultSampleRequests.some(request=>request.path.endsWith("/samples/"+failedIndex)),"Error proof requires an uncached penultimate sample.");
+  const failedPath="/v2/workspace/items/"+itemId+"/results/arrays/"+arrayPathSegment(selectedOutput.array.id)+"/samples/"+failedIndex;
+  const failedRoute=url=>url.pathname===failedPath;
   let failedRequests=0;
   const failSample=async route=>{failedRequests++;await route.fulfill({status:503,json:{code:"qa_sample_unavailable",message:"QA saved sample temporarily unavailable"}});};
   const errorSlider=outputInspector.getByRole("slider",{name:"Saved sample"});
@@ -597,11 +607,139 @@ try {
   assert(liveScreenshot.length<=512*1024);
   result={...result,live_screenshot_base64:liveScreenshot.toString("base64"),live_return_verified:true,live_view_source:"current",live_drawing_buffer:[liveGl.width,liveGl.height],results_sample_indices:resultIndices,results_sample_sha256:[...expectedResults.values()],results_canvas_changed:true};
   // Repeat through Explorer > Results for the just-completed live run.
-  const currentCatalogResponse=await context.request.get(proxy.origin+"/v2/sessions/current/data/results");
+  const currentCatalogResponse=await context.request.get(proxy.origin+"/v2/sessions/current/data/results?limit=200");
   assert.equal(currentCatalogResponse.status(),200);
   const currentCatalog=await currentCatalogResponse.json();
-  const currentEntry=currentCatalog.entries.find(entry=>entry.array_id===selectedOutput.array.id);
-  assert(currentEntry,"Current run does not expose the saved magnetization array.");
+  assert.equal(typeof currentCatalog.run_id,"string","Current results catalog has no accepted native run id.");
+  const currentStatusResponse=await context.request.get(proxy.origin+"/v2/sessions/current/status");
+  assert.equal(currentStatusResponse.status(),200);
+  const currentStatus=await currentStatusResponse.json();
+  assert.equal(currentStatus.run?.run_id,currentCatalog.run_id,"Current results catalog is not bound to the active native run.");
+  const runPathIndexes=savedFolderPathComponents
+    .map((component,index)=>component===currentCatalog.run_id?index:-1)
+    .filter(index=>index>=0);
+  assert.deepEqual(runPathIndexes,[savedFolderPathComponents.length-2],"Saved result folder is not an exact leaf of the current native run.");
+  const currentLeafLabel=savedFolderPathComponents.at(-1);
+  assert(currentLeafLabel,"Saved result folder has no owned leaf label.");
+  const currentEntries=[...currentCatalog.entries];
+  let currentCursor=currentCatalog.next_cursor;
+  for(let pageIndex=0;currentCursor;pageIndex++) {
+    assert(pageIndex<50,"Current results catalog exceeded the bounded pagination check.");
+    const query=new URLSearchParams({limit:"200",cursor:currentCursor});
+    const response=await context.request.get(proxy.origin+"/v2/sessions/current/data/results?"+query);
+    assert.equal(response.status(),200);
+    const page=await response.json();
+    assert.equal(page.revision,currentCatalog.revision,"Current results changed while paging the accepted run catalog.");
+    currentEntries.push(...page.entries);
+    currentCursor=page.next_cursor;
+  }
+  assert.equal(currentEntries.length,currentCatalog.total_count,"Current results pagination did not enumerate the full catalog.");
+  const currentEntryPath=currentLeafLabel+"/"+selectedOutput.entry.path;
+  const currentMEntries=currentEntries.filter(entry=>entry.kind==="zarr_array" && entry.path===currentEntryPath);
+  assert.equal(currentMEntries.length,1,"Current catalog does not contain exactly one magnetization array in the saved run leaf.");
+  const currentEntry=currentMEntries[0];
+  assert(currentEntry.array_id,"Current magnetization entry has no opaque array id.");
+  const currentArrayResponse=await context.request.get(proxy.origin+"/v2/sessions/current/data/results/arrays/"+arrayPathSegment(currentEntry.array_id)+"?"+new URLSearchParams({revision:currentCatalog.revision}));
+  assert.equal(currentArrayResponse.status(),200);
+  const currentArray=await currentArrayResponse.json();
+  assert.equal(currentArray.id,currentEntry.array_id,"Current array metadata changed its scoped opaque id.");
+  assert.equal(currentArray.path,currentEntry.path);
+  assert.equal(currentArray.quantity_id,"m");
+  assert.equal(currentArray.sample_count,selectedOutput.array.sample_count,"Current and saved magnetization sample counts differ.");
+  assert.deepEqual(currentArray.shape,selectedOutput.array.shape,"Current and saved magnetization shapes differ.");
+  assert.equal(currentArray.unit,selectedOutput.array.unit,"Current and saved magnetization units differ.");
+  assert.equal(currentArray.component_count,selectedOutput.array.component_count);
+  assert.deepEqual(currentArray.geometry,selectedOutput.array.geometry,"Current and saved magnetization geometry differs.");
+  const currentArraySampleUrl=index=>proxy.origin+"/v2/sessions/current/data/results/arrays/"+arrayPathSegment(currentArray.id)+"/samples/"+index+"?"+new URLSearchParams({revision:currentArray.revision});
+  const currentExpectedResults=new Map();
+  for(const index of resultIndices) {
+    const response=await context.request.get(currentArraySampleUrl(index));
+    assert.equal(response.status(),200);
+    const currentHash=sha(await response.body());
+    assert.equal(currentHash,expectedResults.get(index),"Current array sample differs from the exact saved run leaf.");
+    currentExpectedResults.set(index,currentHash);
+  }
+
+  const savedStageMarker="/fields/m";
+  assert(selectedOutput.entry.path.endsWith(savedStageMarker),"Selected magnetization array is not in a stage fields directory.");
+  const savedStagePath=selectedOutput.entry.path.slice(0,-savedStageMarker.length);
+  const savedHEffPath=savedStagePath+"/fields/H_eff";
+  let savedHEffEntry=null,savedHEff=null,savedHEffCursor=null;
+  for(let pageIndex=0;pageIndex<50;pageIndex++) {
+    const query=new URLSearchParams({limit:"200",...(savedHEffCursor?{cursor:savedHEffCursor}:{})});
+    const response=await context.request.get(proxy.origin+"/v2/workspace/items/"+itemId+"/results?"+query);
+    assert.equal(response.status(),200);
+    const catalog=await response.json();
+    assert.equal(catalog.revision,selectedOutput.catalogRevision,"Saved folder changed while locating H_eff.");
+    const candidates=catalog.entries.filter(entry=>entry.kind==="zarr_array" && entry.path===savedHEffPath);
+    assert(candidates.length<=1,"Saved leaf contains duplicate H_eff paths.");
+    if(candidates.length===1) {
+      savedHEffEntry=candidates[0];
+      const arrayResponse=await context.request.get(proxy.origin+"/v2/workspace/items/"+itemId+"/results/arrays/"+arrayPathSegment(savedHEffEntry.array_id)+"?"+new URLSearchParams({revision:catalog.revision}));
+      assert.equal(arrayResponse.status(),200);
+      savedHEff=await arrayResponse.json();
+      break;
+    }
+    if(!catalog.next_cursor)break;
+    savedHEffCursor=catalog.next_cursor;
+  }
+  assert(savedHEffEntry && savedHEff,"Saved result leaf has no H_eff array beside its magnetization array.");
+  assert.equal(savedHEff.id,savedHEffEntry.array_id);
+  assert.equal(savedHEff.path,savedHEffEntry.path);
+  assert.equal(savedHEff.quantity_id,"H_eff");
+  assert.equal(savedHEff.can_read_values,true);
+  assert.equal(savedHEff.can_visualize_3d,true);
+  assert.equal(savedHEff.component_count,3);
+  assert.equal(savedHEff.sample_count,selectedOutput.array.sample_count);
+  assert.deepEqual(savedHEff.shape,selectedOutput.array.shape,"H_eff and magnetization do not cover the same stage samples.");
+  assert.equal(savedHEff.unit,"A/m","H_eff metadata lost its canonical field unit.");
+  assert.equal(savedHEff.geometry?.kind,selectedOutput.array.geometry?.kind);
+  assert.equal(savedHEff.geometry?.component_count,3);
+  if(manifest.fem_mesh) {
+    assert.equal(savedHEff.geometry?.kind,"fem_p1");
+    assert.equal(savedHEff.geometry?.component_count,3);
+    assert(Number.isSafeInteger(savedHEff.geometry?.node_count) && savedHEff.geometry.node_count>0);
+    assert.equal(savedHEff.shape[1],savedHEff.geometry.node_count*savedHEff.component_count);
+    assert.match(savedHEff.geometry?.playback_geometry_sha256 ?? "",/^[a-f0-9]{64}$/);
+    assert.equal(savedHEff.geometry?.fem_mesh?.geometry_sha256,savedHEff.geometry.playback_geometry_sha256);
+    assert.match(savedHEff.geometry?.fem_mesh?.topology_sha256 ?? "",/^[a-f0-9]{64}$/);
+    assert.match(savedHEff.geometry?.fem_mesh?.support_sha256 ?? "",/^[a-f0-9]{64}$/);
+  }
+  const currentHEffPath=currentLeafLabel+"/"+savedHEffPath;
+  const currentHEffEntries=currentEntries.filter(entry=>entry.kind==="zarr_array" && entry.path===currentHEffPath);
+  assert.equal(currentHEffEntries.length,1,"Current catalog does not contain exactly one H_eff array in the saved run leaf.");
+  const currentHEffEntry=currentHEffEntries[0];
+  assert(currentHEffEntry.array_id,"Current H_eff entry has no opaque array id.");
+  const currentHEffResponse=await context.request.get(proxy.origin+"/v2/sessions/current/data/results/arrays/"+arrayPathSegment(currentHEffEntry.array_id)+"?"+new URLSearchParams({revision:currentCatalog.revision}));
+  assert.equal(currentHEffResponse.status(),200);
+  const currentHEff=await currentHEffResponse.json();
+  assert.equal(currentHEff.id,currentHEffEntry.array_id);
+  assert.equal(currentHEff.path,currentHEffEntry.path);
+  assert.equal(currentHEff.quantity_id,"H_eff");
+  assert.equal(currentHEff.unit,savedHEff.unit);
+  assert.equal(currentHEff.component_count,3);
+  assert.equal(currentHEff.sample_count,savedHEff.sample_count);
+  assert.deepEqual(currentHEff.shape,savedHEff.shape);
+  assert.equal(currentHEff.can_read_values,true);
+  assert.equal(currentHEff.can_visualize_3d,true);
+  assert.deepEqual(currentHEff.geometry,savedHEff.geometry,"Current H_eff FEM geometry differs from the saved leaf.");
+  const hEffSampleIndices=[0,savedHEff.sample_count-1];
+  const savedHEffHashes=new Map(),currentHEffHashes=new Map();
+  for(const index of hEffSampleIndices) {
+    const savedResponse=await context.request.get(proxy.origin+"/v2/workspace/items/"+itemId+"/results/arrays/"+arrayPathSegment(savedHEff.id)+"/samples/"+index+"?"+new URLSearchParams({revision:savedHEff.revision}));
+    assert.equal(savedResponse.status(),200);
+    const savedBytes=await savedResponse.body();
+    assert.equal(savedBytes.byteLength,savedHEff.shape[1]*8);
+    savedHEffHashes.set(index,sha(savedBytes));
+    const currentResponse=await context.request.get(proxy.origin+"/v2/sessions/current/data/results/arrays/"+arrayPathSegment(currentHEff.id)+"/samples/"+index+"?"+new URLSearchParams({revision:currentHEff.revision}));
+    assert.equal(currentResponse.status(),200);
+    const currentBytes=await currentResponse.body();
+    assert.equal(currentBytes.byteLength,currentHEff.shape[1]*8);
+    const currentHash=sha(currentBytes);
+    assert.equal(currentHash,savedHEffHashes.get(index),"Current H_eff sample differs from the exact saved run leaf.");
+    currentHEffHashes.set(index,currentHash);
+  }
+  assert.equal(savedHEffHashes.get(0),savedHEffHashes.get(savedHEff.sample_count-1),"External-field-only H_eff should remain constant across this saved stage.");
   resultPayloads.clear();
   const explorer=page.getByRole("region",{name:"Explorer",exact:true});
   await explorer.getByRole("tab",{name:"Results",exact:true}).click();
@@ -754,18 +892,20 @@ try {
   await currentRow.click();
   await outputInspector.getByRole("button",{name:"Load into 3D",exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('[data-results-snapshot-status="ready"]'));
-  for(const index of [0,selectedOutput.array.sample_count-1,0]) {
+  for(const index of [...resultIndices,0]) {
     await outputInspector.getByRole("slider",{name:"Saved sample"}).press(index===0?"Home":"End");
     await page.waitForFunction(index=>document.querySelector('[data-results-snapshot-status="ready"]')?.getAttribute("data-results-snapshot-index")===String(index),index);
-    const key=selectedOutput.array.id+":"+index;
+    const key=currentArray.id+":"+index;
     for(let attempt=0;attempt<500&&!resultPayloads.has(key);attempt++)await page.waitForTimeout(20);
-    assert.equal(resultPayloads.get(key),expectedResults.get(index),"Current-run Inspector did not adopt the saved sample.");
+    assert.equal(resultPayloads.get(key),currentExpectedResults.get(index),"Current-run Inspector did not adopt the current leaf's pinned sample.");
+    const currentSamplePath="/v2/sessions/current/data/results/arrays/"+currentArray.id+"/samples/"+index;
+    assert(resultSampleRequests.some(request=>decodeURIComponent(request.path)===currentSamplePath && request.revision===currentArray.revision),"Current Inspector did not use the selected array's leaf revision.");
   }
   scenarioPhase="current-result-playback";
-  const lastSample=selectedOutput.array.sample_count-1;
+  const lastSample=currentArray.sample_count-1;
   await outputInspector.getByRole("slider",{name:"Saved sample"}).press("End");
   await page.waitForFunction(index=>document.querySelector('[data-results-snapshot-status="ready"]')?.getAttribute("data-results-snapshot-index")===String(index),lastSample);
-  const fileEntry=currentCatalog.entries.find(entry=>entry.kind==="file" && entry.path.endsWith(".json"));
+  const fileEntry=currentEntries.find(entry=>entry.kind==="file" && entry.path.endsWith(".json"));
   assert(fileEntry,"Current results lack a metadata file for the reselection check.");
   await explorer.locator('[data-entry-id="'+fileEntry.id+'"] > div > [data-entry-select="true"]').click();
   await outputInspector.getByRole("heading",{name:"File preview",exact:true}).waitFor({state:"visible"});
@@ -774,12 +914,18 @@ try {
   assert.equal(await snapshot.getAttribute("data-results-snapshot-index"),String(lastSample));
   result={...result,sample_reselection_verified:true};
   // Tables must expose their persisted column names, not anonymous values.
-  const tableEntry=currentCatalog.entries.find(entry=>entry.kind==="zarr_array" && entry.path.endsWith("/table"));
+  const currentStagePath=currentLeafLabel+"/"+savedStagePath;
+  const tablePath=currentStagePath+"/table";
+  const tableEntries=currentEntries.filter(entry=>entry.kind==="zarr_array" && entry.path===tablePath);
+  assert.equal(tableEntries.length,1,"Current catalog does not contain exactly one autosave table in the selected run leaf and stage.");
+  const tableEntry=tableEntries[0];
   assert(tableEntry,"The completed run lacks its autosave table.");
-  const tableBase=proxy.origin+"/v2/sessions/current/data/results/arrays/"+tableEntry.array_id;
+  const tableBase=proxy.origin+"/v2/sessions/current/data/results/arrays/"+arrayPathSegment(tableEntry.array_id);
   const tableResponse=await context.request.get(tableBase+"?"+new URLSearchParams({revision:currentCatalog.revision}));
   assert.equal(tableResponse.status(),200);
   const table=await tableResponse.json();
+  assert.equal(table.id,tableEntry.array_id);
+  assert.equal(table.path,tableEntry.path);
   const tableColumns=["t","step","mx","my","mz","e_total"];
   assert.deepEqual(table.quantity_ids,tableColumns,"Results API lost the persisted table column order.");
   assert(table.can_read_values && !table.can_visualize_3d);
@@ -795,6 +941,8 @@ try {
     const key=table.id+":"+index;
     for(let attempt=0;attempt<500&&!resultPayloads.has(key);attempt++)await page.waitForTimeout(20);
     assert.equal(resultPayloads.get(key),sha(expectedBytes),"Table Inspector loaded a different sample.");
+    const tableSamplePath="/v2/sessions/current/data/results/arrays/"+table.id+"/samples/"+index;
+    assert(resultSampleRequests.some(request=>decodeURIComponent(request.path)===tableSamplePath && request.revision===table.revision),"Current table Inspector did not use its leaf revision.");
     await page.waitForFunction(columns=>{
       const group=[...document.querySelectorAll('[data-slot="inspector-group"]')]
         .find(node=>node.querySelector("h3")?.textContent==="Decoded values");
@@ -803,7 +951,56 @@ try {
     },tableColumns);
   }
   result={...result,table_columns_verified:tableColumns,table_sample_indices:[0,table.sample_count-1]};
+
+  const currentHEffRow=explorer.locator('[data-entry-id="'+currentHEffEntry.id+'"] > div > [data-entry-select="true"]');
+  const currentResultsSearch=explorer.getByRole("searchbox",{name:"Search saved result outputs",exact:true});
+  await currentResultsSearch.fill(currentHEffEntry.path);
+  await currentHEffRow.waitFor({state:"visible"});
+  await currentHEffRow.click();
+  await currentResultsSearch.fill("");
+  const outputMetadata=outputInspector.getByRole("button",{name:"Output metadata",exact:true});
+  if(await outputMetadata.getAttribute("aria-expanded")!=="true")await outputMetadata.click();
+  assert((await outputInspector.textContent()).includes("H_eff"),"Current Results Inspector did not select H_eff.");
+  assert.equal(await outputMetadata.getAttribute("aria-expanded"),"true");
+  assert((await outputInspector.textContent()).includes(savedHEff.unit),"Current H_eff Inspector lost the persisted unit.");
+  await outputInspector.getByRole("button",{name:"Load into 3D",exact:true}).click();
+  const hEffCaption=`Historical snapshot · H_eff`;
+  await page.waitForFunction(({caption,unit})=>{
+    const viewport=document.querySelector('[aria-label="Saved results 3D viewport"]');
+    const status=viewport?.querySelector('[role="status"]')?.textContent??"";
+    return viewport?.getAttribute("data-results-snapshot-status")==="ready"
+      && status.includes(caption) && status.includes(unit);
+  },{caption:hEffCaption,unit:savedHEff.unit});
+  const hEffCanvas=snapshot.locator("canvas");
+  const hEffGl=await hEffCanvas.evaluate(node=>{
+    const gl=node.getContext("webgl2")??node.getContext("webgl");
+    const rect=node.getBoundingClientRect();
+    return {visible:rect.width>0&&rect.height>0,lost:gl?.isContextLost()??true,width:gl?.drawingBufferWidth??0,height:gl?.drawingBufferHeight??0};
+  });
+  assert(hEffGl.visible&&!hEffGl.lost&&hEffGl.width>0&&hEffGl.height>0,"H_eff did not reach a visible WebGL 3D viewport.");
+  const hEffSlider=outputInspector.getByRole("slider",{name:"Saved sample"});
+  await hEffSlider.press("Home");
+  await page.waitForFunction(()=>document.querySelector('[data-results-snapshot-status="ready"]')?.getAttribute("data-results-snapshot-index")==="0");
+  for(const index of hEffSampleIndices) {
+    if(index===0)await hEffSlider.press("Home");
+    else await hEffSlider.press("End");
+    await page.waitForFunction(index=>document.querySelector('[data-results-snapshot-status="ready"]')?.getAttribute("data-results-snapshot-index")===String(index),index);
+    const key=currentHEff.id+":"+index;
+    for(let attempt=0;attempt<500&&!resultPayloads.has(key);attempt++)await page.waitForTimeout(20);
+    assert.equal(resultPayloads.get(key),currentHEffHashes.get(index),"H_eff 3D playback adopted bytes outside the selected saved leaf.");
+    const currentHEffSamplePath="/v2/sessions/current/data/results/arrays/"+currentHEff.id+"/samples/"+index;
+    assert(resultSampleRequests.some(request=>decodeURIComponent(request.path)===currentHEffSamplePath && request.revision===currentHEff.revision),"H_eff 3D playback did not use its leaf revision.");
+  }
+  assert((await snapshot.textContent()).includes(hEffCaption),"Current viewport stopped displaying H_eff during sample playback.");
+  const hEffResult={unit:savedHEff.unit,component_count:savedHEff.component_count,sample_count:savedHEff.sample_count,
+    geometry_sha256:savedHEff.geometry.playback_geometry_sha256,sample_indices:hEffSampleIndices,
+    sample_sha256:hEffSampleIndices.map(index=>currentHEffHashes.get(index)),drawing_buffer:[hEffGl.width,hEffGl.height]};
+  result={...result,current_heff_3d_verified:true,current_heff_constant_samples_verified:true,current_heff:hEffResult};
+
   await currentRow.click();
+  await outputInspector.getByRole("button",{name:"Load into 3D",exact:true}).click();
+  await outputInspector.getByRole("slider",{name:"Saved sample"}).press("End");
+  await page.waitForFunction(index=>document.querySelector('[data-results-snapshot-status="ready"]')?.getAttribute("data-results-snapshot-index")===String(index),lastSample);
   assert.equal(Number(await outputInspector.getByRole("slider",{name:"Saved sample"}).inputValue()),lastSample);
   const preResetZoomPose=await snapshotCanvas.getAttribute("data-saved-camera-pose");
   await snapshotCanvas.hover();
@@ -825,10 +1022,10 @@ try {
   await page.getByRole("menuitemradio",{name:"Light",exact:true}).click();
   // Deliver a real, already-fetched historical payload only after returning to
   // Live. A late response must not reactivate the historical render source.
-  const currentSamplePrefix="/v2/sessions/current/data/results/arrays/"+selectedOutput.array.id+"/samples/";
+  const currentSamplePrefix="/v2/sessions/current/data/results/arrays/"+currentArray.id+"/samples/";
   let lateIndex=null;
-  for(let index=1;index<selectedOutput.array.sample_count;index++) {
-    if(!resultSampleRequests.some(path=>decodeURIComponent(path)===currentSamplePrefix+index)) {lateIndex=index;break;}
+  for(let index=1;index<currentArray.sample_count;index++) {
+    if(!resultSampleRequests.some(request=>decodeURIComponent(request.path)===currentSamplePrefix+index && request.revision===currentArray.revision)) {lateIndex=index;break;}
   }
   assert(lateIndex!==null,"Late-response proof needs an uncached current-run sample.");
   const latePath=currentSamplePrefix+lateIndex;
