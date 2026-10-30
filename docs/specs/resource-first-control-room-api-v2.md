@@ -2239,3 +2239,12 @@ scenę, hash albo przypisanie projektu/runu. Obie odpowiedzi wyraźnie
 sygnalizują projekcję tylko do odczytu; nie deklarują zgodności z dawnym
 stanem authoring ani kwalifikacji naukowej. Dane wynikowe pozostają związane
 z niezmiennymi wejściami przyjętego obliczenia.
+
+### Precyzja nowej sesji
+
+`POST /v2/sessions` przyjmuje FDM CPU double, FEM CPU double oraz FDM GPU
+single/double. Pozostałe kombinacje są odrzucane przed utworzeniem sesji.
+Podgląd capabilities odpowiada wybranemu urządzeniu i precyzji; nie jest
+dowodem dostępności ani wykonania runtime. Pierwsze przygotowanie obliczeń
+nadal sprawdza dostępność GPU, bez cichego fallbacku CPU. Runtime odczytuje
+urządzenie i precyzję z kanonicznego skryptu sesji.
