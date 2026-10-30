@@ -1,14 +1,14 @@
 {
   "schema": "fullmag.results-fem-nodal-source-checkpoint.v1",
-  "observed_at": "2026-10-30T10:55:46.631992+00:00",
-  "head": "1f2980429f5c546f4ee2d0bca5d28efb74e80e3d",
+  "observed_at": "2026-10-30T11:12:16.889446+00:00",
+  "head": "78ff376e462db4ebebb2c625ede8d45dd07e0e65",
   "source_sha256": {
     "crates/fullmag-quantities/src/fem_nodal_field.rs": "5852067389b8b9408dc9a41750e22e9fa7e7611cea37bc1acd9d64b1652ed5cd",
     "crates/fullmag-quantities/src/lib.rs": "a77045805d298eff2d6be7c03a193bab40026a8e2f424564342b8e2615aac877",
     "crates/fullmag-session/src/saved_fem_nodal.rs": "0848b004d7f48db1294afc8629ac3727c809ed6e0439297a42793279d9e8212b",
     "crates/fullmag-session/src/lib.rs": "22c94d4343802179444eda4c7ee028e83cee949e15b7d295be0ad31ef51ec63f",
     "crates/fullmag-session/src/solution_field_geometry.rs": "baaef5e093bb19871f64bce5df0fc6c93f0be85d585ae2a308cebb46f1106cb9",
-    "crates/fullmag-runner/src/autosave_fem_geometry.rs": "01ea3d76ccca51784bab7c403e717098d50115a506f804abd378c94c2c0d5bdf",
+    "crates/fullmag-runner/src/autosave_fem_geometry.rs": "10bbbb47fb0e02ca3e4bc18c881ed2819ec91436547756213d5590ce945c6d35",
     "crates/fullmag-runner/src/autosave_zarr.rs": "8b7f07dc709545d4e49d7d300fd5184a38b79be7cf9a587adcd3714b31760f49",
     "crates/fullmag-runner/src/artifact_pipeline.rs": "f8358ba18c2f0aa509e8ae2b844b98e6fb159672ac6a5392f5328f3c8af9d8c7",
     "crates/fullmag-runner/src/lib.rs": "a157dadc5cd27a57eaf51af380388cd19ab184ced3d68f7ddd56ab9ec7f03497",
@@ -34,7 +34,7 @@
   "checks": {
     "rustfmt_owned_files": "passed (skip_children=true)",
     "git_diff_check": "passed",
-    "cargo_tests": "First CI rust-contracts FAILED compiling saved_fem_nodal: missing schema constant import and shadowed test helper. Fixed in current sources; retest pending. Results tests did not run.",
+    "cargo_tests": "Second Rust run41044935114 FAILED compiling autosave_fem_geometry (wrong module path, shadowed test helper, expected byte-slice type). Fixed in source; retest pending. Results tests not yet executed.",
     "new_runtime": "NOT RUN",
     "new_browser": "NOT RUN",
     "review": "Payload/hash API and Windows directory replacement findings addressed in source; Windows execution NOT VERIFIED",
@@ -47,7 +47,7 @@
     "collection": "Independent source review PASS after aggregate receipt budget fix; geometry sibling/stale and aggregate-budget route tests added; NOT RUN.",
     "receipt_budget": "16 MiB aggregate per discovery, typed regular-file oversize error distinguishes missing/type/symlink/I/O failures; independent source review PASS; tests NOT RUN.",
     "snapshot_preferences": "Bounded logical appearance/sample preferences preserve explicit selections across metadata revisions; exact render keys remain revision-pinned and new definitions do not activate preview. Primary source review PASS; Vitest/typecheck/browser NOT RUN.",
-    "ci": "Rust run41043411407 failed compilation; UI run41043505998 control-room-contracts passed typecheck then failed lint on unused React in test mock. Both causes fixed; reruns pending. Inspector browser fixture PASS; broad browser fixture still running at last observation.",
+    "ci": "Rust runs41043411407 and41044935114 FAILED; first UI control-room failed unused-import lint (fixed), broad browser fixture failed old result tree expectations (diagnosis ongoing). Typecheck and inspector-actions browser fixture passed on1f2980429; no runtime qualification.",
     "cargo_lock": "Byte-exact Cargo-produced artifact12971087642 from run41043411407, matching input manifests; sha256 4dbaff705d3e94f64559dd1e50c6088a9bccfe974ea1b49a013d014fe6cb5fbb."
   },
   "formatter_recovery": {

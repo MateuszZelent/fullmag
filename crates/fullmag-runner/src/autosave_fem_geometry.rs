@@ -96,7 +96,7 @@ impl PreparedFemAutosaveGeometry {
         });
         let normalized_markers = if needs_magnetic_support {
             Some(
-                crate::fem::plan::normalized_runtime_element_markers(fem)
+                crate::dispatch::normalized_runtime_element_markers(fem)
                     .map_err(|error| error.message)?,
             )
         } else {
@@ -406,7 +406,7 @@ mod tests {
         )
     }
 
-    fn plan(mesh: fullmag_ir::MeshIR, fe_order: u32) -> ExecutionPlanIR {
+    fn make_plan(mesh: fullmag_ir::MeshIR, fe_order: u32) -> ExecutionPlanIR {
         ExecutionPlanIR {
             common: CommonPlanMeta {
                 ir_version: "v0".into(),
@@ -449,7 +449,7 @@ mod tests {
 
     #[test]
     fn prepares_quantity_specific_masks_and_shared_mesh_bytes() {
-        let plan = plan(mesh(), 1);
+        let plan = make_plan(mesh(), 1);
         let policy = policy(AutosaveFormatIR::Zarr, &["m", "H_eff"]);
         let prepared = PreparedFemAutosaveGeometry::from_plan(&plan, &policy)
             .expect("prepare source geometry")
@@ -497,7 +497,7 @@ mod tests {
 
     #[test]
     fn rejects_width_mismatch_and_skips_alias_projection_or_unsupported_quantity() {
-        let plan = plan(mesh(), 1);
+        let plan = make_plan(mesh(), 1);
         let policy = policy(AutosaveFormatIR::Zarr, &["m", "M", "m.x", "E_total"]);
         let prepared = PreparedFemAutosaveGeometry::from_plan(&plan, &policy)
             .expect("prepare source geometry")
@@ -541,7 +541,7 @@ mod tests {
 
     #[test]
     fn skips_non_zarr_and_higher_order_fem_policies() {
-        let plan = plan(mesh(), 1);
+        let plan = make_plan(mesh(), 1);
         assert!(PreparedFemAutosaveGeometry::from_plan(
             &plan,
             &policy(AutosaveFormatIR::Txt, &["m"])
@@ -549,7 +549,7 @@ mod tests {
         .unwrap()
         .is_none());
 
-        let high_order_plan = plan(mesh(), 2);
+        let high_order_plan = make_plan(mesh(), 2);
         assert!(PreparedFemAutosaveGeometry::from_plan(
             &high_order_plan,
             &policy(AutosaveFormatIR::Zarr, &["m"])
@@ -586,7 +586,7 @@ mod tests {
     #[test]
     fn serialized_metadata_budget_is_optional() {
         let within = serialize_with_budget(&"a", 3, "test semantics").unwrap();
-        assert_eq!(within.as_deref(), Some(br#""a"#));
+        assert_eq!(within.as_deref(), Some(br#""a""#.as_slice()));
         assert!(serialize_with_budget(&"a", 2, "test semantics")
             .unwrap()
             .is_none());

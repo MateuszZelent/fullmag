@@ -844,3 +844,29 @@ Job control-room-contracts potwierdził typecheck, a następnie zatrzymał się 
 jednym ostrzeżeniu ESLint (`React` nieużywane w mocku
 InspectorDirtySelectionGuard). Usunięto niepotrzebny import i async tego mocka.
 Vitest i build nie zostały przez tę próbę wykonane; obowiązuje ponowienie CI.
+
+
+### Drugi Rust CI i odświeżenie ścieżki recovery
+
+Rust run [41044935114](https://github.com/MateuszZelent/fullmag/actions/runs/41044935114)
+na HEAD `78ff376e462db4ebebb2c625ede8d45dd07e0e65` ujawnił kolejne błędy
+kompilacji producenta: nieistniejący moduł fem::plan, przesłonięty helper plan
+oraz niezgodny typ oczekiwanego bufora w teście limitu serializacji. Producent
+korzysta teraz z `dispatch::normalized_runtime_element_markers`, tej samej
+funkcji co runtime i istniejący writer artefaktów; nie kopiuje starszej wersji
+z nieużywanego adaptera. Helper testowy to make_plan; oczekiwanie JSON sprawdza
+pełne trzy bajty `"a"` jako slice. Potrzebne ponowienie CI, bez deklaracji PASS.
+
+Szeroki browser smoke pierwszego UI runu zatrzymał się na nieobecnym legacy
+węźle `results:run:inspector-run`. Fixture nie obsługuje GET current/data/results,
+a bieżące drzewo ma odmienną hierarchię w Modes & analysis. Diagnostyka nadal
+rozróżnia nieaktualne oczekiwania testu od rzeczywistego dostępu do wyników
+zakończonego etapu. Limitu żądań nie podniesiono i nie ukryto strony przed pollingiem.
+
+Odczyt mastera `aee17a54d4c283f2fdf5aa3d89acc5ecdb638e19` potwierdził nowy natywny
+dowód Windows/DrvFs dla aliasów drive. To potencjalna droga usunięcia starej
+blokady recovery. Nadal potrzebne: integracja helperów z lokalną tożsamością
+worktree, świeża kontrola runtime i nowe piny. Poprzedni katalog pinów w /tmp
+nie istnieje; nie odtworzono jego wartości z pamięci. Obcy main ma lokalną zmianę
+browser QA, dlatego nie wykonujemy z niego mutującego recovery jako z czystego
+przypiętego helpera. Nie zmieniono cudzych grup.
