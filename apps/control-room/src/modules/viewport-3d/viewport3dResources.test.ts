@@ -542,12 +542,21 @@ describe("viewport3dResources", () => {
       ],
     ]);
 
+    // A revalidating collection keeps showing its newest matching member.
     expect(
       resolveViewport3DFieldVectorCollectionLastGood({
         current: replacement,
         previous,
         requests,
         status: "stale",
+      }).get("target-a"),
+    ).toMatchObject({ etag: '"field-m-2"', retained: true });
+    expect(
+      resolveViewport3DFieldVectorCollectionLastGood({
+        current: new Map(),
+        previous,
+        requests,
+        status: "loading",
       }).get("target-a")?.etag,
     ).toBe('"field-m-1"');
     expect(

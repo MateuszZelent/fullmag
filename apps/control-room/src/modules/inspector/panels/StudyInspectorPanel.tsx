@@ -15,6 +15,7 @@ import {
 import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
+import { useLayoutSelector } from "@/kernel/layout/useLayout";
 import { runFdmGridRefreshOperation } from "@/kernel/authoring/geometryLifecycleCommandContributions";
 import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
 import {
@@ -34,7 +35,6 @@ import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import type {
   CheckpointEntry,
   FrequencyDomainManifestResource,
-  JsonObject,
   LiveStatusResource,
   MeshPeriodicPairsResource,
   MeshSharedDomainManifestResource,
@@ -114,7 +114,6 @@ import {
 } from "./StudyGlobalAuthoringModel";
 import {
   buildStudyStagesMergePatch,
-  createStudyStageDraft,
   createDefaultStudyStageDraft,
   createStudyStageDrafts,
   validateStudyStageDraft,
@@ -122,6 +121,7 @@ import {
   type StudyStageDraftKind,
 } from "./StudyStageAuthoringModel";
 import { readStudyStageSource } from "@/shared/domain/study/studyStageSource";
+import { createPipelineStudyStageDrafts } from "./studyPipelineStageDrafts";
 import {
   resolveStudyInspectorModel,
   stageExecutionForCurrentScope,
@@ -803,9 +803,12 @@ export function useStudyInspectorPanelController(
   const energyCurrent = useSolverEnergyCurrentResource({
     enabled: shouldLoadRuntimeScalars(true, runtimeStatus),
   });
+  // The Inspector stays mounted while hidden; its 120-row energy window would
+  // otherwise refetch on every scalar row of a running solve.
+  const inspectorVisible = useLayoutSelector((layout) => layout.panelVisible.right);
   const energyHistory = useSolverEnergyHistoryResource(
     120,
-    { enabled: shouldLoadRuntimeScalars(true, runtimeStatus) },
+    { enabled: inspectorVisible && shouldLoadRuntimeScalars(true, runtimeStatus) },
   );
   const commandDetail = useCommandDetailResource(state.selectedCommandId);
   const checkpoints = checkpointCatalog.data?.checkpoints ?? [];
@@ -890,17 +893,7 @@ export function useStudyInspectorPanelController(
     const rawStages = rawStudyStages(scene.data);
     const source = readStudyStageSource(asRecord(scene.data)?.study);
     const stageDrafts = source.kind === "flat" ? createStudyStageDrafts(rawStages)
-      : source.entries.map((entry, index): StudyStageDraft => ({
-        ...createStudyStageDraft(entry.stageKind === "antenna_field_solve" ? entry.payload : {
-          kind: "unsupported",
-        }, index),
-        kind: entry.stageKind === "antenna_field_solve" ? "antenna_field_solve" : "unsupported",
-        rawStage: structuredClone(entry.payload) as JsonObject,
-        stageId: entry.queueId ?? `stage-${index + 1}`,
-        pipelineNodeId: entry.queueId ?? undefined,
-        pipelineEnabled: entry.enabled,
-        pipelineGroupIds: [...entry.groupIds],
-      }));
+      : createPipelineStudyStageDrafts(source.entries);
     dispatch({
       type: "resetStageDrafts",
       drafts: stageDrafts,

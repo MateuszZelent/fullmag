@@ -1738,13 +1738,14 @@ pub(super) fn native_local_node_map_identity(
     expected_node_count: usize,
 ) -> Option<LiveFemLocalNodeMapIdentity> {
     let mesh_generation_id = mesh_generation_id.filter(|value| !value.is_empty())?;
-    let map = backend.local_node_index_map().ok()?;
-    if usize::try_from(map.local_node_count).ok() != Some(expected_node_count) {
+    let (local_node_count, local_node_index_map_sha256) =
+        backend.local_node_index_map_identity().ok()?;
+    if usize::try_from(local_node_count).ok() != Some(expected_node_count) {
         return None;
     }
     Some(LiveFemLocalNodeMapIdentity {
         mesh_generation_id: mesh_generation_id.to_owned(),
-        local_node_index_map_sha256: map.content_sha256().ok()?,
+        local_node_index_map_sha256,
         node_count: expected_node_count,
     })
 }
@@ -1782,7 +1783,9 @@ pub(crate) fn capture_native_fem_observables(
         dt_seconds: (update.stats.dt > 0.0).then_some(update.stats.dt),
     };
     clock.validate().map_err(|error| RunError { message: error.to_string() })?;
-    let quantities = active_fem_preview_quantities(engine, plan, &field_materialization_quantity_ids());
+    let quantities = crate::live_demand::retain_demanded_live_quantities(
+        active_fem_preview_quantities(engine, plan, &field_materialization_quantity_ids()),
+    );
     let started = std::time::Instant::now();
     let mut fields = Vec::with_capacity(quantities.len());
     for quantity in quantities {

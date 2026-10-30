@@ -1999,11 +1999,18 @@ mod tests {
             assert_eq!(realized.bodies[0].object_id, "free");
             assert_eq!(realized.bodies[0].bounds_max, [0.5, 1.0, 1.5]);
 
+            scene.objects[0].tags.clear();
             scene.objects[0].role = "magnet".to_string();
-            assert!(geometry_blocks_mesh_build(&scene, GeometryBackendTarget::Fem).is_some());
+            scene.objects[0].physics_stack = vec![crate::ScriptBuilderMagneticInteractionEntry {
+                kind: crate::ScriptBuilderMagneticInteractionKind::Exchange,
+                enabled: true,
+                params: None,
+            }];
+            assert!(geometry_blocks_mesh_build(&scene, GeometryBackendTarget::Fem).is_none());
             let validation = validate_geometry_scene(&scene, GeometryBackendTarget::Fem);
             assert!(validation.diagnostics.iter().any(|entry| entry.code == "GEOMETRY_OBJECT_MATERIAL_MISSING"));
             assert!(validation.diagnostics.iter().any(|entry| entry.code == "GEOMETRY_OBJECT_MAGNETIZATION_MISSING"));
+            assert!(geometry_blocks_solver_run(&scene, GeometryBackendTarget::Fem).is_some());
         }
     }
 

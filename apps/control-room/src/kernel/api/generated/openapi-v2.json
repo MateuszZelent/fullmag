@@ -34721,6 +34721,38 @@
         ],
         "type": "object"
       },
+      "ScalarObservationSource": {
+        "description": "Process-authenticated source of the single current scalar observation.\nAbsent for historical, imported, or unqualified rows.",
+        "properties": {
+          "request_scope_epoch": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "scalar_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "source_step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_id",
+          "run_id",
+          "request_scope_epoch",
+          "source_step",
+          "scalar_revision"
+        ],
+        "type": "object"
+      },
       "ScalarWindow": {
         "properties": {
           "columns": {
@@ -34728,6 +34760,17 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "current_observation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ScalarObservationSource",
+                "description": "Present only when the window contains exactly the current accepted row."
+              }
+            ]
           },
           "observation_frames": {
             "items": {

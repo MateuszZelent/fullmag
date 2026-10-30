@@ -657,6 +657,7 @@ pub(crate) fn test_app_state() -> Arc<AppState> {
     let (control_events_tx, _rx) = watch::channel(0u64);
 
     Arc::new(AppState {
+        api_started_at: std::time::Instant::now(),
         development_admission: Default::default(),
         development_restored_authoring: Default::default(),
         development_backend: crate::router_v2::handlers::platform::development_backend::DevelopmentBackendConfig::Disabled,
@@ -780,6 +781,7 @@ pub(crate) async fn test_app_state_with_live_session() -> Arc<AppState> {
         simulation_preparation: None,
         scene_document: None,
         scalar_rows: Vec::new(),
+        latest_scalar_source: None,
         engine_log: Vec::new(),
         solver_profile: crate::schemas::diagnostics::SolverProfileResource::default(),
         quantities: Vec::new(),
@@ -3097,6 +3099,7 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
         simulation_preparation: None,
         scene_document: None,
         scalar_rows: Vec::new(),
+        latest_scalar_source: None,
         engine_log: Vec::new(),
         solver_profile: crate::schemas::diagnostics::SolverProfileResource::default(),
         quantities: Vec::new(),
@@ -3154,6 +3157,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
     let (control_events_tx, _rx) = watch::channel(0u64);
 
     let state = Arc::new(AppState {
+        api_started_at: std::time::Instant::now(),
         development_admission: Default::default(),
         development_restored_authoring: Default::default(),
         development_backend: crate::router_v2::handlers::platform::development_backend::DevelopmentBackendConfig::Disabled,
@@ -3308,6 +3312,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         simulation_preparation: None,
         scene_document: None,
         scalar_rows: Vec::new(),
+        latest_scalar_source: None,
         engine_log: Vec::new(),
         solver_profile: crate::schemas::diagnostics::SolverProfileResource::default(),
         quantities: Vec::new(),
@@ -12847,6 +12852,8 @@ async fn mesh_build_command_enqueues_remesh_via_mesh_family() {
             airbox_hmin: Some(2.0e-9),
             airbox_growth_rate: Some(1.4),
             airbox_grading: Some("linear".to_string()),
+            airbox_curvature_factor: Some(0.3),
+            airbox_narrow_region_resolution: Some(0.5),
         };
         scene.study.universe_mesh = Some(universe_mesh.clone());
         scene.universe = Some(universe_mesh);
@@ -12994,6 +13001,21 @@ async fn mesh_build_command_enqueues_remesh_via_mesh_family() {
             .and_then(|value| value.get("airbox_grading"))
             .and_then(serde_json::Value::as_str),
         Some("linear")
+    );
+    let universe_patch = mesh_options
+        .get("scene_problem_patch")
+        .and_then(|value| value.get("universe"));
+    assert_eq!(
+        universe_patch
+            .and_then(|value| value.get("airbox_curvature_factor"))
+            .and_then(serde_json::Value::as_f64),
+        Some(0.3)
+    );
+    assert_eq!(
+        universe_patch
+            .and_then(|value| value.get("airbox_narrow_region_resolution"))
+            .and_then(serde_json::Value::as_f64),
+        Some(0.5)
     );
     drop(queue);
 
@@ -17044,7 +17066,9 @@ async fn mesh_universe_config_put_commits_scene_projection() {
                             "airbox_hmax": 8.0e-9,
                             "airbox_hmin": 2.0e-9,
                             "airbox_growth_rate": 1.4,
-                            "airbox_grading": "linear"
+                            "airbox_grading": "linear",
+                            "curvature_factor": 0.3,
+                            "airbox_narrow_region_resolution": 0.5
                         }
                     })
                     .to_string(),
@@ -17056,6 +17080,10 @@ async fn mesh_universe_config_put_commits_scene_projection() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
+    // Audit 26: the air feature controls survive the policy write.
+    assert_eq!(json["config"]["airbox_curvature_factor"], 0.3);
+    assert_eq!(json["config"]["airbox_narrow_region_resolution"], 0.5);
+    assert!(json["config"].get("curvature_factor").is_none());
     assert_eq!(json["config"]["mode"], "box");
     assert_eq!(json["config"]["size"][0], 4.0);
     assert_eq!(json["config"]["airbox_hmax"], 8.0e-9);
@@ -17080,6 +17108,8 @@ async fn mesh_universe_config_put_commits_scene_projection() {
     assert_eq!(universe.airbox_hmin, Some(2.0e-9));
     assert_eq!(universe.airbox_growth_rate, Some(1.4));
     assert_eq!(universe.airbox_grading.as_deref(), Some("linear"));
+    assert_eq!(universe.airbox_curvature_factor, Some(0.3));
+    assert_eq!(universe.airbox_narrow_region_resolution, Some(0.5));
     assert_eq!(committed.universe.as_ref(), Some(universe));
 }
 
@@ -21248,7 +21278,7 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
 }
 
 #[tokio::test]
-async fn material_field_data_resource_returns_realized_samples() {
+async fn material_field_data_resource_does_not_relabel_global_samples_as_region_assignment() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
     scene.revision = 31;
@@ -21331,7 +21361,7 @@ async fn material_field_data_resource_returns_realized_samples() {
         list["fields"][0]["href"],
         "/v2/sessions/current/data/material-fields/body_core_ms_gradient"
     );
-    assert_eq!(list["fields"][0]["sample_count"], 4);
+    assert_eq!(list["fields"][0]["sample_count"], 0);
 
     let detail_response = app
         .oneshot(
@@ -21353,14 +21383,14 @@ async fn material_field_data_resource_returns_realized_samples() {
     assert_eq!(detail["parameter"], "ms");
     assert_eq!(detail["unit"], "A/m");
     assert_eq!(detail["frame"], "object");
-    assert_eq!(detail["realization_status"], "realized");
-    assert_eq!(detail["sample_count"], 4);
-    assert_eq!(detail["min"], 760000.0);
-    assert_eq!(detail["max"], 790000.0);
-    assert_eq!(detail["mean"], 775000.0);
+    assert_eq!(detail["realization_status"], "authored_pending_realization");
+    assert_eq!(detail["sample_count"], 0);
+    assert!(detail["min"].is_null());
+    assert!(detail["max"].is_null());
+    assert!(detail["mean"].is_null());
     assert_eq!(
         detail["values"],
-        serde_json::json!([760000.0, 770000.0, 780000.0, 790000.0])
+        serde_json::json!([])
     );
 }
 
@@ -35379,7 +35409,9 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
             "artifact_path": material_path
         });
     }
-    let missing_declared_material = app
+    // A live run declares the copy before the runner publishes it to the run
+    // artifact root; the plan-derived values stay authoritative until then.
+    let unpublished_declared_material = app
         .clone()
         .oneshot(
             Request::builder()
@@ -35389,7 +35421,7 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
         )
         .await
         .unwrap();
-    assert_eq!(missing_declared_material.status(), StatusCode::CONFLICT);
+    assert_eq!(unpublished_declared_material.status(), StatusCode::OK);
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1]["material_fields"] =
             serde_json::json!({});
@@ -35494,7 +35526,42 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
         )
         .await
         .unwrap();
-    assert_eq!(missing_declared_membership.status(), StatusCode::CONFLICT);
+    assert_eq!(missing_declared_membership.status(), StatusCode::OK);
+    let missing_declared_membership = body_json(missing_declared_membership).await;
+    assert_eq!(
+        missing_declared_membership["schema_version"],
+        "fdm_multilayer_region_membership.v1"
+    );
+    assert_eq!(missing_declared_membership["layer_id"], "layer:bottom");
+    assert_eq!(missing_declared_membership["object_id"], "object:bottom");
+    assert_eq!(missing_declared_membership["region_legend"], region_legend);
+    assert_eq!(missing_declared_membership["cell_count"], 2);
+    assert_eq!(missing_declared_membership["region_membership_revision"], 23);
+    assert_eq!(
+        missing_declared_membership["grid_fingerprint"],
+        descriptor["grid_fingerprint"]
+    );
+
+    let missing_declared_mask = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layers/layer%3Abottom/region-membership")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_declared_mask.status(), StatusCode::OK);
+    let missing_declared_mask = body_bytes(missing_declared_mask).await;
+    assert_eq!(&missing_declared_mask[..4], b"FMRM");
+    assert_eq!(
+        missing_declared_mask[64..]
+            .chunks_exact(4)
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect::<Vec<_>>(),
+        vec![1, 2]
+    );
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         let layer = &mut snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1];
         layer.as_object_mut().unwrap().remove("native_region_mask");
@@ -41921,11 +41988,12 @@ async fn v2_fdm_vector_respects_max_samples_when_preview_would_be_downscaled() {
     assert_eq!(response.headers()["x-fullmag-node-index-count"], "2");
     let bytes = body_bytes(response).await;
     assert_eq!(&bytes[..4], b"FMVP");
-    assert_eq!(decode_fmvp_node_indices(&bytes), vec![1, 2]);
+    // floor(i * 4 / 2): the same uniform sample the Control Room renderer draws.
+    assert_eq!(decode_fmvp_node_indices(&bytes), vec![0, 2]);
     let values = decode_fmvp_payload_f64(&bytes);
     assert_eq!(
         values,
-        vec![0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+        vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
         "sampled FDM m must preserve the live solver-grid vectors"
     );
 }
@@ -43517,7 +43585,7 @@ async fn v2_field_vector_applies_max_samples_to_part_scope() {
 }
 
 #[tokio::test]
-async fn v2_field_vector_applies_max_samples_to_unscoped_center_window() {
+async fn v2_field_vector_applies_uniform_max_samples_to_unscoped_values() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.latest_fields = serde_json::from_value(serde_json::json!({
@@ -43567,7 +43635,8 @@ async fn v2_field_vector_applies_max_samples_to_unscoped_center_window() {
         .chunks_exact(8)
         .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
         .collect();
-    assert_eq!(values, vec![1.0, 1.1, 1.2, 2.0, 2.1, 2.2, 3.0, 3.1, 3.2]);
+    // floor(i * 5 / 3) = 0, 1, 3: spread over the whole field, not a centre window.
+    assert_eq!(values, vec![0.0, 0.1, 0.2, 1.0, 1.1, 1.2, 3.0, 3.1, 3.2]);
 }
 
 #[tokio::test]

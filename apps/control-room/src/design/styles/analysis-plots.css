@@ -444,6 +444,7 @@
 
 .fm-chart-section__header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--fm-space-2);
   min-width: 0;
@@ -456,7 +457,8 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
-  flex: 1;
+  /* Reserve a readable title before controls wrap in a narrow chart column. */
+  flex: 1 1 12rem;
   min-width: 0;
 }
 

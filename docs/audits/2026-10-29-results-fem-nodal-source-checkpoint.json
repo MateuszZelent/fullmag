@@ -1,7 +1,7 @@
 {
   "schema": "fullmag.results-fem-nodal-source-checkpoint.v1",
-  "observed_at": "2026-10-30T11:30:00Z",
-  "head": "15fb39d2319bc4015277698ad7f64a4625eb1079",
+  "observed_at": "2026-10-30T12:36:11.301602+00:00",
+  "head": "cadcce77eb955e67e1ecda1492ead9b7381c7ded",
   "source_sha256": {
     "crates/fullmag-quantities/src/fem_nodal_field.rs": "5852067389b8b9408dc9a41750e22e9fa7e7611cea37bc1acd9d64b1652ed5cd",
     "crates/fullmag-quantities/src/lib.rs": "a77045805d298eff2d6be7c03a193bab40026a8e2f424564342b8e2615aac877",
@@ -11,7 +11,7 @@
     "crates/fullmag-runner/src/autosave_fem_geometry.rs": "10bbbb47fb0e02ca3e4bc18c881ed2819ec91436547756213d5590ce945c6d35",
     "crates/fullmag-runner/src/autosave_zarr.rs": "8b7f07dc709545d4e49d7d300fd5184a38b79be7cf9a587adcd3714b31760f49",
     "crates/fullmag-runner/src/artifact_pipeline.rs": "f8358ba18c2f0aa509e8ae2b844b98e6fb159672ac6a5392f5328f3c8af9d8c7",
-    "crates/fullmag-runner/src/lib.rs": "a157dadc5cd27a57eaf51af380388cd19ab184ced3d68f7ddd56ab9ec7f03497",
+    "crates/fullmag-runner/src/lib.rs": "24c3654e8e1b7d12566b537e3011571cf8110890a3ae62828d4dc59445c5aea2",
     "crates/fullmag-workspace-inspect/Cargo.toml": "f6beb4583cb9d78a71a3e3a1930e0e41904faa2c4942d02db5fee25035c3f591",
     "crates/fullmag-workspace-inspect/src/results.rs": "e156e4168525cdf9efa09bef3cbffb9a7bd1ee6ae2fd40aee842361dabc3a1b5",
     "crates/fullmag-workspace-inspect/src/lib.rs": "39e232804f64e6fb90a4da41c6a9d1b69dd91745d72a7c70ffbd8efcc2ca2b1e",
@@ -26,9 +26,16 @@
     "crates/fullmag-session/src/repository_path.rs": "9599d6f7e15e52b16691416e99432cde8d6a23f6e4705ad0a298a73c2e36a0ba",
     "apps/control-room/src/kernel/visualization/SnapshotVisualizationController.ts": "439c0e7af802562478a97468820ff6e8d0fbc2c2308e0e9a1d8cab5d95e19140",
     "apps/control-room/src/kernel/visualization/SnapshotVisualizationController.test.ts": "aeaf3893498be5d43a67beb7ff4b3442f0cb0c31fba1bd2fa4a7e7c0ea49c0b8",
-    ".github/workflows/bootstrap.yml": "af4b7c0639a88812080cc13fbd3c4e0c9ae51fe9f7d418e0ee356bd5d4402838",
+    ".github/workflows/bootstrap.yml": "bda31be0ed7116c4592b237c81c90f050a35377935fa2666d8a2f55e8a1069e7",
     "Cargo.lock": "4dbaff705d3e94f64559dd1e50c6088a9bccfe974ea1b49a013d014fe6cb5fbb",
-    "apps/control-room/src/modules/inspector/InspectorModule.test.tsx": "009ceac580ce2a962026a2e56a57c2c498f582c1598d850aa3abc97b8996bb67"
+    "apps/control-room/src/modules/inspector/InspectorModule.test.tsx": "009ceac580ce2a962026a2e56a57c2c498f582c1598d850aa3abc97b8996bb67",
+    "crates/fullmag-api/src/accepted_study_worker.rs": "6450180e3d60f83b9ffe227686681c3642ac6f3aa51d96aef304745d21bd3b5d",
+    "crates/fullmag-api/src/accepted_fem_study_worker.rs": "83908fffcf2dee4e76aa2d1a641c1f326b1afa40287dbbff282609f9106cb1e4",
+    "crates/fullmag-api/src/live_accepted_projection.rs": "df17d3d949a31b6d64c3ce83169a1be12f19a0d2d5bb636aa9d2649881d9b938",
+    "apps/control-room/src/design/styles/analysis-plots.css": "942095ad0607c853e351052e00dfb10ef32ffb97b2b2a13177963c035365f365",
+    "crates/fullmag-workspace-inspect/src/manifest.rs": "a738027d84367cb2f74ee6cf5a82f7ee584d57372ac3665f7303ce8a90d87873",
+    "scripts/docker_bind_overlap_probe.py": "f0e20c36f49ef7e56d8ae3625bebf783caf71fee10806ac72b3159c31c0728a2",
+    "apps/control-room/src/modules/results-navigator/ResultsNavigatorModule.selection.test.ts": "f2a10678b72cbdac38283590a8e6030e4d79c75b9084380f974421d7e1f71a4e"
   },
   "scope": "FEM producer/reader/API, accepted-output collection, aggregate discovery budget and cross-revision snapshot preferences implemented in source; compilation and current UI verification pending",
   "checks": {
@@ -47,32 +54,30 @@
     "collection": "Independent source review PASS after aggregate receipt budget fix; geometry sibling/stale and aggregate-budget route tests added; NOT RUN.",
     "receipt_budget": "16 MiB aggregate per discovery, typed regular-file oversize error distinguishes missing/type/symlink/I/O failures; independent source review PASS; tests NOT RUN.",
     "snapshot_preferences": "Bounded logical appearance/sample preferences preserve explicit selections across metadata revisions; exact render keys remain revision-pinned and new definitions do not activate preview. Primary source review PASS; Vitest/typecheck/browser NOT RUN.",
-    "ci": "Rust run41046759452 at76e2c9d84 compiled; read-only playback step FAILED: workspace-inspect 102 passed, 1 failed (eligible_attestation_read_failure_preserves_running_manifest_for_retry: publication lock WouldBlock). Later playback route/producer commands did not execute. UI rerun pending.",
+    "ci": "Rust run41046759452 failed workspace-inspect lock retry (102/103); UI run41048512203 passed Inspector actions but failed TS test parse and chart title width. Source fixes pending rerun; no green qualification.",
     "cargo_lock": "Byte-exact Cargo-produced artifact12971087642 from run41043411407, matching input manifests; sha256 4dbaff705d3e94f64559dd1e50c6088a9bccfe974ea1b49a013d014fe6cb5fbb.",
-    "browser_harness": "Corrected closed Analysis results accordion and added complete current output catalog fixture. Existing IDs/assertions/request budget8 preserved. node --check and primary diff review PASS; browser rerun pending.",
-    "completed_run_identity": "Legacy Results navigator resolves no-active-stage identity from ready manifest exact current run/session and envelope/payload stage. Contradictions rejected, no last-stage inference. Primary diff review PASS; Vitest/typecheck pending.",
-    "recovery_sources": "Owned six-file recovery delta preserved in15fb39d23; Python parser and justfile parse PASS. Earlier managed tests remain historical; master integration and renewed recovery qualification pending."
+    "browser_harness": "Five resonance leaf routing cases passed in UI run41048512203; artifact12974341222 hash verified and screenshot visually reviewed. Broader browser gate failed later on zero-width chart title.",
+    "completed_run_identity": "Exact completed-stage manifest binding implemented; two test assertion parse errors fixed after UI run41048512203. Tests pending.",
+    "recovery_sources": "Owned six-file recovery delta preserved in15fb39d23; Python parser and justfile parse PASS. Earlier managed tests remain historical; master integration and renewed recovery qualification pending.",
+    "chart_layout": "Header flex-wrap and 12rem title basis address observed zero-width title at1280. Browser rerun pending.",
+    "completion_merge": "Independent source recheck PASS after undefined serde helper, scalar lineage and positive durable-dt findings were addressed. Explicit canonical/legacy dispatch and compatibility preserved; source regressions added. Cargo/CI/runtime pending."
   },
   "formatter_recovery": {
     "unintended_files": 104,
     "proof": "Each file matched rustfmt(HEAD) byte-for-byte; restored original bytes. lib.rs retained only module declaration."
   },
   "runtime_blocker": {
-    "phase": "native-recovery-preflight",
-    "state": "stopped-services-preserved-native-owner",
-    "error": "foreign Windows Docker Desktop bind has unresolved storage identity",
-    "diagnosis": "Worktree project forwarding and omitted HostConfig.Mounts fixes passed managed tests. Remaining Windows host-drive aliases have no qualified exact-container alias-to-Windows-source identity; do not substitute POSIX disjointness for backing-VHDX isolation.",
+    "phase": "authorization-publication",
+    "state": "read-only-preflight-passed",
     "native_recovery_executed": false,
-    "own_backend_current_state": "exited; PID 0; exit 1",
-    "own_frontend_current_state": "exited; PID 0; exit 0"
+    "qualification": "Application restart, current source deployment and actual UI remain NOT VERIFIED"
   },
   "remaining": [
-    "Qualify the exact owned runtime recovery, including foreign Windows bind identity, without modifying foreign groups",
-    "Update Cargo.lock canonically for new existing-crate test dependencies and run quantities/session/runner/inspect/API tests in the managed group",
-    "Verify M and H_eff snapshots, their units/support and return to live in the actual UI",
-    "Verify active publication watermarks and multi-stage/retry output coverage",
-    "Complete FDM/YIG, tables/modes, responsive/accessibility matrix and final CI/integration",
-    "Implement and verify collection of multiple accepted output leaves; current resolver still rejects ambiguity instead of selecting one arbitrarily"
+    "Complete authorized owned runtime recovery and deploy current source without changing foreign groups",
+    "Pass merged Rust/UI CI including quantities/session/runner/inspect/API tests and canonical lockfile checks",
+    "Verify FEM M/H_eff snapshots, units/support, scrubbing and Return to Live in actual UI",
+    "Verify active publication watermarks and multiple accepted output leaves across stages/retries",
+    "Complete FDM/YIG, tables/modes, responsive/accessibility matrix, review and integration"
   ],
   "launcher_baseline_tests": {
     "command": "just docker-dev-offline-check <source-root> test_docker_volume_reconcile",
@@ -86,7 +91,7 @@
   },
   "recovery_gap": {
     "control_operation": "Resolved using explicit failed-stop schema; original helper released its own operation lease after failure-only CAS publication. No native owner/store mutation.",
-    "native_owner": "Existing native v3 supports Ready plus terminal runs. Three run catalogs remain pinned; native preparation is blocked before store validation by foreign Windows host-drive alias identity.",
+    "native_owner": "Read-only preparation validated the existing native v3 Ready/terminal-run state and qualified Windows/DrvFs bind disjointness. Authorization publication in progress; native recovery not yet executed.",
     "guard_policy": "Preserve all stores and foreign consumers. No widening of Windows aliases into the WSL/POSIX-only proof."
   },
   "runtime_blocker_before_settlement": {
@@ -245,5 +250,142 @@
     "foreign_pid": 7625,
     "other_foreign_containers": "b26b89c335475feeb08715fda3184146ae8b172bba598ed3de8324393dac9943 and 177b9c65e319b09baf1e94712815c20fa88c9bbf8d26576bdd7d8ff6eca37f0e remain exited",
     "actions": "read-only Docker inspect; no foreign mutations or messages"
-  }
+  },
+  "merge_in_progress": "aee17a54d4c283f2fdf5aa3d89acc5ecdb638e19",
+  "runtime_blocker_before_validated_preflight": {
+    "phase": "native-recovery-preflight",
+    "state": "stopped-services-preserved-native-owner",
+    "error": "foreign Windows Docker Desktop bind has unresolved storage identity",
+    "diagnosis": "Worktree project forwarding and omitted HostConfig.Mounts fixes passed managed tests. Remaining Windows host-drive aliases have no qualified exact-container alias-to-Windows-source identity; do not substitute POSIX disjointness for backing-VHDX isolation.",
+    "native_recovery_executed": false,
+    "own_backend_current_state": "exited; PID 0; exit 1",
+    "own_frontend_current_state": "exited; PID 0; exit 0"
+  },
+  "recovery_preflight_20261030": {
+    "state": "validated-read-only",
+    "compose_project": "fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f",
+    "proof_path": "runtime-services/container-recovery/103c7000-cc23-4f8d-96a1-ba2e8888def5/abrupt-stop-proof.json",
+    "proof_sha256": "83d194f98d5394166b60931a51270fe499329ea14343c8655a6dbd892175bdca",
+    "application_started": false,
+    "compute_started": false
+  },
+  "merged_recovery_tests": [
+    {
+      "state": "succeeded",
+      "modules": [
+        "test_docker_bind_overlap_probe"
+      ],
+      "helper_container": "fullmag-checks-c5e42943cb784327bfd57c61797b783c",
+      "exit_code": 0,
+      "source_inputs_stable": true,
+      "source_files": {
+        "/opt/fullmag/source/scripts/docker_backend_volume_cache.py": "e35825a97b30b285a1fcddae2e0d90943dae7082898218cff8afd6b514685d8d",
+        "/opt/fullmag/source/scripts/docker_bind_overlap_probe.py": "f0e20c36f49ef7e56d8ae3625bebf783caf71fee10806ac72b3159c31c0728a2",
+        "/opt/fullmag/source/scripts/docker_build_control.py": "dcc46b1928a433f5789fea162fd9edb123d78fffa40c0bff2bc8af892324d424",
+        "/opt/fullmag/source/scripts/docker_cache_retirement.py": "228b30c456184507b89334e2bb44cc9d4a9ddb1438b1b3425852ded85ba392e3",
+        "/opt/fullmag/source/scripts/docker_helper_source.py": "a33cde2fb6834b7a37256c7b35d0290b8b3f30a53ec44c6e3362682b541a9cd3",
+        "/opt/fullmag/source/scripts/docker_prepare_container_recovery.py": "36248c1ede6d54f1f3380ee6508c064716331122b37ec8dfc10b9d189a98ce9c",
+        "/opt/fullmag/source/scripts/docker_shared_build_storage.py": "059f8c369d04b9a9c17548880e7972f369daca0173b11edb13779717ebb44cbd",
+        "/opt/fullmag/source/scripts/docker_volume_accepted_reattach.py": "14ab82480c6af4565b6539597231639cfae625366ee2dac8062b562ba1c43c28",
+        "/opt/fullmag/source/scripts/docker_volume_activate.py": "a0a6cd2add18faec6c4d3464a7ff3a929e539950dab4544bd7d34576f2fa3745",
+        "/opt/fullmag/source/scripts/docker_volume_activation_reconcile.py": "ffd8001c59242c77d61214944059a3fc5e684c0cc20db5657e599285a671d6aa",
+        "/opt/fullmag/source/scripts/docker_volume_cache_maintenance.py": "efd4c0878bc9b6673aa7f729834b9074bffe20fb2291b8a96439d022d2f0a888",
+        "/opt/fullmag/source/scripts/docker_volume_checks.py": "18a93fe0cb59b4dc1ba9f695d05fbb7668be8b7e443d815d322811ce0b957f97",
+        "/opt/fullmag/source/scripts/docker_volume_container_recovery.py": "04f5cda105aa88fe41a498be823e3e9567fa223e210ad7243d197c8adb84165c",
+        "/opt/fullmag/source/scripts/docker_volume_dev.py": "b42dfe65148c1590d10b346294a73d6c08494d4f0e8d7c84790e790bccf5bde2",
+        "/opt/fullmag/source/scripts/docker_volume_drained_successor.py": "54561957ce330ac6de09bdcb819eeeaa05805543d0eda5b5ff02fe422a1e0ba3",
+        "/opt/fullmag/source/scripts/docker_volume_failed_stop.py": "5347c9d36aca125cc2a69d26c94cc64e6a610e46a1377c9a115db07a0be0431a",
+        "/opt/fullmag/source/scripts/docker_volume_native_init_successor.py": "7f8e484c6b870b438bbd4cfaa943573ed1b154e5dacc48951ed7c03b7e0def67",
+        "/opt/fullmag/source/scripts/docker_volume_network_failure_reconcile.py": "695dea28cda73e28ace9b6b16128969a95ea6facb5af46c146f2ef4129f24ebf",
+        "/opt/fullmag/source/scripts/docker_volume_pending_continuation.py": "ddea17ad4d2b02284e23c92f5665fce38154c432a89cc088a9e24714377f65a9",
+        "/opt/fullmag/source/scripts/docker_volume_pre_admission_recreate.py": "ba3d2a306539aa1bc0ce07173d7c9a85864e5e830f95d66ab94c529ff3c6b94a",
+        "/opt/fullmag/source/scripts/docker_volume_pre_admission_selector.py": "fba4f36dc356b4f169368367955c5fa23745abb63241154b0d50db30e3fc29fb",
+        "/opt/fullmag/source/scripts/docker_volume_prestart_recovery.py": "113afff608c36a5c280ebd9f6e68130ed167f36611dc93b415bfe0c2ccaf7561",
+        "/opt/fullmag/source/scripts/docker_volume_reconcile.py": "b9cf38c281daaaf68c42792df9257a25960956235af301f623dd4e5c0cb6ca6f",
+        "/opt/fullmag/source/scripts/docker_volume_stop_failed.py": "e43521754a109608fc6d46fae8e44a7dde636e4fb62d5d0fea62e09e4e5ac058",
+        "/opt/fullmag/source/scripts/docker_volume_terminal_prestart_recovery.py": "50d72091be223afde66447cf8fb6e916db90028ca9058984d545c870058329a6",
+        "/opt/fullmag/source/scripts/docker_worktree_finish.py": "c0bc15102bd7bc0af1a506d7687699e612823f7f5f86c3a23dd3216665eda60d",
+        "/opt/fullmag/source/scripts/test_docker_bind_overlap_probe.py": "3859654884012841919ae0485ec419df6383c0bee0237dd5e5cdf4394eb34cfc"
+      },
+      "stderr": ".........................\n----------------------------------------------------------------------\nRan 25 tests in 0.292s\n\nOK\n"
+    },
+    {
+      "state": "succeeded",
+      "modules": [
+        "test_docker_prepare_container_recovery"
+      ],
+      "helper_container": "fullmag-checks-7fb4dc07dc56423e89435857788e082d",
+      "exit_code": 0,
+      "source_inputs_stable": true,
+      "source_files": {
+        "/opt/fullmag/source/scripts/docker_backend_volume_cache.py": "e35825a97b30b285a1fcddae2e0d90943dae7082898218cff8afd6b514685d8d",
+        "/opt/fullmag/source/scripts/docker_bind_overlap_probe.py": "f0e20c36f49ef7e56d8ae3625bebf783caf71fee10806ac72b3159c31c0728a2",
+        "/opt/fullmag/source/scripts/docker_build_control.py": "dcc46b1928a433f5789fea162fd9edb123d78fffa40c0bff2bc8af892324d424",
+        "/opt/fullmag/source/scripts/docker_cache_retirement.py": "228b30c456184507b89334e2bb44cc9d4a9ddb1438b1b3425852ded85ba392e3",
+        "/opt/fullmag/source/scripts/docker_helper_source.py": "a33cde2fb6834b7a37256c7b35d0290b8b3f30a53ec44c6e3362682b541a9cd3",
+        "/opt/fullmag/source/scripts/docker_prepare_container_recovery.py": "36248c1ede6d54f1f3380ee6508c064716331122b37ec8dfc10b9d189a98ce9c",
+        "/opt/fullmag/source/scripts/docker_shared_build_storage.py": "059f8c369d04b9a9c17548880e7972f369daca0173b11edb13779717ebb44cbd",
+        "/opt/fullmag/source/scripts/docker_volume_accepted_reattach.py": "14ab82480c6af4565b6539597231639cfae625366ee2dac8062b562ba1c43c28",
+        "/opt/fullmag/source/scripts/docker_volume_activate.py": "a0a6cd2add18faec6c4d3464a7ff3a929e539950dab4544bd7d34576f2fa3745",
+        "/opt/fullmag/source/scripts/docker_volume_activation_reconcile.py": "ffd8001c59242c77d61214944059a3fc5e684c0cc20db5657e599285a671d6aa",
+        "/opt/fullmag/source/scripts/docker_volume_cache_maintenance.py": "efd4c0878bc9b6673aa7f729834b9074bffe20fb2291b8a96439d022d2f0a888",
+        "/opt/fullmag/source/scripts/docker_volume_checks.py": "18a93fe0cb59b4dc1ba9f695d05fbb7668be8b7e443d815d322811ce0b957f97",
+        "/opt/fullmag/source/scripts/docker_volume_container_recovery.py": "04f5cda105aa88fe41a498be823e3e9567fa223e210ad7243d197c8adb84165c",
+        "/opt/fullmag/source/scripts/docker_volume_dev.py": "b42dfe65148c1590d10b346294a73d6c08494d4f0e8d7c84790e790bccf5bde2",
+        "/opt/fullmag/source/scripts/docker_volume_drained_successor.py": "54561957ce330ac6de09bdcb819eeeaa05805543d0eda5b5ff02fe422a1e0ba3",
+        "/opt/fullmag/source/scripts/docker_volume_failed_stop.py": "5347c9d36aca125cc2a69d26c94cc64e6a610e46a1377c9a115db07a0be0431a",
+        "/opt/fullmag/source/scripts/docker_volume_native_init_successor.py": "7f8e484c6b870b438bbd4cfaa943573ed1b154e5dacc48951ed7c03b7e0def67",
+        "/opt/fullmag/source/scripts/docker_volume_network_failure_reconcile.py": "695dea28cda73e28ace9b6b16128969a95ea6facb5af46c146f2ef4129f24ebf",
+        "/opt/fullmag/source/scripts/docker_volume_pending_continuation.py": "ddea17ad4d2b02284e23c92f5665fce38154c432a89cc088a9e24714377f65a9",
+        "/opt/fullmag/source/scripts/docker_volume_pre_admission_recreate.py": "ba3d2a306539aa1bc0ce07173d7c9a85864e5e830f95d66ab94c529ff3c6b94a",
+        "/opt/fullmag/source/scripts/docker_volume_pre_admission_selector.py": "fba4f36dc356b4f169368367955c5fa23745abb63241154b0d50db30e3fc29fb",
+        "/opt/fullmag/source/scripts/docker_volume_prestart_recovery.py": "113afff608c36a5c280ebd9f6e68130ed167f36611dc93b415bfe0c2ccaf7561",
+        "/opt/fullmag/source/scripts/docker_volume_reconcile.py": "b9cf38c281daaaf68c42792df9257a25960956235af301f623dd4e5c0cb6ca6f",
+        "/opt/fullmag/source/scripts/docker_volume_stop_failed.py": "e43521754a109608fc6d46fae8e44a7dde636e4fb62d5d0fea62e09e4e5ac058",
+        "/opt/fullmag/source/scripts/docker_volume_terminal_prestart_recovery.py": "50d72091be223afde66447cf8fb6e916db90028ca9058984d545c870058329a6",
+        "/opt/fullmag/source/scripts/docker_worktree_finish.py": "c0bc15102bd7bc0af1a506d7687699e612823f7f5f86c3a23dd3216665eda60d",
+        "/opt/fullmag/source/scripts/test_docker_prepare_container_recovery.py": "c1317d225163b541b998db269bc97397b8ab260a7c4134bc810787c9052a4250"
+      },
+      "stderr": ".............\n----------------------------------------------------------------------\nRan 13 tests in 0.604s\n\nOK\n"
+    },
+    {
+      "state": "succeeded",
+      "modules": [
+        "test_docker_volume_abrupt_stop_recovery"
+      ],
+      "helper_container": "fullmag-checks-d18d981afb214935ba6c3fe4ce2a9f15",
+      "exit_code": 0,
+      "source_inputs_stable": true,
+      "source_files": {
+        "/opt/fullmag/source/scripts/docker_backend_volume_cache.py": "e35825a97b30b285a1fcddae2e0d90943dae7082898218cff8afd6b514685d8d",
+        "/opt/fullmag/source/scripts/docker_bind_overlap_probe.py": "f0e20c36f49ef7e56d8ae3625bebf783caf71fee10806ac72b3159c31c0728a2",
+        "/opt/fullmag/source/scripts/docker_build_control.py": "dcc46b1928a433f5789fea162fd9edb123d78fffa40c0bff2bc8af892324d424",
+        "/opt/fullmag/source/scripts/docker_cache_retirement.py": "228b30c456184507b89334e2bb44cc9d4a9ddb1438b1b3425852ded85ba392e3",
+        "/opt/fullmag/source/scripts/docker_helper_source.py": "a33cde2fb6834b7a37256c7b35d0290b8b3f30a53ec44c6e3362682b541a9cd3",
+        "/opt/fullmag/source/scripts/docker_prepare_container_recovery.py": "36248c1ede6d54f1f3380ee6508c064716331122b37ec8dfc10b9d189a98ce9c",
+        "/opt/fullmag/source/scripts/docker_shared_build_storage.py": "059f8c369d04b9a9c17548880e7972f369daca0173b11edb13779717ebb44cbd",
+        "/opt/fullmag/source/scripts/docker_volume_accepted_reattach.py": "14ab82480c6af4565b6539597231639cfae625366ee2dac8062b562ba1c43c28",
+        "/opt/fullmag/source/scripts/docker_volume_activate.py": "a0a6cd2add18faec6c4d3464a7ff3a929e539950dab4544bd7d34576f2fa3745",
+        "/opt/fullmag/source/scripts/docker_volume_activation_reconcile.py": "ffd8001c59242c77d61214944059a3fc5e684c0cc20db5657e599285a671d6aa",
+        "/opt/fullmag/source/scripts/docker_volume_cache_maintenance.py": "efd4c0878bc9b6673aa7f729834b9074bffe20fb2291b8a96439d022d2f0a888",
+        "/opt/fullmag/source/scripts/docker_volume_checks.py": "18a93fe0cb59b4dc1ba9f695d05fbb7668be8b7e443d815d322811ce0b957f97",
+        "/opt/fullmag/source/scripts/docker_volume_container_recovery.py": "04f5cda105aa88fe41a498be823e3e9567fa223e210ad7243d197c8adb84165c",
+        "/opt/fullmag/source/scripts/docker_volume_dev.py": "b42dfe65148c1590d10b346294a73d6c08494d4f0e8d7c84790e790bccf5bde2",
+        "/opt/fullmag/source/scripts/docker_volume_drained_successor.py": "54561957ce330ac6de09bdcb819eeeaa05805543d0eda5b5ff02fe422a1e0ba3",
+        "/opt/fullmag/source/scripts/docker_volume_failed_stop.py": "5347c9d36aca125cc2a69d26c94cc64e6a610e46a1377c9a115db07a0be0431a",
+        "/opt/fullmag/source/scripts/docker_volume_native_init_successor.py": "7f8e484c6b870b438bbd4cfaa943573ed1b154e5dacc48951ed7c03b7e0def67",
+        "/opt/fullmag/source/scripts/docker_volume_network_failure_reconcile.py": "695dea28cda73e28ace9b6b16128969a95ea6facb5af46c146f2ef4129f24ebf",
+        "/opt/fullmag/source/scripts/docker_volume_pending_continuation.py": "ddea17ad4d2b02284e23c92f5665fce38154c432a89cc088a9e24714377f65a9",
+        "/opt/fullmag/source/scripts/docker_volume_pre_admission_recreate.py": "ba3d2a306539aa1bc0ce07173d7c9a85864e5e830f95d66ab94c529ff3c6b94a",
+        "/opt/fullmag/source/scripts/docker_volume_pre_admission_selector.py": "fba4f36dc356b4f169368367955c5fa23745abb63241154b0d50db30e3fc29fb",
+        "/opt/fullmag/source/scripts/docker_volume_prestart_recovery.py": "113afff608c36a5c280ebd9f6e68130ed167f36611dc93b415bfe0c2ccaf7561",
+        "/opt/fullmag/source/scripts/docker_volume_reconcile.py": "b9cf38c281daaaf68c42792df9257a25960956235af301f623dd4e5c0cb6ca6f",
+        "/opt/fullmag/source/scripts/docker_volume_stop_failed.py": "e43521754a109608fc6d46fae8e44a7dde636e4fb62d5d0fea62e09e4e5ac058",
+        "/opt/fullmag/source/scripts/docker_volume_terminal_prestart_recovery.py": "50d72091be223afde66447cf8fb6e916db90028ca9058984d545c870058329a6",
+        "/opt/fullmag/source/scripts/docker_worktree_finish.py": "c0bc15102bd7bc0af1a506d7687699e612823f7f5f86c3a23dd3216665eda60d",
+        "/opt/fullmag/source/scripts/test_docker_volume_abrupt_stop_recovery.py": "5e5e2e882ab6d0d139e81e8d807add08c8edf260272a194b092b14bffb91dba3"
+      },
+      "stderr": "......................................\n----------------------------------------------------------------------\nRan 38 tests in 21.610s\n\nOK\n"
+    }
+  ]
 }

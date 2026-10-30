@@ -1052,6 +1052,8 @@ fn m2_picard_convergence_map_covers_reciprocal_and_hall_strengths() {
 #[test]
 fn m2_inactive_cells_do_not_require_physical_material_or_publish_current() {
     let mut fields = material(2);
+    fields.magnetic_active_mask[1] = false;
+    fields.magnetization[1] = [0.0; 3];
     fields.reciprocal[1] = ReciprocalConstitutiveMaterial {
         sigma_s_per_m: 0.0,
         sigma_spin_s_per_m: 0.0,

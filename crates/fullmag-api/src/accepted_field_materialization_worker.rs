@@ -18,6 +18,7 @@ use crate::accepted_field_binary::{BinaryFieldRef, BinaryFieldChunk};
 
 pub(crate) const SCHEMA: &str = "accepted_quantity_bundle.v1";
 const ARTIFACT_TYPE: &str = "accepted_quantity_bundle";
+pub(crate) const TERMINAL_SCALAR_ARTIFACT_TYPE: &str = "accepted_terminal_scalar_stats";
 const MAX_BUNDLE_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -33,6 +34,23 @@ pub(crate) struct MaterializationRecord {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) binary_fields: BTreeMap<String, BinaryFieldRef>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TerminalScalarStatsRecord {
+    pub(crate) schema_version: String,
+    pub(crate) run_id: String,
+    pub(crate) task_id: String,
+    pub(crate) step_id: String,
+    pub(crate) attempt_id: String,
+    pub(crate) ownership_epoch: u64,
+    pub(crate) source: fullmag_quantities::AcceptedStateRef,
+    pub(crate) state_object_ref: String,
+    pub(crate) stats: fullmag_runner::StepStats,
+}
+
+const TERMINAL_SCALAR_STATS_SCHEMA: &str = "accepted_terminal_scalar_stats.v1";
+const MAX_TERMINAL_SCALAR_STATS_BYTES: u64 = 256 * 1024;
 
 /// Runs only inside the admitted worker, before Completing releases its lease.
 /// Unsupported postprocessing is recorded without changing a completed Solve
@@ -63,7 +81,7 @@ pub(crate) fn prepare_and_publish(
     let field_budget = step.claim.lease.budget.memory_bytes / 16;
     let legacy_budget = storage_budget.min(MAX_BUNDLE_BYTES / 2)
         .min(step.claim.lease.budget.memory_bytes / 16);
-    if budget < 4096 {
+    if budget < 4096 && execution.terminal_stats.is_none() {
         tracing::warn!(task_id = %step.claim.task_id.as_str(),
             "accepted quantities omitted: no observation storage budget after declared outputs");
         return Ok(());
@@ -74,6 +92,33 @@ pub(crate) fn prepare_and_publish(
         "attempt": step.claim.attempt_id, "epoch": step.claim.ownership_epoch,
         "source": source, "state": state_object_ref,
     })));
+    let decoded = fullmag_application::decode_study_artifact_bytes(
+        "state", &output.codec_id, &output.codec_version, &output.bytes)?;
+    let fullmag_application::DecodedStudyArtifact::MagnetizationState(state) = decoded else {
+        bail!("materialization requires an accepted magnetization artifact");
+    };
+    let terminal_stats = execution.terminal_stats.as_ref().and_then(|stats| {
+        match build_terminal_scalar_stats(step, source, &state_object_ref, stats, &state) {
+            Ok(record) => Some(record),
+            Err(error) => {
+                tracing::warn!(task_id = %step.claim.task_id.as_str(), error = %error,
+                    "accepted terminal scalar statistics do not match the final state; scalar row omitted");
+                None
+            }
+        }
+    });
+    let terminal_stats_bytes = if let Some(record) = terminal_stats.as_ref() {
+        publish_terminal_scalar_stats(store, step, record, budget)?.unwrap_or(0)
+    } else {
+        0
+    };
+    let quantity_budget = budget.saturating_sub(terminal_stats_bytes);
+    let can_materialize_quantities = quantity_budget >= 4096;
+    if !can_materialize_quantities && terminal_stats_bytes == 0 {
+        tracing::warn!(task_id = %step.claim.task_id.as_str(),
+            "accepted quantities omitted: no observation storage budget after declared outputs");
+        return Ok(());
+    }
     // Receipt recovery never repeats the evaluator after its artifact committed.
     if let Some(catalog) = store.read_artifact_catalog(step.claim.run_id.as_str())? {
         if let Some(entry) = catalog.entries.iter().find(|entry| entry.artifact_id == artifact_id) {
@@ -95,11 +140,9 @@ pub(crate) fn prepare_and_publish(
     let mut binary_fields = BTreeMap::new();
     let mut binary_entries = Vec::new();
     let evaluated = (|| -> Result<AcceptedMaterializationBatch> {
-        let decoded = fullmag_application::decode_study_artifact_bytes(
-            "state", &output.codec_id, &output.codec_version, &output.bytes)?;
-        let fullmag_application::DecodedStudyArtifact::MagnetizationState(state) = decoded else {
-            bail!("materialization requires an accepted magnetization artifact");
-        };
+        if !can_materialize_quantities {
+            bail!("accepted quantities omitted: no observation storage budget after declared outputs");
+        }
         let plan = crate::accepted_study_worker::materialize_resolved_study_inputs(store, step)?;
         // FDM binds the immutable authored plan plus requested execution;
         // FEM binds its accepted preparation plan fingerprint. Neither digest
@@ -183,14 +226,14 @@ pub(crate) fn prepare_and_publish(
         binary_entries.clear();
     }
     let mut bytes = serde_json::to_vec(&record)?;
-    if bytes.len() as u64 > budget {
+    if bytes.len() as u64 > quantity_budget {
         record.batch = None;
         record.error = Some("accepted quantity bundle exceeds its serialized storage budget".into());
         record.binary_fields.clear();
         binary_entries.clear();
         bytes = serde_json::to_vec(&record)?;
     }
-    if bytes.len() as u64 > budget {
+    if bytes.len() as u64 > quantity_budget {
         tracing::warn!(task_id = %step.claim.task_id.as_str(),
             "accepted quantity receipt omitted: observation storage budget exhausted");
         return Ok(());
@@ -420,6 +463,209 @@ pub(crate) fn read_record(store: &SessionStore, entry: &FmsArtifactCatalogEntry)
         }
     }
     Ok(record)
+}
+
+fn build_terminal_scalar_stats(
+    step: &AcceptedWorkerStep,
+    source: &fullmag_quantities::AcceptedStateRef,
+    state_object_ref: &str,
+    stats: &fullmag_runner::StepStats,
+    state: &fullmag_application::MagnetizationStateArtifact,
+) -> Result<TerminalScalarStatsRecord> {
+    source.validate().map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    validate_scalar_row_stats(stats)?;
+    let clock = fullmag_quantities::ObservationClock {
+        accepted_step: stats.step,
+        time_seconds: stats.time,
+        dt_seconds: (stats.dt > 0.0).then_some(stats.dt),
+    };
+    clock.validate().map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    if source.id.run_id != step.claim.run_id.as_str()
+        || source.id.stage_id.as_deref() != Some(step.step_id.as_str())
+        || source.generation.runtime_epoch != step.claim.ownership_epoch.value()
+        || source.id.accepted_step != stats.step
+        || source.id.clock_digest != clock.digest().map_err(|error| anyhow::anyhow!(error.to_string()))?
+        || state.step != stats.step
+        || state.time_s.to_bits() != stats.time.to_bits()
+        || state.solver_dt_s.to_bits() != stats.dt.to_bits()
+    {
+        bail!("terminal scalar clock or state identity differs from the accepted final state");
+    }
+    let record = TerminalScalarStatsRecord {
+        schema_version: TERMINAL_SCALAR_STATS_SCHEMA.into(),
+        run_id: step.claim.run_id.as_str().into(),
+        task_id: step.claim.task_id.as_str().into(),
+        step_id: step.step_id.clone(),
+        attempt_id: step.claim.attempt_id.as_str().into(),
+        ownership_epoch: step.claim.ownership_epoch.value(),
+        source: source.clone(),
+        state_object_ref: state_object_ref.to_owned(),
+        stats: stats.clone(),
+    };
+    if serde_json::to_vec(&record)?.len() as u64 > MAX_TERMINAL_SCALAR_STATS_BYTES {
+        bail!("terminal scalar record exceeds its bounded storage budget");
+    }
+    Ok(record)
+}
+
+fn validate_terminal_scalar_record(
+    stats: &TerminalScalarStatsRecord,
+    entry: &FmsArtifactCatalogEntry,
+) -> Result<()> {
+    stats.source.validate().map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    validate_scalar_row_stats(&stats.stats)?;
+    let clock = fullmag_quantities::ObservationClock {
+        accepted_step: stats.stats.step,
+        time_seconds: stats.stats.time,
+        dt_seconds: (stats.stats.dt > 0.0).then_some(stats.stats.dt),
+    };
+    clock.validate().map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    if stats.schema_version != TERMINAL_SCALAR_STATS_SCHEMA
+        || stats.run_id != stats.source.id.run_id
+        || stats.task_id != entry.task_id
+        || stats.attempt_id != entry.attempt_id
+        || stats.ownership_epoch != entry.ownership_epoch
+        || stats.source.generation.runtime_epoch != entry.ownership_epoch
+        || stats.step_id != stats.source.id.stage_id.as_deref().unwrap_or_default()
+        || stats.state_object_ref.len() != 64
+        || !stats.state_object_ref.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        || stats.source.id.accepted_step != stats.stats.step
+        || stats.source.id.clock_digest != clock.digest().map_err(|error| anyhow::anyhow!(error.to_string()))?
+        || entry.artifact_id != terminal_scalar_artifact_id(stats)
+        || entry.logical_path != terminal_scalar_logical_path(stats)
+        || entry.required
+        || entry.study_output.is_some()
+    {
+        bail!("accepted terminal scalar record identity or clock differs from its artifact pin");
+    }
+    Ok(())
+}
+
+fn terminal_scalar_artifact_id(stats: &TerminalScalarStatsRecord) -> String {
+    format!("accepted-terminal-scalar-{}", fullmag_session::canonical_json_sha256(&json!({
+        "run": stats.run_id, "task": stats.task_id, "step": stats.step_id,
+        "attempt": stats.attempt_id, "epoch": stats.ownership_epoch,
+        "source": stats.source, "state": stats.state_object_ref,
+    })))
+}
+
+fn terminal_scalar_logical_path(stats: &TerminalScalarStatsRecord) -> String {
+    format!("outputs/{}/{}/accepted-terminal-scalar-stats.v1.json", stats.task_id, stats.attempt_id)
+}
+
+pub(crate) fn read_terminal_scalar_stats(
+    store: &SessionStore,
+    entry: &FmsArtifactCatalogEntry,
+) -> Result<TerminalScalarStatsRecord> {
+    if entry.artifact_type != TERMINAL_SCALAR_ARTIFACT_TYPE
+        || entry.status != FmsArtifactStatus::Published
+        || entry.object_ref.as_deref() != Some(entry.content_sha256.as_str())
+        || entry.study_output.is_some()
+    {
+        bail!("accepted terminal scalar artifact binding is invalid");
+    }
+    let bytes = store.cas().get_bounded(&entry.content_sha256, MAX_TERMINAL_SCALAR_STATS_BYTES)?
+        .context("accepted terminal scalar CAS object missing")?;
+    if bytes.len() as u64 > MAX_TERMINAL_SCALAR_STATS_BYTES
+        || fullmag_application::study_artifact_content_sha256(&bytes) != entry.content_sha256
+    {
+        bail!("accepted terminal scalar CAS digest or size differs");
+    }
+    let stats: TerminalScalarStatsRecord = serde_json::from_slice(&bytes)?;
+    validate_terminal_scalar_record(&stats, entry)?;
+    Ok(stats)
+}
+
+fn publish_terminal_scalar_stats(
+    store: &SessionStore,
+    step: &AcceptedWorkerStep,
+    stats: &TerminalScalarStatsRecord,
+    budget: u64,
+) -> Result<Option<u64>> {
+    let bytes = serde_json::to_vec(stats)?;
+    if bytes.len() as u64 > MAX_TERMINAL_SCALAR_STATS_BYTES {
+        bail!("accepted terminal scalar artifact exceeds its bounded storage limit");
+    }
+    let artifact_id = terminal_scalar_artifact_id(stats);
+    let logical_path = terminal_scalar_logical_path(stats);
+    if let Some(catalog) = store.read_artifact_catalog(step.claim.run_id.as_str())? {
+        let matching = catalog.entries.iter().filter(|entry| {
+            entry.artifact_type == TERMINAL_SCALAR_ARTIFACT_TYPE
+                && entry.task_id == step.claim.task_id.as_str()
+                && entry.attempt_id == step.claim.attempt_id.as_str()
+                && entry.ownership_epoch == step.claim.ownership_epoch.value()
+        }).collect::<Vec<_>>();
+        if matching.len() > 1 {
+            bail!("accepted terminal scalar artifact pin is ambiguous for this task attempt");
+        }
+        if let Some(existing_entry) = matching.first() {
+            if existing_entry.artifact_id != artifact_id {
+                bail!("accepted terminal scalar replay identity differs from its immutable artifact");
+            }
+            let existing = read_terminal_scalar_stats(store, existing_entry)?;
+            if fullmag_session::canonical_json_sha256(&serde_json::to_value(&existing)?)
+                != fullmag_session::canonical_json_sha256(&serde_json::to_value(stats)?)
+            {
+                bail!("accepted terminal scalar replay differs from its immutable artifact");
+            }
+            return Ok(Some(bytes.len() as u64));
+        }
+        if catalog.entries.iter().any(|entry| {
+            entry.task_id == step.claim.task_id.as_str()
+                && entry.attempt_id == step.claim.attempt_id.as_str()
+                && entry.ownership_epoch == step.claim.ownership_epoch.value()
+                && entry.artifact_type == "study_output_manifest"
+        }) {
+            tracing::warn!(task_id = %step.claim.task_id.as_str(),
+                "accepted terminal scalar artifact omitted after immutable output manifest publication");
+            return Ok(None);
+        }
+    }
+    if bytes.len() as u64 > budget {
+        tracing::warn!(task_id = %step.claim.task_id.as_str(),
+            "accepted terminal scalar artifact omitted: bounded storage budget exhausted");
+        return Ok(None);
+    }
+    let object_ref = retry_worker_store_writer_busy(|| store.cas().put(&bytes))?;
+    let lease = store.read_resource_lease(step.claim.run_id.as_str(),
+        step.claim.lease.resource_id.as_str(), step.claim.lease.lease_token.as_str())?
+        .context("terminal scalar publication resource lease missing")?;
+    let entry = FmsArtifactCatalogEntry {
+        artifact_id,
+        task_id: stats.task_id.clone(),
+        attempt_id: stats.attempt_id.clone(),
+        ownership_epoch: stats.ownership_epoch,
+        logical_path,
+        artifact_type: TERMINAL_SCALAR_ARTIFACT_TYPE.into(),
+        content_sha256: object_ref.clone(),
+        object_ref: Some(object_ref),
+        status: FmsArtifactStatus::Published,
+        required: false,
+        study_output: None,
+    };
+    retry_worker_store_writer_busy(|| {
+        store.append_artifact_catalog_entries_for_lease(&lease, std::slice::from_ref(&entry))
+    })?;
+    Ok(Some(bytes.len() as u64))
+}
+
+pub(crate) fn validate_scalar_row_stats(stats: &fullmag_runner::StepStats) -> Result<()> {
+    if !stats.is_physical_observation() {
+        bail!("terminal scalar statistics are not a physical observation");
+    }
+    let mut values = vec![
+        stats.time, stats.dt, stats.mx, stats.my, stats.mz, stats.e_ex,
+        stats.e_demag, stats.e_ext, stats.e_ani, stats.e_dmi,
+        stats.e_rotated_dmi, stats.e_total, stats.max_dm_dt, stats.max_h_eff,
+        stats.max_h_demag, stats.max_torque_Apm, stats.max_torque_T,
+    ];
+    values.extend([stats.error_estimate, stats.max_error, stats.dt_suggested, stats.pseudo_time_s]
+        .into_iter().flatten());
+    if values.iter().any(|value| !value.is_finite()) || stats.time < 0.0 || stats.dt < 0.0
+        || stats.per_object_scalars.values().flat_map(|values| values.values()).any(|value| !value.is_finite()) {
+        bail!("terminal scalar statistics contain invalid physical values");
+    }
+    Ok(())
 }
 
 pub(crate) struct LoadedBundle {

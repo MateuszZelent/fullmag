@@ -326,6 +326,14 @@ oddzielny zakres. Kształt odpowiedzi OpenAPI pozostaje bez zmian.
 - `data/tables/{table_id}/rows` owns table-shaped scalar histories for charts.
   The default chart table is `data/tables/default/rows`; `data/scalars` is a
   compatibility projection until all scalar-history consumers migrate.
+  Opcjonalne `current_observation` identyfikuje wyłącznie pojedynczy bieżący
+  wiersz zaakceptowanej obserwacji: session/run, `request_scope_epoch`, krok
+  i rewizję skalarów. Scope wiąże instancję API i jej wewnętrzną epokę;
+  nie jest to publiczny token sesji `session_id@started_at_unix_ms`.
+  Binding powstaje przy zaakceptowanej publikacji, nie podczas odczytu historii.
+  Wielowierszowe, importowane i niepowiązane okna nie otrzymują tego pola.
+  Stopka może użyć odpowiedzi HTTP po odświeżeniu tylko przy zgodności tego
+  bindingu z bieżącym statusem; nie przypisuje sama run_id historycznej próbce.
 - `visualization/display` owns the legacy display-selection projection.
 - `visualization/state` owns canonical session-wide renderer state. Its schema version 4 exposes `quantity`, independent `layers`, `domains`, `sampling`, FDM/FEM view policy, trim/clip state, global camera state, vector glyph style, object/part `overrides`, a complete effective target registry for current scene objects/mesh parts, and diagnostics while retaining flat display fields as a compatibility projection.
 - `visualization/client-acks` owns bounded, diagnostic frontend feedback for renderer state revisions. Clients `POST` `applied`, `rendered`, or `failed` acknowledgements after consuming `visualization/state`; operators and scripts can `GET` the resource to confirm whether a visible browser applied a requested mode such as `surface` versus `wireframe`.

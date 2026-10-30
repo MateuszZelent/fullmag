@@ -65,6 +65,7 @@ import {
   SIMULATION_COMMANDS_PATH,
   SIMULATION_OBJECT_METRICS_PATH,
   SIMULATION_PREPARATION_PATH,
+  SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
   SIMULATION_STAGE_HYSTERESIS_ORIENTATION_PATH,
@@ -497,7 +498,7 @@ export class RealtimeInvalidationBridge {
     this.invalidateSessionScope(`realtime:reconnect:${Date.now()}`);
   }
 
-  handleEvent(event: unknown): boolean {
+  handleEvent(event: unknown, requestScopeEpoch: string | null = null): boolean {
     const sessionHandled = this.handleSessionEnvelope(event);
 
     if (isRealtimeResyncRequiredEvent(event)) {
@@ -514,6 +515,7 @@ export class RealtimeInvalidationBridge {
     if (isRealtimeScalarSampleEvent(event)) {
       const row = scalarSampleRow(event.payload.row);
       this.options.bus?.emit("telemetry:scalar-sample", {
+        requestScopeEpoch,
         revision: event.payload.revision,
         row,
         runId: event.run_id ?? null,
@@ -542,6 +544,12 @@ export class RealtimeInvalidationBridge {
 
         if (scalarChange) {
           this.queuePrefixInvalidation(DATA_SCALARS_PATH, change.revision);
+          // Energy history keys carry a `?limit=` window; the batch names only
+          // `energies/current`, so the history must follow every scalar row.
+          this.queuePrefixInvalidation(
+            SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
+            change.revision,
+          );
           this.queuePrefixInvalidation(
             resourceFamilyPrefix(SIMULATION_OBJECT_METRICS_PATH),
             dependentResourceRevision(

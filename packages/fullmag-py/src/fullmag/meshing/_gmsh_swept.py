@@ -108,6 +108,7 @@ from ._gmsh_airbox import (
     _gmsh_require_triangular_shell_interface,
     _mixed_transition_shell_parameters,
 )
+from ._airbox_feature_fields import require_no_airbox_feature_refinement
 from ._airbox_grading import _add_airbox_grading_field
 from ._mixed_face_incidence import MixedFaceIncidence, build_mixed_face_incidence
 
@@ -2824,6 +2825,7 @@ def generate_swept_tetrahedral_box_airbox_mesh(
     options: MeshOptions,
 ) -> MeshData:
     """Realize a fixed-layer Tet4 Box, partitioning scoped fields by exact z layers."""
+    require_no_airbox_feature_refinement(airbox, route="exact-layer tetrahedral Box")
     if airbox is not None and int(airbox.boundary_marker) == 10:
         raise ValueError(
             "shared-domain interface and outer boundary markers must be distinct"
@@ -2874,6 +2876,7 @@ def _generate_coincident_ring_airbox_mesh(
     bounds: tuple[float, float, float, float, float, float],
 ) -> MeshData:
     """Mesh a Box or ring and exact-cell airbox as synchronized GEO partitions."""
+    require_no_airbox_feature_refinement(airbox, route="exact-cell layered")
     SCALE = 1.0e6
     body_hmax_scaled = float(hmax) * SCALE
     if not math.isfinite(body_hmax_scaled) or body_hmax_scaled <= 0.0:
@@ -4926,6 +4929,7 @@ def generate_disconnected_mixed_p1_mesh(
     options: MeshOptions | None = None,
 ) -> MeshData:
     """Generate a conforming Box-prism plus disconnected annulus-tet domain."""
+    require_no_airbox_feature_refinement(airbox, route="mixed-v2 prism/tetrahedral")
     opts = options or MeshOptions()
     if opts.algorithm_2d != 6 or opts.algorithm_3d not in (1, 10) or opts.periodic_pair_ids:
         raise ValueError(

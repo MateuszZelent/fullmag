@@ -951,7 +951,7 @@ fn run_scheduler(
                 // settled; only an unsettled task keeps the fail-stop.
                 match check_task_outcome_settled(&store, &worker_run_id, &worker_task_id)? {
                     TaskOutcomeCheck::Settled(true) => {
-                        report_settled_task_failure(&worker_run_id, &worker_task_id, &error);
+                        report_settled_worker_error(&worker_run_id, &worker_task_id, &error);
                     }
                     TaskOutcomeCheck::Settled(false) => {
                         return Err(error).context("supervise scheduled accepted worker");
@@ -1310,7 +1310,7 @@ fn resolve_pending_task_outcomes(
     for mut pending in pending_task_outcomes.drain(..) {
         match check_task_outcome_settled(store, &pending.run_id, &pending.task_id)? {
             TaskOutcomeCheck::Settled(true) => {
-                report_settled_task_failure(
+                report_settled_worker_error(
                     &pending.run_id,
                     &pending.task_id,
                     &pending.original_error,
@@ -1352,18 +1352,18 @@ fn task_outcome_settled(store: &SessionStore, run_id: &RunId, task_id: &str) -> 
     Ok(lease.is_none())
 }
 
-fn report_settled_task_failure(run_id: &RunId, task_id: &str, error: &anyhow::Error) {
+fn report_settled_worker_error(run_id: &RunId, task_id: &str, error: &anyhow::Error) {
     tracing::warn!(
         run_id = run_id.as_str(),
         task_id,
         error = ?error,
-        "accepted task failed; its outcome is durable and scheduling continues"
+        "accepted worker supervision reported an error after durable task settlement; scheduling continues"
     );
     eprintln!(
         "{}",
         serde_json::json!({
             "schema_version": "scheduler_task_outcome.v1",
-            "event": "task_failed_settled",
+            "event": "worker_error_after_task_settlement",
             "component": "accepted_compute_scheduler",
             "run_id": run_id.as_str(),
             "task_id": task_id,
@@ -1500,7 +1500,7 @@ fn recover_exited_worker_tasks(
                 Err(error) => {
                     match check_task_outcome_settled(store, run_id, &task.task_id)? {
                         TaskOutcomeCheck::Settled(true) => {
-                            report_settled_task_failure(run_id, &task.task_id, &error);
+                            report_settled_worker_error(run_id, &task.task_id, &error);
                         }
                         TaskOutcomeCheck::Settled(false) => {
                             return Err(error).with_context(|| {

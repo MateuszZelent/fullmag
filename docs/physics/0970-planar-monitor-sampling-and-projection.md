@@ -313,6 +313,10 @@ operators, although the identity above would also hold there.
 | $N_n$ | FDM cell count along the normal | $1$ |
 | $h_n$ | FDM cell edge along the normal | $\mathrm{m}$ |
 | $h_\perp$ | Navigation step of a continuous FEM section: median normal extent of the cut target elements | $\mathrm{m}$ |
+| $\mathbf h$ | Shared native cell spacing of all FDM multilayer grids | $\mathrm{m}$ |
+| $\mathbf o_l$ | Edge origin of native multilayer grid l | $\mathrm{m}$ |
+| $\mathbf s_l$ | Integral cell shift of native grid l in the composite lattice | $1$ |
+| $\mathcal C$ | Composite cells covered by a native multilayer cell | $1$ |
 | $\pi$ | Circle constant | $1$ |
 
 `[q]` denotes the canonical SI unit of the selected source quantity. Unit
@@ -814,6 +818,51 @@ reference image of $e\cap\Pi_p$ is used. Linear interpolation of vertex
 values along clipped edges is exact only for affine fields and is therefore
 insufficient for these elements.
 
+(planar-monitor-fdm-multilayer-composite)=
+### FDM multilayer composite carrier
+
+A `multilayer_convolution` plan realizes each magnetic object $l$ on its own
+native grid $G_l$ with origin $\mathbf o_l$, spacing $\mathbf h_l$ and counts
+$\mathbf N_l$; the published field concatenates the native cell values layer by
+layer. The common transform layout of that plan is FFT scratch, not a physical
+mesh, so neither it nor the concatenated array is a structured carrier for a
+`monitor_target` or `region` scope. Those scopes sample the composite carrier
+$G$ defined below; `layer` scope keeps sampling one native grid.
+
+When every $\mathbf h_l$ equals one spacing $\mathbf h$ (componentwise relative
+difference at most $10^{-9}$) and every shift
+
+```{math}
+:label: eq-planar-multilayer-shift
+\mathbf s_l=\frac{\mathbf o_l-\mathbf o}{\mathbf h},\qquad
+\mathbf o=\min_l \mathbf o_l\ \text{(componentwise)},
+```
+
+is integral within $10^{-6}$ cells, the native grids embed into the lattice
+$G$ with origin $\mathbf o$, spacing $\mathbf h$ and counts
+$\mathbf N=\max_l(\mathbf s_l+\mathbf N_l)$. A composite cell $c$ covered by
+native cell $c-\mathbf s_l$ of layer $l$ carries
+
+```{math}
+:label: eq-planar-multilayer-embedding
+q_c=q_{l,\,c-\mathbf s_l},\qquad
+\mathcal C=\bigcup_l\left(\mathbf s_l+G_l\right).
+```
+
+The embedding is a bijection between $\mathcal C$ and the native cells, so
+every FDM operator evaluated on $G$ equals the same operator on the native
+grids; no value is interpolated. Cells outside $\mathcal C$ carry no value:
+they are excluded from every target, `domain` included, and are not air with a
+zero field. Membership on $\mathcal C$ is the native region mask of the
+covering layer (inactive native cells stay non-magnetic); the native region
+legends merge by numeric identity and must agree. The `Default` section and
+its bounds use $G$ instead of the common transform layout.
+
+The carrier fails closed with `planar_scope_unsupported` when spacings differ,
+when a shift is not integral, when two native grids cover the same composite
+cell, or when the legends disagree; `layer` scope remains available in each
+case.
+
 (planar-monitor-default-section)=
 ### Default-section publication
 
@@ -1082,6 +1131,7 @@ silent clamp. New HTTP and OpenAPI payloads expose only `range` and
 | PM-N28 | batched point location through the element AABB hierarchy (structured Tet4 with unselected elements; interior, face, edge and outside points; runtime profile on a mixed FEM carrier) | located element, value and occupancy identical to the direct scan for every point; candidate count bounded by the elements around a node |
 | PM-N26 | in-plane streamlines on a uniform field, a vortex raster and a masked raster | uniform field gives straight parallel lines along $\mathbf w$ within $10^{-9}$ of the pixel pitch; vortex lines close or stay within the disk; no point lies in a non-renderable cell; repeated runs are identical; budget overflow is reported as truncated |
 | PM-N27 | multislice of an FDM stack at $\phi\in\{0.25,0.5,0.75\}$ and of an FEM film | each panel equals the single default section at the same $\phi$ (same resolved coordinate and bitwise-equal raster); the panels' sample tokens differ; the auto range is the union of the panels' renderable extrema; a monitor source with `position_fraction` is rejected |
+| PM-N29 | FDM multilayer composite of two native grids with equal spacing, integral shifts and a gap between them; fixtures with unequal spacing, a half-cell shift and overlapping grids | composite plane samples equal the native cell values of the covering layer bitwise; gap cells are empty under the `domain` target; the default section spans the composite lattice of {eq}`eq-planar-multilayer-shift`; the three invalid fixtures fail with `planar_scope_unsupported` |
 | PM-D01 | default source identity | `Default` resolves from session state and domain metadata without creating a monitor, changing `ProblemIR`, or changing canonical Python |
 | PM-D02 | default position validation | `position_fraction` is finite and in $[0,1]$; resolved `position_m` is finite and inside the selected normal bounds |
 | PM-D03 | default/authored sampler parity | after source resolution, both source identities use the same interpolation and measure-weighted reduction; source provenance remains distinct |

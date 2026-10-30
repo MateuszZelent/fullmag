@@ -1496,6 +1496,9 @@ export function useSolverEnergyHistoryResource(
   return useSessionScopedResource<SolverEnergyHistoryResource | null>({
     enabled,
     load,
+    // Each scalar row invalidates the history window; keep the refetch at the
+    // table-rows cadence instead of one full window per projector tick.
+    minRefetchIntervalMs: tableRowsMinRefetchIntervalMs(),
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
   });

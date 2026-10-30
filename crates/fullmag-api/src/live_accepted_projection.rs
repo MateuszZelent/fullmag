@@ -192,7 +192,7 @@ struct DurableProjection {
     resolved_capabilities: Option<fullmag_runner::BackendCapabilities>,
     latest_state: Option<VerifiedOutput>,
     latest_total_energy: Option<fullmag_application::StudyScalarArtifact>,
-    final_step_stats: Option<fullmag_runner::StepStats>,
+    terminal_stats: Option<fullmag_runner::StepStats>,
     latest_output_identity: Option<String>,
     live_observation: Option<(usize, crate::accepted_study_worker::AcceptedLiveObservation)>,
     live_observation_identity: Option<String>,
@@ -215,12 +215,14 @@ pub(crate) fn spawn(state: Arc<AppState>) {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut cursor: Option<ProjectionCursor> = None;
         let mut study_cache: Option<Arc<fullmag_runtime_control::AcceptedStudySnapshot>> = None;
+        // Last live quantity demand published beside a run (run id, quantities).
+        let mut published_demand: Option<(String, Vec<String>)> = None;
         // The poll repeats every interval; report each distinct deferral once.
         let mut last_deferral: Option<String> = None;
         let mut repeated_deferrals: u32 = 0;
         loop {
             interval.tick().await;
-            match poll_once(&state, &mut cursor, &mut study_cache).await {
+            match poll_once(&state, &mut cursor, &mut study_cache, &mut published_demand).await {
                 Ok(()) => {
                     last_deferral = None;
                     repeated_deferrals = 0;
@@ -262,6 +264,7 @@ async fn poll_once(
     state: &Arc<AppState>,
     cursor: &mut Option<ProjectionCursor>,
     study_cache: &mut Option<Arc<fullmag_runtime_control::AcceptedStudySnapshot>>,
+    published_demand: &mut Option<(String, Vec<String>)>,
 ) -> Result<(), ApiError> {
     let Some(context) = capture_context(state).await? else {
         return Ok(());
@@ -282,6 +285,15 @@ async fn poll_once(
     let Some(store_root) = state.submit_store_root.clone() else {
         return Ok(());
     };
+    // The displayed and recently read quantities bound the worker's live
+    // field capture; publish them before reading this tick's observation.
+    crate::live_field_demand::publish_live_demand(
+        state,
+        &store_root,
+        &context.run_id,
+        published_demand,
+    )
+    .await;
     let expected = context.clone();
     let previous_cursor = cursor.clone();
     let mut cached_study = study_cache.take();
@@ -834,6 +846,25 @@ fn load_durable_projection(
         .filter(|output| output.data_kind == "state")
         .max_by(|left, right| compare_magnetization_outputs(left, right))
         .cloned();
+    // A fast worker can finish between projector ticks, before its final live
+    // sidecar can be adopted. Recover terminal scalars only from the immutable
+    // quantity bundle pinned to the exact final state and task attempt. Older
+    // runs without this artifact remain unknown; prepared rows are never relabeled.
+    let terminal_stats = if terminal_status {
+        latest_state.as_ref().and_then(|output| {
+            let fullmag_application::DecodedStudyArtifact::MagnetizationState(final_state) =
+                &output.decoded else { return None; };
+            let catalog = artifact_catalog.as_ref()?;
+            terminal_stats_from_pinned_artifact(
+                &store,
+                &run_catalog,
+                catalog,
+                &task_order,
+                output,
+                final_state,
+            )
+        })
+    } else { None };
     let accepted_runtime_problem = if matches!(status, "completed" | "failed" | "cancelled") {
         latest_state.as_ref().and_then(|output| {
             accepted
@@ -873,67 +904,6 @@ fn load_durable_projection(
             fullmag_application::DecodedStudyArtifact::Scalar(scalar) => Some(scalar.clone()),
             _ => None,
         });
-    let final_step_stats = if terminal_status {
-        let final_stats_output = latest_state
-            .as_ref()
-            .into_iter()
-            .chain(latest_total_energy_output.as_ref())
-            .max_by(|left, right| compare_terminal_metric_outputs(left, right));
-        let final_step_stats = final_stats_output
-            .map(|output| {
-                crate::accepted_study_worker::read_completed_worker_final_step_stats(
-                    store_root,
-                    &context.run_id,
-                    &output.task_id,
-                    &output.attempt_id,
-                    output.ownership_epoch,
-                    &output.case_id,
-                    output.accepted_state_ref.as_ref(),
-                )
-                .map_err(|error| {
-                    ApiError::conflict(format!(
-                        "read authoritative accepted final StepStats: {error:#}"
-                    ))
-                })
-            })
-            .transpose()?
-            .flatten();
-        if let Some(stats) = final_step_stats.as_ref() {
-            if let Some(output) = latest_state.as_ref().filter(|output| {
-                final_stats_output.is_some_and(|source| same_verified_attempt(source, *output))
-            }) {
-                let fullmag_application::DecodedStudyArtifact::MagnetizationState(state) =
-                    &output.decoded
-                else {
-                    unreachable!("latest state output was not a magnetization state");
-                };
-                if stats.step != state.step || stats.time.to_bits() != state.time_s.to_bits() {
-                    return Err(ApiError::conflict(
-                        "accepted final StepStats differs from durable state output",
-                    ));
-                }
-            }
-            if let Some(output) = latest_total_energy_output.as_ref().filter(|output| {
-                final_stats_output.is_some_and(|source| same_verified_attempt(source, *output))
-            }) {
-                let fullmag_application::DecodedStudyArtifact::Scalar(scalar) = &output.decoded
-                else {
-                    unreachable!("latest total-energy output was not a scalar artifact");
-                };
-                if stats.step != scalar.step
-                    || stats.time.to_bits() != scalar.time_s.to_bits()
-                    || stats.e_total.to_bits() != scalar.value_si.to_bits()
-                {
-                    return Err(ApiError::conflict(
-                        "accepted final StepStats differs from durable E_total output",
-                    ));
-                }
-            }
-        }
-        final_step_stats
-    } else {
-        None
-    };
     let latest_output_identity = latest_state
         .as_ref()
         .map(|output| output.object_ref.clone())
@@ -1040,7 +1010,7 @@ fn load_durable_projection(
         resolved_capabilities,
         latest_state,
         latest_total_energy,
-        final_step_stats,
+        terminal_stats,
         latest_output_identity,
         live_observation,
         live_observation_identity,
@@ -1681,38 +1651,17 @@ fn compare_scalar_outputs(left: &VerifiedOutput, right: &VerifiedOutput) -> std:
         .then_with(|| scalar_identity(left_scalar).cmp(&scalar_identity(right_scalar)))
 }
 
-fn compare_terminal_metric_outputs(
-    left: &VerifiedOutput,
-    right: &VerifiedOutput,
-) -> std::cmp::Ordering {
-    fn sample(output: &VerifiedOutput) -> (u64, f64) {
-        match &output.decoded {
-            fullmag_application::DecodedStudyArtifact::MagnetizationState(state) => {
-                (state.step, state.time_s)
-            }
-            fullmag_application::DecodedStudyArtifact::Scalar(scalar) => {
-                (scalar.step, scalar.time_s)
-            }
-            _ => (0, 0.0),
-        }
+fn same_projected_scalar_sample(left: &crate::types::ScalarRow, right: &crate::types::ScalarRow) -> bool {
+    // The session binds the observation frame after admission. Compare the
+    // complete scientific row so changed diagnostics at the same step survive.
+    let mut previous = left.clone();
+    previous.observation_frame = None;
+    let mut candidate = right.clone();
+    candidate.observation_frame = None;
+    match (serde_json::to_value(previous), serde_json::to_value(candidate)) {
+        (Ok(previous), Ok(candidate)) => previous == candidate,
+        _ => false,
     }
-    let (left_step, left_time) = sample(left);
-    let (right_step, right_time) = sample(right);
-    left.task_order
-        .cmp(&right.task_order)
-        .then_with(|| left_step.cmp(&right_step))
-        .then_with(|| left_time.total_cmp(&right_time))
-        // A single accepted attempt owns all outputs for a step. The object
-        // reference only makes selection deterministic when both data kinds
-        // describe the same terminal sample.
-        .then_with(|| left.object_ref.cmp(&right.object_ref))
-}
-
-fn same_verified_attempt(left: &VerifiedOutput, right: &VerifiedOutput) -> bool {
-    left.task_id == right.task_id
-        && left.attempt_id == right.attempt_id
-        && left.ownership_epoch == right.ownership_epoch
-        && left.case_id == right.case_id
 }
 
 fn scalar_row_from_step_stats(stats: &fullmag_runner::StepStats) -> Option<crate::types::ScalarRow> {
@@ -2047,6 +1996,74 @@ fn load_verified_outputs(
     Ok(outputs)
 }
 
+fn terminal_stats_from_pinned_artifact(
+    store: &fullmag_session::SessionStore,
+    run_catalog: &fullmag_session::FmsRunCatalog,
+    artifact_catalog: &fullmag_session::FmsArtifactCatalog,
+    task_order: &std::collections::BTreeMap<String, usize>,
+    output: &VerifiedOutput,
+    final_state: &fullmag_application::MagnetizationStateArtifact,
+) -> Option<fullmag_runner::StepStats> {
+    let accepted_state_ref = output.accepted_state_ref.as_ref()?;
+    let task = run_catalog.tasks.iter().find(|task| {
+        task.lifecycle == fullmag_session::FmsTaskLifecycle::Succeeded
+            && task_order.get(&task.task_id) == Some(&output.task_order)
+    })?;
+    let attempt_id = task.attempt_id.as_deref()?;
+    let ownership_epoch = task.ownership_epoch?;
+    if accepted_state_ref.id.run_id != run_catalog.run_id
+        || accepted_state_ref.id.stage_id.as_deref() != Some(output.step_id.as_str())
+        || accepted_state_ref.generation.runtime_epoch != ownership_epoch
+        || accepted_state_ref.id.accepted_step != final_state.step
+    {
+        tracing::warn!(task_id = %task.task_id,
+            "terminal scalar artifact source does not match the final accepted state identity");
+        return None;
+    }
+    let mut matches = artifact_catalog.entries.iter().filter(|entry| {
+        task.artifact_ids.contains(&entry.artifact_id)
+            && entry.task_id == task.task_id
+            && entry.attempt_id == attempt_id
+            && entry.ownership_epoch == ownership_epoch
+            && entry.artifact_type == crate::accepted_field_materialization_worker::TERMINAL_SCALAR_ARTIFACT_TYPE
+            && entry.status == fullmag_session::FmsArtifactStatus::Published
+    });
+    let Some(entry) = matches.next() else { return None; };
+    if matches.next().is_some() {
+        tracing::warn!(task_id = %task.task_id,
+            "terminal scalar artifact pin is ambiguous; scalar row remains unknown");
+        return None;
+    }
+    let stats = match crate::accepted_field_materialization_worker::read_terminal_scalar_stats(store, entry) {
+        Ok(record) => record,
+        Err(error) => {
+            tracing::warn!(task_id = %task.task_id, error = %error,
+                "terminal scalar artifact is invalid; scalar row remains unknown");
+            return None;
+        }
+    };
+    if stats.source != *accepted_state_ref
+        || stats.source.id.run_id != run_catalog.run_id
+        || stats.source.id.stage_id.as_deref() != Some(output.step_id.as_str())
+        || stats.source.generation.runtime_epoch != ownership_epoch
+        || stats.state_object_ref != output.object_ref
+        || stats.run_id != run_catalog.run_id
+        || stats.task_id != task.task_id
+        || stats.step_id != output.step_id
+        || stats.attempt_id != attempt_id
+        || stats.ownership_epoch != ownership_epoch
+        || stats.stats.step != final_state.step
+        || stats.stats.time.to_bits() != final_state.time_s.to_bits()
+        || stats.stats.dt.to_bits() != final_state.solver_dt_s.to_bits()
+        || crate::accepted_field_materialization_worker::validate_scalar_row_stats(&stats.stats).is_err()
+    {
+        tracing::warn!(task_id = %task.task_id,
+            "terminal scalar artifact does not match the pinned final state; scalar row remains unknown");
+        return None;
+    }
+    Some(stats.stats)
+}
+
 #[derive(Debug, Clone)]
 struct PreparedProjectionDomain {
     preparation_id: String,
@@ -2103,9 +2120,12 @@ async fn ensure_stage_preparation_for_step(
     step_id: &str,
     accepted_state_ref: Option<&fullmag_quantities::AcceptedStateRef>,
 ) -> Result<PreparedProjectionDomain, ApiError> {
-    let existing = {
+    let (existing, terminal_restore) = {
         let current = state.current_live_state.read().await;
-        current.as_ref().and_then(|snapshot| {
+        let terminal_restore = context.allow_api_instance_rebind && current.as_ref()
+            .and_then(|snapshot| snapshot.run.as_ref())
+            .is_some_and(|run| matches!(run.status.as_str(), "completed" | "failed" | "cancelled"));
+        let existing = current.as_ref().and_then(|snapshot| {
             let workspace = snapshot.mesh_workspace.as_ref()?;
             if workspace.get("accepted_run_id").and_then(Value::as_str)
                 != Some(context.run_id.as_str())
@@ -2125,7 +2145,8 @@ async fn ensure_stage_preparation_for_step(
                 execution_plan,
                 plan_fingerprint: plan_fingerprint.to_owned(),
             })
-        })
+        });
+        (existing, terminal_restore)
     };
 
     let prepared = if let Some(existing) = existing {
@@ -2138,7 +2159,11 @@ async fn ensure_stage_preparation_for_step(
             session_epoch: context.session_epoch,
             request_scope_epoch: format!("{}:{}", context.api_instance_id, context.session_epoch),
         };
-        let published =
+        let published = if terminal_restore {
+            crate::live_scene_preparation::restore_terminal_task_domain(
+                state, &live_context, &context.run_id, step_id,
+            ).await?
+        } else {
             crate::live_scene_preparation::publish_accepted_task_preparation(
                 state,
                 &live_context,
@@ -2146,7 +2171,8 @@ async fn ensure_stage_preparation_for_step(
                 step_id,
                 "accepted_projection_stage_preparation",
             )
-            .await?;
+            .await?
+        };
         PreparedProjectionDomain {
             preparation_id: published.read_model.preparation_id,
             execution_plan: Arc::new(published.read_model.execution_plan),
@@ -2606,6 +2632,12 @@ async fn apply_projection(
     ensure_projection_context(state, context, &next)?;
     let publication_fence = ProjectionPublicationFence::capture(&next)?;
     let display_revision = state.current_display_selection.read().await.revision;
+    // Revisions before this projection: the realtime batch names only the
+    // resources (and field quantities) that this tick actually changed.
+    let previous_revisions =
+        crate::current_live_realtime_state_from_snapshot(state, &next, display_revision)
+            .await
+            .revisions;
 
     let profile_changed = if let Some(profile) = projection.solver_profile.as_ref() {
         // The recovered journal, rather than a default startup frame, owns a
@@ -2667,7 +2699,7 @@ async fn apply_projection(
                 changed = true;
             }
         }
-        if let Some(stats) = projection.final_step_stats.as_ref() {
+        if let Some(stats) = projection.terminal_stats.as_ref() {
             if stats.time.is_finite()
                 && stats.time >= 0.0
                 && run.final_time != Some(stats.time)
@@ -2811,30 +2843,53 @@ async fn apply_projection(
             }
         }
     }
-    // Apply the durable terminal row after any live observation so it wins
-    // over a stale sidecar. Both paths retain the current lineage reset and
-    // scalar-progress signal used by the projector's publication cadence.
-    let live_stats = projection
-        .live_observation
-        .as_ref()
-        .and_then(|(_, observation)| observation.header.stats.as_ref());
-    let terminal_stats = terminal.then_some(projection.final_step_stats.as_ref()).flatten();
-    for stats in [live_stats, terminal_stats].into_iter().flatten() {
+    // Terminal samples come only from the pinned artifact. A stale live
+    // sidecar must not supply a replacement when terminal diagnostics are absent.
+    let scalar_stats = if terminal {
+        projection.terminal_stats.as_ref()
+    } else {
+        projection.live_observation.as_ref()
+            .and_then(|(_, observation)| observation.header.stats.as_ref())
+    };
+    if let Some(stats) = scalar_stats {
         if let Some(row) = scalar_row_from_step_stats(stats) {
-            let scalar_revision = next.scalar_revision;
-            if next.scalar_rows.last().is_some_and(|last| row.step < last.step) {
-                next.scalar_rows.clear();
-            }
-            crate::session::apply_current_live_scalar_frame(
-                &mut next,
-                crate::types::CurrentLiveScalarFrameRequest {
-                    session_id: context.session_id.clone(),
-                    latest_scalar_row: Some(row),
-                },
-            )?;
-            if next.scalar_revision != scalar_revision {
-                changed = true;
-                scalar_sample_advanced = true;
+            let request_scope_epoch = format!("{}:{}", context.api_instance_id, context.session_epoch);
+            let same_lineage = next.latest_scalar_source.as_ref().is_some_and(|source| {
+                source.session_id == context.session_id
+                    && source.run_id == context.run_id
+                    && source.request_scope_epoch == request_scope_epoch
+            });
+            let already_projected = same_lineage
+                && next.latest_scalar_source.as_ref().is_some_and(|source| {
+                    source.scalar_revision == next.scalar_revision && source.source_step == stats.step
+                })
+                && next.scalar_rows.last()
+                    .is_some_and(|last| same_projected_scalar_sample(last, &row));
+            if !already_projected {
+                let scalar_revision = next.scalar_revision;
+                // Identical values from another run are a new observation.
+                // Do not relabel a history whose source is absent or foreign.
+                if !same_lineage || next.scalar_rows.last().is_some_and(|last| row.step < last.step) {
+                    next.scalar_rows.clear();
+                }
+                crate::session::apply_current_live_scalar_frame(
+                    &mut next,
+                    crate::types::CurrentLiveScalarFrameRequest {
+                        session_id: context.session_id.clone(),
+                        latest_scalar_row: Some(row),
+                    },
+                )?;
+                if next.scalar_revision != scalar_revision {
+                    next.latest_scalar_source = Some(crate::schemas::scalars::ScalarObservationSource {
+                        session_id: context.session_id.clone(),
+                        run_id: context.run_id.clone(),
+                        request_scope_epoch,
+                        source_step: stats.step,
+                        scalar_revision: next.scalar_revision,
+                    });
+                    changed = true;
+                    scalar_sample_advanced = true;
+                }
             }
         }
     }
@@ -2941,22 +2996,12 @@ async fn apply_projection(
             .get("m")
             .and_then(|field| field.pointer("/provenance/observation_identity"))
             .and_then(Value::as_str);
-        let expected_sequence = projection
-            .live_observation
-            .as_ref()
-            .and_then(|(_, observation)| observation.header.magnetization.as_ref())
-            .map(|reference| reference.sequence);
-        let displayed_sequence = next
-            .latest_fields
-            .get("m")
-            .and_then(|field| field.pointer("/provenance/sequence"))
-            .and_then(Value::as_u64);
-        let stale_field = active_identity.is_some_and(|identity| {
-            displayed_identity != Some(identity)
-                || expected_sequence.is_some_and(|sequence| {
-                    displayed_sequence != Some(sequence)
-                })
-        });
+        // Only fields of another task attempt are stale. The worker replaces
+        // its payload on every published step, so a header read can name a
+        // payload that is already gone; the displayed older frame of the same
+        // observation stays valid under its own source step until the next
+        // complete read. Clearing it made m and every live field flap to 204.
+        let stale_field = active_identity.is_some_and(|identity| displayed_identity != Some(identity));
         if stale_field && next.latest_fields.get("m").is_some() {
             let mut fields = next.latest_fields.clone();
             fields.remove("m");
@@ -3151,7 +3196,14 @@ async fn apply_projection(
         }
     }
     crate::router_v2::handlers::sessions::status::record_current_live_heartbeat(state).await;
-    crate::publish_current_live_realtime_batch_changed(state, &realtime_state, true, 100).await
+    crate::publish_current_live_realtime_batch_changed_since(
+        state,
+        &realtime_state,
+        Some(&previous_revisions),
+        true,
+        100,
+    )
+    .await
 }
 
 fn accepted_output_frame(
@@ -4553,6 +4605,29 @@ mod tests {
     }
 
     #[test]
+    fn scalar_dedup_preserves_changed_diagnostics_at_the_same_sample() {
+        let stats = fullmag_runner::StepStats {
+            step: 9,
+            time: 9.0e-12,
+            error_estimate: Some(0.25),
+            ..Default::default()
+        };
+        let row = scalar_row_from_step_stats(&stats).unwrap();
+        let mut published = row.clone();
+        published.observation_frame = Some(crate::schemas::common::AcceptedObservationFrameRef::for_snapshot(
+            "session", 1, "domain", 0, row.step, Some(row.time),
+        ));
+        assert!(same_projected_scalar_sample(&published, &row));
+        let mut corrected = row.clone();
+        corrected.error_estimate = Some(0.5);
+        assert!(!same_projected_scalar_sample(&published, &corrected));
+        corrected = row.clone();
+        corrected.per_object_scalars.insert("free".into(),
+            std::collections::HashMap::from([("mx".into(), 0.7)]));
+        assert!(!same_projected_scalar_sample(&published, &corrected));
+    }
+
+    #[test]
     fn solver_progress_is_not_lowered_to_a_physical_scalar_row() {
         let mut stats = fullmag_runner::StepStats::default();
         stats.kind = fullmag_quantities::StepDataKind::SolverProgress;
@@ -4560,6 +4635,36 @@ mod tests {
             metrics: std::collections::HashMap::new(),
         });
         assert!(scalar_row_from_step_stats(&stats).is_none());
+    }
+
+    fn terminal_projection_fixture(stats: Option<fullmag_runner::StepStats>, revision: u64) -> DurableProjection {
+        DurableProjection {
+            run_catalog_revision: revision,
+            artifact_catalog_revision: Some(revision),
+            terminal_without_outputs: false,
+            preclaim_cancellations: Vec::new(),
+            solver_profile: None,
+            stage_journal_details: StageJournalDetailsCache::new(),
+            status: "completed",
+            accepted_runtime_capabilities: None,
+            accepted_runtime_mode: None,
+            accepted_runtime_problem: None,
+            command_id: None,
+            interactive_command: false,
+            resolved_capabilities: None,
+            latest_state: None,
+            latest_total_energy: None,
+            terminal_stats: stats,
+            latest_output_identity: None,
+            live_observation: None,
+            live_observation_identity: None,
+            live_observation_sequence: None,
+            live_magnetization_sequence: None,
+            stage_execution: crate::session::accepted_stage_execution_state(
+                Vec::new(),
+                crate::types::RuntimeLifecycleState::Completed,
+            ),
+        }
     }
 
     #[tokio::test]
@@ -4607,6 +4712,11 @@ mod tests {
                 },
             )
             .expect("stale scalar fixture should be admitted");
+            snapshot.latest_scalar_source = Some(crate::schemas::scalars::ScalarObservationSource {
+                session_id: "test-session".into(), run_id: "test-run".into(),
+                request_scope_epoch: format!("{}:4", state.request_scope_instance_id),
+                source_step: stale.step, scalar_revision: snapshot.scalar_revision,
+            });
         }
 
         let final_stats = fullmag_runner::StepStats {
@@ -4628,33 +4738,7 @@ mod tests {
         apply_projection(
             &state,
             &context,
-            DurableProjection {
-                run_catalog_revision: 1,
-                artifact_catalog_revision: Some(1),
-                terminal_without_outputs: false,
-                preclaim_cancellations: Vec::new(),
-                solver_profile: None,
-                stage_journal_details: StageJournalDetailsCache::new(),
-                status: "completed",
-                accepted_runtime_capabilities: None,
-                accepted_runtime_mode: None,
-                accepted_runtime_problem: None,
-                command_id: None,
-                interactive_command: false,
-                resolved_capabilities: None,
-                latest_state: None,
-                latest_total_energy: None,
-                final_step_stats: Some(final_stats),
-                latest_output_identity: None,
-                live_observation: None,
-                live_observation_identity: None,
-                live_observation_sequence: None,
-                live_magnetization_sequence: None,
-                stage_execution: crate::session::accepted_stage_execution_state(
-                    Vec::new(),
-                    crate::types::RuntimeLifecycleState::Completed,
-                ),
-            },
+            terminal_projection_fixture(Some(final_stats.clone()), 1),
         )
         .await
         .expect("terminal projection should publish final scalar row");
@@ -4689,7 +4773,7 @@ mod tests {
             );
         }
 
-        // A legacy v1 receipt has no terminal row. Replaying that projection
+        // Without a pinned terminal scalar artifact, replaying the projection
         // must not infer a new sample from the terminal step counter.
         {
             let mut current = state.current_live_state.write().await;
@@ -4700,33 +4784,7 @@ mod tests {
         apply_projection(
             &state,
             &context,
-            DurableProjection {
-                run_catalog_revision: 2,
-                artifact_catalog_revision: Some(2),
-                terminal_without_outputs: false,
-                preclaim_cancellations: Vec::new(),
-                solver_profile: None,
-                stage_journal_details: StageJournalDetailsCache::new(),
-                status: "completed",
-                accepted_runtime_capabilities: None,
-                accepted_runtime_mode: None,
-                accepted_runtime_problem: None,
-                command_id: None,
-                interactive_command: false,
-                resolved_capabilities: None,
-                latest_state: None,
-                latest_total_energy: None,
-                final_step_stats: None,
-                latest_output_identity: None,
-                live_observation: None,
-                live_observation_identity: None,
-                live_observation_sequence: None,
-                live_magnetization_sequence: None,
-                stage_execution: crate::session::accepted_stage_execution_state(
-                    Vec::new(),
-                    crate::types::RuntimeLifecycleState::Completed,
-                ),
-            },
+            terminal_projection_fixture(None, 2),
         )
         .await
         .expect("legacy terminal projection should remain valid");
@@ -4734,6 +4792,33 @@ mod tests {
         let snapshot = current.as_ref().expect("published live session");
         assert_eq!(snapshot.scalar_rows.len(), 1);
         assert_eq!(snapshot.scalar_rows[0].step, 5);
+        drop(current);
+
+        apply_projection(&state, &context, terminal_projection_fixture(Some(final_stats.clone()), 3))
+            .await.expect("restore the pinned terminal sample");
+        let revision = state.current_live_state.read().await.as_ref().unwrap().scalar_revision;
+        apply_projection(&state, &context, terminal_projection_fixture(Some(final_stats.clone()), 3))
+            .await.expect("repeat of the same observation is idempotent");
+        assert_eq!(state.current_live_state.read().await.as_ref().unwrap().scalar_revision, revision);
+
+        let rerun = ProjectionContext { run_id: "test-run-rerun".into(), ..context.clone() };
+        {
+            let mut current = state.current_live_state.write().await;
+            let snapshot = current.as_mut().unwrap();
+            snapshot.run.as_mut().unwrap().run_id = rerun.run_id.clone();
+            snapshot.run.as_mut().unwrap().status = "running".into();
+        }
+        apply_projection(&state, &rerun, terminal_projection_fixture(Some(final_stats), 1))
+            .await.expect("identical values in a new run must get new provenance");
+        let current = state.current_live_state.read().await;
+        let snapshot = current.as_ref().unwrap();
+        assert_eq!(snapshot.scalar_rows.len(), 1, "foreign run history must not be relabelled");
+        assert_eq!(snapshot.scalar_rows[0].step, 101);
+        assert!(snapshot.scalar_revision > revision);
+        let source = snapshot.latest_scalar_source.as_ref().unwrap();
+        assert_eq!(source.run_id, rerun.run_id);
+        assert_eq!(source.scalar_revision, snapshot.scalar_revision);
+        assert_eq!(source.source_step, 101);
     }
 }
 

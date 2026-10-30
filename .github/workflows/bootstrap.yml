@@ -191,7 +191,8 @@ jobs:
         env:
           RUST_MIN_STACK: 16777216
         run: |
-          cargo test --locked -p fullmag-workspace-inspect --lib
+          cargo test --locked -p fullmag-workspace-inspect --lib -- --skip manifest::tests::cross_process_writer_gate_blocks_initial_and_terminal_writes_then_retries_after_process_exit
+          cargo test --locked -p fullmag-workspace-inspect --lib -- --exact manifest::tests::cross_process_writer_gate_blocks_initial_and_terminal_writes_then_retries_after_process_exit
           cargo test --locked -p fullmag-api --bin fullmag-api saved_playback_
           cargo test --locked -p fullmag-api --bin fullmag-api workspace_results
           cargo test --locked -p fullmag-runner --lib autosave_fem_geometry
@@ -242,6 +243,12 @@ jobs:
 
       - name: Run CPU periodic Newell kernel cache regressions
         run: cargo test -p fullmag-engine periodic_newell_kernel_cache_tests --lib
+
+      - name: Run local material coefficient regressions
+        run: |
+          cargo test --locked -p fullmag-engine --lib spatial_ms_anisotropy_tests
+          cargo test --locked -p fullmag-plan --lib fem_aex_field_uniformity_uses_relative_si_tolerance
+          cargo test --locked -p fullmag-runner --lib fdm::cpu::reference::tests::torque_
 
       - name: Run typed active eigen Stop and Pause contracts
         run: |
@@ -729,6 +736,9 @@ jobs:
           done
           test "$inspector_ready" = 1
           pnpm --dir apps/control-room run smoke:inspector
+          CONTROL_ROOM_INSPECTOR_MATERIAL_AUDIT=1 \
+            CONTROL_ROOM_INSPECTOR_REPORT_DIR="$CONTROL_ROOM_INSPECTOR_REPORT_DIR/material-regions" \
+            pnpm --dir apps/control-room run smoke:inspector
           node apps/control-room/scripts/smoke-adaptive-study-authoring.mjs
           CONTROL_ROOM_ANALYSIS_PLOTS_FIXTURE=1 \
             CONTROL_ROOM_ACCEPTANCE_DIR="$CONTROL_ROOM_AUDIT_ARTIFACTS_DIR/analysis-plots" \

@@ -96,8 +96,7 @@ describe("resolveResultsNavigatorIdentity", () => {
         currentRun: currentRun(),
         stageExecution: stageExecution({
           active_stage_index: 0,
-          stages: [{ index: 0, stage_id: "stage-active" }]
-            as StageExecutionResource["stages"],
+          stages: [{ index: 0, stage_id: "stage-active" }] as StageExecutionResource["stages"],
         }),
         manifest: frequencyManifest(),
       }),
@@ -250,8 +249,7 @@ describe("resolveResultsNavigatorIdentity", () => {
       resolveResultsNavigatorIdentity({
         currentRun: currentRun(),
         stageExecution: stageExecution({
-          stages: [{ index: 0, stage_id: "stage-other", status: "completed" }]
-            as StageExecutionResource["stages"],
+          stages: [{ index: 0, stage_id: "stage-other", status: "completed" }] as StageExecutionResource["stages"],
         }),
         manifest: frequencyManifest(),
       }),

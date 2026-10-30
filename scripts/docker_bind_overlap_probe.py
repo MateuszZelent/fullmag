@@ -36,6 +36,7 @@ MAX_MARKER_BYTES = 1024 * 1024
 MAX_MOUNTINFO_BYTES = 4 * 1024 * 1024
 MAX_MOUNTINFO_RECORDS = 8192
 MAX_PROBE_OUTPUT_BYTES = 4 * 1024 * 1024
+MAX_FOREIGN_LIFECYCLE_PROOFS = 3
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _DECIMAL = re.compile(r"(?:0|[1-9][0-9]*)\Z")
@@ -955,29 +956,44 @@ def prove_foreign_alias_disjoint(control, backend, container, alias, reference_r
         if (mount.get("Type") == "volume"
                 and mount.get("Name") in {control_volume, ledger_volume}):
             raise BuildControlError("foreign consumer references the selected control volume or ledger")
-    try:
-        marker = _host_reference_identity(_canonical_reference_root(reference_root))
-        kernel = prove_disjoint_bind(
-            control, backend, alias=selected_alias, reference_root=reference_root,
-            reference_marker_sha256=marker["marker_sha256"],
-        )
-    except BuildControlError:
-        raise
-    except (OSError, TypeError, ValueError) as error:
-        raise BuildControlError("foreign alias kernel proof could not be established") from error
-    try:
-        observed = docker_capture("inspect", before["id"], timeout=60)
-        documents = json.loads(observed.stdout.decode("utf-8", "strict"),
-                               object_pairs_hook=_reject_duplicate_keys)
-    except (BuildControlError, OSError, subprocess.SubprocessError, UnicodeDecodeError,
-            json.JSONDecodeError, ValueError, TypeError, AttributeError) as error:
-        raise BuildControlError("foreign consumer could not be re-inspected after the kernel proof") from error
-    if not isinstance(documents, list) or len(documents) != 1:
-        raise BuildControlError("fresh foreign consumer inspect is not one exact container")
-    after = _foreign_container_pin(
-        documents[0], selected_alias, selected_project=control.project)
-    if after != before:
-        raise BuildControlError("foreign consumer identity or state changed during overlap proof")
+    for observation in range(MAX_FOREIGN_LIFECYCLE_PROOFS):
+        try:
+            marker = _host_reference_identity(_canonical_reference_root(reference_root))
+            kernel = prove_disjoint_bind(
+                control, backend, alias=selected_alias, reference_root=reference_root,
+                reference_marker_sha256=marker["marker_sha256"],
+            )
+        except BuildControlError:
+            raise
+        except (OSError, TypeError, ValueError) as error:
+            raise BuildControlError("foreign alias kernel proof could not be established") from error
+        try:
+            observed = docker_capture("inspect", before["id"], timeout=60)
+            documents = json.loads(observed.stdout.decode("utf-8", "strict"),
+                                   object_pairs_hook=_reject_duplicate_keys)
+        except (BuildControlError, OSError, subprocess.SubprocessError, UnicodeDecodeError,
+                json.JSONDecodeError, ValueError, TypeError, AttributeError) as error:
+            raise BuildControlError(
+                f"foreign consumer {before['id']} could not be re-inspected after the kernel proof"
+            ) from error
+        if not isinstance(documents, list) or len(documents) != 1:
+            raise BuildControlError("fresh foreign consumer inspect is not one exact container")
+        after = _foreign_container_pin(
+            documents[0], selected_alias, selected_project=control.project)
+        if after == before:
+            break
+        changed = sorted(key for key in before if key != "sha256" and before[key] != after[key])
+        if changed != ["state"]:
+            raise BuildControlError(
+                f"foreign consumer {before['id']} identity changed during overlap proof: {','.join(changed)}"
+            )
+        if observation + 1 == MAX_FOREIGN_LIFECYCLE_PROOFS:
+            raise BuildControlError(
+                f"foreign consumer {before['id']} lifecycle remained unstable during overlap proof"
+            )
+        # A lifecycle transition requires a new physical proof. The registered
+        # selected worktree, foreign image and mount identity remain pinned.
+        before = after
     proof = {
         "schema": FOREIGN_PROOF_SCHEMA,
         "decision": "disjoint",

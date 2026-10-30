@@ -1193,11 +1193,12 @@ describe("RealtimeInvalidationBridge", () => {
       run_id: "run-1",
       session_id: "session-1",
       type: "scalar.sample",
-    });
+    }, "api-instance:2");
 
     expect(handled).toBe(true);
     expect(samples).toEqual([
       {
+        requestScopeEpoch: "api-instance:2",
         revision: 12,
         row: { e_total: 0.3, step: 7, time: 0.2 },
         runId: "run-1",

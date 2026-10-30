@@ -218,6 +218,7 @@ export type Viewport3DTargetPassDegradation =
   | "vector-segments-unavailable";
 
 export interface Viewport3DTargetFieldBufferSource {
+  cacheResourceKey?: string | null;
   bufferId: string;
   capability: Viewport3DTargetFieldBuffer["capability"];
   component: Viewport3DTargetFieldBuffer["component"];
@@ -1427,6 +1428,7 @@ function targetFieldBufferSource(
 ): Viewport3DTargetFieldBufferSource {
   return {
     bufferId: buffer.bufferId,
+    cacheResourceKey: buffer.cacheResourceKey ?? null,
     capability: buffer.capability,
     component: buffer.component,
     componentCount: buffer.componentCount,

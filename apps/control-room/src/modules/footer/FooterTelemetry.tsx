@@ -12,6 +12,7 @@ import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 
 import type {
+  CurrentRunResource,
   FrequencyDomainSweepProgressResource,
   LiveStatusResource,
   ObjectMetricsResource,
@@ -61,11 +62,19 @@ const INTEGER_FORMAT = new Intl.NumberFormat(UI_NUMBER_LOCALE, {
 const COMPACT_DECIMAL_FORMAT = new Intl.NumberFormat(UI_NUMBER_LOCALE, {
   maximumFractionDigits: 6,
 });
-
+const TERMINAL_FOOTER_SOLVER_STATES = new Set([
+  "completed",
+  "failed",
+  "stopped",
+  "cancelled",
+  "canceled",
+  "error",
+]);
 type FooterLiveScalarSample = KernelEventMap["telemetry:scalar-sample"];
 
 export const STAGE_PROGRESS_NOT_PUBLISHED_LABEL =
   "Stage progress not published by this runtime";
+
 type FooterScalarResourceSample = {
   revision: number;
   row: Record<string, number>;
@@ -73,14 +82,7 @@ type FooterScalarResourceSample = {
   sessionId: string;
 };
 
-const FOOTER_SCALAR_COLUMNS = [
-  "step",
-  "time",
-  "mx",
-  "my",
-  "mz",
-  "e_total",
-] as const;
+const FOOTER_SCALAR_COLUMNS = ["step", "time", "mx", "my", "mz", "e_total"] as const;
 
 export function FooterTelemetry({
   bus,
@@ -94,6 +96,7 @@ export function FooterTelemetry({
   view: "overview" | "antenna";
 }) {
   const solverStatus = useSolverStatusResource({ enabled: Boolean(status) && view === "overview" });
+  const solverStatusForRun = resolveFooterSolverStatus(status, solverStatus.data);
   const antennaStage = resolveFooterAntennaStage(status, stageExecution.data);
   const antennaNumerical = antennaStage ? readAntennaProgress(antennaStage.record) : null;
   const antennaNowMs = useAntennaStageClock(
@@ -116,10 +119,6 @@ export function FooterTelemetry({
     limit: 1,
     tail: true,
   });
-  const scalarResourceSample = useMemo(
-    () => resolveFooterScalarResourceSample(status, scalarWindow.data),
-    [scalarWindow.data, status],
-  );
   const scene = useSceneResource();
   const selectedObjectId = useSelectionSelector(
     (selection) => selection.objectId,
@@ -133,7 +132,7 @@ export function FooterTelemetry({
   // polling them elsewhere only produces 404s.
   const loadsFrequencyResponse =
     generalTelemetryEnabled &&
-    studyHasFrequencyResponseStage(solverStatus.data?.stage_kind, stageExecution.data);
+    studyHasFrequencyResponseStage(solverStatusForRun?.stage_kind, stageExecution.data);
   const responseProgress = useFrequencyDomainResponseProgressResource({
     enabled: loadsFrequencyResponse,
   });
@@ -141,11 +140,12 @@ export function FooterTelemetry({
     enabled: loadsFrequencyResponse,
   });
   const currentRun = useCurrentRunResource({ enabled: generalTelemetryEnabled });
+  const currentRunForStatus = resolveFooterCurrentRun(status, currentRun.data);
   const userSolvePhase = status
     ? resolveRuntimeUserSolvePhase({
-        detailedRuntimeState: solverStatus.data?.runtime_state,
-        runStatus: currentRun.data?.status,
-        runStatusReason: currentRun.data?.status_reason,
+        detailedRuntimeState: solverStatusForRun?.runtime_state,
+        runStatus: currentRunForStatus?.status,
+        runStatusReason: currentRunForStatus?.status_reason,
         sessionSolverState: status.solver.state,
       })
     : null;
@@ -157,14 +157,15 @@ export function FooterTelemetry({
   const telemetry = buildFooterTelemetryModel(
     status,
     objectId && objectMetrics.data?.object_id === objectId ? objectMetrics.data : null,
-    solverStatus.data,
+    solverStatusForRun,
     liveSample,
     stageExecution.data,
     responseProgress.data,
     responseSweep.data,
-    scalarResourceSample,
+    scalarWindow.data,
     {
       magneticModelPresent: resolveFooterMagneticModelPresent(scene),
+      currentRunStatus: currentRunForStatus?.status,
       nowMs: antennaNowMs,
       stageExecutionUnpublished,
       userSolvePhase,
@@ -411,9 +412,10 @@ export function buildFooterTelemetryModel(
   stageExecution?: StageExecutionResource | null,
   responseProgress?: FrequencyDomainSweepProgressResource | null,
   responseSweep?: unknown,
-  scalarResourceSample?: FooterScalarResourceSample | null,
+  scalarWindow?: ScalarWindowResource | null,
   runtimePhase?: {
     magneticModelPresent?: boolean | null;
+    currentRunStatus?: string | null;
     nowMs?: number | null;
     stageExecutionUnpublished?: boolean;
     userSolvePhase?: RuntimeUserSolvePhase | null;
@@ -435,60 +437,73 @@ export function buildFooterTelemetryModel(
   const antennaStage = resolveFooterAntennaStage(status, stageExecution);
   if (antennaStage) return buildAntennaSolveTelemetry(antennaStage, runtimePhase?.nowMs ?? null);
 
-  const liveSampleForStatus = resolveLiveSampleForStatus(status, liveSample);
-  const scalarSample = selectLatestFooterScalarSample(
-    liveSampleForStatus,
-    scalarResourceSample,
-  );
+  const completedRun =
+    isTerminalFooterSolverState(status.solver.state) ||
+    isTerminalFooterSolverState(runtimePhase?.currentRunStatus);
+  const liveSampleForStatus = resolveLiveSampleForStatus(status, liveSample, completedRun);
+  const resourceSample = resolveFooterScalarResourceSample(status, scalarWindow);
+  const scalarSample = !resourceSample ||
+      (completedRun && resourceSample.row.step !== status.run?.solver_steps) ||
+      (liveSampleForStatus && typeof liveSampleForStatus.revision === "number" &&
+        resourceSample.revision <= liveSampleForStatus.revision)
+    ? liveSampleForStatus
+    : resourceSample;
   const liveRow = scalarSample?.row ?? null;
+  const runSolverStatus = resolveFooterSolverStatus(status, solverStatus);
   const runtimeState =
     resolveEffectiveRuntimeState({
-      detailedRuntimeState: solverStatus?.runtime_state,
+      detailedRuntimeState: runSolverStatus?.runtime_state,
       sessionSolverState: status?.solver?.state,
     }) ?? "unknown";
   const runtimeStateLabel = formatRuntimeStateLabel(runtimeState);
   const simTimeSeconds =
-    scalarSampleNumber(liveRow, "time") ??
-    solverStatus?.sim_time_seconds ??
-    status?.run?.solver_time ??
-    null;
+    (completedRun
+      ? status?.run?.solver_time ??
+        runSolverStatus?.sim_time_seconds ??
+        scalarSampleNumber(liveRow, "time")
+      : scalarSampleNumber(liveRow, "time") ??
+        runSolverStatus?.sim_time_seconds ??
+        status?.run?.solver_time) ?? null;
   const pseudoTimeSeconds =
     scalarSampleNumber(liveRow, "pseudo_time_s") ??
-    solverStatus?.pseudo_time_seconds ??
+    runSolverStatus?.pseudo_time_seconds ??
     null;
   const activeRuntimeSeconds =
     scalarSampleNumber(liveRow, "active_runtime_s") ??
-    objectNumber(solverStatus, "active_runtime_seconds") ??
+    objectNumber(runSolverStatus, "active_runtime_seconds") ??
     null;
   const usesPseudoTime = pseudoTimeSeconds !== null;
   const primaryTimeSeconds = usesPseudoTime ? pseudoTimeSeconds : simTimeSeconds;
   const totalSteps =
-    scalarSampleNumber(liveRow, "step") ??
-    solverStatus?.step_index ??
-    status?.run?.solver_steps ??
-    status?.metrics?.total_steps ??
-    null;
+    (completedRun
+      ? status?.run?.solver_steps ??
+        runSolverStatus?.step_index ??
+        status?.metrics?.total_steps
+      : scalarSampleNumber(liveRow, "step") ??
+        runSolverStatus?.step_index ??
+        status?.run?.solver_steps ??
+        status?.metrics?.total_steps) ?? null;
   const stepsPerSecond = status?.metrics?.steps_per_second;
   const maxTorqueT =
     scalarSampleNumber(liveRow, "max_torque_T") ??
-    solverStatus?.max_torque_T ??
+    runSolverStatus?.max_torque_T ??
     status?.solver?.max_torque_T;
   const dt =
     scalarSampleNumber(liveRow, "solver_dt") ??
     scalarSampleNumber(liveRow, "dt") ??
-    solverStatus?.dt_seconds ??
+    runSolverStatus?.dt_seconds ??
     status?.solver?.dt;
   const errorEstimate =
-    scalarSampleNumber(liveRow, "error_estimate") ?? solverStatus?.error_estimate ?? null;
-  const maxError = scalarSampleNumber(liveRow, "max_error") ?? solverStatus?.max_error ?? null;
+    scalarSampleNumber(liveRow, "error_estimate") ?? runSolverStatus?.error_estimate ?? null;
+  const maxError = scalarSampleNumber(liveRow, "max_error") ?? runSolverStatus?.max_error ?? null;
   const dtSuggested =
-    scalarSampleNumber(liveRow, "dt_suggested") ?? solverStatus?.dt_suggested_seconds ?? null;
+    scalarSampleNumber(liveRow, "dt_suggested") ?? runSolverStatus?.dt_suggested_seconds ?? null;
   const rejectedAttempts =
-    scalarSampleNumber(liveRow, "rejected_attempts") ?? solverStatus?.rejected_attempts ?? null;
+    scalarSampleNumber(liveRow, "rejected_attempts") ?? runSolverStatus?.rejected_attempts ?? null;
   const rejectedAttemptsLabel = rejectedAttempts === null
     ? "Rejected attempts unavailable"
     : `${formatInteger(rejectedAttempts)} rejected`;
-  const converged = solverStatus?.converged ?? status?.solver?.converged;
+  const converged = runSolverStatus?.converged ?? status?.solver?.converged;
   const scalarEnergy = {
     anisotropy: scalarSampleNumber(liveRow, "e_ani"),
     demag: scalarSampleNumber(liveRow, "e_demag"),
@@ -514,9 +529,7 @@ export function buildFooterTelemetryModel(
     userSolvePhase === "awaiting_user_solve" ||
     isRuntimeStateWaitingForCompute(runtimeState);
   const liveSampleSource = scalarSample
-    ? scalarSample === liveSampleForStatus
-      ? "Live scalar sample"
-      : "Scalar history resource"
+    ? scalarSample === liveSampleForStatus ? "Live scalar sample" : "Accepted scalar observation"
     : null;
   const magnetizationSource = liveSampleSource ?? "No global sample";
   const objectEnergySource = objectMetrics?.has_solver_sample === true
@@ -525,11 +538,13 @@ export function buildFooterTelemetryModel(
         ? "Session summary (object resource)" : null
     : null;
   const energyMetric = (key: keyof typeof scalarEnergy, detail: string, label: string): FooterTelemetryMetric => {
-    const candidates = [
-      [scalarEnergy[key], liveSampleSource],
-      [objectEnergySource ? objectMetrics?.energies?.[key] : null, objectEnergySource],
-      [status?.energies?.[key], "Session summary"],
-    ] as const;
+    const candidates = completedRun
+      ? [[status?.energies?.[key], "Session summary"]] as const
+      : [
+          [scalarEnergy[key], liveSampleSource],
+          [objectEnergySource ? objectMetrics?.energies?.[key] : null, objectEnergySource],
+          [status?.energies?.[key], "Session summary"],
+        ] as const;
     const sample = candidates.find(([value]) => typeof value === "number" && Number.isFinite(value));
     return {
       detail, icon: <Zap size={14} aria-hidden="true" />, id: `energy-${key}`, label,
@@ -537,17 +552,19 @@ export function buildFooterTelemetryModel(
       value: formatScientific(sample?.[0], "—"),
     };
   };
-  const timeSource = liveRow
-    ? `Scalar revision ${String(scalarSample?.revision ?? "unavailable")}`
-    : solverStatus
-      ? "Source: solver status"
-      : status
-        ? "Source: session status"
-        : "Source unavailable";
+  const timeSource = completedRun
+    ? "Current run status"
+    : liveRow
+      ? `Scalar revision ${String(scalarSample?.revision ?? "unavailable")}`
+      : runSolverStatus
+        ? "Source: solver status"
+        : status
+          ? "Source: session status"
+          : "Source unavailable";
   const frequencyDomainProgress = buildFrequencyDomainProgress({
     responseProgress,
     responseSweep,
-    solverStageKind: solverStatus?.stage_kind,
+    solverStageKind: runSolverStatus?.stage_kind,
     stageExecution,
   });
 
@@ -616,13 +633,13 @@ export function buildFooterTelemetryModel(
         id: "step",
         label: "Step",
         subdetail: `t=${formatScientific(
-          liveRow
+          completedRun || liveRow
             ? simTimeSeconds
             : objectMetrics?.time_seconds ?? simTimeSeconds,
           "—",
         )} s`,
         value: formatInteger(
-          liveRow ? totalSteps : objectMetrics?.step ?? totalSteps,
+          completedRun || liveRow ? totalSteps : objectMetrics?.step ?? totalSteps,
         ),
         unit: "steps",
       },
@@ -1360,11 +1377,28 @@ function FrequencyDomainProgressStrip({
 function resolveLiveSampleForStatus(
   status: FooterTelemetryStatus | null | undefined,
   liveSample: FooterLiveScalarSample | null | undefined,
+  terminalRun = isTerminalFooterSolverState(status?.solver.state),
 ): FooterLiveScalarSample | null {
-  if (!liveSample) return null;
-  if (status?.sessionId && liveSample.sessionId !== status.sessionId) return null;
-  const runId = status?.run?.run_id ?? null;
-  if (runId && liveSample.runId !== runId) return null;
+  if (!liveSample || !status?.sessionId || !status.run?.run_id) return null;
+  if (
+    !liveSample.requestScopeEpoch ||
+    liveSample.requestScopeEpoch !== status.requestScopeEpoch ||
+    liveSample.sessionId !== status.sessionId ||
+    liveSample.runId !== status.run.run_id
+  ) {
+    return null;
+  }
+  const rowStep = scalarSampleNumber(liveSample.row, "step");
+  const sampleStep = rowStep ?? liveSample.step;
+  if (rowStep !== null && rowStep !== liveSample.step) return null;
+  if (
+    terminalRun &&
+    Number.isFinite(status.run.solver_steps) &&
+    Number.isFinite(sampleStep) &&
+    sampleStep !== status.run.solver_steps
+  ) {
+    return null;
+  }
   return liveSample;
 }
 
@@ -1372,39 +1406,53 @@ export function resolveFooterScalarResourceSample(
   status: FooterTelemetryStatus | null | undefined,
   window: ScalarWindowResource | null | undefined,
 ): FooterScalarResourceSample | null {
-  const values = window?.rows.at(-1);
-  if (!status?.run?.run_id || !window || !values) return null;
+  const source = window?.current_observation;
+  const values = window?.rows[0];
+  if (!status?.sessionId || !status.run?.run_id || !window || !source || !values ||
+      window.rows.length !== 1 || window.returned_rows !== 1 ||
+      source.session_id !== status.sessionId || source.run_id !== status.run.run_id ||
+      source.request_scope_epoch !== status.requestScopeEpoch ||
+      !Number.isSafeInteger(window.revision) || window.revision < 0 ||
+      source.scalar_revision !== window.revision ||
+      !Number.isSafeInteger(source.source_step) || source.source_step < 0 ||
+      values.length !== window.columns.length) return null;
   const row: Record<string, number> = {};
   for (const [index, column] of window.columns.entries()) {
     const value = values[index];
-    if (typeof value === "number" && Number.isFinite(value)) {
-      row[column] = value;
-    }
+    if (typeof value === "number" && Number.isFinite(value)) row[column] = value;
   }
-  if (scalarSampleMagnetization(row) === null) return null;
-  return {
-    revision: window.revision,
-    row,
-    runId: status.run.run_id,
-    sessionId: status.sessionId,
-  };
+  if (row.step !== source.source_step || scalarSampleMagnetization(row) === null) return null;
+  return { revision: window.revision, row, runId: source.run_id, sessionId: source.session_id };
 }
 
-function selectLatestFooterScalarSample(
-  liveSample: FooterLiveScalarSample | null,
-  resourceSample: FooterScalarResourceSample | null | undefined,
-): FooterLiveScalarSample | FooterScalarResourceSample | null {
-  if (!resourceSample) return liveSample;
-  // At equal revision the live row includes optional diagnostics omitted from
-  // the history projection. A newer history row still supersedes it in full.
+function resolveFooterCurrentRun(
+  status: FooterTelemetryStatus | null | undefined,
+  currentRun: CurrentRunResource | null | undefined,
+): CurrentRunResource | null {
   if (
-    !liveSample ||
-    typeof liveSample.revision !== "number" ||
-    resourceSample.revision > liveSample.revision
+    !status?.run?.run_id ||
+    !currentRun ||
+    currentRun.session_id !== status.sessionId ||
+    currentRun.run_id !== status.run.run_id
   ) {
-    return resourceSample;
+    return null;
   }
-  return liveSample;
+  return currentRun;
+}
+
+function resolveFooterSolverStatus(
+  status: FooterTelemetryStatus | null | undefined,
+  solverStatus: SolverStatusResource | null | undefined,
+): SolverStatusResource | null {
+  if (!status?.run?.run_id || solverStatus?.run_id !== status.run.run_id) {
+    return null;
+  }
+  return solverStatus;
+}
+
+function isTerminalFooterSolverState(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  return TERMINAL_FOOTER_SOLVER_STATES.has(value.trim().toLowerCase());
 }
 
 export function resolveFooterMagneticModelPresent(

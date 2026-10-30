@@ -109,8 +109,12 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
     draftIndex: selectedIndex,
     demagEnabled: state.globalDraft.demagEnabled,
     onCommit: () => void commitStageDrafts(),
-    onUpdateDraft: (patch: Partial<(typeof state.stageDrafts)[number]>) =>
-      dispatch({ type: "updateStageDraft", index: selectedIndex, patch }),
+    // Canonical pipeline stages are inspected read-only; the flat-stage editor
+    // cannot write them back without losing groups and references.
+    onUpdateDraft: (patch: Partial<(typeof state.stageDrafts)[number]>) => {
+      if (draft?.pipelineNodeId) return;
+      dispatch({ type: "updateStageDraft", index: selectedIndex, patch });
+    },
     pipelineDrafts: state.stageDrafts,
     requestedBackend: model.requested.backend,
     requestedDevice: model.requested.device,

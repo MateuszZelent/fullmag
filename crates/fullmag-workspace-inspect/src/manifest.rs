@@ -1462,7 +1462,12 @@ mod tests {
 
         let invalid_metadata = running_dir.path().join(METADATA_RELATIVE_PATH);
         std::fs::create_dir_all(&invalid_metadata).unwrap();
-        assert!(write_run_manifest(running_dir.path(), &terminal).is_err());
+        let invalid_metadata_error = write_run_manifest(running_dir.path(), &terminal).unwrap_err();
+        assert_ne!(
+            invalid_metadata_error.kind(),
+            io::ErrorKind::WouldBlock,
+            "invalid metadata should fail while reading the artifact, not at the writer gate"
+        );
         assert_eq!(std::fs::read(&running_path).unwrap(), running_bytes);
         assert_eq!(
             read_run_manifest(running_dir.path())

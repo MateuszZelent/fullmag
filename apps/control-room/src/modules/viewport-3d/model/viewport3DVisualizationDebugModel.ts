@@ -20,7 +20,10 @@ import type {
   Viewport3DFieldVectorCacheEntryDiagnostics,
 } from "../viewport3dResources";
 import { buildFieldVectorDebugSamples } from "./scanFieldVectorDebugStatistics";
-import { resolveTrustedViewport3DResponseDomainGenerationId } from "./viewport3DFieldDomainCompatibility";
+import {
+  canonicalMeshTopologyHash,
+  resolveTrustedViewport3DResponseDomainGenerationId,
+} from "./viewport3DFieldDomainCompatibility";
 
 const MAX_DEBUG_CARRIERS = 8;
 const MAX_DEBUG_TEXT_LENGTH = 256;
@@ -392,8 +395,8 @@ function buildHealthEvidence(
         : null;
   const responseMetadataMatches = compareResponseMetadata(carrier);
   const topologyHashMatches = compareWhenKnown(
-    decoded?.meshTopologyHash,
-    carrier.expectedTopologyHash,
+    decoded?.meshTopologyHash == null ? null : canonicalMeshTopologyHash(decoded.meshTopologyHash),
+    carrier.expectedTopologyHash == null ? null : canonicalMeshTopologyHash(carrier.expectedTopologyHash),
   );
   const surfaceAdoptionRequired = hasRequestedPass(carrier, "surface");
   const vectorAdoptionRequired = hasRequestedPass(carrier, "vector-glyph");

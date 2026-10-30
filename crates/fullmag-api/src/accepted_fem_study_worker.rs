@@ -32,7 +32,7 @@ pub(crate) struct AcceptedFemExecution {
     pub(crate) outputs: Vec<StudyOutputPayload>,
     pub(crate) attempt_output_dir: std::path::PathBuf,
     pub(crate) accepted_state_ref: fullmag_quantities::AcceptedStateRef,
-    pub(crate) final_step_stats: Option<fullmag_runner::StepStats>,
+    pub(crate) terminal_stats: Option<fullmag_runner::StepStats>,
 }
 
 /// The solver may acknowledge an interrupt after producing a prefix of steps.
@@ -177,8 +177,7 @@ pub(crate) fn execute_accepted_fem_attempt(
     if result.status != RunStatus::Completed {
         bail!("accepted FEM {} runner did not complete successfully", prepared.resolved_device);
     }
-    let final_step_stats = crate::accepted_study_worker::final_physical_step_stats(&result)
-        .context("capture authoritative final accepted FEM StepStats")?;
+    let terminal_stats = crate::accepted_study_worker::capture_optional_final_step_stats(&result);
 
     // The shared output collector performs the metadata-size preflight before
     // allocating each explicit artifact. Reuse its owned state bytes instead
@@ -266,7 +265,7 @@ pub(crate) fn execute_accepted_fem_attempt(
             outputs,
             attempt_output_dir: attempt_output_dir.to_path_buf(),
             accepted_state_ref,
-            final_step_stats,
+            terminal_stats,
         },
     ))
 }
