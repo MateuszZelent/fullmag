@@ -364,33 +364,10 @@ pub(crate) fn execute_direct_minimizer(
                         },
                     )?
                     else {
-                        let diagnostics = line_search_failure_diagnostics(
-                            &state,
-                            &ms_apm,
-                            &volumes_m3,
-                            cell_volume_m3,
-                        );
-                        return Err(restore_previous_state_after_failed_line_search(
-                            backend,
-                            &state.magnetization,
-                            "projected-gradient BB",
-                            PROJECTED_GRADIENT_MAX_BACKTRACK,
-                            DirectMinimizerLineSearchFailure {
-                                previous_energy_j: state.energy_j,
-                                last_trial_energy_j,
-                                initial_step_size_m_per_a: initial_trial_step_size,
-                                last_trial_step_size_m_per_a: last_trial_step_size,
-                                direction_dot_gradient_j_per_step,
-                                energy_tolerance_j,
-                                evaluations: trial_evaluations,
-                                gradient_max_apm: diagnostics.0,
-                                active_gradient_max_apm: diagnostics.1,
-                                active_cell_count: diagnostics.2,
-                                cell_volume_m3: diagnostics.3,
-                                ms_min_apm: diagnostics.4,
-                                ms_max_apm: diagnostics.5,
-                            },
-                        )?);
+                        backend.upload_magnetization(&state.magnetization)?;
+                        backend.refresh_observables()?;
+                        numerical_stagnation = true;
+                        break;
                     };
                     trial_lambda = accepted_trial.step_size;
                     let line_search_backtracks = accepted_trial.backtracks;
@@ -467,33 +444,10 @@ pub(crate) fn execute_direct_minimizer(
                         },
                     )?
                     else {
-                        let diagnostics = line_search_failure_diagnostics(
-                            &state,
-                            &ms_apm,
-                            &volumes_m3,
-                            cell_volume_m3,
-                        );
-                        return Err(restore_previous_state_after_failed_line_search(
-                            backend,
-                            &state.magnetization,
-                            "nonlinear-CG",
-                            NONLINEAR_CG_MAX_BACKTRACK,
-                            DirectMinimizerLineSearchFailure {
-                                previous_energy_j: state.energy_j,
-                                last_trial_energy_j,
-                                initial_step_size_m_per_a: initial_trial_step_size,
-                                last_trial_step_size_m_per_a: last_trial_step_size,
-                                direction_dot_gradient_j_per_step: p_dot_g,
-                                energy_tolerance_j,
-                                evaluations: trial_evaluations,
-                                gradient_max_apm: diagnostics.0,
-                                active_gradient_max_apm: diagnostics.1,
-                                active_cell_count: diagnostics.2,
-                                cell_volume_m3: diagnostics.3,
-                                ms_min_apm: diagnostics.4,
-                                ms_max_apm: diagnostics.5,
-                            },
-                        )?);
+                        backend.upload_magnetization(&state.magnetization)?;
+                        backend.refresh_observables()?;
+                        numerical_stagnation = true;
+                        break;
                     };
                     trial_lambda = accepted_trial.step_size;
                     let line_search_backtracks = accepted_trial.backtracks;

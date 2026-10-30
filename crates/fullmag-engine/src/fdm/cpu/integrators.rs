@@ -2335,7 +2335,8 @@ impl ExchangeLlgProblem {
             .terms
             .oersted_cylinder
             .as_ref()
-            .is_some_and(|cfg| cfg.time_dep_kind != 0);
+            .is_some_and(|cfg| cfg.time_dep_kind != 0)
+            || self.regional_field_drives.iter().any(|drive| drive.enabled);
         bufs.m0[..n].copy_from_slice(&state.magnetization);
 
         // Dormand-Prince coefficients
@@ -2767,7 +2768,8 @@ impl ExchangeLlgProblem {
             .terms
             .oersted_cylinder
             .as_ref()
-            .is_some_and(|cfg| cfg.time_dep_kind != 0);
+            .is_some_and(|cfg| cfg.time_dep_kind != 0)
+            || self.regional_field_drives.iter().any(|drive| drive.enabled);
         bufs.soa.m0.scatter_from_aos(&state.magnetization);
 
         const A21: f64 = 1.0 / 5.0;
@@ -3695,7 +3697,8 @@ impl ExchangeLlgProblem {
             .terms
             .oersted_cylinder
             .as_ref()
-            .is_some_and(|cfg| cfg.time_dep_kind != 0);
+            .is_some_and(|cfg| cfg.time_dep_kind != 0)
+            || self.regional_field_drives.iter().any(|drive| drive.enabled);
         bufs.soa.m0.copy_from(&state.magnetization);
 
         const A21: f64 = 1.0 / 5.0;
@@ -4188,6 +4191,7 @@ impl ExchangeLlgProblem {
         self.magnetoelastic_field_add_into_soa(magnetization, h_eff);
         self.anisotropy_field_add_into_soa(magnetization, h_eff);
         self.interfacial_dmi_field_add_into_soa(magnetization, h_eff);
+        self.rotated_interfacial_dmi_field_add_into_soa(magnetization, h_eff);
         self.bulk_dmi_field_add_into_soa(magnetization, h_eff);
         self.thermal_field_add_into_soa(h_eff);
 

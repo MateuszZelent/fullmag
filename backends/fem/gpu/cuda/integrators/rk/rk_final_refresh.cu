@@ -11,6 +11,7 @@
 #include "gpu/cuda/integrators/rk/rk_final_refresh.hpp"
 
 #include "context.hpp"
+#include "gpu/cuda/integrators/llg/llg_rhs_kernels.hpp"
 #include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
 #include "cpu/mfem/integrators/rk_step_failure_injection.hpp"
 #include "gpu/cuda/integrators/rk/rk_rhs_runtime.hpp"
@@ -166,6 +167,24 @@ bool gpu_rk_finalize_accepted_step(
         reason = "GPU RK device max requires preallocated CUB reduction temp storage";
         gpu.rk.fsal_valid = false;
         return false;
+    }
+    if (endpoint_rhs_ready) {
+        const uint8_t *active_mask =
+            (ctx.frozen_spins.enabled() && gpu.mesh_regions.free_node_mask != nullptr)
+                ? gpu.mesh_regions.free_node_mask
+                : gpu.mesh_regions.magnetic_node_mask;
+        fullmag_cuda_rhs_norm_blocks(
+            gpu.rk.k[0].x,
+            gpu.rk.k[0].y,
+            gpu.rk.k[0].z,
+            active_mask,
+            gpu.reductions.scalar_workspace,
+            n,
+            stream);
+        if (!cuda_launch_ok("launch GPU RK endpoint FSAL RHS metric blocks", reason)) {
+            gpu.rk.fsal_valid = false;
+            return false;
+        }
     }
     size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
     fullmag_cuda_device_max(

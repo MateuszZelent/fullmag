@@ -89,7 +89,13 @@ bool gpu_rk_compute_one_dmi_field(
         bulk_mode,
         static_cast<int>(ctx.mesh.n_elements),
         n,
-        stream);
+        stream,
+        gpu.mesh_regions.has_periodic_reduced_nodes
+            ? gpu.mesh_regions.periodic_reduced_node
+            : nullptr,
+        gpu.mesh_regions.has_periodic_reduced_nodes
+            ? gpu.mesh_regions.periodic_representative_nodes
+            : nullptr);
     return cuda_launch_ok(
         bulk_mode ? "launch GPU RK bulk DMI field" : "launch GPU RK interfacial DMI field",
         reason);

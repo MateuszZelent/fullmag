@@ -24,7 +24,8 @@ void fullmag_cuda_field_metric_blocks(
     double *block_max_h,
     double *block_max_torque,
     int N,
-    cudaStream_t stream = nullptr);
+    cudaStream_t stream = nullptr,
+    const uint8_t *torque_node_mask = nullptr);
 
 /// Per-block Ms-times-lumped-volume weighted magnetization sums and total weight.
 void fullmag_cuda_magnetization_sum_blocks(

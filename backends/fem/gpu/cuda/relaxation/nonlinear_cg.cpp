@@ -30,6 +30,7 @@
 #include "gpu/cuda/integrators/rk/rk.hpp"
 #include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
 #include "gpu/cuda/integrators/rk/rk_energy_reductions.hpp"
+#include "gpu/cuda/integrators/rk/rk_field_metric_reductions.hpp"
 #include "gpu/cuda/integrators/rk/rk_rhs_runtime.hpp"
 #include "gpu/cuda/integrators/rk/rk_scalar_readback.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
@@ -649,6 +650,10 @@ bool gpu_relax_compute_effective_field_energy_gradient_and_direction(
 
     double scalars[4] = {0.0, 0.0, 0.0, 0.0};
     if (evaluate_fields) {
+        if (!gpu_rk_reduce_final_field_metric_terms(
+                ctx, stream, n, blocks, reason)) {
+            return false;
+        }
         std::array<double, FEM_GPU_SCALAR_RESULT_SLOTS> packed_scalars{};
         if (!gpu_rk_read_control_scalar_results(
                 ctx,
@@ -1861,6 +1866,12 @@ int gpu_relax_nonlinear_cg_step(
         accepted_energy_delta_upper_j;
     ctx.relaxation.accepted_energy_proof.armijo_rhs_j =
         armijo_increment_rhs_j;
+    accepted_snapshot.terms_j[
+        static_cast<size_t>(GpuFinalScalarSlot::MaxHEff)] = out_stats.max_h_eff;
+    accepted_snapshot.terms_j[
+        static_cast<size_t>(GpuFinalScalarSlot::MaxHDemag)] = out_stats.max_h_demag;
+    accepted_snapshot.terms_j[
+        static_cast<size_t>(GpuFinalScalarSlot::MaxTorque)] = out_stats.max_torque;
     publish_ncg_accepted_evaluation(
         ctx, accepted_step, accepted_snapshot, accepted_refined);
     gpu.fields.accepted_observables_valid = true;

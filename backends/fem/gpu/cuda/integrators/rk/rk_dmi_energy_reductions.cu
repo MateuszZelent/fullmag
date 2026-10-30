@@ -89,7 +89,13 @@ bool gpu_rk_reduce_final_dmi_energy_terms(
             bulk_mode,
             static_cast<int>(ctx.mesh.n_elements),
             n,
-            stream);
+            stream,
+            gpu.mesh_regions.has_periodic_reduced_nodes
+                ? gpu.mesh_regions.periodic_reduced_node
+                : nullptr,
+            gpu.mesh_regions.has_periodic_reduced_nodes
+                ? gpu.mesh_regions.periodic_representative_nodes
+                : nullptr);
         if (!cuda_launch_ok(
                 bulk_mode ? "launch GPU RK bulk DMI energy blocks" :
                             "launch GPU RK interfacial DMI energy blocks",

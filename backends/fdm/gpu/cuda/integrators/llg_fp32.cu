@@ -105,13 +105,26 @@ __global__ void llg_rhs_fp32_kernel(
 
         float dmx_u = 0.0f, dmy_u = 0.0f, dmz_u = 0.0f;
 
+        auto is_active_cell = [&](int cell_idx) -> bool {
+            if (stt.active_mask != nullptr) {
+                return stt.active_mask[cell_idx] != 0;
+            }
+            return mx[cell_idx] != 0.0f || my[cell_idx] != 0.0f || mz[cell_idx] != 0.0f;
+        };
+
         if (stt.zhang_li_formula == FULLMAG_FDM_ZHANG_LI_MUMAX3_CENTRAL_V1) {
-            const int xm = zhang_li_neighbor_index(x, nx, 1, idx, -1, stt.periodic_x);
-            const int xp = zhang_li_neighbor_index(x, nx, 1, idx, 1, stt.periodic_x);
-            const int ym = zhang_li_neighbor_index(y, ny, nx, idx, -1, stt.periodic_y);
-            const int yp = zhang_li_neighbor_index(y, ny, nx, idx, 1, stt.periodic_y);
-            const int zm = zhang_li_neighbor_index(z, nz, nx * ny, idx, -1, stt.periodic_z);
-            const int zp = zhang_li_neighbor_index(z, nz, nx * ny, idx, 1, stt.periodic_z);
+            int xm = zhang_li_neighbor_index(x, nx, 1, idx, -1, stt.periodic_x);
+            int xp = zhang_li_neighbor_index(x, nx, 1, idx, 1, stt.periodic_x);
+            int ym = zhang_li_neighbor_index(y, ny, nx, idx, -1, stt.periodic_y);
+            int yp = zhang_li_neighbor_index(y, ny, nx, idx, 1, stt.periodic_y);
+            int zm = zhang_li_neighbor_index(z, nz, nx * ny, idx, -1, stt.periodic_z);
+            int zp = zhang_li_neighbor_index(z, nz, nx * ny, idx, 1, stt.periodic_z);
+            if (!is_active_cell(xm)) xm = idx;
+            if (!is_active_cell(xp)) xp = idx;
+            if (!is_active_cell(ym)) ym = idx;
+            if (!is_active_cell(yp)) yp = idx;
+            if (!is_active_cell(zm)) zm = idx;
+            if (!is_active_cell(zp)) zp = idx;
             // The MuMax3 source prefactor contains the factor 1/2; its
             // central stencil uses the unhalved neighbour difference.
             const float inv_dx = 1.0f / static_cast<float>(stt.dx);
@@ -129,42 +142,54 @@ __global__ void llg_rhs_fp32_kernel(
         } else {
         
         // x-derivative
-        if (ux > 0.0f && x > 0) {
-            int prev = idx - 1;
-            dmx_u += ux * (m0 - mx[prev]) * inv_dx;
-            dmy_u += ux * (m1 - my[prev]) * inv_dx;
-            dmz_u += ux * (m2 - mz[prev]) * inv_dx;
-        } else if (ux < 0.0f && x < nx - 1) {
-            int next = idx + 1;
-            dmx_u += ux * (mx[next] - m0) * inv_dx;
-            dmy_u += ux * (my[next] - m1) * inv_dx;
-            dmz_u += ux * (mz[next] - m2) * inv_dx;
+        if (ux > 0.0f && (stt.periodic_x || x > 0)) {
+            int prev = zhang_li_neighbor_index(x, nx, 1, idx, -1, stt.periodic_x);
+            if (is_active_cell(prev)) {
+                dmx_u += ux * (m0 - mx[prev]) * inv_dx;
+                dmy_u += ux * (m1 - my[prev]) * inv_dx;
+                dmz_u += ux * (m2 - mz[prev]) * inv_dx;
+            }
+        } else if (ux < 0.0f && (stt.periodic_x || x < nx - 1)) {
+            int next = zhang_li_neighbor_index(x, nx, 1, idx, 1, stt.periodic_x);
+            if (is_active_cell(next)) {
+                dmx_u += ux * (mx[next] - m0) * inv_dx;
+                dmy_u += ux * (my[next] - m1) * inv_dx;
+                dmz_u += ux * (mz[next] - m2) * inv_dx;
+            }
         }
 
         // y-derivative
-        if (uy > 0.0f && y > 0) {
-            int prev = idx - nx;
-            dmx_u += uy * (m0 - mx[prev]) * inv_dy;
-            dmy_u += uy * (m1 - my[prev]) * inv_dy;
-            dmz_u += uy * (m2 - mz[prev]) * inv_dy;
-        } else if (uy < 0.0f && y < ny - 1) {
-            int next = idx + nx;
-            dmx_u += uy * (mx[next] - m0) * inv_dy;
-            dmy_u += uy * (my[next] - m1) * inv_dy;
-            dmz_u += uy * (mz[next] - m2) * inv_dy;
+        if (uy > 0.0f && (stt.periodic_y || y > 0)) {
+            int prev = zhang_li_neighbor_index(y, ny, nx, idx, -1, stt.periodic_y);
+            if (is_active_cell(prev)) {
+                dmx_u += uy * (m0 - mx[prev]) * inv_dy;
+                dmy_u += uy * (m1 - my[prev]) * inv_dy;
+                dmz_u += uy * (m2 - mz[prev]) * inv_dy;
+            }
+        } else if (uy < 0.0f && (stt.periodic_y || y < ny - 1)) {
+            int next = zhang_li_neighbor_index(y, ny, nx, idx, 1, stt.periodic_y);
+            if (is_active_cell(next)) {
+                dmx_u += uy * (mx[next] - m0) * inv_dy;
+                dmy_u += uy * (my[next] - m1) * inv_dy;
+                dmz_u += uy * (mz[next] - m2) * inv_dy;
+            }
         }
 
         // z-derivative
-        if (uz > 0.0f && z > 0) {
-            int prev = idx - nx * ny;
-            dmx_u += uz * (m0 - mx[prev]) * inv_dz;
-            dmy_u += uz * (m1 - my[prev]) * inv_dz;
-            dmz_u += uz * (m2 - mz[prev]) * inv_dz;
-        } else if (uz < 0.0f && z < nz - 1) {
-            int next = idx + nx * ny;
-            dmx_u += uz * (mx[next] - m0) * inv_dz;
-            dmy_u += uz * (my[next] - m1) * inv_dz;
-            dmz_u += uz * (mz[next] - m2) * inv_dz;
+        if (uz > 0.0f && (stt.periodic_z || z > 0)) {
+            int prev = zhang_li_neighbor_index(z, nz, nx * ny, idx, -1, stt.periodic_z);
+            if (is_active_cell(prev)) {
+                dmx_u += uz * (m0 - mx[prev]) * inv_dz;
+                dmy_u += uz * (m1 - my[prev]) * inv_dz;
+                dmz_u += uz * (m2 - mz[prev]) * inv_dz;
+            }
+        } else if (uz < 0.0f && (stt.periodic_z || z < nz - 1)) {
+            int next = zhang_li_neighbor_index(z, nz, nx * ny, idx, 1, stt.periodic_z);
+            if (is_active_cell(next)) {
+                dmx_u += uz * (mx[next] - m0) * inv_dz;
+                dmy_u += uz * (my[next] - m1) * inv_dz;
+                dmz_u += uz * (mz[next] - m2) * inv_dz;
+            }
         }
         }
 

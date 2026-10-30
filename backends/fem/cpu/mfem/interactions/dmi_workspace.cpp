@@ -131,6 +131,51 @@ bool refresh_dmi_grid_functions_from_magnetization(
     }
     return true;
 }
+
+void accumulate_dmi_periodic_residual_and_mass(
+    const Context &ctx,
+    std::vector<double> &residual_xyz,
+    std::vector<double> &periodic_lumped_mass)
+{
+    const size_t node_count = static_cast<size_t>(ctx.mesh.n_nodes);
+    const auto &lumped_mass = ctx.integration_weights.mfem_lumped_mass;
+    if (ctx.mesh.periodic_reduced_node.empty() ||
+        ctx.mesh.periodic_reduced_node.size() != node_count ||
+        ctx.mesh.periodic_reduced_node_count == 0u ||
+        lumped_mass.size() != node_count ||
+        residual_xyz.size() != node_count * 3u) {
+        periodic_lumped_mass = lumped_mass;
+        return;
+    }
+    const size_t reduced_count =
+        static_cast<size_t>(ctx.mesh.periodic_reduced_node_count);
+    std::vector<double> reduced_residual(reduced_count * 3u, 0.0);
+    std::vector<double> reduced_mass(reduced_count, 0.0);
+    for (size_t node = 0; node < node_count; ++node) {
+        const size_t reduced =
+            static_cast<size_t>(ctx.mesh.periodic_reduced_node[node]);
+        if (reduced >= reduced_count) {
+            continue;
+        }
+        reduced_residual[reduced * 3u + 0u] += residual_xyz[node * 3u + 0u];
+        reduced_residual[reduced * 3u + 1u] += residual_xyz[node * 3u + 1u];
+        reduced_residual[reduced * 3u + 2u] += residual_xyz[node * 3u + 2u];
+        reduced_mass[reduced] += lumped_mass[node];
+    }
+    periodic_lumped_mass.resize(node_count);
+    for (size_t node = 0; node < node_count; ++node) {
+        const size_t reduced =
+            static_cast<size_t>(ctx.mesh.periodic_reduced_node[node]);
+        if (reduced >= reduced_count) {
+            periodic_lumped_mass[node] = lumped_mass[node];
+            continue;
+        }
+        residual_xyz[node * 3u + 0u] = reduced_residual[reduced * 3u + 0u];
+        residual_xyz[node * 3u + 1u] = reduced_residual[reduced * 3u + 1u];
+        residual_xyz[node * 3u + 2u] = reduced_residual[reduced * 3u + 2u];
+        periodic_lumped_mass[node] = reduced_mass[reduced];
+    }
+}
 #endif
 
 void destroy_dmi_workspace(Context &ctx)

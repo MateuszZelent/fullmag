@@ -151,8 +151,6 @@ impl ExchangeLlgProblem {
         magnetization: &VectorFieldSoA,
         h_eff: &mut VectorFieldSoA,
     ) {
-        let prefactor =
-            2.0 * self.material.exchange_stiffness / (MU0 * self.material.saturation_magnetisation);
         let dx2 = self.cell_size.dx * self.cell_size.dx;
         let dy2 = self.cell_size.dy * self.cell_size.dy;
         let dz2 = self.cell_size.dz * self.cell_size.dz;
@@ -165,44 +163,50 @@ impl ExchangeLlgProblem {
             if !self.is_active(flat_index) {
                 continue;
             }
+            let ms_i = self.ms_at(flat_index);
+            if ms_i <= 0.0 {
+                continue;
+            }
+            let ai = self.a_at(flat_index);
             let x = flat_index % grid.nx;
             let y = (flat_index / grid.nx) % grid.ny;
             let z = flat_index / (grid.nx * grid.ny);
             let center_x = magnetization.x[flat_index];
             let center_y = magnetization.y[flat_index];
             let center_z = magnetization.z[flat_index];
-            let sample = |nx: usize, ny: usize, nz: usize| -> Vector3 {
+            let sample_contrib = |nx: usize, ny: usize, nz: usize, dist2: f64| -> Vector3 {
                 let ni = grid.index(nx, ny, nz);
                 if self.is_active(ni) {
+                    let aj = self.a_at(ni);
+                    let aij = if ai == 0.0 || aj == 0.0 {
+                        0.0
+                    } else {
+                        2.0 * ai * aj / (ai + aj)
+                    };
+                    let coeff = 2.0 * aij / (MU0 * ms_i * dist2);
                     [
-                        magnetization.x[ni],
-                        magnetization.y[ni],
-                        magnetization.z[ni],
+                        coeff * (magnetization.x[ni] - center_x),
+                        coeff * (magnetization.y[ni] - center_y),
+                        coeff * (magnetization.z[ni] - center_z),
                     ]
                 } else {
-                    [center_x, center_y, center_z]
+                    [0.0, 0.0, 0.0]
                 }
             };
 
-            let x_minus = sample(neighbor_index(x, grid.nx, -1, px), y, z);
-            let x_plus = sample(neighbor_index(x, grid.nx, 1, px), y, z);
-            let y_minus = sample(x, neighbor_index(y, grid.ny, -1, py), z);
-            let y_plus = sample(x, neighbor_index(y, grid.ny, 1, py), z);
-            let z_minus = sample(x, y, neighbor_index(z, grid.nz, -1, pz));
-            let z_plus = sample(x, y, neighbor_index(z, grid.nz, 1, pz));
+            let x_minus = sample_contrib(neighbor_index(x, grid.nx, -1, px), y, z, dx2);
+            let x_plus = sample_contrib(neighbor_index(x, grid.nx, 1, px), y, z, dx2);
+            let y_minus = sample_contrib(x, neighbor_index(y, grid.ny, -1, py), z, dy2);
+            let y_plus = sample_contrib(x, neighbor_index(y, grid.ny, 1, py), z, dy2);
+            let z_minus = sample_contrib(x, y, neighbor_index(z, grid.nz, -1, pz), dz2);
+            let z_plus = sample_contrib(x, y, neighbor_index(z, grid.nz, 1, pz), dz2);
 
-            h_eff.x[flat_index] += prefactor
-                * ((x_plus[0] - 2.0 * center_x + x_minus[0]) / dx2
-                    + (y_plus[0] - 2.0 * center_x + y_minus[0]) / dy2
-                    + (z_plus[0] - 2.0 * center_x + z_minus[0]) / dz2);
-            h_eff.y[flat_index] += prefactor
-                * ((x_plus[1] - 2.0 * center_y + x_minus[1]) / dx2
-                    + (y_plus[1] - 2.0 * center_y + y_minus[1]) / dy2
-                    + (z_plus[1] - 2.0 * center_y + z_minus[1]) / dz2);
-            h_eff.z[flat_index] += prefactor
-                * ((x_plus[2] - 2.0 * center_z + x_minus[2]) / dx2
-                    + (y_plus[2] - 2.0 * center_z + y_minus[2]) / dy2
-                    + (z_plus[2] - 2.0 * center_z + z_minus[2]) / dz2);
+            h_eff.x[flat_index] +=
+                x_minus[0] + x_plus[0] + y_minus[0] + y_plus[0] + z_minus[0] + z_plus[0];
+            h_eff.y[flat_index] +=
+                x_minus[1] + x_plus[1] + y_minus[1] + y_plus[1] + z_minus[1] + z_plus[1];
+            h_eff.z[flat_index] +=
+                x_minus[2] + x_plus[2] + y_minus[2] + y_plus[2] + z_minus[2] + z_plus[2];
         }
     }
 }

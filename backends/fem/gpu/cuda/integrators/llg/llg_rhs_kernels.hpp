@@ -26,5 +26,12 @@ void fullmag_cuda_llg_rhs_fused(
     bool precession_enabled,
     int N, cudaStream_t stream = nullptr);
 
+/// Standalone per-block max |rhs| reduction over active/free nodes.
+void fullmag_cuda_rhs_norm_blocks(
+    const double *rx, const double *ry, const double *rz,
+    const uint8_t *active_node_mask,
+    double *block_max_rhs,
+    int N, cudaStream_t stream = nullptr);
+
 } // namespace fullmag::fem
 #endif // FULLMAG_HAS_CUDA_RUNTIME

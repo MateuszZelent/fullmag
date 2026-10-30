@@ -233,11 +233,11 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         launch_project_frozen_fp32(ctx, nullptr);
         if (abort_step_from_tmp(ctx, false)) return;
 
-        context_stage_accepted_step(ctx, dt);
-
         if (!compute_abm3_rhs_fp32(
                 ctx, ctx.h_ex, n, grid, gamma_bar_f, alpha_f,
-                ctx.pending_time)) return;
+                step_start_time + dt)) return;
+
+        context_stage_accepted_step(ctx, dt);
         abm3_rotate_history_fp32(ctx, ctx.cell_count);
         cudaMemcpy(ctx.abm_f_n.x, ctx.h_ex.x, bytes, cudaMemcpyDeviceToDevice);
         cudaMemcpy(ctx.abm_f_n.y, ctx.h_ex.y, bytes, cudaMemcpyDeviceToDevice);

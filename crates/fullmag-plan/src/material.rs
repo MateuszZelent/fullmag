@@ -373,7 +373,7 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
             for &(region_id, priority, value, region_opt, frame, policy, ref source_id) in
                 &overrides
             {
-                let weight = if let Some(region) = region_opt {
+                let (weight, is_strictly_inside) = if let Some(region) = region_opt {
                     let coords = match frame {
                         RegionFrameIR::World => point,
                         RegionFrameIR::Object => [
@@ -382,12 +382,35 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
                             point[2] - object_translation[2],
                         ],
                     };
-                    let distance = signed_distance_to_region_shape(coords, &region.shape)?;
                     let transition =
                         crate::material_transition::resolved_region_transition(region, parameter);
-                    transition_weight(distance, transition, spacing.at(point_index))?
+                    let distance = match (&region.shape, transition) {
+                        (
+                            RegionShapeIR::Csg { expression },
+                            crate::material_transition::ResolvedMaterialTransition::None
+                            | crate::material_transition::ResolvedMaterialTransition::Sharp,
+                        ) => {
+                            let predicate =
+                                crate::selection::geometry::GeometryPredicate::from_geometry_entry(
+                                    expression,
+                                    crate::selection::geometry::AffineTransform3::identity(),
+                                    crate::selection::geometry::BoundaryMembership::inclusive(),
+                                )
+                                .map_err(|err| err.to_string())?;
+                            if predicate.contains(coords).map_err(|err| err.to_string())? {
+                                -1.0
+                            } else {
+                                1.0
+                            }
+                        }
+                        _ => signed_distance_to_region_shape(coords, &region.shape)?,
+                    };
+                    (
+                        transition_weight(distance, transition, spacing.at(point_index))?,
+                        distance <= 0.0,
+                    )
                 } else {
-                    1.0
+                    (1.0, true)
                 };
                 if weight > 0.0 {
                     active_at_point.push((
@@ -397,6 +420,7 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
                         weight,
                         policy,
                         source_id.to_string(),
+                        is_strictly_inside,
                     ));
                 }
             }
@@ -404,33 +428,56 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
             if active_at_point.is_empty() {
                 resolved_values.push(base_value);
             } else {
-                let candidates = active_at_point
+                // Group by priority ascending so higher-priority regions smoothly blend
+                // over the underlying lower-priority region value instead of resetting to base_value.
+                let mut distinct_priorities = active_at_point
                     .iter()
-                    .map(|entry| RegionConflictCandidate {
-                        region_id: entry.5.clone(),
-                        priority: entry.1,
-                        policy: entry.4,
-                    })
+                    .map(|entry| entry.1)
                     .collect::<Vec<_>>();
-                let resolution = resolve_region_conflict(&candidates).map_err(|reason| {
-                    format!(
-                        "region-owned material parameter conflict: overlapping regions assign different values for {:?}; {reason}",
-                        parameter,
-                    )
-                })?;
-                if resolution.policy == fullmag_ir::RegionConflictPolicyIR::MinMeshSizeWins {
-                    return Err(format!(
-                        "region-owned material parameter conflict: overlapping regions assign different values for {:?}; min_mesh_size_wins is only valid for mesh-size ownership",
-                        parameter
-                    ));
+                distinct_priorities.sort_unstable();
+                distinct_priorities.dedup();
+
+                let mut current_value = base_value;
+                for tier_priority in distinct_priorities {
+                    let mut tier_entries = active_at_point
+                        .iter()
+                        .filter(|entry| entry.1 == tier_priority)
+                        .collect::<Vec<_>>();
+                    // If the sample point lies geometrically inside at least one region in this
+                    // priority tier, ignore outer Boundary transition fringes (distance > 0) of
+                    // adjacent interior-disjoint regions in the same tier.
+                    if tier_entries.iter().any(|entry| entry.6) {
+                        tier_entries.retain(|entry| entry.6);
+                    }
+                    let candidates = tier_entries
+                        .iter()
+                        .map(|entry| RegionConflictCandidate {
+                            region_id: entry.5.clone(),
+                            priority: entry.1,
+                            policy: entry.4,
+                        })
+                        .collect::<Vec<_>>();
+                    let resolution = resolve_region_conflict(&candidates).map_err(|reason| {
+                        format!(
+                            "region-owned material parameter conflict: overlapping regions assign different values for {:?}; {reason}",
+                            parameter,
+                        )
+                    })?;
+                    if resolution.policy == fullmag_ir::RegionConflictPolicyIR::MinMeshSizeWins {
+                        return Err(format!(
+                            "region-owned material parameter conflict: overlapping regions assign different values for {:?}; min_mesh_size_wins is only valid for mesh-size ownership",
+                            parameter
+                        ));
+                    }
+                    let selected = tier_entries
+                        .iter()
+                        .find(|entry| entry.5.as_str() == resolution.winner_region_id.as_str())
+                        .expect("resolver winner must be one of the active candidates");
+                    let value = evaluate_parameter_field(selected.2, point, object_translation)?;
+                    validate_resolved_parameter_value(parameter, value)?;
+                    current_value += selected.3 * (value - current_value);
                 }
-                let selected = active_at_point
-                    .iter()
-                    .find(|entry| entry.5.as_str() == resolution.winner_region_id.as_str())
-                    .expect("resolver winner must be one of the active candidates");
-                let value = evaluate_parameter_field(selected.2, point, object_translation)?;
-                validate_resolved_parameter_value(parameter, value)?;
-                resolved_values.push(base_value + selected.3 * (value - base_value));
+                resolved_values.push(current_value);
             }
         }
         resolved_values
