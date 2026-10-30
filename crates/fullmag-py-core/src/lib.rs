@@ -258,8 +258,9 @@ fn parse_existing_output(value: &str) -> PyResult<ExistingOutputIR> {
     match value.trim().to_ascii_lowercase().as_str() {
         "timestamp" => Ok(ExistingOutputIR::Timestamp),
         "error" => Ok(ExistingOutputIR::Error),
+        "overwrite" => Ok(ExistingOutputIR::Overwrite),
         _ => Err(PyValueError::new_err(
-            "existing_output must be 'timestamp' or 'error'",
+            "existing_output must be 'timestamp', 'error', or 'overwrite'",
         )),
     }
 }

@@ -7512,7 +7512,7 @@ export interface components {
             tolerance?: string | null;
         };
         /** @enum {string} */
-        ExistingOutputSchema: "timestamp" | "error";
+        ExistingOutputSchema: "timestamp" | "error" | "overwrite";
         FdmCommonTransformLayoutResource: {
             cell_size: number[];
             fft_shape: number[];

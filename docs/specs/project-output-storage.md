@@ -15,7 +15,7 @@ Eksport skryptu i ponowny import zachowują wszystkie pola.
 | `temp_dir` | Katalog nadrzędny prywatnych danych tymczasowych | `.fullmag-tmp` obok katalogu wyników |
 | `data_format` | Format tablic pól i tabel etapów | `zarr`; `h5` normalizowane do `hdf5` |
 | `cleanup` | Usuwanie prywatnego tmp po zakończonym wykonaniu | `on_success`; również `always`, `never` |
-| `existing_output` | Reakcja na zajęty katalog konkretnego wykonania | `timestamp`; również `error` |
+| `existing_output` | Reakcja na zajęty katalog konkretnego wykonania | `timestamp`; również `error`, `overwrite` |
 
 Ścieżki nie mogą być puste, zawierać NUL ani komponentu `..`. UI wymaga ścieżek absolutnych
 na hoście backendu. Runtime dodatkowo odmawia dowiązań i Windows junction/reparse points
@@ -60,6 +60,40 @@ study.storage(fm.OutputStorage(
 Zwykłe `fullmag skrypt.py` bez ustawień zapisuje pierwsze wykonanie do `skrypt.zarr`
 w katalogu skryptu. Ponowne wykonanie nie kasuje poprzednich danych: wybiera świeżą nazwę
 z identyfikatorem wykonania albo zatrzymuje się przy `existing_output="error"`.
+With `existing_output="overwrite"` (mumax3-like) the run reuses the requested result path:
+an existing directory there is removed and recreated only when it is an inactive fullmag
+result (fullmag `.zattrs` metadata or an `output-storage.json` receipt, no
+`.fullmag-active.lock` reservation anywhere in its tree, no links or reparse points);
+any other directory is refused with an error naming the path and is left untouched.
+
+A multi-stage Python sequence holds one `.fullmag-active.lock` at the result root
+until all stages and the sequence manifest are written. Each native stage reserves
+its own child directory; it does not replace or reserve the sequence root again.
+The root stays active between stages. The native CLI already holds one storage
+lease for its full sequence. A single Python stage keeps the native-owned root
+and its existing output layout.
+An active ancestor reservation also protects completed child results. Overwrite
+refuses an existing descendant while that reservation is active. Fresh stage
+children can still be created; after the ancestor finishes, normal overwrite applies.
+
+Python and native reservation use the same exclusive sibling gate,
+`.<result-name>.fullmag-reservation.lock`. The gate covers collision checks,
+inactive-result removal, directory creation and active-marker publication.
+An entering child writer also holds gates for its existing result ancestors,
+so parent removal cannot race child reservation. A busy gate refuses overwrite;
+`timestamp` can select another target when only the target gate is busy.
+Preparation gates inside a result tree also count as active reservations. Before
+any directory mutation, a writer publishes its target gate, checks all ancestor
+gates and verifies its target gate identity. This also protects a pending remover
+from a higher ancestor replacement. Gates are removed only after the same checks
+prove safe cleanup. An interrupted or uncertain gate remains present and blocks
+new reservations until explicit recovery checks its owner.
+Before returning a reservation, the writer publishes its active token, then checks
+every ancestor gate, including ancestors missed during metadata discovery. Only
+gates still owned by that writer are allowed. The writer then verifies its token
+again. An overlapping removal or replaced token aborts preparation before the
+caller can write results. These checks run while the preparation gates remain held.
+
 Dla HDF5 bez jawnej ścieżki używa katalogu `skrypt.results`; faktyczne pliki etapów mają
 rozszerzenie `.h5`. Flagi `--output-dir`, `--temp-dir`, `--data-format`, `--temp-cleanup`
 i `--existing-output` mają pierwszeństwo przed polityką skryptu, a ta przed defaults.

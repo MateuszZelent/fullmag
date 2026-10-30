@@ -5,10 +5,14 @@ import json
 import math
 import os
 import re
+import shutil
+import stat
 import sys
 import time
+import uuid
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import Sequence
+from typing import Iterator, Sequence
 
 from fullmag._core import extract_fem_mesh_ir, resample_fem_to_fdm_grid, run_problem_json
 from fullmag.model import BackendTarget, ExecutionMode, ExecutionPrecision
@@ -59,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--existing-output",
-        choices=("timestamp", "error"),
+        choices=("timestamp", "error", "overwrite"),
         help="Override behavior when the requested result path already exists.",
     )
     parser.add_argument(
@@ -74,6 +78,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
 
+    reservations = ExitStack()
     try:
         loaded = load_problem_from_script(Path(args.script))
         simulation = Simulation(
@@ -113,10 +118,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ".zarr" if effective_format == "zarr" else ".results"
             )
         if loaded.stages and loaded.auto_execute_stages:
-            base_output_dir = _reserve_stage_sequence_root(
-                base_output_dir, existing_output=args.existing_output or storage.existing_output,
-            )
-            if effective_format == "zarr":
+            # A single stage keeps its existing layout and native-owned lease.
+            if len(loaded.stages) > 1:
+                base_output_dir = reservations.enter_context(_reserve_stage_sequence_root(
+                    base_output_dir,
+                    existing_output=args.existing_output or storage.existing_output,
+                ))
+            if len(loaded.stages) > 1 and effective_format == "zarr":
                 (base_output_dir / ".zgroup").write_text(
                     json.dumps({"zarr_format": 2}), encoding="utf-8"
                 )
@@ -218,6 +226,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 resolved_storage = run_payload.get("resolved_output_storage")
                 if isinstance(resolved_storage, dict):
                     stage_storage.append(resolved_storage)
+                if len(loaded.stages) == 1:
+                    resolved_output = (
+                        resolved_storage.get("output_dir")
+                        if isinstance(resolved_storage, dict)
+                        else run_payload.get("output_dir")
+                    )
+                    if isinstance(resolved_output, str):
+                        base_output_dir = Path(resolved_output)
+                        stage_output_dir = base_output_dir
                 # Track FEM mesh for potential cross-backend transfer in next stage.
                 previous_fem_mesh_ir = extract_fem_mesh_ir(ir)
                 stage_manifest.append(
@@ -290,6 +307,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     except Exception as exc:
         print(f"fullmag run failed: {exc}", file=sys.stderr)
         return 1
+    finally:
+        reservations.close()
 
     summary = build_summary(
         script_path=str(loaded.source_path),
@@ -368,10 +387,15 @@ def _require_target_grid_identity(
     return target_grid
 
 
-def _reserve_stage_sequence_root(base: Path, *, existing_output: str) -> Path:
-    """Reserve a fresh sequence root without changing an earlier project's files."""
-    if existing_output not in {"timestamp", "error"}:
-        raise ValueError("existing_output must be 'timestamp' or 'error'")
+@contextmanager
+def _reserve_stage_sequence_root(base: Path, *, existing_output: str) -> Iterator[Path]:
+    """Reserve a sequence root.
+
+    An earlier project's files are changed only under ``overwrite``, and only
+    when the existing root is an inactive fullmag result.
+    """
+    if existing_output not in {"timestamp", "error", "overwrite"}:
+        raise ValueError("existing_output must be 'timestamp', 'error', or 'overwrite'")
     if ".." in base.parts:
         raise ValueError("output path must not contain '..' components")
     base = base.expanduser().absolute()
@@ -384,20 +408,187 @@ def _reserve_stage_sequence_root(base: Path, *, existing_output: str) -> Path:
             continue
         if ancestor.is_symlink() or getattr(attributes, "st_file_attributes", 0) & 0x400:
             raise ValueError(f"output path contains a link/reparse point: {ancestor}")
-    base.parent.mkdir(parents=True, exist_ok=True)
     suffix = ".zarr" if base.name.endswith(".zarr") else ""
     stem = base.name[:-len(suffix)] if suffix else base.name
     run_id = f"py-sequence-{time.time_ns()}-{os.getpid()}"
     candidate = base
-    for attempt in range(100):
+    token = str(uuid.uuid4())
+    marker_path = None
+    try:
+        with _result_ancestor_gates(base) as ancestor_gates:
+            base.parent.mkdir(parents=True, exist_ok=True)
+            for attempt in range(100):
+                try:
+                    with _result_reservation_gate(candidate, ancestor_gates):
+                        try:
+                            candidate.mkdir(exist_ok=False)
+                        except FileExistsError:
+                            if existing_output == "error":
+                                raise FileExistsError(
+                                    f"result location already exists: {candidate}"
+                                ) from None
+                            if existing_output == "timestamp":
+                                raise
+                            _remove_inactive_result(candidate)
+                            candidate.mkdir(exist_ok=False)
+                        with (candidate / _ACTIVE_RESERVATION_FILE).open("x", encoding="utf-8") as marker:
+                            marker_path = candidate / _ACTIVE_RESERVATION_FILE
+                            marker.write(token)
+                            marker.flush()
+                            os.fsync(marker.fileno())
+                        _verify_sequence_reservation(candidate, token, ancestor_gates)
+                    break
+                except FileExistsError:
+                    if marker_path is not None or existing_output != "timestamp":
+                        raise
+                candidate = base.parent / f"{stem}-{run_id}-{attempt}{suffix}"
+            else:
+                raise FileExistsError("unable to reserve a fresh sequence root after 100 attempts")
+        yield candidate
+    finally:
+        if marker_path is not None:
+            try:
+                attributes = marker_path.lstat()
+                if (stat.S_ISREG(attributes.st_mode)
+                        and not getattr(attributes, "st_file_attributes", 0) & 0x400
+                        and marker_path.read_text(encoding="utf-8") == token):
+                    marker_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+_ACTIVE_RESERVATION_FILE = ".fullmag-active.lock"
+_RESERVATION_GATE_SUFFIX = ".fullmag-reservation.lock"
+
+
+def _result_gate_path(path: Path) -> Path:
+    return path.with_name(f".{path.name}{_RESERVATION_GATE_SUFFIX}")
+
+
+@contextmanager
+def _result_reservation_gate(
+    path: Path, ancestor_gates: dict[Path, os.stat_result] | None = None,
+) -> Iterator[os.stat_result]:
+    ancestor_gates = ancestor_gates if ancestor_gates is not None else {}
+    gate_path = _result_gate_path(path)
+    try:
+        gate = gate_path.open("x", encoding="utf-8")
+    except FileExistsError:
+        raise FileExistsError(f"an active run reservation is present: {path}") from None
+    identity = os.fstat(gate.fileno())
+    try:
+        _verify_ancestor_gates(path, ancestor_gates)
+        if not os.path.samestat(identity, gate_path.lstat()):
+            raise FileExistsError(f"result preparation gate ownership changed: {path}")
+        yield identity
+    finally:
+        remove = False
         try:
-            candidate.mkdir(exist_ok=False)
-            return candidate
-        except FileExistsError:
-            if existing_output == "error":
-                raise FileExistsError(f"result location already exists: {candidate}") from None
-            candidate = base.parent / f"{stem}-{run_id}-{attempt}{suffix}"
-    raise FileExistsError("unable to reserve a fresh sequence root after 100 attempts")
+            _verify_ancestor_gates(path, ancestor_gates)
+            remove = os.path.samestat(identity, gate_path.lstat())
+        except (FileExistsError, FileNotFoundError):
+            pass
+        finally:
+            gate.close()
+        if remove:
+            gate_path.unlink()
+
+
+@contextmanager
+def _result_ancestor_gates(path: Path) -> Iterator[dict[Path, os.stat_result]]:
+    with ExitStack() as gates:
+        owned = {}
+        for ancestor in reversed(path.parents):
+            if not ancestor.name:
+                continue
+            gate = _result_gate_path(ancestor)
+            # Removal can erase metadata while its sibling gate still exists.
+            if (gate.exists() or (ancestor / _ACTIVE_RESERVATION_FILE).exists()
+                    or _is_fullmag_result_directory(ancestor) or gate.exists()):
+                owned[ancestor] = gates.enter_context(_result_reservation_gate(ancestor, owned))
+        yield owned
+
+
+def _verify_ancestor_gates(
+    path: Path, ancestor_gates: dict[Path, os.stat_result],
+) -> None:
+    # A remover that passed its activity scan still holds a gate or invalidated
+    # our published identity. Check that identity after all ancestor gates.
+    for ancestor in path.parents:
+        if not ancestor.name:
+            continue
+        try:
+            observed = _result_gate_path(ancestor).lstat()
+        except FileNotFoundError:
+            continue
+        owned = ancestor_gates.get(ancestor)
+        if owned is None or not os.path.samestat(owned, observed):
+            raise FileExistsError(f"an active run reservation is present: {ancestor}")
+
+
+def _verify_sequence_reservation(
+    path: Path, token: str, ancestor_gates: dict[Path, os.stat_result],
+) -> None:
+    _verify_ancestor_gates(path, ancestor_gates)
+    marker = path / _ACTIVE_RESERVATION_FILE
+    attributes = marker.lstat()
+    if (not stat.S_ISREG(attributes.st_mode)
+            or getattr(attributes, "st_file_attributes", 0) & 0x400
+            or marker.read_text(encoding="utf-8") != token):
+        raise FileExistsError(f"result reservation ownership changed: {path}")
+
+
+def _remove_inactive_result(path: Path) -> None:
+    """Remove an inactive fullmag result tree for the ``overwrite`` policy.
+
+    The caller holds the target and result ancestor gates. Any link/reparse
+    point, active reservation, or missing fullmag metadata leaves the tree intact.
+    """
+
+    def refuse(reason: str) -> FileExistsError:
+        return FileExistsError(
+            "refusing to overwrite a directory that is not an inactive fullmag "
+            f"result ({reason}): {path}"
+        )
+
+    if not path.is_dir() or path.is_symlink():
+        raise refuse("not a directory")
+    for ancestor in path.parents:
+        try:
+            (ancestor / _ACTIVE_RESERVATION_FILE).lstat()
+        except FileNotFoundError:
+            continue
+        raise refuse("an active run reservation is present in an ancestor")
+    for current, directories, files in os.walk(path):
+        for name in (*directories, *files):
+            entry = Path(current) / name
+            if entry.is_symlink() or getattr(entry.lstat(), "st_file_attributes", 0) & 0x400:
+                raise refuse(f"contains a link/reparse point {entry}")
+            if (name == _ACTIVE_RESERVATION_FILE
+                    or name.startswith(".") and name.endswith(_RESERVATION_GATE_SUFFIX)):
+                raise refuse("an active run reservation is present")
+    if not _is_fullmag_result_directory(path):
+        raise refuse("no fullmag result metadata")
+    shutil.rmtree(path)
+
+
+def _is_fullmag_result_directory(path: Path) -> bool:
+    def read_json(name: str) -> object:
+        try:
+            return json.loads((path / name).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    attributes = read_json(".zattrs")
+    if isinstance(attributes, dict) and str(attributes.get("schema_version", "")).startswith(
+        "fullmag."
+    ):
+        return True
+    receipt = read_json("output-storage.json")
+    if isinstance(receipt, dict) and receipt.get("schema") == "fullmag.output_storage.resolved.v1":
+        return True
+    manifest = read_json("sequence_manifest.json")
+    return isinstance(manifest, dict) and manifest.get("kind") == "flat_sequence"
 
 
 def _stage_output_dir(
@@ -418,6 +609,7 @@ def _write_stage_sequence_manifest(
     base_output_dir: Path,
     stages: list[dict[str, object]],
 ) -> None:
+    base_output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = base_output_dir / "sequence_manifest.json"
     payload = {
         "kind": "flat_sequence",

@@ -260,7 +260,7 @@ export function NewProblemDialog({
                     <label className="fm-new-problem__field" htmlFor="fm-new-problem-existing"><span>If a destination already exists</span>
                       <Select disabled={disabled} value={settings.existing_output} onValueChange={(value) => update("existing_output", value as OutputStorageDefaultsRequest["existing_output"])}>
                         <SelectTrigger id="fm-new-problem-existing"><SelectValue /></SelectTrigger>
-                        <SelectContent><SelectItem value="timestamp">Add a unique suffix</SelectItem><SelectItem value="error">Stop if destination exists</SelectItem></SelectContent>
+                        <SelectContent><SelectItem value="timestamp">Add a unique suffix</SelectItem><SelectItem value="error">Stop if destination exists</SelectItem><SelectItem value="overwrite">Overwrite (like mumax3)</SelectItem></SelectContent>
                       </Select>
                     </label>
                   </div>
