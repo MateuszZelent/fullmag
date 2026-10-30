@@ -142,11 +142,28 @@ class RecreatedOperationCallerTests(unittest.TestCase):
         )
 
     def _records(self, *, metadata, preproof, native_context, certificate):
+        operator_probe_record = docker_dev._operator_probe_record({
+            "FULLMAG_MIXED_P1_DEVICE": "gpu",
+            "FULLMAG_ARTIFACT_FIELD_STORAGE": "json",
+        })
+        recreation_inputs = {
+            "attempt": self.old_attempt,
+            "config_sha256": "e" * 64,
+            **operator_probe_record,
+        }
         previous = {
             "attempt": self.old_attempt,
             "state_root": "/state/fullmag",
             "inputs": {"source_root": "/src/fullmag", "gpu_access_requested": "auto",
-                       "device_access": "gpu", "gpu_preflight": "PASS"},
+                       "device_access": "gpu", "gpu_preflight": "PASS",
+                       **operator_probe_record},
+            **operator_probe_record,
+        }
+        operation_terminal = {
+            "attempt": self.recreate_attempt,
+            "inputs": recreation_inputs,
+            "post_build_generation": metadata,
+            **({"pre_admission_recreate": preproof} if preproof is not None else {}),
         }
         return {
             "previous": previous,
@@ -154,15 +171,16 @@ class RecreatedOperationCallerTests(unittest.TestCase):
                 "environment": {"FULLMAG_DOCKER_DEVICE_ACCESS": "gpu"},
                 "gpus": [{"count": "all"}],
             }}},
-            "operation_terminal": {
-                "attempt": self.recreate_attempt,
-                "post_build_generation": metadata,
-                **({"pre_admission_recreate": preproof} if preproof is not None else {}),
-            },
+            "operation_terminal": operation_terminal,
             "snapshot": {"backend": {}, "frontend": {}},
             "image_id": self.image,
             "proof": {"container_id": "d" * 64},
-            "operator_probe_record": {},
+            "operator_probe_record": operator_probe_record,
+            "successor_operator_probe_record": (
+                docker_dev._recreation_successor_operator_probe_record(
+                    operator_probe_record, recreation_inputs
+                )
+            ),
             "native_recovery_context": native_context,
         }, certificate
 
@@ -230,6 +248,10 @@ class RecreatedOperationCallerTests(unittest.TestCase):
         self.assertEqual(start.call_args.kwargs["retained_device_access"], "gpu")
         self.assertEqual(start.call_args.kwargs["post_build_generation"], metadata)
         self.assertEqual(start.call_args.kwargs["recreation_resume_proof"], records["proof"])
+        self.assertEqual(
+            start.call_args.kwargs["reuse_state"]["operator_probe_environment_record"],
+            records["successor_operator_probe_record"],
+        )
         pending_validate.assert_called_once()
         carry_receipt.assert_called_once()
         bind.assert_not_called()
@@ -265,6 +287,10 @@ class RecreatedOperationCallerTests(unittest.TestCase):
         bind.assert_called_once()
         start.assert_called_once()
         self.assertEqual(start.call_args.kwargs["retained_device_access"], "gpu")
+        self.assertEqual(
+            start.call_args.kwargs["reuse_state"]["operator_probe_environment_record"],
+            records["successor_operator_probe_record"],
+        )
 
     def test_false_certificate_without_carry_receipt_stays_rejected(self):
         records, certificate = self._records(

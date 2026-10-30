@@ -1876,7 +1876,12 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
                 writes.append((path, deepcopy(value)))
 
         browser_id = "sha256:" + "b" * 64
-        observed = {"Id": browser_id}
+        browser_command = [
+            "node",
+            "/state/development/workspace/apps/control-room/scripts/docker-dev-browser-qa.mjs",
+        ]
+        document = {"services": {"browser-qa": {"command": browser_command}}}
+        observed = {"Id": browser_id, "Config": {"Cmd": browser_command}}
         compose_result = SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
 
         def fake_daemon(*args, **_kwargs):
@@ -1901,7 +1906,7 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
                 qa._run(
                     operation,
                     FakeControl(),
-                    {"services": {}},
+                    document,
                     {"project_name": "fullmag-worktree-fixture"},
                     ROOT,
                     "fullmag-frontend-state",
@@ -1917,9 +1922,19 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
 
         self.assertEqual(operation["receipt"]["helper_container"], "fullmag-control-" + "a" * 32)
         self.assertEqual(operation["receipt"]["browser_container_name"], "fullmag-browser-qa-" + "a" * 12)
+        self.assertNotEqual(
+            operation["receipt"]["helper_container"],
+            operation["receipt"]["browser_container_name"],
+        )
         self.assertEqual(operation["receipt"]["browser_container_id"], browser_id)
         self.assertEqual(operation["receipt"]["state"], "failed-confirmed")
         self.assertEqual(operation["receipt"]["error"], "invalid canvas evidence")
+        compose_calls = [call for call in daemon_calls if call[0] == "compose"]
+        self.assertEqual(len(compose_calls), 1)
+        self.assertEqual(
+            compose_calls[0][compose_calls[0].index("--name") + 1],
+            operation["receipt"]["browser_container_name"],
+        )
         self.assertEqual([call[:2] for call in daemon_calls if call[0] in {"rm", "inspect"}], [("rm", browser_id), ("inspect", browser_id)])
         self.assertTrue(any(path.endswith("/result.json") for path, _value in writes))
         receipts = [value for path, value in writes if path.endswith("/receipt.json")]

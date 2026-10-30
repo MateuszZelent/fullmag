@@ -105,6 +105,10 @@ class RetainedDeviceLifecycleTests(unittest.TestCase):
                 start = handles[10]
                 self.assertEqual(result, 'started')
                 self.assertEqual(start.call_args.kwargs['retained_device_access'], access)
+                self.assertEqual(
+                    start.call_args.kwargs['reuse_state']['operator_probe_environment_record'],
+                    records['successor_operator_probe_record'],
+                )
                 self.assertEqual(start.call_args.kwargs['recreation_resume_proof'], records['proof'])
                 self.assertEqual(args.gpu_access, 'auto')
                 self.assertEqual(records['previous']['inputs']['gpu_access_requested'], 'auto')
