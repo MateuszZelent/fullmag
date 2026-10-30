@@ -10516,8 +10516,8 @@ def minimize(
 def tablesave() -> None:
     """Save one table row of the state left by the preceding ``minimize()``.
 
-    mumax3 ``tablesave()``: in a loop over ``b_ext(...)`` and ``minimize()`` each call
-    adds one row ``t, mx, my, mz, B_ext`` to ``<script>.zarr/table``.
+    mumax3 ``tablesave()``: in a loop over ``b_ext(...)`` and ``minimize()`` the
+    table-saved points fold into one hysteresis stage with one point per call.
     """
     capture = _capture_binding.current()
     if not capture.enabled:
