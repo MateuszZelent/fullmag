@@ -426,17 +426,25 @@ class WindowsIsolationTests(unittest.TestCase):
         self.assertNotIn("FileId $currentDir", walk)
         self.assertIn("FileId $root", walk)
 
-    def test_descendant_walk_avoids_powershell_item_provider_and_per_entry_budget_calls(self):
+    def test_descendant_walk_uses_dotnet_for_ordinary_entries_and_bounds_link_lookups(self):
         ancestor = isolation.WINDOWS_PROVIDER.split("function NoReparse(", 1)[1].split("function FileId(", 1)[0]
         walk = isolation.WINDOWS_PROVIDER.split("function Descendants(", 1)[1].split("function Identity(", 1)[0]
         self.assertNotIn("Get-Item", ancestor)
         self.assertIn("[IO.File]::GetAttributes($cursor)", ancestor)
-        self.assertNotIn("Get-Item", walk)
         self.assertIn("[IO.DirectoryInfo]::new($currentDir)", walk)
         entries = walk.split("foreach ($entry in $directory.EnumerateFileSystemInfos())", 1)[1]
         entries = entries.split("NoReparse $currentDir", 1)[0]
+        ordinary, link_and_after = entries.split("if ($isLink) {", 1)
+        link_observation, after_link = link_and_after.split("if (($attributes -band 0x10) -ne 0) {", 1)
+        self.assertNotIn("Get-Item", ordinary + after_link)
+        self.assertEqual(link_observation.count("Get-Item -Force -LiteralPath $entry.FullName"), 2)
+        self.assertIn("if ($tag -ceq '0xa0000003')", link_observation)
+        self.assertIn("} elseif ($tag -ceq '0xa000000c')", link_observation)
+        self.assertIn(f"if ($links.Count -ge {isolation.MAX_RELATIVE_LINKS})", link_observation)
+        self.assertEqual(isolation.MAX_RELATIVE_LINKS, 256)
         self.assertEqual(entries.count("DescendantBudget $clock"), 1)
         self.assertIn("if ($entryCount -gt 100000 -or $clock.ElapsedMilliseconds -ge 15000)", entries)
+        self.assertIn("if (($relative.Split('\\')).Length -gt 128)", entries)
 
     def test_descendant_budget_failure_has_observation_counters(self):
         budget = isolation.WINDOWS_PROVIDER.split("function DescendantBudget(", 1)[1].split("function Descendants(", 1)[0]

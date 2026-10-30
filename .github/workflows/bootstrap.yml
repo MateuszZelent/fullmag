@@ -884,6 +884,10 @@ jobs:
 
       - name: Verify Docker storage probes and runtime lifecycle contracts
         run: |
+          # Aggregate exit remains fail-closed: any failed unit command fails this step.
+          set +e
+          failed_test_commands=0
+          trap 'failed_test_commands=$((failed_test_commands + 1))' ERR
           python -B scripts/test_fullmag_docker_runtime.py -v
           python -B scripts/test_fem_cpu_hypre_host_policy.py -v
           python -B scripts/test_docker_backend_dev.py -v
@@ -917,6 +921,7 @@ jobs:
           python -B scripts/test_runtime_service_snapshot.py -v
           python -B scripts/test_docker_volume_abrupt_stop_recovery.py -v
           python -B scripts/test_docker_windows_bind_isolation.py -v
+          python -B scripts/test_docker_windows_absent_bind_isolation.py -v
           python -B scripts/test_docker_prepare_container_recovery.py -v
           python -B scripts/test_docker_foreign_bind_identity.py -v
           python -B scripts/test_docker_stopped_network.py -v
@@ -993,6 +998,12 @@ jobs:
           python -B scripts/test_docker_orphan_recovery.py -v
           python -B scripts/test_recover_docker_orphan.py -v
           python -B scripts/test_just_orphan_recovery_shell.py -v
+          trap - ERR
+          set -e
+          if [ "$failed_test_commands" -ne 0 ]; then
+            printf 'Unit-test commands failed: %s\n' "$failed_test_commands" >&2
+            exit 1
+          fi
 
       - name: Audit managed FEM CPU-only verification configuration
         run: python scripts/test_audit_fem_cpu_only_runtime.py -v
