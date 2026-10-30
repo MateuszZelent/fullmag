@@ -11952,6 +11952,83 @@ fn fem_eigen_bias_field_samples_bind_cpu_and_gpu_execution() {
     }
 }
 
+fn planned_k0_relax_each_eigen_plan_with_demag_policy(
+    demag_solver_policy: Option<fullmag_ir::FemLinearSolverPolicy>,
+) -> fullmag_ir::FemEigenPlanIR {
+    let mut ir = k0_periodic_airbox_fem_eigen_ir();
+    ir.materials[0].damping = 0.0;
+    ir.problem_meta
+        .runtime_metadata
+        .remove("k0_kittel_validation");
+    let fem_hints = ir
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fem.as_mut())
+        .expect("bootstrap eigen fixture must contain FEM hints");
+    fem_hints.demag_solver_policy = demag_solver_policy;
+    let fullmag_ir::StudyIR::Eigenmodes {
+        bias_field_sweep, ..
+    } = &mut ir.study
+    else {
+        unreachable!("fixture must remain an eigenmode study")
+    };
+    *bias_field_sweep = Some(fullmag_ir::BiasFieldSweepIR {
+        samples_a_per_m: vec![[12_500.0, 0.0, 0.0]],
+        equilibrium_policy: fullmag_ir::BiasFieldSweepEquilibriumPolicyIR::RelaxEach,
+        ordering: "declared".to_string(),
+        continuation_seed: fullmag_ir::BiasFieldSweepContinuationSeedIR::InitialState,
+    });
+
+    let planned = plan(&ir).expect("bounded RelaxEach bias sample must plan");
+    let BackendPlanIR::FemEigen(fem_eigen) = planned.backend_plan else {
+        panic!("expected FEM eigen plan")
+    };
+    assert_eq!(fem_eigen.bias_field_samples.len(), 1);
+    fem_eigen
+}
+
+#[test]
+fn fem_eigen_bias_sample_demag_solver_policy_preserves_all_authored_fields() {
+    let policy = fullmag_ir::FemLinearSolverPolicy {
+        solver: "GMRES".to_string(),
+        preconditioner: "JACOBI".to_string(),
+        rtol: 2.5e-7,
+        atol: Some(3.0e-9),
+        max_iterations: 37,
+        print_level: 2,
+    };
+    let fem_eigen = planned_k0_relax_each_eigen_plan_with_demag_policy(Some(policy.clone()));
+
+    assert_eq!(fem_eigen.demag_solver_policy, Some(policy.clone()));
+    assert!(
+        fem_eigen.solver_policy.is_none(),
+        "demag Poisson policy must remain separate from the modal policy"
+    );
+    let encoded = serde_json::to_value(&fem_eigen).expect("FEM eigen plan serializes");
+    assert_eq!(encoded["demag_solver_policy"]["solver"], "GMRES");
+    assert_eq!(encoded["demag_solver_policy"]["preconditioner"], "JACOBI");
+    assert_eq!(encoded["demag_solver_policy"]["rtol"], 2.5e-7);
+    assert_eq!(encoded["demag_solver_policy"]["atol"], 3.0e-9);
+    assert_eq!(encoded["demag_solver_policy"]["max_iterations"], 37);
+    assert_eq!(encoded["demag_solver_policy"]["print_level"], 2);
+}
+
+#[test]
+fn fem_eigen_bias_sample_none_policy_keeps_legacy_serialized_shape() {
+    let fem_eigen = planned_k0_relax_each_eigen_plan_with_demag_policy(None);
+    assert!(fem_eigen.demag_solver_policy.is_none());
+
+    let encoded = serde_json::to_value(&fem_eigen).expect("FEM eigen plan serializes");
+    assert!(
+        encoded.get("demag_solver_policy").is_none(),
+        "None must remain omitted so legacy canonical plan bytes stay unchanged"
+    );
+    let decoded: fullmag_ir::FemEigenPlanIR = serde_json::from_value(encoded)
+        .expect("legacy plan without the optional field deserializes");
+    assert!(decoded.demag_solver_policy.is_none());
+}
+
 fn planned_k0_eigen_execution_resolution(
     requested_device: &str,
     runtime_override: Option<&str>,

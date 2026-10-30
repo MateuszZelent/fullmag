@@ -484,5 +484,55 @@
     "fix": "link fem_floquet_modal_solver_contract explicitly to PETSC::petsc MPI::MPI_CXX under existing MFEM+SLEPc condition",
     "production_linkage_changed": false,
     "native_recheck_required": true
+  },
+  "current_runtime_c90_schur_diagnostic": {
+    "schema": "eigensolve_runtime_diagnostic_checkpoint.v1",
+    "source_commit": "c90fd32b5f657e2f917a0cac3fec3ecd486ddcbe",
+    "source_snapshot_sha256": "7b827a5b4150f92c1c49f5369b8225f04213d53991574fd14b6c84d6dd46efca",
+    "compose_project": "fullmag-worktree-eigensolve-integration-ui-202610-78b341212cbdaa7d",
+    "managed_stop_attempt": "b491532163694089bec886dd8b3850a3",
+    "recreate_services_attempt": "1f27a376e1ab4f5eb2893fb059bde362",
+    "development_attempt": "2ff8bddd29eb4d33b984ac3c168971f7",
+    "old_config_sha256": "20d55ce7b337d48e60e75f21ed28be7730b798ec3a6425773df7ad9470ec97e5",
+    "new_config_sha256": "574ec32b3638099a5257c371db95237296f646be46fd7cc5ccbeed0c82e7a940",
+    "backend_id_prefix": "8f1fd5d23a9d",
+    "frontend_id_prefix": "72510ac37bd3",
+    "profile": "schur-action",
+    "container_schur_action_flag": "1",
+    "native_source_gate": {
+      "run": 41068131113,
+      "commit": "84197c1b31252cf06e80c97515729657faec2756",
+      "tests_passed": 21,
+      "tests_failed": 0
+    },
+    "api_gate": {
+      "run": 41066670891,
+      "commit": "b8f47197feaf8ec3666ec06be255b55d31d22785",
+      "status": "success"
+    },
+    "full_bootstrap_still_requires_followup": true,
+    "script_request_id": "eigensolve-signed15-schur-c90fd32b5-20261030-1",
+    "script_sha256": "8d48ad08356352d69713b29465a70e2c0ea4135f66069f3d82c2ce853dacfa2f",
+    "activation_status": "succeeded",
+    "fresh_numerical_results_qualified": false,
+    "r6_complete": false,
+    "master_integration_complete": false,
+    "retention_cleanup_complete": false,
+    "repo_patches_still_external": [
+      "/tmp/eigen-demag-solver-policy.patch",
+      "/tmp/eigen-absent-bind-isolation-updated.patch"
+    ],
+    "activation_attempt": "977bfb57536b46eb9a8b3d4071d4e320",
+    "run_id": "run-live-8e6f4c19dfa90df546f8161a4b7ae552f9041375716dad74b293bd45a83e9b37",
+    "run_status": "failed_native_floquet_slepc_solve_failed",
+    "d1_bytes": 6030
+  },
+  "i1_demag_policy_source_fix": {
+    "status": "source_reviewed_hosted_ci_pending",
+    "default_none_serialization_preserved": true,
+    "bias_relax_plan_consumes_all_some_fields": true,
+    "modal_policy_and_floquet_ksp_unchanged": true,
+    "hardcoded_llg_budget_8_resolved": false,
+    "report": "docs/audits/2026-10-30-eigensolve-gamma-policy-disposition.md"
   }
 }

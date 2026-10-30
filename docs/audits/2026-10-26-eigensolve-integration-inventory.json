@@ -6313,6 +6313,24 @@
         "18cfc2a2e0e684934839a04e3ce2ae6cf8f7c693"
       ],
       "remaining": "Review dotyczy wskazanych kontraktów providera/C ABI i kolejności admission; nie zamyka wszystkich ścieżek całych historycznych commitów ani I1. Runtime tracking/Prism6 nadal NOT VERIFIED."
+    },
+    {
+      "id": "exact-gamma-planner-policy-20261030",
+      "report": "docs/audits/2026-10-30-eigensolve-gamma-policy-disposition.md",
+      "reviewed_source_head": "84197c1b31252cf06e80c97515729657faec2756",
+      "historical_atom": "f0986ede9853828dfd573a2bee12302385213321",
+      "disposition": "bounded-planner-slices-reviewed-demag-pass-through-source-implemented-ci-pending",
+      "slices": {
+        "automatic_gamma_pure_neumann": "not_ported_over_explicit_current_dirichlet_robin_contract",
+        "old_gpu_pure_neumann_routing": "superseded_with_old_boundary_policy_not_gpu_runtime_qualification",
+        "demag_policy": "optional_skip_none_planner_to_bias_relax_plan_pass_through_added"
+      },
+      "remaining": [
+        "bias relaxation hardcoded max_steps=8 and separate control contract",
+        "other toolchain/build/test/documentation hunks",
+        "hosted CI and actual runtime policy propagation",
+        "full global inventory disposition"
+      ]
     }
   ]
 }

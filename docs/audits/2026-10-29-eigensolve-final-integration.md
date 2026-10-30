@@ -1,5 +1,31 @@
 # Domknięcie integracji eigensolve i UI — checkpoint
 
+## Bieżący checkpoint: rzeczywisty sparse C1, 30.10.2026
+
+- Native Floquet/SLEPc 41068131113: 21/21 CTest PASS na 84197c1b3, w tym large
+  sparse C1 i rzeczywisty C ABI JSON; log/receipt zachowane poza repo.
+- API 41066670891 na b8f47197f: PASS. Pełny bootstrap pozostaje otwarty po
+  starym teście zakazującym również bounded Get-Item dla linków. Poprawka
+  zachowuje szybki zwykły walk; nowy agregator nadal zwraca exit1 po dowolnym
+  błędzie i uruchamia wszystkie 108 wcześniejszych komend plus nowy proof test.
+- Managed stop b4915321, recreate 1f27a376 i development 2ff8bddd succeeded.
+  Runtime: compiled c90fd32b5 / snapshot7b827a5b, grupa3217, schur-action=1;
+  zachowano stare dane oraz config, nowy config574ec32b jest odrębnym następcą.
+- Oryginalny signed15: activation977bfb57 succeeded, run8e6f4c19 failed EPS91.
+  D1 6030B/sha683f323d pokazuje replay defect0, repeatability0, additivity
+  2.45745e-16 i Poisson relative residual3.08496e-14. Rekurencyjny residual
+  1.50016e-38 nie odpowiada true3.54756e-13 przy RHS1.01214e-13. To nadal
+  brak zaakceptowanych nowych modów/pełnej krzywej, nie gotowy wynik fizyczny.
+- Refined CGS jest już ustawiony; utrata ortogonalności nie jest wykazana.
+  Kolejny kontrolowany pilot istniejącego FGMRES ma odróżnić problem
+  preconditionera/rekonstrukcji od innych przyczyn; default/gates bez zmian.
+- I1: źródłowo naprawiono zgubienie istniejącej demag policy w bias Relax;
+  None zachowuje dawną serializację. Nowe CI/runtime pozostają otwarte,
+  limit LLG8 oraz pozostałe historyczne fragmenty nadal wymagają domknięcia.
+- R6 z udanym opublikowanym solverem, I7, PR/master i końcowy cleanup pozostają
+  otwarte. Żadne dane użytkownika ani chronione 14 plików nie zostały usunięte.
+
+
 ## Cel i warunki zakończenia
 
 Użytkownik zlecił dokończenie planu, integrację z masterem i sprzątnięcie worktree.

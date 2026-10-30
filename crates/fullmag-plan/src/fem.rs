@@ -6020,6 +6020,7 @@ pub(crate) fn plan_fem_eigen(
         exchange_bc: ExchangeBoundaryCondition::Neumann,
         spin_wave_bc: spin_wave_bc.clone(),
         demag_realization: resolved_demag_realization,
+        demag_solver_policy: fem_hints.demag_solver_policy.clone(),
         air_box_config,
         mode_tracking: mode_tracking.clone(),
         dispersion_validation,

@@ -445,3 +445,15 @@ C ABI ma regresję delimitacji nowych JSON stringów. Następnie: native SLEPc
 CI + pełne bootstrap/API CI, managed recreate profilu schur-action w naszej
 grupie, oryginalny signed15 i odczyt probe; potem poprawka potwierdzonego
 błędu numerycznego i pełne R6/wykres/I7. Merge master i cleanup nadal otwarte.
+
+
+### 30.10 — sparse C1 rzeczywiście zmierzony, dalszy krok
+
+- [x] Native source C1/SLEPc21/21 (41068131113) i API PASS (41066670891).
+- [x] Group-local managed recreate schur-action, runtime c90/7b827a, bez zmiany starego frozen config.
+- [x] Oryginalny signed15 ponowiony; failure D1 zachowuje rzeczywiste sparse replay/repeatability/additivity/Poisson.
+- [ ] EPS91 nadal występuje: true/recursive residual gap; refined CGS już istnieje, brak dowodu przyczyny. Jawny pilot FGMRES wymaga przypiętej managed selekcji, bez zmian fizyki/gate.
+- [ ] Pełny bootstrap po korekcie starego Windows hot-path testu; agregować wszystkie unit command failures, nigdy nie zmieniać exit na sukces.
+- [ ] I1 demag policy pass-through: source po review, hosted CI i rzeczywiste wykonanie do sprawdzenia. LLG max_steps8 pozostaje osobną korektą.
+- [ ] Udany Gamma/signed sweep + pola/wykres/analityka, R6 wszystkich14 operacji z opublikowanym wynikiem, I7 pełne bramki.
+- [ ] Pozostałe I0/I1 disposition, najnowszy master/review/CI, PR merge oraz kwalifikowany cleanup własnego worktree.

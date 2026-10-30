@@ -2,7 +2,7 @@
 
 - Status: implemented
 - Owners: Fullmag FEM/runtime
-- Last updated: 2026-06-05
+- Last updated: 2026-10-30
 - Related ADRs: `docs/adr/` (execution-selection + canonical IR contract)
 - Related specs: `docs/specs/capability-matrix-v0.md`
 
@@ -113,6 +113,22 @@ CPU thread selection remains a runtime selection concern:
 
 - `FemHintsIR` carries optional `demag_solver_policy`
 - `FemPlanIR.demag_solver_policy` is populated from canonical FEM hints
+- `FemEigenPlanIR.demag_solver_policy` carries that same optional policy only
+  to the generated static `FemPlanIR` used for each bias-field sample's
+  equilibrium relaxation; `RelaxEach` versus `Continuation` still controls
+  seed selection and is not changed by this solver hint
+- Qualification of the 2026-10-30 pass-through correction: source implemented;
+  hosted planner/runner regressions and runtime propagation remain NOT VERIFIED
+- the bias-sample relaxation policy preserves all authored policy fields and
+  does not change the legacy plan shape when absent
+- this bias-sample relaxation policy is not the modal `FemEigenPlanIR.solver_policy`
+  and is not the dynamic Floquet inner-KSP policy; linear `max_iterations` also
+  remains separate from the sample-relaxation LLG stop limit (`max_steps = 8`)
+- Source anchors: `FemEigenPlanIR` in `crates/fullmag-ir/src/plan.rs`,
+  `plan_fem_eigen` in `crates/fullmag-plan/src/fem.rs`, and
+  `bias_field_relax_plan` in `crates/fullmag-runner/src/fem/eigen_execution.rs`;
+  planner and runner regressions cover exact policy preservation and `None`
+  compatibility
 - session/runtime metadata expose:
   - requested CPU threads
   - resolved Rayon/control-plane threads
@@ -222,7 +238,12 @@ available for diagnosis, but the failed field is never current solver state.
   diagnostics and FFI step stats; richer direct UI telemetry can replace
   artifact-derived display in a later pass.
 - This contract does not yet expose separate linear-solver policies for future
-  FEM mechanics or eigen operators.
+  FEM mechanics or modal eigen operators. The carried `FemHintsIR.demag_solver_policy`
+  on an eigen plan is limited to the per-sample static Poisson relaxation
+  described in §4.2; it does not configure modal assembly/solve or dynamic
+  Floquet inner KSP.
+- Bias-sample relaxation keeps its existing LLG stop budget (`max_steps = 8`);
+  propagating the optional Poisson solver policy does not alter that budget.
 
 Update 2026-05-15: native FEM CPU now carries `atol` and `print_level` across
 the C ABI and uses them when configuring the non-PBC Hypre AMG/CG/GMRES Poisson

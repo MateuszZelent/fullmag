@@ -4257,6 +4257,7 @@ pub(super) fn minimal_native_modal_plan() -> FemEigenPlanIR {
         exchange_bc: fullmag_ir::ExchangeBoundaryCondition::Neumann,
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
         demag_realization: None,
+        demag_solver_policy: None,
         air_box_config: None,
         mode_tracking: None,
         dispersion_validation: None,

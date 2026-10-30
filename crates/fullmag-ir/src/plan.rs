@@ -1880,6 +1880,10 @@ pub struct FemEigenPlanIR {
     pub spin_wave_bc: SpinWaveBoundaryConditionIR,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub demag_realization: Option<ResolvedFemDemagIR>,
+    /// Authored FEM Poisson policy for the bias-sample relaxation plan only.
+    /// This is independent of modal `solver_policy` and Floquet inner KSP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_solver_policy: Option<FemLinearSolverPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub air_box_config: Option<AirBoxConfigIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

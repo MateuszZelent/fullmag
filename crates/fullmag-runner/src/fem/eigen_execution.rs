@@ -732,7 +732,7 @@ fn bias_field_relax_plan(plan: &FemEigenPlanIR) -> fullmag_ir::FemPlanIR {
         oersted_time_dep_t_off: 0.0,
         magnetoelastic: None,
         mechanics: None,
-        demag_solver_policy: None,
+        demag_solver_policy: plan.demag_solver_policy.clone(),
         thermal_seed_config: None,
         oersted_realization: None,
         gpu_device_index: None,
@@ -3103,8 +3103,36 @@ pub(super) fn interrupted_fem_eigen_run(
 
 #[cfg(test)]
 mod tests {
-    use super::{emit_native_gpu_k0_kittel_progress, FemEigenProgress, FemEigenProgressCallback};
+    use super::{
+        bias_field_relax_plan, emit_native_gpu_k0_kittel_progress, FemEigenProgress,
+        FemEigenProgressCallback,
+    };
+    use crate::fem::eigen_tests::minimal_native_modal_plan;
     use crate::types::StepAction;
+
+    #[test]
+    fn bias_field_sample_relax_plan_carries_demag_policy_without_changing_llg_budget() {
+        let policy = fullmag_ir::FemLinearSolverPolicy {
+            solver: "GMRES".to_string(),
+            preconditioner: "JACOBI".to_string(),
+            rtol: 2.5e-7,
+            atol: Some(3.0e-9),
+            max_iterations: 37,
+            print_level: 2,
+        };
+        let mut plan = minimal_native_modal_plan();
+        plan.demag_solver_policy = Some(policy.clone());
+
+        let relax_plan = bias_field_relax_plan(&plan);
+        assert_eq!(relax_plan.demag_solver_policy, Some(policy));
+        let control = relax_plan.relaxation.expect("sample relaxation control");
+        assert_eq!(control.stop.max_steps, Some(8));
+        assert_eq!(control.stop.torque_tolerance_apm, Some(1.0e-3));
+
+        let default_plan = minimal_native_modal_plan();
+        let default_relax_plan = bias_field_relax_plan(&default_plan);
+        assert!(default_relax_plan.demag_solver_policy.is_none());
+    }
 
     #[test]
     fn native_gpu_k0_kittel_progress_reports_boundaries_and_propagates_interrupt() {

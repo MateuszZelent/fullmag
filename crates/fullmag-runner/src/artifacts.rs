@@ -7923,6 +7923,7 @@ mod tests {
                 exchange_bc: ExchangeBoundaryCondition::Neumann,
                 spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
                 demag_realization: None,
+                demag_solver_policy: None,
                 air_box_config: None,
                 mode_tracking: None,
                 dispersion_validation: None,
