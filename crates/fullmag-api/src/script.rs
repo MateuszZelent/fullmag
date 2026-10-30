@@ -868,13 +868,8 @@ pub(crate) fn scene_document_to_study_execution_inputs_with_asset_root_and_progr
                     step.step_id
                 )));
             };
-            stage.ir.validate().map_err(|errors| {
-                ApiError::unprocessable(format!(
-                    "accepted study step `{}` produced invalid ProblemIR: {}",
-                    step.step_id,
-                    errors.join("; ")
-                ))
-            })?;
+            // The Study materializer binds the profile before validating the
+            // solver input; authored execution fields may still be unresolved.
             Ok(fullmag_application::StudyStepExecutionInput {
                 step_id: step.step_id.clone(),
                 problem: stage.ir.clone(),
