@@ -17,4 +17,19 @@ Wszystkie14wcześniejszychWIP zachowało dokładneSHA z manifestu29.10. Dodatkow
 
 Native GHA41093866398 na475147b09 zatrzymało się przy kompilacji nowego fixture C++: brak namespace dla SLEPcTinyGyrotropicModalEigenResult. CTest nie został uruchomiony; C04 raportuje brak pomiarów. Artefakt12995884907/sha256 `1db7eb14df0e9b9e07ac2bd307fccf60b18efe767f9ac1d8a8f1bc8436356751` zachowano. Poprawka fixture i ponowna pełna bramka są konieczne, bez zmiany residuali ani fizyki.
 
-Aktualnie uruchomiona grupa3217 nadal używa compiled5c8 i zachowanych wyników15punktów. Merge źródeł nie jest dowodem przebudowy ani działania z nowego commitu. Kolejna potrzebna próba: managed rebuild, native default bez jawnego type override, signed15/R6 oraz import analityki w UI.
+Przed kolejną przebudową grupa3217 używała compiled5c8 i opublikowanych wyników15punktów. Wyniki zachowano także w sprawdzonym archiwum `.fms`. Merge źródeł nie jest dowodem przebudowy ani działania z nowego commitu.
+
+
+## Checkpoint po bramce natywnej i próbie aplikacji
+
+- Native GHA [41102742706](https://github.com/MateuszZelent/fullmag/actions/runs/41102742706), source `3967f03ba78323827712df99f7de020a2a16ff5b`: **21/21 CTest PASS**, 7,22 s. Artefakt13001715440, 429606 B, SHA256 `ee2f06fddeee59460f577b2f623199e93eb814e95ccd7d304c8043dae5f56975`; ZIP oraz log sprawdzono. To bramka natywnego kontraktu CPU/SLEPc, obejmująca nowy wybór FGMRES; nie jest ponowną kwalifikacją pełnego runtime ani nauki.
+- Managed development `4c5c18af5b564ba1866cf20f11e49203` zakończył się **failed-confirmed** przy kompilacji aplikacji. Kontener backendu `a63f97a62eb9` zakończył się kodem2. Potwierdzono E0063/E0061 w modalnym workerze: brak dwóch pól `terminal_stats` i dziesiątego argumentu persystencji. Ten sam błąd zgłosiły GHA generated-api-determinism i checkpoint-windows-contracts. Nie uruchomiono nowego Solve.
+- Poprawka `e17b78ae0e841344a160a02ec7517b0d3b4d4515` przekazuje jawne `None` w tych trzech miejscach. Modalny bundle nie posiada accepted time-domain state ani przypisanych StepStats. Nie kopiuje się skalarów z innego etapu. Parser Rust i YAML PASS; ponowna kompilacja aplikacji oraz hosted CI są nadal wymagane.
+- Workflow dodatkowo uruchamia dwa istniejące pure source tests: MaxSteps nie oznacza convergence oraz odrzucenie niespójnego/nieskonwergowanego M0. Liczniki 2+1+1+1 są sprawdzane na pełnym wierszu wyniku; lokalnych unit testów ani ich kompilacji nie uruchamiano.
+- Compose nieudanej próby ma SHA256 `609903dbcf38e00b5c51eab90f3e03d2ceacd103a396ffb17f6acf6587d3300a`. Nie zawiera override `FULLMAG_MODAL_SHIFTED_KSP_TYPE`; Schur-action pozostaje1. Prawidłowa próba z natywnym defaultem jest nadal **NOT VERIFIED**.
+
+## Rozdzielenie dysków
+
+Preflight kompilacji4c5 mierzył `/build` wewnątrz Dockera: 179862945792 B wolnego przy estymacie2963687540 B. Próg32GiB dotyczy tego filesystemu. Hostowy pomiar Ubuntu `/dev/sdd` wykazał jedynie734158848 B wolnego. `/state` jest bind-mountem z Ubuntu, a nie wolumenem builda; wymaga miejsca na sesje i wyniki. Żądanie dodatkowych30GiB w WSL jako warunku tego builda było nieprecyzyjne. Hostowy mount jest `rw`; widok `ro` pochodził z sandboxa.
+
+Nie usunięto danych ani cache. Katalogi `runtimes` zawierają również wyniki i sesje; ich nazwa nie jest podstawą retencji. Inwentarz kandydatów i hostowy follow-up zachowano w `final-integration-20261030/wsl-cleanup-candidates` poza repo. Kolejny krok to spójna dokumentacja, ponowny managed build aplikacji, fresh signed15/R6 i analityka w rzeczywistym UI.

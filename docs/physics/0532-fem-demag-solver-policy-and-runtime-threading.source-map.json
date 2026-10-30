@@ -1,0 +1,359 @@
+{
+  "document": {
+    "path": "docs/physics/0532-fem-demag-solver-policy-and-runtime-threading.md",
+    "reviewed_revision": "e17b78ae0e841344a160a02ec7517b0d3b4d4515",
+    "scope": "FEM Poisson demag solver policy, runtime CPU thread intent, eigen bias-sample pass-through, and the distinct shifted Floquet KSP default",
+    "evidence_status": "source-and-regression-contract; runtime-qualification-not-claimed"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source-documented-runtime-unverified",
+      "reason": "The plan and CPU Poisson solver source paths are present; no runtime qualification is claimed by this page."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "source-documented-runtime-unverified",
+      "reason": "Resolution is backend-specific; this page does not claim a GPU run or all solver/preconditioner pairs."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FemLinearSolverPolicy applies to FEM Poisson demag; FDM has separate demag controls."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FemLinearSolverPolicy applies to FEM Poisson demag; FDM has separate demag controls."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-fem-demag-poisson",
+      "symbols": [
+        "M",
+        "H_d",
+        "u",
+        "D"
+      ],
+      "sources": [
+        "poisson-rhs",
+        "poisson-recovery"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "M",
+      "latex": "\\mathbf{M}",
+      "meaning": "Magnetization in the magnetic region; zero in nonmagnetic air",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "H_d",
+      "latex": "\\mathbf{H}_{\\mathrm{d}}",
+      "meaning": "Demagnetizing field",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "u",
+      "latex": "u",
+      "meaning": "Magnetic scalar potential",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "D",
+      "latex": "D",
+      "meaning": "Computational FEM domain",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "eps_rel",
+      "latex": "\\varepsilon_{\\mathrm{rel}}",
+      "meaning": "`rtol`, a relative linear-solver tolerance",
+      "si_unit": "1"
+    },
+    {
+      "id": "eps_abs",
+      "latex": "\\varepsilon_{\\mathrm{abs}}",
+      "meaning": "`atol`, an optional absolute algebraic residual threshold",
+      "si_unit": "\\mathrm{A\\,m}"
+    },
+    {
+      "id": "N_iter",
+      "latex": "N_{\\mathrm{iter}}",
+      "meaning": "`max_iterations`, the linear-solver iteration cap",
+      "si_unit": "1"
+    },
+    {
+      "id": "N_LLG",
+      "latex": "N_{\\mathrm{LLG}}",
+      "meaning": "Generated bias-sample relaxation step cap",
+      "si_unit": "1"
+    },
+    {
+      "id": "n_CPU",
+      "latex": "n_{\\mathrm{CPU}}",
+      "meaning": "Requested CPU thread count",
+      "si_unit": "1"
+    }
+  ],
+  "sources": [
+    {
+      "id": "py-policy",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FemLinearSolverPolicy",
+      "responsibility": "Python policy defaults, validation, and omission of atol when absent."
+    },
+    {
+      "id": "py-fem-hints",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FEM",
+      "responsibility": "Python FEM order, mesh-size, mesh-source, and optional policy hints."
+    },
+    {
+      "id": "py-study-builder",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "Stage-first builder API for policy and requested thread settings."
+    },
+    {
+      "id": "py-exports",
+      "path": "packages/fullmag-py/src/fullmag/__init__.py",
+      "symbol": "__all__",
+      "responsibility": "Public export names for the flat policy, threads, FEM, and policy type."
+    },
+    {
+      "id": "py-runtime-test",
+      "path": "packages/fullmag-py/tests/test_api.py",
+      "symbol": "test_problem_runtime_selection_serializes_to_ir",
+      "responsibility": "Runtime selection thread value serialization regression."
+    },
+    {
+      "id": "py-signed15-example",
+      "path": "examples/fem_eigen_mode_ui_de_signed15.py",
+      "symbol": "study",
+      "responsibility": "Source example of the authored primary Relax stage and its independent stop values."
+    },
+    {
+      "id": "ir-linear-policy",
+      "path": "crates/fullmag-ir/src/study.rs",
+      "symbol": "FemLinearSolverPolicy",
+      "responsibility": "Canonical Rust policy defaults and optional absolute tolerance."
+    },
+    {
+      "id": "ir-fem-hints",
+      "path": "crates/fullmag-ir/src/mesh_hints.rs",
+      "symbol": "FemHintsIR",
+      "responsibility": "FEM hint carries the optional Poisson policy."
+    },
+    {
+      "id": "ir-fem-plan",
+      "path": "crates/fullmag-ir/src/plan.rs",
+      "symbol": "FemPlanIR",
+      "responsibility": "Executable FEM plan stores the resolved Poisson policy."
+    },
+    {
+      "id": "ir-eigen-plan",
+      "path": "crates/fullmag-ir/src/plan.rs",
+      "symbol": "FemEigenPlanIR",
+      "responsibility": "Eigen plan carries bias-sample policy separately from modal solver policy."
+    },
+    {
+      "id": "planner-fem",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "plan_fem",
+      "responsibility": "Ordinary FEM policy planning."
+    },
+    {
+      "id": "planner-eigen",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "plan_fem_eigen",
+      "responsibility": "Eigen plan policy propagation and direct-minimizer constraint."
+    },
+    {
+      "id": "planner-policy-test",
+      "path": "crates/fullmag-plan/src/tests.rs",
+      "symbol": "fem_eigen_bias_sample_demag_solver_policy_preserves_all_authored_fields",
+      "responsibility": "Policy fields survive eigen planner pass-through."
+    },
+    {
+      "id": "planner-none-test",
+      "path": "crates/fullmag-plan/src/tests.rs",
+      "symbol": "fem_eigen_bias_sample_none_policy_keeps_legacy_serialized_shape",
+      "responsibility": "None policy preserves prior serialized plan shape."
+    },
+    {
+      "id": "runner-relax-plan",
+      "path": "crates/fullmag-runner/src/fem/eigen_execution.rs",
+      "symbol": "bias_field_relax_plan",
+      "responsibility": "Generated bias Relax plan uses policy independently of fixed LLG controls."
+    },
+    {
+      "id": "runner-policy-test",
+      "path": "crates/fullmag-runner/src/fem/eigen_execution.rs",
+      "symbol": "bias_field_sample_relax_plan_carries_demag_policy_without_changing_llg_budget",
+      "responsibility": "Policy propagation and unchanged internal LLG budget regression."
+    },
+    {
+      "id": "runner-maxsteps-test",
+      "path": "crates/fullmag-runner/src/fem/eigen_tests.rs",
+      "symbol": "accepted_relax_stage_handoff_rejects_nonconvergent_and_incoherent_completions",
+      "responsibility": "Non-converged MaxSteps handoff is rejected."
+    },
+    {
+      "id": "poisson-rhs",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp",
+      "symbol": "assemble_demag_poisson_rhs",
+      "responsibility": "Assembles the magnetization-dependent Poisson right-hand side."
+    },
+    {
+      "id": "poisson-solve",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp",
+      "symbol": "solve_demag_poisson_hypre",
+      "responsibility": "CPU Hypre Poisson solver configuration and solve path."
+    },
+    {
+      "id": "poisson-recovery",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp",
+      "symbol": "recover_demag_poisson_field",
+      "responsibility": "Recovers H_demag from the Poisson potential."
+    },
+    {
+      "id": "floquet-sparse-solve",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context",
+      "responsibility": "Selects the sparse large-dimension shifted-KSP default."
+    },
+    {
+      "id": "floquet-ksp-policy",
+      "path": "backends/fem/cpu/frequency_domain/modal_krylov_tuning.hpp",
+      "symbol": "resolve_modal_krylov_tuning",
+      "responsibility": "Resolves explicit modal and Floquet shifted-KSP tuning."
+    },
+    {
+      "id": "floquet-modal-tests",
+      "path": "backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp",
+      "symbol": "main",
+      "responsibility": "Test harness entry point invokes the large sparse, explicit override, fail-closed, and small exact-Schur cases."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "fm.FEM(order)",
+        "type": "int",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "Integer at least 1; booleans rejected",
+        "meaning": "FEM finite-element order",
+        "backend_support": "FEM only",
+        "problem_ir": "discretization.fem.order"
+      },
+      {
+        "python": "`fm.FEM(maximum_element_size) / fm.FEM(hmax)`",
+        "type": "float",
+        "default": "one required",
+        "si_unit": "m",
+        "validation": "Positive; if both are passed they must agree",
+        "meaning": "Maximum FEM element size; `hmax` is an alias",
+        "backend_support": "FEM only",
+        "problem_ir": "discretization.fem.hmax"
+      },
+      {
+        "python": "fm.FEM(mesh)",
+        "type": "str or None",
+        "default": "None",
+        "si_unit": "1 (identifier)",
+        "validation": "Non-blank when provided",
+        "meaning": "Optional named mesh source",
+        "backend_support": "FEM only",
+        "problem_ir": "discretization.fem.mesh"
+      },
+      {
+        "python": "fm.FEM(demag_solver_policy)",
+        "type": "FemLinearSolverPolicy or None",
+        "default": "None",
+        "si_unit": "1 (configuration)",
+        "validation": "Optional by annotation; the constructor has no explicit type check",
+        "meaning": "Typed policy attached to FEM hints",
+        "backend_support": "FEM only",
+        "problem_ir": "discretization.fem.demag_solver_policy"
+      },
+      {
+        "python": "`fm.FemLinearSolverPolicy.solver`; `fm.fem_demag_solver(solver=...)`; `study.fem_demag_solver(solver=...)`",
+        "type": "Literal[CG, GMRES]",
+        "default": "CG",
+        "si_unit": "1",
+        "validation": "`CG` or `GMRES`",
+        "meaning": "Poisson linear-solver method",
+        "backend_support": "FEM Poisson only; resolved per backend",
+        "problem_ir": "discretization.fem.demag_solver_policy.solver"
+      },
+      {
+        "python": "`fm.FemLinearSolverPolicy.preconditioner`; `fm.fem_demag_solver(preconditioner=...)`; `study.fem_demag_solver(preconditioner=...)`",
+        "type": "Literal[AMG, JACOBI, NONE]",
+        "default": "AMG",
+        "si_unit": "1",
+        "validation": "`AMG`, `JACOBI`, or `NONE`",
+        "meaning": "Poisson preconditioner choice",
+        "backend_support": "FEM Poisson only; resolved per backend",
+        "problem_ir": "discretization.fem.demag_solver_policy.preconditioner"
+      },
+      {
+        "python": "`fm.FemLinearSolverPolicy.rtol`; `fm.fem_demag_solver(rtol=...)`; `study.fem_demag_solver(rtol=...)`",
+        "type": "float",
+        "default": "1e-8",
+        "si_unit": "1",
+        "validation": "Positive finite; no general upper bound in the Python model",
+        "meaning": "Relative linear-solver tolerance",
+        "backend_support": "FEM Poisson only; planner may add method-specific constraints",
+        "problem_ir": "discretization.fem.demag_solver_policy.rtol"
+      },
+      {
+        "python": "`fm.FemLinearSolverPolicy.atol`; `fm.fem_demag_solver(atol=...)`; `study.fem_demag_solver(atol=...)`",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "$\\mathrm{A\\,m}$ for unscaled weak residual",
+        "validation": "Positive finite when present",
+        "meaning": "Optional absolute algebraic residual threshold; `None` is omitted from the policy IR",
+        "backend_support": "FEM Poisson only; residual scaling is realization-specific",
+        "problem_ir": "discretization.fem.demag_solver_policy.atol"
+      },
+      {
+        "python": "`fm.FemLinearSolverPolicy.max_iterations`; `fm.fem_demag_solver(max_iterations=...)`; `study.fem_demag_solver(max_iterations=...)`",
+        "type": "int",
+        "default": "500",
+        "si_unit": "`1` (iterations)",
+        "validation": "Annotated int; the Python model checks only value >= 1",
+        "meaning": "Upper bound on Poisson linear-solver iterations",
+        "backend_support": "FEM Poisson only",
+        "problem_ir": "discretization.fem.demag_solver_policy.max_iterations"
+      },
+      {
+        "python": "`fm.FemLinearSolverPolicy.print_level`; `fm.fem_demag_solver(print_level=...)`; `study.fem_demag_solver(print_level=...)`",
+        "type": "int",
+        "default": "0",
+        "si_unit": "`1` (verbosity level)",
+        "validation": "Annotated int; the Python model checks only value >= 0",
+        "meaning": "Backend solver diagnostic verbosity",
+        "backend_support": "FEM Poisson only",
+        "problem_ir": "discretization.fem.demag_solver_policy.print_level"
+      },
+      {
+        "python": "`fm.threads(cpu_threads)`; `study.threads(cpu_threads)`",
+        "type": "int",
+        "default": "required",
+        "si_unit": "`1` (threads)",
+        "validation": "Converted to integer by the flat API and must be at least 1",
+        "meaning": "Requested runtime CPU threads for the next study/run",
+        "backend_support": "Runtime selection; effective counts remain backend-specific",
+        "problem_ir": "problem_meta.runtime_metadata.runtime_selection.cpu_threads"
+      }
+    ]
+  }
+}
