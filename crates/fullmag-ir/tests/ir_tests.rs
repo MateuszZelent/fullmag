@@ -3009,6 +3009,62 @@ fn hysteresis_validation_rejects_unknown_minor_loop_continuation_policy() {
 }
 
 #[test]
+fn hysteresis_minimize_energy_tolerance_round_trips_optional_values() {
+    for value in [None, Some(serde_json::Value::Null), Some(serde_json::json!(1e-20))] {
+        let mut payload = serde_json::json!({
+            "kind": "minimize",
+            "method": "projected_gradient_bb",
+            "torque_tolerance": 1.0,
+            "max_steps": 500,
+            "on_non_convergence": "continue_with_warning"
+        });
+        if let Some(value) = value {
+            payload["energy_tolerance"] = value;
+        }
+        let step: SettleStepIR = serde_json::from_value(payload.clone()).unwrap();
+        let SettleStepIR::Minimize { energy_tolerance, .. } = &step else {
+            panic!("expected minimize settle step");
+        };
+        assert_eq!(*energy_tolerance, payload["energy_tolerance"].as_f64());
+        let serialized = serde_json::to_value(&step).unwrap();
+        if energy_tolerance.is_none() {
+            payload.as_object_mut().unwrap().remove("energy_tolerance");
+        }
+        assert_eq!(serialized, payload);
+    }
+}
+
+#[test]
+fn hysteresis_minimize_energy_tolerance_is_positive_when_present() {
+    for energy_tolerance in [None, Some(1e-20), Some(0.0), Some(-1e-20)] {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.study = serde_json::from_value(serde_json::json!({
+            "kind": "hysteresis",
+            "field_values_mT": [0.0, 1.0],
+            "initial_protocol": "as_authored",
+            "settle_pipeline": {
+                "kind": "sequence",
+                "steps": [{
+                    "kind": "minimize",
+                    "method": "projected_gradient_bb",
+                    "torque_tolerance": 1.0,
+                    "energy_tolerance": energy_tolerance,
+                    "max_steps": 500,
+                    "on_non_convergence": "continue_with_warning"
+                }]
+            },
+            "sampling": ir.study.sampling()
+        })).unwrap();
+        if energy_tolerance.is_some_and(|value| value <= 0.0) {
+            let errors = ir.validate().expect_err("nonpositive energy tolerance must fail");
+            assert!(errors.iter().any(|error| error.contains("energy_tolerance must be positive")));
+        } else {
+            ir.validate().expect("absent or positive energy tolerance must be valid");
+        }
+    }
+}
+
+#[test]
 fn hysteresis_validation_rejects_run_next_algorithm_without_next_step() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.study = StudyIR::Hysteresis {
@@ -3031,7 +3087,7 @@ fn hysteresis_validation_rejects_run_next_algorithm_without_next_step() {
             steps: vec![SettleStepIR::Minimize {
                 method: "projected_gradient_bb".to_string(),
                 torque_tolerance: 5e-5,
-                energy_tolerance: 1e-20,
+                energy_tolerance: Some(1e-20),
                 max_steps: 2000,
                 applies_to: None,
                 stop_criteria: None,
@@ -3089,7 +3145,7 @@ fn hysteresis_validation_rejects_run_next_algorithm_tree_without_fallback_branch
             default: SettleStepIR::Minimize {
                 method: "projected_gradient_bb".to_string(),
                 torque_tolerance: 5e-5,
-                energy_tolerance: 1e-20,
+                energy_tolerance: Some(1e-20),
                 max_steps: 2000,
                 applies_to: None,
                 stop_criteria: None,
@@ -3273,7 +3329,7 @@ fn hysteresis_validation_rejects_direct_minimizer_physical_time_budget() {
             steps: vec![SettleStepIR::Minimize {
                 method: "projected_gradient_bb".to_string(),
                 torque_tolerance: 5e-5,
-                energy_tolerance: 1e-20,
+                energy_tolerance: Some(1e-20),
                 max_steps: 100,
                 applies_to: None,
                 stop_criteria: None,
