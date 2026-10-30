@@ -14,7 +14,9 @@ import re
 from pathlib import Path
 import time
 
-from docker_build_control import BuildControl, BuildControlError, canonical, docker_capture
+from docker_build_control import (
+    BuildControl, BuildControlError, bounded_capture, canonical, docker_capture,
+)
 from docker_compose_identity import source_labels
 
 
@@ -28,6 +30,182 @@ _ABSENT_CONTAINER = re.compile(
 
 def _fail(message: str) -> None:
     raise BuildControlError(message)
+
+
+def pinned_group_archive(control, generation):
+    """Read the exact archive backing a ledger generation, without changing it."""
+    if (not isinstance(generation, Mapping)
+            or generation.get("schema") != "fullmag.docker-group-ledger-generation.v1"
+            or generation.get("compose_project") != control.project
+            or not _OPERATION_ID.fullmatch(str(generation.get("generation", "")))):
+        _fail("Fresh group ledger generation is malformed")
+    token = generation["generation"]
+    path = "recreate-services/attempts/" + token + "/runtime-control-archive-terminal.json"
+    if generation.get("archive_terminal_path") != path:
+        _fail("Fresh ledger generation has another archive path")
+    archive = control.read(path)
+    if (not isinstance(archive, Mapping) or archive.get("state") != "succeeded"
+            or archive.get("operation_attempt") != token
+            or archive.get("compose_project") != control.project
+            or archive.get("preserved_group_ledger_volume") != generation.get("preserved_volume")
+            or hashlib.sha256(canonical(archive)).hexdigest() != generation.get("archive_terminal_sha256")):
+        _fail("Fresh ledger generation has no exact completed runtime archive")
+    return archive
+
+
+def _archived_successful_runtime(control, previous, inputs, removed):
+    """Keep a failed build immutable; qualify its actual successful resume."""
+    if previous.get("state") == "succeeded":
+        return previous
+    if previous.get("state") != "failed-confirmed":
+        _fail("Snapshot bootstrap retirement has no terminal previous development")
+    # Enumerate immutable resume terminals, rather than a mutable verified
+    # pointer which a later start may replace. This is read-only and bounded.
+    script = (
+        "if test -d /control/resume/attempts; then "
+        "test ! -L /control/resume; test ! -L /control/resume/attempts; "
+        "test \"$(readlink -f /control/resume/attempts)\" = /control/resume/attempts; "
+        "find /control/resume/attempts -mindepth 2 -maxdepth 2 "
+        "-type f -name terminal.json -printf '%h\\n'; fi"
+    )
+    from docker_volume_pre_admission_selector import _readonly_control_helper_args
+    image = previous["inputs"].get("image_id")
+    result = bounded_capture(
+        _readonly_control_helper_args(control, control._namespace_guard(script), image),
+        timeout=30, maximum=32768,
+    )
+    if result.returncode:
+        _fail("Snapshot bootstrap retirement could not enumerate resume evidence")
+    paths = result.stdout.decode("utf-8").splitlines()
+    if len(paths) > 256 or len(set(paths)) != len(paths):
+        _fail("Snapshot bootstrap retirement resume inventory exceeds its bound")
+    from docker_volume_activate import _validate_linked_runtime_terminal
+    for path in sorted(paths):
+        match = re.fullmatch(r"/control/resume/attempts/([0-9a-f]{32})", path)
+        if match is None:
+            _fail("Snapshot bootstrap retirement resume path is not portable")
+        relative = "resume/attempts/" + match.group(1)
+        raw = control.read_bytes(relative + "/terminal.json")
+        candidate = json.loads(raw)
+        if not isinstance(candidate, Mapping):
+            continue
+        candidate_inputs = candidate.get("inputs")
+        if (candidate.get("state") != "succeeded"
+                or not isinstance(candidate_inputs, Mapping)
+                or candidate_inputs.get("attempt") != inputs["attempt"]
+                or any(candidate.get(role + "_container") != identifier
+                       for role, identifier in removed.items())):
+            continue
+        if (raw != canonical(candidate) + b"\n"
+                or raw != control.read_bytes(relative + "/receipt.json")
+                or candidate.get("schema") != "fullmag.docker-build-operation.v1"
+                or candidate.get("attempt") != match.group(1)
+                or candidate.get("control_volume") != control.volume
+                or candidate.get("control_namespace") != control.namespace):
+            _fail("Snapshot bootstrap retirement resume backing records differ")
+        _validate_linked_runtime_terminal(
+            candidate, phase="resume", original_attempt=inputs["attempt"],
+            original=previous, source_root=control.identity["source_root"],
+            image=image, config_sha256=inputs["config_sha256"],
+        )
+        return candidate
+    _fail("Snapshot bootstrap retirement has no successful resume for its removed services")
+
+
+def snapshot_bootstrap_retired(control, snapshot):
+    """A completed explicit fresh start supersedes only its old bootstrap.
+
+    The immutable snapshot, its native validation and its data remain intact.
+    An archive intent or an incomplete recreation grants no such authority.
+    """
+    generation = control.read("group-ledger-generation.json", optional=True)
+    if generation is None:
+        return False
+    archive = pinned_group_archive(control, generation)
+    token = generation["generation"]
+    root = "recreate-services/attempts/" + token
+    outer = control.read(root + "/terminal.json")
+    raw_intent = control.read_bytes(root + "/runtime-control-archive-intent.json")
+    intent = json.loads(raw_intent)
+    retained = control.read(root + "/retained-containers.json")
+    meta = {"compose_project": control.project, "control_volume": control.volume,
+            "control_namespace": control.namespace}
+    mapping = {"previous_runtime_control": "runtime-control",
+               "archived_runtime_control": "runtime-archives/" + token,
+               "fresh_runtime_control": "runtime-control",
+               "fresh_runtime_services": "runtime-control/runtime-services"}
+    removed = archive.get("removed_containers")
+    outer_removed = outer.get("removed_containers") if isinstance(outer, Mapping) else None
+    if (not isinstance(outer, Mapping) or not isinstance(intent, Mapping)
+            or not isinstance(retained, Mapping) or not isinstance(removed, Mapping)
+            or set(removed) != {"backend", "frontend"}
+            or any(not _CONTAINER_ID.fullmatch(str(value)) for value in removed.values())
+            or len(set(removed.values())) != 2
+            or archive.get("schema") != "fullmag.docker-fresh-runtime-archive-terminal.v1"
+            or intent.get("schema") != "fullmag.docker-fresh-runtime-archive-intent.v1"
+            or intent.get("operation_attempt") != token
+            or any(document.get(key) != value for document in (archive, intent, outer)
+                   for key, value in meta.items())
+            or archive.get("intent_sha256") != hashlib.sha256(raw_intent).hexdigest()
+            or archive.get("mapping") != mapping or intent.get("mapping") != mapping
+            or intent.get("removed_containers") != removed
+            or intent.get("preserved_group_ledger_volume") != generation.get("preserved_volume")
+            or intent.get("source_root") != control.identity.get("source_root")
+            or outer.get("schema") != "fullmag.docker-build-operation.v1"
+            or outer.get("phase") != "recreate-services" or outer.get("state") != "succeeded"
+            or outer.get("attempt") != token or outer.get("fresh_state") is not True
+            or canonical(outer.get("runtime_control_archive")) != canonical(archive)
+            or not isinstance(outer_removed, list) or sorted(outer_removed) != sorted(removed.values())
+            or outer.get("previous_state_root") != intent.get("previous_state_root")
+            or any(not isinstance(retained.get(role), Mapping)
+                   or retained[role].get("Id") != identifier for role, identifier in removed.items())):
+        _fail("Snapshot bootstrap retirement has no exact completed fresh-runtime archive")
+    inputs = outer.get("inputs")
+    if (not isinstance(inputs, Mapping)
+            or not _OPERATION_ID.fullmatch(str(inputs.get("attempt", "")))
+            or not re.fullmatch(r"[0-9a-f]{64}", str(inputs.get("config_sha256", "")))):
+        _fail("Snapshot bootstrap retirement has no pinned previous development")
+    previous_root = "development/attempts/" + inputs["attempt"]
+    previous = control.read(previous_root + "/terminal.json")
+    compose = control.read(previous_root + "/compose.json")
+    previous_inputs = previous.get("inputs") if isinstance(previous, Mapping) else None
+    if (not isinstance(previous, Mapping) or not isinstance(previous_inputs, Mapping)
+            or previous.get("schema") != "fullmag.docker-build-operation.v1"
+            or previous.get("phase") != "development"
+            or previous.get("state") not in {"succeeded", "failed-confirmed"}
+            or previous.get("attempt") != inputs["attempt"]
+            or any(previous.get(key) != value for key, value in meta.items())
+            or previous_inputs.get("source_root") != control.identity.get("source_root")
+            or previous.get("state_root") != intent.get("previous_state_root")
+            or hashlib.sha256(canonical(compose)).hexdigest() != inputs["config_sha256"]):
+        _fail("Snapshot bootstrap retirement has another previous development identity")
+    runtime = _archived_successful_runtime(control, previous, inputs, removed)
+    if (runtime.get("state_root") != intent.get("previous_state_root")
+            or any(runtime.get(role + "_container") != identifier
+                   for role, identifier in removed.items())):
+        _fail("Snapshot bootstrap retirement has another successful runtime identity")
+    binding = outer.get("snapshot_bootstrap_retirement")
+    proof_path = root + "/snapshot-native-drain.json"
+    if (not isinstance(binding, Mapping)
+            or binding.get("schema") != "fullmag.docker-snapshot-bootstrap-retirement.v1"
+            or binding.get("snapshot_sha256") != hashlib.sha256(canonical(snapshot)).hexdigest()
+            or binding.get("backend_container_id") != removed["backend"]
+            or binding.get("image_id") != retained["backend"].get("Image")
+            or binding.get("backend_started_at") != retained["backend"].get("State", {}).get("StartedAt")
+            or binding.get("native_drain_path") != proof_path):
+        _fail("Snapshot bootstrap retirement has no exact stopped incarnation")
+    native_raw = control.read_bytes(proof_path)
+    archived_raw = control.read_bytes("runtime-archives/" + token + "/runtime-service/process-tree.json")
+    native = json.loads(native_raw)
+    state = retained["backend"].get("State", {})
+    if (hashlib.sha256(native_raw).hexdigest() != binding.get("native_drain_sha256")
+            or native_raw != archived_raw
+            or not isinstance(native, Mapping) or native.get("schema") != "fullmag.docker-process-tree.v1"
+            or native.get("state") != "drained" or state.get("Running") is not False
+            or state.get("OOMKilled") is not False or state.get("ExitCode") != 0
+            or state.get("Pid") != 0 or state.get("Status") != "exited"):
+        _fail("Snapshot bootstrap retirement lacks its preserved genuine native drain")
+    return True
 
 
 def _preserve_previous_preparation_abort_archive(control: BuildControl, operation: Mapping[str, object]) -> bool:

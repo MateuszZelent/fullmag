@@ -264,6 +264,50 @@ class BuildBackendTests(unittest.TestCase):
         self.assertIn("Version: 0.1.0.dev20261003+g0123456789ab", metadata)
         self.assertEqual((self.root / "pyproject.toml").read_bytes(), original)
 
+    def test_public_release_version_has_no_local_label_and_matches_base(self) -> None:
+        for version in ("0.1.0", "0.1.0rc1", "0.1.0.post2", "0.1.0.dev20261028"):
+            with mock.patch.dict(os.environ, {backend.RELEASE_VERSION_ENV: version}, clear=True):
+                resolution = backend.resolve_version(self.root)
+            self.assertEqual(resolution.pep440_version, version)
+            self.assertEqual(resolution.reason, "public-release")
+            self.assertFalse(resolution.version_source_bound)
+
+        for version in ("0.1.0+g0123456789ab", "v0.1.0", "0.1", "0.1.0-rc1"):
+            with mock.patch.dict(os.environ, {backend.RELEASE_VERSION_ENV: version}, clear=True):
+                with self.assertRaisesRegex(backend.BuildBackendError, "public PEP 440"):
+                    backend.resolve_version(self.root)
+
+        with mock.patch.dict(os.environ, {backend.RELEASE_VERSION_ENV: "0.2.0"}, clear=True):
+            with self.assertRaisesRegex(backend.BuildBackendError, "does not match"):
+                backend.resolve_version(self.root)
+
+    def test_public_release_version_is_not_combined_with_a_managed_record(self) -> None:
+        record_path = self._write_record(self._record())
+        with mock.patch.dict(
+            os.environ,
+            {backend.RELEASE_VERSION_ENV: "0.1.0", backend.VERSION_FILE_ENV: str(record_path)},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(backend.BuildBackendError, "cannot be combined"):
+                backend.resolve_version(self.root)
+
+    def test_release_sdist_pkg_info_supplies_the_base_for_the_wheel_build(self) -> None:
+        (self.root / "pyproject.toml").write_text(
+            "[project]\nname = \"fullmag\"\ndynamic = [\"version\"]\n",
+            encoding="utf-8",
+        )
+        (self.root / "PKG-INFO").write_text(
+            "Metadata-Version: 2.4\nName: fullmag\nVersion: 0.1.0rc1\n\n",
+            encoding="utf-8",
+        )
+        with mock.patch.dict(os.environ, {}, clear=True):
+            resolution = backend.resolve_version(self.root)
+        self.assertEqual(resolution.pep440_version, "0.1.0rc1")
+        self.assertEqual(resolution.reason, "source-archive-pkg-info")
+        with mock.patch.dict(os.environ, {backend.RELEASE_VERSION_ENV: "0.1.0rc1"}, clear=True):
+            resolution = backend.resolve_version(self.root)
+        self.assertEqual(resolution.reason, "public-release")
+
 
 if __name__ == "__main__":
     unittest.main()

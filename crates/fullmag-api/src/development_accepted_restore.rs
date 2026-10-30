@@ -1869,7 +1869,12 @@ pub(crate) fn scene_from_definition(bytes: &[u8], specification: &RunSpecificati
     .context("decode accepted SceneDocument")?;
     fullmag_authoring::validate_scene_document_for_authoring(&scene)
         .map_err(|error| anyhow::anyhow!(error.message))?;
-    Ok(scene)
+    crate::live_execution_binding::recover_scene_projection(scene, specification)
+        .map_err(|error| anyhow::anyhow!(
+            "{}: {}",
+            error.code.as_deref().unwrap_or("accepted_execution_input_error"),
+            error.message
+        ))
 }
 
 fn validate_live_binding(
@@ -3626,6 +3631,37 @@ mod tests {
             terminal_outcome: terminal_outcome.map(str::to_owned),
             preparation_failure,
         }
+    }
+
+    #[test]
+    fn scene_from_definition_restores_authored_projection_after_byte_validation() {
+        let mut loaded = loaded_snapshot_fixture(AcceptedRestoreMode::Held, None, None);
+        let authored_scene = SceneDocument::default();
+        let execution_input =
+            fullmag_authoring::scene_execution_input_identity(&authored_scene).unwrap();
+        let mut stored_scene = authored_scene;
+        stored_scene.study.execution_profile =
+            Some(fullmag_application::legacy_live_execution_profile());
+        loaded.specification.parameters = json!({
+            "live_workspace": { "execution_input": execution_input }
+        });
+        let bytes = serde_json::to_vec(&json!({
+            "schema": "fullmag.project_definition.v1",
+            "name": "accepted-test",
+            "project_id": loaded.project_id.as_str(),
+            "revision": loaded.specification.snapshot.definition_revision,
+            "scene": stored_scene,
+        }))
+        .unwrap();
+        loaded.specification.snapshot.definition_sha256 =
+            fullmag_session::hex_sha256(&bytes);
+
+        let restored = scene_from_definition(&bytes, &loaded.specification).unwrap();
+
+        assert!(restored.study.execution_profile.is_none());
+        let mut tampered = bytes;
+        tampered.push(b' ');
+        assert!(scene_from_definition(&tampered, &loaded.specification).is_err());
     }
 
     fn failed_preparation_store() -> (tempfile::TempDir, fullmag_session::SessionStore) {

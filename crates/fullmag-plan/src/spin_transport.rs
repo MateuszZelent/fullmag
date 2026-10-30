@@ -5272,12 +5272,12 @@ mod tests {
             .as_ref()
             .expect("executable FEM descriptor");
         assert_eq!(descriptor.charge_conductivity_spm_per_element, [4.0e6; 6]);
-        assert_eq!(descriptor.charge_dirichlet, [(11, 0.0), (12, 0.1)]);
+        assert_eq!(descriptor.charge_dirichlet, [(11, 0.0), (12, 0.1), (13, 0.1), (15, 0.0)]);
         assert_eq!(descriptor.charge_domain.element_mask, [true; 6]);
         assert_eq!(descriptor.spin_domain.element_mask, [true; 6]);
         assert_eq!(
             descriptor.charge_insulating_boundaries[0].boundary_attributes,
-            [13, 14, 15, 16]
+            [14, 16]
         );
         assert_eq!(
             descriptor.spin_insulating_boundaries[0].boundary_attributes,
@@ -5357,7 +5357,7 @@ mod tests {
             FEM_CHARGE_RESIDUAL_VERSION
         );
         assert_eq!(descriptor.charge_conductivity_spm_per_element, [4.0e6; 6]);
-        assert_eq!(descriptor.charge_dirichlet, [(11, 0.0), (12, 0.1)]);
+        assert_eq!(descriptor.charge_dirichlet, [(11, 0.0), (12, 0.1), (13, 0.1), (15, 0.0)]);
         assert_eq!(descriptor.capability_status, "reference_executable");
         assert_eq!(descriptor.implementation_state, "executable");
         assert_eq!(

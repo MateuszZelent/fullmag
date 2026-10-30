@@ -19,8 +19,8 @@ use crate::mesh::{
     build_air_box_config, build_mesh_parts_from_segments, compatible_fem_material,
     geometry_object_translation, initial_vectors_for_magnet, load_mesh_from_source,
     merge_fem_meshes, mesh_bounds, object_space_sample_points, reject_unsupported_mixed_topology,
-    resolve_fem_domain_mesh_asset, resolved_domain_mesh_mode, study_universe_planner_note,
-    MagnetPlanningEntry, AIR_OBJECT_SEGMENT_ID,
+    resolve_fem_domain_mesh_asset, resolve_object_region_marker, resolved_domain_mesh_mode,
+    study_universe_planner_note, MagnetPlanningEntry, AIR_OBJECT_SEGMENT_ID,
 };
 use crate::oersted::{resolve_fem_oersted_term, ResolvedOerstedTerm};
 use crate::spin_torque::{
@@ -1390,10 +1390,7 @@ fn eigen_policy_floquet_pair_sets_match(plan: &FemEigenPlanIR) -> bool {
         && (requested_set.is_empty() || requested_set == node_set)
 }
 
-fn eigen_policy_floquet_dynamic_demag_path(
-    plan: &FemEigenPlanIR,
-    planned_path: bool,
-) -> bool {
+fn eigen_policy_floquet_dynamic_demag_path(plan: &FemEigenPlanIR, planned_path: bool) -> bool {
     planned_path
         && plan.enable_demag
         && plan.operator.include_demag
@@ -1892,17 +1889,17 @@ fn allows_k0_kittel_synthetic_demag_factor(
 /// has one finite positive global target and does not claim a complete window
 /// or spectrum.  The native provider applies the same boundary before
 /// materializing the request, so the planner must not reject it earlier.
-fn floquet_airbox_dynamic_demag_target_supported(
-    target: &fullmag_ir::EigenTargetIR,
-) -> bool {
+fn floquet_airbox_dynamic_demag_target_supported(target: &fullmag_ir::EigenTargetIR) -> bool {
     match target {
         fullmag_ir::EigenTargetIR::FrequencyWindow {
             frequency_min_hz,
             frequency_max_hz,
-        } => frequency_min_hz.is_finite()
-            && frequency_max_hz.is_finite()
-            && *frequency_min_hz >= 0.0
-            && *frequency_max_hz > *frequency_min_hz,
+        } => {
+            frequency_min_hz.is_finite()
+                && frequency_max_hz.is_finite()
+                && *frequency_min_hz >= 0.0
+                && *frequency_max_hz > *frequency_min_hz
+        }
         fullmag_ir::EigenTargetIR::Nearest { frequency_hz } => {
             frequency_hz.is_finite() && *frequency_hz > 0.0
         }
@@ -2614,10 +2611,8 @@ fn segment_node_indices(
 
 fn materialize_fem_spin_torque_target_masks(
     target: &fullmag_ir::RegionRefIR,
-    node_count: usize,
-    element_count: usize,
+    mesh: &fullmag_ir::MeshIR,
     object_segments: &[fullmag_ir::FemObjectSegmentIR],
-    mesh_parts: &[fullmag_ir::FemMeshPartIR],
 ) -> Result<(Vec<bool>, Vec<bool>), PlanError> {
     if let Some(region_id) = target.region_id.as_deref() {
         return Err(PlanError {
@@ -2644,23 +2639,23 @@ fn materialize_fem_spin_torque_target_masks(
         });
     }
 
-    let mut node_mask = vec![false; node_count];
-    let mut element_mask = vec![false; element_count];
+    let mut node_mask = vec![false; mesh.nodes.len()];
+    let mut element_mask = vec![false; mesh.cell_count()];
     for segment in matching {
-        for node in segment_node_indices(mesh_parts, segment, node_count)? {
-            node_mask[node] = true;
-        }
         let start = segment.element_start as usize;
         let end = start.saturating_add(segment.element_count as usize);
-        if end > element_count {
+        if end > mesh.cell_count() {
             return Err(PlanError {
                 reasons: vec![format!(
                     "FEM spin-torque target object '{}' element range {}..{} exceeds mesh element count {}",
-                    target.object_id, start, end, element_count
+                    target.object_id, start, end, mesh.cell_count()
                 )],
             });
         }
         element_mask[start..end].fill(true);
+        for node in segment_element_node_indices(mesh, segment)? {
+            node_mask[node] = true;
+        }
     }
     if !node_mask.iter().any(|selected| *selected) || !element_mask.iter().any(|selected| *selected)
     {
@@ -2677,6 +2672,29 @@ fn materialize_fem_spin_torque_target_masks(
 #[cfg(test)]
 mod spin_torque_target_tests {
     use super::*;
+
+    fn mesh_with_two_tets() -> fullmag_ir::MeshIR {
+        fullmag_ir::MeshIR {
+            mesh_name: "two-disjoint-tets".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [3.0, 0.0, 0.0],
+                [4.0, 0.0, 0.0],
+                [3.0, 1.0, 0.0],
+                [3.0, 0.0, 1.0],
+            ],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
+            element_markers: vec![1, 2],
+            facets: fullmag_ir::FemFacetConnectivityIR::empty(),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: std::collections::HashMap::new(),
+        }
+    }
 
     fn segment(
         object_id: &str,
@@ -2704,10 +2722,10 @@ mod spin_torque_target_tests {
             region_id: None,
         };
         let segments = vec![segment("fixed", 0, 4, 0, 1), segment("free", 4, 4, 1, 1)];
+        let mesh = mesh_with_two_tets();
 
-        let (nodes, elements) =
-            materialize_fem_spin_torque_target_masks(&target, 8, 2, &segments, &[])
-                .expect("resolved FEM object target");
+        let (nodes, elements) = materialize_fem_spin_torque_target_masks(&target, &mesh, &segments)
+            .expect("resolved FEM object target");
 
         assert_eq!(
             nodes,
@@ -2722,12 +2740,11 @@ mod spin_torque_target_tests {
             object_id: "free".to_string(),
             region_id: Some("contact".to_string()),
         };
+        let mesh = mesh_with_two_tets();
         let err = materialize_fem_spin_torque_target_masks(
             &target,
-            4,
-            1,
+            &mesh,
             &[segment("free", 0, 4, 0, 1)],
-            &[],
         )
         .expect_err("FEM region target must not broaden silently to its object");
         assert!(err.reasons.iter().any(|reason| {
@@ -2915,11 +2932,13 @@ fn heterogeneous_fem_material_shape_supported(
         candidate.cubic_anisotropy_axis1,
         has_active_cubic_anisotropy(reference),
         has_active_cubic_anisotropy(candidate),
+        [1.0, 0.0, 0.0],
     ) && compatible_axis_for_region_material_field(
         reference.cubic_anisotropy_axis2,
         candidate.cubic_anisotropy_axis2,
         has_active_cubic_anisotropy(reference),
         has_active_cubic_anisotropy(candidate),
+        [0.0, 1.0, 0.0],
     )
 }
 
@@ -2928,9 +2947,12 @@ fn compatible_axis_for_region_material_field(
     candidate_axis: Option<[f64; 3]>,
     reference_active: bool,
     candidate_active: bool,
+    default_axis: [f64; 3],
 ) -> bool {
     match (reference_active, candidate_active) {
-        (true, true) => reference_axis == candidate_axis,
+        (true, true) => {
+            reference_axis.unwrap_or(default_axis) == candidate_axis.unwrap_or(default_axis)
+        }
         _ => true,
     }
 }
@@ -2969,9 +2991,10 @@ fn build_region_materials(
 }
 
 fn values_differ(values: &[f64], reference: f64) -> bool {
-    values
-        .iter()
-        .any(|value| (*value - reference).abs() > 1e-18)
+    values.iter().any(|value| {
+        let scale = value.abs().max(reference.abs());
+        (*value - reference).abs() > 64.0 * f64::EPSILON * scale
+    })
 }
 
 fn axes_differ(values: &[[f64; 3]], reference: [f64; 3]) -> bool {
@@ -3015,7 +3038,8 @@ fn should_promote_fem_material_template(
     reference: &fullmag_ir::MaterialIR,
     candidate: &fullmag_ir::MaterialIR,
 ) -> bool {
-    !has_active_anisotropy(reference) && has_active_anisotropy(candidate)
+    (!has_active_cubic_anisotropy(reference) && has_active_cubic_anisotropy(candidate))
+        || (!has_active_anisotropy(reference) && has_active_anisotropy(candidate))
 }
 
 fn has_nonzero_optional(value: Option<f64>) -> bool {
@@ -3117,7 +3141,6 @@ fn build_region_material_fields(
     base_material: &fullmag_ir::MaterialIR,
     mesh: &fullmag_ir::MeshIR,
     object_segments: &[fullmag_ir::FemObjectSegmentIR],
-    mesh_parts: &[fullmag_ir::FemMeshPartIR],
     magnet_materials: &BTreeMap<String, fullmag_ir::MaterialIR>,
 ) -> Result<(fullmag_ir::MaterialIR, Option<Vec<[f64; 3]>>), PlanError> {
     let node_count = mesh.nodes.len();
@@ -3126,6 +3149,7 @@ fn build_region_material_fields(
     }
 
     let mut material = base_material.clone();
+    let node_spacings = crate::material::fem_node_spacings(mesh);
     let base_axis = normalize_nonzero_vector3(
         base_material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]),
         "anisotropy_axis",
@@ -3148,17 +3172,32 @@ fn build_region_material_fields(
     let sharp_conformal_ms_regions =
         sharp_conformal_parameter_regions(problem, fullmag_ir::MaterialParameterNameIR::Ms)?;
 
+    let mut node_indices_by_object = BTreeMap::<String, BTreeSet<usize>>::new();
     for segment in object_segments {
         if segment.object_id == AIR_OBJECT_SEGMENT_ID {
             continue;
         }
-        let Some(region_material) = magnet_materials.get(&segment.object_id) else {
+        if !magnet_materials.contains_key(&segment.object_id) {
             continue;
-        };
-        let node_indices = segment_node_indices(mesh_parts, segment, node_count)?;
+        }
+        // Conformal segments can share an owner/geometry identity. The first
+        // matching mesh part may belong to another segment of that owner;
+        // element connectivity is the authoritative node membership here.
+        let node_indices = segment_element_node_indices(mesh, segment)?;
         if node_indices.is_empty() {
             continue;
         }
+        node_indices_by_object
+            .entry(segment.object_id.clone())
+            .or_default()
+            .extend(node_indices);
+    }
+
+    for (object_id, node_index_set) in node_indices_by_object {
+        let Some(region_material) = magnet_materials.get(&object_id) else {
+            continue;
+        };
+        let node_indices = node_index_set.into_iter().collect::<Vec<_>>();
         let region_axis = normalize_nonzero_vector3(
             region_material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]),
             "anisotropy_axis",
@@ -3168,14 +3207,19 @@ fn build_region_material_fields(
         })?;
 
         let points: Vec<[f64; 3]> = node_indices.iter().map(|&idx| mesh.nodes[idx]).collect();
-        let object_translation = crate::material::object_translation(problem, &segment.object_id);
+        let point_spacings = node_indices
+            .iter()
+            .map(|&idx| node_spacings[idx])
+            .collect::<Vec<_>>();
+        let object_translation = crate::material::object_translation(problem, &object_id);
 
         let ms_resolved = crate::material::resolve_spatial_parameter_excluding_regions(
             problem,
-            &segment.object_id,
+            &object_id,
             fullmag_ir::MaterialParameterNameIR::Ms,
             region_material.saturation_magnetisation,
             &points,
+            crate::material::MaterialSampleSpacing::PerPoint(&point_spacings),
             object_translation,
             &sharp_conformal_ms_regions,
         )
@@ -3183,10 +3227,11 @@ fn build_region_material_fields(
 
         let aex_resolved = crate::material::resolve_spatial_parameter_excluding_regions(
             problem,
-            &segment.object_id,
+            &object_id,
             fullmag_ir::MaterialParameterNameIR::Aex,
             region_material.exchange_stiffness,
             &points,
+            crate::material::MaterialSampleSpacing::PerPoint(&point_spacings),
             object_translation,
             &sharp_conformal_aex_regions,
         )
@@ -3194,10 +3239,11 @@ fn build_region_material_fields(
 
         let alpha_resolved = crate::material::resolve_spatial_parameter(
             problem,
-            &segment.object_id,
+            &object_id,
             fullmag_ir::MaterialParameterNameIR::Alpha,
             region_material.damping,
             &points,
+            crate::material::MaterialSampleSpacing::PerPoint(&point_spacings),
             object_translation,
         )
         .map_err(|e| PlanError { reasons: vec![e] })?;
@@ -3399,7 +3445,19 @@ fn build_conformal_region_element_fields(
                 .iter()
                 .any(|mesh_marker| *mesh_marker == marker.marker)
             {
-                marker_to_region.insert(marker.marker, marker.geometry_name.clone());
+                let Some(region) = resolve_object_region_marker(problem, &marker.geometry_name)
+                    .map_err(|message| PlanError {
+                        reasons: vec![message],
+                    })?
+                else {
+                    return Err(PlanError {
+                        reasons: vec![format!(
+                            "FEM object-region marker '{}' does not resolve to an enabled region",
+                            marker.geometry_name
+                        )],
+                    });
+                };
+                marker_to_region.insert(marker.marker, region);
             }
         }
     }
@@ -3407,23 +3465,10 @@ fn build_conformal_region_element_fields(
         return Ok((None, None));
     }
 
-    let mut region_by_key: BTreeMap<String, &fullmag_ir::ObjectRegionIR> = BTreeMap::new();
-    for region in problem
-        .object_regions
-        .iter()
-        .filter(|region| region.enabled)
-    {
-        region_by_key.insert(region.region_id.clone(), region);
-        region_by_key.insert(region.name.clone(), region);
-    }
-
     let mut ms_changed = false;
     let mut a_changed = false;
     for (element_index, marker) in mesh.element_markers.iter().copied().enumerate() {
-        let Some(region_key) = marker_to_region.get(&marker) else {
-            continue;
-        };
-        let Some(region) = region_by_key.get(region_key) else {
+        let Some(region) = marker_to_region.get(&marker) else {
             continue;
         };
         let owner_material = magnet_materials
@@ -3465,6 +3510,8 @@ fn gather_fem_material_field_plans(
     problem: &ProblemIR,
     material: &fullmag_ir::MaterialIR,
     node_count: usize,
+    ms_element_field: Option<&[f64]>,
+    a_element_field: Option<&[f64]>,
 ) -> Vec<fullmag_ir::MaterialFieldPlan> {
     let mut material_field_plans = Vec::new();
     let is_extended =
@@ -3530,18 +3577,27 @@ fn gather_fem_material_field_plans(
                     }
                 }
             }
-            let (values, fallback) = match plan.parameter {
+            let (nodal_values, element_values, fallback) = match plan.parameter {
                 fullmag_ir::MaterialParameterNameIR::Ms => (
                     material.ms_field.as_deref(),
+                    ms_element_field,
                     material.saturation_magnetisation,
                 ),
-                fullmag_ir::MaterialParameterNameIR::Aex => {
-                    (material.a_field.as_deref(), material.exchange_stiffness)
-                }
+                fullmag_ir::MaterialParameterNameIR::Aex => (
+                    material.a_field.as_deref(),
+                    a_element_field,
+                    material.exchange_stiffness,
+                ),
                 fullmag_ir::MaterialParameterNameIR::Alpha => {
-                    (material.alpha_field.as_deref(), material.damping)
+                    (material.alpha_field.as_deref(), None, material.damping)
                 }
-                _ => (None, 0.0),
+                _ => (None, None, 0.0),
+            };
+            let values = element_values.or(nodal_values);
+            plan.realization_location = if element_values.is_some() {
+                fullmag_ir::MaterialFieldLocationIR::Element
+            } else {
+                fullmag_ir::MaterialFieldLocationIR::Node
             };
             let (sample_count, min, max, mean) = if let Some(values) = values {
                 let min = values.iter().copied().fold(f64::INFINITY, f64::min);
@@ -3552,7 +3608,9 @@ fn gather_fem_material_field_plans(
                 (node_count, fallback, fallback, fallback)
             };
             plan.realization_method = Some(
-                if plan
+                if element_values.is_some() {
+                    "conformal_domain_element_sampling"
+                } else if plan
                     .warnings
                     .iter()
                     .any(|warning| warning.contains("projected approximation"))
@@ -4282,7 +4340,6 @@ pub(crate) fn plan_fem(
         &base_material,
         &mesh,
         &object_segments,
-        &resolved_mesh_parts,
         &magnet_materials,
     )?;
     let (ms_element_field, a_element_field) = build_conformal_region_element_fields(
@@ -4463,10 +4520,8 @@ pub(crate) fn plan_fem(
         Some(target) => {
             let (nodes, elements) = materialize_fem_spin_torque_target_masks(
                 target,
-                mesh.nodes.len(),
-                mesh.cell_count(),
+                &mesh,
                 &object_segments,
-                &resolved_mesh_parts,
             )?;
             (Some(nodes), Some(elements))
         }
@@ -4499,10 +4554,8 @@ pub(crate) fn plan_fem(
         .map(|target| {
             materialize_fem_spin_torque_target_masks(
                 target,
-                mesh.nodes.len(),
-                mesh.cell_count(),
+                &mesh,
                 &object_segments,
-                &resolved_mesh_parts,
             )
             .map(|(nodes, _elements)| nodes)
         })
@@ -4533,8 +4586,13 @@ pub(crate) fn plan_fem(
             reasons: vec!["bounded FEM steady spin transport requires uniform saturation magnetization; per-element Ms is not supported by the native descriptor".to_string()],
         });
     }
-    let charge_transport_plans =
-        resolve_fem_charge_only_transport(problem, &mesh, &object_segments, &resolved_mesh_parts, false)?;
+    let charge_transport_plans = resolve_fem_charge_only_transport(
+        problem,
+        &mesh,
+        &object_segments,
+        &resolved_mesh_parts,
+        false,
+    )?;
     let spin_transport_plans = crate::spin_transport::resolve_m1_fem_spin_transport(
         problem,
         &mesh,
@@ -4848,8 +4906,13 @@ pub(crate) fn plan_fem(
     if let Some(note) = universe_note {
         provenance_notes.push(note);
     }
-    let material_field_plans =
-        gather_fem_material_field_plans(problem, &fem_plan.material, n_nodes);
+    let material_field_plans = gather_fem_material_field_plans(
+        problem,
+        &fem_plan.material,
+        n_nodes,
+        fem_plan.ms_element_field.as_deref(),
+        fem_plan.a_element_field.as_deref(),
+    );
     for field_plan in &material_field_plans {
         if let Some(statistics) = &field_plan.statistics {
             provenance_notes.push(format!(
@@ -6012,8 +6075,13 @@ pub(crate) fn plan_fem_eigen(
         "study: eigenmodes operator={:?} count={} normalization={:?} damping_policy={:?}",
         fem_plan.operator.kind, fem_plan.count, fem_plan.normalization, fem_plan.damping_policy
     );
-    let material_field_plans =
-        gather_fem_material_field_plans(problem, &fem_plan.material, fem_plan.mesh.nodes.len());
+    let material_field_plans = gather_fem_material_field_plans(
+        problem,
+        &fem_plan.material,
+        fem_plan.mesh.nodes.len(),
+        None,
+        None,
+    );
     let mut provenance_notes = vec![
         if resolved_domain_mesh_asset.is_some() {
             "Bootstrap FEM eigen planner using study-level shared-domain mesh asset".to_string()

@@ -167,6 +167,9 @@ function runViewCommand(id: ViewCommandId, context: CommandContext): Promise<Com
     context.visualizationSync.queuePatch({
       planar: { default_slice: { ...planar.default_slice, position_fraction: fraction } },
     });
+    // The section is part of the sample identity: send it now instead of
+    // after the debounce window (D2D-12 layer-step budget).
+    void context.visualizationSync.flushNow?.();
     return { status: "completed" };
   }
   const preset = COMPONENT_PRESETS[id];
@@ -175,6 +178,7 @@ function runViewCommand(id: ViewCommandId, context: CommandContext): Promise<Com
       return unavailable("Choose a catalogued tensor projection in the 2D controls; vector presets do not apply to tensors.");
     }
     context.visualizationSync.queuePatch({ planar: planarComponentPresetPatch(preset, planar.range) });
+    void context.visualizationSync.flushNow?.();
     return { status: "completed" };
   }
   const layer = LAYER_TOGGLES[id];

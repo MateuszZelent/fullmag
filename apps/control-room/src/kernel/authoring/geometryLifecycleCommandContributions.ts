@@ -53,6 +53,11 @@ import {
   createObjectTransaction,
   deleteObjectTransaction,
 } from "./geometryLifecycleCommands";
+import {
+  primitiveDraftBaseName,
+  resolveDraftObjectName,
+  uniqueObjectName,
+} from "./uniqueObjectName";
 import { invalidateAuthoringMutationDependents } from "./authoringMutationInvalidation";
 import {
   captureAuthoringHistoryWorkspaceState,
@@ -1110,7 +1115,10 @@ function openPrimitiveDraft(
   context.selection?.set(
     {
       kind: "builder.primitive",
-      label: draftIdentity === "thin-film" ? "New thin film" : `New ${primitiveKind}`,
+      label: uniqueObjectName(
+        primitiveDraftBaseName(`geometry:draft:${draftIdentity}`),
+        resourceData(context, MODEL_SCENE_PATH),
+      ),
       nodeId: `geometry:draft:${draftIdentity}`,
       objectId: null,
       ref: null,
@@ -1593,13 +1601,18 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
       const selection = context.selection?.get();
       const primitiveKind = primitiveKindFromDraftSelection(selection);
       const objectId = draftObjectId(primitiveKind);
-      const name = selection?.label ?? `New ${primitiveKind}`;
+      const baseName = primitiveDraftBaseName(selection?.nodeId);
       if (!context.api) {
         return { message: "Control-room API is unavailable.", status: "failed" };
       }
       const preparation = await prepareAuthoringMutation(context);
       assertCurrentSessionScope(context);
       const before = preparation.before;
+      const name = resolveDraftObjectName(
+        selection?.label ?? baseName,
+        baseName,
+        before ?? resourceData(context, MODEL_SCENE_PATH),
+      );
       const baseRevision =
         typeof before?.revision === "number" && Number.isFinite(before.revision)
           ? before.revision

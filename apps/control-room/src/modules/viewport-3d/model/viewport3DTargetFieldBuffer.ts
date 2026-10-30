@@ -11,6 +11,7 @@ import {
 } from "@/kernel/api/quantityIds";
 import type { SurfaceFieldProjectionMode } from "@/kernel/visualization/ObjectVisualizationController";
 import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
+import { sessionScopedResourceKey } from "@/kernel/resources/sessionResourceIdentity";
 
 import type {
   Viewport3DFieldComponentDemand,
@@ -33,6 +34,7 @@ export type Viewport3DFieldPayloadCapability =
 
 interface Viewport3DTargetFieldBufferBase {
   bufferId: string;
+  cacheResourceKey?: string | null;
   capability: Viewport3DFieldPayloadCapability;
   component: Exclude<Viewport3DFieldComponentDemand, "none">;
   componentCount: number;
@@ -214,6 +216,8 @@ export function buildViewport3DTargetFieldBuffer({
       requestScopeEpoch: validSessionIdentity?.requestScopeEpoch ?? null,
       topologyRevision,
     }),
+    cacheResourceKey: validSessionIdentity && resourceKey
+      ? sessionScopedResourceKey(validSessionIdentity, resourceKey) : null,
     capability,
     component,
     componentCount: fieldVector.nComp,

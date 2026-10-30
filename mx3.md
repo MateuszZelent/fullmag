@@ -1,7 +1,43 @@
 # MX3 — audyt frontendu i runtime symulacji Fullmag
 
 <!-- mx3-current-status:start -->
-## Aktualny status wdrożenia — 21.10.2026, po źródłowym review H2
+## Aktualny stan — 29.10.2026
+
+**Bieżący odbiór:** [CoFeB na aktualnym masterze](docs/audits/2026-10-29-cofeb-master-current-build.md),
+[przypięte dane i hashe](docs/diagnostics/2026-10-29-cofeb-master-current/runtime-evidence.json).
+
+`fullmag-master` działa na <http://127.0.0.1:3198/workspace>, **128 GiB / 16 CPU**.
+Native build: HEAD `b2b159c58fb921efbf278c120d12d268d958d03b` z lokalnymi poprawkami,
+snapshot `fd3cc159005bee251f8f876df7174c3bcef2dc183489146ed370dcb7dc2e42b1`.
+Development `80088b44d21c497199550c8857ed14c6` i nowa aktywacja CoFeB zakończyły
+się poprawnie. Siatka: **1 087 250 elementów, 183 764 węzły**. Run wykonał
+**10 iteracji na FEM GPU/double/strict** (w skrypcie etap BB). Native quantity bundle automatycznie
+opublikował m, H_demag i H_eff; w nowej próbie wysłano jedno Solve.
+
+Sprawdzono skończone dane binarne z kroku 10, stany complete/stale=0 i zgodność
+m z natywnym snapshotem GPU. Obejrzano kolorowaną magnetyzację oraz wektory
+Airbox w rzeczywistej przeglądarce: WebGL2, contextLost=false, 617×495,
+bez błędów strony/HTTP. Bounds cylindra uwzględniają oś X; Universe zachowuje
+2,8×2,1×1,2 µm, zmax obiektów wynosi 310,8 nm.
+
+[Izolacja błędów runtime](docs/audits/2026-10-29-runtime-failure-isolation.md)
+opisuje wdrożony pending odczytu wyniku workera, komunikaty UI oraz naprawę
+Pythonowego odbioru Completed. Naturalne błędy startup/admission pozostawiły
+API diagnostyczne dostępne. Rzadkie ścieżki błędu/pending nie były celowo
+wywoływane; ich pełny odbiór pozostaje **NOT VERIFIED**.
+
+Pozostają: terminal-observation odtwarza status/model bez mesh/pól, scalar
+window/stopka może pokazywać prepared step0, a obsługa dużych wejść wymaga
+profilowania. Nie kwalifikowano wszystkich FDM/FEM CPU/GPU ani zbieżności
+naukowej. Bez testów jednostkowych, nowego worktree i commit/push; równoległe
+zmiany oraz stary ukończony run zachowane.
+
+[Poprzedni odbiór](docs/audits/2026-10-29-cofeb-master-runtime-result.md) oraz
+[audyt początkowy](docs/audits/2026-10-28-mx3-master-reassessment.md)
+pozostają historią, a nie dowodem dla dowolnego późniejszego buildu.
+<!-- mx3-current-status:end -->
+
+### Historyczny status — 21.10.2026, po źródłowym review H2
 
 Ostatni rzeczywisty build pozostaje na `73e275ce1`: Make exit 0 / 121700 ms,
 pakiet 24 plików / 6161 ms, verify 1564 ms. Backend `f7c035fd` ma
@@ -34,7 +70,6 @@ buildu H0/H1/H2. Zastosowanie H2 wymaga rozszerzenia zgody na bezpieczny
 drain/recovery dwóch innych grup; pytanie pozostaje bez odpowiedzi.
 API, materializacja, mesh i widoczny render **NOT VERIFIED**.
 Browser tool nadal wymaga poprawnej karty HTTP; nie obchodzono odmowy.
-<!-- mx3-current-status:end -->
 
 
 **Data:** 19.10.2026. **Metoda:** analiza kodu, bez uruchamiania testów, buildów, symulacji, poleceń Docker ani przeglądarki. **Checkout:** `C:\git\fullmag\fullmag`, branch `master`. Pierwsza runda: HEAD `6d3fcc08285e075cab0019cb235f21c7a2a9841f`. Druga, trzecia, czwarta i piąta runda (§0–0.3): HEAD `377f3ced6d314ecfc46bc63211563dca4483765f`. We wszystkich rundach istniały lokalne zmiany. Raport dotyczy tych źródeł, nie samego czystego commita ani aktualnie działającego obrazu kontenera.
@@ -953,6 +988,8 @@ Historyczny manifest SHA-256 dla 166 plików: 156 odczytanych 2026-10-19 20:27:0
 | [crates/fullmag-authoring/src/scene.rs](C:/git/fullmag/fullmag/crates/fullmag-authoring/src/scene.rs) | `16bc4e15b3307447b408b3a5759d0a8371b1ae2cbd6fa4981d0db47236fec5c4` |
 
 ## 10. Plan wdrożenia po ponownym review — backend i frontend
+
+> **Adnotacja 28.10.2026:** specyfikacja F0–F12 poniżej jest historyczna. Jej kryteria pomagają w odbiorze, lecz ówczesne konflikty, ścieżki Windows, lista brakujących implementacji i plan wspólnej migracji nie opisują aktualnego mastera. Bieżące rozstrzygnięcia i kolejność dalszej pracy są w [ponownej ocenie mastera](docs/audits/2026-10-28-mx3-master-reassessment.md). Nie odtwarzać starych operacji 3806/held04 ani Solve na podstawie tego planu.
 
 **F1–F12 pozostają planem wdrożenia i odbioru; równoległych zmian implementacyjnych nie zakwalifikowano w tej rundzie. F0: w źródłach są już połączone trzy dawne konflikty; odbiór integracji/kompilacji NOT VERIFIED (§0.3).** Ten przegląd aktualizuje dokumentację; nie rozwiązuje konfliktów, nie wdraża poprawek ani nie uruchamia testów. Numeracja F0–F12 została zachowana, ale kolejność i kryteria zastępują plan drugiej rundy. Pozycje zakwalifikowane jako propozycja UX, hipoteza lub dług techniczny nie stają się automatycznie obowiązkowymi naprawami defektów.
 

@@ -559,7 +559,7 @@ mod tests {
                 7 => snapshot.mesh_workspace=None,
                 8 => snapshot.metadata.as_mut().unwrap()["execution_plan"]["backend_plan"]["source_object_id"]=json!("other"),
                 9 => snapshot.fem_mesh.as_mut().unwrap().mesh_name="other".into(),
-                10 => snapshot.fem_mesh.as_mut().unwrap().object_segments.clear(),
+                10 => snapshot.mesh_workspace.as_mut().unwrap()["execution_plan"]["backend_plan"]["source_object_segments"]=json!([]),
                 11 => snapshot.mesh_workspace.as_mut().unwrap()["accepted_run_id"]=json!("foreign"),
                 12 => snapshot.fem_mesh.as_mut().unwrap().generation_id=None,
                 13 => snapshot.simulation_preparation.as_mut().unwrap().preparation_id="old".into(),

@@ -93,9 +93,10 @@ def file_link_fixture():
     value = native()
     inventory = value["candidate"]["descendants"]
     inventory.update(entries=3, directories=1, files=2, reparse_points=1,
-                     links=[{"path": r"lib\alias.so", "tag": "0xa000001d", "kind": "file"}])
+                     links=[{"path": r"lib\alias.so", "tag": "0xa000001d", "kind": "file", "target": None}])
     mapping = proof()["before"]["mapping"]
-    hop = {"path": "lib/alias.so", "native_entry_kind": "file", "target": "alias.so.0", "device": mapping["device"],
+    hop = {"path": "lib/alias.so", "native_entry_kind": "file", "native_reparse_tag": "0xa000001d",
+           "target": "alias.so.0", "device": mapping["device"],
            "inode": 123, "mode": stat.S_IFLNK | 0o777}
     final = {"path": "lib/alias.so.0", "device": mapping["device"],
              "inode": 124, "mode": stat.S_IFREG | 0o644}
@@ -221,7 +222,8 @@ class WindowsIsolationTests(unittest.TestCase):
 
     def test_unknown_native_file_reparse_tag_or_link_inventory_overflow_is_refused(self):
         value, _, _ = file_link_fixture()
-        value["candidate"]["descendants"]["links"][0]["tag"] = "0xa0000003"
+        value["candidate"]["descendants"]["links"][0].update(
+            tag="0xa0000003", target=SOURCE + r"\lib\alias.so.0")
         with self.assertRaisesRegex(BuildControlError, "tag"):
             self.check_native(value)
         value, _, _ = file_link_fixture()
@@ -320,7 +322,8 @@ class WindowsIsolationTests(unittest.TestCase):
         value, mapping, evidence = file_link_fixture()
         inventory = value["candidate"]["descendants"]
         inventory.update(entries=4, directories=2, files=2, reparse_points=2)
-        inventory["links"].append({"path": r"lib\alias.so.0", "tag": "0xa000001d", "kind": "directory"})
+        inventory["links"].append({"path": r"lib\alias.so.0", "tag": "0xa000001d",
+                                    "kind": "directory", "target": None})
         second = dict(evidence[0]["hops"][0], path="lib/alias.so.0", inode=125,
                       native_entry_kind="directory", target="final")
         final = dict(evidence[0]["final"], path="lib/final", mode=stat.S_IFDIR | 0o755)
@@ -393,7 +396,8 @@ class WindowsIsolationTests(unittest.TestCase):
                 candidate["after"]["contained_links"][0]["hops"][0]["target"] = "different.so"
             else:
                 candidate["after"]["contained_links"][0]["final"]["inode"] += 1
-            with self.subTest(field=field), self.assertRaisesRegex(BuildControlError, "identities drifted"):
+            expected_error = "Relative link does not end" if field == "target" else "identities drifted"
+            with self.subTest(field=field), self.assertRaisesRegex(BuildControlError, expected_error):
                 self.check_proof(candidate)
 
     def test_directory_descendant_inventory_has_fixed_entry_and_time_bounds(self):
@@ -422,13 +426,21 @@ class WindowsIsolationTests(unittest.TestCase):
         self.assertNotIn("FileId $currentDir", walk)
         self.assertIn("FileId $root", walk)
 
-    def test_descendant_walk_avoids_powershell_item_provider_and_per_entry_budget_calls(self):
+    def test_descendant_walk_limits_item_provider_to_reparse_entries_and_bounds_budget_calls(self):
         ancestor = isolation.WINDOWS_PROVIDER.split("function NoReparse(", 1)[1].split("function FileId(", 1)[0]
         walk = isolation.WINDOWS_PROVIDER.split("function Descendants(", 1)[1].split("function Identity(", 1)[0]
         self.assertNotIn("Get-Item", ancestor)
         self.assertIn("[IO.File]::GetAttributes($cursor)", ancestor)
-        self.assertNotIn("Get-Item", walk)
         self.assertIn("[IO.DirectoryInfo]::new($currentDir)", walk)
+        ordinary_prefix, link_and_rest = walk.split("if ($isLink) {", 1)
+        link_branch, ordinary_suffix = link_and_rest.split(
+            "if (($attributes -band 0x10) -ne 0) {", 1)
+        ordinary_entry_path = ordinary_prefix + ordinary_suffix
+        self.assertNotIn("Get-Item", ordinary_entry_path)
+        self.assertEqual(link_branch.count("Get-Item -Force -LiteralPath $entry.FullName"), 2)
+        self.assertIn("if ($tag -ceq '0xa0000003')", link_branch)
+        self.assertIn("elseif ($tag -ceq '0xa000000c')", link_branch)
+        self.assertIn("if ($links.Count -ge 256)", link_branch)
         entries = walk.split("foreach ($entry in $directory.EnumerateFileSystemInfos())", 1)[1]
         entries = entries.split("NoReparse $currentDir", 1)[0]
         self.assertEqual(entries.count("DescendantBudget $clock"), 1)

@@ -708,6 +708,8 @@ export function VisualizationQuantitySection({
     loading: fieldCatalogLoading, error: fieldCatalogError, executionRequired,
   });
   const quantityFeedbackId = useId();
+  const [quantityMenuOpen, setQuantityMenuOpen] = useState(false);
+  const quantityPending = isFieldPending("activeQuantityId");
   const noQuantities = quantityItems.length === 0;
   const selectedQuantity = selectedValue ? quantityCatalog?.quantities.find((entry) =>
     resolveCanonicalQuantityId(entry.id) === resolveCanonicalQuantityId(selectedValue),
@@ -719,9 +721,14 @@ export function VisualizationQuantitySection({
     <InspectorPropertyRow label="Quantity source" layout="stacked">
       <div className="fm-quantity-source-control flex w-full min-w-0 flex-col gap-1">
       <Select
-        disabled={executionRequired || isFieldPending("activeQuantityId") || !settings.visible || fieldCatalogLoading || Boolean(fieldCatalogError) || noQuantities}
+        disabled={executionRequired || !settings.visible || fieldCatalogLoading || Boolean(fieldCatalogError) || noQuantities}
+        open={quantityMenuOpen}
+        onOpenChange={(open) => {
+          if (!open || !quantityPending) setQuantityMenuOpen(open);
+        }}
         value={selectedValue}
         onValueChange={(quantityId) => {
+          if (quantityPending) return;
           const patchValue = quantitySourcePatch(settings, quantityId);
           const nextQuantity = quantityCatalog?.quantities.find((entry) => entry.id === quantityId);
           if (isFlowMajorTensorDescriptor(nextQuantity?.tensor)) {
@@ -739,7 +746,9 @@ export function VisualizationQuantitySection({
           void patch(patchValue);
         }}
       >
-        <SelectTrigger aria-label="Quantity source" aria-describedby={quantityFeedbackId} aria-invalid={Boolean(fieldCatalogError) || undefined}>
+        {/* Keep the trigger focusable while saving so closing the menu can
+            restore focus. The controlled menu and value guard block reentry. */}
+        <SelectTrigger aria-label="Quantity source" aria-describedby={quantityFeedbackId} aria-invalid={Boolean(fieldCatalogError) || undefined} aria-busy={quantityPending || undefined} aria-disabled={quantityPending || undefined}>
           <SelectValue placeholder={summary}>{summary}</SelectValue>
         </SelectTrigger>
         <SelectContent>

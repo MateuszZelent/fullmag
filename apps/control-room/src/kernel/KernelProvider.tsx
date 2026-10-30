@@ -51,6 +51,7 @@ import { resolveDiagnosticRecorderConfig } from "./performance/diagnostic-record
 import { KernelContext } from "./KernelContext";
 import { LayoutController } from "./layout/LayoutController";
 import { SHELL_COMMANDS } from "./layout/shellCommands";
+import { useDomainSetupNavigation } from "./layout/domainSetupNavigation";
 import { ModuleRegistry } from "./module/ModuleRegistry";
 import { startBrowserActivityDiagnostics } from "./performance/browserActivityDiagnostics";
 import { startPerformanceMeasureDiagnostics } from "./performance/performanceMeasureDiagnostics";
@@ -70,7 +71,10 @@ import {
 import {
   createViewport3DInactiveResourcePauseController,
 } from "./resources/inactiveViewportResourcePolicy";
-import { createHiddenInstanceTabResourcePauseController } from "./resources/hiddenInstanceTabResourcePolicy";
+import {
+  createHiddenDocumentResourcePauseController,
+  createHiddenInstanceTabResourcePauseController,
+} from "./resources/hiddenInstanceTabResourcePolicy";
 import { listenForInstanceTabVisibility } from "./layout/instanceTabVisibility";
 import { useRuntimeCommandControlResourceData } from "./resources/studyRuntimeResources";
 import { confirmedSessionResourceIdentity, sessionRequestScopeKey, sessionScopedResourceKey, type SessionResourceIdentity } from "./resources/sessionResourceIdentity";
@@ -506,6 +510,9 @@ function AvailableSessionRuntimeConnectors({ kernel, collection }: {
     clearRuntimeSelection();
     return clearRuntimeSelection;
   }, [kernel, scopeKey]);
+  // Declared after the clearing effect so a requested Universe selection is
+  // applied after the session-transition clear, not wiped by it.
+  useDomainSetupNavigation(kernel, confirmedIdentity?.sessionId ?? null, scopeKey);
   if (!confirmedIdentity) return null;
   return (
     <>
@@ -852,10 +859,17 @@ function Viewport3DResourceLifecycleConnector({
   return null;
 }
 
-/** Pauses this page's background work while its instance tab is hidden (ADR 0069). */
+/**
+ * Pauses this page's background work while its instance tab is hidden
+ * (ADR 0069), and its live data plane while the browser tab is hidden.
+ */
 function InstanceTabVisibilityConnector() {
   useEffect(() => listenForInstanceTabVisibility(window), []);
   useEffect(() => createHiddenInstanceTabResourcePauseController(), []);
+  useEffect(
+    () => createHiddenDocumentResourcePauseController({ visibility: document }),
+    [],
+  );
 
   return null;
 }

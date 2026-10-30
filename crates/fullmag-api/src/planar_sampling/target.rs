@@ -45,6 +45,28 @@ pub(crate) struct ResolvedSpatialTarget {
     source_entity_kind: &'static str,
 }
 
+/// Point count from which a FEM locator builds the element index.
+const POINT_LOCATOR_INDEX_THRESHOLD: usize = 32;
+
+/// Point evaluation with an optional element index; results equal
+/// `ResolvedSpatialTarget::evaluate_point`.
+pub(crate) struct PointLocator<'a> {
+    target: &'a ResolvedSpatialTarget,
+    index: Option<super::element_index::ElementBvh>,
+    candidates: Vec<u32>,
+}
+
+impl PointLocator<'_> {
+    pub(crate) fn evaluate(&mut self, point: [f64; 3]) -> Option<(u32, Vec<f64>)> {
+        match (&self.target.field, &self.index) {
+            (TargetField::Fem(field), Some(index)) => {
+                super::fem::interpolate_at_indexed(field, index, &mut self.candidates, point)
+            }
+            _ => self.target.evaluate_point(point),
+        }
+    }
+}
+
 impl ResolvedSpatialTarget {
     /// Raw carrier value at a world point with the raster's own locator and
     /// basis: containing FDM cell or FEM shape functions. `None` when the point
@@ -56,6 +78,19 @@ impl ResolvedSpatialTarget {
             }
             TargetField::Fem(field) => super::fem::interpolate_at(field, point),
         }
+    }
+
+    /// Locator for `expected_points` evaluations. FEM targets with many points
+    /// build an element AABB hierarchy once (PM-N28); a few points keep the
+    /// direct scan, which is cheaper than building the index.
+    pub(crate) fn point_locator(&self, expected_points: usize) -> PointLocator<'_> {
+        let index = match &self.field {
+            TargetField::Fem(field) if expected_points >= POINT_LOCATOR_INDEX_THRESHOLD => {
+                Some(super::fem::element_index(field))
+            }
+            _ => None,
+        };
+        PointLocator { target: self, index, candidates: Vec::new() }
     }
 
     pub(crate) fn selected_entity_ids(&self) -> &[u32] {
@@ -252,6 +287,7 @@ pub(crate) fn resolve_spatial_target(
             grid_fingerprint,
             membership,
             membership_error,
+            coverage,
             ..
         } => {
             if matches!(operator, PlanarOperatorIR::SurfaceProjection { .. }) {
@@ -294,6 +330,10 @@ pub(crate) fn resolve_spatial_target(
                     },
                 )?;
                 intersect_masks(&mut selected, &region);
+            }
+            if let Some(coverage) = coverage {
+                // A composite multilayer grid has cells no native layer covers.
+                intersect_masks(&mut selected, coverage);
             }
             let carrier_identity = grid_fingerprint
                 .clone()

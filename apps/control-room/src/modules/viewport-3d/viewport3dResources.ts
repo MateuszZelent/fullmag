@@ -694,6 +694,12 @@ export const VIEWPORT_3D_TOPOLOGY_RETRY_POLICY: ResourceRetryPolicy = {
  * API caches it; a 5 s budget aborted those loads for good and left the
  * viewport without data. The deadline bounds a hung request, not normal work.
  */
+// Live fields publish a new revision every projector tick, while a large
+// vector can take longer than the refetch interval to download and decode.
+// Aborting the running load on every revision could starve the viewport, so a
+// newer revision waits for the running load and then loads the latest one.
+const FIELD_VECTOR_ABORT_STALE_INFLIGHT = false;
+
 const FIELD_VECTOR_RETRY_POLICY: ResourceRetryPolicy = {
   deadlineMs: 30_000,
   maxAttempts: 5,
@@ -1656,7 +1662,7 @@ export function useViewport3DFieldVectorRequest(
   );
 
   const resource = useResource({
-    abortStaleInflight: true,
+    abortStaleInflight: FIELD_VECTOR_ABORT_STALE_INFLIGHT,
     enabled: enabled && sessionIdentity !== null,
     load,
     minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),
@@ -1939,7 +1945,7 @@ export function useViewport3DAirboxFieldVectors(
   }, [requests]);
 
   const resource = useResource({
-    abortStaleInflight: true,
+    abortStaleInflight: FIELD_VECTOR_ABORT_STALE_INFLIGHT,
     enabled: enabled && requests.size > 0,
     load,
     minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),
@@ -2195,7 +2201,7 @@ export function useViewport3DQuantityFieldVectors(
   }, [requestKeys]);
 
   const resource = useResource({
-    abortStaleInflight: true,
+    abortStaleInflight: FIELD_VECTOR_ABORT_STALE_INFLIGHT,
     enabled: enabled && sessionIdentity !== null && requestKeys.size > 0,
     load,
     minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),
@@ -2436,7 +2442,7 @@ export function useViewport3DPartFieldVectors(
   }, [requestKeys]);
 
   const resource = useResource({
-    abortStaleInflight: true,
+    abortStaleInflight: FIELD_VECTOR_ABORT_STALE_INFLIGHT,
     enabled: enabled && sessionIdentity !== null && requestKeys.size > 0,
     load,
     minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),

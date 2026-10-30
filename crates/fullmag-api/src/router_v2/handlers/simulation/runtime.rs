@@ -1821,18 +1821,9 @@ pub async fn get_solver_status(
             snapshot.metadata.as_deref(),
             &["execution_plan", "backend_plan", "kind"],
         ),
-        relaxation_algorithm: metadata_string(
+        relaxation_algorithm: crate::router_v2::handlers::sessions::status::relaxation_algorithm_from_metadata(
             snapshot.metadata.as_deref(),
-            &["relaxation_algorithm"],
-        )
-        .or_else(|| {
-            metadata_string(
-                snapshot.metadata.as_deref(),
-                &["execution_plan", "backend_plan", "relax_algorithm"],
-            )
-        })
-        .as_deref()
-        .and_then(RelaxationAlgorithm::parse),
+        ),
         integrator: metadata_string(
             snapshot.metadata.as_deref(),
             &["execution_plan", "backend_plan", "integrator"],
@@ -2228,6 +2219,7 @@ fn runtime_command_disabled_reason(
                 return Some("Accepted preparation is pending; Compute remains held.".into());
             }
             "pause" => return Some(ACCEPTED_PAUSE_UNSUPPORTED_REASON.into()),
+            "close" => return Some(DOCKER_CLOSE_UNSUPPORTED_REASON.into()),
             "stop" => return accepted_stop_disabled_reason(snapshot),
             "compute_fields" | "compute_energies" => {
                 if snapshot.runtime_status.code == "imported_read_only"
@@ -2268,6 +2260,9 @@ fn runtime_command_disabled_reason(
 /// Reason prefix matches the rejection code published by the accepted Pause
 /// route so UI readiness and command admission stay one contract.
 const ACCEPTED_PAUSE_UNSUPPORTED_REASON: &str = "accepted_control_unsupported: Docker accepted workers expose durable Stop; Pause is unavailable until a worker pause command is published.";
+/// Close is drained only by a CLI session host, which the Docker API-only
+/// runtime does not have; admission rejects it instead of queueing it forever.
+pub(crate) const DOCKER_CLOSE_UNSUPPORTED_REASON: &str = "accepted_control_unsupported: the Docker API-only runtime has no session host to close; use Stop for a run, or create a new simulation to replace the session.";
 
 /// Accepted Stop is durable task cancellation: any non-terminal accepted run
 /// may be stopped, including waiting_for_compute/waiting_for_solve, FEM

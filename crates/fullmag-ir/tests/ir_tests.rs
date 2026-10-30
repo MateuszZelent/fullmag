@@ -6074,6 +6074,26 @@ fn declared_universe_accepts_scene_box_as_manual_airbox() {
     assert_eq!(universe.airbox_hmin, Some(2.0e-8));
     assert_eq!(universe.airbox_growth_rate, Some(2.5));
     assert_eq!(universe.airbox_grading.as_deref(), Some("geometric"));
+    assert_eq!(universe.airbox_curvature_factor, None);
+}
+
+#[test]
+fn declared_universe_carries_air_feature_controls() {
+    let value = serde_json::json!({
+        "mode": "manual",
+        "size": [4e-7, 2.4e-7, 2.4e-7],
+        "airbox_hmax": 4e-8,
+        "airbox_curvature_factor": 0.3,
+        "airbox_narrow_region_resolution": 0.5
+    });
+
+    let universe = DeclaredUniverseIR::from_study_universe_value(&value).unwrap();
+
+    assert_eq!(universe.airbox_curvature_factor, Some(0.3));
+    assert_eq!(universe.airbox_narrow_region_resolution, Some(0.5));
+    let encoded = serde_json::to_value(&universe).unwrap();
+    assert_eq!(encoded["airbox_curvature_factor"], 0.3);
+    assert_eq!(encoded["airbox_narrow_region_resolution"], 0.5);
 }
 
 #[test]

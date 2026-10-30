@@ -87,6 +87,19 @@ fi
 
 # Closed scientific route, before diagnostic/storage shortcuts; never eval argv.
 case "${recipe}" in
+  *"scripts/docker_volume_no_spawn_cancellation.py"*)
+    no_spawn_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_no_spawn_cancellation.py\" --source-root '([^']+)' --backend-container-id '([0-9a-f]{64})' --image-id '(sha256:[0-9a-f]{64})' --process-receipt-sha256 '([0-9a-f]{64})' --request '([^']+)' --request-sha256 '([0-9a-f]{64})'( --apply)?( --reconcile-loader-failure '([0-9a-f]{32})' --failed-receipt-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
+    if [[ ! "${recipe}" =~ ${no_spawn_pattern} ]]; then
+      echo "[fullmag just] invalid native no-spawn cancellation recipe" >&2
+      exit 2
+    fi
+    no_spawn_args=(--source-root "${BASH_REMATCH[1]}" --backend-container-id "${BASH_REMATCH[2]}"
+      --image-id "${BASH_REMATCH[3]}" --process-receipt-sha256 "${BASH_REMATCH[4]}"
+      --request "${BASH_REMATCH[5]}" --request-sha256 "${BASH_REMATCH[6]}")
+    if [[ -n "${BASH_REMATCH[7]:-}" ]]; then no_spawn_args+=(--apply); fi
+    if [[ -n "${BASH_REMATCH[8]:-}" ]]; then no_spawn_args+=(--reconcile-loader-failure "${BASH_REMATCH[9]}" --failed-receipt-sha256 "${BASH_REMATCH[10]}"); fi
+    exec "${python_cmd}" -B "${script_dir}/docker_volume_no_spawn_cancellation.py" "${no_spawn_args[@]}"
+    ;;
   *"scripts/docker_volume_startup_diagnostic.py"*)
     startup_inspection_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_startup_diagnostic.py\" --source-root '([^']+)' --backend-container-id '([0-9a-f]{64})' --image-id '(sha256:[0-9a-f]{64})' --report '(verification/[A-Za-z0-9._/-]+\\.json)'[[:space:]]*$"
     if [[ ! "${recipe}" =~ ${startup_inspection_pattern} ]]; then

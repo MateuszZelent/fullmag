@@ -15,6 +15,152 @@ PROOF_SCHEMA = "fullmag.development-terminal-observation-proof.v1"
 Read = Callable[[str], bytes]
 
 
+def diagnostic_terminal_stop_probe(control, previous, backend):
+    """Read-only admission to an explicit stop, never restart or recovery.
+
+    A target API may install Completed correctly while an older Python
+    receipt reader rejects it. Its native owner can still be Ready and idle.
+    Authenticate that exact case instead of treating API health as proof that
+    the native service is dead. The caller must still obtain a real drain.
+    """
+    from docker_build_control import BuildControlError, docker_capture
+    from docker_volume_preowner_drained import _released, _run_pins
+    metadata = previous.get("terminal_observation")
+    if (previous.get("state") != "failed-confirmed" or not isinstance(metadata, Mapping)
+            or previous.get("error") != "Runtime admission failed; services retained: terminal observation receipt differs from the real target installation"):
+        raise BuildControlError("Diagnostic stop requires the exact terminal-installation admission failure")
+    proof_sha = metadata.get("proof_sha256")
+    digest(proof_sha)
+    script = r'''import hashlib,json,os,pathlib,sys,urllib.request
+sys.path.insert(0,'/opt/fullmag')
+import runtime_service as service
+paths=service.canonical_paths()
+sha=lambda raw:hashlib.sha256(raw).hexdigest()
+def read(path,label,maximum=1048576): return service._bounded_regular(path,label,maximum)
+def obj(path,label,maximum=1048576): return service._accepted_reattach_json(read(path,label,maximum),label)
+def require(value,message):
+ if not value: raise RuntimeError(message)
+environment,observation=service._terminal_observation_documents(paths)
+require(isinstance(observation,dict) and observation['proof_sha256']==sys.argv[1],'source observation differs')
+proof=observation['proof']
+process_path=service.process_receipt_path(paths)
+process_raw=read(process_path,'diagnostic process')
+process=service._accepted_reattach_json(process_raw,'diagnostic process')
+cause='terminal observation receipt differs from the real target installation'
+require(process.get('schema')=='fullmag.docker-process-tree.v1'
+ and process.get('state')=='failed_outcome_retained' and process.get('error')==cause
+ and process.get('api_diagnostic_only') is True and 'terminal_service_owner' not in process,
+ 'not the exact retained terminal-observation failure')
+owner=process.get('service_owner',{})
+service._validate_terminal_owner(owner,state='ready',name='diagnostic ready owner')
+native=service._service_status(paths)
+fingerprint=service._owner_fingerprint(owner)
+require(service._owner_fingerprint(native)==fingerprint,'native owner changed or is not ready')
+fence_path=process.get('api_failure_fence','')
+require(isinstance(fence_path,str) and pathlib.Path(fence_path).parent==process_path.parent
+ and pathlib.Path(fence_path).name.startswith('api-failure-'),'failure fence path differs')
+fence_raw=read(fence_path,'diagnostic API fence')
+fence=service._accepted_reattach_json(fence_raw,'diagnostic API fence')
+api_id=fence.get('api_instance_id')
+service._accepted_reattach_api_id(api_id,'diagnostic API')
+require(fence.get('schema')=='fullmag.api-runtime-failure-fence.v1'
+ and fence.get('stage')=='runtime_supervision' and fence.get('reason')==cause
+ and fence.get('api_pid')==process.get('api_pid'),'failure fence identity differs')
+def get(path):
+ request=urllib.request.Request('http://127.0.0.1:8081'+path,headers={'Host':'localhost'})
+ with urllib.request.urlopen(request,timeout=5) as response:
+  raw=response.read(1048577)
+  require(response.status==200 and len(raw)<=1048576
+   and response.headers.get_all('x-fullmag-api-instance')==[api_id],'API identity differs')
+  return service._accepted_reattach_json(raw,'diagnostic response')
+health=get('/v2/platform/health'); status=get('/v2/sessions/current/status')
+require(health.get('status')=='degraded' and health.get('active_session') is True
+ and status.get('session',{}).get('session_id')==proof['session_id']
+ and status.get('run',{}).get('run_id')==proof['run_id']
+ and status.get('solver',{}).get('state')=='completed','retained session is not completed')
+parent=pathlib.PurePosixPath(observation['proof_relative']).parent
+installed_path=service._reattach_relative(paths.state_root,str(parent/('installed-'+api_id+'.json')),'installed observation')
+installed_raw=read(installed_path,'installed observation')
+installed=service._accepted_reattach_json(installed_raw,'installed observation')
+launch_sha=installed.get('launch_sha256')
+require(isinstance(launch_sha,str) and service.HEX64.fullmatch(launch_sha),'launch digest differs')
+launch_path=service._reattach_relative(paths.state_root,str(parent/('launch-'+launch_sha+'.json')),'launch observation')
+launch_raw=read(launch_path,'launch observation'); launch=service._accepted_reattach_json(launch_raw,'launch observation')
+require(sha(launch_raw)==launch_sha and launch.get('source_proof_sha256')==sys.argv[1]
+ and launch.get('source_native_config_sha256')==proof['native_config_sha256']
+ and launch.get('terminal_evidence_sha256')==proof['terminal_evidence_sha256'],'launch/source binding differs')
+expected={'schema':'fullmag.terminal-observation-restored.v1','api_instance_id':api_id,
+ 'run_id':proof['run_id'],'session_id':proof['session_id'],'session_epoch':proof['session_epoch'],
+ 'scene_revision':proof['scene_revision'],'terminal_outcome':'completed','proof_sha256':sys.argv[1],
+ 'launch_sha256':launch_sha,'source_image_id':proof['image_id'],'source_config_sha256':proof['config_sha256'],
+ 'target_build_id':launch['target_build_id'],'target_source_sha256':launch['target_source_sha256'],
+ 'target_image_id':launch['target_image_id'],'native_config_sha256':launch['native_config_sha256'],
+ 'terminal_evidence_sha256':proof['terminal_evidence_sha256']}
+require(installed==expected,'native installed observation differs')
+config_raw=read(paths.config,'native config'); config_sha=sha(config_raw)
+require(config_sha==launch['native_config_sha256'],'native config changed')
+evidence=service._run_cli(paths,['runtime','service-inspect-terminal-run','--config',str(paths.config),
+ '--config-sha256',config_sha,'--run-id',proof['run_id']],timeout=30)
+require(evidence=={'schema_version':'runtime_service_terminal_run_evidence.v1','run_id':proof['run_id'],
+ 'terminal_evidence_sha256':proof['terminal_evidence_sha256'],'mutations_applied':False,'solve_replayed':False},
+ 'native terminal evidence differs')
+catalogs={}
+runs=paths.store/'runs'
+require(not runs.is_symlink() and runs.is_dir(),'run inventory is unsafe')
+for run in runs.iterdir():
+ require(len(catalogs)<128 and not run.is_symlink() and run.is_dir(),'run inventory exceeds its bound')
+ raw=read(run/'run_catalog.json','terminal catalog',8*1048576)
+ catalog=service._accepted_reattach_json(raw,'terminal catalog')
+ tasks=catalog.get('tasks')
+ require(isinstance(tasks,list) and tasks and all(isinstance(task,dict)
+  and task.get('lifecycle') in {'succeeded','failed','cancelled','interrupted'} for task in tasks),
+  'run inventory contains a nonterminal task; stop refused')
+ catalogs[run.name]=sha(raw)
+require(catalogs.get(proof['run_id'])==proof['catalog_sha256'],'source catalog changed')
+def proc(pid):
+ root=pathlib.Path('/proc')/str(pid)
+ tail=(root/'stat').read_text().rsplit(') ',1)[1].split()
+ return {'pid':pid,'ppid':int(tail[1]),'start':int(tail[19]),'exe':os.readlink(root/'exe'),
+  'argv':[x.decode() for x in (root/'cmdline').read_bytes().split(bytes([0])) if x]}
+rows=[]
+for path in pathlib.Path('/proc').iterdir():
+ if path.name.isdigit():
+  try: rows.append(proc(int(path.name)))
+  except FileNotFoundError: pass
+ require(len(rows)<=32,'process inventory exceeds its bound')
+api=proc(process['api_pid']); entry=proc(api['ppid'])
+require(entry['ppid']==1 and entry['argv']==['/usr/local/bin/python3','/opt/fullmag/entrypoint.py']
+ and api['exe'].endswith('/fullmag-api'),'API/entrypoint ancestry differs')
+health_processes=[row for row in rows if row['ppid']==0
+ and row['argv']==['/usr/local/bin/python3','/opt/fullmag/healthcheck.py']]
+allowed={1,entry['pid'],api['pid'],owner['pid'],os.getpid(),*(child['pid'] for child in owner['children'])}
+require(len(health_processes)<=1 and {row['pid'] for row in rows}==allowed|{row['pid'] for row in health_processes},
+ 'a worker or unknown process is present; stop refused')
+stable=sorted((row['pid'],row['ppid'],row['start'],row['exe']) for row in rows
+ if row['pid']!=os.getpid() and row not in health_processes)
+require(read(process_path,'diagnostic process')==process_raw
+ and read(fence_path,'diagnostic API fence')==fence_raw
+ and service._owner_fingerprint(service._service_status(paths))==fingerprint,'diagnostic state changed')
+print(json.dumps({'schema':'fullmag.terminal-diagnostic-stop-preflight.v1',
+ 'proof_sha256':sys.argv[1],'run_id':proof['run_id'],'session_id':proof['session_id'],
+ 'api_instance_id':api_id,'process_sha256':sha(process_raw),'fence_sha256':sha(fence_raw),
+ 'installed_sha256':sha(installed_raw),'native_config_sha256':config_sha,
+ 'owner_sha256':sha(fingerprint.encode()),'terminal_evidence_sha256':proof['terminal_evidence_sha256'],
+ 'terminal_catalogs':catalogs,
+ 'process_inventory_sha256':sha(json.dumps(stable,separators=(',',':')).encode()),
+ 'health':{'status':'degraded','active_session':True},'mutations_applied':False,'solve_replayed':False},sort_keys=True))
+'''
+    result = docker_capture("exec", backend["Id"], "python3", "-I", "-B", "-c", script, proof_sha, timeout=90)
+    if len(result.stdout) > 64 * 1024:
+        raise BuildControlError("Diagnostic terminal stop probe exceeds its bound")
+    probe = decode(result.stdout)
+    if (probe.get("schema") != "fullmag.terminal-diagnostic-stop-preflight.v1"
+            or probe.get("proof_sha256") != proof_sha
+            or probe.get("mutations_applied") is not False or probe.get("solve_replayed") is not False):
+        raise BuildControlError("Diagnostic terminal stop probe differs")
+    return {**probe, "released": _released(control, backend), "run_pins": _run_pins(control, backend)}
+
+
 def canonical(value: object) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True,
                       separators=(",", ":"), allow_nan=False).encode("utf-8")
@@ -114,8 +260,9 @@ def build_proof(read_control: Read, read_store: Read, *, iteration: str,
     require(preflight.get("schema") == "fullmag.docker-terminal-session-drain-preflight.v1",
             "preflight is not a terminal session observation")
     public_run = preflight.get("run", {})
-    require(public_run.get("run_id") == run_id and public_run.get("status") == "failed",
-            "preflight is not this Failed run")
+    public_status = public_run.get("status")
+    require(public_run.get("run_id") == run_id and public_status in ("failed", "completed"),
+            "preflight is not this Failed or Completed run")
     session_id = portable(preflight.get("session_id"))
     require(public_run.get("session_id") == session_id, "public session binding differs")
     started_at = public_run.get("started_at")
@@ -147,9 +294,28 @@ def build_proof(read_control: Read, read_store: Read, *, iteration: str,
             and drain.get("backend_container_id") == operation.get("backend_container"),
             "native drain belongs to another backend")
     process = drain.get("process_receipt", {})
-    require(set(process) == {"schema", "state", "api_pid", "api_exit_code", "accepted_store",
-                            "bootstrap", "qualification", "service_owner", "terminal_service_owner"},
+    process_fields = {"schema", "state", "api_pid", "api_exit_code", "accepted_store",
+                      "bootstrap", "qualification", "service_owner", "terminal_service_owner"}
+    annotations = {"container_recovery", "container_recovery_authorization"}
+    require(set(process) in (process_fields, process_fields | annotations),
             "native process receipt is partial or unsupported")
+    if annotations <= set(process):
+        # Historical annotations are not new recovery authority. The current
+        # native owner and terminal evidence remain independently fenced below.
+        recovered, authorized = process["container_recovery"], process["container_recovery_authorization"]
+        require(isinstance(recovered, dict) and isinstance(authorized, dict)
+                and recovered.get("schema_version") == "runtime_service_container_recovery.v1"
+                and authorized.get("schema_version") == "fullmag.docker-container-recovery-authorization.v1"
+                and recovered.get("status") == "recovered"
+                and recovered.get("outcome") in {
+                    "retained_attempt_history_recovered", "retained_manual_held_runs_recovered",
+                    "retained_terminal_runs_recovered", "empty_namespace_recovered",
+                    "retained_cancelled_runs_recovered"}, "historical recovery annotations are invalid")
+        portable(recovered.get("request_id"))
+        for key in ("request_id", "request_sha256", "config_sha256", "attestation_sha256", "owner_sha256_after"):
+            require(recovered.get(key) == authorized.get(key), "historical recovery annotation binding differs")
+            if key != "request_id":
+                digest(recovered.get(key))
     require(process.get("schema") == "fullmag.docker-process-tree.v1"
             and process.get("state") == "drained"
             and process.get("accepted_store") == "/state/runs/docker-all/session-store"
@@ -199,9 +365,14 @@ def build_proof(read_control: Read, read_store: Read, *, iteration: str,
     require(catalog.get("schema_version") == "run_catalog.v1" and catalog.get("run_id") == run_id
             and type(catalog.get("revision")) is int and catalog["revision"] > 0
             and isinstance(tasks, list) and tasks, "native catalog is incomplete")
-    require(all(task.get("lifecycle") in {"succeeded", "failed", "cancelled", "interrupted"}
-                for task in tasks) and any(task.get("lifecycle") == "failed" for task in tasks),
-            "native catalog is not terminal Failed")
+    require(all(isinstance(task, dict) and task.get("lifecycle") in {
+                    "succeeded", "failed", "cancelled", "interrupted"}
+                for task in tasks), "native catalog is not terminal")
+    all_succeeded = all(task.get("lifecycle") == "succeeded" for task in tasks)
+    any_failed = any(task.get("lifecycle") == "failed" for task in tasks)
+    catalog_outcome = "completed" if all_succeeded else "failed" if any_failed else None
+    require(catalog_outcome == public_status,
+            "public run status differs from the terminal catalog outcome")
     release_raw = read_store(relative + "start_release.json")
     release = decode(release_raw)
     require(release.get("schema_version") == "accepted_run_start_release.v1"
@@ -253,8 +424,88 @@ def validate_context(context):
     return {"environment": dict(env), "metadata": dict(meta)}
 
 
+def _validate_diagnostic_stop(read_control, root, current, health, actual, proof):
+    """Bind a later genuine drain to the original observation; keep both IDs."""
+    require(isinstance(proof, dict) and health.get("status") == "degraded"
+            and health.get("active_session") is True, "diagnostic stop has no source observation")
+    require(proof.get("compose_project") == current.get("compose_project")
+            and proof.get("control_volume") == current.get("control_volume")
+            and proof.get("source_root") == current.get("inputs", {}).get("source_root"),
+            "diagnostic source observation belongs to another group")
+    probe_raw, probe = managed(read_control, root + "diagnostic-terminal-preflight.json")
+    require(sha(canonical(probe)) == current.get("diagnostic_terminal_stop_sha256")
+            and probe.get("schema") == "fullmag.terminal-diagnostic-stop-preflight.v1"
+            and probe.get("proof_sha256") == sha(canonical(proof) + b"\n")
+            and probe.get("run_id") == proof.get("run_id")
+            and probe.get("session_id") == proof.get("session_id")
+            and probe.get("terminal_evidence_sha256") == proof.get("terminal_evidence_sha256")
+            and probe.get("mutations_applied") is False and probe.get("solve_replayed") is False
+            and probe.get("released", {}).get("active_count") == 0,
+            "diagnostic stop preflight differs from its source proof")
+    require(current.get("native_drain_authenticated") is True and current.get("backend_exit_code") == 1,
+            "diagnostic stop has no authenticated native drain")
+    for role in ("backend", "frontend"):
+        state = actual[role].get("State", {})
+        require(state.get("Status") == "exited" and state.get("Running") is False
+                and state.get("Pid") == 0 and state.get("OOMKilled") is False
+                and state.get("ExitCode") == (1 if role == "backend" else 0),
+                "diagnostic stop Docker exit differs")
+    api_id = portable(probe.get("api_instance_id"))
+    require(re.fullmatch(r"[0-9a-f-]{36}", api_id), "diagnostic API instance is invalid")
+    private = "runtime-control/terminal-observation/" + probe["proof_sha256"] + "/"
+    installed_raw = read_control(private + "installed-" + api_id + ".json")
+    installed = decode(installed_raw)
+    require(sha(installed_raw) == probe.get("installed_sha256")
+            and installed.get("schema") == "fullmag.terminal-observation-restored.v1"
+            and installed.get("api_instance_id") == api_id
+            and installed.get("proof_sha256") == probe["proof_sha256"]
+            and installed.get("terminal_outcome") == "completed"
+            and installed.get("run_id") == proof["run_id"]
+            and installed.get("session_id") == proof["session_id"]
+            and installed.get("target_image_id") == actual["backend"].get("Image"),
+            "diagnostic installed observation changed")
+    require(sha(read_control("runtime-control/runtime-service/docker-all.json"))
+            == probe.get("native_config_sha256") == installed.get("native_config_sha256"),
+            "diagnostic native configuration changed")
+    before_raw = read_control(root + "diagnostic-terminal-process-before.json")
+    before = decode(before_raw)
+    require(sha(before_raw) == probe.get("process_sha256")
+            and before.get("state") == "failed_outcome_retained"
+            and before.get("api_diagnostic_only") is True
+            and before.get("error") == "terminal observation receipt differs from the real target installation",
+            "diagnostic process archive changed")
+    drain_raw, drain = managed(read_control, root + "backend-drain.json")
+    process = drain.get("process_receipt", {})
+    current_process_raw = read_control("runtime-control/runtime-service/process-tree.json")
+    require(current_process_raw == canonical(process) + b"\n"
+            and sha(current_process_raw) == drain.get("process_receipt_sha256")
+            and process.get("state") == "drained"
+            and process.get("service_owner") == before.get("service_owner")
+            and process.get("api_pid") == before.get("api_pid")
+            and process.get("error") == before.get("error"), "diagnostic native drain changed")
+    ready, terminal = process.get("service_owner", {}), process.get("terminal_service_owner", {})
+    persisted = decode(read_control("runtime-control/runtime-services/OWNER.json"))
+    from docker_volume_drained_successor import _validate_native_owners
+    native = _validate_native_owners(ready, persisted)
+    native._validate_terminal_owner(terminal, state="drained", name="diagnostic terminal owner")
+    require(native._owner_fingerprint(terminal) == native._owner_fingerprint(persisted)
+            and sha(native._owner_fingerprint(ready).encode()) == probe.get("owner_sha256")
+            and ready.get("build_commit") == installed.get("target_build_id")
+            and ready.get("build_snapshot") == installed.get("target_source_sha256"),
+            "diagnostic native owner continuity changed")
+    pin = decode(read_control("runtime-control/runtime-services/docker-client-" + portable(ready["owner_token"]) + ".json"))
+    require(native._owner_fingerprint(pin) == native._owner_fingerprint(ready), "diagnostic Ready pin changed")
+    fence_path = before.get("api_failure_fence", "")
+    require(isinstance(fence_path, str) and re.fullmatch(
+        r"/opt/fullmag/runtime-control/runtime-service/api-failure-[0-9a-f]{32}[.]json", fence_path),
+        "diagnostic fence path differs")
+    require(sha(read_control(fence_path.removeprefix("/opt/fullmag/"))) == probe.get("fence_sha256"),
+            "diagnostic failure fence changed")
+    return probe
+
+
 def validate_empty_stop(read_control, *, project, volume, source_root, attempt, config_sha256, actual,
-                        stop_pin=None):
+                        stop_pin=None, source_proof=None):
     if stop_pin is None:
         current_raw = read_control("iteration/current.json")
     else:
@@ -284,7 +535,49 @@ def validate_empty_stop(read_control, *, project, volume, source_root, attempt, 
             or current.get("config_sha256") != config_sha256):
         raise ValueError("terminal observation requires the exact managed empty idle stop")
     health = decode(read_control(root + "idle-preflight.json"))
-    if health.get("status") != "ok" or health.get("active_session") is not False:
+    diagnostic = current.get("diagnostic_terminal_stop_sha256") is not None
+    if diagnostic:
+        _validate_diagnostic_stop(read_control, root, current, health, actual, source_proof)
+    elif health.get("status") != "ok":
+        raise ValueError("terminal observation idle stop health is unavailable")
+    nonempty_source_bound = False
+    if diagnostic:
+        # This stop has its own authenticated owner/drain. It is not the
+        # historical source stop and cannot replace that proof's bytes.
+        pass
+    elif health.get("active_session") is False:
+        # Preserve the original empty-stop observation path.
+        pass
+    elif health.get("active_session") is True and isinstance(source_proof, dict):
+        proof_iteration = source_proof.get("original_iteration")
+        if (not isinstance(proof_iteration, str)
+                or re.fullmatch(r"[0-9a-f]{32}", proof_iteration) is None
+                or token != proof_iteration
+                or sha(current_raw) != source_proof.get("operation_sha256")):
+            raise ValueError("terminal observation stop differs from its original iteration proof")
+        if (source_proof.get("compose_project") != project
+                or source_proof.get("control_volume") != volume
+                or source_proof.get("source_root") != source_root
+                or current.get("inputs", {}).get("image_id") != source_proof.get("image_id")
+                or source_proof.get("config_sha256") != config_sha256
+                or current.get("inputs", {}).get("source_root") != source_root
+                or current.get("inputs", {}).get("config_sha256") != config_sha256):
+            raise ValueError("terminal observation stop scope differs from its source proof")
+        preflight_raw, preflight = managed(
+            read_control, root + "terminal-session-preflight.json")
+        if (sha(preflight_raw) != source_proof.get("preflight_raw_sha256")
+                or sha(canonical(preflight)) != current.get("terminal_session_preflight_sha256")):
+            raise ValueError("terminal observation stop preflight differs from its source proof")
+        public_run = preflight.get("run", {})
+        if (preflight.get("session_id") != source_proof.get("session_id")
+                or public_run.get("run_id") != source_proof.get("run_id")
+                or public_run.get("session_id") != source_proof.get("session_id")
+                or public_run.get("status") not in ("failed", "completed")):
+            raise ValueError("terminal observation stop run differs from its source proof")
+        # prepare_context rebuilt this proof against its exact catalog. The raw
+        # preflight pin above therefore preserves that status/catalog agreement.
+        nonempty_source_bound = True
+    else:
         raise ValueError("terminal observation idle stop had a nonempty workspace")
     stopped_raw = read_control(root + "idle-stop-containers.json")
     stopped = decode(stopped_raw)
@@ -295,13 +588,18 @@ def validate_empty_stop(read_control, *, project, volume, source_root, attempt, 
         old, now = stopped[key], actual[key]
         if (old.get("Id") != now.get("Id") or old.get("Image") != now.get("Image")
                 or old.get("Config") != now.get("Config")
+                or (diagnostic and old.get("HostConfig") != now.get("HostConfig"))
                 or sorted(old.get("Mounts", []), key=canonical)
                 != sorted(now.get("Mounts", []), key=canonical)
                 or old.get("State", {}).get("StartedAt") != now.get("State", {}).get("StartedAt")
                 or old.get("State", {}).get("Running") is not False
                 or now.get("State", {}).get("Running") is not False):
             raise ValueError("terminal observation stopped service incarnation differs")
-    drain = decode(read_control(root + "backend-drain.json"))
+    drain_raw = read_control(root + "backend-drain.json")
+    if (nonempty_source_bound
+            and sha(drain_raw) != source_proof.get("drain_sha256")):
+        raise ValueError("terminal observation native drain differs from its source proof")
+    drain = decode(drain_raw)
     process = drain.get("process_receipt", {})
     if (drain.get("schema") != "fullmag.docker-idle-restart-drain.v1"
             or drain.get("backend_container_id") != actual["backend"].get("Id")
@@ -312,6 +610,50 @@ def validate_empty_stop(read_control, *, project, volume, source_root, attempt, 
 
 
 
+def _observation_stop(control, read_control, *, source_root, attempt, config_sha256,
+                      actual, proof, proof_sha256, stop_pin=None):
+    """Keep the original native drain distinct from a later API-only stop."""
+    from docker_volume_accepted_reattach import _control_bytes
+    backend_id = actual.get("backend", {}).get("Id")
+    successor = None
+    if isinstance(backend_id, str) and re.fullmatch(r"[0-9a-f]{64}", backend_id):
+        journal = "verification/preowner-drained-stop-" + backend_id
+        records = [_control_bytes(control, journal + suffix, optional=True, maximum=8 * 1024 * 1024)
+                   for suffix in (".json", ".intent.json")]
+        if any(raw is not None for raw in records):
+            from docker_volume_preowner_drained import retained_context
+            parent_root = "development/attempts/" + attempt + "/"
+            previous = decode(read_control(parent_root + "terminal.json"))
+            document = decode(read_control(parent_root + "compose.json"))
+            successor = retained_context(control, previous, document, actual, proof, proof_sha256)
+            if successor is None:
+                raise ValueError("terminal observation has an unresolved pre-owner successor stop")
+    if successor is not None:
+        original = (successor["original_stop_attempt"], successor["source_stop_sha256"])
+        if stop_pin is not None and original != stop_pin:
+            raise ValueError("terminal observation predecessor drain changed")
+        return *original, successor
+    original = validate_empty_stop(
+        read_control, project=control.project, volume=control.volume, source_root=source_root,
+        attempt=attempt, config_sha256=config_sha256, actual=actual,
+        stop_pin=stop_pin, source_proof=proof)
+    stop = decode(read_control("iteration/attempts/" + original[0] + "/terminal.json"))
+    if stop.get("diagnostic_terminal_stop_sha256") is not None:
+        root = "iteration/attempts/" + original[0] + "/"
+        probe = decode(read_control(root + "diagnostic-terminal-preflight.json"))
+        from docker_volume_preowner_drained import _released, _run_pins
+        require(_released(control, actual["backend"]) == probe.get("released")
+                and _run_pins(control, actual["backend"]) == probe.get("run_pins"),
+                "diagnostic stopped run catalogs or leases changed")
+        return *original, {
+            "schema": "fullmag.terminal-diagnostic-drain-context.v1",
+            "stop_attempt": original[0], "stop_sha256": original[1],
+            "source_proof_sha256": proof_sha256,
+            "diagnostic_preflight_sha256": stop["diagnostic_terminal_stop_sha256"],
+        }
+    return *original, None
+
+
 def revalidate_context(control, context, *, source_root, attempt, config_sha256, actual):
     """Read-only revalidation under the caller's existing recreate lease."""
     from docker_volume_accepted_reattach import _control_bytes
@@ -320,21 +662,26 @@ def revalidate_context(control, context, *, source_root, attempt, config_sha256,
         raise ValueError("terminal observation context is absent")
     read_control = lambda relative: _control_bytes(control, relative, maximum=8 * 1024 * 1024)
     meta = context["metadata"]
-    validate_empty_stop(
-        read_control, project=control.project, volume=control.volume, source_root=source_root,
-        attempt=attempt, config_sha256=config_sha256, actual=actual,
-        stop_pin=(meta["stop_attempt"], meta["stop_sha256"]))
     private = "runtime-control/terminal-observation/" + meta["proof_sha256"]
-    proof = read_control(private + "/proof.json")
-    request = read_control(private + "/request.json")
-    if (hashlib.sha256(proof).hexdigest() != meta["proof_sha256"]
-            or hashlib.sha256(request).hexdigest() != meta["request_sha256"]):
+    proof_raw = read_control(private + "/proof.json")
+    request_raw = read_control(private + "/request.json")
+    if (hashlib.sha256(proof_raw).hexdigest() != meta["proof_sha256"]
+            or hashlib.sha256(request_raw).hexdigest() != meta["request_sha256"]):
         raise ValueError("terminal observation private input CAS changed under recreate lease")
+    proof = decode(proof_raw)
+    if proof.get("schema") != PROOF_SCHEMA:
+        raise ValueError("terminal observation private proof schema differs")
     expected = {"schema": "fullmag.terminal-observation-request.v1",
                 "proof_path": "terminal-observation/" + meta["proof_sha256"] + "/proof.json",
                 "proof_sha256": meta["proof_sha256"]}
-    if decode(request) != expected:
+    if decode(request_raw) != expected:
         raise ValueError("terminal observation private request changed under recreate lease")
+    _, _, successor = _observation_stop(
+        control, read_control, source_root=source_root,
+        attempt=attempt, config_sha256=config_sha256, actual=actual,
+        stop_pin=(meta["stop_attempt"], meta["stop_sha256"]),
+        proof=proof, proof_sha256=meta["proof_sha256"])
+    return successor
 
 
 def prepare_context(control, *, proof_relative, proof_sha256, store_root, source_root,
@@ -362,9 +709,9 @@ def prepare_context(control, *, proof_relative, proof_sha256, store_root, source
         terminal_evidence_sha256=proof["terminal_evidence_sha256"])
     if proof != rebuilt:
         raise ValueError("terminal observation proof differs from authoritative original records")
-    stop_attempt, stop_sha256 = validate_empty_stop(
-        read_control, project=control.project, volume=control.volume, source_root=source_root,
-        attempt=attempt, config_sha256=config_sha256, actual=actual)
+    stop_attempt, stop_sha256, _ = _observation_stop(
+        control, read_control, source_root=source_root, attempt=attempt,
+        config_sha256=config_sha256, actual=actual, proof=proof, proof_sha256=proof_sha256)
     private = "terminal-observation/" + proof_sha256
     request = {"schema": "fullmag.terminal-observation-request.v1",
                "proof_path": private + "/proof.json", "proof_sha256": proof_sha256}

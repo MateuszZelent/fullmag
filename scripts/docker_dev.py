@@ -2687,6 +2687,10 @@ def _parser() -> argparse.ArgumentParser:
         "--pending-activation",
         help="close one exact unreleased preparation after native owner failure; permits only subsequent fresh-state archival",
     )
+    stop_diagnostic.add_argument(
+        "--catalog-failure", action="store_true",
+        help="drain a Ready runtime after an exact unreleased startup catalog failure; requires --pending-activation and fresh-state archival",
+    )
     stop_held = subparsers.add_parser(
         "stop-held-retirement-volume",
         help="preview a pinned diagnostic backend drain; apply requires an explicit UI-reset acknowledgement and plan digest",
@@ -2712,6 +2716,16 @@ def _parser() -> argparse.ArgumentParser:
     cancelled_activation.add_argument("--port", type=int, required=True)
     cancelled_activation.add_argument("--apply", action="store_true")
     cancelled_activation.add_argument("--expected-plan-sha256")
+    preowner_policy = subparsers.add_parser(
+        "stop-preowner-policy-volume",
+        help="preview or gracefully stop the exact startup-only diagnostic group after a refused budget",
+    )
+    for option in ("attempt", "config-sha256", "source-root", "backend-container-id", "image-id"):
+        preowner_policy.add_argument("--" + option, required=True)
+    preowner_policy.add_argument("--apply", action="store_true")
+    preowner_policy.add_argument("--expected-plan-sha256")
+    preowner_policy.add_argument("--terminal-observation-proof", dest="proof_path")
+    preowner_policy.add_argument("--terminal-observation-proof-sha256", dest="proof_sha256")
     stop_bootstrap = subparsers.add_parser(
         "stop-bootstrap-volume",
         help="stop one pinned backend retaining only its exact pre-owner startup-fenced diagnostic API",
@@ -3001,6 +3015,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             from docker_volume_stop_diagnostic import stop_diagnostic
             result = stop_diagnostic(args)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        elif args.action == "stop-preowner-policy-volume":
+            if bool(args.proof_path) != bool(args.proof_sha256):
+                raise _fail("Terminal observation successor requires paired proof path and digest")
+            if args.proof_path:
+                from docker_volume_preowner_drained import stop
+            else:
+                from docker_volume_stop_preowner_policy import stop
+            stop(args)
         elif args.action == "stop-held-retirement-volume":
             from docker_volume_stop_held_retirement import apply, plan
             from docker_volume_retirement_probe import inspect_retirement

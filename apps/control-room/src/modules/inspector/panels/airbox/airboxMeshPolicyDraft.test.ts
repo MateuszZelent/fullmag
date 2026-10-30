@@ -11,8 +11,37 @@ import {
   draftIdentityKeyForUniverseMeshPolicyResource,
   draftKeyForUniverseMeshPolicyResource,
   formatUniverseMeshPolicyConfig,
+  rebaseAirboxMeshPolicyDraft,
   updateAirboxLengthUnit,
 } from "./airboxMeshPolicyDraft";
+
+describe("Airbox mesh policy revision rebase", () => {
+  const opened = { config: null, effective_config: null, revision: 0 };
+
+  it("adopts a newer mesh revision when only unrelated scene state changed", () => {
+    const draft = updateAirboxMeshPolicyDraft(
+      draftFromUniverseMeshPolicyResource(opened),
+      { airboxMode: "manual" },
+    );
+
+    const rebased = rebaseAirboxMeshPolicyDraft(draft, { ...opened, revision: 7 });
+
+    expect(rebased.baseRevision).toBe(7);
+    expect(rebased.airboxMode).toBe("manual");
+  });
+
+  it("keeps the opened revision when the Universe policy changed concurrently", () => {
+    const draft = draftFromUniverseMeshPolicyResource(opened);
+
+    const rebased = rebaseAirboxMeshPolicyDraft(draft, {
+      config: { mode: "manual", size: [1e-7, 1e-7, 1e-7] },
+      effective_config: null,
+      revision: 7,
+    });
+
+    expect(rebased.baseRevision).toBe(0);
+  });
+});
 
 describe("Airbox mesh policy draft", () => {
   it("formats nullable universe mesh config as an editable object draft", () => {
@@ -207,6 +236,29 @@ describe("Airbox mesh policy draft", () => {
         },
       },
     });
+  });
+
+  it("round-trips air curvature and narrow-region controls under canonical keys", () => {
+    for (const config of [
+      { airbox_hmax: 4e-8, airbox_curvature_factor: 0.3, airbox_narrow_region_resolution: 0.5 },
+      { airbox_hmax: 4e-8, curvature_factor: 0.3, narrow_region_resolution: 0.5 },
+    ]) {
+      const draft = draftFromUniverseMeshPolicyResource({ config, revision: 3 });
+      expect(draft.curvatureFactor).toBe("0.3");
+      expect(draft.narrowRegionResolution).toBe("0.5");
+
+      const result = buildAirboxMeshPolicyReplaceRequest(draft);
+      expect(result).toEqual({
+        request: {
+          config: {
+            airbox_curvature_factor: 0.3,
+            airbox_hmax: 4e-8,
+            airbox_narrow_region_resolution: 0.5,
+          },
+          expected_revision: 3,
+        },
+      });
+    }
   });
 
   it("keeps an empty automatic domain policy free of zero-filled bounds", () => {

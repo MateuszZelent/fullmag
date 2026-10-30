@@ -461,6 +461,40 @@ class SavedAuthoringRestartTests(IsolatedReceiptTests):
             **request['package']}
         return dev, request, scene, raw, files, pack, actual, proof
 
+    def empty_authoring_fixture(self):
+        import copy, hashlib, json
+        dev, pin, _, _, files, pack, actual, proof = self.fixture()
+        from docker_build_control import canonical
+        scene = {
+            'version': 'scene.v2', 'revision': 1,
+            'scene': {'id': 'scene-one', 'name': 'Empty UI authoring',
+                      'source_of_truth': 'ui', 'authoring_schema': '0.3'},
+            'objects': [],
+        }
+        files.pop('project/source/script.py')
+        files.pop('project/source/script.json')
+        files['project/scene_document.json'] = canonical(scene)
+        files['project/definition.json'] = canonical({
+            'schema': 'fullmag.project.v1', 'project_id': 'project-one',
+            'revision': 2, 'scene': scene,
+        })
+        files['project/provenance.json'] = canonical({'authors': [], 'history': [], 'runs': []})
+        manifest = json.loads(files['manifest/project.json'])
+        manifest.update(source=None, assets=[], opaque_documents=['project/provenance.json'])
+        files['manifest/project.json'] = canonical(manifest)
+        raw = pack(files)
+        pin['schema'] = 'fullmag.saved-empty-authoring-restart.v1'
+        pin['archive'].update(
+            bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest(),
+            scene_revision=scene['revision'],
+            scene_sha256=hashlib.sha256(canonical(scene)).hexdigest(),
+            source_entry=None, source_sha256=None,
+        )
+        for suffix in ('before', 'after'):
+            proof['resources']['scene_' + suffix]['body'] = copy.deepcopy(scene)
+            proof['resources']['status_' + suffix]['body']['resources']['scene_revision'] = scene['revision']
+        return dev, pin, scene, raw, files, pack, actual, proof
+
     def test_accepts_exact_durable_authoring_archive_and_scope(self):
         dev, pin, scene, raw, _, _, actual, proof = self.fixture()
         dev._saved_authoring_validate_request(pin, project='fullmag-test', attempt='b' * 32,
@@ -470,6 +504,94 @@ class SavedAuthoringRestartTests(IsolatedReceiptTests):
         actual['frontend']['State']['Running'] = False
         dev._saved_authoring_validate_services(pin, actual, quiesced=True)
         dev._saved_authoring_validate_probe(proof, pin, scene)
+
+    def test_accepts_empty_ui_authoring_archive_and_existing_strict_probe(self):
+        dev, pin, scene, raw, _, _, _, proof = self.empty_authoring_fixture()
+        dev._saved_authoring_validate_request(pin, project='fullmag-test', attempt='b' * 32,
+                                              config_sha256='c' * 64, selected='/selected')
+        self.assertEqual(dev._saved_authoring_validate_archive(raw, pin['archive']), scene)
+        dev._saved_authoring_validate_probe(proof, pin, scene)
+
+    def test_empty_ui_authoring_rejects_populated_scene(self):
+        import hashlib
+        from docker_build_control import canonical
+        dev, pin, scene, _, files, pack, _, _ = self.empty_authoring_fixture()
+        populated = {**scene, 'objects': [{'object_id': 'object-one'}]}
+        files['project/scene_document.json'] = canonical(populated)
+        files['project/definition.json'] = canonical({
+            'schema': 'fullmag.project.v1', 'project_id': pin['archive']['project_id'],
+            'revision': pin['archive']['project_revision'], 'scene': populated,
+        })
+        raw = pack(files)
+        pin['archive'].update(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest(),
+                              scene_sha256=hashlib.sha256(canonical(populated)).hexdigest())
+        with self.assertRaisesRegex(BuildControlError, 'empty UI authoring'):
+            dev._saved_authoring_validate_archive(raw, pin['archive'])
+
+    def test_empty_ui_authoring_rejects_script_metadata_and_history_entries(self):
+        import hashlib, json
+        from docker_build_control import canonical
+        for path in ('project/source/script.py', 'project/source/script.json',
+                     'project/source-history/' + 'f' * 64 + '.py'):
+            with self.subTest(path=path):
+                dev, pin, _, _, files, pack, _, _ = self.empty_authoring_fixture()
+                manifest = json.loads(files['manifest/project.json'])
+                manifest['opaque_documents'].append(path)
+                files[path] = b'{}'
+                files['manifest/project.json'] = canonical(manifest)
+                raw = pack(files)
+                pin['archive'].update(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+                with self.assertRaisesRegex(BuildControlError, 'source|history|metadata'):
+                    dev._saved_authoring_validate_archive(raw, pin['archive'])
+
+    def test_empty_ui_authoring_rejects_project_history(self):
+        import hashlib, json
+        from docker_build_control import canonical
+        dev, pin, _, _, files, pack, _, _ = self.empty_authoring_fixture()
+        provenance = json.loads(files['project/provenance.json'])
+        provenance['history'] = [{'kind': 'import'}]
+        files['project/provenance.json'] = canonical(provenance)
+        raw = pack(files)
+        pin['archive'].update(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+        with self.assertRaisesRegex(BuildControlError, 'history'):
+            dev._saved_authoring_validate_archive(raw, pin['archive'])
+
+    def test_empty_ui_authoring_requires_both_source_pins_to_be_null(self):
+        import copy
+        dev, pin, _, _, _, _, _, _ = self.empty_authoring_fixture()
+        for source_entry, source_sha256 in (
+            ('project/source/script.py', None),
+            (None, 'a' * 64),
+            ('project/source/script.py', 'a' * 64),
+        ):
+            with self.subTest(source_entry=source_entry, source_sha256=source_sha256):
+                candidate = copy.deepcopy(pin)
+                candidate['archive']['source_entry'] = source_entry
+                candidate['archive']['source_sha256'] = source_sha256
+                with self.assertRaises(BuildControlError):
+                    dev._saved_authoring_validate_request(candidate, project='fullmag-test', attempt='b' * 32,
+                        config_sha256='c' * 64, selected='/selected')
+
+    def test_empty_ui_authoring_rejects_inherited_restart_extensions(self):
+        import copy
+        dev, pin, _, _, _, _, _, _ = self.empty_authoring_fixture()
+        for extension in ('cancelled_preclaim', 'historical_preclaim', 'retained_run_catalogs'):
+            with self.subTest(extension=extension):
+                candidate = copy.deepcopy(pin)
+                candidate[extension] = {}
+                with self.assertRaisesRegex(BuildControlError, 'empty authoring|checkpoint|preclaim|retained'):
+                    dev._saved_authoring_validate_request(candidate, project='fullmag-test', attempt='b' * 32,
+                        config_sha256='c' * 64, selected='/selected')
+
+    def test_legacy_source_backed_schema_still_requires_source_pins(self):
+        import copy
+        dev, pin, _, _, _, _, _, _ = self.fixture()
+        candidate = copy.deepcopy(pin)
+        candidate['archive']['source_entry'] = None
+        candidate['archive']['source_sha256'] = None
+        with self.assertRaises(BuildControlError):
+            dev._saved_authoring_validate_request(candidate, project='fullmag-test', attempt='b' * 32,
+                config_sha256='c' * 64, selected='/selected')
 
     def test_accepts_public_authoring_source_without_rebinding_preserved_script(self):
         import hashlib, json

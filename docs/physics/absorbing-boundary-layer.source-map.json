@@ -30,7 +30,8 @@
     {"id": "planner-profile", "path": "crates/fullmag-plan/src/material.rs", "symbol": "apply_absorbing_boundary_layer", "responsibility": "Evaluate the profile at FDM cells or FEM nodes and add it to resolved alpha."},
     {"id": "fem-materialization", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "build_region_material_fields", "responsibility": "Carry the resolved FEM alpha field into the material plan."},
     {"id": "cuda-gate", "path": "crates/fullmag-plan/src/validate.rs", "symbol": "validate_region_owned_planning", "responsibility": "Fail closed for FDM CUDA cellwise damping before native launch."},
-    {"id": "ui-panel", "path": "apps/control-room/src/modules/inspector/panels/ObjectAbsorbingBoundaryPanel.tsx", "symbol": "ObjectAbsorbingBoundaryPanel", "responsibility": "Expose per-object boundary parameters and persist them through the v2 model resource."}
+    {"id": "ui-panel", "path": "apps/control-room/src/modules/inspector/panels/ObjectAbsorbingBoundaryPanel.tsx", "symbol": "ObjectAbsorbingBoundaryPanel", "responsibility": "Expose per-object boundary parameters and persist them through the v2 model resource."},
+    {"id": "fem-owner-bounds-regression", "path": "crates/fullmag-plan/src/tests/material_audit_fem.rs", "symbol": "fem_absorber_uses_the_union_of_conformal_owner_segments", "responsibility": "Mapa alpha nie zależy od podziału ownera na markery ani ich kolejności.", "evidence_status": "implemented"}
   ],
   "public_api": {
     "parameters": [

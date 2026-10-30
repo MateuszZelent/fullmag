@@ -452,6 +452,14 @@ without rebuilding them from a current norm. `mfem_bridge.cpp` passes
 descriptors only. Strict GPU may not invoke a CPU torque path or claim GPU
 provenance after a fallback.
 
+Dla celu obejmującego obiekt maska węzłowa FEM jest sumą węzłów connectivity
+wszystkich elementów segmentów tego ownera. Podział obiektu na markery
+regionów konformalnych i kolejność markerów nie zmieniają tej maski. Wspólne
+węzły są zaznaczane raz; osobny, rozłączny obiekt pozostaje poza maską.
+Ta sama reguła dotyczy STT i prescribed SOT. Jawne `region_id` nadal jest
+odrzucane do czasu obsługi dokładnej maski celu regionowego. Regresja planera
+sprawdza maski, bez nowego dowodu wykonania torque ani parytetu CPU/GPU.
+
 ### 3.3 Hybrid and stage coupling
 
 No hybrid torque capability is validated by this note. A hybrid realization
@@ -718,6 +726,8 @@ hidden change to `alpha`.
 
 | Path | Symbol | Responsibility |
 |---|---|---|
+| `crates/fullmag-plan/src/fem.rs` | `materialize_fem_spin_torque_target_masks` | Maska STT/SOT z connectivity wszystkich elementów wybranego ownera. |
+| `crates/fullmag-plan/src/tests/material_boundary_stt.rs` | `fem_torque_object_target_mask_covers_conformal_regions_per_owner_and_order` | Regresja STT/SOT dla dwóch regionów, obu kolejności i odrębnego ownera. |
 | `backends/fem/cpu/mfem/interactions/stt_slonczewski.cpp` | `add_slonczewski_stt_rhs_aos` | FEM CPU canonical v2 algebraic oracle |
 | `backends/fem/cpu/mfem/interactions/stt.cpp` | `initialize_stt_plan_fields` | FEM STT descriptor validation and normalization |
 | `backends/fem/gpu/cuda/interactions/stt/stt_kernels.cu` | `slonczewski_stt_rhs_kernel` | FEM GPU v2 device torque kernel |
@@ -728,9 +738,9 @@ hidden change to `alpha`.
 | `backends/fem/gpu/cuda/runtime/gpu_state_runtime.cpp` | `initialize_context_gpu_state` | Bootstrap upload ordering |
 | `backends/fdm/include/spin_torque.hpp` | `prescribed_sot_explicit_rhs` | Canonical prescribed-SOT Gilbert source and single explicit Gilbert conversion shared by CUDA precision lanes |
 | `backends/fdm/include/context.hpp` | `sot_params_from_ctx` | Native FDM SOT descriptor normalization and signed SI prefactor |
-| `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `prescribed_sot_scales` | Independent CPU reference scales for canonical and legacy prescribed SOT |
-| `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `sot_torque` | CPU reference torque evaluation with active/target mask intersection |
-| `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `prescribed_sot_torque_from_config` | Backend-neutral canonical SOT SI/Gilbert algebra shared by FDM and the Rust FEM reference |
+| `crates/fullmag-engine/src/fdm/cpu/fields/direct_torques.rs` | `prescribed_sot_scales` | Independent CPU reference scales for canonical and legacy prescribed SOT |
+| `crates/fullmag-engine/src/fdm/cpu/fields/direct_torques.rs` | `sot_torque` | CPU reference torque evaluation with active/target mask intersection |
+| `crates/fullmag-engine/src/fdm/cpu/fields/direct_torques.rs` | `prescribed_sot_torque_from_config` | Backend-neutral canonical SOT SI/Gilbert algebra shared by FDM and the Rust FEM reference |
 | `backends/fdm/tests/prescribed_sot_contract.cpp` | `main` | Native algebraic canonical-SOT contract and sign/Gilbert checks |
 | `backends/fdm/tests/prescribed_sot_cuda_runtime.cu` | `main` | Managed FP64/FP32 native CUDA SOT runtime contract |
 | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `native_fdm_prescribed_sot_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available` | Managed eight-step FP64 FDM CUDA canonical-SOT trajectory parity against CPU reference prefixes |

@@ -1706,6 +1706,7 @@ pub(crate) fn default_current_live_state(req: &CurrentLiveSnapshotRequest) -> Se
         simulation_preparation: req.simulation_preparation.clone(),
         scene_document: None,
         scalar_rows: Vec::new(),
+        latest_scalar_source: None,
         engine_log: Vec::new(),
         solver_profile: req.solver_profile.clone().unwrap_or_default(),
         quantities: Vec::new(),

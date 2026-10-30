@@ -459,6 +459,8 @@ async fn remesh_snapshot_preserves_canonical_policies_and_overwrites_client_spoo
                 airbox_hmin: None,
                 airbox_growth_rate: None,
                 airbox_grading: None,
+                airbox_curvature_factor: None,
+                airbox_narrow_region_resolution: None,
             })
         };
         scene.objects[0].regions = vec![serde_json::from_value(serde_json::json!({

@@ -9746,6 +9746,43 @@ mod tests {
     }
 
     #[test]
+    fn fem_element_material_artifact_preserves_location_and_values() {
+        let mut plan = test_fem_execution_plan();
+        plan.common.material_field_plans = vec![MaterialFieldPlan {
+            object_id: "free".to_string(),
+            parameter: MaterialParameterNameIR::Aex,
+            source_kind: MaterialFieldSourceKind::Override,
+            realization_location: MaterialFieldLocationIR::Element,
+            requires_sampling: false,
+            requires_mesh_revision: true,
+            warnings: Vec::new(),
+            realization_method: Some("conformal_domain_element_sampling".to_string()),
+            statistics: None,
+        }];
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("test plan should be FEM");
+        };
+        fem.material.a_field = None;
+        fem.a_element_field = Some(vec![13e-12]);
+        let prepared = build_material_field_artifacts(&plan).expect("element coefficient artifact");
+        assert_eq!(
+            prepared.files.len(),
+            1,
+            "element fields must not be silently omitted"
+        );
+        let asset: fullmag_ir::MaterialFieldAssetIR =
+            serde_json::from_slice(&prepared.files[0].bytes).expect("material field artifact");
+        assert_eq!(asset.location, MaterialFieldLocationIR::Element);
+        assert_eq!(asset.values, vec![13e-12]);
+        assert_eq!(asset.unit, "J/m");
+        assert_eq!(asset.min, 13e-12);
+        assert_eq!(asset.max, 13e-12);
+        assert_eq!(asset.mean, 13e-12);
+        assert_eq!(prepared.metadata_assets[0]["location"], "element");
+        assert_eq!(prepared.metadata_assets[0]["values"], serde_json::json!([]));
+    }
+
+    #[test]
     fn write_artifacts_persists_fem_material_field_asset_files() {
         let problem = fullmag_ir::ProblemIR::bootstrap_example();
         let mut plan = test_fem_execution_plan();

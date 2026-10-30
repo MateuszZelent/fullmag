@@ -1118,7 +1118,7 @@ function invalidateRestoredStateResources(
   context.resources?.invalidate(DATA_SCALARS_PATH, revision);
   context.resources?.invalidatePrefix(DATA_SCALARS_PATH, revision);
   context.resources?.invalidate(SIMULATION_SOLVER_ENERGIES_CURRENT_PATH, revision);
-  context.resources?.invalidate(SIMULATION_SOLVER_ENERGIES_HISTORY_PATH, revision);
+  context.resources?.invalidatePrefix(SIMULATION_SOLVER_ENERGIES_HISTORY_PATH, revision);
   context.resources?.invalidatePrefix(
     SIMULATION_OBJECT_METRICS_PATH.split("{object_id}")[0],
     revision,
@@ -1237,7 +1237,7 @@ function resolveHysteresisLoopCommandInput(
   };
 }
 
-function hysteresisPointSelectionPayload(input: HysteresisPointCommandInput) {
+export function hysteresisPointSelectionPayload(input: HysteresisPointCommandInput) {
   return {
     kind: "analysis.chart-point" as const,
     label: `Point ${input.point.point_id} (${input.point.field_value_mT} mT)`,
@@ -2440,6 +2440,12 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
         ),
       });
       if (outcome.kind === "rejected") return outcome.result;
+      if (outcome.kind === "server-prepares") {
+        return {
+          message: "No live preparation is published; Compute prepares the accepted run.",
+          status: "failed",
+        };
+      }
       const planFingerprint =
         outcome.kind === "materialized"
           ? outcome.resource.plan_fingerprint

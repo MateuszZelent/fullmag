@@ -50,12 +50,17 @@ pub(crate) fn prepare_accepted_fem_task(
     if specification.run_id != run_id {
         bail!("accepted FEM preparer RunSpec belongs to another run");
     }
+    let accepted_study_load_started = std::time::Instant::now();
     let accepted = fullmag_runtime_control::load_accepted_study_snapshot(
         store,
         &run_id,
         &specification.snapshot.project_id,
     )
     .context("load immutable accepted study for FEM preparation")?;
+    eprintln!(
+        "accepted-fem-preparer: phase=load_accepted_study_snapshot elapsed_ms={:.3}",
+        accepted_study_load_started.elapsed().as_secs_f64() * 1_000.0
+    );
     let catalog = store
         .read_run_catalog(run_id.as_str())?
         .context("accepted FEM preparation requires a durable run catalog")?;
@@ -129,10 +134,15 @@ pub(crate) fn prepare_accepted_fem_task(
         }
     };
 
+    let replay_validation_started = std::time::Instant::now();
     if let Some(existing) = store.read_task_preparation_receipt(run_id.as_str(), task_id)? {
         let receipt = accepted
             .read_task_preparation(store, task_id)
             .context("validate replayed accepted FEM preparation receipt")?;
+        eprintln!(
+            "accepted-fem-preparer: phase=replay_validation result=hit elapsed_ms={:.3}",
+            replay_validation_started.elapsed().as_secs_f64() * 1_000.0
+        );
         return Ok(AcceptedFemPreparationResult {
             run_id: run_id.as_str().to_owned(),
             task_id: task_id.to_owned(),
@@ -142,6 +152,10 @@ pub(crate) fn prepare_accepted_fem_task(
             replayed: true,
         });
     }
+    eprintln!(
+        "accepted-fem-preparer: phase=replay_validation result=miss elapsed_ms={:.3}",
+        replay_validation_started.elapsed().as_secs_f64() * 1_000.0
+    );
 
     if task.lifecycle != FmsTaskLifecycle::Accepted
         || !matches!(
@@ -158,7 +172,12 @@ pub(crate) fn prepare_accepted_fem_task(
         bail!("new accepted FEM preparation requires an active resource lease");
     }
 
+    let native_preparation_started = std::time::Instant::now();
     let native = produce_native_fem_evidence(&mesh, fe_order)?;
+    eprintln!(
+        "accepted-fem-preparer: phase=native_prepare_fem_mesh_space elapsed_ms={:.3}",
+        native_preparation_started.elapsed().as_secs_f64() * 1_000.0
+    );
     let preparation_id = format!("prep-{task_id}");
     let receipt = if matches!(step.kind, fullmag_authoring::StudyStepKind::ClosedLoopInspection { .. }) {
         AcceptedPreparationReceipt::ClosedLoop(ClosedLoopPreparationReceipt::ready(
@@ -205,6 +224,7 @@ pub(crate) fn prepare_accepted_fem_task(
         receipt.plan_fingerprint().to_owned(),
         payload,
     )?;
+    let receipt_commit_started = std::time::Instant::now();
     let replayed = matches!(
         retry_preparation_store_writer_busy(|| {
             store.commit_task_preparation_receipt_with_preparation_lease(
@@ -216,6 +236,10 @@ pub(crate) fn prepare_accepted_fem_task(
         })
         .context("publish accepted FEM preparation receipt")?,
         PreparationReceiptCommitDisposition::Replayed
+    );
+    eprintln!(
+        "accepted-fem-preparer: phase=receipt_commit elapsed_ms={:.3} replayed={replayed}",
+        receipt_commit_started.elapsed().as_secs_f64() * 1_000.0
     );
     let verified = accepted
         .read_task_preparation(store, task_id)

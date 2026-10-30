@@ -1212,7 +1212,7 @@ fn normalize_lane_discretization(value: &str, fallback: &str) -> String {
     }
 }
 
-fn relaxation_algorithm_from_metadata(metadata: Option<&Value>) -> Option<RelaxationAlgorithm> {
+pub(crate) fn relaxation_algorithm_from_metadata(metadata: Option<&Value>) -> Option<RelaxationAlgorithm> {
     metadata
         .and_then(|value| value.get("relaxation_algorithm"))
         .and_then(Value::as_str)
@@ -1223,6 +1223,7 @@ fn relaxation_algorithm_from_metadata(metadata: Option<&Value>) -> Option<Relaxa
                 .and_then(|value| value.get("relax_algorithm"))
                 .and_then(Value::as_str)
         })
+        .or_else(|| metadata?.pointer("/execution_plan/backend_plan/relaxation/algorithm")?.as_str())
         .and_then(RelaxationAlgorithm::parse)
 }
 

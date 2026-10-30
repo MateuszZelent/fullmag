@@ -152,6 +152,8 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api live_retirement --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api session_output_target_tests --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api live_accepted_execution::tests
+          cargo test -p fullmag-api --bin fullmag-api live_execution_binding::tests
+          cargo test -p fullmag-api --bin fullmag-api isolated_snapshot_restore::tests
           cargo test -p fullmag-api --bin fullmag-api development_accepted_restore::tests
           cargo test -p fullmag-runtime-control --lib scheduler::accepted_start_tests
           cargo test -p fullmag-api --bin fullmag-api live_accepted_projection::tests
@@ -235,6 +237,12 @@ jobs:
 
       - name: Run CPU periodic Newell kernel cache regressions
         run: cargo test -p fullmag-engine periodic_newell_kernel_cache_tests --lib
+
+      - name: Run local material coefficient regressions
+        run: |
+          cargo test --locked -p fullmag-engine --lib spatial_ms_anisotropy_tests
+          cargo test --locked -p fullmag-plan --lib fem_aex_field_uniformity_uses_relative_si_tolerance
+          cargo test --locked -p fullmag-runner --lib fdm::cpu::reference::tests::torque_
 
       - name: Run typed active eigen Stop and Pause contracts
         run: |
@@ -395,7 +403,12 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api-accepted-worker common_host_launch_gate_
           cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_worker::accepted_worker_claim_retry_tests::
           cargo test -p fullmag-api --bin fullmag-api-accepted-scheduler accepted_study_supervisor::tests::reaped_child_receipt_survives_unacknowledged_final_heartbeat -- --exact
-          cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_supervisor::tests::host_bound_pre_spawn_retries_writer_busy_without_re_admission -- --exact
+          cargo test -p fullmag-api --bin fullmag-api-accepted-scheduler accepted_study_supervisor::tests::host_bound_pre_spawn_retries_writer_busy_without_re_admission -- --exact
+          cargo test -p fullmag-runtime-control --lib host_runtime::recovery_tests::required_current_snapshot_preserves_missing_sample_reason_as_typed_error -- --exact
+          cargo test -p fullmag-runtime-control --lib host_runtime::recovery_tests::required_current_snapshot_keeps_configured_owner_mismatch_fatal -- --exact
+          cargo test -p fullmag-api --bin fullmag-api-accepted-scheduler accepted_study_supervisor::tests::missing_sample_retries_exact_claim_without_consuming_launch_permit -- --exact
+          cargo test -p fullmag-api --bin fullmag-api-accepted-scheduler accepted_study_supervisor::tests::inactive_inventory_owner_retries_before_spawn_without_releasing_claim -- --exact
+          cargo test -p fullmag-api --bin fullmag-api-accepted-scheduler accepted_study_supervisor::tests::exhausted_stale_sample_retry_defers_second_read_and_authorization_without_consuming_claim_start_lease -- --exact
           cargo test -p fullmag-api --bin fullmag-api-accepted-scheduler scheduler_writer_busy_tests
           cargo test -p fullmag-runtime-control --lib worker_inbox::tests
           cargo test -p fullmag-api --bin fullmag-runtime-service orphan_teardown_
@@ -705,6 +718,9 @@ jobs:
           done
           test "$inspector_ready" = 1
           pnpm --dir apps/control-room run smoke:inspector
+          CONTROL_ROOM_INSPECTOR_MATERIAL_AUDIT=1 \
+            CONTROL_ROOM_INSPECTOR_REPORT_DIR="$CONTROL_ROOM_INSPECTOR_REPORT_DIR/material-regions" \
+            pnpm --dir apps/control-room run smoke:inspector
           node apps/control-room/scripts/smoke-adaptive-study-authoring.mjs
           CONTROL_ROOM_ANALYSIS_PLOTS_FIXTURE=1 \
             CONTROL_ROOM_ACCEPTANCE_DIR="$CONTROL_ROOM_AUDIT_ARTIFACTS_DIR/analysis-plots" \
@@ -864,6 +880,7 @@ jobs:
           python -B scripts/test_docker_isolated_snapshot_copy.py -v
           python -B scripts/test_docker_isolated_snapshot_namespace.py -v
           python -B scripts/test_docker_isolated_session_recovery.py -v
+          python -B scripts/test_docker_isolated_stopped_predecessor.py -v
           python -B scripts/test_docker_isolated_sqlite_fence.py -v
           python -B scripts/test_docker_isolated_control_snapshot.py -v
           python -B scripts/test_docker_isolated_control_prepare.py -v
@@ -881,6 +898,9 @@ jobs:
           python -B scripts/test_docker_volume_dev_cancelled_activation.py -v
           python -B scripts/test_docker_volume_readiness_receipt.py -v
           python -B scripts/test_docker_volume_stop_failed.py -v
+          python -B scripts/test_docker_volume_no_spawn_cancellation.py -v
+          python -B scripts/test_docker_volume_no_spawn_loader_reconcile.py -v
+          python -B scripts/test_docker_volume_linux_supervision_stop.py -v
           python -B scripts/test_docker_volume_activation_reconcile.py -v
           python -B scripts/test_docker_volume_offline_reconcile.py -v
           python -B scripts/test_docker_stopped_network.py -v
@@ -909,6 +929,7 @@ jobs:
           python -B scripts/test_docker_helper_source_transition.py -v
           python -B scripts/test_just_development_recovery_shell.py -v
           python -B scripts/test_docker_volume_reconcile.py -v
+          python -B scripts/test_docker_volume_network_failure_reconcile.py -v
           python -B scripts/test_docker_volume_development_interrupted.py -v
           python -B scripts/test_docker_volume_resume_interrupted.py -v
           python -B scripts/test_linux_native_readmission.py -v

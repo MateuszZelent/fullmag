@@ -56,6 +56,8 @@ export interface AirboxMeshPolicyDraft {
   airboxCenterZ: string;
   /** Resource revision the draft was edited from; sent as expected_revision. */
   baseRevision?: number;
+  /** Authored config the draft was edited from; decides whether a newer revision may be adopted. */
+  baseConfigText?: string;
 }
 
 export function defaultUniverseMeshPolicyResource(): MeshUniverseConfigResource {
@@ -80,6 +82,7 @@ export function draftFromUniverseMeshPolicyResource(
 
   return {
     baseRevision: resource.revision,
+    baseConfigText: formatUniverseMeshPolicyConfig(resource.config),
     authoredConfigPresent: resource.config !== null && resource.config !== undefined,
     airboxGradingAuthored: Object.hasOwn(config, "airbox_grading"),
     airboxGrading: readAirboxGrading(config.airbox_grading),
@@ -88,8 +91,11 @@ export function draftFromUniverseMeshPolicyResource(
     airboxHmin: readNumberText(config.airbox_hmin),
     configText: formatUniverseMeshPolicyConfig(resource.config),
     syncedConfigText: formatUniverseMeshPolicyConfig(resource.config),
-    curvatureFactor: readNumberText(config.curvature_factor),
-    narrowRegionResolution: readNumberText(config.narrow_region_resolution),
+    // Canonical air keys are prefixed; the unprefixed aliases come from older drafts.
+    curvatureFactor: readNumberText(config.airbox_curvature_factor ?? config.curvature_factor),
+    narrowRegionResolution: readNumberText(
+      config.airbox_narrow_region_resolution ?? config.narrow_region_resolution,
+    ),
     paddingX: readVec3Component(config.padding, 0),
     paddingY: readVec3Component(config.padding, 1),
     paddingZ: readVec3Component(config.padding, 2),
@@ -129,6 +135,27 @@ export function draftIdentityKeyForUniverseMeshPolicyResource(): string {
   return "universe";
 }
 
+/**
+ * The policy revision is the session mesh revision, which every scene commit
+ * advances. A draft therefore adopts the latest revision when the authored
+ * Universe policy itself is unchanged since the draft was opened; a real
+ * concurrent policy edit keeps the old revision and still conflicts.
+ */
+export function rebaseAirboxMeshPolicyDraft(
+  draft: AirboxMeshPolicyDraft,
+  latest: MeshUniverseConfigResource | null,
+): AirboxMeshPolicyDraft {
+  if (
+    !latest ||
+    draft.baseConfigText === undefined ||
+    draft.baseRevision === latest.revision ||
+    formatUniverseMeshPolicyConfig(latest.config) !== draft.baseConfigText
+  ) {
+    return draft;
+  }
+  return { ...draft, baseRevision: latest.revision };
+}
+
 export function airboxMeshPolicyDraftDirty(
   draft: AirboxMeshPolicyDraft,
   baseDraft: AirboxMeshPolicyDraft,
@@ -142,7 +169,12 @@ export function airboxMeshPolicyDraftDirty(
 function normalizeLengthDraftForComparison(
   draft: AirboxMeshPolicyDraft,
 ): AirboxMeshPolicyDraft {
-  const normalized = { ...draft, quantityUnits: undefined, baseRevision: undefined };
+  const normalized = {
+    ...draft,
+    quantityUnits: undefined,
+    baseRevision: undefined,
+    baseConfigText: undefined,
+  };
   for (const field of AIRBOX_LENGTH_FIELDS) {
     const input = parseQuantityInput(
       draft[field],
@@ -172,7 +204,7 @@ function synchronizeAirboxMeshPolicyJson(draft: AirboxMeshPolicyDraft): AirboxMe
   const changes: Partial<AirboxMeshPolicyDraft> = {};
   const resetUnits: Partial<Record<AirboxLengthPolicyField, AirboxLengthUnit>> = {};
   for (const key of Object.keys(nextFields) as (keyof AirboxMeshPolicyDraft)[]) {
-    if (["baseRevision", "configText", "syncedConfigText", "configSynchronized", "authoredConfigPresent", "quantityUnits"].includes(key)) continue;
+    if (["baseRevision", "baseConfigText", "configText", "syncedConfigText", "configSynchronized", "authoredConfigPresent", "quantityUnits"].includes(key)) continue;
     if (!Object.is(previousFields[key], nextFields[key])) {
       let value = nextFields[key];
       if (isAirboxLengthPolicyField(key) && typeof value === "string") {
@@ -342,14 +374,16 @@ function buildAirboxMeshPolicyFormRequest(
       "Curvature factor",
     );
     if (!curvature.ok) return { error: curvature.error };
-    applyOptionalNumber(config, "curvature_factor", curvature.value);
+    delete config.curvature_factor;
+    applyOptionalNumber(config, "airbox_curvature_factor", curvature.value);
 
     const narrowRegion = parsePositiveNumber(
       draft.narrowRegionResolution,
       "Resolution of narrow regions",
     );
     if (!narrowRegion.ok) return { error: narrowRegion.error };
-    applyOptionalNumber(config, "narrow_region_resolution", narrowRegion.value);
+    delete config.narrow_region_resolution;
+    applyOptionalNumber(config, "airbox_narrow_region_resolution", narrowRegion.value);
   }
 
   // Airbox mode
@@ -409,6 +443,8 @@ const FEM_ONLY_POLICY_KEYS = [
   "airbox_growth_rate",
   "airbox_hmax",
   "airbox_hmin",
+  "airbox_curvature_factor",
+  "airbox_narrow_region_resolution",
   "curvature_factor",
   "narrow_region_resolution",
 ] as const;

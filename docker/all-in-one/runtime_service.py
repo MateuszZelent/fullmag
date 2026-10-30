@@ -6193,6 +6193,28 @@ def terminal_observation_runtime_receipt(paths, *, preflight, launch, handle):
     if _terminal_observation_documents(paths)[1] != preflight:
         _fail("terminal observation controls changed before native receipt")
     proof = preflight["proof"]
+    # Match the outcome already authenticated by the native installation to
+    # its immutable public preflight. The v1 proof stays byte-compatible.
+    original = proof.get("original_iteration")
+    preflight_sha = proof.get("preflight_raw_sha256")
+    if (not isinstance(original, str) or re.fullmatch(r"[0-9a-f]{32}", original) is None
+            or not isinstance(preflight_sha, str) or HEX64.fullmatch(preflight_sha) is None):
+        _fail("terminal observation source preflight identity is invalid")
+    source_raw = _bounded_regular(
+        _reattach_relative(BUILD_CONTROL_ROOT,
+            "iteration/attempts/" + original + "/terminal-session-preflight.json", "terminal source preflight"),
+        "terminal source preflight", 8 * 1024 * 1024)
+    if _sha256_bytes(source_raw) != preflight_sha:
+        _fail("terminal observation source preflight CAS differs")
+    source = _accepted_reattach_json(source_raw, "terminal source preflight")
+    source_run = source.get("run")
+    if not isinstance(source_run, dict):
+        _fail("terminal observation source run is invalid")
+    outcome = source_run.get("status")
+    if (not isinstance(outcome, str) or outcome not in {"failed", "completed"}
+            or source_run.get("run_id") != proof["run_id"]
+            or source.get("session_id") != proof["session_id"]):
+        _fail("terminal observation source outcome differs")
     if not isinstance(launch, dict) or set(launch) != {"relative", "sha256", "binding"}:
         _fail("terminal observation has no exact launch binding")
     binding = launch["binding"]
@@ -6212,7 +6234,7 @@ def terminal_observation_runtime_receipt(paths, *, preflight, launch, handle):
         "schema": "fullmag.terminal-observation-restored.v1", "api_instance_id": api_id,
         "run_id": proof["run_id"], "session_id": proof["session_id"],
         "session_epoch": proof["session_epoch"], "scene_revision": proof["scene_revision"],
-        "terminal_outcome": "failed", "proof_sha256": preflight["proof_sha256"],
+        "terminal_outcome": outcome, "proof_sha256": preflight["proof_sha256"],
         "launch_sha256": launch["sha256"], "source_image_id": proof["image_id"],
         "source_config_sha256": proof["config_sha256"],
         "target_build_id": binding["target_build_id"],
@@ -6226,7 +6248,7 @@ def terminal_observation_runtime_receipt(paths, *, preflight, launch, handle):
     code, headers, run = _http_json(8081, "/v2/sessions/current/simulation/runs/current")
     if (code != 200 or _single_header(headers, "x-fullmag-api-instance") != api_id
             or run.get("run_id") != proof["run_id"] or run.get("session_id") != proof["session_id"]
-            or run.get("status") != "failed"):
+            or run.get("status") != outcome):
         _fail("terminal observation live readback differs from its native receipt")
     return {
         "schema": "fullmag.terminal-observation-runtime.v1", "api_instance_id": api_id,

@@ -3607,7 +3607,7 @@ fn validate_accepted_study_inputs(
         .get_bounded(study_ref, fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES)?
         .context("accepted run study object is missing")?;
     let catalog_bytes = cas
-        .get_bounded(catalog_ref, fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES)?
+        .get_bounded(catalog_ref, crate::MAX_ACCEPTED_MODEL_DOCUMENT_BYTES)?
         .context("accepted run study catalog object is missing")?;
     let study: StudyPlan =
         serde_json::from_slice(&study_bytes).context("accepted run study object is not typed")?;

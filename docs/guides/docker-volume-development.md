@@ -208,6 +208,64 @@ lease `iteration` i przed zatrzymaniem którejkolwiek usługi; błąd tej kontro
 zostawia grupę działającą i nie tworzy próby. Grupa bez kwarantanny namespace
 ma `BuildControl.namespace == ""` i używa subpath `runtime-control`.
 
+#### Zapis pustej sesji UI przed restartem
+
+Zwykłą, aktywną sesję `ui_authoring` w stanie `awaiting_command`, bez bieżącego
+runu i bez obiektów sceny, można zachować w archiwum projektu przed
+`restart-idle`. Dla tego przypadku checkpoint używa osobnego schematu
+`fullmag.saved-empty-authoring-restart.v1`: oba piny źródła (`source_entry` i
+`source_sha256`) muszą jawnie mieć wartość `null`. Archiwum zachowuje dokładne
+hashowane rewizje projektu i sceny; scena musi wskazywać `source_of_truth: ui`,
+a `objects` musi być pominięte albo puste. Nie dodaje się zastępczego skryptu
+Python ani metadanych skryptu, historii źródeł, historii projektu lub runów.
+
+Ta ścieżka nadal wymaga zwykłego ścisłego probe stanu przed i po zatrzymaniu
+frontendu, identycznych pinów kontenerów, źródeł, właściciela i archiwum oraz
+uwierzytelnionego natywnego drainu. Nie przyjmuje checkpointów rozszerzonych o
+anulowane lub historyczne preclaim ani katalogi zachowanych runów. Istniejący
+schemat `fullmag.saved-authoring-restart.v1` pozostaje przeznaczony dla
+archiwów z przypiętym skryptem źródłowym i nadal wymaga obu pinów źródła.
+
+Do bezpiecznego zatrzymania tej grupy użyj `just docker-dev-stop-saved-authoring`
+z przypiętym checkpointem. Recepta przechodzi przez probe i native drain,
+następnie pozostawia frontend oraz backend zatrzymane. Nie odtwarza sesji ani
+nie uruchamia skryptu; archiwum pozostaje zachowane do osobnego, jawnego otwarcia
+projektu.
+
+#### Początkowy start odrzucony z powodu wyczerpanej puli sieci
+
+Błąd Dockera `all predefined address pools have been fully subnetted` może
+wystąpić przed utworzeniem obu usług. Zachowany helper i receipt
+`outcome-unknown-resources-retained` nie są zgodą na ponowne `up` ani ręczne
+usunięcie `active`. Najpierw sprawdź właścicieli sieci; nie stosuj globalnego
+`network prune` i nie usuwaj sieci grup z zachowanymi kontenerami lub recovery.
+Usunięcie osieroconej sieci innego zadania wymaga odrębnej autoryzacji.
+
+Dla wyłącznie początkowej próby, bez wcześniejszego udanego deploymentu,
+recepta `docker-dev-reconcile-network-failure` potwierdza nieudany start.
+Przyjmuje wybrany checkout, dokładny attempt, hashe oryginalnego `receipt.json`
+i `compose.json` oraz ID silnika Docker. Domyślnie wykonuje tylko preview:
+
+```text
+just docker-dev-reconcile-network-failure <source> <attempt> <receipt-sha256> <compose-sha256> <engine-id>
+```
+
+Po sprawdzeniu dowodów końcowy argument `true` wykonuje failure-only CAS.
+Wymagane są: dokładny błąd puli, brak usług (także zatrzymanych) i sieci tej
+próby oraz zgodny oryginalny helper z potwierdzonym `LOGGED`, nadal trzymający
+`operation.lock`. Pełny spis kontenerów wyklucza obcych konsumentów wolumenu
+kontrolnego i checkoutu tej grupy. Dowody są ponownie sprawdzane przed publikacją.
+Ta początkowa procedura failure-only jest lokalna dla grupy (ADR 0067); nie
+wymaga zatrzymania procesów innych grup. Starsze procedury odzyskiwania
+BuildKit zachowują własne, globalne kontrole.
+Adapter zachowuje oryginalny receipt i dowód, nie publikuje sukcesu ani
+`verified`, nie uruchamia usług i nie usuwa danych. Wyłącznie oryginalny helper
+zwalnia swój marker `active` po odebraniu terminalnego wyniku. Nieznany wynik
+publikacji wymaga odczytu zachowanych dowodów; nie ponawiaj mutacji w ciemno.
+Dopiero potwierdzony terminal i zwolnienie helpera pozwalają na nowy start
+standardową receptą. Ta procedura nie służy do odzyskiwania zatrzymanego
+mastera z istniejącą sesją.
+
 #### Odzyskanie grupy zablokowanej w `iteration`
 
 Przed poprawką z 21.10.2026 idle restart grupy bez namespace (`""`) zatrzymywał
@@ -723,3 +781,68 @@ niezmieniony. Nie jest to ogólne odzyskiwanie lease ani trasa dla aktywnego run
 
 Po sukcesie użyj zwykłego przypiętego resume-volume --restart-backend.
 Inne zmiany tożsamości, aktywny/nieznany konsument albo różne piny blokują zapis.
+
+
+## Authored input after accepted recovery
+
+Accepted live runs retain the authored SceneDocument in the immutable project
+definition, with the same versioned execution-input identity as the RunIntent.
+The legacy default execution profile used to materialize the Study remains in
+the accepted Study and execution catalog; it does not become an authored scene
+change merely because the API restarts.
+
+Older definitions may contain that automatically inserted default profile.
+Recovery first validates the unchanged scene. Only if its input digest differs
+and the profile equals the exact canonical legacy default may recovery project
+that field back to absence, and only when the complete input digest then equals
+the immutable pin. Explicit profiles, actual input changes, and malformed pins
+remain protected. Stored definitions and RunIntent/CAS bytes are never rewritten.
+
+This keeps terminal cancellation visible to the accepted projector: a completed
+Stop must publish its terminal command resource and durable journal ACK instead
+of leaving the UI at accepted/stopping. It does not replay Solve, release a held
+run, or authorize editing historical journals.
+
+## Kolejne recovery po zatrzymaniu odtworzonej grupy
+
+Po potwierdzonym uruchomieniu isolated snapshot użytkownik może utworzyć nową
+sesję. Kolejne recovery musi jawnie wskazać jej aktualny held-manual run;
+ponowne użycie pierwotnego `start.json` przywróciłoby wcześniejszy model.
+`docker-dev-recover-isolated` przyjmuje ostatni argument `successor_snapshot=true`
+(CLI: `--successor-snapshot`). Domyślnie nadal odmawia wyboru innego recovery ID.
+
+Ścieżka successor wymaga natywnego admission poprzednika oraz zgodności
+`development/current.json` z przypiętym terminalnym receiptem. Zwykły udany start
+wymaga identycznego `verified.json`. Po potwierdzonej awarii kolejnego startu
+(`failed-confirmed`) verified musi wskazywać swój wcześniejszy, niezmienny
+terminal udanego startu i Compose, w tym samym namespace oraz z tymi samymi
+katalogami state i user-data. Obie pary dokumentów pozostają przypięte do CAS;
+awaria nie jest przedstawiana jako udany start ani dowód braku OWNER.
+Ścieżka sprawdza namespace, registry, attempt, konfigurację i dokładne
+kontenery, po czym wykonuje dotychczasowe kontrole wszystkich runów, ledgeru,
+blokad OWNER/WRITER i spójności SQLite. Kopiuje bieżące dane do nowej namespace;
+oryginały, poprzedni registry i `start.json` pozostają zachowane. Piny admission
+są ponownie sprawdzane przy publikacji. Podgląd niczego nie uruchamia, a apply
+nie odtwarza Solve ani nie kończy runów. Nowy start nadal przechodzi osobną
+natywną bramkę. Operacja dotyczy wyłącznie przypiętej, zatrzymanej grupy mastera.
+Nowy snapshot ma odrębną generację prywatnego ledgeru, wyprowadzoną z recovery ID;
+stary ledger pozostaje zachowany. Kontrole readmission poza tą jawną ścieżką
+nadal wymagają udanego terminalnego receiptu.
+
+Jeżeli nieudany start zakończył się przed zapisaniem identyfikatorów usług,
+successor nie odgaduje ich z listy kontenerów. Operator musi jawnie przypiąć
+typed journal bezpiecznego zatrzymania diagnostycznego API przez parę opcji
+`--stopped-predecessor-proof` i `--stopped-predecessor-proof-sha256`.
+Adapter przyjmuje tylko `fullmag.docker-preowner-policy-stop.v1` dla tej samej
+nieudanej próby: potwierdzone zatrzymanie po odmowie polityki zasobów,
+brak bieżącej sesji API i zachowane dane. Sprawdza surowy hash journala,
+niezmienny plan oraz udany terminal operacji Stop, a także zachowane piny
+OWNER, procesu i provenance. Journal nie stanowi dowodu native drain.
+
+Brakujące lub null identyfikatory terminala uzupełnia wyłącznie w pamięci;
+inne pola i istniejące identyfikatory muszą pozostać zgodne. Oryginalne bajty
+terminala, current i wszystkich dokumentów dowodu pozostają pinami końcowego
+CAS. Każdy ponowny odczyt zatrzymanej pary sprawdza identyfikator, obraz,
+fingerprint, `StartedAt` oraz poprawne zakończenie kontenera. Dotychczasowe
+bramki natywnego admission, ledgeru i magazynu wszystkich runów nadal obowiązują.
+Opcje nie są dostępne dla zwykłego readmission ani udanego terminala.

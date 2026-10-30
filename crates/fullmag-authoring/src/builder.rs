@@ -255,6 +255,12 @@ pub struct ScriptBuilderUniverseState {
     pub airbox_growth_rate: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub airbox_grading: Option<String>,
+    /// Air target `c * R` at curved magnetic surfaces (docs/physics/0107).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub airbox_curvature_factor: Option<f64>,
+    /// Element-count control across air gaps (docs/physics/0107).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub airbox_narrow_region_resolution: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

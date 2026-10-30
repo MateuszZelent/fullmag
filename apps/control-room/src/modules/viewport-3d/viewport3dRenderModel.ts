@@ -47,6 +47,8 @@ import {
 } from "./model/viewport3DTargetFieldBuffer";
 import { resolveViewport3DFieldDomainCompatibility } from "./model/viewport3DFieldDomainCompatibility";
 import { resolveViewport3DAdaptiveVectorGlyphLength } from "./model/viewport3DVectorGlyphScale";
+import { buildViewport3DPhysicalGlyphColors } from "./model/viewport3DPhysicalGlyphColors";
+import type { Viewport3DVisibleColorScale } from "./model/viewport3DVisibleColorScale";
 import {
   buildPartSurfaceIndices as buildPartSurfaceIndicesUncached,
   buildPartSurfaceIndicesWithSupplemental as buildPartSurfaceIndicesWithSupplementalUncached,
@@ -216,6 +218,7 @@ export type Viewport3DTargetPassDegradation =
   | "vector-segments-unavailable";
 
 export interface Viewport3DTargetFieldBufferSource {
+  cacheResourceKey?: string | null;
   bufferId: string;
   capability: Viewport3DTargetFieldBuffer["capability"];
   component: Viewport3DTargetFieldBuffer["component"];
@@ -260,6 +263,7 @@ export interface Viewport3DTargetRenderPassModel {
     /** Global source node for each emitted, nonzero glyph. */
     nodeIndices?: Uint32Array | null;
     glyphColors?: Float32Array | null;
+    colorScale?: Viewport3DVisibleColorScale | null;
   };
 }
 
@@ -307,6 +311,7 @@ export interface Viewport3DFieldRenderOptions {
   targetRenderPlans?: ReadonlyMap<string, Viewport3DTargetRenderPlan>;
   partVectorAnchorModes?: ReadonlyMap<string, Viewport3DVectorAnchorMode>;
   partVectorBudgets?: ReadonlyMap<string, number>;
+  partVectorColorModes?: ReadonlyMap<string, string>;
   partVectorScales?: ReadonlyMap<string, number>;
   partVectorScopes?: ReadonlyMap<string, "surface" | "full">;
   partVectorSurfaceOffsetEnabled?: ReadonlySet<string>;
@@ -331,6 +336,8 @@ export type Viewport3DVectorAnchorMode = "center" | "tail";
 interface Viewport3DVectorSegmentBuild {
   segments: Float32Array;
   nodeIndices: Uint32Array;
+  /** Exact physical field sample for each emitted glyph, after filtering and decimation. */
+  valueIndices?: Uint32Array;
 }
 
 export interface Viewport3DVectorSegmentOptions {
@@ -1182,6 +1189,18 @@ export function buildViewport3DFieldRenderModel(
             fieldValueResolver,
           );
     const partSegments = partSegmentBuild?.segments ?? null;
+    const glyphColorMode = targetRenderPlan?.vectors.colorMode ??
+      options.partVectorColorModes?.get(partId) ?? options.vectorColorMode ?? "orientation";
+    const physicalGlyphColors = partSegmentBuild && partFieldVector
+      ? buildViewport3DPhysicalGlyphColors({
+          field: partFieldVector,
+          sampleIndices: partSegmentBuild.valueIndices ?? partSegmentBuild.nodeIndices,
+          colorMode: glyphColorMode,
+          palette: partScalarColorPalette ?? "viridis",
+          range: partScalarColorsByMode?.get(glyphColorMode)?.range ??
+            options.partScalarRangesByMode?.get(partId)?.get(glyphColorMode),
+        })
+      : null;
     partVectorSegments.set(partId, partSegments);
     const partVectorBuildReference = buildVectorGlyphBuildReference({
       budget: partBudget,
@@ -1236,6 +1255,8 @@ export function buildViewport3DFieldRenderModel(
         passId: `${partId}:vector-glyph`,
         segments: partSegments,
         nodeIndices: partSegmentBuild?.nodeIndices ?? null,
+        glyphColors: physicalGlyphColors?.colors ?? null,
+        colorScale: physicalGlyphColors?.scale ?? null,
       },
     });
   }
@@ -1407,6 +1428,7 @@ function targetFieldBufferSource(
 ): Viewport3DTargetFieldBufferSource {
   return {
     bufferId: buffer.bufferId,
+    cacheResourceKey: buffer.cacheResourceKey ?? null,
     capability: buffer.capability,
     component: buffer.component,
     componentCount: buffer.componentCount,
@@ -2350,7 +2372,8 @@ function estimateRenderCacheValueByteLength(value: unknown): number {
 
   const segmentBuild = value as Partial<Viewport3DVectorSegmentBuild>;
   if (segmentBuild.segments && segmentBuild.nodeIndices) {
-    return segmentBuild.segments.byteLength + segmentBuild.nodeIndices.byteLength;
+    return segmentBuild.segments.byteLength + segmentBuild.nodeIndices.byteLength +
+      (segmentBuild.valueIndices?.byteLength ?? 0);
   }
 
   const maybeDecodedFieldVector = value as Partial<Viewport3DFieldVector>;
@@ -3064,6 +3087,7 @@ function buildVectorLineSegmentsForNodeSelectionFromPositions(
 
   const segments = new Float32Array(samples.length * VECTOR_SEGMENT_STRIDE);
   const nodeIndices = new Uint32Array(samples.length);
+  const valueIndices = new Uint32Array(samples.length);
   let visibleVectorCount = 0;
 
   for (let vector = 0; vector < samples.length; vector += 1) {
@@ -3110,12 +3134,14 @@ function buildVectorLineSegmentsForNodeSelectionFromPositions(
     }
     segments[target + 6] = length / scaleMag; // relative magnitude [0..1]
     nodeIndices[visibleVectorCount] = sample.pointIndex;
+    valueIndices[visibleVectorCount] = sample.valuePointIndex;
     visibleVectorCount += 1;
   }
 
   return visibleVectorCount > 0
     ? { segments: segments.slice(0, visibleVectorCount * VECTOR_SEGMENT_STRIDE),
-        nodeIndices: nodeIndices.slice(0, visibleVectorCount) }
+        nodeIndices: nodeIndices.slice(0, visibleVectorCount),
+        valueIndices: valueIndices.slice(0, visibleVectorCount) }
     : null;
 }
 

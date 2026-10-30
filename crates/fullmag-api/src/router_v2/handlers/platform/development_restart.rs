@@ -504,7 +504,8 @@ fn validate_current_mesh_workspace(snapshot: &SessionStateResponse) -> Result<()
         stages.len() == 1 && stages[0].get("status").and_then(Value::as_str) == Some("completed")
             && matches!(stages[0].get("id").and_then(Value::as_str),
                 Some("startup" | "solve" | "run" | "relax" | "resume" | "mesh_build" | "fdm_grid_refresh"
-                    | "accepted_run_reattach" | "accepted_projection_stage_preparation" | "remesh"))
+                    | "accepted_run_reattach" | "isolated_snapshot_restore"
+                    | "accepted_projection_stage_preparation" | "remesh"))
     });
     let fingerprint = workspace.get("plan_fingerprint").and_then(Value::as_str)
         .and_then(|value| value.strip_prefix("sha256:"));

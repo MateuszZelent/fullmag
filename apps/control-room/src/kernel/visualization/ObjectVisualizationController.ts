@@ -1,3 +1,4 @@
+import { normalizeScalarColorPalette as normalizeSharedScalarColorPalette } from "@/shared/visualization/scalarColorPalette";
 import type { ArtifactFieldSelection } from "./artifactFieldSelection";
 import { validAntennaColorRange, type AntennaColorRange } from "./antennaColorRange";
 import { hasEmptyObjectMagneticModel } from "@/shared/domain/physics/objectMagneticModel";
@@ -2198,6 +2199,7 @@ export function resolveAirboxVisualizationSettingsFromState(
       wireframeVisible,
     }),
     scalarColorPalette:
+      targetSettings?.scalarColorPalette ??
       state?.quantity?.colormap ??
       state?.colormap ??
       baseSettings.scalarColorPalette,
@@ -2850,17 +2852,7 @@ function normalizeSurfaceProjectionMode(
 }
 
 function normalizeScalarColorPalette(value: unknown): string {
-  const normalized =
-    typeof value === "string"
-      ? value.trim().toLowerCase().replace(/[\s-]+/g, "_")
-      : "";
-  return normalized === "coolwarm" ||
-    normalized === "inferno" ||
-    normalized === "jet" ||
-    normalized === "magma" ||
-    normalized === "viridis"
-    ? normalized
-    : "viridis";
+  return normalizeSharedScalarColorPalette(typeof value === "string" ? value : null);
 }
 
 function surfaceColorSourceFromColorMode(

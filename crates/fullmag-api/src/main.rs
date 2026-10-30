@@ -41,7 +41,9 @@ mod accepted_fem_study_worker;
 mod accepted_antenna_inspection_worker;
 use accepted_study_worker::accepted_solver_profile;
 mod accepted_study_worker;
+mod accepted_live_demand;
 mod accepted_observation_spool;
+mod live_field_demand;
 mod accepted_field_binary;
 mod accepted_project_storage;
 mod analysis;
@@ -71,6 +73,7 @@ mod instance_discovery;
 mod imported_observation_retirement;
 mod live_command_journal;
 mod live_execution_binding;
+mod live_geometry_mesh_build;
 mod accepted_field_materialization;
 mod accepted_field_materialization_worker;
 mod live_accepted_continuation;
@@ -2062,7 +2065,7 @@ pub(crate) async fn publish_current_live_realtime_batch_changed(
     .await
 }
 
-async fn publish_current_live_realtime_batch_changed_since(
+pub(crate) async fn publish_current_live_realtime_batch_changed_since(
     state: &AppState,
     realtime_state: &CurrentLiveRealtimeState,
     previous_revisions: Option<&RealtimeResourceRevisionMap>,
@@ -2308,7 +2311,7 @@ async fn publish_current_live_realtime_scalar_sample_now(
     .await
 }
 
-async fn queue_current_live_realtime_scalar_sample(
+pub(crate) async fn queue_current_live_realtime_scalar_sample(
     state: &AppState,
     sample: PendingRealtimeScalarSample,
 ) -> Result<(), ApiError> {
@@ -2628,6 +2631,7 @@ async fn main() {
         bootstrap_started.elapsed().as_millis()
     );
     let state = Arc::new(AppState {
+        api_started_at: bootstrap_started,
         development_admission: Default::default(),
         development_restored_authoring: Default::default(),
         development_backend: router_v2::handlers::platform::development_backend::DevelopmentBackendConfig::from_environment(),

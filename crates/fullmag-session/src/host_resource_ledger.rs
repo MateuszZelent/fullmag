@@ -18,6 +18,20 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::canonical_json_sha256;
+
+/// The active compute-node owner has no current sample. The sampler publishes
+/// a fresh one periodically, so admission waits for it; this is never a fault
+/// of the request itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ComputeNodeSampleNotCurrent;
+
+impl std::fmt::Display for ComputeNodeSampleNotCurrent {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("host admission requires a current sample for the active compute-node owner")
+    }
+}
+
+impl std::error::Error for ComputeNodeSampleNotCurrent {}
 use crate::compute_node_snapshot::{
     ComputeNodeSnapshot, EnforcementStatus, GpuPartition, Reported, UnavailableReason,
 };
@@ -3026,7 +3040,8 @@ impl HostResourceLedger {
         self.read_document_locked()?;
         let snapshot = self
             .read_compute_node_snapshot_locked()?
-            .context("host admission requires a published compute-node sample")?;
+            .ok_or_else(|| anyhow::Error::new(ComputeNodeSampleNotCurrent)
+                .context("host admission requires a published compute-node sample; compute-node snapshot is missing"))?;
         let descriptor = HostInventoryOwnerDescriptor {
             host_owner_id: snapshot
                 .host_owner_id
@@ -3061,13 +3076,15 @@ impl HostResourceLedger {
         }
         let active = self
             .active_inventory_owner_locked()?
-            .context("host admission has no active compute-node inventory owner")?;
+            .ok_or_else(|| anyhow::Error::new(ComputeNodeSampleNotCurrent)
+                .context("host admission has no active compute-node inventory owner"))?;
         if active.host_owner_id.as_str() != owner_id || active.host_owner_epoch != owner_epoch {
             bail!("host request is fenced by a different compute-node inventory owner");
         }
         let snapshot = self
             .read_compute_node_snapshot_locked()?
-            .context("host admission requires a published compute-node sample")?;
+            .ok_or_else(|| anyhow::Error::new(ComputeNodeSampleNotCurrent)
+                .context("host admission requires a published compute-node sample; compute-node snapshot is missing"))?;
         self.validate_v2_snapshot_locked(&snapshot)?;
         if snapshot.schema_version
             != crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2
@@ -3078,7 +3095,7 @@ impl HostResourceLedger {
             || snapshot.host_owner_epoch != Some(owner_epoch)
             || !snapshot.is_current_at(chrono::Utc::now())?
         {
-            bail!("host admission requires a current sample for the active compute-node owner");
+            return Err(anyhow::Error::new(ComputeNodeSampleNotCurrent));
         }
         Ok(())
     }
@@ -3108,7 +3125,8 @@ impl HostResourceLedger {
 
         let snapshot = self
             .read_compute_node_snapshot_locked()?
-            .context("host admission requires a published compute-node sample")?;
+            .ok_or_else(|| anyhow::Error::new(ComputeNodeSampleNotCurrent)
+                .context("host admission requires a published compute-node sample; compute-node snapshot is missing"))?;
 
         if !self.policy.allowed_cpu_ids.is_empty() || !request.cpu_ids.is_empty() {
             let topology = match &snapshot.cpu.topology {

@@ -153,6 +153,7 @@ vi.mock("@/kernel/resources/planarFieldResources", () => ({
   usePlanarMaskResource: () => ({ data: null, error: null, status: "idle" }),
   usePlanarMeshOverlayResource: () => ({ data: null, error: null, status: "idle" }),
   usePlanarProbeResource: () => ({ data: mocks.probeData, error: null, status: mocks.probeData ? "ready" : "idle" }),
+  usePlanarProfileResource: () => ({ data: null, error: null, status: "idle" }),
   usePlanarScalarResource: () => mocks.renderReady && !mocks.scalarPending
     ? { data: mocks.scalarData, error: null, status: "ready" }
     : { data: null, error: null, status: "idle" },
@@ -174,6 +175,7 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
 
 vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
   useFieldCatalogResource: () => ({ data: null, error: null, status: "idle" }),
+  useHysteresisPointsResource: () => ({ data: null, error: null, status: "idle" }),
   useQuantityCatalogResource: () => ({ data: null, error: null, status: "idle" }),
 }));
 
@@ -551,7 +553,7 @@ describe("FieldMapModule planar state ownership", () => {
     expect(html).toContain("2 kA/m");
     expect(html).toContain('class="fm-field-map__colorbar-ramp" data-colormap="viridis"');
     expect(html).toContain(
-      "background:linear-gradient(to right, rgb(68, 1, 84), rgb(49, 104, 142), rgb(53, 183, 121), rgb(253, 231, 37))",
+      "background:linear-gradient(to right in srgb, rgb(68, 1, 84), rgb(49, 104, 142), rgb(53, 183, 121), rgb(253, 231, 37))",
     );
 
     const minIndex = html.indexOf("-1 kA/m");

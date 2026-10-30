@@ -109,7 +109,9 @@ describe("field-map data plan", () => {
     expect(source).toContain("canonicalSampleError");
     expect(source).toContain("canonicalSampleError !== null");
     expect(source).toContain("canonicalSampleError?.message");
-    expect(source.match(/canonicalSampleReady/g)).toHaveLength(6);
+    // Scalar, mask, vectors, mesh overlay, probe and line profile all wait
+    // for the canonical sample.
+    expect(source.match(/canonicalSampleReady/g)).toHaveLength(7);
   });
 
   it.each([

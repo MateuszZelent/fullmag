@@ -733,6 +733,12 @@
       "responsibility": "Writes the current FMMQ v1 artifact."
     },
     {
+      "id": "growth-hint-diagnostic",
+      "path": "packages/fullmag-py/src/fullmag/meshing/remesh_cli.py",
+      "symbol": "_mesh_result_payload",
+      "responsibility": "Publishes adjacent_size_growth as a diagnostic for an authored growth_rate and gates it only when enforce_growth_gate is requested."
+    },
+    {
       "id": "fmmq-v1-decoder",
       "path": "apps/control-room/src/kernel/api/codecs/meshQualityDataCodec.ts",
       "symbol": "decodeMeshQualityData",

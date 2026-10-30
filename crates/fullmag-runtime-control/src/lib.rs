@@ -744,6 +744,10 @@ pub struct AcceptedRunSnapshot {
     pub definition_bytes: Vec<u8>,
 }
 
+/// Model-bearing documents can contain an inline FEM mesh. Their bounded
+/// decode budget is separate from the small control-plane metadata budget.
+pub const MAX_ACCEPTED_MODEL_DOCUMENT_BYTES: u64 = 256 * 1024 * 1024;
+
 /// Resolve the pinned definition; a missing CAS object never falls back to current.
 pub fn load_accepted_run_snapshot(
     store: &SessionStore,
@@ -782,7 +786,7 @@ pub fn load_accepted_run_snapshot_from_intent(
         bail!("accepted run definition reference differs from snapshot");
     }
     let definition_bytes = cas
-        .get_bounded(definition_ref, fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES)?
+        .get_bounded(definition_ref, MAX_ACCEPTED_MODEL_DOCUMENT_BYTES)?
         .context("accepted run definition object is missing")?;
     Ok(AcceptedRunSnapshot {
         intent,

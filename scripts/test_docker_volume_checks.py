@@ -433,5 +433,32 @@ class OracleWheelBindingTests(unittest.TestCase):
 
 
 
+
+
+class InitialOfflineImageTests(unittest.TestCase):
+    def test_image_is_bound_to_selected_attempt_source_and_compose(self):
+        identity = {'project_name': 'fullmag-worktree-test', 'source_root': '/source',
+                    'worktree_id': 'test', 'project_id': 'project'}
+        image = 'sha256:' + 'a' * 64
+        receipt = {'phase': 'development', 'attempt': 'b' * 32,
+                   'compose_project': identity['project_name'],
+                   'inputs': {'source_root': '/source', 'source_worktree_id': 'test',
+                              'source_project_id': 'project', 'image_id': image}}
+        document = {'name': identity['project_name'], 'services': {'backend': {'image': image}}}
+        self.assertEqual(checks._initial_offline_image(receipt, document, identity, 'b' * 32), image)
+        for field, value in [('source_root', '/foreign'), ('source_worktree_id', 'foreign'),
+                             ('source_project_id', 'foreign'), ('image_id', 'mutable:tag')]:
+            bad = copy.deepcopy(receipt)
+            bad['inputs'][field] = value
+            with self.subTest(field=field), self.assertRaises(checks.BuildControlError):
+                checks._initial_offline_image(bad, document, identity, 'b' * 32)
+        with self.assertRaises(checks.BuildControlError):
+            checks._initial_offline_image(receipt, document, identity, 'c' * 32)
+        bad_document = copy.deepcopy(document)
+        bad_document['services']['backend']['image'] = 'sha256:' + 'd' * 64
+        with self.assertRaises(checks.BuildControlError):
+            checks._initial_offline_image(receipt, bad_document, identity, 'b' * 32)
+
+
 if __name__ == '__main__':
     unittest.main()

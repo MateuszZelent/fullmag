@@ -1079,7 +1079,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     },
     [scalarShaderMaterials, tracker],
   );
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (
       committedScalarColorState.pipeline !== "shader" ||
       !committedScalarColorState.buffer
@@ -1108,9 +1108,13 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       scalarShaderMaterialFront.toneMapped =
         materialProfile.magneticSurface.toneMapped ?? false;
     }
+    // Imperative uniform changes do not invalidate a demand-driven canvas.
+    // Schedule the frame after both surface materials have adopted the palette.
+    invalidate();
   }, [
     committedScalarColorState.buffer,
     committedScalarColorState.pipeline,
+    invalidate,
     materialProfile.magneticSurface.shadeStrength,
     materialProfile.magneticSurface.toneMapped,
     scalarShaderMaterial,
@@ -1353,6 +1357,8 @@ export const MeshPartLayer = memo(function MeshPartLayer({
               : renderPlan.vectors.opacity
           }
           segments={modalVectorLayerInput?.segments ?? vectorLayerInput.segments}
+          glyphColorsOverride={modalVectorsActive ? undefined : vectorLayerInput.glyphColors}
+          colorScale={modalVectorsActive ? undefined : vectorLayerInput.colorScale}
           fieldBufferId={
             modalVectorLayerInput?.buildReference.fieldBufferId ?? requestedFieldBufferId
           }

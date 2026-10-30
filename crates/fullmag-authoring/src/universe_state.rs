@@ -15,6 +15,11 @@ pub(crate) struct UniverseStateWire {
     minimum_element_size: Option<f64>,
     airbox_growth_rate: Option<f64>,
     airbox_grading: Option<String>,
+    airbox_curvature_factor: Option<f64>,
+    airbox_narrow_region_resolution: Option<f64>,
+    // Unprefixed names written by earlier Airbox policy clients.
+    curvature_factor: Option<f64>,
+    narrow_region_resolution: Option<f64>,
 }
 
 fn mesh_size_alias(
@@ -32,21 +37,63 @@ fn mesh_size_alias(
     }
 }
 
+/// Note 0107 air feature controls: finite, positive and anchored to the
+/// far-air maximum element size they relax toward.
+fn air_feature_control(
+    value: Option<f64>,
+    name: &str,
+    airbox_hmax: Option<f64>,
+) -> Result<Option<f64>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if !value.is_finite() || value <= 0.0 {
+        return Err(format!("universe {name} must be finite and greater than 0"));
+    }
+    if airbox_hmax.is_none() {
+        return Err(format!(
+            "universe {name} requires the airbox maximum_element_size"
+        ));
+    }
+    Ok(Some(value))
+}
+
 impl TryFrom<UniverseStateWire> for ScriptBuilderUniverseState {
     type Error = String;
 
     fn try_from(wire: UniverseStateWire) -> Result<Self, Self::Error> {
+        let airbox_hmax = mesh_size_alias(
+            wire.airbox_hmax,
+            wire.maximum_element_size,
+            "airbox_hmax",
+            "maximum_element_size",
+        )?;
+        let airbox_curvature_factor = air_feature_control(
+            mesh_size_alias(
+                wire.curvature_factor,
+                wire.airbox_curvature_factor,
+                "curvature_factor",
+                "airbox_curvature_factor",
+            )?,
+            "airbox_curvature_factor",
+            airbox_hmax,
+        )?;
+        let airbox_narrow_region_resolution = air_feature_control(
+            mesh_size_alias(
+                wire.narrow_region_resolution,
+                wire.airbox_narrow_region_resolution,
+                "narrow_region_resolution",
+                "airbox_narrow_region_resolution",
+            )?,
+            "airbox_narrow_region_resolution",
+            airbox_hmax,
+        )?;
         Ok(Self {
             mode: wire.mode,
             size: wire.size,
             center: wire.center,
             padding: wire.padding,
-            airbox_hmax: mesh_size_alias(
-                wire.airbox_hmax,
-                wire.maximum_element_size,
-                "airbox_hmax",
-                "maximum_element_size",
-            )?,
+            airbox_hmax,
             airbox_hmin: mesh_size_alias(
                 wire.airbox_hmin,
                 wire.minimum_element_size,
@@ -55,6 +102,8 @@ impl TryFrom<UniverseStateWire> for ScriptBuilderUniverseState {
             )?,
             airbox_growth_rate: wire.airbox_growth_rate,
             airbox_grading: wire.airbox_grading,
+            airbox_curvature_factor,
+            airbox_narrow_region_resolution,
         })
     }
 }
@@ -102,6 +151,37 @@ mod tests {
             let raw = json!({"mode":"auto",(legacy):5e-7,(current):5e-7 + 1e-18});
             let error = serde_json::from_value::<ScriptBuilderUniverseState>(raw).unwrap_err();
             assert!(error.to_string().contains("must agree"));
+        }
+    }
+
+    #[test]
+    fn air_feature_controls_survive_and_accept_unprefixed_aliases() {
+        for raw in [
+            json!({"mode":"auto","airbox_hmax":4e-8,
+                "airbox_curvature_factor":0.3,"airbox_narrow_region_resolution":0.5}),
+            json!({"mode":"auto","airbox_hmax":4e-8,
+                "curvature_factor":0.3,"narrow_region_resolution":0.5}),
+        ] {
+            let state: ScriptBuilderUniverseState = serde_json::from_value(raw).unwrap();
+            assert_eq!(state.airbox_curvature_factor, Some(0.3));
+            assert_eq!(state.airbox_narrow_region_resolution, Some(0.5));
+            let encoded = serde_json::to_value(&state).unwrap();
+            assert_eq!(encoded, json!({"mode":"auto","airbox_hmax":4e-8,
+                "airbox_curvature_factor":0.3,"airbox_narrow_region_resolution":0.5}));
+            assert_eq!(serde_json::from_value::<ScriptBuilderUniverseState>(encoded).unwrap(), state);
+        }
+    }
+
+    #[test]
+    fn air_feature_controls_are_validated() {
+        for (raw, message) in [
+            (json!({"mode":"auto","curvature_factor":0.3}), "requires the airbox maximum_element_size"),
+            (json!({"mode":"auto","airbox_hmax":4e-8,"narrow_region_resolution":0.0}), "greater than 0"),
+            (json!({"mode":"auto","airbox_hmax":4e-8,"curvature_factor":0.3,
+                "airbox_curvature_factor":0.4}), "must agree"),
+        ] {
+            let error = serde_json::from_value::<ScriptBuilderUniverseState>(raw).unwrap_err();
+            assert!(error.to_string().contains(message), "{error}");
         }
     }
 

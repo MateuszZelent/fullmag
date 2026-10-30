@@ -1146,7 +1146,15 @@ fn defer_if_compute_sample_expired<T>(
         Ok(operation) => return Ok(operation),
         Err(error) => error,
     };
-    if preparation_admission_snapshot_ready(|| host.has_current_compute_snapshot())? {
+    // A sample that was stale when admission read it may be fresh again by
+    // now; the typed refusal still means "wait for the sampler", never a
+    // fatal admission error.
+    let sample_was_stale = error.chain().any(|cause| {
+        cause.is::<fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent>()
+    });
+    if !sample_was_stale
+        && preparation_admission_snapshot_ready(|| host.has_current_compute_snapshot())?
+    {
         return Err(error);
     }
     eprintln!(

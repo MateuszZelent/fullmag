@@ -215,12 +215,21 @@ class BindOverlapProbeTests(unittest.TestCase):
             changed_lifecycle["State"]["StartedAt"] = "2026-10-27T10:01:00Z"
             changed_records.append(changed_lifecycle)
             for changed in changed_records:
+                observations = [changed]
+                if changed is changed_lifecycle:
+                    # A one-off sibling transition can be re-proven. Keep
+                    # rejecting a lifecycle that changes around EVERY proof.
+                    observations = []
+                    for index in range(overlap.MAX_FOREIGN_LIFECYCLE_PROOFS):
+                        transition = json.loads(json.dumps(changed_lifecycle))
+                        transition["State"]["StartedAt"] = f"2026-10-27T10:01:0{index}Z"
+                        observations.append(transition)
                 with self.subTest(changed=changed), \
                      patch.object(overlap, "bounded_capture", return_value=subprocess.CompletedProcess(
                         [], 0, json.dumps(result).encode(), b"")), \
-                     patch.object(overlap, "docker_capture", return_value=subprocess.CompletedProcess(
-                        [], 0, json.dumps([changed]).encode(), b"")):
-                    with self.assertRaisesRegex(BuildControlError, "identity or state changed"):
+                     patch.object(overlap, "docker_capture", side_effect=[subprocess.CompletedProcess(
+                        [], 0, json.dumps([record]).encode(), b"") for record in observations]):
+                    with self.assertRaisesRegex(BuildControlError, "identity changed|lifecycle remained unstable"):
                         overlap.prove_foreign_alias_disjoint(control, backend, foreign, alias, root)
 
     def test_embedded_immutable_python_probe_is_syntactically_valid(self):
