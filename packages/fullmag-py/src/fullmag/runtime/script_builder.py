@@ -1608,6 +1608,7 @@ def _render_scene_stage_bootstrap(
                 "g",
                 "autosave",
                 "table_autosave",
+                "relax_alpha",
             },
         )
         kwargs = _scene_relax_stage_kwargs(stage, solver=solver)
@@ -2358,6 +2359,9 @@ def _scene_relax_stage_kwargs(
     max_relaxation_time_s = _finite_number(stage.get("max_relaxation_time_s"))
     if max_relaxation_time_s is not None:
         kwargs["max_relaxation_time_s"] = max_relaxation_time_s
+    relax_alpha = _finite_number(stage.get("relax_alpha"))
+    if relax_alpha is not None:
+        kwargs["relax_alpha"] = relax_alpha
     kwargs.update(_relax_stage_timestep_kwargs(stage, solver))
     return kwargs
 
