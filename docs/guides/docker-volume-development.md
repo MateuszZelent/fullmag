@@ -959,3 +959,34 @@ CAS. Każdy ponowny odczyt zatrzymanej pary sprawdza identyfikator, obraz,
 fingerprint, `StartedAt` oraz poprawne zakończenie kontenera. Dotychczasowe
 bramki natywnego admission, ledgeru i magazynu wszystkich runów nadal obowiązują.
 Opcje nie są dostępne dla zwykłego readmission ani udanego terminala.
+
+
+### Jawny profil diagnostyki Floqueta dla jednej grupy
+
+`recreate-volume` przyjmuje opcjonalne `--floquet-diagnostics`:
+`disabled`, `schur-action` albo `dense-oracle`. Ostatni opcjonalny argument
+recepty `docker-dev-recreate-volume` ma tę samą nazwę z podkreśleniem.
+Bez argumentu zachowuje się dokładnie zamrożony rekord poprzedniej grupy;
+`up`, `resume` i zwykły restart nie przechwytują ponownie środowiska hosta.
+
+Profil wybiera najwyżej jedną flagę `FULLMAG_FLOQUET_*` z wartością1.
+`disabled` usuwa obie flagi, zachowując pozostałe sterowania. Launcher
+najpierw sprawdza stare kontenery, receipty i drain, a potem wylicza rekord
+następcy. Profil oraz stary i nowy hash trafiają do immutable intentu
+recreation; wznowienie odtwarza ten wybór z intentu. Powtórzony argument,
+nieznana wartość albo nadpisywanie ukończonej/recovery próby są odrzucane.
+Operacja wymaga tych samych dowodów zatrzymania co zwykłe recreate i nie
+uruchamia automatycznie Solve. Wybór dotyczy tylko grupy wskazanego checkoutu.
+
+Przykład argumentów po zweryfikowanym, zarządzanym zatrzymaniu grupy:
+
+```text
+python -B scripts/docker_dev.py --repo-root <checkout> recreate-volume --attempt <development-attempt> --config-sha256 <compose-sha256> --source-root <checkout> --port <port> --floquet-diagnostics schur-action
+```
+
+Aktywna obsługa native oraz jej limity są niezależne od samego przekazania
+flagi: niedostępny pomiar ma pozostać unavailable. Dla nieudanej próby
+ograniczone scalar diagnostics trafiają do `native_failure_diagnostic.v1.json`
+w prywatnym worker attempt pod SessionStore; nie stanowią zaakceptowanego
+widma ani certyfikatu zbieżności. Profil zwiększa pracę diagnostyczną i nie
+zmienia docelowego residualu lub fizyki.

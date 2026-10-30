@@ -102,6 +102,14 @@ MODAL_KRYLOV_ENVIRONMENT_ALLOWED = {
     "FULLMAG_MODAL_GMRES_RESTART": frozenset({"8", "10", "12", "16", "30"}),
     "FULLMAG_MODAL_SHIFTED_KSP_TYPE": frozenset({"gmres", "fgmres"}),
 }
+FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED = {
+    "FULLMAG_FLOQUET_DENSE_ORACLE": frozenset({"1"}),
+    "FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC": frozenset({"1"}),
+}
+OPTIONAL_OPERATOR_PROBE_ENVIRONMENT_ALLOWED = {
+    **MODAL_KRYLOV_ENVIRONMENT_ALLOWED,
+    **FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED,
+}
 
 
 def _normalize_operator_probe_environment(value: Mapping[str, object]) -> dict[str, str]:
@@ -110,18 +118,30 @@ def _normalize_operator_probe_environment(value: Mapping[str, object]) -> dict[s
     if (not isinstance(value, Mapping)
             or not set(OPERATOR_PROBE_ENVIRONMENT_ALLOWED).issubset(value)
             or not set(value).issubset(
-                OPERATOR_PROBE_ENVIRONMENT_ALLOWED.keys() | MODAL_KRYLOV_ENVIRONMENT_ALLOWED.keys())):
+                OPERATOR_PROBE_ENVIRONMENT_ALLOWED.keys()
+                | MODAL_KRYLOV_ENVIRONMENT_ALLOWED.keys()
+                | FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED.keys())):
         raise ValueError(
-            "operator_probe_environment must contain exactly the required controls and optional bounded modal tuning"
+            "operator_probe_environment must contain exactly the required controls and optional bounded modal/Floquet diagnostics"
         )
+    if set(value).intersection(FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED) == set(
+            FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED):
+        raise ValueError("Floquet diagnostic controls are mutually exclusive")
     normalized: dict[str, str] = {}
-    allowed_controls = {**OPERATOR_PROBE_ENVIRONMENT_ALLOWED, **MODAL_KRYLOV_ENVIRONMENT_ALLOWED}
+    allowed_controls = {
+        **OPERATOR_PROBE_ENVIRONMENT_ALLOWED,
+        **MODAL_KRYLOV_ENVIRONMENT_ALLOWED,
+        **FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED,
+    }
     for name in value:
         allowed = allowed_controls[name]
         raw = value[name]
         if not isinstance(raw, str):
             raise ValueError(f"{name} must be a string")
-        candidate = raw.strip().lower()
+        candidate = (
+            raw if name in FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED
+            else raw.strip().lower()
+        )
         if candidate not in allowed:
             choices = ", ".join(sorted(allowed))
             raise ValueError(f"{name} must be one of: {choices}")
@@ -1090,11 +1110,12 @@ def compose_spec(image, state, port, host_certificate=None, *, repo=None, inputs
         backend_environment = configured.get("services", {}).get("backend", {}).get("environment", {})
         if not isinstance(backend_environment, dict):
             raise ValueError("Versioned Compose backend environment is not an object")
-        for name in MODAL_KRYLOV_ENVIRONMENT_ALLOWED:
+        for name in OPTIONAL_OPERATOR_PROBE_ENVIRONMENT_ALLOWED:
             if name not in operator_probe_values:
                 backend_environment.pop(name, None)
     if operator_probe_values is not None and any(
-            name in operator_probe_values for name in MODAL_KRYLOV_ENVIRONMENT_ALLOWED):
+            name in operator_probe_values
+            for name in OPTIONAL_OPERATOR_PROBE_ENVIRONMENT_ALLOWED):
         backend = configured.get("services", {}).get("backend")
         if not isinstance(backend, dict) or not isinstance(backend.get("environment", {}), dict):
             raise ValueError("Versioned Compose backend environment is not an object")

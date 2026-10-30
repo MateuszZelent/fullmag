@@ -139,6 +139,15 @@ MODAL_KRYLOV_ENVIRONMENT_ALLOWED = {
     "FULLMAG_MODAL_GMRES_RESTART": frozenset({"8", "10", "12", "16", "30"}),
     "FULLMAG_MODAL_SHIFTED_KSP_TYPE": frozenset({"gmres", "fgmres"}),
 }
+FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED = {
+    "FULLMAG_FLOQUET_DENSE_ORACLE": frozenset({"1"}),
+    "FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC": frozenset({"1"}),
+}
+FLOQUET_DIAGNOSTIC_PROFILES = frozenset({"disabled", "schur-action", "dense-oracle"})
+OPTIONAL_OPERATOR_PROBE_ENVIRONMENT_ALLOWED = {
+    **MODAL_KRYLOV_ENVIRONMENT_ALLOWED,
+    **FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED,
+}
 
 
 def _normalize_operator_probe_environment(value: Mapping[str, object]) -> dict[str, str]:
@@ -147,23 +156,56 @@ def _normalize_operator_probe_environment(value: Mapping[str, object]) -> dict[s
     if (not isinstance(value, Mapping)
             or not set(OPERATOR_PROBE_ENVIRONMENT_ALLOWED).issubset(value)
             or not set(value).issubset(
-                OPERATOR_PROBE_ENVIRONMENT_ALLOWED.keys() | MODAL_KRYLOV_ENVIRONMENT_ALLOWED.keys())):
+                OPERATOR_PROBE_ENVIRONMENT_ALLOWED.keys()
+                | MODAL_KRYLOV_ENVIRONMENT_ALLOWED.keys()
+                | FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED.keys())):
         raise _fail(
-            "operator_probe_environment must contain exactly the required controls and optional bounded modal tuning"
+            "operator_probe_environment must contain exactly the required controls and optional bounded modal/Floquet diagnostics"
         )
+    if set(value).intersection(FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED) == set(
+            FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED):
+        raise _fail("Floquet diagnostic controls are mutually exclusive")
     normalized: dict[str, str] = {}
-    allowed_controls = {**OPERATOR_PROBE_ENVIRONMENT_ALLOWED, **MODAL_KRYLOV_ENVIRONMENT_ALLOWED}
+    allowed_controls = {
+        **OPERATOR_PROBE_ENVIRONMENT_ALLOWED,
+        **MODAL_KRYLOV_ENVIRONMENT_ALLOWED,
+        **FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED,
+    }
     for name in value:
         allowed = allowed_controls[name]
         raw = value[name]
         if not isinstance(raw, str):
             raise _fail(f"{name} must be a string")
-        candidate = raw.strip().lower()
+        candidate = (
+            raw if name in FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED
+            else raw.strip().lower()
+        )
         if candidate not in allowed:
             choices = ", ".join(sorted(allowed))
             raise _fail(f"{name} must be one of: {choices}")
         normalized[name] = candidate
     return normalized
+
+
+def _operator_probe_environment_for_floquet_profile(
+    value: Mapping[str, object], profile: str | None
+) -> dict[str, str]:
+    """Apply one explicit diagnostic profile while preserving every other pin."""
+
+    normalized = _normalize_operator_probe_environment(value)
+    if profile is None:
+        return normalized
+    if not isinstance(profile, str) or profile not in FLOQUET_DIAGNOSTIC_PROFILES:
+        raise _fail("Floquet diagnostics profile is unsupported")
+    dense = "FULLMAG_FLOQUET_DENSE_ORACLE"
+    schur = "FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC"
+    result = {name: control for name, control in normalized.items()
+              if name not in FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED}
+    if profile == "dense-oracle":
+        result[dense] = "1"
+    elif profile == "schur-action":
+        result[schur] = "1"
+    return _normalize_operator_probe_environment(result)
 
 
 def _operator_probe_environment_from_host() -> dict[str, str]:
@@ -173,6 +215,8 @@ def _operator_probe_environment_from_host() -> dict[str, str]:
         **{name: os.environ.get(name, default)
            for name, default in OPERATOR_PROBE_ENVIRONMENT_DEFAULTS.items()},
         **{name: os.environ[name] for name in MODAL_KRYLOV_ENVIRONMENT_ALLOWED
+           if name in os.environ},
+        **{name: os.environ[name] for name in FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED
            if name in os.environ},
     })
 
@@ -2525,6 +2569,30 @@ def recreate(args: argparse.Namespace) -> None:
     start(repo, args.assembly_receipt, args.port, **start_kwargs)
 
 
+class _StoreOnce(argparse.Action):
+    """Reject repeated single-value controls instead of silently taking the last."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        if getattr(namespace, self.dest, None) is not None:
+            parser.error(f"{option_string or self.dest} may be supplied only once")
+        setattr(namespace, self.dest, values)
+
+
+def _validate_floquet_diagnostics_request(args) -> None:
+    profile = getattr(args, "floquet_diagnostics", None)
+    if profile is None:
+        return
+    if not isinstance(profile, str) or profile not in FLOQUET_DIAGNOSTIC_PROFILES:
+        raise _fail("--floquet-diagnostics has an unsupported profile")
+    if getattr(args, "resume_recreation", None) is not None:
+        raise _fail("--floquet-diagnostics cannot override a --resume-recreation intent")
+    if (getattr(args, "completed_recreation_attempt", None)
+            or getattr(args, "completed_recreation_sha256", None)):
+        raise _fail("--floquet-diagnostics cannot be added to a completed recreation")
+    if getattr(args, "recovery_authorization", None) is not None:
+        raise _fail("--floquet-diagnostics cannot combine with container recovery authorization")
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=_repo_default(),
@@ -2873,6 +2941,13 @@ def _parser() -> argparse.ArgumentParser:
     recreate_volume.add_argument("--terminal-observation-proof", help="Exact private control-volume proof of one terminal observation")
     recreate_volume.add_argument("--terminal-observation-proof-sha256", help="SHA-256 of the exact terminal observation proof")
     recreate_volume.add_argument(
+        "--floquet-diagnostics",
+        choices=sorted(FLOQUET_DIAGNOSTIC_PROFILES),
+        action=_StoreOnce,
+        default=None,
+        help="explicitly select the successor group's bounded Floquet diagnostic profile",
+    )
+    recreate_volume.add_argument(
         "--offline-reconciliation", metavar="OPERATION_TOKEN",
         help="consume the exact completed offline control repair without replaying its old operation",
     )
@@ -3073,6 +3148,8 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.action == "recreate-volume":
+            _validate_floquet_diagnostics_request(args)
         if args.action in {"up", "build"}:
             from docker_dev_host import require_host
             require_host()

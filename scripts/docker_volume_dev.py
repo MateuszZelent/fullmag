@@ -1525,6 +1525,86 @@ def _operator_probe_record_from_fields(fields, *, label):
     }
 
 
+_FLOQUET_DIAGNOSTIC_SELECTION_SCHEMA = "fullmag.floquet-diagnostic-selection.v1"
+
+
+def _floquet_diagnostic_successor_record(previous_record, requested_profile):
+    """Derive and pin only the explicit successor-group diagnostic profile."""
+
+    from docker_dev import _operator_probe_environment_for_floquet_profile
+
+    old_record = _operator_probe_record_from_fields(
+        previous_record, label="retained operation"
+    )
+    if requested_profile is None:
+        return old_record, None
+    try:
+        successor_values = _operator_probe_environment_for_floquet_profile(
+            old_record["operator_probe_environment"], requested_profile
+        )
+        successor_record = _operator_probe_record(successor_values)
+    except Exception as error:
+        raise BuildControlError("Invalid Floquet diagnostic profile: " + str(error)) from error
+    selection = {
+        "schema": _FLOQUET_DIAGNOSTIC_SELECTION_SCHEMA,
+        "requested_profile": requested_profile,
+        "old_operator_probe_environment_sha256": (
+            old_record["operator_probe_environment_sha256"]
+        ),
+        "new_operator_probe_environment_sha256": (
+            successor_record["operator_probe_environment_sha256"]
+        ),
+    }
+    return successor_record, selection
+
+
+def _floquet_diagnostic_successor_from_metadata(previous_record, selection):
+    """Rebuild the successor's exact controls from its immutable recreation intent."""
+
+    if selection is None:
+        return previous_record
+    old_record = _operator_probe_record_from_fields(
+        previous_record, label="retained operation"
+    )
+    if (not isinstance(selection, Mapping)
+            or set(selection) != {
+                "schema", "requested_profile",
+                "old_operator_probe_environment_sha256",
+                "new_operator_probe_environment_sha256",
+            }
+            or selection.get("schema") != _FLOQUET_DIAGNOSTIC_SELECTION_SCHEMA):
+        raise BuildControlError("Floquet diagnostic selection metadata is malformed")
+    successor_record, expected_selection = _floquet_diagnostic_successor_record(
+        old_record, selection.get("requested_profile")
+    )
+    if selection != expected_selection:
+        raise BuildControlError("Floquet diagnostic selection hashes differ from retained records")
+    return successor_record
+
+
+def _operator_probe_record_for_start(reuse_state, explicit_record=None):
+    """Choose a start record without rereading host controls for retained groups."""
+
+    if explicit_record is not None:
+        record = _operator_probe_record_from_fields(explicit_record, label="successor start")
+        if reuse_state is not None:
+            retained = _operator_probe_record_from_fields(
+                reuse_state.get("operator_probe_environment_record"),
+                label="service recreation",
+            )
+            if retained != record:
+                raise BuildControlError(
+                    "Successor operator probe record differs from retained recreation intent"
+                )
+        return record
+    if reuse_state is None:
+        from docker_dev import _operator_probe_environment_from_host
+        return _operator_probe_record(_operator_probe_environment_from_host())
+    return _operator_probe_record_from_fields(
+        reuse_state.get("operator_probe_environment_record"), label="service recreation"
+    )
+
+
 def _operator_probe_record_from_retained(previous, document):
     """Recover the exact controls from the retained Compose record and verify mounts."""
 
@@ -1534,9 +1614,14 @@ def _operator_probe_record_from_retained(previous, document):
     if not isinstance(environment, Mapping):
         raise BuildControlError("retained backend environment is malformed")
     values = record["operator_probe_environment"]
-    from docker_dev import MODAL_KRYLOV_ENVIRONMENT_ALLOWED
+    from docker_dev import (
+        FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED,
+        MODAL_KRYLOV_ENVIRONMENT_ALLOWED,
+    )
     if any(name in environment and name not in values for name in MODAL_KRYLOV_ENVIRONMENT_ALLOWED):
         raise BuildControlError("retained backend has unrecorded modal Krylov controls")
+    if any(name in environment and name not in values for name in FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED):
+        raise BuildControlError("retained backend has unrecorded Floquet diagnostic controls")
     if any(environment.get(name) != value for name, value in values.items()):
         raise BuildControlError("retained backend operator probe environment differs from its receipt")
     if environment.get("FULLMAG_OPERATOR_PROBE_ENVIRONMENT_SHA256") != record["operator_probe_environment_sha256"]:
@@ -1573,8 +1658,8 @@ def _reassert_operator_probe_environment(document, record):
     backend_environment = backend["environment"]
     if not isinstance(backend_environment, dict):
         raise BuildControlError("DEV backend environment is malformed")
-    from docker_dev import MODAL_KRYLOV_ENVIRONMENT_ALLOWED
-    for name in MODAL_KRYLOV_ENVIRONMENT_ALLOWED:
+    from docker_dev import OPTIONAL_OPERATOR_PROBE_ENVIRONMENT_ALLOWED
+    for name in OPTIONAL_OPERATOR_PROBE_ENVIRONMENT_ALLOWED:
         if name not in record["operator_probe_environment"]:
             backend_environment.pop(name, None)
     backend_environment.update(record["operator_probe_environment"])
@@ -1831,10 +1916,10 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
           native_restart_metadata=None, accepted_reattach_environment=None,
           accepted_reattach_metadata=None, recreation_resume_proof=None,
           post_build_generation=None, retained_device_access=None, maintenance=None,
-          startup_diagnostic_restart=None, terminal_observation=None, helper_source_binding=None):
+          startup_diagnostic_restart=None, terminal_observation=None, helper_source_binding=None,
+          operator_probe_environment_record=None):
     from docker_dev import (_select_source, _compose_identity,
-        _assert_no_running_fullmag, _source_git_common_directory, _workspace_state_root,
-        _operator_probe_environment_from_host)
+        _assert_no_running_fullmag, _source_git_common_directory, _workspace_state_root)
     import fullmag_docker_runtime as runtime
     provided_control = control
     provided_operation = operation
@@ -1956,12 +2041,9 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
     # Freeze the bounded operator controls before any toolchain/image/cache
     # preparation.  A service recreation reuses the exact prior record rather
     # than rereading ambient host variables.
-    if reuse_state is None:
-        operator_probe_record = _operator_probe_record(_operator_probe_environment_from_host())
-    else:
-        operator_probe_record = _operator_probe_record_from_fields(
-            reuse_state.get("operator_probe_environment_record"), label="service recreation"
-        )
+    operator_probe_record = _operator_probe_record_for_start(
+        reuse_state, operator_probe_environment_record
+    )
     from docker_dev import _resolve_gpu_access, _verify_docker_gpu_access
     policy = getattr(args, "gpu_access", None) or "auto"
     if retained_device_access is not None and (
@@ -5658,6 +5740,12 @@ def _validate_removed_recreation_proof(
         "config_sha256": args.config_sha256,
         **operator_probe_record,
     }
+    operation_inputs = operation_terminal.get("inputs")
+    selection = (operation_inputs.get("floquet_diagnostic_selection")
+                 if isinstance(operation_inputs, Mapping) else None)
+    _floquet_diagnostic_successor_from_metadata(operator_probe_record, selection)
+    if selection is not None:
+        expected_operation_inputs["floquet_diagnostic_selection"] = selection
     try:
         import docker_helper_source as helper_source
         stored_helper_source = helper_source.compare_operation_binding(
@@ -5958,6 +6046,11 @@ def _validate_recreation_resume_records(args, control, selected, identity, *, ex
     )
     if expected_proof is not None and proof != expected_proof:
         raise BuildControlError("Recreation resume evidence changed before the new start admission")
+    successor_operator_probe_record = _floquet_diagnostic_successor_from_metadata(
+        operator_probe_record,
+        operation_terminal.get("inputs", {}).get("floquet_diagnostic_selection")
+        if isinstance(operation_terminal.get("inputs"), Mapping) else None,
+    )
     if current_raw != canonical(current) + b"\n" or current != previous:
         _validate_failed_prestart_successor(
             args,
@@ -5984,6 +6077,7 @@ def _validate_recreation_resume_records(args, control, selected, identity, *, ex
         "snapshot": snapshot,
         "image_id": image,
         "operator_probe_record": operator_probe_record,
+        "successor_operator_probe_record": successor_operator_probe_record,
         "proof": proof,
         "native_recovery_context": native_recovery_context,
     }
@@ -5999,7 +6093,7 @@ def _resume_recreated_operation(args, control, selected, layout, identity, *, he
     snapshot = records["snapshot"]
     image = records["image_id"]
     proof = records["proof"]
-    operator_probe_record = records["operator_probe_record"]
+    operator_probe_record = records["successor_operator_probe_record"]
     backend_id = proof["container_id"]
 
     if _retained_startup_enabled(snapshot["backend"]):
@@ -6590,6 +6684,12 @@ def _completed_recreation_start_context(control, args, selected, layout):
         retained=retained, previous_raw=previous_raw, document_raw=document_raw,
         operator_probe_record=operator_probe_record,
     )
+    completed_inputs = completed.get("inputs")
+    selection = (completed_inputs.get("floquet_diagnostic_selection")
+                 if isinstance(completed_inputs, Mapping) else None)
+    successor_operator_probe_record = _floquet_diagnostic_successor_from_metadata(
+        operator_probe_record, selection
+    )
     from docker_volume_drained_successor import DrainedSuccessorContext
     from docker_volume_startup_diagnostic_restart import StartupDiagnosticStopContext
     if (not isinstance(recovery, (DrainedSuccessorContext, StartupDiagnosticStopContext))
@@ -6598,7 +6698,7 @@ def _completed_recreation_start_context(control, args, selected, layout):
         raise BuildControlError("Completed recreation requires the exact managed failed-owner restart proof")
     reuse = {"state": state, "host_certificate": certificate_path,
         "owner_marker": owner_marker, "receipt": {"image_id": image},
-        "operator_probe_environment_record": operator_probe_record,
+        "operator_probe_environment_record": successor_operator_probe_record,
         "removed_recreation_proof_sha256": hashlib.sha256(canonical(removed_proof)).hexdigest()}
     return {"reuse_state": reuse,
             "retained_device_access": _retained_device_access(previous, document), **recovery}
@@ -7002,7 +7102,19 @@ def _retained_operation(
     resume_recreation_id=None, refresh_frontend_service=False,
 ):
     """Resume one exact retained start; a frontend-only recovery never restarts the backend."""
-    from docker_dev import _select_source, _compose_identity
+    from docker_dev import FLOQUET_DIAGNOSTIC_PROFILES, _select_source, _compose_identity
+    requested_floquet_profile = getattr(args, "floquet_diagnostics", None)
+    if requested_floquet_profile is not None:
+        if (not isinstance(requested_floquet_profile, str)
+                or requested_floquet_profile not in FLOQUET_DIAGNOSTIC_PROFILES):
+            raise BuildControlError("Unsupported --floquet-diagnostics profile")
+        if (not recreate_services or resume_recreation_id is not None
+                or getattr(args, "completed_recreation_attempt", None)
+                or getattr(args, "completed_recreation_sha256", None)
+                or getattr(args, "recovery_authorization", None) is not None):
+            raise BuildControlError(
+                "--floquet-diagnostics is allowed only on a new retained recreation start"
+            )
     require_host()
     import docker_helper_source as helper_source
     helper_pair = helper_source.validate_option_pair(
@@ -7662,8 +7774,19 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                         or labels.get("com.docker.compose.service") != "host-ledger-maintenance"):
                     raise BuildControlError("Recorded ledger helper identity/outcome differs")
                 helper_ids.append(helper_document["Id"])
+        if requested_floquet_profile is None:
+            successor_operator_probe_record = operator_probe_record
+            floquet_diagnostic_selection = None
+        else:
+            successor_operator_probe_record, floquet_diagnostic_selection = (
+                _floquet_diagnostic_successor_record(
+                    operator_probe_record, requested_floquet_profile
+                )
+            )
         recreate_inputs = {"attempt": args.attempt, "config_sha256": args.config_sha256,
                            **operator_probe_record}
+        if floquet_diagnostic_selection is not None:
+            recreate_inputs["floquet_diagnostic_selection"] = floquet_diagnostic_selection
         if helper_source_binding is not None:
             recreate_inputs["helper_source"] = helper_source_binding
         if offline_attempt is not None:
@@ -8056,13 +8179,14 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
             pin_archive(control)
         reuse = None if fresh_state else {"state": state, "host_certificate": certificate_path,
             "owner_marker": owner_path, "receipt": {"image_id": image},
-            "operator_probe_environment_record": operator_probe_record}
+            "operator_probe_environment_record": successor_operator_probe_record}
         if reuse is not None and helper_source_binding is not None:
             reuse["helper_source_binding"] = helper_source_binding
         recovery_context.update(accepted_reattach_context)
         return start(
             args, reuse_state=reuse, retained_device_access=retained_device_access,
             terminal_observation=terminal_observation, helper_source_binding=helper_source_binding,
+            operator_probe_environment_record=successor_operator_probe_record,
             **recovery_context,
         )
     restart_backend = bool(getattr(args, "restart_backend", False))

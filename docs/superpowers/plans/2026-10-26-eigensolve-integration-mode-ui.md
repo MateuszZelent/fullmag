@@ -30,7 +30,7 @@ Nie usuwamy niezintegrowanych worktree, wyników, cache ani aktywnych zasobów. 
 | I3: właściciel pola i akcja punkt → mod | Owner-bound JSON/meta/binary i pięć rzeczywistych przejść punkt → mod (próbki 0/3/7/11/14) PASS; import FMS cold oraz visualization_only PASS, końcowy strict i bieżący runtime otwarte | Run/stage/sample/mode/equilibrium oraz generacja artefaktu spójne; odrzucenie brakujących/sprzecznych powiązań |
 | I4: rzeczywisty mod w UI | Gamma nearest i ±10: rzeczywiste pola, Real/Imag/Abs/Phase, WebGL2, animacja i zrzut samego magnetyka PASS; pełny sweep pozostaje w I7 | Import wyniku/FMS lub przypięta mała symulacja; widoczny mod, real/imag/abs/phase, faza i animacja; WebGL bez utraty kontekstu i niezerowy buffer |
 | I5: review, PR, master i cleanup | Master 9f70be04 scalony jako aa81ac433 i wypchnięty; hosted API/UI PASS na aa81, planner PASS na 95787aeb8. PR #262 draft; merge master i cleanup otwarte | Wymagane CI/review, merge PR, lokalny fast-forward bez naruszania WIP; cleanup tylko potwierdzonego, czystego i nieużywanego worktree |
-| I6: pozostała integracja solvera | Native CSR/strict guards mają wcześniejsze native CI PASS; świeży Gamma selected-only succeeded 9,299249697 GHz, residual 2,73e-13. Nowy typed diagnostics reader 0fb7cf913 w CI; pełne okno i pozostałe disposition nadal otwarte | Projekcja zespolona/transport bazy/periodyczne węzły, guards, artefakty, worker identity/journals, tracking; każda zmiana osobno zweryfikowana |
+| I6: pozostała integracja solvera | Native CSR/strict guards mają wcześniejsze native CI PASS; świeży Gamma selected-only succeeded 9,299249697 GHz, residual 2,73e-13. Typed diagnostics reader i active-preparation contracts mają hosted PASS (41047805119); oryginalny signed15 na c593 kończy EPS91, pełne okno i pozostałe disposition nadal otwarte | Projekcja zespolona/transport bazy/periodyczne węzły, guards, artefakty, worker identity/journals, tracking; każda zmiana osobno zweryfikowana |
 | I7: kwalifikacja naukowa | Świeży Gamma selected-only zgadza się z analityką skończonego airboxu Dirichleta. Historyczny signed15 FMS zachowany; nowy pełny signed15/window, kompletność, zbieżność, serial/adaptive i COMSOL nadal NOT VERIFIED | Gamma + signed sweep, residuale, kompletność okna, serial/adaptive, zbieżność i COMSOL A1 ≤0,5% |
 
 Nie podajemy zbiorczego procentu: liczba commitów poza masterem nie mierzy ukończenia funkcji. S00–S12 oraz U1–U7 nie są zamknięte przez ten checkpoint.
@@ -41,7 +41,7 @@ Nie podajemy zbiorczego procentu: liczba commitów poza masterem nie mierzy uko�
 - [x] Przenieść czystą projekcję `dispersionChartAxes.ts`, kontrolkę osi i podłączenie w `AnalysisFrequencySurface.tsx` z zachowaniem nowszej infrastruktury jednostek i ograniczeń liczby punktów.
 - [x] Zachować dokładne indeksy, identyfikatory i przerwy gałęzi; powtarzane k/crossing nie są tożsamością modu.
 - [x] Dodać regresje dla ujemnego/zerowego/dodatniego k, brakujących składowych, zmiany osi i selekcji.
-- [ ] Review diff, testy w CI, typecheck/lint oraz browser po uruchomieniu dedykowanej grupy.
+- [x] Review diff, testy w CI, typecheck/lint i browser dedykowanej grupy; dowody I2 opisano w checkpointach CI/UI poniżej. Nie zamyka to kwalifikacji I7.
 
 W tym fragmencie nie wymieniamy Inspectora ani renderera: master ma nowsze damping observables, sterowanie i reguły cyklu życia. Akcja pola należy do I3, ponieważ stare UI korzysta z dodatkowego kontraktu właściciela i równowagi per próbka.
 
@@ -424,3 +424,15 @@ archiwum signed15, import UI i dane do porównania.
 Pozostałe I0–I7, pełny wykres z Gamma/analityką, kompletność/zbieżność,
 COMSOL A1, finalny merge PR/master i kwalifikowany cleanup pozostają w zakresie.
 Nowe kroki diagnostyczne nie zastępują tych wymagań ani nie zmieniają definicji zakończenia.
+
+
+Kontrakt nowej sparse C1: cap64MiB dodatkowego workspace. Pinned PETSc
+1467453 w MatGetInfo_SeqAIJ zwraca memory=0, dlatego ta statystyka nie może
+być warunkiem admission ani pomiarem rzeczywistej pamięci. Implementacja
+ma używać jawnie oznaczonego storage estimate z rozmiarów CPU SeqAIJ,
+zaalokowanych nnz, typów scalar/index, wektorów oraz narzutu indeksów/work
+faktora; preflight i ponowna estymacja po prywatnym setupie mają ten sam cap.
+Actual observed memory pozostaje null, jeśli PETSc jej nie raportuje.
+To admission estimate, nie obietnica twardego ograniczenia fill-in LU.
+Brak/invalid metainfo, unsupported typ, overflow lub przekroczenie budżetu
+daje unavailable; opt-out i small full C1 pozostają. Implementacja/testy w toku.

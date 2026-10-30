@@ -777,3 +777,24 @@ Poisson residual, production/isolated replay, repeatability/additivity,
 status i availability. Bez pól/macierzowych payloadów i bez kopiowania
 nieznanych obiektów; limit64KiB pozostaje. Regresję filtracji rozszerzono;
 nowe hosted CI jest wymagane. Tej zmiany jeszcze nie ma w runtimec593.
+
+
+Review planowanego sparse C1 odrzucił pierwszy draft przed zastosowaniem:
+warunek dodatniego MatInfo.memory był błędnym założeniem kontraktu root.
+[Dokładny PETSc1467453](https://github.com/petsc/petsc/blob/1467453aedb62826efc970ceafc4bd6dab8229ab/src/mat/impls/aij/seq/aij.c#L1985)
+w MatGetInfo_SeqAIJ ustawia ten parametr na zero. Draft pozostaje poza repo;
+kontrakt skorygowano na jawne CPU SeqAIJ allocated-storage estimates oraz
+ponowną estymację po prywatnym setupie, z tym samym cap64MiB. Brak actual
+memory ma pozostać null; estimate nie może udawać pomiaru RSS ani gwarancji
+fill-in. Ta korekta nie zmienia fizyki lub progu residualu. Workflow41053623397
+na64f8dcb9b zakończył się pełnym PASS wszystkich trzech jobów; sparse C1 i
+managed flag route nadal są odrębną pracą w toku.
+
+
+Managed profil Floqueta jest teraz zaimplementowany źródłowo w launcherze,
+receptach i walidatorach: optional strict flags plus explicit recreate profile,
+stare piny przed derywacją następcy, persisted selection z old/new SHA,
+wznowienia bez ambient env. Nowe testy obejmują stare SHA, błędne i podwójne
+sterowania, Compose, niezmienność pozostałego env i odtwarzanie intentu.
+Review produkcyjnego flow oraz AST/diff PASS; testy wyłącznie GitHub Actions,
+nowy managed runtime jeszcze NOT VERIFIED. Native sparse C1 nadal poza repo.

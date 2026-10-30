@@ -694,6 +694,60 @@ class CompletedRemovalNativeProofTests(unittest.TestCase):
                     current_operation=current_operation,expected_proof=expected_proof)
             return dev._completed_recreation_start_context(self.control,self.args,self.selected,{'runtime_root':self.root})
 
+    def test_recreation_resume_uses_the_persisted_successor_profile(self):
+        successor_record = dev._operator_probe_record({
+            "FULLMAG_MIXED_P1_DEVICE": "gpu",
+            "FULLMAG_ARTIFACT_FIELD_STORAGE": "json",
+            "FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC": "1",
+        })
+        selection = {
+            "schema": "fullmag.floquet-diagnostic-selection.v1",
+            "requested_profile": "schur-action",
+            "old_operator_probe_environment_sha256": "a" * 64,
+            "new_operator_probe_environment_sha256": (
+                successor_record["operator_probe_environment_sha256"]
+            ),
+        }
+        self.completed["inputs"]["floquet_diagnostic_selection"] = selection
+        completed_raw = dev.canonical(self.completed) + b"\n"
+        base = "recreate-services/attempts/" + self.args.completed_recreation_attempt
+        self.args.completed_recreation_sha256 = hashlib.sha256(completed_raw).hexdigest()
+        for path in (base + "/terminal.json", base + "/receipt.json",
+                     "recreate-services/current.json", "recreate-services/verified.json"):
+            self.records[path] = completed_raw
+        with patch.object(dev, "_floquet_diagnostic_successor_from_metadata",
+                          return_value=successor_record):
+            records = self.invoke(ordinary=True)
+        self.assertEqual(records["successor_operator_probe_record"], successor_record)
+
+    def test_completed_recreation_start_uses_the_persisted_successor_profile(self):
+        successor_record = dev._operator_probe_record({
+            "FULLMAG_MIXED_P1_DEVICE": "gpu",
+            "FULLMAG_ARTIFACT_FIELD_STORAGE": "json",
+            "FULLMAG_FLOQUET_DENSE_ORACLE": "1",
+        })
+        selection = {
+            "schema": "fullmag.floquet-diagnostic-selection.v1",
+            "requested_profile": "dense-oracle",
+            "old_operator_probe_environment_sha256": "a" * 64,
+            "new_operator_probe_environment_sha256": (
+                successor_record["operator_probe_environment_sha256"]
+            ),
+        }
+        self.completed["inputs"]["floquet_diagnostic_selection"] = selection
+        completed_raw = dev.canonical(self.completed) + b"\n"
+        base = "recreate-services/attempts/" + self.args.completed_recreation_attempt
+        self.args.completed_recreation_sha256 = hashlib.sha256(completed_raw).hexdigest()
+        for path in (base + "/terminal.json", base + "/receipt.json",
+                     "recreate-services/current.json", "recreate-services/verified.json"):
+            self.records[path] = completed_raw
+        with patch.object(dev, "_floquet_diagnostic_successor_from_metadata",
+                          return_value=successor_record):
+            context = self.invoke()
+        self.assertEqual(
+            context["reuse_state"]["operator_probe_environment_record"], successor_record
+        )
+
     def test_completed_removal_revalidates_real_native_proof_without_stopped_inspection(self):
         context=self.invoke()
         self.assertEqual(context['native_restart_metadata']['container_id'],BACKEND_ID)
@@ -1125,6 +1179,76 @@ class DrainedSuccessorProofTests(unittest.TestCase):
                         return_value=CompletedProcess([], 0, json.dumps(value).encode(), b"")):
                 with self.assertRaises(dev.BuildControlError):
                     self.successor._ledger_observation(self.control, self.document, actual)
+
+
+class FloquetDiagnosticCliTests(unittest.TestCase):
+    def test_floquet_profile_is_recreate_only_and_duplicate_options_are_rejected(self):
+        import docker_dev as cli
+        required = [
+            "--repo-root", "D:/selected checkout", "recreate-volume",
+            "--attempt", "a" * 32, "--config-sha256", "b" * 64,
+            "--source-root", "D:/selected checkout", "--port", "3202",
+        ]
+        defaulted = cli._parser().parse_args(required)
+        self.assertIsNone(defaulted.floquet_diagnostics)
+        for profile in ("disabled", "schur-action", "dense-oracle"):
+            parsed = cli._parser().parse_args(
+                required + ["--floquet-diagnostics", profile]
+            )
+            self.assertEqual(parsed.floquet_diagnostics, profile)
+        with self.assertRaises(SystemExit):
+            cli._parser().parse_args([
+                "--repo-root", "D:/selected checkout", "resume-volume",
+                "--attempt", "a" * 32, "--config-sha256", "b" * 64,
+                "--source-root", "D:/selected checkout", "--port", "3202",
+                "--floquet-diagnostics", "disabled",
+            ])
+        for tail in (
+            ["--floquet-diagnostics", "unknown"],
+            ["--floquet-diagnostics", "disabled", "--floquet-diagnostics", "dense-oracle"],
+        ):
+            with self.subTest(tail=tail), self.assertRaises(SystemExit):
+                cli._parser().parse_args(required + tail)
+
+    def test_profile_conflicts_are_rejected_before_dispatch(self):
+        import contextlib
+        import io
+        import docker_dev as cli
+        import docker_volume_dev
+        base = [
+            "--repo-root", "D:/selected checkout", "recreate-volume",
+            "--attempt", "a" * 32, "--config-sha256", "b" * 64,
+            "--source-root", "D:/selected checkout", "--port", "3202",
+            "--floquet-diagnostics", "dense-oracle",
+        ]
+        conflicts = (
+            ["--resume-recreation", "c" * 32],
+            ["--completed-recreation-attempt", "c" * 32,
+             "--completed-recreation-sha256", "d" * 64],
+            ["--recovery-authorization", "verification/recovery.json"],
+        )
+        for conflict in conflicts:
+            with self.subTest(conflict=conflict), \
+                 contextlib.redirect_stderr(io.StringIO()), \
+                 patch.object(docker_volume_dev, "recreate") as recreate, \
+                 patch.object(docker_volume_dev, "resume_recreation") as resume:
+                self.assertEqual(cli.main(base + conflict), 2)
+                recreate.assert_not_called()
+                resume.assert_not_called()
+
+    def test_recreate_recipe_keeps_the_optional_profile_last_and_omits_default(self):
+        from pathlib import Path
+        recipe = Path(__file__).resolve().parents[1].joinpath("justfile").read_text(
+            encoding="utf-8"
+        )
+        line = next(line for line in recipe.splitlines()
+                    if line.startswith("docker-dev-recreate-volume "))
+        self.assertTrue(line.endswith('floquet_diagnostics="":'))
+        command = recipe.split(line, 1)[1].splitlines()[1]
+        self.assertIn('if floquet_diagnostics == "" { "" }', command)
+        self.assertIn('--floquet-diagnostics " + quote(floquet_diagnostics)', command)
+        for profile in ("disabled", "schur-action", "dense-oracle"):
+            self.assertIn(f'floquet_diagnostics == "{profile}"', command)
 
 
 if __name__ == "__main__":
