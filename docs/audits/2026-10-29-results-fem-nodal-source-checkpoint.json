@@ -1,7 +1,7 @@
 {
   "schema": "fullmag.results-fem-nodal-source-checkpoint.v1",
-  "observed_at": "2026-10-30T12:36:11.301602+00:00",
-  "head": "cadcce77eb955e67e1ecda1492ead9b7381c7ded",
+  "observed_at": "2026-10-30T12:43:20.336099+00:00",
+  "head": "286953713830f54d509623210537a197329ffc6f",
   "source_sha256": {
     "crates/fullmag-quantities/src/fem_nodal_field.rs": "5852067389b8b9408dc9a41750e22e9fa7e7611cea37bc1acd9d64b1652ed5cd",
     "crates/fullmag-quantities/src/lib.rs": "a77045805d298eff2d6be7c03a193bab40026a8e2f424564342b8e2615aac877",
@@ -26,7 +26,7 @@
     "crates/fullmag-session/src/repository_path.rs": "9599d6f7e15e52b16691416e99432cde8d6a23f6e4705ad0a298a73c2e36a0ba",
     "apps/control-room/src/kernel/visualization/SnapshotVisualizationController.ts": "439c0e7af802562478a97468820ff6e8d0fbc2c2308e0e9a1d8cab5d95e19140",
     "apps/control-room/src/kernel/visualization/SnapshotVisualizationController.test.ts": "aeaf3893498be5d43a67beb7ff4b3442f0cb0c31fba1bd2fa4a7e7c0ea49c0b8",
-    ".github/workflows/bootstrap.yml": "bda31be0ed7116c4592b237c81c90f050a35377935fa2666d8a2f55e8a1069e7",
+    ".github/workflows/bootstrap.yml": "484446d0d55b64ab229f967163d55f4207d1246afef2110d82656ebccf72565d",
     "Cargo.lock": "4dbaff705d3e94f64559dd1e50c6088a9bccfe974ea1b49a013d014fe6cb5fbb",
     "apps/control-room/src/modules/inspector/InspectorModule.test.tsx": "009ceac580ce2a962026a2e56a57c2c498f582c1598d850aa3abc97b8996bb67",
     "crates/fullmag-api/src/accepted_study_worker.rs": "6450180e3d60f83b9ffe227686681c3642ac6f3aa51d96aef304745d21bd3b5d",
@@ -60,7 +60,9 @@
     "completed_run_identity": "Exact completed-stage manifest binding implemented; two test assertion parse errors fixed after UI run41048512203. Tests pending.",
     "recovery_sources": "Owned six-file recovery delta preserved in15fb39d23; Python parser and justfile parse PASS. Earlier managed tests remain historical; master integration and renewed recovery qualification pending.",
     "chart_layout": "Header flex-wrap and 12rem title basis address observed zero-width title at1280. Browser rerun pending.",
-    "completion_merge": "Independent source recheck PASS after undefined serde helper, scalar lineage and positive durable-dt findings were addressed. Explicit canonical/legacy dispatch and compatibility preserved; source regressions added. Cargo/CI/runtime pending."
+    "completion_merge": "Independent source recheck PASS after undefined serde helper, scalar lineage and positive durable-dt findings were addressed. Explicit canonical/legacy dispatch and compatibility preserved; source regressions added. Cargo/CI/runtime pending.",
+    "receipt_ci_coverage": "Required startup/projection step now explicitly runs accepted_final_step_stats_tests on the accepted-worker binary; execution pending.",
+    "react_doctor": "First merge scan incomplete due oxlint AST decoder error; second scan two incoming QA lookup warnings. No suppression. Project lint/typecheck still required in CI."
   },
   "formatter_recovery": {
     "unintended_files": 104,
@@ -251,7 +253,6 @@
     "other_foreign_containers": "b26b89c335475feeb08715fda3184146ae8b172bba598ed3de8324393dac9943 and 177b9c65e319b09baf1e94712815c20fa88c9bbf8d26576bdd7d8ff6eca37f0e remain exited",
     "actions": "read-only Docker inspect; no foreign mutations or messages"
   },
-  "merge_in_progress": "aee17a54d4c283f2fdf5aa3d89acc5ecdb638e19",
   "runtime_blocker_before_validated_preflight": {
     "phase": "native-recovery-preflight",
     "state": "stopped-services-preserved-native-owner",
@@ -387,5 +388,6 @@
       },
       "stderr": "......................................\n----------------------------------------------------------------------\nRan 38 tests in 21.610s\n\nOK\n"
     }
-  ]
+  ],
+  "integrated_master": "3bf5e0c86d728f7cadfeb4a175e5cb39cb83a814"
 }

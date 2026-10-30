@@ -894,3 +894,8 @@ The workspace-inspect process-spawning lock test now runs in its own CI invocati
 
 
 Independent merge review found three issues, all addressed and rechecked in source: an undefined V3 schema-deserializer attribute was removed while retaining explicit dispatch; scalar deduplication now includes session/run/request-epoch provenance and revision, with identical reruns republished under their own source; positive durable state dt is checked exactly while the legacy zero sentinel remains unspecified. Regressions cover same-run idempotence, new-run rebinding, legacy dt tampering and zero-dt compatibility. Source review and parser checks pass; compilation/tests/runtime remain pending.
+
+
+Master integration is committed as `433e30948`, followed by the latest upstream verification updates in `286953713` (master `3bf5e0c86`). The normal first merge hook reported an internal React Doctor/oxlint AST decoding failure, so that scan is incomplete and is not counted as lint PASS. The second merge hook reported two lookup-performance warnings in the incoming browser QA harness; no rules or hooks were suppressed. Owned diff whitespace checks pass; the single staged trailing blank line in the upstream live-quantity audit was byte-identical to master and retained.
+
+The required CI list now explicitly runs `accepted_study_worker::accepted_final_step_stats_tests` on the accepted-worker binary, covering the new receipt migration and real-CAS recovery regressions. Existing projection tests run separately. Full PR workflows were triggered by the push; green CI is still required before integration.
