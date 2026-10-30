@@ -2794,7 +2794,12 @@ fn resolve_step_output_inputs(
             study_artifact: None,
         };
         if let Some(supplied) = supplied_inputs.get(&port.port_id) {
-            if supplied != &from_catalog {
+            // Re-resolved inputs already carry their manifest binding; compare
+            // only the pinned identity and digest and let manifest binding
+            // derive the typed artifact again from the durable catalog.
+            if supplied.source != from_catalog.source
+                || supplied.content_sha256 != from_catalog.content_sha256
+            {
                 bail!(
                     "study input `{}` does not match its pinned artifact identity and digest",
                     port.port_id
@@ -3267,6 +3272,27 @@ mod dependency_tests {
             Some(&artifact_catalog),
         )
         .is_err());
+
+        let mut bound = resolved_inputs();
+        bound
+            .get_mut("initial_state")
+            .expect("resolved input")
+            .study_artifact = Some(ResolvedStudyArtifact {
+            artifact_id: "artifact-source".into(),
+            object_ref: "c".repeat(64),
+            data_kind: "state".into(),
+            codec_id: "codec".into(),
+            codec_version: "1".into(),
+        });
+        let rederived = resolve_step_output_inputs(
+            "run-study-dependency",
+            &ports,
+            &bound,
+            &run_catalog,
+            Some(&artifact_catalog),
+        )
+        .expect("manifest-bound inputs re-resolve against their pinned artifact");
+        assert_eq!(rederived, resolved_inputs());
 
         let mut missing_case = artifact_catalog;
         missing_case.entries[1]
