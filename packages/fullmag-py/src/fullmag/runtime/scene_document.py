@@ -2434,6 +2434,11 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                 "until_seconds": _number_or_none(stage.get("until_seconds")),
                 "autosave": copy.deepcopy(stage.get("autosave")),
                 "relax_algorithm": _stage_relax_algorithm(stage) or None,
+                **(
+                    {"relax_alpha": _number_or_none(stage.get("relax_alpha"))}
+                    if "relax_alpha" in stage
+                    else {}
+                ),
                 "torque_tolerance": _number_or_none(stage.get("torque_tolerance")),
                 "energy_tolerance": _number_or_none(stage.get("energy_tolerance")),
                 "max_steps": _int_or_none(stage.get("max_steps")),

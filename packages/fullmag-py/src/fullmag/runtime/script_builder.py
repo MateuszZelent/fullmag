@@ -2359,9 +2359,8 @@ def _scene_relax_stage_kwargs(
     max_relaxation_time_s = _finite_number(stage.get("max_relaxation_time_s"))
     if max_relaxation_time_s is not None:
         kwargs["max_relaxation_time_s"] = max_relaxation_time_s
-    relax_alpha = _finite_number(stage.get("relax_alpha"))
-    if relax_alpha is not None:
-        kwargs["relax_alpha"] = relax_alpha
+    if (algorithm or "llg_overdamped") == "llg_overdamped" and "relax_alpha" in stage:
+        kwargs["relax_alpha"] = _finite_number(stage.get("relax_alpha"))
     kwargs.update(_relax_stage_timestep_kwargs(stage, solver))
     return kwargs
 
@@ -3025,8 +3024,10 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
         # relax(relax_alpha=...) is realized as this stage's material damping;
         # export it so pipeline materialization applies it to this stage only.
         relax_alphas = {float(magnet.material.alpha) for magnet in stage.problem.magnets}
-        if study.algorithm == "llg_overdamped" and len(relax_alphas) == 1:
-            payload["relax_alpha"] = _text_number(relax_alphas.pop())
+        if study.algorithm == "llg_overdamped":
+            payload["relax_alpha"] = (
+                _text_number(relax_alphas.pop()) if len(relax_alphas) == 1 else None
+            )
         if study.dynamics is not None:
             payload.update(
                 {
@@ -8785,6 +8786,13 @@ def _render_stages(
                         f"energy_tolerance={_py_number(energy_tolerance)}"
                     )
             if algorithm == "llg_overdamped":
+                relax_alpha = _override_number(
+                    stage_override,
+                    "relax_alpha",
+                    _finite_number(_export_stage_draft(stage).get("relax_alpha", 1.0)),
+                )
+                if relax_alpha != 1.0:
+                    call_parts.append(f"relax_alpha={_py_literal(relax_alpha)}")
                 if relax_solver and relax_solver not in {"auto", "rk23"}:
                     call_parts.append(f"solver={_py_repr(relax_solver)}")
                 if relax_fixed_timestep is not None:
