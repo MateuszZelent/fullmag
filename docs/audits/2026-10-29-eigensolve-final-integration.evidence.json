@@ -358,7 +358,7 @@
     "gamma_activation": "b801cdf93fba47c9a89e1dfabeda9831",
     "signed15_activation": "57c502343b5e4df38609030026e87bcf",
     "signed15_run": "run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f8f3b2354d5e",
-    "signed15_state": "running; observed with is_busy=true",
+    "signed15_state": "failed",
     "ui_ci": {
       "run": 41040360146,
       "status": "success"
@@ -366,8 +366,31 @@
     "api_ci": {
       "run": 41040357851,
       "status": "failed",
-      "reason": "new test fixture lacked accepted physical observation for incoming m; guard correctly rejected; fixture corrected with physical scalar row; rerun pending"
+      "reason": "new test fixture lacked accepted physical observation for incoming m; guard correctly rejected; fixture corrected with physical scalar row; rerun pending",
+      "rerun": {
+        "run": 41044788566,
+        "status": "failed",
+        "reason": "incoming m fixture also required actual FEM topology; corrected with a four-node tet and matching field"
+      }
     },
-    "frontend_first_navigation": "cold Next compile 49s; warm 141ms; browser then PASS"
+    "frontend_first_navigation": "cold Next compile 49s; warm 141ms; browser then PASS",
+    "signed15_failure": {
+      "native_reason": "floquet_slepc_solve_failed",
+      "native_stop_reason": "subwindow_failed",
+      "accepted_mode_count": 0,
+      "tangent_dof_count": 656,
+      "execution_lane": "production_cpu",
+      "mfem_operator_payload": "floquet_shared_domain_sparse_matshell",
+      "worker_exit_code": 1,
+      "native_failure_sidecar_sha256": "ec238d14ba877cb01c58a45ce1067143c453b789bc2c3c8d655663814cfa0316",
+      "lower_diagnostic_capture_bug": "is_failed_subwindow did not recognize C++ solve_error status; fixed in source, hosted/runtime pending"
+    },
+    "r6": {
+      "qualified_operations": 10,
+      "requested_operations": 14,
+      "status": "INCOMPLETE",
+      "no_browser_numeric_mutations": true,
+      "browser_errors": []
+    }
   }
 }

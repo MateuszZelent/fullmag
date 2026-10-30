@@ -414,6 +414,22 @@ fn first_failed_subwindow_projection(value: &Value) -> Option<Value> {
     for key in [
         "pass",
         "subwindow_index",
+        "index",
+        "unsupported_reason",
+        "linear_iterations_total",
+        "eps_solve_error_available",
+        "eps_converged_reason",
+        "eps_nev",
+        "eps_ncv",
+        "eps_mpd",
+        "eps_normalized_absolute_tolerance",
+        "eps_normalized_absolute_residual_max",
+        "ksp_converged_reason",
+        "ksp_last_iterations",
+        "ksp_last_rhs_norm",
+        "ksp_last_true_residual_available",
+        "ksp_last_true_residual_norm",
+        "ksp_last_true_relative_residual",
         "shift_frequency_hz",
         "status",
         "solve_succeeded",
@@ -474,7 +490,48 @@ fn first_failed_subwindow_projection(value: &Value) -> Option<Value> {
             projection.insert(key.into(), value);
         }
     }
+    if let Some(probe) = source.get("shifted_ksp_failure_probe") {
+        let keys = [
+            "schema_version", "scope", "eps_dimension_semantics", "eps_attempt_number",
+            "eps_dimension_arguments_available", "eps_nev_argument", "eps_ncv_argument",
+            "callback_observation_available", "callback_count", "callback_count_scope",
+            "last_callback_iteration", "last_recursive_residual_available",
+            "last_recursive_residual_norm", "last_default_reason_available",
+            "last_default_reason", "last_reason_after_gate_available", "last_reason_after_gate",
+            "true_probe_attempt_count", "true_probe_attempt_count_scope", "true_probe_count",
+            "true_probe_count_scope", "true_probe_measurement_failure_count",
+            "true_probe_auxiliary_measurement_failure_count",
+        ];
+        if let Some(mut projected) = project_scalar_diagnostic_fields(probe, &keys) {
+            if let Some(last) = probe.get("last_true_probe").and_then(|last| {
+                project_scalar_diagnostic_fields(last, &[
+                    "available", "callback_ordinal", "iteration", "recursive_residual_available",
+                    "recursive_residual_norm", "default_reason_available", "default_reason",
+                    "build_solution_reason_available", "build_solution_reason",
+                    "reason_after_gate_available", "reason_after_gate", "solution_l2_norm_available",
+                    "solution_l2_norm_source", "solution_l2_norm", "shifted_operator_action_l2_norm_available",
+                    "shifted_operator_action_l2_norm_source", "shifted_operator_action_l2_norm",
+                    "rhs_l2_norm", "true_residual_l2_norm", "rtol", "atol", "threshold_l2_norm",
+                    "tolerance_ratio_available", "true_residual_to_threshold_ratio",
+                ])
+            }) {
+                projected.insert("last_true_probe".into(), Value::Object(last));
+            }
+            projection.insert("shifted_ksp_failure_probe".into(), Value::Object(projected));
+        }
+    }
     (!projection.is_empty()).then(|| Value::Object(projection))
+}
+
+fn project_scalar_diagnostic_fields(value: &Value, keys: &[&str]) -> Option<Map<String, Value>> {
+    let source = value.as_object()?;
+    let mut projection = Map::new();
+    for key in keys {
+        if let Some(value) = source.get(*key).and_then(bounded_scalar) {
+            projection.insert((*key).into(), value);
+        }
+    }
+    (!projection.is_empty()).then_some(projection)
 }
 
 fn is_failed_subwindow(value: &Value) -> bool {
@@ -482,7 +539,7 @@ fn is_failed_subwindow(value: &Value) -> bool {
         return false;
     };
     match object.get("status").and_then(Value::as_str) {
-        Some("failed" | "diagnostics_truncated") => true,
+        Some("failed" | "solve_error" | "diagnostics_truncated") => true,
         // A successful solve may truthfully describe incomplete spectral
         // coverage. Its stop-reason text must not relabel it as a failed solve.
         Some("ok" | "completed" | "converged") => false,
@@ -679,6 +736,38 @@ mod tests {
         assert!(saved.first_failed_subwindow.is_some());
         assert!(write_bounded_sidecar(directory.path(), &sidecar).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn floquet_solve_error_preserves_bounded_shifted_ksp_diagnostics() {
+        let value = serde_json::json!({"subwindows": [
+            {"status":"converged", "index":0, "unsupported_reason":"none"},
+            {"status":"solve_error", "index":1,
+             "unsupported_reason":"floquet_slepc_solve_failed",
+             "eps_solve_error_available":true, "eps_solve_error_code":91,
+             "ksp_converged_reason":-3, "raw_vectors":[1,2,3],
+             "shifted_ksp_failure_probe": {
+                 "schema_version":"shifted_ksp_failure_probe.v1",
+                 "scope":"internal_shifted_linear_system_not_original_descriptor",
+                 "callback_count":12, "raw_vectors":[4,5,6],
+                 "last_true_probe": {"available":true,"rtol":1e-11,
+                    "true_residual_l2_norm":0.1,"rhs_l2_norm":1.0,
+                    "tolerance_ratio_available":true,"true_residual_to_threshold_ratio":10.0,
+                    "raw_vectors":[7,8,9]}
+             }}
+        ]});
+        let failure = first_failed_subwindow_projection(&value).unwrap();
+        assert_eq!(failure["status"], "solve_error");
+        assert_eq!(failure["index"], 1);
+        assert_eq!(failure["unsupported_reason"], "floquet_slepc_solve_failed");
+        assert_eq!(failure["eps_solve_error_code"], 91);
+        assert_eq!(failure["ksp_converged_reason"], -3);
+        assert_eq!(failure["shifted_ksp_failure_probe"]["callback_count"], 12);
+        assert_eq!(failure["shifted_ksp_failure_probe"]["last_true_probe"]["rtol"], 1e-11);
+        assert_eq!(failure["shifted_ksp_failure_probe"]["last_true_probe"]["true_residual_to_threshold_ratio"], 10.0);
+        assert!(failure.get("raw_vectors").is_none());
+        assert!(failure["shifted_ksp_failure_probe"].get("raw_vectors").is_none());
+        assert!(failure["shifted_ksp_failure_probe"]["last_true_probe"].get("raw_vectors").is_none());
     }
 
     #[test]

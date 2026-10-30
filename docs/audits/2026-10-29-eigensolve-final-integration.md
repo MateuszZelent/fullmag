@@ -683,3 +683,44 @@ uruchomiono jako `run-live-80e9491f0d10264fae1698fcd8f50b0f7a8409ff7951ef1b46f2f
 activation `57c502343b5e4df38609030026e87bcf`; potwierdzono running/is_busy=true.
 Obserwator R6 pracuje na tym samym run ID. Jego pełny odbiór oraz wynik
 signed sweepa wymagają oddzielnego końcowego sprawdzenia; nie deklarujemy PASS.
+
+
+### Wynik signed15 i dalsza diagnoza
+
+Signed15 zakończył się failed; worker native exit1: sparse CSR multi-shift,
+`floquet_slepc_solve_failed`, `subwindow_failed`, zero zaakceptowanych modów,
+tangent_dof_count656. To oryginalny natywny błąd solve, nie Stop/cancel.
+R6 zdążył zakwalifikować 10/14 operacji: przed i po każdej ten sam run,
+running/is_busy=true. Operacja edge-dock Inspectora zakończyła się po błędzie
+solvera, dlatego nie jest zaliczona. Browser errors=0, blocked mutations=0;
+nie wysłano poleceń numerycznych. Pełne R6 pozostaje INCOMPLETE.
+Nowy szczegółowy JSON `2026-10-30-r6-signed15-native-failure.evidence.json`
+zachowuje obserwacje; starszych dowodów R6 nie nadpisano.
+
+D1 sidecar powstał, ale utracił niższe dane: producent C++ zapisuje
+subwindows[].status=solve_error, podczas gdy projekcja rozpoznawała tylko
+failed/diagnostics_truncated. Dodano ten rzeczywisty status oraz bounded
+scalar projection EPS/KSP i shifted_ksp_failure_probe, bez wektorów i bez
+zmiany tolerancji. Wymaga nowego CI i repro; dokładna przyczyna SLEPc
+pozostaje nierozpoznana do czasu odczytu tych danych.
+
+Źródłowy trace wykluczył hipotezę, że rtol1e-7 z fem_demag_solver steruje
+dynamicznym matvec Floqueta. Ten operator ma osobny Poisson PREONLY/LU
+z konfigurowanym rtol1e-11 dla outertol1e-8; runtime PETSc defaults nie były
+odczytane. Nie zmieniono ani tej polityki, ani kryterium pełnego residualu.
+Drugi CI fixture incoming m przeszedł źródło obserwacji, lecz wykazał brak
+FEM topology. Fixture dostał rzeczywisty czterowęzłowy tet i cztery zgodne
+wektory m. Produkcyjne guardy topologii i obserwacji pozostają zachowane.
+
+
+### Rozdzielenie miejsca Ubuntu i Docker Desktop
+
+Pomiar live z tego samego backendu: /build jest nazwanym wolumenem Docker,
+filesystem /dev/sde, 169 GiB wolnego. /state jest bind mountem filesystemu
+Ubuntu /dev/sdd, 2,7 GiB wolnego. Windows C: ma około 29 GiB.
+Próg 32 GiB w docker_build_control.py jest mierzony przez df -Pk /control
+wewnątrz Docker VM; nie dotyczy wolnego miejsca pod / w Ubuntu.
+Wcześniejsza prośba o dodatkowe 30 GiB w Ubuntu przed buildem była oparta
+na niewłaściwym filesystemie. Bieżący pomiar spełnia tę bramkę Docker.
+Sesje i wyniki nadal wymagają miejsca w Ubuntu, ponieważ /state jest bind
+mountem. Nie wykonywano sprzątania, migracji danych ani restartów.

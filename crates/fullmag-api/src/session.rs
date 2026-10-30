@@ -4636,13 +4636,16 @@ mod tests {
         current.simulation_preparation = Some(simulation_preparation(1));
         current.coupled_checkpoint = Some(json!({"old_run": true}));
         let mut request = preparation_request("prep-new-with-fields", 2);
+        let mesh = domain_fem_mesh("incoming-preparation");
+        let incoming_values = vec![[0.0, 0.0, 1.0]; mesh.nodes.len()];
+        request.fem_mesh = Some(mesh.into());
         request.latest_fields = Some(serde_json::from_value(json!({
-            "m": {"values": [[0.0, 0.0, 1.0]], "source_step": 0}
+            "m": {"values": incoming_values, "source_step": 0}
         })).unwrap());
         request.latest_scalar_row = Some(scalar_row(0, 0.0));
         request.coupled_checkpoint = Some(json!({"new_run": true}));
         apply_current_live_preparation_snapshot(&mut current, request).unwrap();
-        assert_eq!(current.latest_fields.get("m").unwrap()["values"], json!([[0.0, 0.0, 1.0]]));
+        assert_eq!(current.latest_fields.get("m").unwrap()["values"], json!(incoming_values));
         assert_eq!(current.coupled_checkpoint.as_ref().unwrap()["new_run"], true);
     }
 

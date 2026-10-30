@@ -52,6 +52,11 @@ jobs:
           cargo test --locked -p fullmag-api --bin fullmag-api live_scene_preparation::tests::new_modal_and_frequency_preparation_clears_prior_fields_before_noop_initial_publish -- --exact
           cargo test --locked -p fullmag-api --bin fullmag-api live_scene_preparation::tests::active_preparation_replay_keeps_new_solve_fields_and_cache -- --exact
           cargo test --locked -p fullmag-api --bin fullmag-api live_scene_preparation::tests::terminal_observation_publication_preserves_accepted_fields_cache_and_checkpoint -- --exact
+      - name: Preserve native Floquet failure diagnostic projection
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_worker::native_failure_diagnostic::tests -- --nocapture | tee "$RUNNER_TEMP/native-failure-projection.log"
+          grep -F "floquet_solve_error_preserves_bounded_shifted_ksp_diagnostics ... ok" "$RUNNER_TEMP/native-failure-projection.log"
       - name: Preserve dataset source paths and byte revisions
         run: |
           set -o pipefail
