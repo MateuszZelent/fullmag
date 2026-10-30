@@ -117,9 +117,9 @@ def _sweep_stage(sweep: Sequence["CapturedStage"]) -> "CapturedStage":
     minimize = MinimizeStep(
         method=study.algorithm,
         torque_tolerance=stop.torque_tolerance_apm,
+        energy_tolerance=stop.energy_tolerance_j,
         max_steps=stop.max_steps,
         on_non_convergence="continue_with_warning",
-        **({"energy_tolerance": stop.energy_tolerance_j} if stop.energy_tolerance_j else {}),
     )
     hysteresis = Hysteresis(
         outputs=study.outputs,

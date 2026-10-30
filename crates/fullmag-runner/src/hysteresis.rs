@@ -2497,7 +2497,7 @@ fn settle_step_relaxation_control(step: &SettleStepIR) -> Result<RelaxationContr
                 algorithm,
                 stop: RelaxStopIR {
                     torque_tolerance_apm: Some(*torque_tolerance),
-                    energy_tolerance_j: Some(*energy_tolerance),
+                    energy_tolerance_j: *energy_tolerance,
                     max_steps: Some(*max_steps as u64),
                     max_relaxation_time_s: resolve_settle_relaxation_time(
                         algorithm,
@@ -5801,7 +5801,7 @@ mod tests {
         let minimize_tpi = SettleStepIR::Minimize {
             method: "tangent_plane_implicit".to_string(),
             torque_tolerance: 1e-5,
-            energy_tolerance: 1e-20,
+            energy_tolerance: Some(1e-20),
             max_steps: 100,
             applies_to: None,
             stop_criteria: None,
@@ -5845,7 +5845,7 @@ mod tests {
         let step = SettleStepIR::Minimize {
             method: "unknown_method".to_string(),
             torque_tolerance: 1e-5,
-            energy_tolerance: 1e-20,
+            energy_tolerance: Some(1e-20),
             max_steps: 100,
             applies_to: None,
             stop_criteria: None,
@@ -6390,7 +6390,7 @@ mod tests {
         let step = SettleStepIR::Minimize {
             method: "projected_gradient_bb".to_string(),
             torque_tolerance: 5e-5,
-            energy_tolerance: 1e-20,
+            energy_tolerance: Some(1e-20),
             max_steps: 2000,
             applies_to: Some(serde_json::json!(["key_events", "minor"])),
             stop_criteria: Some(serde_json::json!({
@@ -6612,7 +6612,7 @@ mod tests {
         let step = SettleStepIR::Minimize {
             method: "projected_gradient_bb".to_string(),
             torque_tolerance: 5e-5,
-            energy_tolerance: 1e-20,
+            energy_tolerance: Some(1e-20),
             max_steps: 2,
             applies_to: None,
             stop_criteria: None,
@@ -7614,7 +7614,7 @@ mod tests {
                 steps: vec![SettleStepIR::Minimize {
                     method: "projected_gradient_bb".to_string(),
                     torque_tolerance: 5e-5,
-                    energy_tolerance: 1e-20,
+                    energy_tolerance: Some(1e-20),
                     max_steps: 200,
                     applies_to: None,
                     stop_criteria: None,
@@ -8208,7 +8208,7 @@ mod tests {
                     run: SettleStepIR::Minimize {
                         method: "projected_gradient_bb".to_string(),
                         torque_tolerance: 5e-6,
-                        energy_tolerance: 1e-20,
+                        energy_tolerance: Some(1e-20),
                         max_steps: 2000,
                         applies_to: None,
                         stop_criteria: None,
@@ -8263,7 +8263,7 @@ mod tests {
         let key_event_step = SettleStepIR::Minimize {
             method: "projected_gradient_bb".to_string(),
             torque_tolerance: 5e-5,
-            energy_tolerance: 1e-20,
+            energy_tolerance: Some(1e-20),
             max_steps: 25,
             applies_to: Some(serde_json::json!(["key_events", "minor"])),
             stop_criteria: None,
@@ -8406,7 +8406,7 @@ mod tests {
                 SettleStepIR::Minimize {
                     method: "projected_gradient_bb".to_string(),
                     torque_tolerance: 5e-5,
-                    energy_tolerance: 1e-20,
+                    energy_tolerance: Some(1e-20),
                     max_steps: 2000,
                     applies_to: None,
                     stop_criteria: None,
@@ -8492,7 +8492,7 @@ mod tests {
                 &SettleStepIR::Minimize {
                     method: "projected_gradient_bb".to_string(),
                     torque_tolerance: 5e-5,
-                    energy_tolerance: 1e-20,
+                    energy_tolerance: Some(1e-20),
                     max_steps: 2000,
                     applies_to: None,
                     stop_criteria: None,
@@ -8552,7 +8552,7 @@ mod tests {
         let step = SettleStepIR::Minimize {
             method: "projected_gradient_bb".to_string(),
             torque_tolerance: 5e-5,
-            energy_tolerance: 1e-20,
+            energy_tolerance: Some(1e-20),
             max_steps: 2000,
             applies_to: Some(serde_json::json!(["key_events", "minor"])),
             stop_criteria: Some(serde_json::json!({
@@ -8752,7 +8752,7 @@ mod tests {
         let step = SettleStepIR::Minimize {
             method: "projected_gradient_bb".to_string(),
             torque_tolerance: 5e-5,
-            energy_tolerance: 1e-20,
+            energy_tolerance: Some(1e-20),
             max_steps: 2000,
             applies_to: None,
             stop_criteria: None,
@@ -8771,11 +8771,37 @@ mod tests {
     }
 
     #[test]
+    fn minimize_settle_preserves_optional_energy_tolerance_in_control_and_trace() {
+        for energy_tolerance in [None, Some(1e-20)] {
+            let step = SettleStepIR::Minimize {
+                method: "projected_gradient_bb".to_string(),
+                torque_tolerance: 1.0,
+                energy_tolerance,
+                max_steps: 500,
+                applies_to: None,
+                stop_criteria: None,
+                timestep_s: None,
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+                on_non_convergence: "continue_with_warning".to_string(),
+                retry_timestep_scale: None,
+                retry_max_attempts: None,
+            };
+            let control = settle_step_relaxation_control(&step).unwrap();
+            assert_eq!(control.stop.energy_tolerance_j, energy_tolerance);
+            assert_eq!(control.stop.torque_tolerance_apm, Some(1.0));
+            assert_eq!(control.stop.max_steps, Some(500));
+            let trace = settle_trace_resolved_parameters(&step, None);
+            assert_eq!(trace.get("energy_tolerance"), Some(&serde_json::json!(energy_tolerance)));
+        }
+    }
+
+    #[test]
     fn direct_minimizer_settle_step_rejects_physical_time_budget() {
         let step = SettleStepIR::Minimize {
             method: "projected_gradient_bb".to_string(),
             torque_tolerance: 5e-5,
-            energy_tolerance: 1e-20,
+            energy_tolerance: Some(1e-20),
             max_steps: 2000,
             applies_to: None,
             stop_criteria: None,
@@ -8831,7 +8857,7 @@ mod tests {
         let tpi_step = SettleStepIR::Minimize {
             method: "tangent_plane_implicit".to_string(),
             torque_tolerance: 5e-5,
-            energy_tolerance: 1e-20,
+            energy_tolerance: Some(1e-20),
             max_steps: 2000,
             applies_to: None,
             stop_criteria: None,
@@ -9031,7 +9057,7 @@ mod tests {
         let step = SettleStepIR::Minimize {
             method: "projected_gradient_bb".to_string(),
             torque_tolerance: 5e-5,
-            energy_tolerance: 1e-20,
+            energy_tolerance: Some(1e-20),
             max_steps: 2000,
             applies_to: None,
             stop_criteria: None,

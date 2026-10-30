@@ -31,13 +31,19 @@ def _load(tmp_path, body: str):
     return load_problem_from_script(script)
 
 
-def test_minimize_tablesave_loop_becomes_one_hysteresis_stage(tmp_path):
+@pytest.mark.parametrize(
+    ("energy_argument", "energy_tolerance"),
+    [("", None), (", energy_tolerance=None", None), (", energy_tolerance=2e-21", 2e-21)],
+)
+def test_minimize_tablesave_loop_becomes_one_hysteresis_stage(
+    tmp_path, energy_argument, energy_tolerance
+):
     loaded = _load(
         tmp_path,
-        """
+        f"""
         for B in (0.0, 1e-3, 2e-3, 1e-3, -1e-3):
             fm.b_ext(B, 0, 0)
-            fm.minimize(tolA=1.0, max_steps=500)
+            fm.minimize(tolA=1.0, max_steps=500{energy_argument})
             fm.tablesave()
         """,
     )
@@ -52,6 +58,12 @@ def test_minimize_tablesave_loop_becomes_one_hysteresis_stage(tmp_path):
     assert step.method == "projected_gradient_bb"
     assert step.torque_tolerance == 1.0
     assert step.max_steps == 500
+    assert step.energy_tolerance == energy_tolerance
+    step_ir = sweep.to_ir()["settle_pipeline"]["steps"][0]
+    if energy_tolerance is None:
+        assert "energy_tolerance" not in step_ir
+    else:
+        assert step_ir["energy_tolerance"] == energy_tolerance
 
 
 def test_minimize_without_tablesave_keeps_separate_stages(tmp_path):
