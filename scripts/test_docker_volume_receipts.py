@@ -1048,6 +1048,7 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
     def run_refresh(self, fault=None, *, linux=False):
         import copy,json,types
         import docker_volume_dev as dev
+        import docker_volume_frontend_preflight_rejection as preflight_rejection
         import docker_dev_codegen as codegen
         import docker_development_inputs as frontend_inputs
         import docker_group_ledger as group_ledger
@@ -1056,7 +1057,15 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
         certificate_name = Path(host.HOST_CERT_PATH).name
         control=mock.Mock(spec=BuildControl);control.project='own';control.volume='control';control.namespace=''
         control._active_operation=None
-        control.operation=types.MethodType(BuildControl.operation,control)
+        control.read_bytes.side_effect=lambda path,*,optional=False,maximum=None: (
+            None if path == 'development/current.json' and optional else
+            (_ for _ in ()).throw(BuildControlError('Unexpected fixture byte read: ' + path)))
+        operation_calls=[]
+        actual_operation=types.MethodType(BuildControl.operation,control)
+        def operation(*args,**kwargs):
+            operation_calls.append(args[0] if args else kwargs.get('phase'))
+            return actual_operation(*args,**kwargs)
+        control.operation=operation
         control._pin_operation_helper=types.MethodType(BuildControl._pin_operation_helper,control)
         control._inspect_operation_helper.return_value='e'*64
         control.path.side_effect=lambda value:'/control/'+value
@@ -1107,6 +1116,8 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
         def text(*argv):
             if argv[:2]==('image','inspect'):return json.dumps([{'Config':{}}])
             if argv[0]=='inspect':return json.dumps([backend if argv[1]=='b'*64 else old['frontend'] if argv[1]=='o'*64 else frontend])
+            if fault=='pre-operation-health' and argv[0]=='exec':
+                raise BuildControlError('Frontend refresh requires an empty healthy API')
             if stopped and fault=='post-quiesce-health':raise BuildControlError('API accepted session before quiescence')
             return json.dumps({'status':'ok','active_session':False})
         def compose(doc,*argv,**kwargs):return b'f'*64 if argv[0]=='ps' else b''
@@ -1119,6 +1130,14 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
                     or (fault=='owner-drift' and name==host.OWNER_NAME)):
                 raw+=b' '
             return raw
+        validation_calls=[]
+        def validate_preflight(*_args,operation=None,**_kwargs):
+            validation_calls.append(operation)
+            if fault=='preflight-under-lease' and operation is not None:
+                raise BuildControlError('Frontend preflight proof drifted under lease')
+            if fault=='preflight-under-lease':
+                return {'schema':'fullmag.docker-frontend-preflight-rejection.v1','sha256':'p'*64}
+            return None
         with mock.patch.object(docker_build_control.subprocess,'Popen',return_value=logger), \
              mock.patch.object(fullmag_storage,'validate_path',return_value=Path('/state')), \
              mock.patch.object(dev,'_session_host',return_value=host), \
@@ -1135,6 +1154,7 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
              mock.patch.object(codegen,'_source_matches',return_value=fault!='source-mismatch'), \
              mock.patch.object(frontend_inputs,'describe',return_value=seed), \
              mock.patch.object(frontend_inputs,'frontend_view',return_value={'files':[]}), \
+             mock.patch.object(preflight_rejection,'validate',side_effect=validate_preflight), \
              mock.patch.object(dev,'_frontend',return_value=(seed,'new-volume')) as seeded, \
              mock.patch.object(dev,'compose_capture',side_effect=compose) as composed, \
              mock.patch.object(dev,'_validate_retained_service'):
@@ -1143,8 +1163,17 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
                     Path('/selected'),{'runtime_root':'/runtime'},old,{'backend':'b'*64,'frontend':'o'*64},'image',{})
             except (BuildControlError,codegen.CodegenError,OSError):
                 if fault is None:raise
-        if fault=='source-mismatch' or fault=='unknown-source':stopped_call.assert_not_called()
+        if fault in ('source-mismatch','unknown-source','pre-operation-health','preflight-under-lease'):
+            stopped_call.assert_not_called()
         else:stopped_call.assert_called_once_with('stop','--time','60','o'*64,timeout=90)
+        if fault=='pre-operation-health':
+            self.assertEqual(operation_calls,[])
+            self.assertEqual(writes,{})
+            self.assertEqual(validation_calls,[None])
+        if fault=='preflight-under-lease':
+            self.assertEqual(len(validation_calls),2)
+            self.assertIsNone(validation_calls[0])
+            self.assertIsNotNone(validation_calls[1])
         return writes,seeded,composed,logger,backend_declaration
 
     def test_successful_handoff_recreates_only_frontend_and_retains_backend(self):
@@ -1184,6 +1213,16 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
         writes,seeded,composed,logger,_backend_declaration=self.run_refresh('source-mismatch')
         seeded.assert_not_called();composed.assert_not_called()
         self.assertEqual(next(value for path,value in writes.items() if path.endswith('/terminal.json'))['state'],'failed-confirmed')
+
+    def test_healthy_idle_failure_precedes_development_operation_admission(self):
+        writes,seeded,composed,logger,_backend_declaration=self.run_refresh('pre-operation-health')
+        self.assertEqual(writes,{})
+        seeded.assert_not_called();composed.assert_not_called()
+
+    def test_preflight_proof_is_rechecked_under_lease_before_frontend_stop(self):
+        writes,seeded,composed,logger,_backend_declaration=self.run_refresh('preflight-under-lease')
+        self.assertFalse(any(path.endswith('/rollback-compose.json') for path in writes))
+        seeded.assert_not_called();composed.assert_not_called()
 
     def test_unknown_probe_or_late_proof_failure_retains_real_control_lease(self):
         for fault in ('unknown-source','unknown-stop','post-quiesce-health','last-proof','certificate-drift','owner-drift','memory-drift'):

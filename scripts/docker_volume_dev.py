@@ -6367,6 +6367,14 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
         inputs['helper_transition'] = frozen_context['request']['source_transition']
     inputs.pop('attempt', None)
     inputs.pop('config_sha256', None)
+    from docker_volume_frontend_preflight_rejection import validate as validate_preflight_rejection
+    preflight_rejection = validate_preflight_rejection(
+        control, args, selected, mode="refresh-frontend")
+    # Run the ordinary healthy-idle/service observation before opening a new
+    # development receipt, then repeat it after the lease has been acquired.
+    inspect_services(ids['frontend']); healthy_idle()
+    if preflight_rejection is not None:
+        inputs['frontend_preflight_rejection'] = preflight_rejection
     retained_documents = _frontend_refresh_retained_documents(
         control, previous_root, document, image)
     with control.operation('development', inputs) as operation:
@@ -6374,6 +6382,12 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
             control, previous_root, document, image)
         if canonical(locked_documents) != canonical(retained_documents):
             raise BuildControlError('Retained frontend refresh documents changed under the operation lease')
+        repeated_preflight_rejection = validate_preflight_rejection(
+            control, args, selected, mode="refresh-frontend", operation=operation)
+        if repeated_preflight_rejection != preflight_rejection:
+            raise BuildControlError('Frontend preflight rejection proof changed under refresh lease')
+        if repeated_preflight_rejection is not None:
+            operation['receipt']['frontend_preflight_rejection'] = repeated_preflight_rejection
         operation['receipt'].update(operator_probe_record)
         operation['receipt'].update(state='validating-frontend-refresh', state_root=str(state),
             backend_volumes=previous['backend_volumes'], previous_frontend_volume=previous['frontend_volume'])
@@ -7192,11 +7206,23 @@ def _retained_operation(
         _preflight_terminal_process_receipt(actual["backend"], control)
         if saved_authoring:
             _saved_authoring_read_archive(saved_authoring, state)
-        with control.operation("iteration", {"source_root": str(selected), "image_id": image,
-                                            "attempt": args.attempt, "config_sha256": args.config_sha256,
-                                            **({"saved_authoring_checkpoint_sha256": checkpoint_sha} if saved_authoring else {}),
-                                            **operator_probe_record}) as operation:
+        from docker_volume_frontend_preflight_rejection import validate as validate_preflight_rejection
+        preflight_rejection = validate_preflight_rejection(
+            control, args, selected, mode="restart-idle")
+        operation_inputs = {"source_root": str(selected), "image_id": image,
+                            "attempt": args.attempt, "config_sha256": args.config_sha256,
+                            **({"saved_authoring_checkpoint_sha256": checkpoint_sha} if saved_authoring else {}),
+                            **operator_probe_record}
+        if preflight_rejection is not None:
+            operation_inputs["frontend_preflight_rejection"] = preflight_rejection
+        with control.operation("iteration", operation_inputs) as operation:
             operation["receipt"].update(operator_probe_record)
+            repeated_preflight_rejection = validate_preflight_rejection(
+                control, args, selected, mode="restart-idle", operation=operation)
+            if repeated_preflight_rejection != preflight_rejection:
+                raise BuildControlError("Frontend preflight rejection proof changed under idle-restart lease")
+            if repeated_preflight_rejection is not None:
+                operation["receipt"]["frontend_preflight_rejection"] = repeated_preflight_rejection
             _assert_private_restart_network(actual, ids, control.project)
             operation["daemon_pending"] = True
             docker_capture("stop", "--time", "60", ids["frontend"], timeout=90)

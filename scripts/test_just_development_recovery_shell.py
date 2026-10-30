@@ -56,23 +56,40 @@ class DevelopmentRecoveryShellTests(unittest.TestCase):
         recipe = ('python "/ignored/scripts/docker_dev.py" --repo-root "/ignored" '
                   "restart-idle-volume --attempt '" + 'a' * 32 + "' --config-sha256 '" + 'b' * 64
                   + "' --source-root '/selected/$(printf injected);worktree' --port '3203'")
+        proof = (" --frontend-preflight-rejection 'verification/frontend-preflight-rejection/operator.json'"
+                 + " --frontend-preflight-rejection-sha256 '" + 'c' * 64 + "'")
         marker = '  *"scripts/docker_dev.py"*)\n'
         expected = [b'/recorded/python', b'/registered/checkout/scripts/docker_dev.py',
                     b'--repo-root', b'/registered/checkout', b'restart-idle-volume',
                     b'--attempt', b'a' * 32, b'--config-sha256', b'b' * 64,
                     b'--source-root', b'/selected/$(printf injected);worktree', b'--port', b'3203']
         for suffix in ('', ' --allow-prepared-session', ' --stop-only --allow-prepared-session'):
-            with self.subTest(suffix=suffix):
-                result = self.dispatch(recipe + suffix, marker=marker)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout.split(b'\0')[:-1],
-                                 expected + [word.encode() for word in suffix.split()])
+            for proof_suffix in ('', proof):
+                with self.subTest(suffix=suffix, proof=bool(proof_suffix)):
+                    result = self.dispatch(recipe + suffix + proof_suffix, marker=marker)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    expected_args = expected + [word.encode() for word in suffix.split()]
+                    if proof_suffix:
+                        expected_args += [b'--frontend-preflight-rejection',
+                                          b'verification/frontend-preflight-rejection/operator.json',
+                                          b'--frontend-preflight-rejection-sha256', b'c' * 64]
+                    self.assertEqual(result.stdout.split(b'\0')[:-1], expected_args)
         for suffix in (' --allow-prepared-session --allow-prepared-session',
                        ' --allow-prepared-session true', ' --allow-prepared-session; printf injected',
                        ' --allow-prepared-session && printf injected',
                        ' --allow-prepared-session\nprintf injected'):
             with self.subTest(suffix=suffix):
                 result = self.dispatch(recipe + suffix, marker=marker)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertFalse(result.stdout)
+        for proof_suffix in (
+            " --frontend-preflight-rejection 'verification/frontend-preflight-rejection/operator.json'",
+            " --frontend-preflight-rejection-sha256 '" + 'c' * 64 + "'",
+            " --frontend-preflight-rejection 'verification/frontend-preflight-rejection/../operator.json'"
+            + " --frontend-preflight-rejection-sha256 '" + 'c' * 64 + "'",
+        ):
+            with self.subTest(proof_suffix=proof_suffix):
+                result = self.dispatch(recipe + proof_suffix, marker=marker)
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertFalse(result.stdout)
 
@@ -86,7 +103,9 @@ class DevelopmentRecoveryShellTests(unittest.TestCase):
                   + "' --source-root '" + source + "' --port '3203'")
         suffix = (" --frontend-frozen-resume '" + "c" * 32
                   + "' --frontend-frozen-resume-sha256 '" + "d" * 64 + "'")
-        for tail in ("", suffix):
+        proof_suffix = (" --frontend-preflight-rejection 'verification/frontend-preflight-rejection/operator.json'"
+                        + " --frontend-preflight-rejection-sha256 '" + "e" * 64 + "'")
+        for tail in ("", suffix, proof_suffix):
             with self.subTest(tail=tail):
                 result = self.dispatch(recipe + tail, marker='  *"scripts/docker_dev.py"*)\n')
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -94,12 +113,20 @@ class DevelopmentRecoveryShellTests(unittest.TestCase):
                             b'--repo-root', b'/registered/checkout', b'refresh-frontend-volume',
                             b'--attempt', b'a' * 32, b'--config-sha256', b'b' * 64,
                             b'--source-root', source.encode(), b'--port', b'3203']
-                if tail:
+                if tail == suffix:
                     expected += [b'--frontend-frozen-resume', b'c' * 32,
                                  b'--frontend-frozen-resume-sha256', b'd' * 64]
+                elif tail == proof_suffix:
+                    expected += [b'--frontend-preflight-rejection',
+                                 b'verification/frontend-preflight-rejection/operator.json',
+                                 b'--frontend-preflight-rejection-sha256', b'e' * 64]
                 self.assertEqual(result.stdout.split(b'\0')[:-1], expected)
         for tail in (" --frontend-frozen-resume '" + "c" * 32 + "'",
                      " --frontend-frozen-resume-sha256 '" + "d" * 64 + "'",
+                     " --frontend-preflight-rejection 'verification/frontend-preflight-rejection/operator.json'",
+                     " --frontend-preflight-rejection-sha256 '" + "e" * 64 + "'",
+                     " --frontend-preflight-rejection 'verification/frontend-preflight-rejection/../operator.json'"
+                     + " --frontend-preflight-rejection-sha256 '" + "e" * 64 + "'",
                      suffix + " --unexpected value", suffix + "; printf injected",
                      suffix + " && printf injected", suffix + "\nprintf injected",
                      suffix.replace("c" * 32, "$(printf injected)")):

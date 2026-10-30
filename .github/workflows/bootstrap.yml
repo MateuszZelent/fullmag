@@ -962,6 +962,8 @@ jobs:
           python -B scripts/test_docker_dev_codegen.py -v
           python -B scripts/test_docker_dev_browser_qa.py -v
           python -B scripts/test_docker_volume_receipts.py -v
+          python -B scripts/test_docker_volume_frontend_recovery.py -v
+          python -B scripts/test_docker_volume_frontend_preflight_rejection.py -v
           python -B scripts/test_docker_saved_authoring_history.py -v
           python -B scripts/test_docker_volume_device_access.py -v
           python -B scripts/test_docker_volume_retained_device_lifecycle.py -v

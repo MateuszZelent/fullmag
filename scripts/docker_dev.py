@@ -2587,6 +2587,8 @@ def _parser() -> argparse.ArgumentParser:
     frontend_refresh.add_argument("--port", type=int, required=True)
     frontend_refresh.add_argument("--frontend-frozen-resume")
     frontend_refresh.add_argument("--frontend-frozen-resume-sha256")
+    frontend_refresh.add_argument("--frontend-preflight-rejection")
+    frontend_refresh.add_argument("--frontend-preflight-rejection-sha256")
     run_script_parser = subparsers.add_parser(
         "run-script",
         help="run one script in the managed DEV group and observe its result; keep API/frontend running",
@@ -2612,6 +2614,8 @@ def _parser() -> argparse.ArgumentParser:
     idle_restart.add_argument("--port", type=int, required=True)
     idle_restart.add_argument("--saved-authoring-checkpoint")
     idle_restart.add_argument("--saved-authoring-checkpoint-sha256")
+    idle_restart.add_argument("--frontend-preflight-rejection")
+    idle_restart.add_argument("--frontend-preflight-rejection-sha256")
     idle_restart.add_argument("--stop-only", action="store_true", help="Drain and stop the pinned backend without restarting it")
     idle_restart.add_argument(
         "--allow-prepared-session", action="store_true",

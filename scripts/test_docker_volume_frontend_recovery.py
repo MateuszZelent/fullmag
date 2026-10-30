@@ -135,6 +135,9 @@ class LegacyFrontendRecoveryTests(unittest.TestCase):
         control = mock.Mock(spec=build_control.BuildControl)
         control.project, control.volume, control.namespace = 'own', 'control', ''
         control._active_operation = None
+        control.read_bytes.side_effect = lambda path, *, optional=False, maximum=None: (
+            None if path == 'development/current.json' and optional else
+            (_ for _ in ()).throw(dev.BuildControlError('Unexpected fixture byte read: ' + path)))
         control._pin_operation_helper.return_value = 'c' * 64
         operation = mock.Mock(wraps=build_control.BuildControl.operation.__get__(control))
         control.operation = operation
