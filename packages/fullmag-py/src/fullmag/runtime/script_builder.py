@@ -9096,6 +9096,10 @@ def _render_hysteresis_settle_step(value: object) -> str:
         "retry_timestep_scale",
         "retry_max_attempts",
     ):
+        if key == "energy_tolerance" and kind == "minimize" and payload.get(key) is None:
+            # Omission would restore MinimizeStep's enabled energy default.
+            args.append("energy_tolerance=None")
+            continue
         if key not in payload:
             continue
         value = payload[key]
