@@ -1,6 +1,7 @@
 """Interpretive checks for read-only bind overlap proofs."""
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -13,6 +14,7 @@ import unittest
 from unittest.mock import patch
 
 import docker_bind_overlap_probe as overlap
+import docker_compose_identity
 from docker_build_control import BuildControlError
 from docker_foreign_bind_identity import WSL_ALIAS
 
@@ -86,21 +88,52 @@ class BindOverlapProbeTests(unittest.TestCase):
             ],
         }
 
-    def _foreign_probe_container(self, alias):
+    def _worktree_identity(self):
         return {
+            "project_name": "fullmag-worktree-results-snapshot-inspector",
+            "network_name": "fullmag-worktree-results-snapshot-inspector_fullmag",
+            "project_id": "fullmag",
+            "worktree_id": "results-snapshot-inspector",
+            "checkout_kind": "worktree",
+            "source_root": "/checkout/worktrees/results-snapshot-inspector",
+            "registered_name": "results-snapshot-inspector",
+        }
+
+    def _worktree_probe_backend(self, identity, *, source_label_overrides=None):
+        backend = self._master_probe_backend()
+        labels = backend["Config"]["Labels"]
+        labels["com.docker.compose.project"] = identity["project_name"]
+        labels.update(docker_compose_identity.source_labels(identity))
+        labels.update(source_label_overrides or {})
+        backend["Mounts"][0]["Source"] = WSL_ALIAS + "Ubuntu/worktree-state"
+        backend["Mounts"][1]["Name"] = "worktree-control"
+        backend["Mounts"][2]["Name"] = "worktree-ledger"
+        return backend
+
+    def _foreign_probe_container(self, alias, *, project=None, service=None,
+                                 extra_mounts=()):
+        container = {
             "Id": "e" * 64,
             "Image": "sha256:" + "f" * 64,
             "Mounts": [{"Type": "bind", "Source": alias,
-                        "Destination": "/etc/mongo.conf", "RW": False}],
+                        "Destination": "/etc/mongo.conf", "RW": False},
+                       *extra_mounts],
             "HostConfig": {"Mounts": None, "Binds": [alias + ":/etc/mongo.conf:ro"]},
             "State": {"StartedAt": "2026-10-27T10:00:00Z", "Status": "running",
                       "Running": True, "Pid": 234},
         }
+        if project is not None or service is not None:
+            container["Config"] = {"Labels": {
+                "com.docker.compose.project": project,
+                "com.docker.compose.service": service,
+            }}
+        return container
 
-    def _probe_control(self, operation=None):
+    def _probe_control(self, operation=None, *, project="fullmag-master",
+                       volume="master-control", identity=None):
         writes = []
         documents = {}
-        control = SimpleNamespace(project="fullmag-master", volume="master-control",
+        control = SimpleNamespace(project=project, volume=volume, identity=identity,
                                   _active_operation=operation, writes=writes, documents=documents)
 
         def read_bytes(path, *, optional=False, **_kwargs):
@@ -222,6 +255,168 @@ class BindOverlapProbeTests(unittest.TestCase):
                         [], 0, json.dumps([changed]).encode(), b"")):
                     with self.assertRaisesRegex(BuildControlError, "identity or state changed"):
                         overlap.prove_foreign_alias_disjoint(control, backend, foreign, alias, root)
+
+    def test_docker_omitted_optional_host_mounts_keeps_required_effective_mount_pins(self):
+        alias = WSL_ALIAS + "Ubuntu2/binds-only/config"
+        foreign = self._foreign_probe_container(alias)
+        explicit = overlap._foreign_container_pin(foreign, alias)
+        foreign["HostConfig"].pop("Mounts")
+        self.assertEqual(overlap._foreign_container_pin(foreign, alias), explicit)
+        for malformed in ({"Binds": [], "Mounts": {}}, {"Mounts": None}, None):
+            bad = copy.deepcopy(foreign)
+            bad["HostConfig"] = malformed
+            with self.subTest(host_config=malformed), self.assertRaises(BuildControlError):
+                overlap._foreign_container_pin(bad, alias)
+        foreign["Mounts"] = []
+        with self.assertRaisesRegex(BuildControlError, "alias is absent"):
+            overlap._foreign_container_pin(foreign, alias)
+
+    def test_foreign_alias_wrapper_supports_docker_binds_only_inspection(self):
+        alias = WSL_ALIAS + "Ubuntu2/binds-only/config"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "state"
+            root.mkdir()
+            _, result, foreign = self._wrapper_inputs(root, alias)
+            foreign["HostConfig"].pop("Mounts")
+            control = self._probe_control()
+            backend = self._master_probe_backend()
+            with patch.object(overlap, "bounded_capture", return_value=subprocess.CompletedProcess(
+                    [], 0, json.dumps(result).encode(), b"")), \
+                 patch.object(overlap, "docker_capture", return_value=subprocess.CompletedProcess(
+                    [], 0, json.dumps([foreign]).encode(), b"")):
+                proof = overlap.prove_foreign_alias_disjoint(control, backend, foreign, alias, root)
+            self.assertEqual(proof["decision"], "disjoint")
+            self.assertEqual(control.writes, [])
+
+    def test_worktree_backend_identity_proves_foreign_group_alias(self):
+        alias = WSL_ALIAS + "Ubuntu2/mongo/mongod.conf"
+        identity = self._worktree_identity()
+        project = identity["project_name"]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "state"
+            root.mkdir()
+            _, result, foreign = self._wrapper_inputs(root, alias)
+            # A different Compose group is still proved by the kernel; its label alone is not
+            # treated as permission to skip the alias.
+            foreign["Config"] = {"Labels": {
+                "com.docker.compose.project": "fullmag-worktree-another-group",
+                "com.docker.compose.service": "backend",
+            }}
+            control = self._probe_control(project=project, volume="worktree-control",
+                                          identity=identity)
+            backend = self._worktree_probe_backend(identity)
+            with patch.object(overlap, "bounded_capture", return_value=subprocess.CompletedProcess(
+                    [], 0, json.dumps(result).encode(), b"")) as probe, \
+                 patch.object(overlap, "docker_capture", return_value=subprocess.CompletedProcess(
+                    [], 0, json.dumps([foreign]).encode(), b"")) as inspect:
+                proof = overlap.prove_foreign_alias_disjoint(
+                    control, backend, foreign, alias, root)
+            self.assertEqual(proof["decision"], "disjoint")
+            probe.assert_called_once()
+            inspect.assert_called_once_with("inspect", foreign["Id"], timeout=60)
+            command = probe.call_args.args[0]
+            self.assertIn("--label", command)
+            self.assertIn("com.docker.compose.project=" + project, command)
+
+    def test_worktree_identity_and_source_labels_are_required_before_probe(self):
+        alias = WSL_ALIAS + "Ubuntu2/mongo/mongod.conf"
+        identity = self._worktree_identity()
+        project = identity["project_name"]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "state"
+            root.mkdir()
+            (root / overlap.OWNER_MARKER).write_bytes(b"accepted worktree owner marker")
+            backend = self._worktree_probe_backend(identity)
+            bad_backend = self._worktree_probe_backend(
+                identity, source_label_overrides={"org.fullmag.source.worktree-id": "other"})
+            wrong_project_backend = self._worktree_probe_backend(identity)
+            wrong_project_backend["Config"]["Labels"]["com.docker.compose.project"] = "fullmag-worktree-other"
+            wrong_service_backend = self._worktree_probe_backend(identity)
+            wrong_service_backend["Config"]["Labels"]["com.docker.compose.service"] = "frontend"
+            cases = (
+                (self._probe_control(project=project, volume="worktree-control"), backend),
+                (self._probe_control(project=project, volume="worktree-control",
+                                     identity={**identity, "project_name": "fullmag-worktree-other"}),
+                 backend),
+                (self._probe_control(project=project, volume="worktree-control",
+                                     identity={**identity, "checkout_kind": "main-checkout"}),
+                 backend),
+                (self._probe_control(project=project, volume="worktree-control",
+                                     identity={key: value for key, value in identity.items()
+                                               if key != "project_id"}), backend),
+                (self._probe_control(project=project, volume="worktree-control",
+                                     identity=identity), bad_backend),
+                (self._probe_control(project=project, volume="worktree-control",
+                                     identity=identity), wrong_project_backend),
+                (self._probe_control(project=project, volume="worktree-control",
+                                     identity=identity), wrong_service_backend),
+            )
+            for control, candidate in cases:
+                with self.subTest(identity=control.identity, labels=candidate["Config"]["Labels"]), \
+                     patch.object(overlap, "bounded_capture") as probe:
+                    with self.assertRaises(BuildControlError):
+                        overlap.prove_disjoint_bind(
+                            control, candidate, alias=alias, reference_root=root,
+                            reference_marker_sha256="a" * 64)
+                    probe.assert_not_called()
+
+    def test_selected_worktree_application_containers_and_shared_volumes_are_not_foreign(self):
+        alias = WSL_ALIAS + "Ubuntu2/mongo/mongod.conf"
+        identity = self._worktree_identity()
+        project = identity["project_name"]
+        control = self._probe_control(project=project, volume="worktree-control",
+                                      identity=identity)
+        backend = self._worktree_probe_backend(identity)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "state"
+            root.mkdir()
+            (root / overlap.OWNER_MARKER).write_bytes(b"accepted worktree owner marker")
+            candidates = [
+                self._foreign_probe_container(alias, project=project, service=service)
+                for service in ("backend", "frontend")
+            ]
+            for volume in ("worktree-control", "worktree-ledger"):
+                candidates.append(self._foreign_probe_container(
+                    alias, project="fullmag-worktree-another-group", service="backend",
+                    extra_mounts=[{"Type": "volume", "Name": volume,
+                                   "Destination": "/foreign/protected"}]))
+            for foreign in candidates:
+                with self.subTest(foreign=foreign), \
+                     patch.object(overlap, "bounded_capture") as probe, \
+                     patch.object(overlap, "docker_capture") as inspect:
+                    with self.assertRaises(BuildControlError):
+                        overlap.prove_foreign_alias_disjoint(
+                            control, backend, foreign, alias, root)
+                    probe.assert_not_called()
+                    inspect.assert_not_called()
+
+    def test_worktree_foreign_reinspection_cannot_become_selected_application_container(self):
+        alias = WSL_ALIAS + "Ubuntu2/mongo/mongod.conf"
+        identity = self._worktree_identity()
+        project = identity["project_name"]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "state"
+            root.mkdir()
+            _, result, foreign = self._wrapper_inputs(root, alias)
+            foreign["Config"] = {"Labels": {
+                "com.docker.compose.project": "fullmag-worktree-another-group",
+                "com.docker.compose.service": "backend",
+            }}
+            changed = json.loads(json.dumps(foreign))
+            changed["Config"]["Labels"]["com.docker.compose.project"] = project
+            changed["Config"]["Labels"]["com.docker.compose.service"] = "frontend"
+            control = self._probe_control(project=project, volume="worktree-control",
+                                          identity=identity)
+            backend = self._worktree_probe_backend(identity)
+            with patch.object(overlap, "bounded_capture", return_value=subprocess.CompletedProcess(
+                    [], 0, json.dumps(result).encode(), b"")) as probe, \
+                 patch.object(overlap, "docker_capture", return_value=subprocess.CompletedProcess(
+                    [], 0, json.dumps([changed]).encode(), b"")) as inspect:
+                with self.assertRaisesRegex(BuildControlError, "selected application container"):
+                    overlap.prove_foreign_alias_disjoint(
+                        control, backend, foreign, alias, root)
+            probe.assert_called_once()
+            inspect.assert_called_once_with("inspect", foreign["Id"], timeout=60)
 
     def test_embedded_immutable_python_probe_is_syntactically_valid(self):
         compile(overlap.PROBE_SOURCE, "<managed-bind-overlap-probe>", "exec")

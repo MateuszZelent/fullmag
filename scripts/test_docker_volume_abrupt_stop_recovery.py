@@ -394,12 +394,24 @@ class AbruptStopTests(unittest.TestCase):
                  patch('docker_volume_dev._validate_retained_service') as validate:
                 self.assertEqual(r._retained_compose_state_root(backend, compose, project=project), Path(state))
                 validate.assert_called_once()
+                control = SimpleNamespace(project=project)
+                foreign = {'Id': 'a' * 64}
+                alias = '/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/foreign'
+                with patch('docker_bind_overlap_probe.prove_foreign_alias_disjoint',
+                           return_value={'decision': 'disjoint'}) as physical:
+                    self.assertEqual(r._prove_foreign_alias_for_abrupt(
+                        control, backend, foreign, alias, compose), {'decision': 'disjoint'})
+                    physical.assert_called_once_with(control, backend, foreign, alias, Path(state))
                 with self.assertRaisesRegex(r.ContainerRecoveryError, 'selected Compose identity'):
                     r._retained_compose_state_root(backend, compose)
                 backend['Config']['Labels']['com.docker.compose.project'] = 'foreign'
                 with self.assertRaisesRegex(r.ContainerRecoveryError, 'selected Compose identity'):
                     r._retained_compose_state_root(backend, compose, project=project)
-                self.assertEqual(validate.call_count, 1)
+                with patch('docker_bind_overlap_probe.prove_foreign_alias_disjoint') as physical:
+                    with self.assertRaisesRegex(r.ContainerRecoveryError, 'selected Compose identity'):
+                        r._prove_foreign_alias_for_abrupt(control, backend, foreign, alias, compose)
+                    physical.assert_not_called()
+                self.assertEqual(validate.call_count, 2)
 
     def test_windows_raw_protected_overlap_precedes_qualified_proof(self):
         proof, _, compose = self.fixture()

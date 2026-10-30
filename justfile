@@ -195,6 +195,10 @@ docker-dev-recover-isolated source_root operator_pins recovery_id terminal_runs 
 docker-dev-recover-container old_attempt config_sha256 source_root port recovery_authorization:
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" recreate-volume --attempt {{quote(old_attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --recovery-authorization {{quote(recovery_authorization)}}
 
+# Preview terminal-only abrupt-stop recovery evidence; publish only under the group lease.
+docker-dev-prepare-container-recovery source_root operator_pins terminal_runs publish="false":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_prepare_container_recovery.py" --repo-root "{{repo_root}}" --source-root {{quote(source_root)}} --operator-pins {{quote(operator_pins)}} --retained-terminal-runs {{quote(terminal_runs)}} {{if publish == "true" { "--publish" } else if publish == "false" { "" } else { error("publish must be true or false") } }}
+
 # Controlled recreation of one terminal failed direct-development run.  The
 # receipt and config digest are mandatory; this is not unknown-owner recovery.
 docker-dev-recreate run_receipt previous_config_sha256 source_root="" port="3197" gpu_access="auto":
