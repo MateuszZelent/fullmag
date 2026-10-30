@@ -1,0 +1,26 @@
+{
+  "scope": "Publication copies only; original API/raw files and archive unchanged",
+  "files": [
+    {
+      "file": "open-air-1d-ui-reference.csv",
+      "original_sha256": "6f6606aa5602f19e67354f1886c979173d79ae06716aced79439a1db3fa4fcde",
+      "published_sha256": "6f6606aa5602f19e67354f1886c979173d79ae06716aced79439a1db3fa4fcde",
+      "line_endings": "LF",
+      "numeric_rows_preserved": true
+    },
+    {
+      "file": "finite-dirichlet-n0-ui-reference.csv",
+      "original_sha256": "5ebf85b0466b07f60f2ac401f0098b863fdad11cab98b804c62898cd2f23507a",
+      "published_sha256": "5ebf85b0466b07f60f2ac401f0098b863fdad11cab98b804c62898cd2f23507a",
+      "line_endings": "LF",
+      "numeric_rows_preserved": true
+    },
+    {
+      "file": "samples.csv",
+      "original_sha256": "2d38205fed582daece1a7a3e6ab3a800461d2d6ade37fd34f8debda2973d8cc5",
+      "published_sha256": "52dc46dd70f6f567b6a8bdac8b2d8a45d2fba748c2386307a6697a9fae14518d",
+      "line_endings": "LF",
+      "numeric_rows_preserved": true
+    }
+  ]
+}

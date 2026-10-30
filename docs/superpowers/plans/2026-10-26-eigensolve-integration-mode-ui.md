@@ -28,10 +28,10 @@ Nie usuwamy niezintegrowanych worktree, wyników, cache ani aktywnych zasobów. 
 | I1: mapa selektywnej integracji | W toku; review trzech krytycznych WIP rekonstrukcji potwierdza identyczne obecne odpowiedniki (28.10); pozostałe historyczne fragmenty otwarte | Każdy istotny fix ma decyzję: przenieść / obecny odpowiednik / zastąpiony / otwarty; klasyfikacja po ścieżce nie wystarcza |
 | I2: podpisane osie i tożsamość punktu | Kod wypchnięty; CI UI i browser fixture PASS | Wybór osi kx/ky/kz/path, SI, brak wymyślania znaku, stabilna próbka/mod po zmianie osi; aktualne typecheck/lint/CI |
 | I3: właściciel pola i akcja punkt → mod | Owner-bound JSON/meta/binary i pięć rzeczywistych przejść punkt → mod (próbki 0/3/7/11/14) PASS; import FMS cold oraz visualization_only PASS, końcowy strict i bieżący runtime otwarte | Run/stage/sample/mode/equilibrium oraz generacja artefaktu spójne; odrzucenie brakujących/sprzecznych powiązań |
-| I4: rzeczywisty mod w UI | Gamma nearest i ±10: rzeczywiste pola, Real/Imag/Abs/Phase, WebGL2, animacja i zrzut samego magnetyka PASS; pełny sweep pozostaje w I7 | Import wyniku/FMS lub przypięta mała symulacja; widoczny mod, real/imag/abs/phase, faza i animacja; WebGL bez utraty kontekstu i niezerowy buffer |
+| I4: rzeczywisty mod w UI | Świeży signed15: 15 pól ready; Gamma sample7 animacja, paleta, fit filmu i WebGL PASS. R6 nadal11/14; nowa próba defaultu i analityka wUI otwarte | Rzeczywiste pola, tożsamość właściciela, kamera, animacja i lifecycle paneli |
 | I5: review, PR, master i cleanup | Master 9f70be04 scalony jako aa81ac433 i wypchnięty; hosted API/UI PASS na aa81, planner PASS na 95787aeb8. PR #262 draft; merge master i cleanup otwarte | Wymagane CI/review, merge PR, lokalny fast-forward bez naruszania WIP; cleanup tylko potwierdzonego, czystego i nieużywanego worktree |
-| I6: pozostała integracja solvera | Native CSR/strict guards mają wcześniejsze native CI PASS; świeży Gamma selected-only succeeded 9,299249697 GHz, residual 2,73e-13. Typed diagnostics reader i active-preparation contracts mają hosted PASS (41047805119); oryginalny signed15 na c593 kończy EPS91, pełne okno i pozostałe disposition nadal otwarte | Projekcja zespolona/transport bazy/periodyczne węzły, guards, artefakty, worker identity/journals, tracking; każda zmiana osobno zweryfikowana |
-| I7: kwalifikacja naukowa | Świeży Gamma selected-only zgadza się z analityką skończonego airboxu Dirichleta. Historyczny signed15 FMS zachowany; nowy pełny signed15/window, kompletność, zbieżność, serial/adaptive i COMSOL nadal NOT VERIFIED | Gamma + signed sweep, residuale, kompletność okna, serial/adaptive, zbieżność i COMSOL A1 ≤0,5% |
+| I6: pozostała integracja solvera | Jawny FGMRES: oryginalny signed15 completed15/15, eps_full max1,40e-13. Nowy default tylko large sparse source475147b09; nativeCI41093866398 i runtime bezoverride’u otwarte. Pozostałe I1 disposition/biasLLG8 nadal wymagane | Projekcja, równowaga, periodyczność, guards, publikacja, worker identity/journals, tracking |
+| I7: kwalifikacja naukowa | Świeża pełna ścieżka15punktów zGamma i polami. Różnica n0 max0,827148%, zachowana1D max0,593629%. Kompletność, zbieżności, serial/adaptive i COMSOL A1 nadal NOT VERIFIED | Residuale, pełne okno i count convergence, mesh/airbox, serial/adaptive i COMSOL A1≤0,5% |
 
 Nie podajemy zbiorczego procentu: liczba commitów poza masterem nie mierzy ukończenia funkcji. S00–S12 oraz U1–U7 nie są zamknięte przez ten checkpoint.
 
@@ -457,3 +457,13 @@ błędu numerycznego i pełne R6/wykres/I7. Merge master i cleanup nadal otwarte
 - [ ] I1 demag policy pass-through: source po review, hosted CI i rzeczywiste wykonanie do sprawdzenia. LLG max_steps8 pozostaje osobną korektą.
 - [ ] Udany Gamma/signed sweep + pola/wykres/analityka, R6 wszystkich14 operacji z opublikowanym wynikiem, I7 pełne bramki.
 - [ ] Pozostałe I0/I1 disposition, najnowszy master/review/CI, PR merge oraz kwalifikowany cleanup własnego worktree.
+
+## Checkpoint 30.10.2026 — świeży signed15 i dalsze zadania
+
+[Szczegółowy wynik z tabelą, wykresem i ograniczeniami](../../audits/2026-10-30-eigensolve-signed15-fgmres-runtime.md).
+
+- [x] Oryginalny signed15 z jawnym FGMRES: 15 widm i pól, w tymGamma, pełne residuale; FMSCRC i browserGamma.
+- [ ] R5a: reuse wrappera inspectora importera z dokładnym run/stage/revision dla legacyResultsNavigator; realny import i signedky w przebudowanymUI.
+- [ ] Default FGMRES dla dużego sparseFloquet: nativeCI, manageddefault intent i świeży sweep bezoverride’u.
+- [ ] R6: pełne gesty paneli podczas tej samej potrzebnej symulacji i jej udana publikacja; obecnie11/14.
+- [ ] I1/I7, latestmaster, review/merge i kwalifikowany cleanup; lista chronionych14plików pozostaje nienaruszona.

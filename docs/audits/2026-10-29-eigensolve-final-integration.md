@@ -1,29 +1,16 @@
 # Domknięcie integracji eigensolve i UI — checkpoint
 
-## Bieżący checkpoint: rzeczywisty sparse C1, 30.10.2026
+## Bieżący checkpoint: świeży signed15 z FGMRES, 30.10.2026
 
-- Native Floquet/SLEPc 41068131113: 21/21 CTest PASS na 84197c1b3, w tym large
-  sparse C1 i rzeczywisty C ABI JSON; log/receipt zachowane poza repo.
-- API 41066670891 na b8f47197f: PASS. Pełny bootstrap pozostaje otwarty po
-  starym teście zakazującym również bounded Get-Item dla linków. Poprawka
-  zachowuje szybki zwykły walk; nowy agregator nadal zwraca exit1 po dowolnym
-  błędzie i uruchamia wszystkie 108 wcześniejszych komend plus nowy proof test.
-- Managed stop b4915321, recreate 1f27a376 i development 2ff8bddd succeeded.
-  Runtime: compiled c90fd32b5 / snapshot7b827a5b, grupa3217, schur-action=1;
-  zachowano stare dane oraz config, nowy config574ec32b jest odrębnym następcą.
-- Oryginalny signed15: activation977bfb57 succeeded, run8e6f4c19 failed EPS91.
-  D1 6030B/sha683f323d pokazuje replay defect0, repeatability0, additivity
-  2.45745e-16 i Poisson relative residual3.08496e-14. Rekurencyjny residual
-  1.50016e-38 nie odpowiada true3.54756e-13 przy RHS1.01214e-13. To nadal
-  brak zaakceptowanych nowych modów/pełnej krzywej, nie gotowy wynik fizyczny.
-- Refined CGS jest już ustawiony; utrata ortogonalności nie jest wykazana.
-  Kolejny kontrolowany pilot istniejącego FGMRES ma odróżnić problem
-  preconditionera/rekonstrukcji od innych przyczyn; default/gates bez zmian.
-- I1: źródłowo naprawiono zgubienie istniejącej demag policy w bias Relax;
-  None zachowuje dawną serializację. Nowe CI/runtime pozostają otwarte,
-  limit LLG8 oraz pozostałe historyczne fragmenty nadal wymagają domknięcia.
-- R6 z udanym opublikowanym solverem, I7, PR/master i końcowy cleanup pozostają
-  otwarte. Żadne dane użytkownika ani chronione 14 plików nie zostały usunięte.
+- Runtime compiled5c8/snapshot a128cd72, development7ac23e14, config7195cbd0: succeeded. Jawny FGMRES i schur-action1; stare recordy zachowane.
+- Oryginalny signed15: run6a5847c6 completed, **15/15 widm i pól ready/member_verified_owner_bound**. Gamma9,299249697GHz; eps_full max1.397e-13 przy niezmienionym1e-8. FMS38MB/CRC PASS zachowany pozaGit.
+- Wykres z analityką gotowy: max różnica n0=0.827148%, zachowana1D=0.593629%; brak pełnej zbieżności/COMSOL. [Szczegółowy raport](2026-10-30-eigensolve-signed15-fgmres-runtime.md).
+- BrowserGamma sample7: film bezairboxu, animacja i paleta PASS, WebGL888×573/contextLostfalse, bez błędów i zapisów solvera.
+- R6: **11/14** operacji na tym samym running run, potem jego udana publikacja. Ostatnie gesty nadal otwarte. Timeout odczytu i błędny punkt chwytu obserwatora są jawnie zapisane; nie replayowano Compute.
+- UI R5: legacy inspector nie ma importera ani pełnej selekcji ownera. Poprawka reuse wrappera i exact identity w toku; świeża analityka w UI jeszcze NOT VERIFIED.
+- Native baseline41068131113:21/21PASS na84197c1b3. Nowy default large-sparseFloquet w475147b09 ma hosted native41093866398 w toku. K0, small exact, explicit overrides i bramki bez zmiany; runtime bez override'u wymaga próby.
+- API41085124821 i wszystkie pozaPython joby bootstrap41085120349 PASS na d9. Dwa wspólne fixture’y pustych operator records są poprawione do v1; ponowne CI potrzebne. Unit testy wyłącznie GHA.
+- I1 demag policy kompiluje się w hosted Rust job; log wykazał brak wykonania trzech nowych regresji, dlatego dodano je do CI z asercją liczby testów. Ich wynik, runtime Some/biasLLG8 oraz pozostałe disposition są otwarte. I7, latest master/review/merge i końcowy cleanup również otwarte. Chronione14plików i cudze dane zachowane.
 
 
 ## Cel i warunki zakończenia

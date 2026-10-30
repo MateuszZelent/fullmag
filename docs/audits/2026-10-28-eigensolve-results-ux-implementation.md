@@ -1,5 +1,7 @@
 # Wdrożenie audytu Results UX — 2026-10-28
 
+> Bieżąca ponowna weryfikacja 30.10: świeży signed15 i Gamma UI PASS; nowy zakres R6 ma 11/14 gestów. Wykryto brak importera na legacy trasie; poprawka i browser po przebudowie pozostają otwarte. Historyczne PASS poniżej zachowują swój wcześniejszy zakres. [Świeży wynik i ograniczenia](2026-10-30-eigensolve-signed15-fgmres-runtime.md).
+
 Wdrożono aplikacyjne zmiany R1–R5 z [audytu](2026-10-28-eigensolve-results-ux-audit.md). Testy automatyczne i rzeczywista przeglądarka potwierdzają opisany poniżej zakres. Techniczna próba R6 podczas aktywnego solvera jest zakończona PASS; otwarty pozostaje ręczny odbiór użyteczności z nową osobą. Nie utożsamiamy go z samym Playwrightem.
 
 Worktree: `/home/kkingstoun/git/fullmag/worktrees/eigensolve-integration-ui-20261026`. Branch: `codex/eigensolve-integration-ui-20261026`. UI: http://localhost:3217/session/eigen-mode-ui-de-signed15. [PR 262](https://github.com/MateuszZelent/fullmag/pull/262) pozostaje draftem szerszej integracji; ten raport kwalifikuje wyłącznie zmiany UX.
@@ -236,3 +238,11 @@ przebiegach (13 + 1), a wyniki obu opublikowano. Gesty myszy obejmują Inspector
 Explorer, Diagnostics i separator. Pierwszej próby ostatniego separatora nie
 zaliczono, bo solver zakończył się naturalnie w jej trakcie; brakującą operację
 sprawdzono oddzielnie. [Raport i ograniczenia](2026-10-29-r6-live-workspace-docking.md).
+
+## Ponowna weryfikacja na świeżym signed15 — 30.10.2026
+
+Backend5c8fdb527 z jawnym FGMRES zakończył oryginalne15punktów −25…0…+25 rad/µm: wszystkie widma i pola są opublikowane z tym samym run/generation ownerem, a maksymalny eps_full to1,3973e-13 przy niezmienionym1e-8. Zachowano FMS38165446B/CRC PASS. Gamma sample7 rzeczywiście renderuje sam film; faza/animacja i paleta reagują, WebGL jest niepusty i nie traci kontekstu.
+
+W tej ponownej próbie11z14 operacji ma ten sam running run przed i po; ten run następnie opublikował komplet żądanych wyników. Pierwszy timeout dotyczył odczytu API, a późniejszy gest Explorera trafił w zakładkę zamiast uchwytu. Nie replayowano Compute. Pełna próba nowych gestów i nowego defaultu pozostaje do wykonania po wspólnej przebudowie.
+
+Wykryto dodatkową lukę legacy: `results.eigen.dispersion` nie montował importera referencji i nie niósł pełnego run/stage/artifactRevision. Source poprawka używa istniejącego wrappera physics-first i zachowuje owner/revision gate; hosted UI CI i rzeczywisty import CSV/signedky muszą ją jeszcze potwierdzić. Nie zmieniono poprawnego adaptera projekcji referencji.
