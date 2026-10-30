@@ -195,6 +195,7 @@ pub enum FrequencyDomainJsonArtifactPayload {
     Branches(FrequencyDomainBranchesArtifactPayload),
     FieldSweep(FrequencyDomainFieldSweepArtifactPayload),
     Diagnostics(FrequencyDomainDiagnosticsArtifactPayload),
+    EigenDiagnosticsV2(FrequencyDomainEigenDiagnosticsV2ArtifactPayload),
     Mode(FrequencyDomainModeArtifactPayload),
     ResponseSweep(FrequencyDomainResponseSweepArtifactPayload),
     ResponsePoint(FrequencyDomainResponsePointPayload),
@@ -659,6 +660,45 @@ pub struct FrequencyDomainDiagnosticsArtifactPayload {
     pub complete: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub interrupted: Option<bool>,
+    #[serde(flatten)]
+    pub extra: FrequencyDomainArtifactExtras,
+}
+
+/// One requested diagnostic section in the user-facing eigen diagnostics artifact.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainEigenDiagnosticSectionPayload {
+    pub status: String,
+    pub available: bool,
+    pub data: Option<Value>,
+    pub unavailable_reason: Option<String>,
+    #[serde(flatten)]
+    pub extra: FrequencyDomainArtifactExtras,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainEigenDiagnosticsDispersionPayload {
+    pub sample_count: u64,
+    pub mode_count: u64,
+    pub mode_count_requested: Option<u64>,
+    #[serde(flatten)]
+    pub extra: FrequencyDomainArtifactExtras,
+}
+
+/// Schema for the user-requested eigen diagnostics projection. This differs
+/// from solver diagnostics, which report execution completion and interruption.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainEigenDiagnosticsV2ArtifactPayload {
+    pub schema_version: String,
+    pub solver_model: String,
+    pub solver_model_scope: String,
+    pub sample_count: u64,
+    pub mode_count: u64,
+    pub dispersion: FrequencyDomainEigenDiagnosticsDispersionPayload,
+    pub tracking: FrequencyDomainEigenDiagnosticSectionPayload,
+    pub residuals: FrequencyDomainEigenDiagnosticSectionPayload,
+    pub overlaps: FrequencyDomainEigenDiagnosticSectionPayload,
+    pub tangent_leakage: FrequencyDomainEigenDiagnosticSectionPayload,
+    pub orthogonality: FrequencyDomainEigenDiagnosticSectionPayload,
     #[serde(flatten)]
     pub extra: FrequencyDomainArtifactExtras,
 }
@@ -2527,6 +2567,14 @@ pub(crate) fn decode_frequency_domain_artifact_payload(
                 .map(FrequencyDomainJsonArtifactPayload::FieldSweep),
         )
     } else if artifact_path == "eigen/diagnostics.v2.json"
+        && schema_version == "eigen_diagnostics.v2"
+    {
+        (
+            &["eigen_diagnostics.v2" as &str][..],
+            serde_json::from_value::<FrequencyDomainEigenDiagnosticsV2ArtifactPayload>(value)
+                .map(FrequencyDomainJsonArtifactPayload::EigenDiagnosticsV2),
+        )
+    } else if artifact_path == "eigen/diagnostics.v2.json"
         || artifact_path == "eigen/diagnostics/solver.v1.json"
     {
         (
@@ -2614,7 +2662,44 @@ pub(crate) fn decode_frequency_domain_artifact_payload(
     if let FrequencyDomainJsonArtifactPayload::FieldSweep(field_sweep) = &payload {
         validate_frequency_domain_field_sweep(field_sweep)?;
     }
+    if let FrequencyDomainJsonArtifactPayload::EigenDiagnosticsV2(diagnostics) = &payload {
+        validate_frequency_domain_eigen_diagnostics_v2(diagnostics)?;
+    }
     Ok(payload)
+}
+
+fn validate_frequency_domain_eigen_diagnostics_v2(
+    diagnostics: &FrequencyDomainEigenDiagnosticsV2ArtifactPayload,
+) -> Result<(), ApiError> {
+    const ARTIFACT_PATH: &str = "eigen/diagnostics.v2.json";
+    if diagnostics.dispersion.sample_count != diagnostics.sample_count
+        || diagnostics.dispersion.mode_count != diagnostics.mode_count
+    {
+        return Err(ApiError::internal(format!(
+            "inconsistent eigen diagnostics dispersion counts in '{ARTIFACT_PATH}'"
+        )));
+    }
+
+    for (name, section) in [
+        ("tracking", &diagnostics.tracking),
+        ("residuals", &diagnostics.residuals),
+        ("overlaps", &diagnostics.overlaps),
+        ("tangent_leakage", &diagnostics.tangent_leakage),
+        ("orthogonality", &diagnostics.orthogonality),
+    ] {
+        let available_status = matches!(section.status.as_str(), "available" | "partial");
+        if section.available != available_status || section.available != section.data.is_some() {
+            return Err(ApiError::internal(format!(
+                "inconsistent eigen diagnostics {name} availability in '{ARTIFACT_PATH}'"
+            )));
+        }
+        if !section.available && section.unavailable_reason.is_none() {
+            return Err(ApiError::internal(format!(
+                "missing eigen diagnostics {name} unavailable_reason in '{ARTIFACT_PATH}'"
+            )));
+        }
+    }
+    Ok(())
 }
 
 // Persisted field identity does not require an HTTP route. Legacy readers may
@@ -4695,6 +4780,157 @@ mod spectrum_residual_tests {
         for invalid in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             parsed.samples[0].modes[0].residual_relative_l2 = Some(invalid);
             assert!(validate_frequency_domain_spectrum_v3(&parsed).is_err());
+        }
+    }
+}
+
+#[cfg(test)]
+mod eigen_diagnostics_schema_tests {
+    use super::*;
+
+    fn eigen_diagnostics_v2() -> Value {
+        serde_json::json!({
+            "schema_version": "eigen_diagnostics.v2",
+            "solver_model": "slepc_modal_eigen",
+            "solver_model_scope": "selected_k_sample",
+            "sample_count": 1,
+            "mode_count": 1,
+            "dispersion": {
+                "sample_count": 1,
+                "mode_count": 1,
+                "mode_count_requested": 1
+            },
+            "tracking": {
+                "status": "not_requested",
+                "available": false,
+                "data": null,
+                "unavailable_reason": "disabled_by_request"
+            },
+            "residuals": {
+                "status": "partial",
+                "available": true,
+                "data": {
+                    "mode_count": 1,
+                    "records": [{
+                        "sample_index": 0,
+                        "sample_id": "sample-0000",
+                        "raw_mode_index": 0,
+                        "mode_id": "sample-0000/mode-0000",
+                        "branch_id": null,
+                        "residual_absolute_l2": null,
+                        "residual_relative_l2": 2.7347e-13,
+                        "residual_linf": null
+                    }]
+                },
+                "unavailable_reason": "some_requested_metrics_not_reported"
+            },
+            "overlaps": {
+                "status": "not_applicable",
+                "available": false,
+                "data": null,
+                "unavailable_reason": "single_sample_has_no_predecessor"
+            },
+            "tangent_leakage": {
+                "status": "unavailable",
+                "available": false,
+                "data": null,
+                "unavailable_reason": "tangent_leakage_metrics_not_reported"
+            },
+            "orthogonality": {
+                "status": "available",
+                "available": true,
+                "data": {
+                    "definition": "mass_inner_product = u_i^T M u_j",
+                    "records": [{
+                        "sample_index": 0,
+                        "sample_id": "sample-0000",
+                        "lhs_mode_index": 0,
+                        "rhs_mode_index": 0,
+                        "mass_inner_product": 1.0
+                    }]
+                },
+                "unavailable_reason": null
+            },
+            "execution_lane": "production_cpu",
+            "solver_adapter": "slepc_modal_eigen"
+        })
+    }
+
+    #[test]
+    fn eigen_diagnostics_v2_uses_its_own_contract_and_preserves_legacy_schemas() {
+        let payload = decode_frequency_domain_artifact_payload(
+            "eigen/diagnostics.v2.json",
+            eigen_diagnostics_v2(),
+        )
+        .expect("the eigen diagnostics producer schema should be readable");
+        let FrequencyDomainJsonArtifactPayload::EigenDiagnosticsV2(diagnostics) = payload else {
+            panic!("eigen diagnostics should use its own typed payload");
+        };
+        assert_eq!(diagnostics.solver_model, "slepc_modal_eigen");
+        assert_eq!(diagnostics.sample_count, 1);
+        assert!(diagnostics.residuals.available);
+        assert_eq!(
+            diagnostics.residuals.data.as_ref().unwrap()["records"][0]
+                ["residual_relative_l2"],
+            2.7347e-13
+        );
+        assert_eq!(diagnostics.extra.0["execution_lane"], "production_cpu");
+
+        let mut missing_section = eigen_diagnostics_v2();
+        missing_section.as_object_mut().unwrap().remove("residuals");
+        assert!(decode_frequency_domain_artifact_payload(
+            "eigen/diagnostics.v2.json",
+            missing_section,
+        )
+        .is_err());
+
+        let mut inconsistent_counts = eigen_diagnostics_v2();
+        inconsistent_counts["dispersion"]["sample_count"] = serde_json::json!(2);
+        assert!(decode_frequency_domain_artifact_payload(
+            "eigen/diagnostics.v2.json",
+            inconsistent_counts,
+        )
+        .is_err());
+
+        let mut inconsistent_section = eigen_diagnostics_v2();
+        inconsistent_section["residuals"]["available"] = serde_json::json!(false);
+        assert!(decode_frequency_domain_artifact_payload(
+            "eigen/diagnostics.v2.json",
+            inconsistent_section,
+        )
+        .is_err());
+
+        for path in [
+            "eigen/diagnostics.v2.json",
+            "eigen/diagnostics/solver.v1.json",
+        ] {
+            for schema in [
+                "frequency_domain_modal_solver_diagnostics.v1",
+                "frequency_domain_modal_solver_diagnostics.v2",
+            ] {
+                let payload = decode_frequency_domain_artifact_payload(
+                    path,
+                    serde_json::json!({"schema_version": schema, "status": "completed"}),
+                )
+                .expect("historical modal solver diagnostics remain readable");
+                assert!(matches!(payload, FrequencyDomainJsonArtifactPayload::Diagnostics(_)));
+            }
+        }
+
+        for path in [
+            "response/diagnostics/solver.v1.json",
+            "response/diagnostics.v1.json",
+        ] {
+            for schema in [
+                "frequency_domain_response_diagnostics.v1",
+                "frequency_domain_response_diagnostics.v2",
+            ] {
+                assert!(decode_frequency_domain_artifact_payload(
+                    path,
+                    serde_json::json!({"schema_version": schema, "status": "completed"}),
+                )
+                .is_ok());
+            }
         }
     }
 }

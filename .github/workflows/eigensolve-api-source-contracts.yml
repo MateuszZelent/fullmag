@@ -59,6 +59,7 @@ jobs:
           cargo test --locked -p fullmag-runner --lib artifact_generation::tests -- --nocapture
           cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::analysis::frequency_domain::spectrum_residual_tests::artifact_generation_status_uses_explicit_wire_values -- --exact | tee "$RUNNER_TEMP/artifact-generation-status.log"
           grep -F "artifact_generation_status_uses_explicit_wire_values ... ok" "$RUNNER_TEMP/artifact-generation-status.log"
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::analysis::frequency_domain::eigen_diagnostics_schema_tests::eigen_diagnostics_v2_uses_its_own_contract_and_preserves_legacy_schemas -- --exact
           cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::analysis::results::generation_snapshot_tests -- --nocapture | tee "$RUNNER_TEMP/artifact-generations.log"
           grep -F "committed_field_reader_returns_only_digest_verified_generation_bytes ... ok" "$RUNNER_TEMP/artifact-generations.log"
           grep -F "legacy_capture_fence_rejects_a_new_publication ... ok" "$RUNNER_TEMP/artifact-generations.log"
