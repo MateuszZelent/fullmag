@@ -492,30 +492,113 @@ fn first_failed_subwindow_projection(value: &Value) -> Option<Value> {
     }
     if let Some(probe) = source.get("shifted_ksp_failure_probe") {
         let keys = [
-            "schema_version", "scope", "eps_dimension_semantics", "eps_attempt_number",
-            "eps_dimension_arguments_available", "eps_nev_argument", "eps_ncv_argument",
-            "callback_observation_available", "callback_count", "callback_count_scope",
-            "last_callback_iteration", "last_recursive_residual_available",
-            "last_recursive_residual_norm", "last_default_reason_available",
-            "last_default_reason", "last_reason_after_gate_available", "last_reason_after_gate",
-            "true_probe_attempt_count", "true_probe_attempt_count_scope", "true_probe_count",
-            "true_probe_count_scope", "true_probe_measurement_failure_count",
+            "schema_version",
+            "scope",
+            "eps_dimension_semantics",
+            "eps_attempt_number",
+            "eps_dimension_arguments_available",
+            "eps_nev_argument",
+            "eps_ncv_argument",
+            "callback_observation_available",
+            "callback_count",
+            "callback_count_scope",
+            "last_callback_iteration",
+            "last_recursive_residual_available",
+            "last_recursive_residual_norm",
+            "last_default_reason_available",
+            "last_default_reason",
+            "last_reason_after_gate_available",
+            "last_reason_after_gate",
+            "true_probe_attempt_count",
+            "true_probe_attempt_count_scope",
+            "true_probe_count",
+            "true_probe_count_scope",
+            "true_probe_measurement_failure_count",
             "true_probe_auxiliary_measurement_failure_count",
         ];
         if let Some(mut projected) = project_scalar_diagnostic_fields(probe, &keys) {
             if let Some(last) = probe.get("last_true_probe").and_then(|last| {
-                project_scalar_diagnostic_fields(last, &[
-                    "available", "callback_ordinal", "iteration", "recursive_residual_available",
-                    "recursive_residual_norm", "default_reason_available", "default_reason",
-                    "build_solution_reason_available", "build_solution_reason",
-                    "reason_after_gate_available", "reason_after_gate", "solution_l2_norm_available",
-                    "solution_l2_norm_source", "solution_l2_norm", "shifted_operator_action_l2_norm_available",
-                    "shifted_operator_action_l2_norm_source", "shifted_operator_action_l2_norm",
-                    "rhs_l2_norm", "true_residual_l2_norm", "rtol", "atol", "threshold_l2_norm",
-                    "tolerance_ratio_available", "true_residual_to_threshold_ratio",
-                ])
+                project_scalar_diagnostic_fields(
+                    last,
+                    &[
+                        "available",
+                        "callback_ordinal",
+                        "iteration",
+                        "recursive_residual_available",
+                        "recursive_residual_norm",
+                        "default_reason_available",
+                        "default_reason",
+                        "build_solution_reason_available",
+                        "build_solution_reason",
+                        "reason_after_gate_available",
+                        "reason_after_gate",
+                        "solution_l2_norm_available",
+                        "solution_l2_norm_source",
+                        "solution_l2_norm",
+                        "shifted_operator_action_l2_norm_available",
+                        "shifted_operator_action_l2_norm_source",
+                        "shifted_operator_action_l2_norm",
+                        "rhs_l2_norm",
+                        "true_residual_l2_norm",
+                        "rtol",
+                        "atol",
+                        "threshold_l2_norm",
+                        "tolerance_ratio_available",
+                        "true_residual_to_threshold_ratio",
+                    ],
+                )
             }) {
                 projected.insert("last_true_probe".into(), Value::Object(last));
+            }
+            if let Some(candidate) =
+                probe
+                    .get("candidate_operator_diagnostic")
+                    .and_then(|candidate| {
+                        project_scalar_diagnostic_fields(
+                            candidate,
+                            &[
+                                "schema_version",
+                                "requested",
+                                "measurement_scope",
+                                "diagnostic_mode",
+                                "sparse_workspace_budget_bytes",
+                                "sparse_workspace_estimated_bytes",
+                                "sparse_workspace_observed_bytes",
+                                "memory_admission_status",
+                                "memory_admission_reason",
+                                "status",
+                                "reason",
+                                "workspace_available",
+                                "sample_available",
+                                "callback_ordinal",
+                                "iteration",
+                                "production_phi_rhs_l2_norm_available",
+                                "production_phi_rhs_l2_norm",
+                                "production_phi_l2_norm_available",
+                                "production_phi_l2_norm",
+                                "production_poisson_residual_l2_norm_available",
+                                "production_poisson_residual_l2_norm",
+                                "production_poisson_relative_residual_available",
+                                "production_poisson_relative_residual",
+                                "production_vs_isolated_replay_available",
+                                "production_vs_isolated_replay_relative_defect",
+                                "isolated_repeatability_available",
+                                "isolated_repeatability_relative_defect",
+                                "isolated_additivity_available",
+                                "isolated_additivity_relative_defect",
+                                "exact_shifted_matrix_comparison_available",
+                                "exact_shifted_matrix_relative_defect",
+                                "preconditioner_normalization_scale",
+                                "measurement_failure_count",
+                                "last_error_code",
+                            ],
+                        )
+                    })
+            {
+                projected.insert(
+                    "candidate_operator_diagnostic".into(),
+                    Value::Object(candidate),
+                );
             }
             projection.insert("shifted_ksp_failure_probe".into(), Value::Object(projected));
         }
@@ -750,6 +833,18 @@ mod tests {
                  "schema_version":"shifted_ksp_failure_probe.v1",
                  "scope":"internal_shifted_linear_system_not_original_descriptor",
                  "callback_count":12, "raw_vectors":[4,5,6],
+                 "candidate_operator_diagnostic": {
+                     "schema_version":"floquet_candidate_operator_diagnostic.v1",
+                     "requested":true, "status":"available", "sample_available":true,
+                     "diagnostic_mode":"sparse_replay", "sparse_workspace_budget_bytes":67108864,
+                     "sparse_workspace_estimated_bytes":4096, "sparse_workspace_observed_bytes":null,
+                     "memory_admission_status":"estimated", "memory_admission_reason":"observed_pending",
+                     "production_vs_isolated_replay_available":true,
+                     "production_vs_isolated_replay_relative_defect":0.25,
+                     "isolated_repeatability_available":true,
+                     "isolated_repeatability_relative_defect":0.0,
+                     "raw_vectors":[10,11,12], "live_pc_observation":{"raw_matrix":[[1,2]]}
+                 },
                  "last_true_probe": {"available":true,"rtol":1e-11,
                     "true_residual_l2_norm":0.1,"rhs_l2_norm":1.0,
                     "tolerance_ratio_available":true,"true_residual_to_threshold_ratio":10.0,
@@ -763,11 +858,41 @@ mod tests {
         assert_eq!(failure["eps_solve_error_code"], 91);
         assert_eq!(failure["ksp_converged_reason"], -3);
         assert_eq!(failure["shifted_ksp_failure_probe"]["callback_count"], 12);
-        assert_eq!(failure["shifted_ksp_failure_probe"]["last_true_probe"]["rtol"], 1e-11);
-        assert_eq!(failure["shifted_ksp_failure_probe"]["last_true_probe"]["true_residual_to_threshold_ratio"], 10.0);
+        assert_eq!(
+            failure["shifted_ksp_failure_probe"]["last_true_probe"]["rtol"],
+            1e-11
+        );
+        assert_eq!(
+            failure["shifted_ksp_failure_probe"]["last_true_probe"]
+                ["true_residual_to_threshold_ratio"],
+            10.0
+        );
+        let operator = &failure["shifted_ksp_failure_probe"]["candidate_operator_diagnostic"];
+        assert_eq!(
+            operator["schema_version"],
+            "floquet_candidate_operator_diagnostic.v1"
+        );
+        assert_eq!(
+            operator["production_vs_isolated_replay_relative_defect"],
+            0.25
+        );
+        assert_eq!(operator["isolated_repeatability_relative_defect"], 0.0);
+        assert_eq!(operator["diagnostic_mode"], "sparse_replay");
+        assert_eq!(operator["sparse_workspace_estimated_bytes"], 4096);
+        assert!(operator
+            .as_object()
+            .unwrap()
+            .contains_key("sparse_workspace_observed_bytes"));
+        assert!(operator["sparse_workspace_observed_bytes"].is_null());
+        assert!(operator.get("raw_vectors").is_none());
+        assert!(operator.get("live_pc_observation").is_none());
         assert!(failure.get("raw_vectors").is_none());
-        assert!(failure["shifted_ksp_failure_probe"].get("raw_vectors").is_none());
-        assert!(failure["shifted_ksp_failure_probe"]["last_true_probe"].get("raw_vectors").is_none());
+        assert!(failure["shifted_ksp_failure_probe"]
+            .get("raw_vectors")
+            .is_none());
+        assert!(failure["shifted_ksp_failure_probe"]["last_true_probe"]
+            .get("raw_vectors")
+            .is_none());
     }
 
     #[test]

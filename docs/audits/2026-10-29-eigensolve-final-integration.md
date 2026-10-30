@@ -724,3 +724,56 @@ Wcześniejsza prośba o dodatkowe 30 GiB w Ubuntu przed buildem była oparta
 na niewłaściwym filesystemie. Bieżący pomiar spełnia tę bramkę Docker.
 Sesje i wyniki nadal wymagają miejsca w Ubuntu, ponieważ /state jest bind
 mountem. Nie wykonywano sprzątania, migracji danych ani restartów.
+
+
+## Checkpoint c593 — CI, kontrolowany restart i niższa diagnostyka
+
+API workflow `41047805119`: wszystkie trzy joby PASS. Log joba124036108832
+potwierdza wykonanie incoming-fields FEM fixture, trzech nowych testów
+publikacji active preparation oraz nowej regresji Floquet solve_error.
+Zarządzany restart/drain `6bb163a8a13d4eb69907aa48211ce7f4` succeeded;
+runtime-provenance commit=c593135c08c7007a3c723ad0cfbb977a36a452e8,
+snapshot=8f35e240d0b7bd2453f2fdbc52bd4f962e08498beb51783676135ac793f95f69.
+Oryginalny signed15 uruchomiono ponownie, bez zmian fizyki/okna/tolerancji:
+activation=f9c82543e9d24424a89b01341f56ed33,
+run=run-live-6ff6193599f29731ecedf3b246ab9d58c8982fc72e79e674d644dbe2a07d5f49.
+
+Błąd native ponownie EPS91 / floquet_slepc_solve_failed. Tym razem sidecar
+3821B zachował first_failed_subwindow i pełne bounded skalary probe.
+Callback253/iter30: residual rekurencyjny1,50016e-38, niezależnie mierzony
+3,54756e-13, rhs1,01214e-13, próg1,01214e-24 (rtol1e-11).
+To pomiar wewnętrznego shifted KSP, nie residual fizycznego deskryptora.
+Trwa sprawdzenie poprawności pomiaru i powtarzalności operatora; nie
+zmieniono kryterium akceptacji. Sidecar SHA256
+7498e4ad1b8c819a2c159cd57ca98313e345e2a0dc7a3e9dc7fd794ea0cf9266.
+
+R6 tego runu nie zostało wykonane. Pierwszy browser goto wyczerpał60s,
+frontend następnie potwierdził /workspace200 po62s zimnej kompilacji.
+Drugi obserwator przyjął za baseline już nowy run waiting_for_compute,
+lecz stary warunek wymagał innego run ID. Naprawiono wyłącznie verifier:
+jawny oczekiwany run ID, dłuższy cold load i fail-fast po terminalnym runie.
+Nie ponowiono z tego powodu solvera. Starsze10/14 z89bb pozostaje dowodem
+historycznym; pełne R6 nadal otwarte.
+
+Review I1 providera tracking ma osobny raport2026-10-30 i wpis w inventory.
+Odpowiedniki P1/C ABI/admission istnieją w źródle; nie kopiowano ich drugi raz
+ani nie oznaczono wszystkich388 historycznych commitów jako przejrzanych.
+
+
+### Operator replay — stan instrumentacji
+
+Inspekcja dokładnego commitu PETSc1467453 nie wykazała stale-iterate ani
+błędu kolejności w callbacku. Braku runtime flag skalowania/nullspace nie
+przekształcono w dowód ich stanu. Source MatShell jest stałym sparse Schurem
+z PREONLY/LU i stałą rotacją; runtime repeatability pozostaje do zmierzenia.
+Obecny C1 ma dwa guardy q/phi<=512, więc nie obejmuje q_split1312 naszego
+przypadku. Limit małego exact Schura jest osobny i pozostaje zachowany.
+Managed DEV ma zamkniętą allowlistę env: istniejące flagi Floquet diagnostyki
+nie są do niej podłączone. To kolejna konkretna luka do usunięcia, nie powód
+uruchamiania ręcznego solvera ani zmniejszania przypadku.
+
+D1 rozszerzono źródłowo o ograniczone scalars candidate_operator_diagnostic:
+Poisson residual, production/isolated replay, repeatability/additivity,
+status i availability. Bez pól/macierzowych payloadów i bez kopiowania
+nieznanych obiektów; limit64KiB pozostaje. Regresję filtracji rozszerzono;
+nowe hosted CI jest wymagane. Tej zmiany jeszcze nie ma w runtimec593.

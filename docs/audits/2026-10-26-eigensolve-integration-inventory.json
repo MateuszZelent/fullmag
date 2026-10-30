@@ -6297,6 +6297,22 @@
         "validate_materialized_tangent_frame_transport"
       ],
       "remaining": "compiled current gate pending; not a disposition of all 40 WIP files or 388 commits"
+    },
+    {
+      "id": "native-p1-tracking-provider-20261030",
+      "report": "docs/audits/2026-10-30-eigensolve-native-tracking-disposition.md",
+      "disposition": "present-current-equivalent-for-reviewed-provider-and-cabi-contracts",
+      "reviewed_head": "c593135c08c7007a3c723ad0cfbb977a36a452e8",
+      "historical_atoms": [
+        "4c7d24499542bfad6ad7082c6906e061c5dad51d",
+        "2976b2bdd806ec197e5b2ed9a93dc58dc73a78dd",
+        "ba26ef88a46175f183ee290b41639fc102f9d7c7"
+      ],
+      "current_equivalent_commits": [
+        "14fc9280e39a1551743a375a491257819012ce5e",
+        "18cfc2a2e0e684934839a04e3ce2ae6cf8f7c693"
+      ],
+      "remaining": "Review dotyczy wskazanych kontraktów providera/C ABI i kolejności admission; nie zamyka wszystkich ścieżek całych historycznych commitów ani I1. Runtime tracking/Prism6 nadal NOT VERIFIED."
     }
   ]
 }

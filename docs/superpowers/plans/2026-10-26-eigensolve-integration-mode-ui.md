@@ -407,3 +407,20 @@ archiwum signed15, import UI i dane do porównania.
    na tych danych poprawić przyczynę numerics; progi pozostają bez zmian.
 5. Gamma + signed15, aktualny scatter/analityka/mody, końcowy R6 i I7; następnie
    wymagane review/CI, master i kwalifikowane sprzątanie własnego worktree.
+
+
+## Checkpoint 30.10 — c593, signed15 i następna próba diagnostyczna
+
+- [x] D1 zachowuje solve_error, EPS/KSP i last_true_probe; API workflow41047805119 PASS oraz realny sidecar3821B po ponowieniu signed15.
+- [x] Active-preparation tests i incoming-fields FEM fixture wykonane w tym CI; kontrolowany restart6bb163a8 succeeded na sourcec593/snapshot8f35e240.
+- [x] Źródłowe review providera P1/C ABI/admission zapisane w raporcie2026-10-30 oraz inventory. Pozostałe historyczne pliki/commity nadal wymagają disposition.
+- [x] Sprawdzono callback zbieżności względem dokładnego commitu PETSc1467453: kolejność i bieżący KSPBuildSolution nie potwierdzają zgłoszonej hipotezy błędu. Raport jest w zewnętrznym signed15-c593-failure.
+- [ ] Dokończyć i zweryfikować przechowanie scalarów candidate_operator_diagnostic w D1. Root ma source patch i rozszerzoną regresję; lokalnie tylko parser/diff, nowe CI wymagane.
+- [ ] Dopuścić jawny, lokalny dla grupy DEV opt-in diagnostyki operatora w managed config/provenance; obecną zamkniętą allowlistę należy rozszerzyć wstecznie zgodnie, bez zmiany obcych grup i bez ręcznego dockerexec solvera. Dotychczasowe frozen records pozostają ważne.
+- [ ] Udostępnić sparse replay/repeatability/additivity na oryginalnym q_split1312. Obecny C1 odmawia q/phi>512. Zachować limit małego exact Schura; tryb dla większych wymiarów potrzebuje niezależnego budżetu kopii macierzy, wektorów i dodatkowego Poisson PCLU oraz jawnego unavailable dla dense porównań. Opt-out nie alokuje ani nie zmienia ścieżki akceptacji.
+- [ ] Ponowić oryginalny signed15 po tej instrumentacji, odczytać operator/replay i naprawić potwierdzoną przyczynę EPS91. Nie zmieniać fizyki, okna8.5–16GHz ani gate1e-8 wyłącznie dla PASS.
+- [ ] Wykonać wszystkie14 operacji R6 podczas tego samego realnego running solvera i powiązać z poprawnym wynikiem. Ostatnia próba c593 nie wykonała operacji: cold load62s oraz błąd baseline obserwatora; verifier ma teraz jawny expected run ID i fail-fast po terminalnym stanie. Nie ponowiono z tego powodu Solve.
+
+Pozostałe I0–I7, pełny wykres z Gamma/analityką, kompletność/zbieżność,
+COMSOL A1, finalny merge PR/master i kwalifikowany cleanup pozostają w zakresie.
+Nowe kroki diagnostyczne nie zastępują tych wymagań ani nie zmieniają definicji zakończenia.

@@ -392,5 +392,44 @@
       "no_browser_numeric_mutations": true,
       "browser_errors": []
     }
+  },
+  "runtime_c593_20261030": {
+    "source_commit": "c593135c08c7007a3c723ad0cfbb977a36a452e8",
+    "snapshot_sha256": "8f35e240d0b7bd2453f2fdbc52bd4f962e08498beb51783676135ac793f95f69",
+    "iteration": "6bb163a8a13d4eb69907aa48211ce7f4",
+    "managed_drain_and_restart": "succeeded",
+    "ci": {
+      "run": 41047805119,
+      "status": "success",
+      "jobs": [
+        124036108283,
+        124036108704,
+        124036108832
+      ],
+      "explicit_new_regressions": "FEM incoming-field fixture, three active-preparation publications and Floquet solve_error projection executed and passed"
+    },
+    "signed15": {
+      "activation": "f9c82543e9d24424a89b01341f56ed33",
+      "run_id": "run-live-6ff6193599f29731ecedf3b246ab9d58c8982fc72e79e674d644dbe2a07d5f49",
+      "status": "failed",
+      "native_error": "floquet_slepc_solve_failed",
+      "eps_error_code": 91,
+      "diagnostic_bytes": 3821,
+      "diagnostic_sha256": "7498e4ad1b8c819a2c159cd57ca98313e345e2a0dc7a3e9dc7fd794ea0cf9266",
+      "diagnostic_scope": "internal shifted KSP, not original physical descriptor",
+      "recursive_residual_norm": 1.5001607248760867e-38,
+      "measured_true_residual_norm": 3.54756097000224e-13,
+      "rhs_norm": 1.0121384291046612e-13,
+      "threshold_norm": 1.0121384291046613e-24,
+      "measurement_validity_and_operator_repeatability": "under investigation; no tolerance change"
+    },
+    "r6": {
+      "status": "not_executed_for_this_run",
+      "cold_navigation_timeout_ms": 60000,
+      "warm_baseline_predicate_bug": "observer already bound to waiting run and required a new run id; corrected verifier for future explicit-run observation",
+      "numeric_browser_commands": 0,
+      "previous_qualified_89bb_operations": 10,
+      "required_operations": 14
+    }
   }
 }
