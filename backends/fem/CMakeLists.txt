@@ -1263,6 +1263,11 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_FEM_WITH_SLEPC)
     # This regression calls PETSc directly, including the production inline
     # convergence callback. The shared library's private linkage is insufficient.
     find_package(MPI REQUIRED COMPONENTS CXX)
+    # The sparse C1 fixture now constructs and inspects SeqAIJ matrices directly.
+    # Keep those executable-level PETSc/MPI dependencies explicit.
+    target_link_libraries(fem_floquet_modal_solver_contract PRIVATE
+        PETSC::petsc MPI::MPI_CXX
+    )
     target_link_libraries(fem_shifted_ksp_true_convergence_contract PRIVATE
         PETSC::petsc MPI::MPI_CXX
     )

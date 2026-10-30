@@ -849,3 +849,13 @@ Root przejrzał diff wszystkich trzech plików; rustfmt parser, Python AST i
 diff-check PASS. Lokalnie nie uruchomiono żadnych unit tests. Poprawki
 wymagają kolejnego hosted bootstrap/API CI. Natywna kontrola C1/SLEPc
 41061935465 pozostaje w toku; nie jest zastąpiona przez te korekty fixture.
+
+
+Native CI 41061935465 zakończyło się przed CTest: nowy test SeqAIJ wywołuje
+bezpośrednio PETSc, lecz jego executable nie linkował PETSC::petsc. Linker
+zgłosił undefined reference MatAssemblyBegin / DSO missing from command line.
+Dodano jawne PETSC::petsc i MPI::MPI_CXX wyłącznie temu targetowi, w istniejącym
+warunku MFEM+SLEPc, tak jak sąsiedni test callbacku zbieżności. Nie zmieniono
+linkowania produkcji ani profilu no-stack. Native-build-and-ctest.log nie
+zawiera startu żadnego CTest; nie jest to dowód PASS/FAIL samych asercji.
+Pełny profil Floquet/SLEPc wymaga ponowienia po tej korekcie.

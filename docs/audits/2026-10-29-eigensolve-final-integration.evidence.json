@@ -472,5 +472,17 @@
       "git diff --check"
     ],
     "hosted_recheck_status": "required"
+  },
+  "native_c1_4c8bfa91a_link_failure": {
+    "run": 41061935465,
+    "job": 124083583362,
+    "artifact_id": 12983610437,
+    "artifact_bytes": 95034,
+    "phase": "native_link_before_ctest",
+    "ctest_started_count": 0,
+    "error": "undefined reference MatAssemblyBegin; PETSc DSO missing from command line",
+    "fix": "link fem_floquet_modal_solver_contract explicitly to PETSC::petsc MPI::MPI_CXX under existing MFEM+SLEPc condition",
+    "production_linkage_changed": false,
+    "native_recheck_required": true
   }
 }
