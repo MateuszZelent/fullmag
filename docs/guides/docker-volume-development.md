@@ -990,3 +990,31 @@ ograniczone scalar diagnostics trafiają do `native_failure_diagnostic.v1.json`
 w prywatnym worker attempt pod SessionStore; nie stanowią zaakceptowanego
 widma ani certyfikatu zbieżności. Profil zwiększa pracę diagnostyczną i nie
 zmienia docelowego residualu lub fizyki.
+
+
+### Jawny typ shifted KSP dla jednej grupy
+
+`recreate-volume` przyjmuje również opcjonalne `--modal-shifted-ksp-type`
+z wartością `gmres` albo `fgmres`. Ostatni opcjonalny argument recepty
+`docker-dev-recreate-volume` to `modal_shifted_ksp_type`; pusty argument
+zachowuje poprzedni rekord. Wybór może współistnieć z `--floquet-diagnostics`.
+
+Bez wyboru grupa następcy zachowuje dokładnie zapisany typ lub brak jawnego
+typu. Launcher najpierw waliduje stare kontenery, receipty i dowód drain, a
+dopiero potem zmienia wyłącznie `FULLMAG_MODAL_SHIFTED_KSP_TYPE` w rekordzie
+następcy. Stary rekord nadal pozostaje przypięty w immutable intencie
+recreation. Intent przechowuje wybrany typ oraz stare i nowe SHA-256; wznowienie
+odtwarza wybór z tego intentu, bez ponownego odczytu środowiska hosta. Starsze
+intenty bez tego pola pozostają poprawne i zachowują wcześniejszy rekord.
+Powtórzony lub nieznany argument oraz próba dodania wyboru do resume,
+ukończonej recreation albo recovery są odrzucane.
+
+Przykład jawnego eksperymentu z FGMRES i diagnostyką Schur dla następcy:
+
+```text
+python -B scripts/docker_dev.py --repo-root <checkout> recreate-volume --attempt <development-attempt> --config-sha256 <compose-sha256> --source-root <checkout> --port <port> --floquet-diagnostics schur-action --modal-shifted-ksp-type fgmres
+```
+
+Wybór typu solvera umożliwia kontrolowany eksperyment numeryczny. Sam wybór
+FGMRES nie dowodzi rozwiązania problemu zbieżności i nie zmienia progów
+akceptacji, geometrii ani domyślnych ustawień innych grup.

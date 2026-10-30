@@ -144,6 +144,9 @@ FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED = {
     "FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC": frozenset({"1"}),
 }
 FLOQUET_DIAGNOSTIC_PROFILES = frozenset({"disabled", "schur-action", "dense-oracle"})
+MODAL_SHIFTED_KSP_TYPES = MODAL_KRYLOV_ENVIRONMENT_ALLOWED[
+    "FULLMAG_MODAL_SHIFTED_KSP_TYPE"
+]
 OPTIONAL_OPERATOR_PROBE_ENVIRONMENT_ALLOWED = {
     **MODAL_KRYLOV_ENVIRONMENT_ALLOWED,
     **FLOQUET_DIAGNOSTIC_ENVIRONMENT_ALLOWED,
@@ -205,6 +208,21 @@ def _operator_probe_environment_for_floquet_profile(
         result[dense] = "1"
     elif profile == "schur-action":
         result[schur] = "1"
+    return _normalize_operator_probe_environment(result)
+
+
+def _operator_probe_environment_for_modal_shifted_ksp_type(
+    value: Mapping[str, object], requested_type: str | None
+) -> dict[str, str]:
+    """Apply one explicit shifted-KSP type while preserving every other pin."""
+
+    normalized = _normalize_operator_probe_environment(value)
+    if requested_type is None:
+        return normalized
+    if not isinstance(requested_type, str) or requested_type not in MODAL_SHIFTED_KSP_TYPES:
+        raise _fail("modal shifted KSP type is unsupported")
+    result = dict(normalized)
+    result["FULLMAG_MODAL_SHIFTED_KSP_TYPE"] = requested_type
     return _normalize_operator_probe_environment(result)
 
 
@@ -2593,6 +2611,21 @@ def _validate_floquet_diagnostics_request(args) -> None:
         raise _fail("--floquet-diagnostics cannot combine with container recovery authorization")
 
 
+def _validate_modal_shifted_ksp_type_request(args) -> None:
+    requested_type = getattr(args, "modal_shifted_ksp_type", None)
+    if requested_type is None:
+        return
+    if not isinstance(requested_type, str) or requested_type not in MODAL_SHIFTED_KSP_TYPES:
+        raise _fail("--modal-shifted-ksp-type has an unsupported solver type")
+    if getattr(args, "resume_recreation", None) is not None:
+        raise _fail("--modal-shifted-ksp-type cannot override a --resume-recreation intent")
+    if (getattr(args, "completed_recreation_attempt", None)
+            or getattr(args, "completed_recreation_sha256", None)):
+        raise _fail("--modal-shifted-ksp-type cannot be added to a completed recreation")
+    if getattr(args, "recovery_authorization", None) is not None:
+        raise _fail("--modal-shifted-ksp-type cannot combine with container recovery authorization")
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=_repo_default(),
@@ -2948,6 +2981,13 @@ def _parser() -> argparse.ArgumentParser:
         help="explicitly select the successor group's bounded Floquet diagnostic profile",
     )
     recreate_volume.add_argument(
+        "--modal-shifted-ksp-type",
+        choices=sorted(MODAL_SHIFTED_KSP_TYPES),
+        action=_StoreOnce,
+        default=None,
+        help="explicitly select the successor group's shifted modal KSP type",
+    )
+    recreate_volume.add_argument(
         "--offline-reconciliation", metavar="OPERATION_TOKEN",
         help="consume the exact completed offline control repair without replaying its old operation",
     )
@@ -3150,6 +3190,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.action == "recreate-volume":
             _validate_floquet_diagnostics_request(args)
+            _validate_modal_shifted_ksp_type_request(args)
         if args.action in {"up", "build"}:
             from docker_dev_host import require_host
             require_host()

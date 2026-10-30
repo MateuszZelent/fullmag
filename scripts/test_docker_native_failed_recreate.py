@@ -686,7 +686,8 @@ class CompletedRemovalNativeProofTests(unittest.TestCase):
              patch.object(reconcile,'docker_capture',side_effect=AssertionError('Removed backend must not be inspected as stopped')), \
              patch.object(dev,'docker_text',return_value=json.dumps([{'Id':IMAGE_ID,'Config':{}}])), \
              patch.object(dev,'bounded_capture',return_value=CompletedProcess([],0,self.config_raw,b'')), \
-             patch.object(dev,'_operator_probe_record_from_retained',return_value={}), \
+             patch.object(dev,'_operator_probe_record_from_retained',
+                          return_value=getattr(self,'operator_probe_record',{})), \
              patch.object(dev,'_session_host',return_value=host):
             if ordinary:
                 self.args.resume_recreation=self.args.completed_recreation_attempt
@@ -695,57 +696,61 @@ class CompletedRemovalNativeProofTests(unittest.TestCase):
             return dev._completed_recreation_start_context(self.control,self.args,self.selected,{'runtime_root':self.root})
 
     def test_recreation_resume_uses_the_persisted_successor_profile(self):
-        successor_record = dev._operator_probe_record({
+        old_record = dev._operator_probe_record({
             "FULLMAG_MIXED_P1_DEVICE": "gpu",
             "FULLMAG_ARTIFACT_FIELD_STORAGE": "json",
-            "FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC": "1",
         })
-        selection = {
-            "schema": "fullmag.floquet-diagnostic-selection.v1",
-            "requested_profile": "schur-action",
-            "old_operator_probe_environment_sha256": "a" * 64,
-            "new_operator_probe_environment_sha256": (
-                successor_record["operator_probe_environment_sha256"]
-            ),
-        }
-        self.completed["inputs"]["floquet_diagnostic_selection"] = selection
+        floquet_record, floquet_selection = dev._floquet_diagnostic_successor_record(
+            old_record, "schur-action"
+        )
+        successor_record, ksp_selection = dev._modal_shifted_ksp_type_successor_record(
+            floquet_record, "fgmres"
+        )
+        self.operator_probe_record = old_record
+        self.completed["inputs"].update(old_record)
+        self.completed["inputs"]["floquet_diagnostic_selection"] = floquet_selection
+        self.completed["inputs"]["modal_shifted_ksp_type_selection"] = ksp_selection
         completed_raw = dev.canonical(self.completed) + b"\n"
         base = "recreate-services/attempts/" + self.args.completed_recreation_attempt
         self.args.completed_recreation_sha256 = hashlib.sha256(completed_raw).hexdigest()
         for path in (base + "/terminal.json", base + "/receipt.json",
                      "recreate-services/current.json", "recreate-services/verified.json"):
             self.records[path] = completed_raw
-        with patch.object(dev, "_floquet_diagnostic_successor_from_metadata",
-                          return_value=successor_record):
-            records = self.invoke(ordinary=True)
+        records = self.invoke(ordinary=True)
         self.assertEqual(records["successor_operator_probe_record"], successor_record)
+        self.assertEqual(
+            successor_record["operator_probe_environment"]["FULLMAG_MODAL_SHIFTED_KSP_TYPE"],
+            "fgmres",
+        )
 
     def test_completed_recreation_start_uses_the_persisted_successor_profile(self):
-        successor_record = dev._operator_probe_record({
+        old_record = dev._operator_probe_record({
             "FULLMAG_MIXED_P1_DEVICE": "gpu",
             "FULLMAG_ARTIFACT_FIELD_STORAGE": "json",
-            "FULLMAG_FLOQUET_DENSE_ORACLE": "1",
         })
-        selection = {
-            "schema": "fullmag.floquet-diagnostic-selection.v1",
-            "requested_profile": "dense-oracle",
-            "old_operator_probe_environment_sha256": "a" * 64,
-            "new_operator_probe_environment_sha256": (
-                successor_record["operator_probe_environment_sha256"]
-            ),
-        }
-        self.completed["inputs"]["floquet_diagnostic_selection"] = selection
+        floquet_record, floquet_selection = dev._floquet_diagnostic_successor_record(
+            old_record, "dense-oracle"
+        )
+        successor_record, ksp_selection = dev._modal_shifted_ksp_type_successor_record(
+            floquet_record, "gmres"
+        )
+        self.operator_probe_record = old_record
+        self.completed["inputs"].update(old_record)
+        self.completed["inputs"]["floquet_diagnostic_selection"] = floquet_selection
+        self.completed["inputs"]["modal_shifted_ksp_type_selection"] = ksp_selection
         completed_raw = dev.canonical(self.completed) + b"\n"
         base = "recreate-services/attempts/" + self.args.completed_recreation_attempt
         self.args.completed_recreation_sha256 = hashlib.sha256(completed_raw).hexdigest()
         for path in (base + "/terminal.json", base + "/receipt.json",
                      "recreate-services/current.json", "recreate-services/verified.json"):
             self.records[path] = completed_raw
-        with patch.object(dev, "_floquet_diagnostic_successor_from_metadata",
-                          return_value=successor_record):
-            context = self.invoke()
+        context = self.invoke()
         self.assertEqual(
             context["reuse_state"]["operator_probe_environment_record"], successor_record
+        )
+        self.assertEqual(
+            successor_record["operator_probe_environment"]["FULLMAG_MODAL_SHIFTED_KSP_TYPE"],
+            "gmres",
         )
 
     def test_completed_removal_revalidates_real_native_proof_without_stopped_inspection(self):
@@ -1236,19 +1241,74 @@ class FloquetDiagnosticCliTests(unittest.TestCase):
                 recreate.assert_not_called()
                 resume.assert_not_called()
 
-    def test_recreate_recipe_keeps_the_optional_profile_last_and_omits_default(self):
+    def test_modal_shifted_ksp_selector_is_explicit_recreate_only_and_strict(self):
+        import contextlib
+        import io
+        import docker_dev as cli
+        import docker_volume_dev
+        required = [
+            "--repo-root", "D:/selected checkout", "recreate-volume",
+            "--attempt", "a" * 32, "--config-sha256", "b" * 64,
+            "--source-root", "D:/selected checkout", "--port", "3202",
+        ]
+        defaulted = cli._parser().parse_args(required)
+        self.assertIsNone(defaulted.modal_shifted_ksp_type)
+        for requested_type in ("gmres", "fgmres"):
+            parsed = cli._parser().parse_args(
+                required + ["--modal-shifted-ksp-type", requested_type]
+            )
+            self.assertEqual(parsed.modal_shifted_ksp_type, requested_type)
+        with self.assertRaises(SystemExit):
+            cli._parser().parse_args([
+                "--repo-root", "D:/selected checkout", "resume-volume",
+                "--attempt", "a" * 32, "--config-sha256", "b" * 64,
+                "--source-root", "D:/selected checkout", "--port", "3202",
+                "--modal-shifted-ksp-type", "gmres",
+            ])
+        for tail in (
+            ["--modal-shifted-ksp-type", "bicgstab"],
+            ["--modal-shifted-ksp-type", "gmres",
+             "--modal-shifted-ksp-type", "fgmres"],
+        ):
+            with self.subTest(tail=tail), self.assertRaises(SystemExit):
+                cli._parser().parse_args(required + tail)
+
+        base = required + ["--modal-shifted-ksp-type", "fgmres"]
+        conflicts = (
+            ["--resume-recreation", "c" * 32],
+            ["--completed-recreation-attempt", "c" * 32,
+             "--completed-recreation-sha256", "d" * 64],
+            ["--recovery-authorization", "verification/recovery.json"],
+        )
+        for conflict in conflicts:
+            with self.subTest(conflict=conflict), \
+                 contextlib.redirect_stderr(io.StringIO()), \
+                 patch.object(docker_volume_dev, "recreate") as recreate, \
+                 patch.object(docker_volume_dev, "resume_recreation") as resume:
+                self.assertEqual(cli.main(base + conflict), 2)
+                recreate.assert_not_called()
+                resume.assert_not_called()
+
+    def test_recreate_recipe_keeps_optional_profiles_last_and_omits_defaults(self):
         from pathlib import Path
         recipe = Path(__file__).resolve().parents[1].joinpath("justfile").read_text(
             encoding="utf-8"
         )
         line = next(line for line in recipe.splitlines()
                     if line.startswith("docker-dev-recreate-volume "))
-        self.assertTrue(line.endswith('floquet_diagnostics="":'))
+        self.assertTrue(line.endswith('modal_shifted_ksp_type="":'))
+        self.assertIn('floquet_diagnostics=""', line)
         command = recipe.split(line, 1)[1].splitlines()[1]
         self.assertIn('if floquet_diagnostics == "" { "" }', command)
         self.assertIn('--floquet-diagnostics " + quote(floquet_diagnostics)', command)
         for profile in ("disabled", "schur-action", "dense-oracle"):
             self.assertIn(f'floquet_diagnostics == "{profile}"', command)
+        self.assertIn('if modal_shifted_ksp_type == "" { "" }', command)
+        self.assertIn(
+            '--modal-shifted-ksp-type " + quote(modal_shifted_ksp_type)', command
+        )
+        for requested_type in ("gmres", "fgmres"):
+            self.assertIn(f'modal_shifted_ksp_type == "{requested_type}"', command)
 
 
 if __name__ == "__main__":

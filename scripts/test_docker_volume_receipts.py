@@ -115,6 +115,7 @@ class VolumeReceiptTests(IsolatedReceiptTests):
                 attempt="a" * 32,
                 config_sha256=hashlib.sha256(dev.canonical(document)).hexdigest(),
                 floquet_diagnostics="schur-action",
+                modal_shifted_ksp_type="fgmres",
             )
             previous = {
                 "state": "failed-confirmed",
@@ -135,10 +136,12 @@ class VolumeReceiptTests(IsolatedReceiptTests):
                  mock.patch.object(dev, "_operator_probe_record_from_retained",
                                    side_effect=BuildControlError("invalid retained probe pin")), \
                  mock.patch.object(dev, "_floquet_diagnostic_successor_record") as derive, \
+                 mock.patch.object(dev, "_modal_shifted_ksp_type_successor_record") as ksp_derive, \
                  mock.patch.object(dev, "compose_capture") as capture:
                 with self.assertRaisesRegex(BuildControlError, "invalid retained probe pin"):
                     dev._retained_operation(args, recreate_services=True)
             derive.assert_not_called()
+            ksp_derive.assert_not_called()
             capture.assert_not_called()
 
     def test_runtime_supervisor_accepts_only_fixed_provenance_locations(self):
@@ -329,6 +332,9 @@ class VolumeReceiptTests(IsolatedReceiptTests):
         schur_record, _ = dev._floquet_diagnostic_successor_record(
             dense_record, "schur-action"
         )
+        compose_record, _ = dev._modal_shifted_ksp_type_successor_record(
+            schur_record, "fgmres"
+        )
         disabled_record, _ = dev._floquet_diagnostic_successor_record(
             dense_record, "disabled"
         )
@@ -445,11 +451,11 @@ class VolumeReceiptTests(IsolatedReceiptTests):
             "package_root": "/opt/fullmag/package",
             "source_root": "/workspace/fullmag",
             "git_common_dir": "/workspace/fullmag/.git",
-            "operator_probe_environment": schur_record["operator_probe_environment"],
-            "operator_probe_environment_schema": schur_record[
+            "operator_probe_environment": compose_record["operator_probe_environment"],
+            "operator_probe_environment_schema": compose_record[
                 "operator_probe_environment_schema"
             ],
-            "operator_probe_environment_sha256": schur_record[
+            "operator_probe_environment_sha256": compose_record[
                 "operator_probe_environment_sha256"
             ],
         }
@@ -478,10 +484,160 @@ class VolumeReceiptTests(IsolatedReceiptTests):
         rendered_environment = configured["services"]["backend"]["environment"]
         self.assertNotIn(dense_flag, rendered_environment)
         self.assertEqual(rendered_environment[schur_flag], "1")
+        self.assertEqual(rendered_environment["FULLMAG_MODAL_SHIFTED_KSP_TYPE"], "fgmres")
         self.assertEqual(
             rendered_environment["FULLMAG_OPERATOR_PROBE_ENVIRONMENT_SHA256"],
-            schur_record["operator_probe_environment_sha256"],
+            compose_record["operator_probe_environment_sha256"],
         )
+
+    def test_modal_shifted_ksp_selection_preserves_and_replays_the_pinned_record(self):
+        import os
+        import docker_dev
+        import docker_volume_dev as dev
+        import fullmag_docker_runtime as runtime
+
+        ksp_flag = "FULLMAG_MODAL_SHIFTED_KSP_TYPE"
+        base_values = {
+            "FULLMAG_MIXED_P1_DEVICE": "gpu",
+            "FULLMAG_ARTIFACT_FIELD_STORAGE": "json",
+            "FULLMAG_MODAL_GMRES_RESTART": "30",
+            "FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC": "1",
+        }
+        legacy_record = dev._operator_probe_record(base_values)
+        preserved, no_selection = dev._modal_shifted_ksp_type_successor_record(
+            legacy_record, None
+        )
+        self.assertEqual(preserved, legacy_record)
+        self.assertIsNone(no_selection)
+
+        existing_type_record = dev._operator_probe_record(
+            {**base_values, ksp_flag: "fgmres"}
+        )
+        self.assertEqual(
+            dev._modal_shifted_ksp_type_successor_record(existing_type_record, None),
+            (existing_type_record, None),
+        )
+        for requested_type in ("gmres", "fgmres"):
+            with self.subTest(requested_type=requested_type):
+                successor, selection = dev._modal_shifted_ksp_type_successor_record(
+                    existing_type_record, requested_type
+                )
+                successor_values = successor["operator_probe_environment"]
+                self.assertEqual(successor_values[ksp_flag], requested_type)
+                self.assertEqual(
+                    {key: value for key, value in successor_values.items()
+                     if key != ksp_flag},
+                    base_values,
+                )
+                self.assertEqual(
+                    runtime._normalize_operator_probe_environment(successor_values),
+                    successor_values,
+                )
+                self.assertEqual(
+                    selection["old_operator_probe_environment_sha256"],
+                    existing_type_record["operator_probe_environment_sha256"],
+                )
+                self.assertEqual(selection["requested_type"], requested_type)
+                self.assertEqual(
+                    selection["new_operator_probe_environment_sha256"],
+                    successor["operator_probe_environment_sha256"],
+                )
+                with mock.patch.dict(
+                        os.environ, {ksp_flag: "fgmres", "UNRELATED_SECRET": "never-copy"},
+                        clear=True):
+                    self.assertEqual(
+                        dev._modal_shifted_ksp_type_successor_from_metadata(
+                            existing_type_record, selection
+                        ),
+                        successor,
+                    )
+
+        with mock.patch.dict(os.environ, {ksp_flag: "gmres"}, clear=True):
+            self.assertEqual(
+                dev._modal_shifted_ksp_type_successor_from_metadata(
+                    legacy_record, None
+                ),
+                legacy_record,
+            )
+        _, floquet_selection = dev._floquet_diagnostic_successor_record(
+            existing_type_record, "dense-oracle"
+        )
+        floquet_successor = dev._floquet_diagnostic_successor_from_metadata(
+            existing_type_record, floquet_selection
+        )
+        combined_successor, ksp_selection = dev._modal_shifted_ksp_type_successor_record(
+            floquet_successor, "gmres"
+        )
+        self.assertEqual(
+            ksp_selection["old_operator_probe_environment_sha256"],
+            floquet_successor["operator_probe_environment_sha256"],
+        )
+        self.assertEqual(
+            combined_successor["operator_probe_environment"][
+                "FULLMAG_FLOQUET_DENSE_ORACLE"
+            ],
+            "1",
+        )
+        self.assertNotIn(
+            "FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC",
+            combined_successor["operator_probe_environment"],
+        )
+        self.assertEqual(
+            dev._recreation_successor_operator_probe_record(
+                existing_type_record,
+                {"floquet_diagnostic_selection": floquet_selection,
+                 "modal_shifted_ksp_type_selection": ksp_selection},
+            ),
+            combined_successor,
+        )
+        preserved_intent = dev._recreation_operation_inputs(
+            "a" * 32, "b" * 64, existing_type_record
+        )
+        self.assertEqual(
+            {key: preserved_intent[key] for key in existing_type_record},
+            existing_type_record,
+        )
+        self.assertNotIn("modal_shifted_ksp_type_selection", preserved_intent)
+        self.assertNotIn("floquet_diagnostic_selection", preserved_intent)
+        selected_intent = dev._recreation_operation_inputs(
+            "a" * 32,
+            "b" * 64,
+            existing_type_record,
+            floquet_selection=floquet_selection,
+            modal_shifted_ksp_type_selection=ksp_selection,
+        )
+        self.assertEqual(
+            {key: selected_intent[key] for key in existing_type_record},
+            existing_type_record,
+        )
+        self.assertEqual(selected_intent["modal_shifted_ksp_type_selection"], ksp_selection)
+        self.assertEqual(selected_intent["floquet_diagnostic_selection"], floquet_selection)
+
+        changed_selection = {
+            **ksp_selection,
+            "new_operator_probe_environment_sha256": "0" * 64,
+        }
+        with self.assertRaisesRegex(BuildControlError, "selection hashes"):
+            dev._modal_shifted_ksp_type_successor_from_metadata(
+                floquet_successor, changed_selection
+            )
+        for invalid in ("bicgstab", "GMRES", " gmres"):
+            with self.subTest(invalid=invalid), self.assertRaises(BuildControlError):
+                dev._modal_shifted_ksp_type_successor_record(
+                    existing_type_record, invalid
+                )
+        with self.assertRaises(docker_dev.DirectDockerError):
+            docker_dev._normalize_operator_probe_environment(
+                {**base_values, "FULLMAG_MODAL_SHIFTED_KSP_TYPE": "bicgstab"}
+            )
+        with self.assertRaisesRegex(BuildControlError, "malformed"):
+            dev._modal_shifted_ksp_type_successor_from_metadata(
+                legacy_record, {**selection, "extra": "untrusted"}
+            )
+        with self.assertRaisesRegex(BuildControlError, "exactly"):
+            dev._operator_probe_record(
+                {**base_values, "FULLMAG_MODAL_SHIFTED_KSP_UNKNOWN": "fgmres"}
+            )
 
     def test_previous_package_is_ignored_until_current_start_handoff(self):
         import json

@@ -1582,6 +1582,98 @@ def _floquet_diagnostic_successor_from_metadata(previous_record, selection):
     return successor_record
 
 
+_MODAL_SHIFTED_KSP_TYPE_SELECTION_SCHEMA = "fullmag.modal-shifted-ksp-type-selection.v1"
+
+
+def _modal_shifted_ksp_type_successor_record(previous_record, requested_type):
+    """Derive and pin only the explicitly selected successor shifted-KSP type."""
+
+    from docker_dev import _operator_probe_environment_for_modal_shifted_ksp_type
+
+    old_record = _operator_probe_record_from_fields(
+        previous_record, label="retained operation"
+    )
+    if requested_type is None:
+        return old_record, None
+    try:
+        successor_values = _operator_probe_environment_for_modal_shifted_ksp_type(
+            old_record["operator_probe_environment"], requested_type
+        )
+        successor_record = _operator_probe_record(successor_values)
+    except Exception as error:
+        raise BuildControlError("Invalid modal shifted KSP type: " + str(error)) from error
+    selection = {
+        "schema": _MODAL_SHIFTED_KSP_TYPE_SELECTION_SCHEMA,
+        "requested_type": requested_type,
+        "old_operator_probe_environment_sha256": (
+            old_record["operator_probe_environment_sha256"]
+        ),
+        "new_operator_probe_environment_sha256": (
+            successor_record["operator_probe_environment_sha256"]
+        ),
+    }
+    return successor_record, selection
+
+
+def _modal_shifted_ksp_type_successor_from_metadata(previous_record, selection):
+    """Rebuild the selected shifted-KSP type from immutable recreation intent."""
+
+    if selection is None:
+        return previous_record
+    old_record = _operator_probe_record_from_fields(
+        previous_record, label="retained operation"
+    )
+    if (not isinstance(selection, Mapping)
+            or set(selection) != {
+                "schema", "requested_type",
+                "old_operator_probe_environment_sha256",
+                "new_operator_probe_environment_sha256",
+            }
+            or selection.get("schema") != _MODAL_SHIFTED_KSP_TYPE_SELECTION_SCHEMA):
+        raise BuildControlError("Modal shifted KSP selection metadata is malformed")
+    successor_record, expected_selection = _modal_shifted_ksp_type_successor_record(
+        old_record, selection.get("requested_type")
+    )
+    if selection != expected_selection:
+        raise BuildControlError("Modal shifted KSP selection hashes differ from retained records")
+    return successor_record
+
+
+def _recreation_successor_operator_probe_record(previous_record, operation_inputs):
+    """Rebuild the successor through the immutable, backward-compatible selectors."""
+
+    inputs = operation_inputs if isinstance(operation_inputs, Mapping) else {}
+    floquet_record = _floquet_diagnostic_successor_from_metadata(
+        previous_record, inputs.get("floquet_diagnostic_selection")
+    )
+    return _modal_shifted_ksp_type_successor_from_metadata(
+        floquet_record, inputs.get("modal_shifted_ksp_type_selection")
+    )
+
+
+def _recreation_operation_inputs(
+    attempt, config_sha256, old_operator_probe_record, *,
+    floquet_selection=None, modal_shifted_ksp_type_selection=None,
+    helper_source_binding=None, offline_attempt=None,
+):
+    """Keep the old record pinned while persisting optional successor intent."""
+
+    inputs = {
+        "attempt": attempt,
+        "config_sha256": config_sha256,
+        **old_operator_probe_record,
+    }
+    if floquet_selection is not None:
+        inputs["floquet_diagnostic_selection"] = floquet_selection
+    if modal_shifted_ksp_type_selection is not None:
+        inputs["modal_shifted_ksp_type_selection"] = modal_shifted_ksp_type_selection
+    if helper_source_binding is not None:
+        inputs["helper_source"] = helper_source_binding
+    if offline_attempt is not None:
+        inputs["offline_reconciliation"] = offline_attempt
+    return inputs
+
+
 def _operator_probe_record_for_start(reuse_state, explicit_record=None):
     """Choose a start record without rereading host controls for retained groups."""
 
@@ -5743,9 +5835,13 @@ def _validate_removed_recreation_proof(
     operation_inputs = operation_terminal.get("inputs")
     selection = (operation_inputs.get("floquet_diagnostic_selection")
                  if isinstance(operation_inputs, Mapping) else None)
-    _floquet_diagnostic_successor_from_metadata(operator_probe_record, selection)
+    ksp_selection = (operation_inputs.get("modal_shifted_ksp_type_selection")
+                     if isinstance(operation_inputs, Mapping) else None)
+    _recreation_successor_operator_probe_record(operator_probe_record, operation_inputs)
     if selection is not None:
         expected_operation_inputs["floquet_diagnostic_selection"] = selection
+    if ksp_selection is not None:
+        expected_operation_inputs["modal_shifted_ksp_type_selection"] = ksp_selection
     try:
         import docker_helper_source as helper_source
         stored_helper_source = helper_source.compare_operation_binding(
@@ -6046,10 +6142,8 @@ def _validate_recreation_resume_records(args, control, selected, identity, *, ex
     )
     if expected_proof is not None and proof != expected_proof:
         raise BuildControlError("Recreation resume evidence changed before the new start admission")
-    successor_operator_probe_record = _floquet_diagnostic_successor_from_metadata(
-        operator_probe_record,
-        operation_terminal.get("inputs", {}).get("floquet_diagnostic_selection")
-        if isinstance(operation_terminal.get("inputs"), Mapping) else None,
+    successor_operator_probe_record = _recreation_successor_operator_probe_record(
+        operator_probe_record, operation_terminal.get("inputs")
     )
     if current_raw != canonical(current) + b"\n" or current != previous:
         _validate_failed_prestart_successor(
@@ -6685,10 +6779,8 @@ def _completed_recreation_start_context(control, args, selected, layout):
         operator_probe_record=operator_probe_record,
     )
     completed_inputs = completed.get("inputs")
-    selection = (completed_inputs.get("floquet_diagnostic_selection")
-                 if isinstance(completed_inputs, Mapping) else None)
-    successor_operator_probe_record = _floquet_diagnostic_successor_from_metadata(
-        operator_probe_record, selection
+    successor_operator_probe_record = _recreation_successor_operator_probe_record(
+        operator_probe_record, completed_inputs
     )
     from docker_volume_drained_successor import DrainedSuccessorContext
     from docker_volume_startup_diagnostic_restart import StartupDiagnosticStopContext
@@ -7102,8 +7194,12 @@ def _retained_operation(
     resume_recreation_id=None, refresh_frontend_service=False,
 ):
     """Resume one exact retained start; a frontend-only recovery never restarts the backend."""
-    from docker_dev import FLOQUET_DIAGNOSTIC_PROFILES, _select_source, _compose_identity
+    from docker_dev import (
+        FLOQUET_DIAGNOSTIC_PROFILES, MODAL_SHIFTED_KSP_TYPES,
+        _select_source, _compose_identity,
+    )
     requested_floquet_profile = getattr(args, "floquet_diagnostics", None)
+    requested_modal_shifted_ksp_type = getattr(args, "modal_shifted_ksp_type", None)
     if requested_floquet_profile is not None:
         if (not isinstance(requested_floquet_profile, str)
                 or requested_floquet_profile not in FLOQUET_DIAGNOSTIC_PROFILES):
@@ -7114,6 +7210,17 @@ def _retained_operation(
                 or getattr(args, "recovery_authorization", None) is not None):
             raise BuildControlError(
                 "--floquet-diagnostics is allowed only on a new retained recreation start"
+            )
+    if requested_modal_shifted_ksp_type is not None:
+        if (not isinstance(requested_modal_shifted_ksp_type, str)
+                or requested_modal_shifted_ksp_type not in MODAL_SHIFTED_KSP_TYPES):
+            raise BuildControlError("Unsupported --modal-shifted-ksp-type solver type")
+        if (not recreate_services or resume_recreation_id is not None
+                or getattr(args, "completed_recreation_attempt", None)
+                or getattr(args, "completed_recreation_sha256", None)
+                or getattr(args, "recovery_authorization", None) is not None):
+            raise BuildControlError(
+                "--modal-shifted-ksp-type is allowed only on a new retained recreation start"
             )
     require_host()
     import docker_helper_source as helper_source
@@ -7783,14 +7890,20 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     operator_probe_record, requested_floquet_profile
                 )
             )
-        recreate_inputs = {"attempt": args.attempt, "config_sha256": args.config_sha256,
-                           **operator_probe_record}
-        if floquet_diagnostic_selection is not None:
-            recreate_inputs["floquet_diagnostic_selection"] = floquet_diagnostic_selection
-        if helper_source_binding is not None:
-            recreate_inputs["helper_source"] = helper_source_binding
-        if offline_attempt is not None:
-            recreate_inputs["offline_reconciliation"] = offline_attempt
+        successor_operator_probe_record, modal_shifted_ksp_type_selection = (
+            _modal_shifted_ksp_type_successor_record(
+                successor_operator_probe_record, requested_modal_shifted_ksp_type
+            )
+        )
+        recreate_inputs = _recreation_operation_inputs(
+            args.attempt,
+            args.config_sha256,
+            operator_probe_record,
+            floquet_selection=floquet_diagnostic_selection,
+            modal_shifted_ksp_type_selection=modal_shifted_ksp_type_selection,
+            helper_source_binding=helper_source_binding,
+            offline_attempt=offline_attempt,
+        )
         with control.operation("recreate-services", recreate_inputs) as operation:
             if offline_attempt is not None:
                 if not validate_for_recreate(
