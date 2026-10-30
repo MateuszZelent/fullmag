@@ -3227,14 +3227,14 @@ fn execute_accepted_modal_worker_start(
         let Some(output) = output else {
             return Ok(AcceptedRunnerExecution { terminal_publication: None, status: RunStatus::Cancelled, completed_step_count: 0,
                 outputs: vec![], attempt_output_dir: attempt.clone(), recovered_from_receipt: false,
-                accepted_state_ref: None, observation_source: None });
+                accepted_state_ref: None, observation_source: None, terminal_stats: None });
         };
         if let Some(storage) = &mut storage { storage.finish(true, &attempt)?; }
         persist_completed_worker_execution(store, &attempt, &identity, &study.outputs, RunStatus::Completed,
-            1, std::slice::from_ref(&output), None, None)?;
+            1, std::slice::from_ref(&output), None, None, None)?;
         Ok(AcceptedRunnerExecution { terminal_publication: None, status: RunStatus::Completed, completed_step_count: 1,
             outputs: vec![output], attempt_output_dir: attempt.clone(), recovered_from_receipt: false,
-            accepted_state_ref: None, observation_source: None })
+            accepted_state_ref: None, observation_source: None, terminal_stats: None })
     })();
     if let Some(storage) = &mut storage {
         match &execution { Ok(result) if result.status == RunStatus::Cancelled => storage.note_outcome("cancelled", None),
