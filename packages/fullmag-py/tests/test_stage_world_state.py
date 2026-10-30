@@ -10,6 +10,7 @@ from fullmag.runtime.scene_document import build_scene_document_from_builder
 from fullmag.runtime.script_builder import (
     export_builder_draft,
     export_study_pipeline_document,
+    render_loaded_problem_as_script,
     render_scene_document_as_script,
 )
 
@@ -28,6 +29,17 @@ film.alpha = 0.02
 film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 study.exchange()
 study.solver(integrator="rk45", fix_dt=1e-13)
+"""
+
+SECOND_MAGNET = """
+study.universe(mode="manual", size=(16e-9, 4e-9, 2e-9), center=(4e-9, 0.0, 0.0))
+other = study.geometry(
+    fm.Translate(fm.Box(size=(8e-9, 4e-9, 2e-9)), (8e-9, 0.0, 0.0)), name="other"
+)
+other.Ms = 800e3
+other.Aex = 13e-12
+other.alpha = 0.05
+other.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 """
 
 
@@ -92,6 +104,81 @@ def test_relax_alpha_is_not_a_material_change(tmp_path):
         """,
     )
     assert payloads["relax"]["relax_alpha"] == "1"
+
+
+@pytest.mark.parametrize(
+    ("changes", "magnet"),
+    [
+        ("film.alpha = 0.03", "film"),
+        ("other.alpha = 0.07", "other"),
+        ("film.alpha = 0.03\nother.alpha = 0.07", "film"),
+    ],
+)
+@pytest.mark.parametrize("exporter", [export_study_pipeline_document, render_loaded_problem_as_script])
+def test_nonuniform_relax_material_damping_changes_are_rejected(tmp_path, changes, magnet, exporter):
+    script = tmp_path / "stages.py"
+    script.write_text(
+        textwrap.dedent(HEADER)
+        + SECOND_MAGNET
+        + 'fm.relax(relax_alpha=None, solver="rk45", dt=1e-13, tolT=1e-5, max_steps=1000)\n'
+        + changes
+        + "\nfm.run(1e-12)\n",
+        encoding="utf-8",
+    )
+    loaded = load_problem_from_script(script)
+    with pytest.raises(ValueError, match=rf"material parameters of '{magnet}' \(alpha\)"):
+        exporter(loaded)
+
+
+@pytest.mark.parametrize("relax_alpha", [0.3, 0.123456789012345])
+def test_uniform_relax_alpha_survives_later_material_damping_changes(tmp_path, relax_alpha):
+    payloads = _pipeline(
+        tmp_path,
+        SECOND_MAGNET
+        + f'fm.relax(relax_alpha={relax_alpha!r}, solver="rk45", dt=1e-13, tolT=1e-5, max_steps=1000)\n'
+        + "film.alpha = 0.03\nother.alpha = 0.07\nfm.run(1e-12)\n",
+    )
+    assert float(payloads["relax"]["relax_alpha"]) == relax_alpha
+    assert "relax_alpha" not in payloads["run"]
+    loaded = load_problem_from_script(tmp_path / "stages.py")
+    rendered = tmp_path / "rendered.py"
+    rendered.write_text(render_loaded_problem_as_script(loaded), encoding="utf-8")
+    reloaded = load_problem_from_script(rendered)
+    assert {magnet.material.alpha for magnet in reloaded.stages[0].problem.magnets} == {relax_alpha}
+    assert {
+        magnet.name: magnet.material.alpha for magnet in reloaded.stages[1].problem.magnets
+    } == {"film": 0.03, "other": 0.07}
+
+
+def test_run_material_damping_change_after_relax_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match=r"material parameters of 'film' \(alpha\)"):
+        _pipeline(
+            tmp_path,
+            SECOND_MAGNET
+            + textwrap.dedent(
+                """
+                fm.relax(relax_alpha=0.3, tolT=1e-5, max_steps=1000)
+                fm.run(1e-12)
+                film.alpha = 0.03
+                """
+            ),
+        )
+
+
+@pytest.mark.parametrize("exporter", [export_study_pipeline_document, render_loaded_problem_as_script])
+def test_zero_relax_material_damping_changes_are_rejected(tmp_path, exporter):
+    script = tmp_path / "stages.py"
+    script.write_text(
+        textwrap.dedent(HEADER)
+        + SECOND_MAGNET
+        + "film.alpha = 0.0\nother.alpha = 0.0\n"
+        + 'fm.relax(relax_alpha=None, solver="rk45", dt=1e-13, tolT=1e-5, max_steps=1000)\n'
+        + "film.alpha = 0.03\nother.alpha = 0.07\nfm.run(1e-12)\n",
+        encoding="utf-8",
+    )
+    loaded = load_problem_from_script(script)
+    with pytest.raises(ValueError, match=r"material parameters of 'film' \(alpha\)"):
+        exporter(loaded)
 
 
 def test_relax_alpha_equal_to_the_material_damping_exports_no_override(tmp_path):

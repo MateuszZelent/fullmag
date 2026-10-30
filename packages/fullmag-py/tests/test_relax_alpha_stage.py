@@ -71,11 +71,21 @@ def test_relax_alpha_applies_to_the_relax_stage_only(tmp_path):
     ("relax_arguments", "expected_alpha", "rendered_argument"),
     [
         ('relax_alpha=0.3, solver="rk45", dt=1e-13, ', 0.3, "relax_alpha=0.3"),
+        (
+            'relax_alpha=0.123456789012345, solver="rk45", dt=1e-13, ',
+            0.123456789012345,
+            "relax_alpha=0.123456789012345",
+        ),
+        (
+            'relax_alpha=1.0000000000000002, solver="rk45", dt=1e-13, ',
+            1.0000000000000002,
+            "relax_alpha=1.0000000000000002",
+        ),
         ('relax_alpha=1.0, solver="rk45", dt=1e-13, ', 1.0, None),
         ('solver="rk45", dt=1e-13, ', 1.0, None),
         ('relax_alpha=None, solver="rk45", dt=1e-13, ', None, "relax_alpha=None"),
     ],
-    ids=["custom", "explicit-default", "default", "material"],
+    ids=["custom", "precise", "near-default", "explicit-default", "default", "material"],
 )
 def test_relax_alpha_survives_script_roundtrip(
     tmp_path, render_path, relax_arguments, expected_alpha, rendered_argument
@@ -116,6 +126,40 @@ def test_relax_alpha_survives_script_roundtrip(
         assert "relax_alpha" not in relax_line
     else:
         assert rendered_argument in relax_line
+
+
+@pytest.mark.parametrize("render_path", ["scene", "loaded"])
+@pytest.mark.parametrize("material_alpha, relax_alpha", [(0.02, 0.02), (0.02, None), (0.0, None)])
+def test_uniform_material_damping_survives_script_roundtrip(
+    tmp_path, render_path, material_alpha, relax_alpha
+):
+    source = tmp_path / "source.py"
+    source.write_text(
+        textwrap.dedent(SCRIPT)
+        .replace("left.alpha = 0.01", f"left.alpha = {material_alpha!r}")
+        .replace("right.alpha = 0.05", f"right.alpha = {material_alpha!r}")
+        .replace(
+            "fm.relax(",
+            f'fm.relax(relax_alpha={relax_alpha!r}, solver="rk45", dt=1e-13, ',
+        ),
+        encoding="utf-8",
+    )
+    loaded = load_problem_from_script(source)
+    if render_path == "scene":
+        scene = build_scene_document_from_builder(export_builder_draft(loaded))
+        rendered = render_scene_document_as_script(scene)
+    else:
+        rendered = render_loaded_problem_as_script(loaded)
+    target = tmp_path / "rendered.py"
+    target.write_text(rendered, encoding="utf-8")
+    reloaded = load_problem_from_script(target)
+    expected = {"left": material_alpha, "right": material_alpha}
+    assert _alphas(reloaded.stages[0].problem) == expected
+    assert _alphas(reloaded.stages[1].problem) == expected
+    assert _alphas(reloaded.pipeline_base_problem()) == expected
+    document = export_study_pipeline_document(reloaded)
+    assert document is not None
+    assert document["nodes"][0]["payload"].get("relax_alpha") is None
 
 
 @pytest.mark.parametrize("algorithm", ["projected_gradient_bb", "nonlinear_cg"])

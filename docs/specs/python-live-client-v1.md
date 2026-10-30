@@ -225,8 +225,21 @@ przez `fullmag skrypt.py` jak dziś (`capture`).
   differs from that problem carries it as `external_field` (tesla, 3 numbers;
   `[0, 0, 0]` when no field was set yet). The override applies to that stage only.
   Changing `b_ext` before an eigenmodes or frequency-response stage, or
-  changing material parameters between stages (other than `relax_alpha`), is
+  changing material parameters between stages beyond a representable
+  `relax_alpha` override, is
   rejected at export instead of silently using the end-of-script values.
+  An `llg_overdamped` relax stage can carry a positive scalar `relax_alpha` only when
+  it exactly matches every magnet's damping in that stage. The scalar is
+  omitted only when it also matches every magnet's end-of-script damping.
+  `relax_alpha=None` keeps call-time material damping; nonuniform damping
+  that differs from the end-of-script values is rejected with the magnet
+  name and `alpha` in the error. Missing or null pipeline `relax_alpha`
+  keeps material damping. Python export preserves this behavior, including
+  explicit `relax_alpha=None` when needed because the DSL default is `1.0`.
+  Uniform zero material damping also requires `None`; a scalar zero override
+  is not supported. Direct Python export applies the same world-state checks
+  as pipeline export. Both Python render paths preserve the scalar's full
+  floating-point value.
   Rendering a SceneDocument or a loaded problem back to Python (workspace
   capture, canonical export) emits `fm.b_ext(...)` before each stage whose
   field differs and restores the end-of-script field after the last stage, so

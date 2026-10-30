@@ -1410,6 +1410,11 @@ def _scene_antenna_stage_sequence(builder: Mapping[str, object]) -> list[dict[st
                     stage = dict(payload)
                     stage["kind"] = node["stage_kind"]
                     stage.setdefault("stage_id", node["id"])
+                    if stage["kind"] == "relax" and (
+                        stage.get("algorithm") or stage.get("relax_algorithm") or "llg_overdamped"
+                    ) == "llg_overdamped":
+                        # Pipeline omission keeps material damping; DSL omission uses 1.0.
+                        stage.setdefault("relax_alpha", None)
                     stages.append(stage)
                 else:
                     raise ValueError("scene pipeline requires the shared study pipeline materializer")
@@ -2856,9 +2861,13 @@ def _bind_stage_world_state(
     stage_kind = _infer_pipeline_stage_kind(payload)
     study = stage.problem.study
     relax_alpha_stage = isinstance(study, Relaxation) and study.algorithm == "llg_overdamped"
-    _reject_stage_material_changes(stage, base_problem, ignore_alpha=relax_alpha_stage)
-    if relax_alpha_stage and _stage_damping_matches_base(stage, base_problem):
-        # Only an actual relax(relax_alpha=...) override needs to travel.
+    relax_alpha = _finite_number(payload.get("relax_alpha")) if relax_alpha_stage else None
+    ignore_alpha = relax_alpha is not None and all(
+        magnet.material.alpha == relax_alpha for magnet in stage.problem.magnets
+    )
+    _reject_stage_material_changes(stage, base_problem, ignore_alpha=ignore_alpha)
+    if ignore_alpha and _stage_damping_matches_base(stage, base_problem):
+        # Omit redundant scalars, but keep None for the Python round trip.
         payload.pop("relax_alpha", None)
     if stage_kind == "hysteresis":
         # Every hysteresis point sets its own field.
@@ -3141,8 +3150,10 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
         # export it so pipeline materialization applies it to this stage only.
         relax_alphas = {float(magnet.material.alpha) for magnet in stage.problem.magnets}
         if study.algorithm == "llg_overdamped":
+            # The pipeline accepts only positive scalar damping overrides.
             payload["relax_alpha"] = (
-                _text_number(relax_alphas.pop()) if len(relax_alphas) == 1 else None
+                _py_float_roundtrip(relax_alphas.pop()).removesuffix(".0")
+                if len(relax_alphas) == 1 and min(relax_alphas) > 0.0 else None
             )
         if study.dynamics is not None:
             payload.update(
@@ -8574,6 +8585,9 @@ def _render_stages(
         if stage.problem.study is None:
             continue
         study = stage.problem.study
+        if isinstance(study, (FieldOnly, AntennaFieldSolve)):
+            continue
+        _bind_stage_world_state(_export_stage_draft(stage), stage, base_problem)
         stage_override = _stage_override_for(stage_overrides, index=index, stage=stage)
         stage_field = _problem_external_field(stage.problem)
         target_field = rendered_base_field if stage_field == script_base_field else stage_field
@@ -8586,8 +8600,6 @@ def _render_stages(
             lines.append(
                 f"study.stages.add_hysteresis_sweep({', '.join(_render_hysteresis_stage_args(study))})"
             )
-            continue
-        if isinstance(study, (FieldOnly, AntennaFieldSolve)):
             continue
         stage_dynamics = stage.problem.study.dynamics
         dynamics_signature = (
@@ -8929,7 +8941,7 @@ def _render_stages(
                     _finite_number(_export_stage_draft(stage).get("relax_alpha", 1.0)),
                 )
                 if relax_alpha != 1.0:
-                    call_parts.append(f"relax_alpha={_py_literal(relax_alpha)}")
+                    call_parts.append(f"relax_alpha={_py_parameter_literal(relax_alpha)}")
                 if relax_solver and relax_solver not in {"auto", "rk23"}:
                     call_parts.append(f"solver={_py_repr(relax_solver)}")
                 if relax_fixed_timestep is not None:
