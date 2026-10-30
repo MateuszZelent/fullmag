@@ -361,19 +361,20 @@ Deferred.
 
 ### 4.1 Python API surface
 
-Current API only allows
+The embedded Bogacki–Shampine method of order 3(2) has canonical token `rk23`.
+`rk32` and `bs23` are authoring aliases of that same tableau; model validation
+and Python export/ProblemIR normalize them to `rk23`. They do not advertise a
+second method or broaden any backend's execution capability. In particular,
+the staged multilayer adaptive gate described above remains closed until its
+native acceptance/rejection lifecycle is implemented and qualified.
 
-```python
-fm.LLG(integrator="heun", fixed_timestep=...)
-```
-
-Recommended extension:
+The public model form is:
 
 ```python
 fm.LLG(
-    integrator="dopri54",   # or "ssprk3", "rk4", "verner65"
+    integrator="rk32",  # exported as canonical "rk23"
     fixed_timestep=None,
-    adaptive=fm.AdaptiveTimestep(
+    adaptive_timestep=fm.AdaptiveTimestep(
         atol=1e-5,
         rtol=1e-4,
         dt_initial=1e-15,
@@ -388,6 +389,10 @@ fm.LLG(
 ```
 
 The public surface should not expose method-specific tableau coefficients.
+For `study.solver`, the same alias can be used with `dt_initial` and `max_err`;
+`fix_dt` remains mutually exclusive with the adaptive controls. Damping-only
+LLG relaxation uses this integrator with precession disabled and its own
+relaxation clock; it does not advance the physical time-domain clock.
 
 ### 4.2 ProblemIR representation
 
