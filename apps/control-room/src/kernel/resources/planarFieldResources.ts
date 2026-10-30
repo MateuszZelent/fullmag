@@ -324,6 +324,9 @@ export function usePlanarFieldMetaResource(
     [api, quantityId, source, stableQuery],
   );
   return useResource<PlanarFieldMetaResource | null>({
+    // The 2D stage reports planar failures inline; a toast would repeat
+    // them with every revision-scoped resource key.
+    notifyOnError: false,
     enabled: options.enabled !== false && sessionIdentity !== null,
     load,
     resourceKey: sessionIdentity
@@ -379,6 +382,7 @@ export function usePlanarFieldBinaryResource(
     [kind, resourceKey],
   );
   return useResource<ArrayBuffer | null>({
+    notifyOnError: false,
     enabled: options.enabled !== false && sessionIdentity !== null,
     load,
     resolveRevision,
@@ -424,6 +428,7 @@ export function usePlanarScalarResource(
     [resourceKey],
   );
   return useResource<PlanarScalarResource | null>({
+    notifyOnError: false,
     enabled: options.enabled !== false && sessionIdentity !== null,
     load,
     resolveRevision,
@@ -569,6 +574,7 @@ export function usePlanarProbeResource(
     [api, quantityId, source, stableQuery],
   );
   return useResource<PlanarFieldProbeResource | null>({
+    notifyOnError: false,
     enabled: options.enabled !== false && sessionIdentity !== null,
     load,
     resourceKey,
@@ -606,6 +612,7 @@ export function usePlanarProfileResource(
     [api, quantityId, source, stableQuery],
   );
   return useResource<PlanarFieldProfileResource | null>({
+    notifyOnError: false,
     enabled: options.enabled !== false && sessionIdentity !== null && stableQuery !== null,
     load,
     resourceKey,

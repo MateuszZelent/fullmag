@@ -6,6 +6,7 @@ import {
   useId,
   useMemo,
   useRef,
+  useState,
   useSyncExternalStore,
   type RefObject,
 } from "react";
@@ -614,6 +615,7 @@ function useVectorGlyphBuild({
   colorsOverride,
   headRadiusRatio,
   invalidate,
+  retentionKey,
   segments,
   shaftRadiusRatio,
   tracker,
@@ -625,6 +627,8 @@ function useVectorGlyphBuild({
   colorsOverride?: Float32Array | null;
   headRadiusRatio: number;
   invalidate: () => void;
+  /** Group or carrier whose last displayed build may bridge a refresh. */
+  retentionKey: string | null;
   segments: Float32Array | null;
   shaftRadiusRatio: number;
   tracker: Viewport3DResourceTracker;
@@ -801,8 +805,25 @@ function useVectorGlyphBuild({
     };
   }, [buildReference, cache, visibleCacheKey]);
 
-  return visibleResult
-    ? { buildKey: visibleCacheKey ?? normalizedBuildKey, result: visibleResult }
+  // The layer is mounted only while vectors are shown, so missing segments or
+  // a pending worker build are a refresh gap: keep the last displayed glyphs of
+  // the same group or carrier instead of unmounting the instanced meshes.
+  const [lastShown, setLastShown] = useState<{
+    build: { buildKey: string | null; result: VectorGlyphBuildResult };
+    retentionKey: string | null;
+  } | null>(null);
+  const shownBuildKey = visibleCacheKey ?? normalizedBuildKey;
+  if (
+    visibleResult &&
+    (lastShown?.build.result !== visibleResult ||
+      lastShown.build.buildKey !== shownBuildKey ||
+      lastShown.retentionKey !== retentionKey)
+  ) {
+    setLastShown({ build: { buildKey: shownBuildKey, result: visibleResult }, retentionKey });
+  }
+  if (visibleResult) return { buildKey: shownBuildKey, result: visibleResult };
+  return retentionKey !== null && lastShown?.retentionKey === retentionKey
+    ? lastShown.build
     : null;
 }
 
@@ -1126,6 +1147,7 @@ export function VectorFieldLayer({
     colorsOverride: glyphColorsOverride,
     headRadiusRatio: resolvedStyle.headRadiusRatio,
     invalidate,
+    retentionKey: buildReference?.groupKey ?? carrierId ?? null,
     segments,
     shaftRadiusRatio: resolvedStyle.shaftRadiusRatio,
     tracker,
