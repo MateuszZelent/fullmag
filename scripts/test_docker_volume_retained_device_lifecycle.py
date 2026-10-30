@@ -138,7 +138,14 @@ class RetainedDeviceLifecycleTests(unittest.TestCase):
         for observed in ('gpu', 'cpu'):
             with self.subTest(observed=observed), tempfile.TemporaryDirectory() as temporary:
                 source = Path(temporary)
-                reuse = {'state': source / 'state', 'operator_probe_environment_record': {}}
+                retained_operator_probe_record = dev._operator_probe_record({
+                    'FULLMAG_MIXED_P1_DEVICE': 'gpu',
+                    'FULLMAG_ARTIFACT_FIELD_STORAGE': 'json',
+                })
+                reuse = {
+                    'state': source / 'state',
+                    'operator_probe_environment_record': retained_operator_probe_record,
+                }
                 args = SimpleNamespace(
                     repo_root=source, source_root=source, port=3203, profile='dev', image=None,
                     toolchain_image=None, source_manifest=None, include_untracked=None,
@@ -162,7 +169,10 @@ class RetainedDeviceLifecycleTests(unittest.TestCase):
                     mock.patch.object(dev, 'local_volume'),
                     mock.patch.object(docker_dev, '_assert_no_running_fullmag'),
                     mock.patch.object(runtime, 'assert_loopback_port_available'),
-                    mock.patch.object(dev, '_operator_probe_record_from_fields', return_value={}),
+                    mock.patch.object(
+                        dev, '_operator_probe_record_from_fields',
+                        return_value=retained_operator_probe_record,
+                    ),
                     mock.patch.object(dev, 'build_volume_toolchain', return_value={
                         'inputs': {'build_args': {'FULLMAG_CUDA_BASE_IMAGE': 'image'}}}),
                     mock.patch.object(dev, 'BuildControl', return_value=control),
