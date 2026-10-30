@@ -2081,6 +2081,76 @@ mod tests {
     }
 
     #[test]
+    fn accepted_flat_default_autosave_survives_scene_capture_and_compilation() {
+        let root = repo_root();
+        let workspace = tempfile::tempdir().unwrap();
+        let path = workspace.path().join("flat_default_outputs.py");
+        fs::write(&path, r#"import fullmag as fm
+fm.engine("fdm")
+fm.device("cpu", precision="double")
+fm.cell(5e-9, 5e-9, 5e-9)
+body = fm.geometry(fm.Box(40e-9, 40e-9, 10e-9), name="body")
+body.Ms = 800e3
+body.Aex = 13e-12
+body.alpha = 0.05
+body.m = fm.texture.uniform(1, 0, 0)
+fm.run(1e-11)
+"#).unwrap();
+        let capture = capture_startup_script_scene(&root, workspace.path(), &path)
+            .expect("implicit flat output defaults must remain capturable");
+        let mut scene: SceneDocument = serde_json::from_value(capture.scene.clone().unwrap()).unwrap();
+        let pipeline = serde_json::to_value(scene.study.study_pipeline.as_ref().unwrap()).unwrap();
+        let nodes = pipeline["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 3);
+        assert_eq!(nodes[0]["stage_kind"], "autosave");
+        assert_eq!(nodes[1]["stage_kind"], "autosave");
+        assert_eq!(nodes[2]["stage_kind"], "run");
+        let run_id = nodes[2]["id"].as_str().unwrap().to_owned();
+        let expected_outputs = serde_json::json!([
+            {"kind":"field", "name":"m", "every_seconds":1e-12},
+            {"kind":"scalar", "name":"E_total", "every_seconds":1e-12},
+        ]);
+        assert_eq!(serde_json::json!([nodes[0]["payload"]["output"], nodes[1]["payload"]["output"]]), expected_outputs);
+
+        let profile = fullmag_application::legacy_live_execution_profile();
+        scene.study.execution_profile = Some(profile.clone());
+        let reference = fullmag_authoring::StudyExecutionProfileReference {
+            profile_id: profile.profile_id.clone(), version: profile.version.clone(),
+        };
+        let request = fullmag_application::RequestedExecution {
+            backend: "fdm".into(), device: "cpu".into(), precision: "double".into(),
+            mode: "strict".into(), minimum_resources: None,
+        };
+        let config = scene_document_to_authored_script_config_with_asset_root(
+            &root, workspace.path(), None, &scene, &request,
+        ).expect("Scene autosave actions must survive the actual Python renderer");
+        assert!(config.stages.is_empty(), "canonical pipeline owns stage expansion");
+        let migration = fullmag_application::migrate_legacy_live_execution(
+            &config.ir, &request, fullmag_ir::ExecutionOriginKindIR::Study,
+            "live.scene.study.legacy_execution.flat_defaults",
+        ).unwrap();
+        let accepted = fullmag_application::compile_accepted_closed_loop_pipeline(
+            config, "study:flat-autosave-capture".into(), scene.revision,
+            reference, vec![migration.layer], capture.manifest.clone(),
+            |_, _| Ok(profile.clone()), fullmag_ir::configure_project_autosave_policy,
+        ).expect("configuration actions must not become extra accepted executions");
+        assert_eq!(accepted.study.steps.len(), 1);
+        let problem = accepted.catalog.entries()[0].problem();
+        assert_eq!(problem.problem_meta.runtime_metadata["active_stage_id"], run_id);
+        assert_eq!(serde_json::to_value(&problem.study.sampling().outputs).unwrap(), expected_outputs);
+        let source = fullmag_application::validate_accepted_script_pipeline_source(
+            &accepted.study, &accepted.catalog, &accepted.source_bytes,
+        ).unwrap();
+        assert_eq!(source["nodes"][0]["execution_ids"], serde_json::json!([]));
+        assert_eq!(source["nodes"][1]["execution_ids"], serde_json::json!([]));
+        assert_eq!(source["executions"][0]["authored_step_id"], run_id);
+        let lowered = fullmag_plan::lower_study_plan_with_catalog(&accepted.study, &accepted.catalog)
+            .expect("captured field/scalar policies must remain valid for the physical plan");
+        assert_eq!(lowered.steps.len(), 1);
+        capture.verify_unchanged().unwrap();
+    }
+
+    #[test]
     fn accepted_fem_execution_materializes_shared_mesh_asset() {
         let root = repo_root();
         let workspace = tempfile::tempdir().expect("create accepted execution workspace");

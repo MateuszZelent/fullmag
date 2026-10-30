@@ -52,7 +52,33 @@ pub fn compile_accepted_closed_loop_pipeline(
         }
     }
     config.ir = captured.problem;
-    let compiled = crate::materialize_script_pipeline_with_output_policy_bounded(config, output_policy, MAX_EXECUTIONS)?;
+    let mut compiled = crate::materialize_script_pipeline_with_output_policy_bounded(config, output_policy, MAX_EXECUTIONS)?;
+    // These actions update the materializer's current IR. Their effects are
+    // already present in following solver stages, so keep them in the
+    // authored source without creating accepted Study steps for them.
+    let mut configuration_execution_ids_by_node = BTreeMap::<String,BTreeSet<String>>::new();
+    for execution in &compiled.executions {
+        if matches!(&execution.stage.action,
+            Some(ResolvedScriptStageAction::Autosave{..}|ResolvedScriptStageAction::TableAutosave{..})) {
+            let owner=execution.stage.provenance.as_ref().context("configuration execution has no authored provenance")?;
+            configuration_execution_ids_by_node.entry(owner.authored_step_id.clone())
+                .or_default().insert(execution.execution_id.clone());
+        }
+    }
+    if !configuration_execution_ids_by_node.is_empty() {
+        let mut configuration_execution_ids=BTreeSet::new();
+        for (owner,ids) in &configuration_execution_ids_by_node {
+            let binding=compiled.nodes.iter_mut().find(|node|node.authored_step_id.as_str()==owner.as_str())
+                .context("configuration execution owner is missing from authored node bindings")?;
+            let before=binding.execution_ids.len();
+            binding.execution_ids.retain(|id|!ids.contains(id));
+            if before-binding.execution_ids.len()!=ids.len() {
+                bail!("configuration execution IDs differ from their authored node binding");
+            }
+            configuration_execution_ids.extend(ids.iter().cloned());
+        }
+        compiled.executions.retain(|execution|!configuration_execution_ids.contains(&execution.execution_id));
+    }
     if compiled.executions.is_empty() { bail!("accepted script has no actual execution"); }
     let mut steps = Vec::new();
     let mut entries = Vec::new();
@@ -202,6 +228,14 @@ pub fn validate_accepted_script_pipeline_source(study:&StudyPlan,catalog:&StudyP
     for (node,expected) in nodes.iter().zip(&expected_nodes) {
         let kind=match expected.kind { ScriptPipelineNodeKind::Primitive=>"primitive", ScriptPipelineNodeKind::Macro=>"macro", ScriptPipelineNodeKind::Group=>"group" };
         let ids=node["execution_ids"].as_array().context("node execution IDs missing")?;
+        let configuration_action=matches!(
+            crate::script_pipeline_compilation::authored_node(&authored.nodes,&expected.authored_step_id),
+            Some(crate::script_stage_contract::StudyPipelineNode::Primitive{stage_kind,..})
+                if matches!(stage_kind.as_str(),"autosave"|"table_autosave")
+        );
+        if configuration_action && !ids.is_empty() {
+            bail!("configuration action nodes cannot own accepted execution IDs");
+        }
         if node["authored_step_id"]!=expected.authored_step_id || node["ancestor_group_ids"]!=json!(expected.ancestor_group_ids) || node["kind"]!=kind || node["effectively_enabled"]!=expected.effectively_enabled || (!expected.effectively_enabled || kind=="group") && !ids.is_empty() || kind=="primitive" && ids.len()>1 { bail!("authored activation, ancestry or node kind differs from captured tree"); }
         if expected.effectively_enabled && matches!(crate::script_pipeline_compilation::authored_node(&authored.nodes,&expected.authored_step_id),
             Some(crate::script_stage_contract::StudyPipelineNode::Primitive{stage_kind,..}) if matches!(stage_kind.as_str(),"relax"|"run")) && ids.len()!=1 {
@@ -293,6 +327,49 @@ mod tests {
                 crate::script_stage_contract::ScriptExecutionStage {ir:second,default_until_seconds:Some(1e-12),entrypoint_kind:"flat_run".into(),action:None},
             ]}
     }
+    fn pipeline_run(id:&str)->Value {
+        json!({"node_kind":"primitive","id":id,"label":id,"stage_kind":"run","payload":{"until_seconds":1e-12}})
+    }
+    fn pipeline_action(id:&str,stage_kind:&str,payload:Value)->Value {
+        json!({"node_kind":"primitive","id":id,"label":id,"stage_kind":stage_kind,"payload":payload})
+    }
+    fn config_with_pipeline_nodes(nodes:Vec<Value>)->ScriptExecutionConfig {
+        let mut config=physical_config();
+        config.stages.clear();
+        config.ir.study.sampling_mut().outputs.clear();
+        config.ir.study.sampling_mut().table_autosave = None;
+        config.study_pipeline=Some(serde_json::from_value(json!({"version":"study_pipeline.v1","nodes":nodes})).unwrap());
+        config
+    }
+    fn configuration_action_config()->ScriptExecutionConfig {
+        let field_m=||json!({"kind":"field","name":"m","every_seconds":1e-12});
+        let energy=||json!({"kind":"scalar","name":"E_total","every_seconds":1e-12});
+        let children=vec![
+            pipeline_run("first"),
+            pipeline_action("field-m","autosave",json!({"output":field_m()})),
+            pipeline_action("scalar-energy","autosave",json!({"output":energy()})),
+            pipeline_action("table-policy","table_autosave",json!({"table_autosave":{"sample_period_s":1e-12,"quantities":["mx","E_total"]}})),
+            pipeline_run("second"),
+            pipeline_action("replace-m","autosave",json!({"output":{"kind":"field","name":"m","every_seconds":2e-12}})),
+            pipeline_action("clear-energy","autosave",json!({"enabled":false,"quantity":"E_total"})),
+            pipeline_action("replace-energy","autosave",json!({"output":{"kind":"scalar","name":"E_ex","every_seconds":4e-12}})),
+            pipeline_action("disable-table","table_autosave",json!({"enabled":false})),
+            pipeline_run("third"),
+        ];
+        config_with_pipeline_nodes(vec![
+            json!({"node_kind":"group","id":"configuration-group","label":"Output policy","children":children}),
+            json!({"node_kind":"group","id":"disabled-group","label":"Disabled","enabled":false,"children":[
+                pipeline_action("disabled-autosave","autosave",json!({"output":{"kind":"field","name":"disabled","every_seconds":1e-12}}))
+            ]}),
+        ])
+    }
+    fn output_every(problem:&fullmag_ir::ProblemIR,kind:&str,name:&str)->Option<f64> {
+        problem.study.sampling().outputs.iter().find_map(|output| match (kind,output) {
+            ("field",fullmag_ir::OutputIR::Field{name:actual,every_seconds}) if actual==name=>Some(*every_seconds),
+            ("scalar",fullmag_ir::OutputIR::Scalar{name:actual,every_seconds}) if actual==name=>Some(*every_seconds),
+            _=>None,
+        })
+    }
     fn physical_profile()->ExecutionProfileIR {
         ExecutionProfileIR {profile_id:"physical".into(),version:"v1".into(),defaults:fullmag_ir::ExecutionRequestPatchIR {
             backend:fullmag_ir::FieldPatch::Value(fullmag_ir::BackendTarget::Fdm),device:fullmag_ir::FieldPatch::Value(fullmag_ir::ExecutionDevice::Cpu),
@@ -320,6 +397,94 @@ mod tests {
         assert_eq!(compiled.study.steps[1].completion_dependencies,vec![compiled.study.steps[0].step_id.clone()]);
         for step in &compiled.study.steps {assert_eq!(step.outputs,vec![StudyOutputPort{port_id:"final_state".into(),data_kind:StudyPortDataKind::State}]);}
         validate_accepted_script_pipeline_source(&compiled.study,&compiled.catalog,&compiled.source_bytes).unwrap();
+    }
+    #[test]
+    fn configuration_actions_preserve_sampling_in_runs_and_source_inventory() {
+        let config=configuration_action_config();
+        let authored=serde_json::to_value(config.study_pipeline.as_ref().unwrap()).unwrap();
+        let authored_digest=fullmag_ir::canonical_ir_json_sha256(&authored).unwrap();
+        let generic=crate::materialize_script_pipeline_with_output_policy_bounded(
+            config.clone(),fullmag_ir::configure_project_autosave_policy,16,
+        ).unwrap();
+        let generic_run_ids:Vec<_>=generic.executions.iter().filter(|execution|execution.stage.action.is_none())
+            .map(|execution|execution.execution_id.clone()).collect();
+
+        let accepted=compile_physical(config).unwrap();
+        let accepted_run_ids:Vec<_>=accepted.study.steps.iter().map(|step|step.step_id.clone()).collect();
+        assert_eq!(accepted_run_ids,generic_run_ids);
+        assert_eq!(accepted.study.steps.len(),3);
+
+        let first=accepted.catalog.entries()[0].problem();
+        let second=accepted.catalog.entries()[1].problem();
+        let third=accepted.catalog.entries()[2].problem();
+        assert!(first.study.sampling().outputs.is_empty());
+        assert!(first.study.sampling().table_autosave.is_none());
+        assert_eq!(output_every(second,"field","m"),Some(1e-12));
+        assert_eq!(output_every(second,"scalar","E_total"),Some(1e-12));
+        let table=second.study.sampling().table_autosave.as_ref().unwrap();
+        assert_eq!(table.sample_period_s,Some(1e-12));
+        assert_eq!(table.quantities,vec!["mx".to_string(),"E_total".to_string()]);
+        assert_eq!(output_every(third,"field","m"),Some(2e-12));
+        assert_eq!(output_every(third,"scalar","E_total"),None);
+        assert_eq!(output_every(third,"scalar","E_ex"),Some(4e-12));
+        assert!(third.study.sampling().table_autosave.is_none());
+        assert_eq!(accepted.study.steps[1].inputs[0].source,StudyInputSource::StepOutput {
+            step_id:accepted.study.steps[0].step_id.clone(),port:"final_state".into(),case_id:"default".into()
+        });
+        assert_eq!(first.problem_meta.runtime_metadata["active_stage_id"],"first");
+        assert_eq!(accepted.study.steps[2].inputs[0].source,StudyInputSource::StepOutput {
+            step_id:accepted.study.steps[1].step_id.clone(),port:"final_state".into(),case_id:"default".into()
+        });
+        assert_eq!(accepted.study.steps[2].completion_dependencies,vec![accepted.study.steps[1].step_id.clone()]);
+
+        let source:Value=serde_json::from_slice(&accepted.source_bytes).unwrap();
+        assert_eq!(source["authored_pipeline"],authored);
+        assert_eq!(source["authored_pipeline_sha256"],authored_digest);
+        let source_nodes=source["nodes"].as_array().unwrap();
+        let authored_ids=["configuration-group","first","field-m","scalar-energy","table-policy","second","replace-m","clear-energy","replace-energy","disable-table","third","disabled-group","disabled-autosave"];
+        assert_eq!(source_nodes.iter().map(|node|node["authored_step_id"].as_str().unwrap()).collect::<Vec<_>>(),authored_ids.to_vec());
+        for id in ["field-m","scalar-energy","table-policy","replace-m","clear-energy","replace-energy","disable-table","disabled-autosave"] {
+            let binding=source_nodes.iter().find(|node|node["authored_step_id"]==id).unwrap();
+            assert_eq!(binding["execution_ids"],json!([]),"{id}");
+        }
+        for (index,id) in ["first","second","third"].into_iter().enumerate() {
+            let binding=source_nodes.iter().find(|node|node["authored_step_id"]==id).unwrap();
+            assert_eq!(binding["execution_ids"],json!([accepted.study.steps[index].step_id.clone()]));
+        }
+    }
+    #[test]
+    fn accepted_source_rejects_configuration_nodes_claiming_execution_ids() {
+        let accepted=compile_physical(configuration_action_config()).unwrap();
+        for id in ["field-m","table-policy","disabled-autosave"] {
+            let mut source:Value=serde_json::from_slice(&accepted.source_bytes).unwrap();
+            let node=source["nodes"].as_array_mut().unwrap().iter_mut()
+                .find(|node|node["authored_step_id"]==id).unwrap();
+            node["execution_ids"]=json!([accepted.study.steps[0].step_id.clone()]);
+            let error=validate_accepted_script_pipeline_source(
+                &accepted.study,&accepted.catalog,&serde_json::to_vec(&source).unwrap(),
+            ).err().expect("configuration action cannot own a Study execution");
+            assert!(error.to_string().contains("configuration action nodes cannot own accepted execution IDs"),"{id}: {error:#}");
+        }
+    }
+    #[test]
+    fn configuration_filter_keeps_malformed_autosave_and_other_actions_fail_closed() {
+        let malformed=config_with_pipeline_nodes(vec![
+            pipeline_action("broken-autosave","autosave",json!({})),pipeline_run("first"),
+        ]);
+        let error=compile_physical(malformed).err().expect("enabled autosave without output must fail");
+        assert!(format!("{error:#}").contains("enabled autosave stage requires payload.output"));
+
+        let configuration_only=config_with_pipeline_nodes(vec![
+            pipeline_action("only-autosave","autosave",json!({"output":{"kind":"field","name":"m","every_seconds":1e-12}})),
+        ]);
+        let error=compile_physical(configuration_only).err().expect("configuration alone is not a Study execution");
+        assert!(format!("{error:#}").contains("accepted script has no actual execution"));
+
+        let unsupported=config_with_pipeline_nodes(vec![
+            pipeline_action("fft","fft_response",json!({"request":{}})),pipeline_run("first"),
+        ]);
+        let error=compile_physical(unsupported).err().expect("non-configuration action remains unsupported");
+        assert!(format!("{error:#}").contains("unsupported enabled accepted script execution"));
     }
     #[test]
     fn physical_contract_refuses_another_activation_identity() {

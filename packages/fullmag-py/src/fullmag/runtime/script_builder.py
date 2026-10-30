@@ -245,15 +245,6 @@ def _builder_base_problem(loaded: LoadedProblem) -> Problem:
 
 def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
     base_problem = _builder_base_problem(loaded)
-    base_study = base_problem.study
-    if isinstance(base_study, TimeEvolution) and _study_outputs(base_study):
-        raise ValueError(
-            "scene_document_time_evolution_base_outputs_unsupported: "
-            "SceneDocument cannot encode base TimeEvolution output selections; "
-            "replace base study.save(...), study.snapshot(...), or "
-            "TimeEvolution(outputs=...) declarations with StageAutosave on a Run "
-            "or explicit study.stages.autosave(...) actions"
-        )
     study_pipeline = _scene_study_pipeline_document(loaded, base_problem)
     authored_problem = loaded.workspace_problem or loaded.problem
     relax_stage = _first_relax_stage(loaded)
@@ -2799,32 +2790,168 @@ def _scene_study_pipeline_document(
     loaded: LoadedProblem,
     base_problem: Problem,
 ) -> dict[str, object] | None:
-    """Keep SceneDocument Run payloads within the shared primitive contract.
-
-    Independent autosave actions already encode output changes in the ordered
-    pipeline. Projected Run snapshots can repeat those changes because their
-    comparison baseline is static; remove that redundant snapshot only when it
-    exactly matches the state established by the preceding actions.
-    """
+    """Encode representable base outputs as Scene-only autosave prefix actions."""
     pipeline = export_study_pipeline_document(loaded)
-    if not isinstance(pipeline, dict):
+    if isinstance(pipeline, dict):
+        pipeline = copy.deepcopy(pipeline)
+
+    base_study = base_problem.study
+    if isinstance(pipeline, dict):
+        _normalize_scene_run_sampling_snapshots(
+            loaded,
+            base_study=base_study,
+            pipeline=pipeline,
+        )
+
+    original_nodes = pipeline.get("nodes") if isinstance(pipeline, dict) else []
+    prefix_nodes = _scene_base_output_action_nodes(base_study, original_nodes)
+    if not prefix_nodes:
         return pipeline
+
+    if pipeline is None:
+        pipeline = {"version": "study_pipeline.v1", "nodes": []}
+    nodes = pipeline.get("nodes")
+    if not isinstance(nodes, list):
+        raise ValueError(
+            "scene_document_base_output_prefix_requires_pipeline_nodes: "
+            "the existing study pipeline must contain a nodes list"
+        )
+    pipeline["nodes"] = [*prefix_nodes, *nodes]
+    return pipeline
+
+
+def _scene_base_output_action_nodes(
+    base_study: object,
+    existing_nodes: object,
+) -> list[dict[str, object]]:
+    if not isinstance(base_study, TimeEvolution):
+        return []
+    outputs = list(_study_outputs(base_study))
+    if not outputs:
+        return []
+
+    from fullmag.world import _periodic_output
+
+    occupied_ids = _scene_pipeline_node_ids(existing_nodes)
+    seen_quantities: set[str] = set()
+    prefix: list[dict[str, object]] = []
+    for index, output in enumerate(outputs):
+        if not isinstance(output, (SaveField, SaveScalar)):
+            raise ValueError(
+                "scene_document_time_evolution_base_outputs_unrepresentable: "
+                f"base output {type(output).__name__} cannot be represented by an "
+                "autosave action; replace base study.save(...), study.snapshot(...), "
+                "or TimeEvolution(outputs=...) declarations with supported "
+                "SaveField/SaveScalar autosave actions"
+            )
+
+        quantity = _periodic_output_name(output)
+        if quantity is None:
+            raise ValueError(
+                "scene_document_time_evolution_base_outputs_unrepresentable: "
+                "a base periodic output has no DSL quantity name"
+            )
+        if quantity in seen_quantities:
+            raise ValueError(
+                "scene_document_time_evolution_base_outputs_unrepresentable: "
+                f"duplicate quantity policy {quantity!r} cannot be preserved by "
+                "replacement autosave actions"
+            )
+        seen_quantities.add(quantity)
+
+        try:
+            reconstructed = _periodic_output(quantity, output.every)
+            output_ir = output.to_ir()
+            reconstructed_ir = reconstructed.to_ir()
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "scene_document_time_evolution_base_outputs_unrepresentable: "
+                f"quantity {quantity!r} cannot be recreated through the public "
+                "autosave DSL; use a DSL-compatible output quantity"
+            ) from exc
+        if reconstructed_ir != output_ir:
+            raise ValueError(
+                "scene_document_time_evolution_base_outputs_unrepresentable: "
+                f"autosave DSL reconstruction changes the output IR for "
+                f"{quantity!r}; use a DSL-compatible output quantity"
+            )
+
+        stem = f"scene-base-autosave-{index + 1}"
+        stage_id = stem
+        collision_index = 1
+        while stage_id in occupied_ids:
+            stage_id = f"{stem}-{collision_index}"
+            collision_index += 1
+        occupied_ids.add(stage_id)
+
+        payload: dict[str, object] = {
+            "kind": "autosave",
+            "entrypoint_kind": "flat_autosave",
+            "stage_id": stage_id,
+            "enabled": True,
+            "quantity": quantity,
+            "output": reconstructed_ir,
+        }
+        prefix.append(
+            {
+                "id": stage_id,
+                "label": _study_pipeline_stage_label(
+                    payload,
+                    stage_kind="autosave",
+                    index=index,
+                ),
+                "enabled": True,
+                "source": "script_imported",
+                "node_kind": "primitive",
+                "stage_kind": "autosave",
+                "payload": payload,
+            }
+        )
+    return prefix
+
+
+def _scene_pipeline_node_ids(nodes: object) -> set[str]:
+    result: set[str] = set()
+
+    def visit(items: object) -> None:
+        if not isinstance(items, list):
+            return
+        for node in items:
+            if not isinstance(node, Mapping):
+                continue
+            node_id = node.get("id")
+            if isinstance(node_id, str):
+                result.add(node_id)
+            payload = node.get("payload")
+            if isinstance(payload, Mapping):
+                stage_id = payload.get("stage_id")
+                if isinstance(stage_id, str):
+                    result.add(stage_id)
+            visit(node.get("children"))
+
+    visit(nodes)
+    return result
+
+
+def _normalize_scene_run_sampling_snapshots(
+    loaded: LoadedProblem,
+    *,
+    base_study: object,
+    pipeline: dict[str, object],
+) -> None:
     if isinstance(loaded.problem.runtime_metadata.get("study_pipeline"), dict):
-        return pipeline
+        return
 
     stages = _builder_stage_sequence(loaded)
     nodes = pipeline.get("nodes")
-    base_study = base_problem.study
-    if (
-        not isinstance(nodes, list)
-        or len(nodes) != len(stages)
-        or not isinstance(base_study, TimeEvolution)
-    ):
-        return pipeline
+    if not isinstance(nodes, list) or len(nodes) != len(stages):
+        return
+    if not isinstance(base_study, TimeEvolution):
+        return
 
     baseline_sampling = base_study.to_ir().get("sampling")
     if not isinstance(baseline_sampling, Mapping):
-        return pipeline
+        return
 
     active_outputs = list(_study_outputs(base_study))
     active_table = baseline_sampling.get("table_autosave")
@@ -2872,8 +2999,6 @@ def _scene_study_pipeline_document(
         actual_sampling = stage.problem.study.to_ir().get("sampling")
         if actual_sampling == expected_sampling:
             payload.pop("sampling", None)
-
-    return pipeline
 
 
 def _export_stage_draft_with_identity(stage: LoadedStage) -> dict[str, object]:

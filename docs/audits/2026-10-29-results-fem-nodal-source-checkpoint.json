@@ -1,7 +1,7 @@
 {
   "schema": "fullmag.results-fem-nodal-source-checkpoint.v1",
-  "observed_at": "2026-10-30T14:39:48.838722+00:00",
-  "head": "0e81b4b5056bcd66318190e348e7539df54c9e2d",
+  "observed_at": "2026-10-30T15:25:51.367575+00:00",
+  "head": "2569f18af1b1caa7294ca455102e27d9f8e5c769",
   "source_sha256": {
     "crates/fullmag-quantities/src/fem_nodal_field.rs": "5852067389b8b9408dc9a41750e22e9fa7e7611cea37bc1acd9d64b1652ed5cd",
     "crates/fullmag-quantities/src/lib.rs": "a77045805d298eff2d6be7c03a193bab40026a8e2f424564342b8e2615aac877",
@@ -40,28 +40,31 @@
     "scripts/test_docker_volume_receipts.py": "d18fd4459201f96fd16311f32bc3d40baab021fb5886e4a04b91a9c291425f84",
     "apps/control-room/scripts/smoke-analysis-plots.mjs": "318e519131f703784e1a7809ac5c9e1e5885940fd4a6cf30f3db170d13254891",
     "apps/control-room/src/modules/viewport-3d/SavedResultsPlaybackViewport.tsx": "4575fcc994c49996ea8fe868b3b542d8bee3cf8afa7f73998e5bd9c129ae7844",
-    "packages/fullmag-py/src/fullmag/runtime/script_builder.py": "a00e05c1781b9bd92b84e8eca1b701a539ada9cf143d71f060e17a43bfd849d7",
-    "packages/fullmag-py/tests/test_script_builder_roundtrip.py": "35f669778bdbd1cbce318a14187f9e46a867912186011de0761ce8ff65c216b8",
-    "apps/control-room/src/modules/start/model/aboutFullmag.ts": "82414a5ba9d739be3c899a1ce3abd409ccec7fe1837772bc6e0e34541feab510"
+    "packages/fullmag-py/src/fullmag/runtime/script_builder.py": "df36db2daf5a8781933173725c06c6fd07ebafbc548ecaeff29b379981288d1a",
+    "packages/fullmag-py/tests/test_script_builder_roundtrip.py": "612ef770029e96b68e3bc6aac46dea6a63a6a67f2e9c18eb67908ed1103c6e78",
+    "apps/control-room/src/modules/start/model/aboutFullmag.ts": "82414a5ba9d739be3c899a1ce3abd409ccec7fe1837772bc6e0e34541feab510",
+    "crates/fullmag-api/src/script.rs": "cb55d074066e7224451147668e94dbbf383a9c06ce61af32afecbe742a32edff",
+    "crates/fullmag-application/src/script_pipeline_acceptance.rs": "bd8e1f743e456aeca0eaad8ff6b62f95e683c3fd4e5575751db53ea1e2164913",
+    "packages/fullmag-py/tests/test_scene_execution_config.py": "4d3c470a46fb23417b158fb5861c7f5f932f50537b86d38e8561091e7b1790f7"
   },
   "scope": "FEM producer/reader/API, accepted-output collection, aggregate discovery budget and cross-revision snapshot preferences implemented in source; compilation and current UI verification pending",
   "checks": {
     "rustfmt_owned_files": "passed (skip_children=true)",
     "git_diff_check": "passed",
-    "cargo_tests": "Complete rust-contracts job124083777114 PASS in run41061996491 (bd4); includes saved FDM/FEM playback, binary routes and full API/CLI/quantity contracts. Earlier28/28 receipt regressions remain passed.",
-    "new_runtime": "NOT RUN",
-    "new_browser": "NOT RUN",
+    "cargo_tests": "Full rust-contracts job124125078374 PASS at2569/run41073966648, including saved FDM/FEM routes, complete inspect, autosave writers, API/CLI/quantities. New accepted Autosave edits and API integration test pending CI.",
+    "new_runtime": "Recovered and then iteration dacf3db158f542fa861c58ee6a7a4c4f deployed2569. Retained API reads passed; convenience run-script rejected before dispatch. Fresh simulation/current-source browser pending.",
+    "new_browser": "NOT RUN on current deployment; CI browser fixtures passed separately.",
     "review": "Payload/hash API and Windows directory replacement findings addressed in source; Windows execution NOT VERIFIED",
     "adapter_review": "Independent source review and scalar metadata delta PASS. Router fixture covers M, H_eff and DemagPhi, transport identities and stale/mismatched unit rejection; tests NOT RUN.",
-    "reader_review": "Primary source review: no legacy inference for present binding including catalog, lazy hidden geometry objects remain revisioned, hash/length/budget/nofollow guards. Parser-only rustfmt and diff check passed; reader tests NOT RUN.",
-    "empty_snapshot_inspector": "Load into 3D disabled for zero samples, controller action also guarded; existing empty-state test extended; Vitest/typecheck/browser NOT RUN.",
-    "active_publication": "Source implementation: exact accepted run/attempt/fingerprint/sample-policy binding, running manifest and storage receipt; reader requires per-array committed prefix. Added router 0/1/3 and stale/invalid declaration tests and reader downgrade/policy-hash tests. Parser-only rustfmt and diff check PASS; Cargo NOT RUN.",
-    "nested_fem_store": "Reader resolves exact validated stages/... path relative to its owning nested Zarr v2 store and uses pinned directory traversal for CAS. Internal geometry hidden at every depth. Added nested H_eff/no-outer-fallback regression. Tests NOT RUN.",
+    "reader_review": "Primary source review: no legacy inference for present binding including catalog, lazy hidden geometry objects remain revisioned, hash/length/budget/nofollow guards. Parser-only rustfmt and diff check passed; reader tests NOT RUN. Subsequent full inspect/API/runner autosave CI at2569 PASS; actual runtime/browser limits remain as noted.",
+    "empty_snapshot_inspector": "Load into 3D disabled for zero samples, controller action also guarded; existing empty-state test extended; Vitest/typecheck/browser NOT RUN. Subsequent Control Room CI at2569 PASS; deployed browser pending.",
+    "active_publication": "Source implementation: exact accepted run/attempt/fingerprint/sample-policy binding, running manifest and storage receipt; reader requires per-array committed prefix. Added router 0/1/3 and stale/invalid declaration tests and reader downgrade/policy-hash tests. Parser-only rustfmt and diff check PASS; Cargo NOT RUN. Subsequent full inspect/API/runner autosave CI at2569 PASS; actual runtime/browser limits remain as noted.",
+    "nested_fem_store": "Reader resolves exact validated stages/... path relative to its owning nested Zarr v2 store and uses pinned directory traversal for CAS. Internal geometry hidden at every depth. Added nested H_eff/no-outer-fallback regression. Tests NOT RUN. Subsequent full inspect/API/runner autosave CI at2569 PASS; actual runtime/browser limits remain as noted.",
     "active_publication_review": "Independent source review confirmed the run.json content-hash P2 addressed and fixture nested-store/receipt-path gaps addressed. Producer roundtrip, Cargo and browser NOT RUN. Legacy absence of all policy declarations remains indistinguishable from historical format.",
-    "collection": "Independent source review PASS after aggregate receipt budget fix; geometry sibling/stale and aggregate-budget route tests added; NOT RUN.",
-    "receipt_budget": "16 MiB aggregate per discovery, typed regular-file oversize error distinguishes missing/type/symlink/I/O failures; independent source review PASS; tests NOT RUN.",
-    "snapshot_preferences": "Bounded logical appearance/sample preferences preserve explicit selections across metadata revisions; exact render keys remain revision-pinned and new definitions do not activate preview. Primary source review PASS; Vitest/typecheck/browser NOT RUN.",
-    "ci": "Run41057502235 has Control Room, generated API, Inspector actions and Windows gates PASS; failed later exact OpenAPI tag expectation and Python retained-profile fixture. Eigensolve UI failed doctor cleanup recognition; source fixes pending rerun.",
+    "collection": "Independent source review PASS after aggregate receipt budget fix; geometry sibling/stale and aggregate-budget route tests added; NOT RUN. Subsequent full inspect/API/runner autosave CI at2569 PASS; actual runtime/browser limits remain as noted.",
+    "receipt_budget": "16 MiB aggregate per discovery, typed regular-file oversize error distinguishes missing/type/symlink/I/O failures; independent source review PASS; tests NOT RUN. Subsequent full inspect/API/runner autosave CI at2569 PASS; actual runtime/browser limits remain as noted.",
+    "snapshot_preferences": "Bounded logical appearance/sample preferences preserve explicit selections across metadata revisions; exact render keys remain revision-pinned and new definitions do not activate preview. Primary source review PASS; Vitest/typecheck/browser NOT RUN. Subsequent full Control Room CI at2569 PASS; actual deployed browser pending.",
+    "ci": "2569: Rust, Control Room, generated API, browser fixture, Inspector and Windows PASS. Python live and scene contracts FAIL; source fixes pending CI. Overall CI not green.",
     "cargo_lock": "Byte-exact Cargo-produced artifact12971087642 from run41043411407, matching input manifests; sha256 4dbaff705d3e94f64559dd1e50c6088a9bccfe974ea1b49a013d014fe6cb5fbb.",
     "browser_harness": "Responsive chart assertions passed; later reference-import Results root hidden behind closed accordion. Idempotent opening and full current catalog DTO added; full browser rerun pending.",
     "completed_run_identity": "Exact completed-stage manifest binding implemented; two test assertion parse errors fixed after UI run41048512203. Tests pending.",
@@ -69,24 +72,25 @@
     "chart_layout": "Responsive chart and complete browser fixture PASS in run41061996491.",
     "completion_merge": "Independent source recheck PASS after undefined serde helper, scalar lineage and positive durable-dt findings were addressed. Explicit canonical/legacy dispatch and compatibility preserved; source regressions added. Cargo/CI/runtime pending.",
     "receipt_ci_coverage": "28/28 accepted_final_step_stats_tests PASS on accepted-worker binary in run41057502235, including legacy refs/dt and real-CAS tampering.",
-    "react_doctor": "Verified artifact12979512623: effect-needs-cleanup falsely classifies Vector3.sub as a subscription. Prior disposer hypothesis was wrong. Equivalent subVectors computation applied; no suppression or fake cleanup; rerun pending.",
-    "browser_fixture": "Complete browser-fixture-smoke job124083778123 and Inspector actions job124083778037 PASS in run41061996491. Actual owned runtime UI not yet qualified.",
+    "react_doctor": "PASS: modal-observables job124125076317/run41073966435 at2569; equivalent subVectors camera expression.",
+    "browser_fixture": "PASS: job124125078222/run41073966648 at2569. This is fixture evidence, not actual deployed snapshot QA.",
     "remaining_ci": "bd4 Python lifecycle fixture PASS; ordered-stage roundtrip exposed legacy sampling loss and needs contract-correct fix. UI contracts failed only README/About license drift; source aligned after integrating e5a1c01864. Doctor subVectors fix awaits CI.",
-    "scene_sampling": "Source fix rejects unrepresentable legacy base TimeEvolution outputs at authoring export and preserves direct IR. Canonical Run uses a five-field renderable subset of Rust fields; output_every_seconds is explicitly unsupported in this renderer. Independent review findings addressed with action enable/replace/disable/table coverage and an unrecorded-delta refusal. CI pending."
+    "scene_sampling": "Representable base periodic outputs become Scene-only Autosave prefix; exact IR reconstruction, collision/idempotence and canonical authority guards. Accepted adapter keeps configuration effects but no extra Study executions. Source review/AST/diff pass; new Python/Rust behavior tests pending CI."
   },
   "formatter_recovery": {
     "unintended_files": 104,
     "proof": "Each file matched rustfmt(HEAD) byte-for-byte; restored original bytes. lib.rs retained only module declaration."
   },
   "runtime_blocker": {
-    "phase": "recovered-runtime-qualification",
-    "state": "recovered-awaiting-current-run-qa",
-    "preparation_operation_state": "succeeded",
-    "native_recovery_executed": "succeeded; new development b3f78da7d700482694724d74b19a30d3 built source0e81b4b5056bcd66318190e348e7539df54c9e2d (cache miss)",
-    "qualification": "API serves retained Results; current-session list empty. Fresh completed FEM run and actual snapshot/Return-to-Live UI remain NOT VERIFIED."
+    "phase": "current-source-qualification",
+    "state": "source-fix-review-before-fresh-run",
+    "recovery": "succeeded",
+    "deployed_source": "2569f18af1b1caa7294ca455102e27d9f8e5c769",
+    "iteration_attempt": "dacf3db158f542fa861c58ee6a7a4c4f",
+    "qualification": "Retained API reads passed. No new Compute dispatched: convenience run-script line was rejected before execution. Fresh completed FEM and deployed UI remain NOT VERIFIED."
   },
   "remaining": [
-    "Complete authorized owned runtime recovery and deploy current source without changing foreign groups",
+    "Deploy final reviewed source to recovered owned group3298 and activate one fresh FEM run through receipt-validated script route",
     "Pass merged Rust/UI CI including quantities/session/runner/inspect/API tests and canonical lockfile checks",
     "Verify FEM M/H_eff snapshots, units/support, scrubbing and Return to Live in actual UI",
     "Verify active publication watermarks and multiple accepted output leaves across stages/retries",
@@ -421,5 +425,6 @@
     "backend_package_cache_hit": false,
     "api_retained_results": "item11 playback/catalog HTTP200;6 m frames,6 H_eff samples,6 table rows. Old m has3D mapping; old H_eff correctly lacks3D capability withoutpersisted mapping.",
     "api_current_session": "GET sessions200 empty; current/status404 no active local live workspace"
-  }
+  },
+  "source_state": "Reviewed working-tree changes after head; source_sha256 binds the pending source, CI not yet run for these edits."
 }

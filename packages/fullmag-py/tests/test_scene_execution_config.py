@@ -589,7 +589,11 @@ def test_scene_renderer_preserves_table_autosave_expressions_and_id(tmp_path, so
         scene["study"].pop("study_pipeline")
         stage = scene["study"]["stages"][0]
     else:
-        stage = scene["study"]["study_pipeline"]["nodes"][0]["children"][0]["payload"]
+        group = scene["study"]["study_pipeline"]["nodes"][0]
+        # This contract concerns the Relax table policy. The full fixture also
+        # carries legacy Run-local solver controls, which canonical Run rejects.
+        group["children"] = [group["children"][0]]
+        stage = group["children"][0]["payload"]
     stage["autosave"] = fm.StageAutosave(
         table=fm.TableAutosave(
             every_steps=7,
@@ -609,6 +613,18 @@ def test_scene_renderer_preserves_table_autosave_expressions_and_id(tmp_path, so
     autosave = export_builder_draft(roundtrip)["stages"][0]["autosave"]
     assert autosave["table"]["table_id"] == "trace"
     assert autosave["table"]["expressions"] == ["mx+my"]
+    if source == "pipeline":
+        assert [stage.stage_id for stage in roundtrip.stages] == ["relax-first"]
+
+
+def test_scene_renderer_rejects_canonical_run_local_solver_controls(tmp_path):
+    scene = _authored_scene(tmp_path)
+    with pytest.raises(
+        ValueError, match="scene_document_run_pipeline_payload_unrendered_fields"
+    ) as error:
+        render_scene_document_as_script(scene)
+    assert "fixed_timestep" in str(error.value)
+    assert "integrator" in str(error.value)
 
 
 @pytest.mark.parametrize("materialize", [False, True])
