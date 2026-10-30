@@ -421,8 +421,20 @@ struct FloquetShiftedKspFailureProbe {
         bool requested = false;
         bool workspace_available = false;
         bool sample_available = false;
+        const char *diagnostic_mode = "full_small";
         const char *status = "disabled";
         const char *reason = "";
+        bool sparse_workspace_budget_bytes_available = false;
+        std::uint64_t sparse_workspace_budget_bytes = 0;
+        bool sparse_workspace_estimated_bytes_available = false;
+        std::uint64_t sparse_workspace_estimated_bytes = 0;
+        bool sparse_workspace_observed_bytes_available = false;
+        std::uint64_t sparse_workspace_observed_bytes = 0;
+        bool sparse_workspace_postsetup_estimated_bytes_available = false;
+        std::uint64_t sparse_workspace_postsetup_estimated_bytes = 0;
+        const char *memory_admission_source = "";
+        const char *memory_admission_status = "not_required";
+        const char *memory_admission_reason = "";
         std::uint64_t callback_ordinal = 0;
         std::int64_t iteration = -1;
         bool production_phi_rhs_norm_available = false;
@@ -447,6 +459,8 @@ struct FloquetShiftedKspFailureProbe {
         bool exact_shifted_matrix_comparison_available = false;
         double exact_shifted_matrix_relative_defect =
             std::numeric_limits<double>::quiet_NaN();
+        const char *exact_shifted_matrix_comparison_reason =
+            "exact_shifted_matrix_comparison_not_started";
         ShiftedLuPolicyComparison shifted_lu_policy_comparison{};
         LivePcObservation live_pc_observation{};
         double preconditioner_normalization_scale =

@@ -431,5 +431,26 @@
       "previous_qualified_89bb_operations": 10,
       "required_operations": 14
     }
+  },
+  "sparse_c1_source_checkpoint_20261030": {
+    "status": "source_reviewed; CI/native/runtime pending",
+    "based_on": "b595d8724544804ccea095350a6de3e526fab8a8",
+    "diagnostic_mode": "sparse_replay",
+    "budget_bytes": 67108864,
+    "memory_source": "petsc_seqaij_allocated_storage_estimate_not_rss",
+    "actual_observed_memory": "unavailable/null",
+    "default_opt_out": "preserved",
+    "exact_schur_limit": 512,
+    "physical_residual_gate": 1e-08,
+    "producer_candidate_path": "shifted_ksp_failure_probe.last_true_probe.candidate_operator_diagnostic",
+    "review_fixes": [
+      "two missing JSON string closings",
+      "D1 consumer/fixture corrected to actual nested producer shape"
+    ],
+    "required_native_checks": [
+      "fem_floquet_modal_solver_contract",
+      "fem_modal_eigen_hard_ksp_nearest_contract"
+    ],
+    "bootstrap_fixture_fixes": "ordering after e6a58cc7b; class-level static backing mock; no production admission threshold change"
   }
 }

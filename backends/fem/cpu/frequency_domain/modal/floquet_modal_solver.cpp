@@ -1297,6 +1297,10 @@ constexpr PetscInt kFloquetShiftedGmresDefaultRestart = 30;
 // magnetic-only approximation omits.  Larger production systems retain the
 // sparse approximation until a scalable block preconditioner is available.
 constexpr PetscInt kFloquetExactSchurPreconditionerMaxDimension = 512;
+constexpr std::uint64_t kFloquetCandidateSparseWorkspaceBudgetBytes =
+    64u * 1024u * 1024u;
+constexpr std::uint64_t kFloquetCandidateSparseWorkspaceQVectorCount = 13u;
+constexpr std::uint64_t kFloquetCandidateSparseWorkspacePhiVectorCount = 5u;
 
 #if defined(PETSC_USE_COMPLEX)
 // The modal production contract uses a real PETSc build and performs the
@@ -2040,6 +2044,283 @@ PetscErrorCode native_floquet_matmult(Mat matrix, Vec x, Vec y)
 using FloquetCandidateOperatorDiagnostic =
     FloquetShiftedKspFailureProbe::CandidateOperatorDiagnostic;
 
+struct FloquetCandidateSparseWorkspaceAdmission {
+    bool estimated_bytes_available = false;
+    std::uint64_t estimated_bytes = 0;
+    std::uint64_t vector_bytes = 0;
+    const char *status = "unavailable";
+    const char *reason = "seqaij_storage_estimate_not_checked";
+    PetscErrorCode error = PETSC_SUCCESS;
+};
+
+bool floquet_candidate_sparse_vector_workspace_bytes(
+    PetscInt q_split_count,
+    PetscInt phi_split_count,
+    std::uint64_t *out_bytes) noexcept
+{
+    if (out_bytes == nullptr || q_split_count <= 0 || phi_split_count <= 0) {
+        return false;
+    }
+    const std::uint64_t maximum = std::numeric_limits<std::uint64_t>::max();
+    const std::uint64_t scalar_bytes = static_cast<std::uint64_t>(sizeof(PetscScalar));
+    if (scalar_bytes == 0u ||
+        kFloquetCandidateSparseWorkspaceQVectorCount >
+            maximum / scalar_bytes ||
+        kFloquetCandidateSparseWorkspacePhiVectorCount >
+            maximum / scalar_bytes) {
+        return false;
+    }
+    const std::uint64_t q_bytes_per_entry =
+        kFloquetCandidateSparseWorkspaceQVectorCount * scalar_bytes;
+    const std::uint64_t phi_bytes_per_entry =
+        kFloquetCandidateSparseWorkspacePhiVectorCount * scalar_bytes;
+    const std::uint64_t q_size = static_cast<std::uint64_t>(q_split_count);
+    const std::uint64_t phi_size = static_cast<std::uint64_t>(phi_split_count);
+    if (q_size > maximum / q_bytes_per_entry ||
+        phi_size > maximum / phi_bytes_per_entry) {
+        return false;
+    }
+    const std::uint64_t q_bytes = q_size * q_bytes_per_entry;
+    const std::uint64_t phi_bytes = phi_size * phi_bytes_per_entry;
+    if (q_bytes > maximum - phi_bytes || q_bytes + phi_bytes == 0u) {
+        return false;
+    }
+    *out_bytes = q_bytes + phi_bytes;
+    return true;
+}
+
+detail::FloquetSparseStorageEstimate
+floquet_candidate_seqaij_storage_observation(
+    Mat matrix,
+    detail::FloquetSeqAIJStorageKind kind,
+    PetscErrorCode *out_error) noexcept
+{
+    detail::FloquetSparseStorageEstimate unavailable{};
+    if (matrix == nullptr || out_error == nullptr) {
+        unavailable.reason = "sparse_matrix_metadata_unavailable";
+        if (out_error != nullptr) {
+            *out_error = PETSC_ERR_ARG_NULL;
+        }
+        return unavailable;
+    }
+    const char *type = nullptr;
+    PetscErrorCode error = MatGetType(matrix, &type);
+    if (error != PETSC_SUCCESS || type == nullptr) {
+        unavailable.reason = "sparse_matrix_type_unavailable";
+        *out_error = error != PETSC_SUCCESS ? error : PETSC_ERR_ARG_WRONGSTATE;
+        return unavailable;
+    }
+    if (std::strcmp(type, MATSEQAIJ) != 0) {
+        unavailable.reason = "unsupported_sparse_matrix_type";
+        *out_error = PETSC_ERR_SUP;
+        return unavailable;
+    }
+    int communicator_size = 0;
+    if (MPI_Comm_size(PetscObjectComm((PetscObject)matrix), &communicator_size) !=
+            MPI_SUCCESS || communicator_size != 1) {
+        unavailable.reason = "unsupported_nonserial_seqaij_communicator";
+        *out_error = PETSC_ERR_SUP;
+        return unavailable;
+    }
+    PetscInt rows = 0;
+    PetscInt columns = 0;
+    error = MatGetSize(matrix, &rows, &columns);
+    if (error != PETSC_SUCCESS) {
+        unavailable.reason = "sparse_matrix_dimensions_unavailable";
+        *out_error = error;
+        return unavailable;
+    }
+    MatInfo info{};
+    error = MatGetInfo(matrix, MAT_LOCAL, &info);
+    if (error != PETSC_SUCCESS) {
+        unavailable.reason = "seqaij_nnz_statistics_unavailable";
+        *out_error = error;
+        return unavailable;
+    }
+    auto estimate = detail::estimate_floquet_seqaij_storage(
+        true,
+        rows,
+        columns,
+        info.nz_allocated,
+        info.nz_used,
+        kind);
+    *out_error = estimate.available ? PETSC_SUCCESS : PETSC_ERR_ARG_SIZ;
+    return estimate;
+}
+
+PetscErrorCode require_floquet_builtin_seqaij_lu_pc(
+    PC pc,
+    const char **out_reason) noexcept
+{
+    if (pc == nullptr || out_reason == nullptr) {
+        if (out_reason != nullptr) {
+            *out_reason = "poisson_factor_pc_unavailable";
+        }
+        return PETSC_ERR_ARG_NULL;
+    }
+    PCType pc_type = nullptr;
+    PetscErrorCode error = PCGetType(pc, &pc_type);
+    if (error != PETSC_SUCCESS || pc_type == nullptr) {
+        *out_reason = "poisson_factor_pc_type_unavailable";
+        return error != PETSC_SUCCESS ? error : PETSC_ERR_ARG_WRONGSTATE;
+    }
+    if (std::strcmp(pc_type, PCLU) != 0) {
+        *out_reason = "unsupported_poisson_factor_pc_type";
+        return PETSC_ERR_SUP;
+    }
+    MatSolverType solver_type = nullptr;
+    error = PCFactorGetMatSolverType(pc, &solver_type);
+    if (error != PETSC_SUCCESS || solver_type == nullptr) {
+        *out_reason = "poisson_factor_solver_type_unavailable";
+        return error != PETSC_SUCCESS ? error : PETSC_ERR_ARG_WRONGSTATE;
+    }
+    if (std::strcmp(solver_type, MATSOLVERPETSC) != 0) {
+        *out_reason = "unsupported_poisson_factor_solver_package";
+        return PETSC_ERR_SUP;
+    }
+    return PETSC_SUCCESS;
+}
+
+PetscErrorCode require_floquet_builtin_seqaij_factor(
+    Mat factor,
+    const char **out_reason) noexcept
+{
+    if (factor == nullptr || out_reason == nullptr) {
+        if (out_reason != nullptr) {
+            *out_reason = "poisson_factor_matrix_unavailable";
+        }
+        return PETSC_ERR_ARG_NULL;
+    }
+    MatSolverType solver_type = nullptr;
+    PetscErrorCode error = MatFactorGetSolverType(factor, &solver_type);
+    if (error != PETSC_SUCCESS || solver_type == nullptr) {
+        *out_reason = "poisson_factor_matrix_solver_type_unavailable";
+        return error != PETSC_SUCCESS ? error : PETSC_ERR_ARG_WRONGSTATE;
+    }
+    if (std::strcmp(solver_type, MATSOLVERPETSC) != 0) {
+        *out_reason = "unsupported_poisson_factor_matrix_solver_package";
+        return PETSC_ERR_SUP;
+    }
+    return PETSC_SUCCESS;
+}
+
+FloquetCandidateSparseWorkspaceAdmission
+measure_floquet_candidate_sparse_workspace_admission(
+    const NativeFloquetMatShellContext *production_context,
+    Mat gyrotropic) noexcept
+{
+    FloquetCandidateSparseWorkspaceAdmission admission{};
+    if (production_context == nullptr || gyrotropic == nullptr ||
+        production_context->p_ksp == nullptr) {
+        admission.reason = "sparse_matrix_metadata_unavailable";
+        admission.error = PETSC_ERR_ARG_NULL;
+        return admission;
+    }
+    if (!floquet_candidate_sparse_vector_workspace_bytes(
+            production_context->q_split_count,
+            production_context->phi_split_count,
+            &admission.vector_bytes)) {
+        admission.reason = "sparse_workspace_vector_size_overflow";
+        admission.error = PETSC_ERR_ARG_SIZ;
+        return admission;
+    }
+
+    const Mat sparse_blocks[] = {
+        production_context->a_qq,
+        production_context->a_qphi,
+        production_context->a_phiq,
+        production_context->p,
+        gyrotropic};
+    for (Mat block : sparse_blocks) {
+        PetscErrorCode error = PETSC_SUCCESS;
+        const auto block_storage = floquet_candidate_seqaij_storage_observation(
+            block,
+            detail::FloquetSeqAIJStorageKind::duplicated_matrix,
+            &error);
+        if (!block_storage.available) {
+            admission.reason = block_storage.reason;
+            admission.error = error;
+            return admission;
+        }
+    }
+
+    PetscErrorCode error = PETSC_SUCCESS;
+    const auto poisson_matrix = floquet_candidate_seqaij_storage_observation(
+        production_context->p,
+        detail::FloquetSeqAIJStorageKind::duplicated_matrix,
+        &error);
+    if (!poisson_matrix.available) {
+        admission.reason = poisson_matrix.reason;
+        admission.error = error;
+        return admission;
+    }
+    PC production_poisson_pc = nullptr;
+    error = KSPGetPC(production_context->p_ksp, &production_poisson_pc);
+    if (error != PETSC_SUCCESS || production_poisson_pc == nullptr) {
+        admission.reason = "production_poisson_factor_type_unavailable";
+        admission.error = error != PETSC_SUCCESS ? error : PETSC_ERR_ARG_WRONGSTATE;
+        return admission;
+    }
+    const char *factor_package_reason = nullptr;
+    error = require_floquet_builtin_seqaij_lu_pc(
+        production_poisson_pc,
+        &factor_package_reason);
+    if (error != PETSC_SUCCESS) {
+        admission.reason = factor_package_reason;
+        admission.error = error;
+        return admission;
+    }
+    Mat production_poisson_factor = nullptr;
+    error = PCFactorGetMatrix(production_poisson_pc, &production_poisson_factor);
+    if (error != PETSC_SUCCESS || production_poisson_factor == nullptr) {
+        admission.reason = "production_poisson_factor_type_unavailable";
+        admission.error = error != PETSC_SUCCESS ? error : PETSC_ERR_ARG_WRONGSTATE;
+        return admission;
+    }
+    error = require_floquet_builtin_seqaij_factor(
+        production_poisson_factor,
+        &factor_package_reason);
+    if (error != PETSC_SUCCESS) {
+        admission.reason = factor_package_reason;
+        admission.error = error;
+        return admission;
+    }
+    const auto production_factor = floquet_candidate_seqaij_storage_observation(
+        production_poisson_factor,
+        detail::FloquetSeqAIJStorageKind::lu_factor,
+        &error);
+    if (!production_factor.available) {
+        admission.reason = production_factor.reason;
+        admission.error = error;
+        return admission;
+    }
+
+    const auto estimate = detail::estimate_floquet_sparse_workspace(
+        poisson_matrix.bytes,
+        production_factor.bytes,
+        admission.vector_bytes);
+    if (!estimate.available) {
+        admission.reason = estimate.reason;
+        admission.error = PETSC_ERR_ARG_SIZ;
+        return admission;
+    }
+    admission.estimated_bytes_available = true;
+    admission.estimated_bytes = estimate.bytes;
+    if (!detail::floquet_sparse_workspace_estimate_within_budget(
+            admission.estimated_bytes_available,
+            admission.estimated_bytes,
+            kFloquetCandidateSparseWorkspaceBudgetBytes)) {
+        admission.status = "estimated_rejected";
+        admission.reason = "preflight_storage_estimate_exceeds_64_mib_budget";
+        admission.error = PETSC_ERR_MEM;
+        return admission;
+    }
+    admission.status = "estimated_admitted";
+    admission.reason = "preflight_storage_estimate_within_64_mib_budget";
+    admission.error = PETSC_SUCCESS;
+    return admission;
+}
+
 struct FloquetCandidateOperatorDiagnosticWorkspace {
     FloquetCandidateOperatorDiagnostic summary{};
     NativeFloquetMatShellContext isolated_context{};
@@ -2052,6 +2333,8 @@ struct FloquetCandidateOperatorDiagnosticWorkspace {
     KSP mat_shift_none_ksp = nullptr;
     Mat gyrotropic = nullptr; // Borrowed from the reusable production graph.
     PetscScalar shift = 0.0;
+    bool sparse_only = false;
+    std::uint64_t sparse_vector_storage_estimate_bytes = 0;
     bool exact_shifted_matrix_available = false;
     bool shifted_lu_vectors_available = false;
     bool cleanup_failed = false;
@@ -2109,6 +2392,82 @@ struct FloquetCandidateOperatorDiagnosticWorkspace {
     KSP live_pc_owned_pmat_ksp = nullptr;
     Vec live_pc_owned_pmat_solution = nullptr;
 };
+
+bool floquet_candidate_sparse_workspace_postsetup_estimate(
+    FloquetCandidateOperatorDiagnosticWorkspace *workspace,
+    std::uint64_t vector_bytes,
+    detail::FloquetSparseWorkspaceEstimate *out_estimate,
+    PetscErrorCode *out_error) noexcept
+{
+    if (workspace == nullptr || out_estimate == nullptr || out_error == nullptr ||
+        workspace->isolated_context.p == nullptr ||
+        workspace->isolated_context.p_ksp == nullptr || vector_bytes == 0u) {
+        if (out_estimate != nullptr) {
+            out_estimate->reason = "owned_sparse_workspace_estimate_unavailable";
+        }
+        if (out_error != nullptr) {
+            *out_error = PETSC_ERR_ARG_NULL;
+        }
+        return false;
+    }
+    PetscErrorCode error = PETSC_SUCCESS;
+    const auto poisson_matrix = floquet_candidate_seqaij_storage_observation(
+        workspace->isolated_context.p,
+        detail::FloquetSeqAIJStorageKind::duplicated_matrix,
+        &error);
+    if (!poisson_matrix.available) {
+        out_estimate->reason = poisson_matrix.reason;
+        *out_error = error;
+        return false;
+    }
+    PC isolated_poisson_pc = nullptr;
+    error = KSPGetPC(workspace->isolated_context.p_ksp, &isolated_poisson_pc);
+    if (error != PETSC_SUCCESS || isolated_poisson_pc == nullptr) {
+        out_estimate->reason = "owned_poisson_factor_type_unavailable";
+        *out_error = error != PETSC_SUCCESS ? error : PETSC_ERR_ARG_WRONGSTATE;
+        return false;
+    }
+    const char *factor_package_reason = nullptr;
+    error = require_floquet_builtin_seqaij_lu_pc(
+        isolated_poisson_pc,
+        &factor_package_reason);
+    if (error != PETSC_SUCCESS) {
+        out_estimate->reason = factor_package_reason;
+        *out_error = error;
+        return false;
+    }
+    Mat isolated_poisson_factor = nullptr;
+    error = PCFactorGetMatrix(isolated_poisson_pc, &isolated_poisson_factor);
+    if (error != PETSC_SUCCESS || isolated_poisson_factor == nullptr) {
+        out_estimate->reason = "owned_poisson_factor_type_unavailable";
+        *out_error = error != PETSC_SUCCESS ? error : PETSC_ERR_ARG_WRONGSTATE;
+        return false;
+    }
+    error = require_floquet_builtin_seqaij_factor(
+        isolated_poisson_factor,
+        &factor_package_reason);
+    if (error != PETSC_SUCCESS) {
+        out_estimate->reason = factor_package_reason;
+        *out_error = error;
+        return false;
+    }
+    const auto poisson_factor = floquet_candidate_seqaij_storage_observation(
+        isolated_poisson_factor,
+        detail::FloquetSeqAIJStorageKind::lu_factor,
+        &error);
+    if (!poisson_factor.available) {
+        out_estimate->reason = poisson_factor.reason;
+        *out_error = error;
+        return false;
+    }
+    *out_estimate = detail::estimate_floquet_sparse_workspace(
+        poisson_matrix.bytes,
+        poisson_factor.bytes,
+        vector_bytes,
+        1u);
+    *out_error = out_estimate->available ? PETSC_SUCCESS : PETSC_ERR_ARG_SIZ;
+    return out_estimate->available;
+}
 
 bool emit_floquet_factor_action_probe_marker(
     FloquetCandidateOperatorDiagnosticWorkspace *workspace) noexcept
@@ -4186,6 +4545,7 @@ PetscErrorCode initialize_candidate_operator_diagnostic_workspace(
     const NativeFloquetMatShellContext *production_context,
     Mat exact_shifted_matrix,
     bool exact_shifted_matrix_available,
+    bool sparse_only,
     Mat gyrotropic,
     PetscScalar shift,
     double operator_normalization_scale,
@@ -4201,8 +4561,11 @@ PetscErrorCode initialize_candidate_operator_diagnostic_workspace(
         production_context->p_ksp == nullptr || gyrotropic == nullptr ||
         production_context->q_split_count <= 0 ||
         production_context->phi_split_count <= 0 ||
-        production_context->q_split_count > 512 ||
-        production_context->phi_split_count > 512 ||
+        (!sparse_only &&
+         (production_context->q_split_count >
+              kFloquetExactSchurPreconditionerMaxDimension ||
+          production_context->phi_split_count >
+              kFloquetExactSchurPreconditionerMaxDimension)) ||
         (exact_shifted_matrix_available && exact_shifted_matrix == nullptr) ||
         !std::isfinite(operator_normalization_scale) ||
         operator_normalization_scale <= 0.0 ||
@@ -4227,9 +4590,32 @@ PetscErrorCode initialize_candidate_operator_diagnostic_workspace(
     shifted_lu.requested = true;
     shifted_lu.exact_shifted_matrix_available = false;
     shifted_lu.status = "unavailable";
-    shifted_lu.reason = exact_shifted_matrix_available
+    shifted_lu.reason = sparse_only
+        ? "sparse_replay_exact_schur_unavailable"
+        : exact_shifted_matrix_available
         ? "exact_shifted_matrix_copy_pending"
         : "exact_materialized_shifted_schur_matrix_unavailable";
+    workspace->sparse_only = sparse_only;
+    if (sparse_only) {
+        workspace->summary.exact_shifted_matrix_comparison_reason =
+            "sparse_replay_exact_schur_unavailable";
+        auto &live_pc = workspace->summary.live_pc_observation;
+        live_pc = {};
+        live_pc.requested = true;
+        live_pc.available = false;
+        live_pc.status = "unavailable";
+        live_pc.reason = "sparse_replay_skips_live_pc_observation";
+        live_pc.borrowed_pmat_copy.requested = true;
+        live_pc.borrowed_pmat_copy.available = false;
+        live_pc.borrowed_pmat_copy.status = "unavailable";
+        live_pc.borrowed_pmat_copy.reason =
+            "sparse_replay_skips_live_pc_observation";
+    } else {
+        workspace->summary.exact_shifted_matrix_comparison_reason =
+            exact_shifted_matrix_available
+                ? "exact_shifted_matrix_comparison_pending"
+                : "exact_materialized_shifted_schur_matrix_unavailable";
+    }
     shifted_lu.target_shift_rad_s = static_cast<double>(PetscRealPart(shift));
     shifted_lu.operator_normalization_scale = operator_normalization_scale;
     shifted_lu.preconditioner_normalization_scale =
@@ -4343,31 +4729,51 @@ PetscErrorCode initialize_candidate_operator_diagnostic_workspace(
     if (error != PETSC_SUCCESS) {
         return error;
     }
-    Vec *q_vectors[] = {
-        &workspace->candidate_input,
-        &workspace->secondary_input,
-        &workspace->sum_input,
-        &workspace->production_action,
-        &workspace->isolated_action,
-        &workspace->isolated_repeat_action,
-        &workspace->isolated_secondary_action,
-        &workspace->isolated_sum_action,
-        &workspace->isolated_gyrotropic_action,
-        &workspace->exact_matrix_action,
-        &workspace->difference,
-        &workspace->live_pc_rhs,
-        &workspace->live_pc_solution,
-        &workspace->live_pc_repeat_solution,
-        &workspace->live_pc_candidate_snapshot,
-        &workspace->live_pc_pmat_action,
-        &workspace->live_pc_expected_pmat_action,
-        &workspace->live_pc_operator_solution,
-        &workspace->live_pc_operator_action,
-        &workspace->live_pc_residual};
-    for (Vec *vector : q_vectors) {
-        error = VecDuplicate(workspace->q_template_output, vector);
-        if (error != PETSC_SUCCESS) {
-            return error;
+    if (sparse_only) {
+        Vec *sparse_q_vectors[] = {
+            &workspace->candidate_input,
+            &workspace->secondary_input,
+            &workspace->sum_input,
+            &workspace->production_action,
+            &workspace->isolated_action,
+            &workspace->isolated_repeat_action,
+            &workspace->isolated_secondary_action,
+            &workspace->isolated_sum_action,
+            &workspace->isolated_gyrotropic_action,
+            &workspace->difference};
+        for (Vec *vector : sparse_q_vectors) {
+            error = VecDuplicate(workspace->q_template_output, vector);
+            if (error != PETSC_SUCCESS) {
+                return error;
+            }
+        }
+    } else {
+        Vec *q_vectors[] = {
+            &workspace->candidate_input,
+            &workspace->secondary_input,
+            &workspace->sum_input,
+            &workspace->production_action,
+            &workspace->isolated_action,
+            &workspace->isolated_repeat_action,
+            &workspace->isolated_secondary_action,
+            &workspace->isolated_sum_action,
+            &workspace->isolated_gyrotropic_action,
+            &workspace->exact_matrix_action,
+            &workspace->difference,
+            &workspace->live_pc_rhs,
+            &workspace->live_pc_solution,
+            &workspace->live_pc_repeat_solution,
+            &workspace->live_pc_candidate_snapshot,
+            &workspace->live_pc_pmat_action,
+            &workspace->live_pc_expected_pmat_action,
+            &workspace->live_pc_operator_solution,
+            &workspace->live_pc_operator_action,
+            &workspace->live_pc_residual};
+        for (Vec *vector : q_vectors) {
+            error = VecDuplicate(workspace->q_template_output, vector);
+            if (error != PETSC_SUCCESS) {
+                return error;
+            }
         }
     }
     error = VecDuplicate(
@@ -4388,7 +4794,7 @@ PetscErrorCode initialize_candidate_operator_diagnostic_workspace(
     if (error != PETSC_SUCCESS) {
         return error;
     }
-    if (exact_shifted_matrix_available) {
+    if (!sparse_only && exact_shifted_matrix_available) {
         error = MatDuplicate(
             exact_shifted_matrix,
             MAT_COPY_VALUES,
@@ -4402,6 +4808,8 @@ PetscErrorCode initialize_candidate_operator_diagnostic_workspace(
             // independent Poisson replay or change the production solve.
             record_candidate_diagnostic_error(workspace, error);
             shifted_lu.reason = "exact_shifted_matrix_copy_failed";
+            workspace->summary.exact_shifted_matrix_comparison_reason =
+                "exact_shifted_matrix_copy_failed";
         }
     }
     if (workspace->exact_shifted_matrix_available) {
@@ -4474,6 +4882,43 @@ PetscErrorCode initialize_candidate_operator_diagnostic_workspace(
     if (error != PETSC_SUCCESS) {
         return error;
     }
+    if (sparse_only) {
+        detail::FloquetSparseWorkspaceEstimate postsetup_estimate{};
+        PetscErrorCode estimate_error = PETSC_SUCCESS;
+        if (!floquet_candidate_sparse_workspace_postsetup_estimate(
+                workspace,
+                workspace->sparse_vector_storage_estimate_bytes,
+                &postsetup_estimate,
+                &estimate_error)) {
+            workspace->summary.sparse_workspace_observed_bytes_available = false;
+            workspace->summary.sparse_workspace_postsetup_estimated_bytes_available = false;
+            workspace->summary.memory_admission_status = "unavailable";
+            workspace->summary.memory_admission_reason = postsetup_estimate.reason;
+            workspace->summary.status = "unavailable";
+            workspace->summary.reason = "sparse_workspace_postsetup_estimate_unavailable";
+            workspace->summary.last_error_code = static_cast<int>(estimate_error);
+            return estimate_error != PETSC_SUCCESS ? estimate_error : PETSC_ERR_ARG_SIZ;
+        }
+        workspace->summary.sparse_workspace_observed_bytes_available = false;
+        workspace->summary.sparse_workspace_postsetup_estimated_bytes_available = true;
+        workspace->summary.sparse_workspace_postsetup_estimated_bytes =
+            postsetup_estimate.bytes;
+        if (!detail::floquet_sparse_workspace_estimate_within_budget(
+                workspace->summary.sparse_workspace_postsetup_estimated_bytes_available,
+                postsetup_estimate.bytes,
+                kFloquetCandidateSparseWorkspaceBudgetBytes)) {
+            workspace->summary.memory_admission_status = "estimated_rejected";
+            workspace->summary.memory_admission_reason =
+                "postsetup_storage_estimate_exceeds_64_mib_budget";
+            workspace->summary.status = "unavailable";
+            workspace->summary.reason = "sparse_workspace_postsetup_estimate_exceeds_budget";
+            workspace->summary.last_error_code = PETSC_ERR_MEM;
+            return PETSC_ERR_MEM;
+        }
+        workspace->summary.memory_admission_status = "estimated_admitted";
+        workspace->summary.memory_admission_reason =
+            "preflight_and_postsetup_storage_estimates_within_64_mib_budget";
+    }
     workspace->summary.workspace_available = true;
     workspace->summary.status = "ready";
     workspace->summary.reason = "awaiting_true_probe_candidate";
@@ -4522,6 +4967,17 @@ bool prepare_candidate_operator_diagnostic(
     out_summary->reason = "candidate_diagnostic_not_started";
     out_summary->preconditioner_normalization_scale =
         preconditioner_normalization_scale;
+    const bool sparse_only = production_context != nullptr &&
+        (production_context->q_split_count >
+             kFloquetExactSchurPreconditionerMaxDimension ||
+         production_context->phi_split_count >
+             kFloquetExactSchurPreconditionerMaxDimension);
+    out_summary->diagnostic_mode = sparse_only ? "sparse_replay" : "full_small";
+    out_summary->exact_shifted_matrix_comparison_reason = sparse_only
+        ? "sparse_replay_exact_schur_unavailable"
+        : exact_shifted_matrix_available
+            ? "exact_shifted_matrix_comparison_pending"
+            : "exact_materialized_shifted_schur_matrix_unavailable";
     auto &shifted_lu = out_summary->shifted_lu_policy_comparison;
     shifted_lu.requested = true;
     shifted_lu.exact_shifted_matrix_available = exact_shifted_matrix_available;
@@ -4543,11 +4999,83 @@ bool prepare_candidate_operator_diagnostic(
         out_summary->last_error_code = PETSC_ERR_ARG_WRONGSTATE;
         return false;
     }
-    if (production_context->q_split_count > 512 ||
-        production_context->phi_split_count > 512) {
-        out_summary->reason = "real_split_dimension_exceeds_512";
-        shifted_lu.reason = "real_split_dimension_exceeds_512";
-        return false;
+    FloquetCandidateSparseWorkspaceAdmission memory_admission{};
+    if (sparse_only) {
+        out_summary->memory_admission_source =
+            "petsc_seqaij_allocated_storage_estimate_not_rss";
+        shifted_lu.exact_shifted_matrix_available = false;
+        shifted_lu.reason = "sparse_replay_exact_schur_unavailable";
+        auto &live_pc = out_summary->live_pc_observation;
+        live_pc.requested = true;
+        live_pc.available = false;
+        live_pc.status = "unavailable";
+        live_pc.reason = "sparse_replay_skips_live_pc_observation";
+        live_pc.borrowed_pmat_copy.requested = true;
+        live_pc.borrowed_pmat_copy.available = false;
+        live_pc.borrowed_pmat_copy.status = "unavailable";
+        live_pc.borrowed_pmat_copy.reason =
+            "sparse_replay_skips_live_pc_observation";
+        out_summary->sparse_workspace_budget_bytes_available = true;
+        out_summary->sparse_workspace_budget_bytes =
+            kFloquetCandidateSparseWorkspaceBudgetBytes;
+
+        const auto admission_transaction =
+            detail::run_floquet_candidate_diagnostic_setup_transaction(
+                []() {
+                    return PetscPushErrorHandler(PetscReturnErrorHandler, nullptr);
+                },
+                [&]() {
+                    memory_admission =
+                        measure_floquet_candidate_sparse_workspace_admission(
+                            production_context, gyrotropic);
+                    return PETSC_SUCCESS;
+                },
+                []() { return PETSC_SUCCESS; },
+                []() { return PetscPopErrorHandler(); });
+        if (admission_transaction.push_error != PETSC_SUCCESS) {
+            out_summary->reason =
+                "sparse_workspace_estimate_handler_push_failed";
+            out_summary->memory_admission_status = "unavailable";
+            out_summary->memory_admission_source =
+                "petsc_seqaij_allocated_storage_estimate_not_rss";
+            out_summary->memory_admission_reason =
+                "petsc_return_error_handler_push_failed";
+            out_summary->last_error_code =
+                static_cast<int>(admission_transaction.push_error);
+            *out_fatal_error = admission_transaction.fatal_error;
+            return true;
+        }
+        if (admission_transaction.pop_error != PETSC_SUCCESS) {
+            out_summary->reason =
+                "sparse_workspace_estimate_handler_restore_failed";
+            out_summary->memory_admission_status = "unavailable";
+            out_summary->memory_admission_source =
+                "petsc_seqaij_allocated_storage_estimate_not_rss";
+            out_summary->memory_admission_reason =
+                "petsc_return_error_handler_restore_failed";
+            out_summary->last_error_code =
+                static_cast<int>(admission_transaction.pop_error);
+            *out_fatal_error = admission_transaction.fatal_error;
+            return true;
+        }
+        out_summary->memory_admission_status = memory_admission.status;
+        out_summary->memory_admission_reason = memory_admission.reason;
+        if (memory_admission.estimated_bytes_available) {
+            out_summary->sparse_workspace_estimated_bytes_available = true;
+            out_summary->sparse_workspace_estimated_bytes =
+                memory_admission.estimated_bytes;
+        }
+        if (memory_admission.status != nullptr &&
+            std::strcmp(memory_admission.status, "estimated_admitted") == 0) {
+            shifted_lu.exact_shifted_matrix_available = false;
+        } else {
+            out_summary->status = "unavailable";
+            out_summary->reason = memory_admission.reason != nullptr
+                ? memory_admission.reason
+                : "sparse_workspace_storage_estimate_admission_unavailable";
+            out_summary->last_error_code = static_cast<int>(memory_admission.error);
+            return false;
+        }
     }
     auto *workspace = new (std::nothrow)
         FloquetCandidateOperatorDiagnosticWorkspace{};
@@ -4556,11 +5084,14 @@ bool prepare_candidate_operator_diagnostic(
         out_summary->last_error_code = PETSC_ERR_MEM;
         return false;
     }
+    workspace->summary = *out_summary;
     workspace->summary.requested = true;
     workspace->summary.status = "unavailable";
     workspace->summary.reason = "workspace_setup_incomplete";
     workspace->summary.preconditioner_normalization_scale =
         preconditioner_normalization_scale;
+    workspace->sparse_only = sparse_only;
+    workspace->sparse_vector_storage_estimate_bytes = memory_admission.vector_bytes;
     void *raw_workspace = workspace;
     PetscErrorCode setup_error = PETSC_SUCCESS;
     const auto transaction =
@@ -4572,8 +5103,9 @@ bool prepare_candidate_operator_diagnostic(
                 setup_error = initialize_candidate_operator_diagnostic_workspace(
                     workspace,
                     production_context,
-                    exact_shifted_matrix,
-                    exact_shifted_matrix_available,
+                    sparse_only ? nullptr : exact_shifted_matrix,
+                    sparse_only ? false : exact_shifted_matrix_available,
+                    sparse_only,
                     gyrotropic,
                     shift,
                     operator_normalization_scale,
@@ -4587,8 +5119,12 @@ bool prepare_candidate_operator_diagnostic(
             [&]() {
                 workspace->summary.workspace_available = false;
                 workspace->summary.status = "unavailable";
-                workspace->summary.reason =
-                    "candidate_diagnostic_workspace_setup_failed";
+                if (std::strcmp(
+                        workspace->summary.reason,
+                        "workspace_setup_incomplete") == 0) {
+                    workspace->summary.reason =
+                        "candidate_diagnostic_workspace_setup_failed";
+                }
                 workspace->summary.last_error_code =
                     static_cast<int>(setup_error);
                 *out_summary = workspace->summary;
@@ -5190,17 +5726,46 @@ void begin_candidate_operator_diagnostic_sample(
     const std::uint64_t setup_failure_count =
         workspace->summary.measurement_failure_count;
     const int setup_error_code = workspace->summary.last_error_code;
+    const auto setup_summary = workspace->summary;
     const auto shifted_lu_setup_summary = workspace->shifted_lu_setup_summary;
     workspace->summary = FloquetCandidateOperatorDiagnostic{};
     workspace->summary.requested = true;
     workspace->summary.workspace_available = true;
+    workspace->summary.diagnostic_mode = setup_summary.diagnostic_mode;
+    workspace->summary.sparse_workspace_budget_bytes_available =
+        setup_summary.sparse_workspace_budget_bytes_available;
+    workspace->summary.sparse_workspace_budget_bytes =
+        setup_summary.sparse_workspace_budget_bytes;
+    workspace->summary.sparse_workspace_estimated_bytes_available =
+        setup_summary.sparse_workspace_estimated_bytes_available;
+    workspace->summary.sparse_workspace_estimated_bytes =
+        setup_summary.sparse_workspace_estimated_bytes;
+    workspace->summary.sparse_workspace_observed_bytes_available =
+        setup_summary.sparse_workspace_observed_bytes_available;
+    workspace->summary.sparse_workspace_observed_bytes =
+        setup_summary.sparse_workspace_observed_bytes;
+    workspace->summary.sparse_workspace_postsetup_estimated_bytes_available =
+        setup_summary.sparse_workspace_postsetup_estimated_bytes_available;
+    workspace->summary.sparse_workspace_postsetup_estimated_bytes =
+        setup_summary.sparse_workspace_postsetup_estimated_bytes;
+    workspace->summary.memory_admission_source =
+        setup_summary.memory_admission_source;
+    workspace->summary.memory_admission_status =
+        setup_summary.memory_admission_status;
+    workspace->summary.memory_admission_reason =
+        setup_summary.memory_admission_reason;
+    workspace->summary.exact_shifted_matrix_comparison_reason =
+        setup_summary.exact_shifted_matrix_comparison_reason;
+    workspace->summary.live_pc_observation = setup_summary.live_pc_observation;
     workspace->summary.measurement_failure_count = setup_failure_count;
     workspace->summary.last_error_code = setup_error_code;
     workspace->summary.status = "unavailable";
     workspace->summary.reason = "candidate_action_not_observed";
-    workspace->summary.live_pc_observation.requested = true;
-    workspace->summary.live_pc_observation.status = "unavailable";
-    workspace->summary.live_pc_observation.reason = "awaiting_live_ksp_capture";
+    if (!workspace->sparse_only) {
+        workspace->summary.live_pc_observation.requested = true;
+        workspace->summary.live_pc_observation.status = "unavailable";
+        workspace->summary.live_pc_observation.reason = "awaiting_live_ksp_capture";
+    }
     workspace->summary.callback_ordinal = callback_ordinal;
     workspace->summary.iteration = static_cast<std::int64_t>(iteration);
     workspace->summary.preconditioner_normalization_scale = preconditioner_scale;
@@ -5251,16 +5816,18 @@ PetscErrorCode capture_candidate_operator_diagnostic_sample(
         return PETSC_SUCCESS;
     }
 
-    const PetscErrorCode live_pc_error = capture_candidate_live_pc_observation(
-        workspace,
-        live_ksp,
-        shifted_operator,
-        shifted_rhs,
-        candidate_solution);
-    if (live_pc_error != PETSC_SUCCESS) {
-        return live_pc_error;
+    if (!workspace->sparse_only) {
+        const PetscErrorCode live_pc_error = capture_candidate_live_pc_observation(
+            workspace,
+            live_ksp,
+            shifted_operator,
+            shifted_rhs,
+            candidate_solution);
+        if (live_pc_error != PETSC_SUCCESS) {
+            return live_pc_error;
+        }
+        (void)emit_floquet_factor_action_probe_marker(workspace);
     }
-    (void)emit_floquet_factor_action_probe_marker(workspace);
 
     workspace->summary.sample_available = true;
     workspace->summary.status = "partial";
@@ -5474,6 +6041,10 @@ PetscErrorCode capture_candidate_operator_diagnostic_sample(
         }
         workspace->summary.exact_shifted_matrix_comparison_available =
             error == PETSC_SUCCESS;
+        workspace->summary.exact_shifted_matrix_comparison_reason =
+            error == PETSC_SUCCESS
+                ? "exact_shifted_matrix_comparison_measured"
+                : "exact_shifted_matrix_comparison_failed";
         if (error != PETSC_SUCCESS) {
             record_candidate_diagnostic_error(workspace, error);
         }
@@ -5518,7 +6089,9 @@ PetscErrorCode capture_candidate_operator_diagnostic_sample(
     }
     if (workspace->summary.measurement_failure_count == 0u) {
         workspace->summary.status = "measured";
-        workspace->summary.reason = "bounded_candidate_operator_observation";
+        workspace->summary.reason = workspace->sparse_only
+            ? "sparse_replay_candidate_operator_observation"
+            : "bounded_candidate_operator_observation";
     } else {
         workspace->summary.status = "partial";
         workspace->summary.reason = "one_or_more_measurements_unavailable";

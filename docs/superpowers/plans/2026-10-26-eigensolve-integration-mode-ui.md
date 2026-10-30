@@ -436,3 +436,12 @@ Actual observed memory pozostaje null, jeśli PETSc jej nie raportuje.
 To admission estimate, nie obietnica twardego ograniczenia fill-in LU.
 Brak/invalid metainfo, unsupported typ, overflow lub przekroczenie budżetu
 daje unavailable; opt-out i small full C1 pozostają. Implementacja/testy w toku.
+
+
+Sparse C1 jest już zaimplementowany źródłowo po review, z kontrolą capacity
+SeqAIJ i cap64MiB; nowe native/runtime dowody nadal wymagane. D1 candidate
+czyta teraz rzeczywistą ścieżkę last_true_probe, fixture odpowiada producentowi.
+C ABI ma regresję delimitacji nowych JSON stringów. Następnie: native SLEPc
+CI + pełne bootstrap/API CI, managed recreate profilu schur-action w naszej
+grupie, oryginalny signed15 i odczyt probe; potem poprawka potwierdzonego
+błędu numerycznego i pełne R6/wykres/I7. Merge master i cleanup nadal otwarte.

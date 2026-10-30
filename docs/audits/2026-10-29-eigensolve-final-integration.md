@@ -798,3 +798,29 @@ wznowienia bez ambient env. Nowe testy obejmują stare SHA, błędne i podwójne
 sterowania, Compose, niezmienność pozostałego env i odtwarzanie intentu.
 Review produkcyjnego flow oraz AST/diff PASS; testy wyłącznie GitHub Actions,
 nowy managed runtime jeszcze NOT VERIFIED. Native sparse C1 nadal poza repo.
+
+
+## Sparse C1 — implementacja po review, przed CI/runtime
+
+Zastosowano skorygowany sparse_replay dla q/phi>512, bez zmiany limitu
+produkcyjnego exact Schura512, równań i gate1e-8. Admission używa jawnego
+SeqAIJ allocated-storage estimate z cap64MiB oraz ponownej estymaty po setupie;
+actual memory pozostaje null. Szczegółowy kontrakt i pinned źródła są
+w2026-10-30-eigensolve-sparse-c1-memory-contract.md. Default opt-out i full_small
+zachowano. Test >512 porównuje akceptację/wynik bez diagnostyki i z nią.
+
+Niezależny review wyłapał dwa brakujące closingquotes w producer JSON;
+naprawiono je i dodano boundary assertions do istniejącego rzeczywistego
+C ABI hard-ksp-nearest. Root wykrył też własny błąd D1: candidate znajduje się
+pod last_true_probe, nie na root shifted_ksp_failure_probe. Consumer i fixture
+przeniesiono do dokładnej ścieżki producenta, bez fallbacku. Review końcowy
+nie zgłosił pozostałych blockerów. Parser/diff PASS, kompilacja/native tests
+pozostają wymagane w CI; nowy kod nie jest jeszcze running runtime.
+
+Bootstrap b595 job124069044243 odrzucił dwa stare fixture'y admission cache.
+Commit e6a58cc7b celowo wymaga cold pull przed konstrukcją BuildControl,
+który używa helpera; fixture oczekiwał starej kolejności. Drugi patchował
+instancję, choć static guard czyta backing przez klasę. Poprawiono wyłącznie
+fixture i forwarding mocka. Produkcyjny Windows physical32GiB guard przed
+cold pull i osobny Docker VM32GiB guard pozostają bez zmian. Ponowne CI
+musi dojść także do nowych managed-profile kontraktów.

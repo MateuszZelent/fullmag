@@ -9942,6 +9942,25 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
                        "\"schema_version\":\"floquet_candidate_operator_diagnostic.v1\"") &&
                   json_member_has_literal(candidate.c_str(), "\"requested\":", "true"),
               "hard failure preserves the requested candidate diagnostic schema");
+        check(json_member_has_literal(candidate.c_str(),
+                  "\"memory_admission_source\":", "\"\"") &&
+                  json_member_has_literal(candidate.c_str(),
+                      "\"diagnostic_mode\":", "\"full_small\""),
+              "production C ABI JSON closes small-C1 admission source and mode strings");
+        const char *comparison_reason_literals[] = {
+            "\"exact_shifted_matrix_comparison_pending\"",
+            "\"exact_shifted_matrix_comparison_measured\"",
+            "\"exact_shifted_matrix_comparison_failed\"",
+            "\"exact_shifted_matrix_copy_failed\"",
+            "\"exact_materialized_shifted_schur_matrix_unavailable\""};
+        bool comparison_reason_delimited = false;
+        for (const char *literal : comparison_reason_literals) {
+            comparison_reason_delimited = comparison_reason_delimited ||
+                json_member_has_literal(candidate.c_str(),
+                    "\"exact_shifted_matrix_comparison_reason\":", literal);
+        }
+        check(comparison_reason_delimited,
+              "production C ABI JSON closes and delimits the exact-Schur reason string");
         if (attempts_count > 0.0) {
             // A later hard error must preserve already captured diagnostic
             // history; it must not relabel earlier positive callbacks absent.

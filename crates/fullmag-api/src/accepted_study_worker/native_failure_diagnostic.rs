@@ -517,7 +517,7 @@ fn first_failed_subwindow_projection(value: &Value) -> Option<Value> {
             "true_probe_auxiliary_measurement_failure_count",
         ];
         if let Some(mut projected) = project_scalar_diagnostic_fields(probe, &keys) {
-            if let Some(last) = probe.get("last_true_probe").and_then(|last| {
+            if let Some(mut last) = probe.get("last_true_probe").and_then(|last| {
                 project_scalar_diagnostic_fields(
                     last,
                     &[
@@ -548,65 +548,67 @@ fn first_failed_subwindow_projection(value: &Value) -> Option<Value> {
                     ],
                 )
             }) {
+                if let Some(candidate) = probe
+                    .get("last_true_probe")
+                    .and_then(|source| source.get("candidate_operator_diagnostic"))
+                    .and_then(project_candidate_operator_diagnostic)
+                {
+                    last.insert(
+                        "candidate_operator_diagnostic".into(),
+                        Value::Object(candidate),
+                    );
+                }
                 projected.insert("last_true_probe".into(), Value::Object(last));
-            }
-            if let Some(candidate) =
-                probe
-                    .get("candidate_operator_diagnostic")
-                    .and_then(|candidate| {
-                        project_scalar_diagnostic_fields(
-                            candidate,
-                            &[
-                                "schema_version",
-                                "requested",
-                                "measurement_scope",
-                                "diagnostic_mode",
-                                "sparse_workspace_budget_bytes",
-                                "sparse_workspace_estimated_bytes",
-                                "sparse_workspace_observed_bytes",
-                                "sparse_workspace_postsetup_estimated_bytes",
-                                "memory_admission_source",
-                                "exact_shifted_matrix_comparison_reason",
-                                "memory_admission_status",
-                                "memory_admission_reason",
-                                "status",
-                                "reason",
-                                "workspace_available",
-                                "sample_available",
-                                "callback_ordinal",
-                                "iteration",
-                                "production_phi_rhs_l2_norm_available",
-                                "production_phi_rhs_l2_norm",
-                                "production_phi_l2_norm_available",
-                                "production_phi_l2_norm",
-                                "production_poisson_residual_l2_norm_available",
-                                "production_poisson_residual_l2_norm",
-                                "production_poisson_relative_residual_available",
-                                "production_poisson_relative_residual",
-                                "production_vs_isolated_replay_available",
-                                "production_vs_isolated_replay_relative_defect",
-                                "isolated_repeatability_available",
-                                "isolated_repeatability_relative_defect",
-                                "isolated_additivity_available",
-                                "isolated_additivity_relative_defect",
-                                "exact_shifted_matrix_comparison_available",
-                                "exact_shifted_matrix_relative_defect",
-                                "preconditioner_normalization_scale",
-                                "measurement_failure_count",
-                                "last_error_code",
-                            ],
-                        )
-                    })
-            {
-                projected.insert(
-                    "candidate_operator_diagnostic".into(),
-                    Value::Object(candidate),
-                );
             }
             projection.insert("shifted_ksp_failure_probe".into(), Value::Object(projected));
         }
     }
     (!projection.is_empty()).then(|| Value::Object(projection))
+}
+
+fn project_candidate_operator_diagnostic(value: &Value) -> Option<Map<String, Value>> {
+    project_scalar_diagnostic_fields(
+        value,
+        &[
+            "schema_version",
+            "requested",
+            "measurement_scope",
+            "diagnostic_mode",
+            "sparse_workspace_budget_bytes",
+            "sparse_workspace_estimated_bytes",
+            "sparse_workspace_observed_bytes",
+            "sparse_workspace_postsetup_estimated_bytes",
+            "memory_admission_source",
+            "exact_shifted_matrix_comparison_reason",
+            "memory_admission_status",
+            "memory_admission_reason",
+            "status",
+            "reason",
+            "workspace_available",
+            "sample_available",
+            "callback_ordinal",
+            "iteration",
+            "production_phi_rhs_l2_norm_available",
+            "production_phi_rhs_l2_norm",
+            "production_phi_l2_norm_available",
+            "production_phi_l2_norm",
+            "production_poisson_residual_l2_norm_available",
+            "production_poisson_residual_l2_norm",
+            "production_poisson_relative_residual_available",
+            "production_poisson_relative_residual",
+            "production_vs_isolated_replay_available",
+            "production_vs_isolated_replay_relative_defect",
+            "isolated_repeatability_available",
+            "isolated_repeatability_relative_defect",
+            "isolated_additivity_available",
+            "isolated_additivity_relative_defect",
+            "exact_shifted_matrix_comparison_available",
+            "exact_shifted_matrix_relative_defect",
+            "preconditioner_normalization_scale",
+            "measurement_failure_count",
+            "last_error_code",
+        ],
+    )
 }
 
 fn project_scalar_diagnostic_fields(value: &Value, keys: &[&str]) -> Option<Map<String, Value>> {
@@ -836,6 +838,9 @@ mod tests {
                  "schema_version":"shifted_ksp_failure_probe.v1",
                  "scope":"internal_shifted_linear_system_not_original_descriptor",
                  "callback_count":12, "raw_vectors":[4,5,6],
+                 "last_true_probe": {"available":true,"rtol":1e-11,
+                    "true_residual_l2_norm":0.1,"rhs_l2_norm":1.0,
+                    "tolerance_ratio_available":true,"true_residual_to_threshold_ratio":10.0,
                  "candidate_operator_diagnostic": {
                      "schema_version":"floquet_candidate_operator_diagnostic.v1",
                      "requested":true, "status":"available", "sample_available":true,
@@ -848,9 +853,6 @@ mod tests {
                      "isolated_repeatability_relative_defect":0.0,
                      "raw_vectors":[10,11,12], "live_pc_observation":{"raw_matrix":[[1,2]]}
                  },
-                 "last_true_probe": {"available":true,"rtol":1e-11,
-                    "true_residual_l2_norm":0.1,"rhs_l2_norm":1.0,
-                    "tolerance_ratio_available":true,"true_residual_to_threshold_ratio":10.0,
                     "raw_vectors":[7,8,9]}
              }}
         ]});
@@ -870,7 +872,8 @@ mod tests {
                 ["true_residual_to_threshold_ratio"],
             10.0
         );
-        let operator = &failure["shifted_ksp_failure_probe"]["candidate_operator_diagnostic"];
+        let operator = &failure["shifted_ksp_failure_probe"]["last_true_probe"]
+            ["candidate_operator_diagnostic"];
         assert_eq!(
             operator["schema_version"],
             "floquet_candidate_operator_diagnostic.v1"
@@ -887,6 +890,9 @@ mod tests {
             .unwrap()
             .contains_key("sparse_workspace_observed_bytes"));
         assert!(operator["sparse_workspace_observed_bytes"].is_null());
+        assert!(failure["shifted_ksp_failure_probe"]
+            .get("candidate_operator_diagnostic")
+            .is_none());
         assert!(operator.get("raw_vectors").is_none());
         assert!(operator.get("live_pc_observation").is_none());
         assert!(failure.get("raw_vectors").is_none());

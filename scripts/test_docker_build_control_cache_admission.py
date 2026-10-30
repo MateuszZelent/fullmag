@@ -171,7 +171,7 @@ class BuildSpaceAdmissionTests(unittest.TestCase):
              mock.patch.object(control, "compose_capture", side_effect=pull) as compose, \
              mock.patch.object(control, "bounded_capture", return_value=subprocess.CompletedProcess(
                  [], 0, json.dumps(MANIFEST).encode(), b"")), \
-             mock.patch.object(control, "BuildControl", side_effect=make_control), \
+             mock.patch.object(control, "BuildControl", side_effect=make_control) as build_control, \
              mock.patch.object(storage, "resolve_layout", return_value={"worktree_id": "test"}), \
              mock.patch.object(compose_identity, "compose_project_identity", return_value={
                  "project_name": "fullmag-cache-test"}), \
@@ -179,6 +179,9 @@ class BuildSpaceAdmissionTests(unittest.TestCase):
              mock.patch.object(bootstrap, "tracked_input_files", return_value=tracked), \
              mock.patch.object(bootstrap, "input_files", return_value=tracked), \
              mock.patch.object(bootstrap, "read_input", side_effect=lambda _repo, path: source_bytes[path.as_posix()]):
+            build_control.assert_windows_pre_pull_space.side_effect = (
+                fake.assert_windows_pre_pull_space
+            )
             result = control.build_volume_toolchain(repo)
         return result, compose
 
@@ -343,10 +346,10 @@ class BuildSpaceAdmissionTests(unittest.TestCase):
         fake = FakeControl(receipt=None, events=events, stop_after_prepare=True)
         with self.assertRaises(StopAfterPrepare):
             self._run_toolchain(fake, base_present=False)
-        expected = ["construct"]
+        expected = []
         if control.os.name == "nt":
             expected.append("windows-pre-pull")
-        expected.extend(("pull", "prepare", "helper"))
+        expected.extend(("pull", "construct", "prepare", "helper"))
         self.assertEqual(events, expected)
 
     def test_bounded_budget_does_not_start_zero_space_lease(self):
@@ -376,7 +379,7 @@ class BuildSpaceAdmissionTests(unittest.TestCase):
         identity = {"project_name": "fullmag-cache-test", "worktree_id": "test"}
         with mock.patch("docker_control_namespace.resolve_namespace", return_value=None):
             instance = control.BuildControl(identity, HELPER)
-        with mock.patch.object(instance, "_windows_backing_volume", return_value={
+        with mock.patch.object(control.BuildControl, "_windows_backing_volume", return_value={
                 "available_bytes": control.MIN_FREE_BUILD_BYTES - 1}):
             with self.assertRaisesRegex(control.BuildControlError, "32 GiB"):
                 instance.assert_windows_pre_pull_space()

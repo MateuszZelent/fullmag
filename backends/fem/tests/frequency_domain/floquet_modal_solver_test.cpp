@@ -1167,23 +1167,25 @@ void executes_native_sparse_matshell_above_dense_bound(bool force_inner_failure 
             fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked();
     }
 
-    const char *previous_action_diagnostic =
-        std::getenv("FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC");
-    const bool had_previous_action_diagnostic = previous_action_diagnostic != nullptr;
-    const std::string previous_action_diagnostic_value =
-        had_previous_action_diagnostic ? previous_action_diagnostic : "";
+    const SavedEnvironmentValue previous_dense_oracle(
+        "FULLMAG_FLOQUET_DENSE_ORACLE");
+    const SavedEnvironmentValue previous_action_diagnostic(
+        "FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC");
+    check(clear_floquet_diagnostic_environment_value(
+              previous_dense_oracle.name) == 0 &&
+              clear_action_diagnostic_environment() == 0,
+          "large sparse C1 comparison starts with both diagnostic opt-ins disabled");
+    fd::SLEPcTinyGyrotropicModalEigenResult baseline_result{};
+    if (!force_inner_failure) {
+        baseline_result = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
+            operator_view, spectral);
+    }
     check(set_action_diagnostic_environment("1") == 0,
           "action-only diagnostic opt-in can be enabled for the prepared native regression");
     const auto result = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
         operator_view, spectral);
-    if (had_previous_action_diagnostic) {
-        check(set_action_diagnostic_environment(
-                  previous_action_diagnostic_value.c_str()) == 0,
-              "action-only diagnostic environment is restored after the prepared regression");
-    } else {
-        check(clear_action_diagnostic_environment() == 0,
-              "action-only diagnostic environment is cleared after the prepared regression");
-    }
+    previous_action_diagnostic.restore();
+    previous_dense_oracle.restore();
 #if FULLMAG_FEM_WITH_SLEPC
     check(result.floquet_schur_action_diagnostic.requested,
           "native regression records that the action-only diagnostic was requested");
@@ -1263,6 +1265,184 @@ void executes_native_sparse_matshell_above_dense_bound(bool force_inner_failure 
               std::isfinite(
                   result.floquet_schur_action_diagnostic.mat_shell_reconstruction_relative_defect),
           "native regression measures the bounded action-only probe and MatShell callback before EPS");
+    const auto &candidate_diagnostic =
+        result.shifted_ksp_failure_probe.candidate_operator_diagnostic;
+    check(candidate_diagnostic.requested &&
+              candidate_diagnostic.workspace_available &&
+              std::strcmp(candidate_diagnostic.diagnostic_mode, "sparse_replay") == 0 &&
+              candidate_diagnostic.sample_available &&
+              candidate_diagnostic.production_phi_rhs_norm_available &&
+              candidate_diagnostic.production_phi_norm_available &&
+              candidate_diagnostic.production_poisson_residual_available &&
+              candidate_diagnostic.production_vs_isolated_replay_available &&
+              candidate_diagnostic.isolated_repeatability_available &&
+              candidate_diagnostic.isolated_additivity_available,
+          "above-bound sparse C1 captures Poisson residual, replay, repeatability, and additivity");
+    check(!candidate_diagnostic.exact_shifted_matrix_comparison_available &&
+              std::strcmp(
+                  candidate_diagnostic.exact_shifted_matrix_comparison_reason,
+                  "sparse_replay_exact_schur_unavailable") == 0 &&
+              candidate_diagnostic.shifted_lu_policy_comparison.requested &&
+              !candidate_diagnostic.shifted_lu_policy_comparison.available &&
+              std::strcmp(
+                  candidate_diagnostic.shifted_lu_policy_comparison.reason,
+                  "sparse_replay_exact_schur_unavailable") == 0 &&
+              candidate_diagnostic.live_pc_observation.requested &&
+              !candidate_diagnostic.live_pc_observation.available &&
+              std::strcmp(
+                  candidate_diagnostic.live_pc_observation.reason,
+                  "sparse_replay_skips_live_pc_observation") == 0,
+          "sparse-only C1 labels exact-Schur, shifted-LU, and live-PC evidence unavailable");
+    check(candidate_diagnostic.sparse_workspace_budget_bytes_available &&
+              candidate_diagnostic.sparse_workspace_budget_bytes ==
+                  64u * 1024u * 1024u &&
+              candidate_diagnostic.sparse_workspace_estimated_bytes_available &&
+              candidate_diagnostic.sparse_workspace_estimated_bytes > 0u &&
+              candidate_diagnostic.sparse_workspace_estimated_bytes <=
+                  candidate_diagnostic.sparse_workspace_budget_bytes &&
+              candidate_diagnostic.sparse_workspace_postsetup_estimated_bytes_available &&
+              candidate_diagnostic.sparse_workspace_postsetup_estimated_bytes > 0u &&
+              candidate_diagnostic.sparse_workspace_postsetup_estimated_bytes <=
+                  candidate_diagnostic.sparse_workspace_budget_bytes &&
+              !candidate_diagnostic.sparse_workspace_observed_bytes_available &&
+              std::strcmp(
+                  candidate_diagnostic.memory_admission_source,
+                  "petsc_seqaij_allocated_storage_estimate_not_rss") == 0 &&
+              std::strcmp(
+                  candidate_diagnostic.memory_admission_status,
+                  "estimated_admitted") == 0,
+          "sparse-only C1 reports separate SeqAIJ storage estimates and no RSS observation");
+
+    Mat synthetic_seqaij = nullptr;
+    check(MatCreateSeqAIJ(PETSC_COMM_SELF, 4, 4, 1, nullptr, &synthetic_seqaij) ==
+                  PETSC_SUCCESS,
+          "create a small SeqAIJ fixture for sparse storage admission");
+    for (PetscInt row = 0; row < 4; ++row) {
+        check(MatSetValue(
+                  synthetic_seqaij,
+                  row,
+                  row,
+                  static_cast<PetscScalar>(1.0),
+                  INSERT_VALUES) == PETSC_SUCCESS,
+              "populate the SeqAIJ storage fixture");
+    }
+    check(MatAssemblyBegin(synthetic_seqaij, MAT_FINAL_ASSEMBLY) == PETSC_SUCCESS &&
+              MatAssemblyEnd(synthetic_seqaij, MAT_FINAL_ASSEMBLY) == PETSC_SUCCESS,
+          "assemble the SeqAIJ storage fixture");
+    MatInfo synthetic_info{};
+    check(MatGetInfo(synthetic_seqaij, MAT_LOCAL, &synthetic_info) == PETSC_SUCCESS &&
+              synthetic_info.nz_allocated > 0.0 && synthetic_info.nz_used > 0.0 &&
+              synthetic_info.memory == 0.0,
+          "pinned SeqAIJ reports valid allocated CSR counts while MatInfo.memory is zero");
+    const auto synthetic_matrix_estimate =
+        fd::detail::estimate_floquet_seqaij_storage(
+            true,
+            4,
+            4,
+            synthetic_info.nz_allocated,
+            synthetic_info.nz_used,
+            fd::detail::FloquetSeqAIJStorageKind::duplicated_matrix);
+    const auto synthetic_factor_estimate =
+        fd::detail::estimate_floquet_seqaij_storage(
+            true,
+            4,
+            4,
+            synthetic_info.nz_allocated,
+            synthetic_info.nz_used,
+            fd::detail::FloquetSeqAIJStorageKind::lu_factor);
+    check(synthetic_matrix_estimate.available && synthetic_matrix_estimate.bytes > 0u &&
+              synthetic_factor_estimate.available && synthetic_factor_estimate.bytes > 0u,
+          "valid SeqAIJ CSR counts produce conservative duplicate and factor storage estimates");
+    const auto synthetic_vectors = static_cast<std::uint64_t>(
+        (13 * 4 + 5 * 4) * sizeof(PetscScalar));
+    const auto synthetic_workspace_estimate =
+        fd::detail::estimate_floquet_sparse_workspace(
+            synthetic_matrix_estimate.bytes,
+            synthetic_factor_estimate.bytes,
+            synthetic_vectors);
+    check(synthetic_workspace_estimate.available &&
+              synthetic_workspace_estimate.bytes > 1u,
+          "valid SeqAIJ storage and fixed vectors produce a preflight estimate");
+    const auto unavailable_workspace_estimate =
+        fd::detail::estimate_floquet_sparse_workspace(
+            0u,
+            synthetic_factor_estimate.bytes,
+            synthetic_vectors);
+    const auto estimate_budget_rejection =
+        fd::detail::floquet_sparse_workspace_estimate_within_budget(
+            true,
+            synthetic_workspace_estimate.bytes,
+            synthetic_workspace_estimate.bytes - 1u);
+    const auto unsupported_type_estimate = fd::detail::estimate_floquet_seqaij_storage(
+        false,
+        4,
+        4,
+        synthetic_info.nz_allocated,
+        synthetic_info.nz_used,
+        fd::detail::FloquetSeqAIJStorageKind::duplicated_matrix);
+    const auto negative_nnz_estimate = fd::detail::estimate_floquet_seqaij_storage(
+        true,
+        4,
+        4,
+        -1.0,
+        synthetic_info.nz_used,
+        fd::detail::FloquetSeqAIJStorageKind::duplicated_matrix);
+    const auto nonfinite_nnz_estimate = fd::detail::estimate_floquet_seqaij_storage(
+        true,
+        4,
+        4,
+        std::numeric_limits<double>::quiet_NaN(),
+        synthetic_info.nz_used,
+        fd::detail::FloquetSeqAIJStorageKind::duplicated_matrix);
+    const auto fractional_nnz_estimate = fd::detail::estimate_floquet_seqaij_storage(
+        true,
+        4,
+        4,
+        0.5,
+        0.0,
+        fd::detail::FloquetSeqAIJStorageKind::duplicated_matrix);
+    const auto inconsistent_nnz_estimate = fd::detail::estimate_floquet_seqaij_storage(
+        true,
+        4,
+        4,
+        1.0,
+        2.0,
+        fd::detail::FloquetSeqAIJStorageKind::duplicated_matrix);
+    const auto out_of_exact_double_range_nnz_estimate =
+        fd::detail::estimate_floquet_seqaij_storage(
+            true,
+            4,
+            4,
+            9007199254740994.0,
+            0.0,
+            fd::detail::FloquetSeqAIJStorageKind::duplicated_matrix);
+    std::uint64_t overflow_total = 0u;
+    const bool checked_multiply_overflow = fd::detail::floquet_add_sparse_storage(
+        std::numeric_limits<std::uint64_t>::max(),
+        2u,
+        &overflow_total);
+    check(!estimate_budget_rejection && !unavailable_workspace_estimate.available &&
+              !unsupported_type_estimate.available &&
+              !negative_nnz_estimate.available && !nonfinite_nnz_estimate.available &&
+              !fractional_nnz_estimate.available && !inconsistent_nnz_estimate.available &&
+              !out_of_exact_double_range_nnz_estimate.available &&
+              !checked_multiply_overflow,
+          "SeqAIJ admission rejects a one-byte-short budget, missing estimates, unsupported types, invalid counts, and arithmetic overflow");
+    check(MatDestroy(&synthetic_seqaij) == PETSC_SUCCESS,
+          "destroy the SeqAIJ storage fixture");
+    check(baseline_result.ok == result.ok &&
+              baseline_result.accepted_mode_count == result.accepted_mode_count &&
+              baseline_result.accepted_mode_count == 1 &&
+              baseline_result.max_candidate_relative_residual <=
+                  spectral.residual_tolerance &&
+              result.max_candidate_relative_residual <= spectral.residual_tolerance &&
+              std::abs(baseline_result.accepted_modes.front().frequency_hz -
+                       result.accepted_modes.front().frequency_hz) <= 1.0e-9 &&
+              baseline_result.accepted_modes.front().relative_residual <=
+                  spectral.residual_tolerance &&
+              result.accepted_modes.front().relative_residual <=
+                  spectral.residual_tolerance,
+          "opt-in sparse C1 preserves the opt-out solve acceptance and certified mode");
 #endif
     check(result.execution_policy != nullptr &&
               std::strcmp(result.execution_policy, "petsc_sequential_cpu") == 0,
