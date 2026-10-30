@@ -1,7 +1,7 @@
 {
   "schema": "fullmag.results-fem-nodal-source-checkpoint.v1",
-  "observed_at": "2026-10-30T11:12:16.889446+00:00",
-  "head": "78ff376e462db4ebebb2c625ede8d45dd07e0e65",
+  "observed_at": "2026-10-30T11:30:00Z",
+  "head": "15fb39d2319bc4015277698ad7f64a4625eb1079",
   "source_sha256": {
     "crates/fullmag-quantities/src/fem_nodal_field.rs": "5852067389b8b9408dc9a41750e22e9fa7e7611cea37bc1acd9d64b1652ed5cd",
     "crates/fullmag-quantities/src/lib.rs": "a77045805d298eff2d6be7c03a193bab40026a8e2f424564342b8e2615aac877",
@@ -34,7 +34,7 @@
   "checks": {
     "rustfmt_owned_files": "passed (skip_children=true)",
     "git_diff_check": "passed",
-    "cargo_tests": "Second Rust run41044935114 FAILED compiling autosave_fem_geometry (wrong module path, shadowed test helper, expected byte-slice type). Fixed in source; retest pending. Results tests not yet executed.",
+    "cargo_tests": "Rust run41046759452 at76e2c9d84 compiled; read-only playback step FAILED: workspace-inspect 102 passed, 1 failed (eligible_attestation_read_failure_preserves_running_manifest_for_retry: publication lock WouldBlock). Later playback route/producer commands did not execute. UI rerun pending.",
     "new_runtime": "NOT RUN",
     "new_browser": "NOT RUN",
     "review": "Payload/hash API and Windows directory replacement findings addressed in source; Windows execution NOT VERIFIED",
@@ -47,8 +47,11 @@
     "collection": "Independent source review PASS after aggregate receipt budget fix; geometry sibling/stale and aggregate-budget route tests added; NOT RUN.",
     "receipt_budget": "16 MiB aggregate per discovery, typed regular-file oversize error distinguishes missing/type/symlink/I/O failures; independent source review PASS; tests NOT RUN.",
     "snapshot_preferences": "Bounded logical appearance/sample preferences preserve explicit selections across metadata revisions; exact render keys remain revision-pinned and new definitions do not activate preview. Primary source review PASS; Vitest/typecheck/browser NOT RUN.",
-    "ci": "Rust runs41043411407 and41044935114 FAILED; first UI control-room failed unused-import lint (fixed), broad browser fixture failed old result tree expectations (diagnosis ongoing). Typecheck and inspector-actions browser fixture passed on1f2980429; no runtime qualification.",
-    "cargo_lock": "Byte-exact Cargo-produced artifact12971087642 from run41043411407, matching input manifests; sha256 4dbaff705d3e94f64559dd1e50c6088a9bccfe974ea1b49a013d014fe6cb5fbb."
+    "ci": "Rust run41046759452 at76e2c9d84 compiled; read-only playback step FAILED: workspace-inspect 102 passed, 1 failed (eligible_attestation_read_failure_preserves_running_manifest_for_retry: publication lock WouldBlock). Later playback route/producer commands did not execute. UI rerun pending.",
+    "cargo_lock": "Byte-exact Cargo-produced artifact12971087642 from run41043411407, matching input manifests; sha256 4dbaff705d3e94f64559dd1e50c6088a9bccfe974ea1b49a013d014fe6cb5fbb.",
+    "browser_harness": "Corrected closed Analysis results accordion and added complete current output catalog fixture. Existing IDs/assertions/request budget8 preserved. node --check and primary diff review PASS; browser rerun pending.",
+    "completed_run_identity": "Legacy Results navigator resolves no-active-stage identity from ready manifest exact current run/session and envelope/payload stage. Contradictions rejected, no last-stage inference. Primary diff review PASS; Vitest/typecheck pending.",
+    "recovery_sources": "Owned six-file recovery delta preserved in15fb39d23; Python parser and justfile parse PASS. Earlier managed tests remain historical; master integration and renewed recovery qualification pending."
   },
   "formatter_recovery": {
     "unintended_files": 104,

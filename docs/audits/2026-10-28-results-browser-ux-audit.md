@@ -870,3 +870,13 @@ worktree, świeża kontrola runtime i nowe piny. Poprzedni katalog pinów w /tmp
 nie istnieje; nie odtworzono jego wartości z pamięci. Obcy main ma lokalną zmianę
 browser QA, dlatego nie wykonujemy z niego mutującego recovery jako z czystego
 przypiętego helpera. Nie zmieniono cudzych grup.
+
+### 30 October: executable reader results and completed-run identity
+
+Rust CI [41046759452](https://github.com/MateuszZelent/fullmag/actions/runs/41046759452), source `76e2c9d84`, passed compilation and reached the read-only playback step. Workspace inspection ran 103 tests: 102 passed; `eligible_attestation_read_failure_preserves_running_manifest_for_retry` failed with `WouldBlock` while reacquiring the publication lock. The later playback route and autosave commands in that step did not execute. This is not a green Rust qualification.
+
+The broad browser fixture failure was traced to the closed **Analysis results** accordion and a missing current output catalog response, not obsolete tree IDs. The harness now expands that section and serves the complete empty catalog DTO; all IDs, routing assertions and the request budget of 8 remain unchanged. Syntax and primary diff review pass; the browser rerun is pending.
+
+A separate completed-run issue in the legacy Results navigator is fixed in source: after active stage metadata clears, identity comes from a ready manifest that explicitly belongs to the current run/session and names an exact stage. Contradictory metadata is rejected; completion ordering is never used to choose a stage. Focused tests were added, but have not yet run.
+
+The owned recovery changes were committed separately as `15fb39d23` before master integration. Python and justfile parsing passed. A global justfile formatting check reported existing formatting differences; none were applied. The fresh read-only control receipt still selects development attempt `9249f5c7473e48d6a0e1347a154f5c57`. Application recovery, current backend deployment, snapshot scrubbing and Return to Live remain **NOT VERIFIED**.
