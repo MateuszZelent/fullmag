@@ -17,6 +17,8 @@ import type { Viewport3DFieldRenderModel } from "../viewport3dRenderModel";
 import {
   attachViewport3DFieldColorBuildReference,
   buildViewport3DChunkedGlobalBuildKey,
+  CHUNKED_SCALAR_COLOR_INITIAL_STATE,
+  chunkedScalarColorReducer,
   chunkedScalarColorStateIsCompatible,
   createViewport3DFieldColorBuildReference,
   filterViewport3DChunkedScalarColorEntries,
@@ -26,6 +28,7 @@ import {
   resolveViewport3DChunkedPartFieldColorTarget,
   resolveViewport3DChunkedPartProjectionTarget,
   resolveViewport3DChunkedPartDisplayModesKey,
+  resolveChunkedScalarColorSettledBuildKey,
   shouldBuildViewport3DPartChunkedScalarColor,
   shouldStartChunkedScalarColorBuild,
 } from "./useViewport3DChunkedScalarColors";
@@ -971,5 +974,134 @@ describe("buildViewport3DChunkedGlobalBuildKey", () => {
     expect(
       buildViewport3DChunkedGlobalBuildKey({ ...base, fieldIdentity: "none" }),
     ).toBe("magnitude:r1||field=none");
+  });
+});
+
+describe("chunked scalar color build settling", () => {
+  const topology = { nodeCount: 75_000 };
+  const identity = {
+    colorPalette: "viridis",
+    targetKind: "full-domain" as const,
+    topology,
+  };
+
+  // Mirrors the build effect: start -> jobs -> finish. Every job reused a
+  // retained entry (or the part was hidden), so nothing new was published.
+  function runBuildThatPublishesNothing(
+    state: typeof CHUNKED_SCALAR_COLOR_INITIAL_STATE,
+    buildKey: string,
+  ) {
+    const started = chunkedScalarColorReducer(state, { type: "start" });
+    return chunkedScalarColorReducer(started, {
+      settled: { ...identity, buildKey },
+      type: "finish",
+    });
+  }
+
+  function shouldStart(
+    state: typeof CHUNKED_SCALAR_COLOR_INITIAL_STATE,
+    currentBuildKey: string,
+  ) {
+    return shouldStartChunkedScalarColorBuild({
+      builtBuildKey: state.chunkedState?.buildKey ?? null,
+      builtFieldVector: state.chunkedState?.fieldVector ?? null,
+      currentBuildKey,
+      currentFieldVector: {},
+      eligibleForChunkedBuild: true,
+      pending: state.pending,
+      settledBuildKey: resolveChunkedScalarColorSettledBuildKey(
+        state.settled,
+        identity,
+      ),
+    });
+  }
+
+  it("does not restart a build that completed without new entries (browser hang)", () => {
+    const shown = chunkedScalarColorReducer(CHUNKED_SCALAR_COLOR_INITIAL_STATE, {
+      chunkedState: {
+        buildKey: "magnitude:r1||part-a:magnitude:viridis||field=1:75000",
+        colorPalette: "viridis",
+        fieldVector: {},
+        modesKey: "magnitude",
+        targetKind: "full-domain",
+        token: {},
+        topology,
+      },
+      type: "success",
+    });
+    // Hiding the part surface drops its segment from the build key.
+    const currentBuildKey = "magnitude:r1||field=1:75000";
+    expect(shouldStart(shown, currentBuildKey)).toBe(true);
+
+    const settled = runBuildThatPublishesNothing(shown, currentBuildKey);
+
+    expect(settled.pending).toBe(false);
+    expect(settled.chunkedState).toBe(shown.chunkedState);
+    // Before the fix this stayed true, so the effect restarted the build in
+    // the same microtask chain forever (RESULT_CODE_HUNG).
+    expect(shouldStart(settled, currentBuildKey)).toBe(false);
+    expect(
+      chunkedScalarColorReducer(settled, {
+        settled: { ...identity, buildKey: currentBuildKey },
+        type: "finish",
+      }),
+    ).toBe(settled);
+  });
+
+  it("still builds a new key, palette or topology after a settled build", () => {
+    const settled = runBuildThatPublishesNothing(
+      CHUNKED_SCALAR_COLOR_INITIAL_STATE,
+      "magnitude:r1||field=1:75000",
+    );
+
+    expect(shouldStart(settled, "magnitude:r1||field=2:75000")).toBe(true);
+    expect(
+      resolveChunkedScalarColorSettledBuildKey(settled.settled, {
+        ...identity,
+        colorPalette: "magma",
+      }),
+    ).toBeNull();
+    expect(
+      resolveChunkedScalarColorSettledBuildKey(settled.settled, {
+        ...identity,
+        topology: { nodeCount: 75_000 },
+      }),
+    ).toBeNull();
+  });
+
+  it("does not settle on a partial publish and clears the settled build on reset", () => {
+    const chunkedState = {
+      buildKey: "magnitude:r1||field=1:75000",
+      colorPalette: "viridis",
+      fieldVector: {},
+      modesKey: "magnitude",
+      targetKind: "full-domain" as const,
+      token: {},
+      topology,
+    };
+    const partial = chunkedScalarColorReducer(CHUNKED_SCALAR_COLOR_INITIAL_STATE, {
+      chunkedState,
+      pending: true,
+      type: "success",
+    });
+    expect(partial.settled).toBeNull();
+
+    const complete = chunkedScalarColorReducer(partial, {
+      chunkedState,
+      type: "success",
+    });
+    expect(complete.settled?.buildKey).toBe(chunkedState.buildKey);
+    expect(chunkedScalarColorReducer(complete, { type: "reset" })).toBe(
+      CHUNKED_SCALAR_COLOR_INITIAL_STATE,
+    );
+  });
+
+  it("only resets displayed colors, never a pending build without a result", () => {
+    const source = readSource(sourceUrl);
+    const compatibilityEffect = source.slice(
+      source.indexOf("// Only displayed colors can be stale."),
+      source.indexOf('dispatchChunkedColorState({ type: "reset" });'),
+    );
+    expect(compatibilityEffect).toContain("!chunkedColorState.chunkedState ||");
   });
 });
