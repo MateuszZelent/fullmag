@@ -4707,6 +4707,23 @@ pub fn run_planned_problem_with_live_preview_and_frozen_stage_context_and_observ
         false, on_step, None, Some((frozen, source_frozen_plan)))
 }
 
+fn live_step_action_with_interrupt<T>(
+    update: T,
+    on_step: &mut dyn FnMut(T) -> StepAction,
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+) -> StepAction {
+    // Publish the accepted update before checking cancellation so a terminal
+    // accepted state is not lost when the stop signal is already set.
+    let action = on_step(update);
+    if interrupt_requested.is_some_and(|signal| {
+        signal.load(std::sync::atomic::Ordering::Acquire)
+    }) {
+        StepAction::Stop
+    } else {
+        action
+    }
+}
+
 fn run_planned_problem_with_live_preview_artifact_context(
     problem: &ProblemIR,
     plan: &fullmag_ir::ExecutionPlanIR,
@@ -4816,6 +4833,13 @@ fn run_planned_problem_with_live_preview_artifact_context(
         }
         BackendPlanIR::FdmMultilayer(fdm) => {
             let resolution = dispatch::resolve_fdm_engine_with_trail(problem)?;
+            let mut interruptible_on_step = |update| {
+                live_step_action_with_interrupt(
+                    update,
+                    &mut on_step,
+                    interrupt_requested,
+                )
+            };
             let mut executed = dispatch::execute_fdm_multilayer(
                 resolution.engine,
                 fdm,
@@ -4825,7 +4849,7 @@ fn run_planned_problem_with_live_preview_artifact_context(
                     &fdm.common_cells,
                     field_every_n,
                     live_layout.as_ref(),
-                    &mut on_step as &mut dyn FnMut(StepUpdate) -> StepAction,
+                    &mut interruptible_on_step as &mut dyn FnMut(StepUpdate) -> StepAction,
                 )),
                 artifact_writer.clone(),
             )?;
@@ -7035,6 +7059,31 @@ pub fn run_eigen_k_worker_request_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fdm_multilayer_interrupt_publishes_accepted_update_before_stop() {
+        let interrupt_requested = std::sync::atomic::AtomicBool::new(true);
+        let mut published_updates = Vec::new();
+        let mut on_step = |update| {
+            published_updates.push(update);
+            StepAction::Pause
+        };
+
+        let action = live_step_action_with_interrupt(
+            17_u8,
+            &mut on_step,
+            Some(&interrupt_requested),
+        );
+
+        assert_eq!(published_updates, vec![17_u8]);
+        assert_eq!(action, StepAction::Stop);
+
+        let mut on_step = |_| StepAction::Pause;
+        assert_eq!(
+            live_step_action_with_interrupt(23_u8, &mut on_step, None),
+            StepAction::Pause,
+        );
+    }
 
     #[test]
     fn eigen_progress_keeps_residual_separate_from_physical_field() {
