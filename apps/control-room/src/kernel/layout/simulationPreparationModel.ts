@@ -336,7 +336,9 @@ export interface SimulationPreparationViewModel {
   readonly eyebrow: "Simulation preparation";
   readonly failure: SimulationPreparationFailureView | null;
   readonly isTerminal: boolean;
+  /** Startup is unresolved: the startup gate holds and status keeps refreshing. */
   readonly isVisible: boolean;
+  /** `syncing` holds the startup gate without rendering the window. */
   readonly kind:
     | "connecting"
     | "failed"
@@ -344,7 +346,8 @@ export interface SimulationPreparationViewModel {
     | "ready"
     | "resource-error"
     | "running"
-    | "stale";
+    | "stale"
+    | "syncing";
   readonly liveSummary: string;
   readonly logEntries: readonly SimulationPreparationLogEntryView[];
   readonly preparation: SimulationPreparationResource | null;
@@ -594,18 +597,23 @@ function resolveMissingPreparationModel(
   const hasNonTransientSessionError =
     sessionStatus.status === "error" &&
     !isTransientStartupError(sessionStatus.error);
+  const isBackendStarting =
+    isBootstrapping ||
+    isMaterializing ||
+    pendingActivation !== null ||
+    (sessionStatus.status === "error" &&
+      isTransientStartupError(sessionStatus.error));
+  // The client has not read the session status or its published preparation
+  // yet, e.g. right after a page reload. Nothing is being prepared that the
+  // window could explain, so it stays closed while the startup gate holds.
+  const isClientSyncing =
+    sessionStatus.status === "idle" ||
+    sessionStatus.status === "loading" ||
+    hasPublishedPreparationRevision ||
+    ((preparation.status === "idle" || preparation.status === "loading") &&
+      sessionStatus.data === null);
   const isConnecting =
-    !hasNonTransientSessionError &&
-    (sessionStatus.status === "idle" ||
-      sessionStatus.status === "loading" ||
-      isBootstrapping ||
-      isMaterializing ||
-      pendingActivation !== null ||
-      hasPublishedPreparationRevision ||
-      ((preparation.status === "idle" || preparation.status === "loading") &&
-        sessionStatus.data === null) ||
-      (sessionStatus.status === "error" &&
-        isTransientStartupError(sessionStatus.error)));
+    !hasNonTransientSessionError && (isBackendStarting || isClientSyncing);
   const title =
     pendingActivation?.title ??
     (isMaterializing ? "Compiling simulation" : "Preparing simulation");
@@ -626,7 +634,11 @@ function resolveMissingPreparationModel(
     failure: null,
     isTerminal: false,
     isVisible: isConnecting,
-    kind: isConnecting ? "connecting" : "hidden",
+    kind: !isConnecting
+      ? "hidden"
+      : isBackendStarting
+        ? "connecting"
+        : "syncing",
     liveSummary: `${title}. ${detail}`,
     logEntries: [],
     preparation: null,
