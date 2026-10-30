@@ -72,6 +72,63 @@ describe("SnapshotVisualizationController", () => {
     });
   });
 
+  it("inherits appearance across revisions without changing the active viewport", () => {
+    const controller = new SnapshotVisualizationController();
+    const olderRevision = snapshotIdentity("quantity-m", 3, "revision-1");
+    const newerRevision = { ...olderRevision, revision: "revision-2" };
+    const nextRevision = { ...olderRevision, revision: "revision-3" };
+    const olderKey = snapshotVisualizationKey(olderRevision);
+    const newerKey = snapshotVisualizationKey(newerRevision);
+    const nextKey = snapshotVisualizationKey(nextRevision);
+
+    expect(controller.select(olderRevision)).toBe(true);
+    expect(controller.updateAppearance(olderKey, { palette: "viridis" })).toBe(true);
+
+    expect(controller.ensureDefinition(newerRevision)).toBe(true);
+    expect(controller.getSnapshot().activeKey).toBe(olderKey);
+    const newerDefinition = controller.getSnapshot().definitions[newerKey];
+    expect(newerDefinition?.identity.revision).toBe("revision-2");
+    expect(newerDefinition?.appearance.palette).toBe("viridis");
+
+    expect(controller.updateAppearance(newerKey, { palette: "plasma" })).toBe(true);
+    expect(controller.getSnapshot().definitions[olderKey]?.appearance.palette).toBe("viridis");
+    expect(controller.ensureDefinition(nextRevision)).toBe(true);
+    expect(controller.getSnapshot().definitions[nextKey]?.appearance.palette).toBe("plasma");
+    expect(controller.getSnapshot().activeKey).toBe(olderKey);
+  });
+
+  it("isolates inherited appearance by logical identity fields", () => {
+    const controller = new SnapshotVisualizationController();
+    const identity = {
+      ...snapshotIdentity("quantity-m", 3, "revision-1"),
+      runId: "run-1|session=session-1",
+    };
+    const newerRevision = { ...identity, revision: "revision-2" };
+    const key = snapshotVisualizationKey(identity);
+
+    expect(controller.ensureDefinition(identity)).toBe(true);
+    expect(controller.updateAppearance(key, { palette: "viridis" })).toBe(true);
+    expect(controller.ensureDefinition(newerRevision)).toBe(true);
+    const newerDefinition =
+      controller.getSnapshot().definitions[snapshotVisualizationKey(newerRevision)];
+    expect(newerDefinition?.appearance.palette).toBe("viridis");
+
+    const isolatedIdentities = [
+      { ...newerRevision, runId: "run-2|session=session-1" },
+      { ...newerRevision, runId: "run-1|session=session-2" },
+      { ...newerRevision, stageId: "stage-2" },
+      { ...newerRevision, datasetId: "source-dataset-2" },
+      { ...newerRevision, quantityId: "quantity-h" },
+      { ...newerRevision, sampleIndex: 4 },
+    ];
+    for (const isolated of isolatedIdentities) {
+      expect(controller.ensureDefinition(isolated)).toBe(true);
+      const definition =
+        controller.getSnapshot().definitions[snapshotVisualizationKey(isolated)];
+      expect(definition?.appearance.palette).toBe("coolwarm");
+    }
+  });
+
   it("returns to live without dropping retained snapshot settings", () => {
     const controller = new SnapshotVisualizationController();
     const identity = snapshotIdentity("quantity-m");
@@ -89,27 +146,46 @@ describe("SnapshotVisualizationController", () => {
 
     expect(controller.select(identity)).toBe(true);
     expect(controller.getSnapshot().definitions[key]?.appearance.palette).toBe("magma");
+    expect(controller.returnToLive()).toBe(true);
+
+    const newerRevision = { ...identity, revision: "revision-2" };
+    expect(controller.ensureDefinition(newerRevision)).toBe(true);
+    expect(controller.getSnapshot().activeKey).toBeNull();
+    expect(
+      controller.getSnapshot().definitions[snapshotVisualizationKey(newerRevision)]?.appearance.palette,
+    ).toBe("magma");
   });
 
-  it("restores the preferred sample for one exact series without activating it", () => {
+  it("restores the preferred sample for one logical series without activating it", () => {
     const controller = new SnapshotVisualizationController();
     const displayed = snapshotIdentity("quantity-m", 5, "revision-1");
     const sameSeries = snapshotIdentity("quantity-m", 0, "revision-1");
     const otherRun = { ...sameSeries, runId: "run-2" };
+    const otherStage = { ...sameSeries, stageId: "stage-2" };
     const otherDataset = { ...sameSeries, datasetId: "dataset-2" };
+    const otherQuantity = { ...sameSeries, quantityId: "quantity-h" };
     const otherRevision = snapshotIdentity("quantity-m", 0, "revision-2");
 
     expect(controller.rememberSampleIndex(sameSeries)).toBe(true);
     expect(controller.getPreferredSampleIndex(sameSeries)).toBe(0);
+    expect(controller.getPreferredSampleIndex(otherRevision)).toBe(0);
     expect(controller.getPreferredSampleIndex(otherRun)).toBeNull();
+    expect(controller.getPreferredSampleIndex(otherStage)).toBeNull();
     expect(controller.getPreferredSampleIndex(otherDataset)).toBeNull();
-    expect(controller.getPreferredSampleIndex(otherRevision)).toBeNull();
+    expect(controller.getPreferredSampleIndex(otherQuantity)).toBeNull();
     expect(controller.getSnapshot().activeKey).toBeNull();
 
     expect(controller.select(displayed)).toBe(true);
     expect(controller.getPreferredSampleIndex(sameSeries)).toBe(5);
+    expect(controller.getPreferredSampleIndex(otherRevision)).toBe(5);
+
+    const newerRevisionSelection = snapshotIdentity("quantity-m", 2, "revision-2");
+    expect(controller.rememberSampleIndex(newerRevisionSelection)).toBe(true);
+    expect(controller.getPreferredSampleIndex(otherRevision)).toBe(2);
+    expect(controller.getSnapshot().activeKey).toBe(snapshotVisualizationKey(displayed));
+
     controller.returnToLive();
-    expect(controller.getPreferredSampleIndex(sameSeries)).toBe(5);
+    expect(controller.getPreferredSampleIndex(sameSeries)).toBe(2);
   });
 
   it("keeps source revisions and delimiter-containing identities distinct", () => {
@@ -140,7 +216,20 @@ describe("SnapshotVisualizationController", () => {
     expect(controller.select(revisionTwo)).toBe(true);
     expect(controller.select(delimiterLeft)).toBe(true);
     expect(controller.select(delimiterRight)).toBe(true);
-    expect(Object.keys(controller.getSnapshot().definitions)).toHaveLength(4);
+    expect(controller.updateAppearance(snapshotVisualizationKey(delimiterLeft), {
+      palette: "viridis",
+    })).toBe(true);
+    const nextDelimiterLeft = { ...delimiterLeft, revision: "revision-2" };
+    const nextDelimiterRight = { ...delimiterRight, revision: "revision-2" };
+    expect(controller.ensureDefinition(nextDelimiterLeft)).toBe(true);
+    expect(controller.ensureDefinition(nextDelimiterRight)).toBe(true);
+    expect(
+      controller.getSnapshot().definitions[snapshotVisualizationKey(nextDelimiterLeft)]?.appearance.palette,
+    ).toBe("viridis");
+    expect(
+      controller.getSnapshot().definitions[snapshotVisualizationKey(nextDelimiterRight)]?.appearance.palette,
+    ).toBe("coolwarm");
+    expect(Object.keys(controller.getSnapshot().definitions)).toHaveLength(6);
   });
 
   it("rejects invalid or no-op appearance updates without notifying", () => {
@@ -259,8 +348,64 @@ describe("SnapshotVisualizationController", () => {
     expect(controller.getPreferredSampleIndex({
       ...first,
       datasetId: "dataset-0",
+      revision: "revision-2",
     })).toBeNull();
-    expect(controller.getPreferredSampleIndex(newest)).toBe(99);
+    expect(controller.getPreferredSampleIndex({
+      ...first,
+      datasetId: "dataset-1",
+      revision: "revision-2",
+    })).toBe(1);
+    expect(
+      controller.getPreferredSampleIndex({ ...newest, revision: "revision-2" }),
+    ).toBe(99);
+  });
+
+  it("bounds cross-revision appearance preferences and clears them on session reset", () => {
+    const controller = new SnapshotVisualizationController();
+
+    for (let index = 0; index < MAX_SNAPSHOT_VISUALIZATION_DEFINITIONS; index += 1) {
+      const identity = {
+        ...snapshotIdentity("quantity-m", index, "revision-1"),
+        datasetId: `dataset-${index}`,
+      };
+      expect(controller.ensureDefinition(identity)).toBe(true);
+      expect(controller.updateAppearance(snapshotVisualizationKey(identity), {
+        palette: `palette-${index}`,
+      })).toBe(true);
+    }
+
+    const newest = {
+      ...snapshotIdentity("quantity-m", 0, "revision-1"),
+      datasetId: "dataset-newest",
+    };
+    expect(controller.ensureDefinition(newest)).toBe(true);
+    expect(
+      controller.updateAppearance(snapshotVisualizationKey(newest), {
+        palette: "plasma",
+      }),
+    ).toBe(true);
+
+    const evictedRevision = {
+      ...snapshotIdentity("quantity-m", 0, "revision-2"),
+      datasetId: "dataset-0",
+    };
+    expect(controller.ensureDefinition(evictedRevision)).toBe(true);
+    const evictedDefinition =
+      controller.getSnapshot().definitions[snapshotVisualizationKey(evictedRevision)];
+    expect(evictedDefinition?.appearance.palette).toBe("coolwarm");
+
+    const retainedRevision = { ...newest, revision: "revision-2" };
+    expect(controller.ensureDefinition(retainedRevision)).toBe(true);
+    const retainedDefinition =
+      controller.getSnapshot().definitions[snapshotVisualizationKey(retainedRevision)];
+    expect(retainedDefinition?.appearance.palette).toBe("plasma");
+
+    expect(controller.clear()).toBe(true);
+    const afterClear = { ...newest, revision: "revision-3" };
+    expect(controller.ensureDefinition(afterClear)).toBe(true);
+    const clearedDefinition =
+      controller.getSnapshot().definitions[snapshotVisualizationKey(afterClear)];
+    expect(clearedDefinition?.appearance.palette).toBe("coolwarm");
   });
 
   it("clears definitions only when the caller explicitly resets the session", () => {
@@ -273,6 +418,12 @@ describe("SnapshotVisualizationController", () => {
     expect(controller.clear()).toBe(true);
     expect(controller.getSnapshot()).toEqual({ activeKey: null, definitions: {} });
     expect(controller.updateAppearance(key, { visible: true })).toBe(false);
+    const newerRevision = { ...identity, revision: "revision-2" };
+    expect(controller.ensureDefinition(newerRevision)).toBe(true);
+    expect(
+      controller.getSnapshot().definitions[snapshotVisualizationKey(newerRevision)]?.appearance.palette,
+    ).toBe("coolwarm");
+    expect(controller.clear()).toBe(true);
     expect(controller.clear()).toBe(false);
   });
 

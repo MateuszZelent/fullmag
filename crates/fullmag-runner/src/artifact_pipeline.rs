@@ -10,6 +10,7 @@ use crate::artifacts::field_unit;
 use crate::artifacts::{
     write_field_snapshot_artifact, write_scalar_row, write_scalars_csv_header, FieldArtifactContext,
 };
+use crate::autosave_fem_geometry::PreparedFemAutosaveGeometry;
 use crate::autosave_storage::{
     AutosaveTargetState, AutosaveTargetWriter, ContinuousIndexEntry, StageManifest,
     StageSampleCoordinate,
@@ -646,21 +647,25 @@ impl ArtifactPipeline {
         field_context: FieldArtifactContext,
         capacity: usize,
     ) -> Result<Self, RunError> {
-        let stage_autosave = problem
-            .study
-            .sampling()
-            .stage_autosave
-            .clone()
-            .map(|policy| StageAutosavePipelineConfig {
-                stage_id: problem
-                    .problem_meta
-                    .runtime_metadata
-                    .get("active_stage_id")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or(&problem.problem_meta.entrypoint_kind)
-                    .to_string(),
-                policy,
-            });
+        let stage_autosave = match problem.study.sampling().stage_autosave.clone() {
+            Some(policy) => {
+                let fem_geometry = PreparedFemAutosaveGeometry::from_plan(plan, &policy)
+                    .map_err(|message| RunError { message })?
+                    .map(Arc::new);
+                Some(StageAutosavePipelineConfig {
+                    stage_id: problem
+                        .problem_meta
+                        .runtime_metadata
+                        .get("active_stage_id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or(&problem.problem_meta.entrypoint_kind)
+                        .to_string(),
+                    policy,
+                    fem_geometry,
+                })
+            }
+            None => None,
+        };
         let physics_execution_context =
             crate::physics_graph_execution::PhysicsGraphExecutionContext::from_problem_and_plan(
                 problem, plan,
@@ -808,6 +813,7 @@ impl ArtifactPipeline {
 struct StageAutosavePipelineConfig {
     stage_id: String,
     policy: fullmag_ir::StageAutosaveIR,
+    fem_geometry: Option<Arc<PreparedFemAutosaveGeometry>>,
 }
 
 enum StageAutosaveWriter {
@@ -865,6 +871,7 @@ struct StageAutosaveRuntime {
     stage_id: String,
     state: AutosaveTargetState,
     writer: StageAutosaveWriter,
+    fem_geometry: Option<Arc<PreparedFemAutosaveGeometry>>,
     table: Option<TableStore>,
     fields: std::collections::BTreeMap<String, FieldCadenceState>,
     field_layouts: std::collections::BTreeMap<String, FemAutosaveFieldLayout>,
@@ -889,6 +896,7 @@ impl StageAutosaveRuntime {
     fn new(output_dir: &Path, config: StageAutosavePipelineConfig) -> Result<Self, String> {
         let stage_id = config.stage_id.clone();
         let policy = config.policy;
+        let fem_geometry = config.fem_geometry;
         let zarr_target =
             (policy.format == fullmag_ir::AutosaveFormatIR::Zarr).then(|| policy.target.clone());
         let writer = match policy.format {
@@ -948,6 +956,7 @@ impl StageAutosaveRuntime {
             stage_id,
             state: AutosaveTargetState::resume(output_dir, &policy.target)?,
             writer,
+            fem_geometry,
             table,
             fields,
             field_layouts: std::collections::BTreeMap::new(),
@@ -1046,6 +1055,14 @@ impl StageAutosaveRuntime {
             return Ok(false);
         }
         cadence.last_step = Some(step);
+        if let StageAutosaveWriter::Zarr(writer) = &mut self.writer {
+            writer.prepare_field(
+                name,
+                field_layout.as_str(),
+                values.len(),
+                self.fem_geometry.as_deref(),
+            )?;
+        }
         self.state.append_field_sample(
             &mut self.writer,
             coordinate(
@@ -1285,24 +1302,48 @@ impl ArtifactRecorder {
         due
     }
 
-    pub(crate) fn begin_terminal_history(&mut self, outputs: &[fullmag_ir::OutputIR]) -> Result<(), RunError> {
+    pub(crate) fn begin_terminal_history(
+        &mut self,
+        outputs: &[fullmag_ir::OutputIR],
+    ) -> Result<(), RunError> {
         let pipeline = self.pipeline.as_ref().ok_or_else(|| RunError {
             message: "terminal history requires the existing streaming writer".into(),
         })?;
-        if self.terminal_history_enabled { return Err(RunError { message: "terminal history already enabled".into() }); }
+        if self.terminal_history_enabled {
+            return Err(RunError {
+                message: "terminal history already enabled".into(),
+            });
+        }
         let header = serde_json::json!({"kind": "header", "schema_version": "fullmag.runner.output_inventory.v1", "outputs": outputs});
-        if header.to_string().len() > 128 * 1024 { return Err(RunError { message: "terminal output configuration exceeds metadata budget".into() }); }
+        if header.to_string().len() > 128 * 1024 {
+            return Err(RunError {
+                message: "terminal output configuration exceeds metadata budget".into(),
+            });
+        }
         pipeline.push(ArtifactJob::TerminalHistory(header))?;
         self.terminal_history_enabled = true;
         Ok(())
     }
 
-    pub(crate) fn record_history_schedule_causes(&self, step: u64, time: f64,
-        collection: &str, schedules: &[crate::schedules::OutputSchedule]) -> Result<(), RunError> {
-        if !self.terminal_history_enabled { return Ok(()); }
-        let pipeline = self.pipeline.as_ref().expect("terminal history requires a writer");
-        for (index, schedule) in schedules.iter().enumerate()
-            .filter(|(_, schedule)| crate::schedules::is_due(time, schedule.next_time)) {
+    pub(crate) fn record_history_schedule_causes(
+        &self,
+        step: u64,
+        time: f64,
+        collection: &str,
+        schedules: &[crate::schedules::OutputSchedule],
+    ) -> Result<(), RunError> {
+        if !self.terminal_history_enabled {
+            return Ok(());
+        }
+        let pipeline = self
+            .pipeline
+            .as_ref()
+            .expect("terminal history requires a writer");
+        for (index, schedule) in schedules
+            .iter()
+            .enumerate()
+            .filter(|(_, schedule)| crate::schedules::is_due(time, schedule.next_time))
+        {
             pipeline.push(ArtifactJob::TerminalHistory(serde_json::json!({
                 "kind": "cause", "step": step, "time_s": time, "collection": collection,
                 "schedule_index": index, "name": schedule.name, "cause": "scheduled",
@@ -1311,9 +1352,16 @@ impl ArtifactRecorder {
         Ok(())
     }
 
-    pub(crate) fn record_history_field_cause(&self, step: u64, time: f64, schedule_index: usize, name: &str)
-        -> Result<(), RunError> {
-        if !self.terminal_history_enabled { return Ok(()); }
+    pub(crate) fn record_history_field_cause(
+        &self,
+        step: u64,
+        time: f64,
+        schedule_index: usize,
+        name: &str,
+    ) -> Result<(), RunError> {
+        if !self.terminal_history_enabled {
+            return Ok(());
+        }
         self.pipeline.as_ref().expect("terminal history requires a writer").push(ArtifactJob::TerminalHistory(
             serde_json::json!({"kind": "cause", "step": step, "time_s": time, "collection": "field",
                 "schedule_index": schedule_index, "name": name, "cause": "scheduled"})))?;
@@ -1321,7 +1369,9 @@ impl ArtifactRecorder {
     }
 
     pub(crate) fn record_history_final_cause(&self, step: u64, time: f64) -> Result<(), RunError> {
-        if !self.terminal_history_enabled { return Ok(()); }
+        if !self.terminal_history_enabled {
+            return Ok(());
+        }
         self.pipeline.as_ref().expect("terminal history requires a writer").push(
             ArtifactJob::TerminalHistory(serde_json::json!({"kind": "cause", "step": step,
                 "time_s": time, "collection": "all", "schedule_index": null, "name": null, "cause": "final"})))?;
@@ -1879,7 +1929,10 @@ fn zarr_dtype(scalar_type: NativeSnapshotScalarType) -> &'static str {
     }
 }
 
-fn write_terminal_history_line(writer: &mut BufWriter<File>, value: &serde_json::Value) -> Result<(), String> {
+fn write_terminal_history_line(
+    writer: &mut BufWriter<File>,
+    value: &serde_json::Value,
+) -> Result<(), String> {
     serde_json::to_writer(&mut *writer, value).map_err(|error| error.to_string())?;
     writer.write_all(b"\n").map_err(|error| error.to_string())
 }
@@ -1954,22 +2007,42 @@ fn writer_loop(
         match job {
             ArtifactJob::TerminalHistory(mut value) => {
                 if value.get("kind").and_then(serde_json::Value::as_str) == Some("cause") {
-                    let ordinal = match value.get("collection").and_then(serde_json::Value::as_str) {
-                        Some("scalar") => Some(history_ordinals.get("scalar-row").copied().unwrap_or(0)),
-                        Some("field") => value.get("name").and_then(serde_json::Value::as_str)
-                            .map(|name| history_ordinals.get(&format!("field:{name}")).copied().unwrap_or(0)),
-                        _ => None,
-                    };
+                    let ordinal =
+                        match value.get("collection").and_then(serde_json::Value::as_str) {
+                            Some("scalar") => {
+                                Some(history_ordinals.get("scalar-row").copied().unwrap_or(0))
+                            }
+                            Some("field") => value
+                                .get("name")
+                                .and_then(serde_json::Value::as_str)
+                                .map(|name| {
+                                    history_ordinals
+                                        .get(&format!("field:{name}"))
+                                        .copied()
+                                        .unwrap_or(0)
+                                }),
+                            _ => None,
+                        };
                     value["sample_ordinal"] = serde_json::json!(ordinal);
                 }
                 if value.get("kind").and_then(serde_json::Value::as_str) == Some("header") {
-                    if terminal_history.is_some() || summary.scalar_rows_written != 0 || summary.field_snapshots_written != 0 {
+                    if terminal_history.is_some()
+                        || summary.scalar_rows_written != 0
+                        || summary.field_snapshots_written != 0
+                    {
                         return Err("terminal history must begin once before output samples".into());
                     }
-                    terminal_history = Some(BufWriter::new(std::fs::OpenOptions::new().write(true).create_new(true)
-                        .open(output_dir.join("terminal-output-inventory.v1.jsonl")).map_err(|error| error.to_string())?));
+                    terminal_history = Some(BufWriter::new(
+                        std::fs::OpenOptions::new()
+                            .write(true)
+                            .create_new(true)
+                            .open(output_dir.join("terminal-output-inventory.v1.jsonl"))
+                            .map_err(|error| error.to_string())?,
+                    ));
                 }
-                let writer = terminal_history.as_mut().ok_or("terminal history event has no header")?;
+                let writer = terminal_history
+                    .as_mut()
+                    .ok_or("terminal history event has no header")?;
                 write_terminal_history_line(writer, &value)?;
             }
             ArtifactJob::ScalarRow(stats) => {
@@ -1996,10 +2069,17 @@ fn writer_loop(
                     let mut row = Vec::with_capacity(512);
                     write_scalar_row(&mut row, &stats).map_err(|error| error.to_string())?;
                     row
-                } else { Vec::new() };
-                let writer = scalar_writer.as_mut().expect("scalar writer initialized before row write");
-                (if terminal_history.is_some() { writer.write_all(&scalar_row) }
-                    else { write_scalar_row(writer, &stats) })
+                } else {
+                    Vec::new()
+                };
+                let writer = scalar_writer
+                    .as_mut()
+                    .expect("scalar writer initialized before row write");
+                (if terminal_history.is_some() {
+                    writer.write_all(&scalar_row)
+                } else {
+                    write_scalar_row(writer, &stats)
+                })
                 .map_err(|error| {
                     format!(
                         "failed to append scalar trace row to '{}': {}",
@@ -2010,16 +2090,23 @@ fn writer_loop(
                 if let Some(writer) = terminal_history.as_mut() {
                     let stream = "scalar-row".to_string();
                     let ordinal = history_ordinals.entry(stream.clone()).or_default();
-                    write_terminal_history_line(writer, &serde_json::json!({
-                        "kind": "sample", "stream_id": stream, "ordinal": *ordinal,
-                        "collection": "scalar", "quantity_id": null,
-                        "step": stats.step, "time_s": stats.time, "solver_dt_s": stats.dt,
-                        "relative_path": "scalars.csv", "byte_offset": scalar_byte_offset,
-                        "writer_byte_count": scalar_row.len(), "payload_codec_id": "fullmag.runner.scalar_csv_row", "payload_codec_version": "v1",
-                    }))?;
-                    *ordinal = ordinal.checked_add(1).ok_or("terminal scalar ordinal overflow")?;
+                    write_terminal_history_line(
+                        writer,
+                        &serde_json::json!({
+                            "kind": "sample", "stream_id": stream, "ordinal": *ordinal,
+                            "collection": "scalar", "quantity_id": null,
+                            "step": stats.step, "time_s": stats.time, "solver_dt_s": stats.dt,
+                            "relative_path": "scalars.csv", "byte_offset": scalar_byte_offset,
+                            "writer_byte_count": scalar_row.len(), "payload_codec_id": "fullmag.runner.scalar_csv_row", "payload_codec_version": "v1",
+                        }),
+                    )?;
+                    *ordinal = ordinal
+                        .checked_add(1)
+                        .ok_or("terminal scalar ordinal overflow")?;
                 }
-                scalar_byte_offset = scalar_byte_offset.checked_add(scalar_row.len() as u64).ok_or("scalar byte offset overflow")?;
+                scalar_byte_offset = scalar_byte_offset
+                    .checked_add(scalar_row.len() as u64)
+                    .ok_or("scalar byte offset overflow")?;
                 if let Some(runtime) = stage_autosave.as_mut() {
                     runtime.append_scalar(&stats)?;
                 }
@@ -2061,15 +2148,22 @@ fn writer_loop(
                         if let Some(writer) = terminal_history.as_mut() {
                             let stream = format!("field:{}", snapshot.name);
                             let ordinal = history_ordinals.entry(stream.clone()).or_default();
-                            let count = fs::metadata(output_dir.join(&relative)).map_err(|error| error.to_string())?.len();
-                            write_terminal_history_line(writer, &serde_json::json!({
-                                "kind": "sample", "stream_id": stream, "ordinal": *ordinal,
-                                "collection": "field", "quantity_id": snapshot.name,
-                                "step": snapshot.step, "time_s": snapshot.time, "solver_dt_s": snapshot.solver_dt,
-                                "relative_path": relative, "byte_offset": 0, "writer_byte_count": count,
-                                "payload_codec_id": "fullmag.runner.field_snapshot_json", "payload_codec_version": "v1",
-                            }))?;
-                            *ordinal = ordinal.checked_add(1).ok_or("terminal field ordinal overflow")?;
+                            let count = fs::metadata(output_dir.join(&relative))
+                                .map_err(|error| error.to_string())?
+                                .len();
+                            write_terminal_history_line(
+                                writer,
+                                &serde_json::json!({
+                                    "kind": "sample", "stream_id": stream, "ordinal": *ordinal,
+                                    "collection": "field", "quantity_id": snapshot.name,
+                                    "step": snapshot.step, "time_s": snapshot.time, "solver_dt_s": snapshot.solver_dt,
+                                    "relative_path": relative, "byte_offset": 0, "writer_byte_count": count,
+                                    "payload_codec_id": "fullmag.runner.field_snapshot_json", "payload_codec_version": "v1",
+                                }),
+                            )?;
+                            *ordinal = ordinal
+                                .checked_add(1)
+                                .ok_or("terminal field ordinal overflow")?;
                         }
                         frames_index.record(
                             &snapshot.name,
@@ -2335,12 +2429,17 @@ fn writer_loop(
     }
 
     if let Some(mut writer) = terminal_history {
-        write_terminal_history_line(&mut writer, &serde_json::json!({
-            "kind": "seal", "schema_version": "fullmag.runner.output_inventory_seal.v1",
-            "streams": history_ordinals, "scalar_rows_written": summary.scalar_rows_written,
-            "field_snapshots_written": summary.field_snapshots_written,
-        }))?;
-        writer.flush().map_err(|error| format!("terminal history drain failed: {error}"))?;
+        write_terminal_history_line(
+            &mut writer,
+            &serde_json::json!({
+                "kind": "seal", "schema_version": "fullmag.runner.output_inventory_seal.v1",
+                "streams": history_ordinals, "scalar_rows_written": summary.scalar_rows_written,
+                "field_snapshots_written": summary.field_snapshots_written,
+            }),
+        )?;
+        writer
+            .flush()
+            .map_err(|error| format!("terminal history drain failed: {error}"))?;
     }
     if let Some(mut writer) = scalar_writer {
         writer.flush().map_err(|error| {
@@ -3135,6 +3234,7 @@ mod tests {
         };
         let stage_autosave = StageAutosavePipelineConfig {
             stage_id: "relax".into(),
+            fem_geometry: None,
             policy: fullmag_ir::StageAutosaveIR {
                 kind: "stage_autosave".into(),
                 target: "state".into(),
@@ -3199,13 +3299,17 @@ mod tests {
         for name in owner_documents {
             fs::write(autosave_root.join(name), br#"{"owner":"storage"}"#).unwrap();
         }
-        let commit_path = autosave_root.join("state.zarr/stages/stage_0000_relax/fields/m/.fullmag-samples.json");
+        let commit_path =
+            autosave_root.join("state.zarr/stages/stage_0000_relax/fields/m/.fullmag-samples.json");
         let committed_before = fs::read(&commit_path).unwrap();
         crate::artifacts::finalize_stage_autosave_provenance(&autosave_root, &resolution)
             .expect("finalize separate stage autosave provenance");
 
         for name in owner_documents {
-            assert_eq!(fs::read(autosave_root.join(name)).unwrap(), br#"{"owner":"storage"}"#);
+            assert_eq!(
+                fs::read(autosave_root.join(name)).unwrap(),
+                br#"{"owner":"storage"}"#
+            );
         }
         assert_eq!(fs::read(commit_path).unwrap(), committed_before);
 
@@ -3251,6 +3355,7 @@ mod tests {
         ));
         let config = StageAutosavePipelineConfig {
             stage_id: "relax".into(),
+            fem_geometry: None,
             policy: fullmag_ir::StageAutosaveIR {
                 kind: "stage_autosave".into(),
                 target: "state".into(),
@@ -3292,6 +3397,189 @@ mod tests {
         fs::remove_dir_all(autosave_root).expect("remove layout marker fixture");
     }
 
+    #[test]
+    fn fem_nodal_binding_is_published_before_first_zarr_sample() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let autosave_root = std::env::temp_dir().join(format!(
+            "fullmag-fem-nodal-binding-{}-{unique}",
+            std::process::id()
+        ));
+        let mesh = fullmag_ir::MeshIR::from_legacy_tet4(
+            "mixed-support-tet".into(),
+            vec![
+                [0., 0., 0.],
+                [1., 0., 0.],
+                [0., 1., 0.],
+                [0., 0., 1.],
+                [0., 0., -1.],
+            ],
+            vec![[0, 1, 2, 3], [0, 2, 1, 4]],
+            vec![0, 1],
+            vec![
+                [0, 1, 3],
+                [1, 2, 3],
+                [2, 0, 3],
+                [0, 2, 4],
+                [2, 1, 4],
+                [1, 0, 4],
+            ],
+            vec![1; 6],
+            vec![],
+            vec![],
+            std::collections::HashMap::new(),
+        );
+        let plan = fullmag_ir::ExecutionPlanIR {
+            common: fullmag_ir::CommonPlanMeta {
+                ir_version: "v0".into(),
+                requested_backend: fullmag_ir::BackendTarget::Fem,
+                resolved_backend: fullmag_ir::BackendTarget::Fem,
+                execution_mode: fullmag_ir::ExecutionMode::Strict,
+                material_field_plans: Vec::new(),
+            },
+            backend_plan: fullmag_ir::BackendPlanIR::Fem(fullmag_ir::FemPlanIR {
+                mesh,
+                fe_order: 1,
+                ..fullmag_ir::FemPlanIR::default()
+            }),
+            output_plan: fullmag_ir::OutputPlanIR {
+                outputs: Vec::new(),
+            },
+            provenance: fullmag_ir::ProvenancePlanIR::default(),
+        };
+        let policy = fullmag_ir::StageAutosaveIR {
+            kind: "stage_autosave".into(),
+            target: "state".into(),
+            layout: fullmag_ir::AutosaveLayoutIR::Separate,
+            format: fullmag_ir::AutosaveFormatIR::Zarr,
+            table: None,
+            fields: ["m", "H_eff"]
+                .into_iter()
+                .map(|quantity| fullmag_ir::FieldAutosaveIR {
+                    kind: "field_autosave".into(),
+                    quantity: quantity.into(),
+                    every_seconds: None,
+                    sample_period_policy: None,
+                    every_steps: Some(1),
+                })
+                .collect(),
+        };
+        let prepared = PreparedFemAutosaveGeometry::from_plan(&plan, &policy)
+            .expect("prepare FEM autosave geometry")
+            .expect("M and H_eff require FEM nodal bindings");
+        let mut runtime = StageAutosaveRuntime::new(
+            &autosave_root,
+            StageAutosavePipelineConfig {
+                stage_id: "relax".into(),
+                policy,
+                fem_geometry: Some(Arc::new(prepared)),
+            },
+        )
+        .expect("start FEM stage autosave runtime");
+        let values = vec![1.0; 15];
+        assert!(runtime
+            .append_field_values(
+                "m",
+                1,
+                1.0e-13,
+                1.0e-13,
+                &values,
+                FemAutosaveFieldLayout::AosNodeMajor,
+            )
+            .expect("append M sample"));
+        assert!(runtime
+            .append_field_values(
+                "H_eff",
+                1,
+                1.0e-13,
+                1.0e-13,
+                &values,
+                FemAutosaveFieldLayout::SoaComponentMajor,
+            )
+            .expect("append H_eff sample"));
+
+        let store = autosave_root.join("state.zarr");
+        let stage = store.join("stages/stage_0000_relax");
+        let read_binding = |quantity: &str| {
+            let field = stage.join("fields").join(quantity);
+            let attrs: serde_json::Value = serde_json::from_slice(
+                &fs::read(field.join(".zattrs")).expect("read first-sample field attrs"),
+            )
+            .expect("decode field attrs");
+            let publication: serde_json::Value = serde_json::from_slice(
+                &fs::read(field.join(".fullmag-samples.json"))
+                    .expect("read first-sample publication"),
+            )
+            .expect("decode publication marker");
+            assert_eq!(publication["committed_samples"], 1);
+            let binding: fullmag_session::saved_fem_nodal::SavedFemNodalArrayBinding =
+                serde_json::from_value(attrs["fem_nodal_binding"].clone())
+                    .expect("decode FEM nodal binding");
+            (attrs, binding)
+        };
+        let (m_attrs, m_binding) = read_binding("m");
+        let (h_attrs, h_binding) = read_binding("H_eff");
+        assert_eq!(m_attrs["unit"], "1");
+        assert_eq!(h_attrs["unit"], "A/m");
+        assert_eq!(m_attrs["field_layout"], "aos_node_major");
+        assert_eq!(h_attrs["field_layout"], "soa_component_major");
+        assert_eq!(m_binding.mesh, h_binding.mesh);
+        assert_ne!(m_binding.semantics, h_binding.semantics);
+
+        let mesh_bytes = fs::read(
+            store.join(
+                fullmag_session::saved_fem_nodal::object_relative_path(&m_binding.mesh)
+                    .expect("resolve shared mesh object"),
+            ),
+        )
+        .expect("read shared mesh object");
+        let saved_mesh = fullmag_session::saved_fem_nodal::parse_saved_fem_mesh_geometry(
+            &mesh_bytes,
+            &m_binding.mesh,
+        )
+        .expect("parse shared mesh geometry");
+        let m_semantics_bytes = fs::read(
+            store.join(
+                fullmag_session::saved_fem_nodal::object_relative_path(&m_binding.semantics)
+                    .expect("resolve M semantics object"),
+            ),
+        )
+        .expect("read M semantics object");
+        let h_semantics_bytes = fs::read(
+            store.join(
+                fullmag_session::saved_fem_nodal::object_relative_path(&h_binding.semantics)
+                    .expect("resolve H_eff semantics object"),
+            ),
+        )
+        .expect("read H_eff semantics object");
+        let m_semantics = fullmag_session::saved_fem_nodal::parse_saved_fem_nodal_semantics(
+            &m_semantics_bytes,
+            &m_binding.semantics,
+        )
+        .expect("parse M semantics");
+        let h_semantics = fullmag_session::saved_fem_nodal::parse_saved_fem_nodal_semantics(
+            &h_semantics_bytes,
+            &h_binding.semantics,
+        )
+        .expect("parse H_eff semantics");
+        m_binding
+            .validate_payload_structure(&saved_mesh, &m_semantics)
+            .expect("validate committed M binding");
+        h_binding
+            .validate_payload_structure(&saved_mesh, &h_semantics)
+            .expect("validate committed H_eff binding");
+        assert_eq!(
+            m_semantics.active_node_mask,
+            vec![true, true, true, false, true]
+        );
+        assert_eq!(h_semantics.active_node_mask, vec![true; 5]);
+
+        runtime.finish().expect("finish FEM stage autosave runtime");
+        fs::remove_dir_all(autosave_root).expect("remove FEM nodal binding fixture");
+    }
+
     #[cfg(feature = "fem-gpu")]
     #[test]
     fn streaming_capture_writes_fem_gpu_receipt_to_field_zattrs() {
@@ -3318,6 +3606,7 @@ mod tests {
         };
         let stage_autosave = StageAutosavePipelineConfig {
             stage_id: "relax".into(),
+            fem_geometry: None,
             policy: fullmag_ir::StageAutosaveIR {
                 kind: "stage_autosave".into(),
                 target: "state".into(),

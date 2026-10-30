@@ -3,9 +3,13 @@ use crate::autosave_storage::{
     StageSampleCoordinate,
 };
 use fullmag_ir::AutosaveLayoutIR;
+use fullmag_session::saved_fem_nodal::{
+    object_relative_path, FemNodalStorageLayout, SavedFemNodalArrayBinding,
+};
+use fullmag_session::solution_field_geometry::SavedFieldGeometryRef;
 use serde_json::json;
 use std::fs::{self, OpenOptions};
-use std::io::{BufWriter, Seek, SeekFrom, Write};
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 pub struct ZarrAutosaveWriter {
@@ -19,6 +23,14 @@ struct ZarrStage {
     path: PathBuf,
     table_samples: usize,
     field_samples: std::collections::BTreeMap<String, usize>,
+    field_metadata: std::collections::BTreeMap<String, PreparedZarrFieldMetadata>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct PreparedZarrFieldMetadata {
+    layout: FemNodalStorageLayout,
+    width: usize,
+    fem_binding: Option<SavedFemNodalArrayBinding>,
 }
 
 impl ZarrAutosaveWriter {
@@ -32,6 +44,74 @@ impl ZarrAutosaveWriter {
 
     pub fn store_path(&self, target: &str) -> PathBuf {
         self.root.join(format!("{target}.zarr"))
+    }
+
+    /// Publish immutable geometry before any array sample can reference it.
+    /// Repeated preparation must preserve the array's original interpretation.
+    pub(crate) fn prepare_field(
+        &mut self,
+        quantity: &str,
+        layout: &str,
+        value_count: usize,
+        geometry: Option<&crate::autosave_fem_geometry::PreparedFemAutosaveGeometry>,
+    ) -> Result<(), String> {
+        let layout = match layout {
+            "aos_node_major" => FemNodalStorageLayout::AosNodeMajor,
+            "soa_component_major" => FemNodalStorageLayout::SoaComponentMajor,
+            _ => return Err("unsupported autosave field storage layout".into()),
+        };
+        if value_count == 0 {
+            return Err("autosave field width must be positive".into());
+        }
+        let current = self
+            .current
+            .as_ref()
+            .ok_or_else(|| "Zarr autosave has no active stage".to_string())?;
+        if !current
+            .manifest
+            .field_quantities
+            .iter()
+            .any(|name| name == quantity)
+        {
+            return Err(format!(
+                "Zarr field '{quantity}' was not declared for this stage"
+            ));
+        }
+        let store = self.store_path(&current.manifest.target);
+        let array_path = format!(
+            "stages/stage_{:04}_{}/fields/{quantity}",
+            current.manifest.stage_index, current.manifest.stage_id
+        );
+        let prepared = geometry
+            .map(|source| source.bind_array(&array_path, quantity, layout, value_count))
+            .transpose()?
+            .flatten();
+        let metadata = PreparedZarrFieldMetadata {
+            layout,
+            width: value_count,
+            fem_binding: prepared.as_ref().map(|value| value.binding.clone()),
+        };
+        if let Some(existing) = current.field_metadata.get(quantity) {
+            if existing != &metadata {
+                return Err("Zarr field layout, width, or geometry changed within a stage".into());
+            }
+            return Ok(());
+        }
+        if current.field_samples.get(quantity).copied().unwrap_or(0) != 0 {
+            return Err("cannot add field interpretation after sample publication".into());
+        }
+        if let Some(prepared) = prepared {
+            write_immutable_fem_object(&store, &prepared.binding.mesh, &prepared.mesh_bytes)?;
+            write_immutable_fem_object(
+                &store,
+                &prepared.binding.semantics,
+                &prepared.semantics_bytes,
+            )?;
+        }
+        self.current_mut()?
+            .field_metadata
+            .insert(quantity.to_string(), metadata);
+        Ok(())
     }
 
     pub fn update_provenance(&mut self, provenance: &serde_json::Value) -> Result<(), String> {
@@ -62,6 +142,145 @@ impl ZarrAutosaveWriter {
         }
         Ok(())
     }
+}
+
+// Geometry is immutable and content-addressed. Never replace a conflicting
+// object; a failed/partial write remains unreferenced and fails closed on retry.
+fn write_immutable_fem_object(
+    store: &Path,
+    reference: &SavedFieldGeometryRef,
+    bytes: &[u8],
+) -> Result<(), String> {
+    let relative = object_relative_path(reference).map_err(|error| error.to_string())?;
+    if bytes.len() as u64 != reference.byte_length
+        || fullmag_session::hex_sha256(bytes) != reference.object_ref
+    {
+        return Err("FEM geometry object does not match its immutable reference".into());
+    }
+    let path = store.join(relative);
+    let directory = path.parent().ok_or("FEM geometry object has no parent")?;
+    match fs::create_dir(directory) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error.to_string()),
+    }
+    let metadata = fs::symlink_metadata(directory).map_err(|error| error.to_string())?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("FEM geometry object directory must be a real directory".into());
+    }
+    let name = path
+        .file_name()
+        .ok_or("FEM geometry object has no filename")?;
+    match open_fem_object(directory, name, true) {
+        Ok(mut file) => {
+            file.write_all(bytes).map_err(|error| error.to_string())?;
+            file.sync_all().map_err(|error| error.to_string())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let file =
+                open_fem_object(directory, name, false).map_err(|error| error.to_string())?;
+            let metadata = file.metadata().map_err(|error| error.to_string())?;
+            if !metadata.is_file() || metadata.len() != reference.byte_length {
+                return Err("existing FEM geometry object has an invalid type or length".into());
+            }
+            let mut existing = Vec::new();
+            file.take(reference.byte_length + 1)
+                .read_to_end(&mut existing)
+                .map_err(|error| error.to_string())?;
+            if existing != bytes {
+                return Err("existing immutable FEM geometry object has different contents".into());
+            }
+            Ok(())
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[cfg(unix)]
+fn open_fem_object(
+    directory: &Path,
+    name: &std::ffi::OsStr,
+    create: bool,
+) -> std::io::Result<fs::File> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::{ffi::OsStrExt, fs::OpenOptionsExt};
+    // Pin the immediate object directory and refuse final-component symlinks.
+    let parent = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(directory)?;
+    let name = std::ffi::CString::new(name.as_bytes())
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+    let access = if create {
+        libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL
+    } else {
+        libc::O_RDONLY | libc::O_NONBLOCK
+    };
+    // SAFETY: parent is live, name is a terminated filename, and mode accompanies O_CREAT.
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            access | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            0o600,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: openat returned an owned descriptor and this is its only owner.
+    Ok(unsafe { fs::File::from_raw_fd(fd) })
+}
+
+#[cfg(windows)]
+fn open_fem_object(
+    directory: &Path,
+    name: &std::ffi::OsStr,
+    create: bool,
+) -> std::io::Result<fs::File> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    const OPEN_REPARSE_POINT: u32 = 0x00200000;
+    const BACKUP_SEMANTICS: u32 = 0x02000000;
+    const REPARSE_POINT: u32 = 0x00000400;
+    // Keep this handle until the child is open. Denying FILE_SHARE_DELETE
+    // prevents replacement of the immediate directory during the path open.
+    let parent = OpenOptions::new()
+        .read(true)
+        .share_mode(0x1 | 0x2) // FILE_SHARE_READ | FILE_SHARE_WRITE
+        .custom_flags(OPEN_REPARSE_POINT | BACKUP_SEMANTICS)
+        .open(directory)?;
+    let metadata = parent.metadata()?;
+    if !metadata.is_dir() || metadata.file_attributes() & REPARSE_POINT != 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "FEM geometry directory must not be a reparse point",
+        ));
+    }
+    let file = OpenOptions::new()
+        .read(!create)
+        .write(create)
+        .create_new(create)
+        .custom_flags(OPEN_REPARSE_POINT)
+        .open(directory.join(name))?;
+    if file.metadata()?.file_attributes() & REPARSE_POINT != 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "FEM geometry object must not be a reparse point",
+        ));
+    }
+    Ok(file)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_fem_object(
+    _directory: &Path,
+    _name: &std::ffi::OsStr,
+    _create: bool,
+) -> std::io::Result<fs::File> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "immutable FEM geometry publication requires Unix or Windows filesystem guards",
+    ))
 }
 
 fn update_json_property(
@@ -131,6 +350,7 @@ impl AutosaveTargetWriter for ZarrAutosaveWriter {
             path: stage_path,
             table_samples: 0,
             field_samples: std::collections::BTreeMap::new(),
+            field_metadata: std::collections::BTreeMap::new(),
         });
         Ok(())
     }
@@ -175,6 +395,11 @@ impl AutosaveTargetWriter for ZarrAutosaveWriter {
                 "Zarr field '{quantity}' was not declared for this stage"
             ));
         }
+        if let Some(metadata) = current.field_metadata.get(quantity) {
+            if metadata.width != values.len() {
+                return Err("Zarr field values differ from their prepared width".into());
+            }
+        }
         let field = current.path.join("fields").join(quantity);
         let sample = *current.field_samples.get(quantity).unwrap_or(&0);
         if sample == 0 {
@@ -184,6 +409,24 @@ impl AutosaveTargetWriter for ZarrAutosaveWriter {
                 "dimension_order": ["sample", "value"],
                 "sample_publication": SAMPLE_PUBLICATION_SCHEMA,
             });
+            // Record canonical units before the first committed sample is visible.
+            // Unknown custom quantities remain explicit: no guessed default unit.
+            if let Some(spec) = fullmag_quantities::quantity_spec(quantity) {
+                let unit = if spec.id == fullmag_quantities::QuantityId::M {
+                    "1"
+                } else {
+                    spec.unit
+                };
+                attrs["unit"] = serde_json::Value::String(unit.to_string());
+            }
+            if let Some(metadata) = current.field_metadata.get(quantity) {
+                attrs["storage_layout"] = json!(metadata.layout.as_str());
+                attrs["field_layout"] = json!(metadata.layout.as_str());
+                if let Some(binding) = &metadata.fem_binding {
+                    attrs["fem_nodal_binding"] =
+                        serde_json::to_value(binding).map_err(|error| error.to_string())?;
+                }
+            }
             if let Some(provenance) = current.manifest.provenance.clone() {
                 attrs["provenance"] = provenance;
             }
@@ -464,6 +707,141 @@ mod tests {
     }
 
     #[test]
+    fn prepared_layout_precedes_publication_and_cannot_drift() {
+        let root = temp_root();
+        let mut writer = ZarrAutosaveWriter::new(&root);
+        let mut state = AutosaveTargetState::new("main");
+        state
+            .begin_stage(
+                &mut writer,
+                "run",
+                AutosaveLayoutIR::Separate,
+                AutosaveFormatIR::Zarr,
+                vec![],
+                vec!["m".into(), "H_eff".into()],
+            )
+            .unwrap();
+        assert!(writer
+            .prepare_field("unknown", "soa_component_major", 3, None)
+            .is_err());
+        assert!(writer.prepare_field("m", "unknown", 3, None).is_err());
+        assert!(writer
+            .prepare_field("m", "soa_component_major", 0, None)
+            .is_err());
+        writer
+            .prepare_field("m", "soa_component_major", 3, None)
+            .unwrap();
+        assert!(state
+            .append_field_sample(
+                &mut writer,
+                StageSampleCoordinate::PhysicalTime { time_s: 0.0 },
+                "m",
+                &[1.0]
+            )
+            .is_err());
+        state
+            .append_field_sample(
+                &mut writer,
+                StageSampleCoordinate::PhysicalTime { time_s: 0.0 },
+                "m",
+                &[1.0, 2.0, 3.0],
+            )
+            .unwrap();
+        let field = root.join("main.zarr/stages/stage_0000_run/fields/m");
+        let attrs_before = fs::read(field.join(".zattrs")).unwrap();
+        let attrs: serde_json::Value = serde_json::from_slice(&attrs_before).unwrap();
+        assert_eq!(attrs["storage_layout"], "soa_component_major");
+        assert_eq!(attrs["field_layout"], "soa_component_major");
+        assert_eq!(attrs["unit"], "1");
+        let publication_before = fs::read(field.join(SAMPLE_PUBLICATION_FILE)).unwrap();
+        let publication: serde_json::Value = serde_json::from_slice(&publication_before).unwrap();
+        assert_eq!(publication["committed_samples"], 1);
+        writer
+            .prepare_field("m", "soa_component_major", 3, None)
+            .unwrap();
+        assert!(writer
+            .prepare_field("m", "aos_node_major", 3, None)
+            .is_err());
+        assert!(writer
+            .prepare_field("m", "soa_component_major", 6, None)
+            .is_err());
+        assert_eq!(fs::read(field.join(".zattrs")).unwrap(), attrs_before);
+        assert_eq!(
+            fs::read(field.join(SAMPLE_PUBLICATION_FILE)).unwrap(),
+            publication_before
+        );
+        // Direct legacy writers stay supported, but cannot attach metadata retroactively.
+        state
+            .append_field_sample(
+                &mut writer,
+                StageSampleCoordinate::PhysicalTime { time_s: 0.0 },
+                "H_eff",
+                &[1.0, 2.0, 3.0],
+            )
+            .unwrap();
+        assert!(writer
+            .prepare_field("H_eff", "aos_node_major", 3, None)
+            .is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn object_reference(bytes: &[u8]) -> SavedFieldGeometryRef {
+        SavedFieldGeometryRef {
+            schema_id: fullmag_session::saved_fem_nodal::FEM_P1_MESH_GEOMETRY_SCHEMA.into(),
+            object_ref: fullmag_session::hex_sha256(bytes),
+            byte_length: bytes.len() as u64,
+        }
+    }
+
+    #[test]
+    fn immutable_geometry_replay_checks_content_and_never_replaces_conflicts() {
+        let root = temp_root();
+        fs::create_dir_all(&root).unwrap();
+        let bytes = b"{\"mesh\":1}";
+        let reference = object_reference(bytes);
+        write_immutable_fem_object(&root, &reference, bytes).unwrap();
+        write_immutable_fem_object(&root, &reference, bytes).unwrap();
+        let path = root.join(object_relative_path(&reference).unwrap());
+        assert!(write_immutable_fem_object(&root, &reference, b"wrong").is_err());
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        let conflict = b"{\"mesh\":2}";
+        fs::write(&path, conflict).unwrap();
+        assert!(write_immutable_fem_object(&root, &reference, bytes).is_err());
+        assert_eq!(fs::read(&path).unwrap(), conflict);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn immutable_geometry_refuses_directory_and_object_symlinks() {
+        use fullmag_session::saved_fem_nodal::FEM_NODAL_OBJECT_DIRECTORY;
+        use std::os::unix::fs::symlink;
+        let root = temp_root();
+        let outside = temp_root();
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let bytes = b"{}";
+        let reference = object_reference(bytes);
+        let directory = root.join(FEM_NODAL_OBJECT_DIRECTORY);
+        symlink(&outside, &directory).unwrap();
+        assert!(write_immutable_fem_object(&root, &reference, bytes).is_err());
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+        fs::remove_file(&directory).unwrap();
+        fs::create_dir(&directory).unwrap();
+        let target = outside.join("retained.json");
+        fs::write(&target, bytes).unwrap();
+        symlink(
+            &target,
+            root.join(object_relative_path(&reference).unwrap()),
+        )
+        .unwrap();
+        assert!(write_immutable_fem_object(&root, &reference, bytes).is_err());
+        assert_eq!(fs::read(target).unwrap(), bytes);
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(outside).unwrap();
+    }
+
+    #[test]
     fn zarr_layout_is_time_first_and_continuous_contains_metadata_only() {
         let root = temp_root();
         let mut writer = ZarrAutosaveWriter::new(&root);
@@ -634,6 +1012,59 @@ mod tests {
             serde_json::from_slice(&fs::read(table.join(SAMPLE_PUBLICATION_FILE)).unwrap())
                 .unwrap();
         assert_eq!(publication["committed_samples"], 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn committed_fields_publish_canonical_units_without_changing_values() {
+        let root =
+            std::env::temp_dir().join(format!("fullmag-zarr-field-units-{}", uuid::Uuid::new_v4()));
+        let mut state = AutosaveTargetState::resume(&root, "units").unwrap();
+        let mut writer = ZarrAutosaveWriter::new(&root);
+        state
+            .begin_stage(
+                &mut writer,
+                "run",
+                AutosaveLayoutIR::Separate,
+                AutosaveFormatIR::Zarr,
+                vec![],
+                vec!["m".into(), "H_eff".into(), "custom_field".into()],
+            )
+            .unwrap();
+        for (quantity, values, expected_unit) in [
+            ("m", vec![1.0_f64, 0.0, 0.0], Some("1")),
+            ("H_eff", vec![10.0_f64, 20.0, 30.0], Some("A/m")),
+            ("custom_field", vec![7.0_f64], None),
+        ] {
+            state
+                .append_field_sample(
+                    &mut writer,
+                    StageSampleCoordinate::PhysicalTime { time_s: 0.0 },
+                    quantity,
+                    &values,
+                )
+                .unwrap();
+            let field = root
+                .join("units.zarr/stages/stage_0000_run/fields")
+                .join(quantity);
+            let attrs: serde_json::Value =
+                serde_json::from_slice(&fs::read(field.join(".zattrs")).unwrap()).unwrap();
+            assert_eq!(
+                attrs.get("unit").and_then(serde_json::Value::as_str),
+                expected_unit
+            );
+            let publication: serde_json::Value =
+                serde_json::from_slice(&fs::read(field.join(SAMPLE_PUBLICATION_FILE)).unwrap())
+                    .unwrap();
+            assert_eq!(publication["committed_samples"], 1);
+            let expected: Vec<u8> = values
+                .iter()
+                .flat_map(|value| value.to_le_bytes())
+                .collect();
+            assert_eq!(fs::read(field.join("0.0")).unwrap(), expected);
+        }
+        // The assertions above deliberately precede finish_stage: live readers
+        // must not need terminalization to discover a committed field's unit.
         fs::remove_dir_all(root).unwrap();
     }
 

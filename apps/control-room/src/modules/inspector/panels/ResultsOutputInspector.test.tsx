@@ -224,12 +224,15 @@ describe("ResultsOutputInspector", () => {
       .toContain('aria-valuetext="Sample 2 of 3"');
     expect(renderToStaticMarkup(<ResultsOutputInspector {...inspectorProps()} sampleIndex={2} />))
       .toContain('aria-valuetext="Sample 3 of 3"');
-    expect(renderToStaticMarkup(
+    const empty = renderToStaticMarkup(
       <ResultsOutputInspector
         {...inspectorProps()}
         array={{ ...array, sample_count: 0, coordinates: [] }}
       />,
-    )).toContain('aria-valuetext="Sample unavailable"');
+    );
+    expect(empty).toContain('aria-valuetext="Sample unavailable"');
+    expect(empty).toMatch(/<button[^>]*disabled=""[^>]*>Load into 3D<\/button>/);
+    expect(empty).toContain("No snapshots have been published yet.");
   });
 
   it("bounds sample indexes and routes navigation, load, and live-return actions", async () => {

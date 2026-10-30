@@ -1,6 +1,6 @@
 # Audyt UX przeglądarki wyników, Inspectora i przejścia live ↔ preview
 
-Data: 2026-10-28, aktualizacja 2026-10-29. Status: **REQUEST CHANGES dla całej funkcji — podstawowy scenariusz nawigacji, snapshotów m, tabel i powrotu do Live przeszedł; pozostałe formaty i bramki kwalifikacji pozostają otwarte**.
+Data: 2026-10-28, aktualizacja 2026-10-30. Status: **REQUEST CHANGES dla całej funkcji — podstawowy scenariusz nawigacji, snapshotów m, tabel i powrotu do Live przeszedł; pozostałe formaty i bramki kwalifikacji pozostają otwarte**.
 
 ## Aktualny stan audytu
 
@@ -14,8 +14,8 @@ Poniższa tabela jest bieżącym podsumowaniem. Szczegółowe ustalenia UX-01–
 | Kamera i panele | Fit/Reset, zachowanie kamery, hide/restore/float/dock; szerokości 768–1920 przeszły | Pozostałe komendy kamery, powiększenie 200% |
 | Results / nawigacja | Wspólny filtr/collapse/focus, widoczny zakres wyszukiwania, klawiatura, wejście Saved | Kolejność folderów i Source details mają dowód browser; duże katalogi/strony i długi run pozostają otwarte |
 | Tabele i metadane | Nazwy sześciu kolumn, odczyt pierwszej/ostatniej próbki, tekstowe preview | Pełne możliwości analiz dla tabel/modów/eigensolve |
-| FDM/FEM i wszystkie quantity | Katalog odczytuje faktyczne wpisy; FEM m ma kwalifikowane 3D | H_eff FEM wymaga per-quantity geometry binding; nowa regresja FDM/YIG i wiele etapów |
-| Monitoring | Rzeczywisty FEM opublikował watermarki 1–6 dla m, H_eff i tabeli przed terminalizacją; reader ma sample commit | Current API nadal terminal-only; monitoring UI, FDM i wiele etapów nie są przez ten dowód zakwalifikowane |
+| FDM/FEM i wszystkie quantity | Poprzedni runtime: FEM m ma kwalifikowane 3D. Nowe źródła: producer-owned binding M/H_eff/DemagPhi, odczyt z właściwego zagnieżdżonego Zarr | Kompilacja i UI nowych kontraktów FEM; regresja FDM/YIG i wiele etapów |
+| Monitoring | Poprzedni runtime: watermarki 1–6 w plikach przed terminalizacją. Nowe źródła: Current API dopuszcza zatwierdzone prefiksy i kolekcję etapów/prób | Nowe testy Rust, monitoring Current UI, FDM i wiele etapów w rzeczywistym runie nadal bez kwalifikacji |
 | Dostępność i czytelność | Klawiatura drzewa, osiągalne kontrolki po scrollu, motywy, brak poziomego overflow w badanym zakresie | Wspólne tokeny dark/light przeszły check:design; brak pełnej kwalifikacji czytnika ekranu i wszystkich rzeczywistych zestawień kolorów |
 | Integracja | Commity i draft [PR #332](https://github.com/MateuszZelent/fullmag/pull/332), grupa 3298 zachowana | CI, końcowe review i merge; React Doctor hook nie ukończył analizy parsera |
 
@@ -672,3 +672,143 @@ Obejrzano główny screenshot Saved, końcowy Live i kompaktowy. Quantity są wi
 Na oglądniętym screenshotcie `m` nagłówek pokazuje `Unit not recorded`. Ogólny writer Zarr zapisuje quantity/layout, lecz nie jednostkę i per-array semantics. Dla istniejącego FEM m geometria wiąże już kanoniczny descriptor z jednostką1; nowy kontrakt publikacji powinien przenosić jawne jednostki bez zgadywania z nazwy. Dla H_eff kanoniczny katalog i live API definiują A/m, Node, FullDomain, a planner przelicza B Zeemana przez μ₀. Nie wolno skopiować maski/producer ID magnetyzacji ani zastąpić H_eff przez kontrakt inspekcji H_ant.
 
 Końcowy `pnpm run typecheck` tej poprawki również przeszedł w frontendzie grupy3298 (exit0). Kod Rust i dane runu nie zmieniły się podczas poprawki UI.
+
+
+### UX-26 — kontrakt zapisanych pól FEM; testy runtime wstrzymane
+
+Dodano źródłowe kontrakty geometrii H1/P1 i osobnej semantyki quantity. Zarr deklaruje jednostkę oraz AoS/SoA przed pierwszą publikacją; binding tablicy wskazuje współdzielony obiekt siatki i osobny obiekt semantyki. M zachowuje support magnetyczny, H_eff support całej domeny. FrozenSpins i pola modalne nie otrzymują fałszywego kontraktu zwykłego pola. Limity metadanych prowadzą do zapisu bez geometrii podglądu, bez blokowania danych autosave. Przy kolejnym snapshocie nie jest hashowana ponownie cała siatka.
+
+Review wykazało dwie usterki, poprawione w źródłach: rozdzielono walidację strukturalną producenta od `parse_payloads`, które weryfikuje referencje hash/size obu obiektów; Windows przypina katalog bez współdzielenia usuwania podczas otwierania pliku. Nowe regresje obejmują podmienioną poprawną maskę M, niezmienność plików, dowiązania Unix, zmianę layout/width oraz pierwszą publikację z geometrią. Formatowanie plików zadania i diff-check przeszły. Przypadkowe rekurencyjne formatowanie 104 innych plików cofnięto dopiero po bajtowym dowodzie `rustfmt(HEAD) == current`; w lib.rs zachowano jedynie deklarację modułu.
+
+**Cargo, nowy runtime i nowy browser: NOT VERIFIED.** Iteracja `bb64d9f26dab4712bb96985fd08143b6` nie doszła do capture/build: zatrzymanie backendu zakończyło się kodem1 i receiptem `shutdown_unknown`, ponieważ API przekroczyło 10 s oczekiwania po terminate. Nie wykonano jeszcze authenticated service drain. Launcher zachował operację i odmówił restartu; backend jest zatrzymany, helper zachowany. Brak ręcznej zmiany lease/receiptów. Ostatni pełny browser PASS pozostaje dowodem poprzedniej wersji i nie dowodzi nowych kontraktów. Sam czytnik bindingu, podgląd H_eff, monitoring trwających publikacji, kolekcja etapów oraz pełna macierz UI nadal pozostają do ukończenia. [Checkpoint źródeł i blokady](2026-10-29-results-fem-nodal-source-checkpoint.json).
+
+Kanoniczna recepta `docker-dev-offline-check` w tej samej zatrzymanej grupie wykonała **39 testów `test_docker_volume_reconcile` — PASS, exit0**, przy stabilnych źródłach. To dowód drogi testów launchera, nie nowych testów Rust. Niezależna analiza nie znalazła pasującej procedury wznowienia: nowy wariant failed-stop może domknąć jedynie operację kontrolną przez oryginalnego helpera/CAS, zachowując `verified` i wszystkie rekordy native. Nie daje to jeszcze prawa do startu: odzyskanie ukończonej sesji z zachowanym `OWNER=ready` i procesem `shutdown_unknown` wymaga osobnego kontraktu. Obecne failed-build, offline-reconcile i held-manual recovery mają inne warunki. Nie należy ich dopasowywać przez zmianę receiptów.
+
+
+### Aktualizacja recovery grupy 3298 — rozliczony nieudany stop
+
+Wcześniejszy wniosek o braku natywnej ścieżki jest zastąpiony dokładnym trace: istniejący request v3 obsługuje Ready ownera oraz pełny zestaw terminalnych runów, bez held-manual. W store są trzy runy, wszystkie task catalogs wskazują succeeded; ich intent/catalog/artifact-catalog mają przypięte hashe. Pełna natywna walidacja tych danych nadal pozostaje przed nami.
+
+Dodano jawny failed-stop reconciler. Wymaga dokładnych preflightów ukończonego zadania, pustej kolejki, starej inkarnacji kontenerów, niezmienionego ownera i receiptów, oraz braku checkpointów świadczących o rozpoczętej innej fazie. Daemon sprawdza CAS ponownie przed publikacją; `verified` i native pozostają poza targetami zapisu. **19 testów nowego profilu + 39 kontrolera + 13 przygotowania v3 przeszło** w kanonicznym offline helperze grupy. Pełny test BEGIN/COMMIT potwierdza zachowanie oryginalnego flock/active, brak native write i odmowę całej publikacji po drift preflightu. Niezależne review nie znalazło blokera.
+
+Podgląd rzeczywistego żądania `e2c0dce5c71cb76c4a8d394a1a3fe4ed3b787147ad1d6cf0758f729543f289d7` przeszedł. Kanoniczne zastosowanie zakończyło `bb64d9f26dab4712bb96985fd08143b6` jako failed-confirmed; oryginalny helper sam zwolnił operation lease. To rozliczenie nie potwierdza drainu ani działania API.
+
+Odczytowy preflight istniejącego native recovery ujawnił kolejny błąd: caller aliasów WSL używał domyślnej grupy master, a kernel probe również ograniczał się do mastera. Rozszerzony test odtwarza odmowę dla prawidłowo przypiętego worktree. Naprawa ma zachować autentykację wybranego checkoutu, dokładne piny kontenerów oraz fizyczny test rozłączności; cudze kontenery i dane pozostają nietknięte. **Nowe testy Rust, nowy runtime i nowy browser pozostają NOT VERIFIED.**
+
+
+### Kontynuacja: odczyt geometrii przypisanej do tablicy FEM
+
+Naprawa failed-stop została zapisana w commicie `4f4eade947c21b3eed7578793013efb7f44c3230`.
+Hashe helpera, testu i kontrolera są identyczne z wersją, która przeszła 19 testów nowej
+ścieżki i 39 testów kontrolera w zarządzanej grupie. Commit nie oznacza wznowienia native.
+
+Poprawki przekazania projektu worktree i obsługi pominiętego `HostConfig.Mounts` przeszły
+odpowiednie testy zarządzane; aktualną blokadą jest tożsamość obcych mountów Windows
+`/run/desktop/mnt/host/{c,e}/...`. Obie usługi naszej grupy pozostają `exited`/PID 0.
+Nie poszerzono dowodu POSIX na aliasy Windows i nie zmodyfikowano obcych grup.
+
+Adapter API łączy nowy `fem_nodal_binding` z istniejącymi odpowiedziami Results i
+wspólnymi kodekami FMMT/FMSP. Geometry identity jest SHA256 serializowanego,
+zwalidowanego bindingu i obejmuje referencje mesh/semantics oraz quantity/layout/unit.
+Nie tworzymy dla H_eff starego kontraktu magnetyzacji. Niepoprawny istniejący binding
+nie może przejść do legacy M/FDM; Inspector zachowuje metadane z wyłączonym 3D.
+Nowy test routera obejmuje M/H_eff, wspólną topologię, różne maski, jednostki,
+zgodność hashów/długości binariów, drugi snapshot, zmianę jednostki i stale revision.
+Review adaptera: source-only PASS po poprawieniu oczekiwania HTTP 422 na kontraktowe
+400. Testy Rust i odbiór nowego UI: **NOT RUN**. Nowe zależności testowe inspect
+wymagają kanonicznej aktualizacji Cargo.lock przed bramką `--locked`.
+
+
+Czytnik został zamrożony do integracji. Obecny binding (także `null` lub uszkodzony)
+wyłącza legacy inferencję quantity/layout/times również w katalogu. Wewnętrzny
+`.fullmag_geometry` nie zaśmieca Explorera, ale nadal jest objęty revision i
+kontrolą ścieżek. Dodano regresje obu referencji hash/length, metadanych,
+budżetu, symlinków i braku fallbacku; wykonanie testów nadal oczekuje na runtime.
+
+Dodatkowa luka źródłowa: kanoniczne wielkości spoza małej legacy listy, np.
+`DemagPhi`, miały `component_count=None` mimo poprawnego bindingu. API teraz
+przenosi liczbę składowych i layout z pełnego, zwalidowanego kontraktu. Test
+routera obejmuje również skalar `DemagPhi` z jednostką A i odpowiednią szerokością
+snapshotu. Niezależny review tej delty: source-only PASS.
+
+Usterka ergonomii pustej tablicy: Inspector wyłączał nawigację, ale przy
+`sample_count=0` mógł pozostawić aktywne „Load into 3D”. Przycisk i obsługująca go
+akcja wymagają teraz co najmniej jednego snapshotu; dostępne jest wyjaśnienie
+„No snapshots have been published yet.”. Rozszerzono istniejący test pustego
+stanu. Vitest/typecheck oraz odbiór tej zmiany w przeglądarce: **NOT RUN**.
+
+Wysłano pytanie o zgodę na koordynację z pozostałymi czatami Fullmaga w sprawie
+właścicieli obcych grup Windows. Brak odpowiedzi nie stanowi zgody; żadnej
+wiadomości do tych czatów ani mutacji ich grup nie wykonano.
+
+### 2026-10-30 — aktywne snapshoty i rzeczywista struktura Zarr (źródła)
+
+Poprzedni komentarz resolvera był nieaktualny: producent Zarr ze stage autosave publikuje niezmienny `run.json` przed startem runnera, a granicę widoczności danych wyznacza `.fullmag-samples.json` każdej tablicy. API dopuszcza teraz taki pojedynczy aktywny leaf po sprawdzeniu runu, próby, epoki, fingerprintu i polityki próbek; starsze foldery zachowują wymóg zakończonej publikacji. Czytnik nie może użyć ścieżki legacy dla tablicy bez watermarka w zadeklarowanym folderze przyrostowym. Nowe testy obejmują 0/1/3 zatwierdzone próbki, stare rewizje i błędne deklaracje.
+
+Przegląd realnego wcześniejszego screenshotu ujawnił dodatkową niezgodność fixture: wynik ma `results_browser.zarr/stages/...`, podczas gdy czytnik FEM zakładał `stages/...` bezpośrednio pod folderem Results. Czytnik ustala teraz dokładny store Zarr właściciela tablicy i otwiera jego obiekty geometrii przez przypięte katalogi. Nie korzysta z kopii obiektu w folderze nadrzędnym; osobny test obejmuje tę odmowę. Wewnętrzne obiekty są ukrywane w katalogu na każdej głębokości. Fixture routera otrzymał zagnieżdżony układ i rzeczywisty katalog receipt, ale pozostaje syntetyczny, nie jest dowodem przebiegu producent→API.
+
+Niezależny review znalazł brak hashowania treści `run.json`; dodano hash do rewizji i regresję zmiany polityki przy tym samym rozmiarze oraz mtime. Kontrola składni rustfmt i `git diff --check` przeszły. **Nowe testy Rust, nowy build i nowy browser: NOT RUN.** Całkowite usunięcie deklaracji polityki z folderu Saved pozostaje nierozróżnialne od formatu legacy; nie deklarujemy odporności na taką utratę wszystkich markerów.
+
+Odczyt Docker potwierdził własny backend zatrzymany oraz obcą grupę `live-quantity-refresh` nadal działającą (PID 7625); dwie pozostałe wskazane grupy pozostają zatrzymane. Nie zmieniano cudzych zasobów. Nadal wymagane są kwalifikowane odzyskanie runtime, testy i odbiór UI, obsługa kolekcji wielu etapów/prób, pozostała macierz oraz CI/integracja.
+
+Końcowy review delty potwierdził usunięcie P2 w źródle oraz poprawę struktury fixture. Nie jest to dowód kompilacji ani rzeczywistego roundtripu producenta.
+
+
+### 2026-10-30 — kolekcja etapów i granice rewizji (source review)
+
+Current Results agreguje legalne leafy accepted runu, zamiast odrzucać drugi etap.
+Każdy członek ma stabilny klucz wyprowadzony z niezmiennej tożsamości outputu,
+runu i nazwy leafu. Globalna rewizja katalogu obejmuje członkostwo i rewizje leafów;
+metadane tablicy zwracają osobny token rewizji wybranego leafa. Dodanie siblinga
+unieważnia globalny cursor, lecz zachowuje ID i token istniejącego snapshotu.
+Odczyty próbek i geometrii sprawdzają właściwy leaf przed i po odczycie;
+nie używają geometrii sąsiedniej próby. Zatwierdzony prefiks deklarowanej
+publikacji incremental pozostaje dostępny również po failed/cancelled.
+Nie kwalifikuje to anulowanej próby jako zakończonej sukcesem.
+
+Niezależny source review nie znalazł błędu routingu tożsamości lub fence rewizji.
+Finding P2: trzy osobne receipty na każdy z maksymalnie 256 leafów mogły
+spowodować parsowanie do 768 MiB JSON. Dodano wspólny budżet 16 MiB na jedno
+rozwiązanie kolekcji, niezależnie od limitu 1 MiB pojedynczego dokumentu.
+Ponowna kontrola po odczycie ma własny taki budżet. Bounded reader ogranicza
+odczyt do pozostałej kwoty przed parsowaniem; wyczerpanie daje 413.
+
+Nowe testy źródłowe obejmują drugi etap, stabilność pierwszego snapshotu,
+odrzucenie obcego tokenu, prefix anulowanej próby, topology/support po dodaniu
+siblinga i stale geometry po zmianie wybranego leafa. Osobny test przekracza
+łączny budżet receiptów, zachowując limit każdego pliku. Fixture nodal FEM
+zawiera teraz rzeczywisty kontrakt commit/coordinates dwóch próbek.
+**Wykonanie tych testów: NOT RUN.** Parser Rust i git diff-check przeszły.
+
+Istniejący job `bootstrap/rust-contracts` rozszerzono o filtry `workspace_results`,
+`autosave_fem_geometry` i `autosave_zarr`. Zachowuje też Cargo.lock oraz manifesty
+jako artefakt, aby odebrać kanoniczną zmianę dependency graph wygenerowaną przez
+Cargo w autoryzowanym CI; lockfile nie jest edytowany ręcznie. Kontrola składni
+YAML przeszła. Samo przygotowanie workflow nie jest dowodem kompilacji.
+
+Bieżąca kontrola Dockera: grupa Results 3298 nadal nie działa; obca grupa
+live-quantity-refresh nadal działa. Nie wykonano restartu ani mutacji obcych
+zasobów. Odbiór nowego UI i pełna macierz audytu pozostają otwarte.
+
+
+### 2026-10-30 — ustawienia snapshotu po dopisaniu danych
+
+Kontroler zachowuje ostatnio wybraną próbkę serii i ostatnio edytowany wygląd
+konkretnej próbki między rewizjami metadanych. Preferencje są ograniczone do
+128 wpisów i rozdzielone według run/session, stage, source/dataset, quantity
+oraz indeksu próbki. To osobna pamięć ustawień: dokładne definicje renderu nadal
+zawierają rewizję i nie współdzielą buforów. Samo utworzenie definicji nowszej
+rewizji nie zmienia aktywnego viewportu. Istniejąca definicja starszej rewizji
+zachowuje swój wygląd; Return to live zachowuje preferencje, reset sesji je czyści.
+Inspector nadal ogranicza odtworzony indeks do aktualnej liczby próbek.
+
+Testy kontrolera rozszerzono o dziedziczenie preferencji, izolację tożsamości,
+brak przełączenia viewportu, LRU oraz clear/Return to live. Primary source review:
+PASS; **Vitest, typecheck i browser: NOT RUN**. Nie jest to dowód zachowania
+kamer ani widocznego renderu bieżącego buildu.
+
+Drugi review budżetu wykazał błędne mapowanie każdego błędu I/O przy małej
+pozostałej kwocie na 413. Reader ma teraz typowany `MetadataByteBudgetExceeded`;
+API używa go tylko dla rzeczywistego przekroczenia limitu. Brak pliku, zły typ,
+symlink i inne błędy zachowują odrębny komunikat. Regresje dodano w readerze
+oraz handlerze API. Niezależny ponowny source review: PASS, wykonanie: NOT RUN.

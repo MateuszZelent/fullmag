@@ -19,6 +19,7 @@ use fullmag_workspace_inspect::{
     read_results_sample, ResultsError, WorkspaceResultEntryPayload, WorkspaceResultsSource,
 };
 
+use super::persistence::solutions::saved_geometry as saved_geometry_binary;
 use crate::error::ApiError;
 use crate::schemas::workspace_items::WorkspacePlaybackGeometryQuery;
 use crate::schemas::workspace_results::{
@@ -28,12 +29,15 @@ use crate::schemas::workspace_results::{
 use crate::types::AppState;
 use serde_json::Value;
 
+mod collection;
+
 const DEFAULT_LIMIT: usize = 200;
 const MAX_LIMIT: usize = 1000;
 const ACCEPTED_OUTPUT_SCHEMA: &str = "fullmag.accepted_project_output.v1";
 const OUTPUT_STORAGE_SCHEMA: &str = "fullmag.output_storage.resolved.v1";
 const MAX_ACCEPTED_OUTPUT_RECEIPT_BYTES: u64 = 1024 * 1024;
 const MAX_ACCEPTED_OUTPUT_CANDIDATES: usize = 256;
+const MAX_ACCEPTED_OUTPUT_DISCOVERY_BYTES: usize = 16 * 1024 * 1024;
 
 // ── workspace item adapters ────────────────────────────────────────────────
 
@@ -84,7 +88,7 @@ pub async fn get_workspace_results_array(
         let root = result_root_at(db, &id)?;
         let array = read_results_array(&root, &array_id, &query.revision, None)
             .map_err(map_results_error)?;
-        let array = enrich_fem_array(&root, array)?;
+        let array = enrich_fem_array(&root, array, None)?;
         fullmag_workspace_inspect::ensure_results_revision(&root, &query.revision, None)
             .map_err(map_results_error)?;
         Ok(array)
@@ -117,25 +121,7 @@ pub async fn get_workspace_results_geometry(
     let body = run(move |db| {
         let _budget = fullmag_workspace_inspect::ResultsReadBudget::begin();
         let root = result_root_at(db, &id)?;
-        let playback_revision = fullmag_workspace_inspect::locate_results_fem_playback_revision(
-            &root,
-            &array_id,
-            &query.revision,
-            None,
-        )
-        .map_err(map_results_error)?;
-        super::workspace_items::playback_geometry_from_root(
-            &root,
-            &WorkspacePlaybackGeometryQuery {
-                revision: playback_revision,
-                part: query.part,
-            },
-        )
-        .and_then(|body| {
-            fullmag_workspace_inspect::ensure_results_revision(&root, &query.revision, None)
-                .map_err(map_results_error)
-                .map(|()| body)
-        })
+        results_geometry_from_root(&root, &array_id, &query, None)
     })
     .await?;
     Ok(geometry_response(body))
@@ -202,20 +188,10 @@ pub async fn get_current_results_catalog(
     State(state): State<Arc<AppState>>,
     Query(query): Query<WorkspaceResultsQuery>,
 ) -> Result<Json<WorkspaceResultsCatalog>, ApiError> {
-    let (context, root, run_id) = current_results_root(&state).await?;
-    let limit = query.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT);
-    let result = tokio::task::spawn_blocking(move || {
-        read_results_catalog(
-            &root,
-            query.cursor.as_deref(),
-            limit,
-            run_id.as_deref(),
-            WorkspaceResultsSource::Current,
-        )
-        .map_err(map_results_error)
-    })
-    .await
-    .map_err(|error| ApiError::internal(format!("result catalog task failed: {error}")))??;
+    let (context, results) = current_results_root(&state).await?;
+    let result = tokio::task::spawn_blocking(move || results.catalog(query))
+        .await
+        .map_err(|error| ApiError::internal(format!("result catalog task failed: {error}")))??;
     crate::validate_current_live_request_context(&state, &context).await?;
     Ok(Json(result))
 }
@@ -235,22 +211,10 @@ pub async fn get_current_results_array(
     AxumPath(array_id): AxumPath<String>,
     Query(query): Query<WorkspaceResultsRevisionQuery>,
 ) -> Result<Json<WorkspaceResultArray>, ApiError> {
-    let (context, root, run_id) = current_results_root(&state).await?;
-    let result = tokio::task::spawn_blocking(move || {
-        let _budget = fullmag_workspace_inspect::ResultsReadBudget::begin();
-        let array = read_results_array(&root, &array_id, &query.revision, run_id.as_deref())
-            .map_err(map_results_error)?;
-        let array = enrich_fem_array(&root, array)?;
-        fullmag_workspace_inspect::ensure_results_revision(
-            &root,
-            &query.revision,
-            run_id.as_deref(),
-        )
-        .map_err(map_results_error)?;
-        Ok::<_, ApiError>(array)
-    })
-    .await
-    .map_err(|error| ApiError::internal(format!("result array task failed: {error}")))??;
+    let (context, results) = current_results_root(&state).await?;
+    let result = tokio::task::spawn_blocking(move || results.array(&array_id, &query.revision))
+        .await
+        .map_err(|error| ApiError::internal(format!("result array task failed: {error}")))??;
     crate::validate_current_live_request_context(&state, &context).await?;
     Ok(Json(result))
 }
@@ -276,37 +240,10 @@ pub async fn get_current_results_geometry(
     AxumPath(array_id): AxumPath<String>,
     Query(query): Query<WorkspacePlaybackGeometryQuery>,
 ) -> Result<Response, ApiError> {
-    let (context, root, run_id) = current_results_root(&state).await?;
-    let result_revision = query.revision.clone();
-    let part = query.part.clone();
-    let body = tokio::task::spawn_blocking(move || {
-        let _budget = fullmag_workspace_inspect::ResultsReadBudget::begin();
-        let playback_revision = fullmag_workspace_inspect::locate_results_fem_playback_revision(
-            &root,
-            &array_id,
-            &result_revision,
-            run_id.as_deref(),
-        )
-        .map_err(map_results_error)?;
-        super::workspace_items::playback_geometry_from_root(
-            &root,
-            &WorkspacePlaybackGeometryQuery {
-                revision: playback_revision,
-                part,
-            },
-        )
-        .and_then(|body| {
-            fullmag_workspace_inspect::ensure_results_revision(
-                &root,
-                &result_revision,
-                run_id.as_deref(),
-            )
-            .map_err(map_results_error)
-            .map(|()| body)
-        })
-    })
-    .await
-    .map_err(|error| ApiError::internal(format!("result geometry task failed: {error}")))??;
+    let (context, results) = current_results_root(&state).await?;
+    let body = tokio::task::spawn_blocking(move || results.geometry(&array_id, &query))
+        .await
+        .map_err(|error| ApiError::internal(format!("result geometry task failed: {error}")))??;
     crate::validate_current_live_request_context(&state, &context).await?;
     Ok(geometry_response(body))
 }
@@ -327,16 +264,9 @@ pub async fn get_current_results_sample(
     AxumPath((array_id, sample_index)): AxumPath<(String, usize)>,
     Query(query): Query<WorkspaceResultsRevisionQuery>,
 ) -> Result<Response, ApiError> {
-    let (context, root, run_id) = current_results_root(&state).await?;
+    let (context, results) = current_results_root(&state).await?;
     let sample = tokio::task::spawn_blocking(move || {
-        read_results_sample(
-            &root,
-            &array_id,
-            sample_index,
-            &query.revision,
-            run_id.as_deref(),
-        )
-        .map_err(map_results_error)
+        results.sample(&array_id, sample_index, &query.revision)
     })
     .await
     .map_err(|error| ApiError::internal(format!("result sample task failed: {error}")))??;
@@ -359,13 +289,10 @@ pub async fn get_current_results_entry(
     AxumPath(entry_id): AxumPath<String>,
     Query(query): Query<WorkspaceResultsRevisionQuery>,
 ) -> Result<Response, ApiError> {
-    let (context, root, run_id) = current_results_root(&state).await?;
-    let payload = tokio::task::spawn_blocking(move || {
-        read_results_entry(&root, &entry_id, &query.revision, run_id.as_deref())
-            .map_err(map_results_error)
-    })
-    .await
-    .map_err(|error| ApiError::internal(format!("result entry task failed: {error}")))??;
+    let (context, results) = current_results_root(&state).await?;
+    let payload = tokio::task::spawn_blocking(move || results.entry(&entry_id, &query.revision))
+        .await
+        .map_err(|error| ApiError::internal(format!("result entry task failed: {error}")))??;
     crate::validate_current_live_request_context(&state, &context).await?;
     entry_response(payload)
 }
@@ -438,16 +365,235 @@ fn result_root_at(db: &Path, id: &str) -> Result<PathBuf, ApiError> {
     Ok(root)
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct ResolvedCurrentResults {
+    root: PathBuf,
+    run_id: String,
+    members: Vec<collection::Member>,
+    collection: bool,
+}
+
+struct CurrentResultsRead {
+    snapshot: crate::types::SessionStateResponse,
+    expected_run_id: String,
+    source: ResolvedCurrentResults,
+}
+
+impl CurrentResultsRead {
+    fn capture(&self) -> Result<Option<collection::CollectionSnapshot>, ApiError> {
+        if self.source.collection {
+            collection::CollectionSnapshot::capture(
+                &self.source.run_id,
+                self.source.members.clone(),
+            )
+            .map(Some)
+            .map_err(map_results_error)
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn capture_request(
+        &self,
+        id: &str,
+        revision: &str,
+    ) -> Result<Option<collection::CollectionSnapshot>, ApiError> {
+        if self.source.collection && revision.starts_with("leaf:") {
+            collection::CollectionSnapshot::capture_selected(
+                &self.source.run_id,
+                self.source.members.clone(),
+                id,
+            )
+            .map(Some)
+            .map_err(map_results_error)
+        } else {
+            self.capture()
+        }
+    }
+
+    fn target(
+        &self,
+        view: Option<&collection::CollectionSnapshot>,
+        id: &str,
+        revision: &str,
+    ) -> Result<collection::Target, ApiError> {
+        if let Some(view) = view {
+            return view.resolve(id, revision).map_err(map_results_error);
+        }
+        Ok(collection::Target {
+            root: self.source.root.clone(),
+            run_id: self.source.run_id.clone(),
+            revision: revision.into(),
+            inner_id: id.into(),
+            key: String::new(),
+            label: String::new(),
+        })
+    }
+
+    fn verify(
+        &self,
+        view: Option<&collection::CollectionSnapshot>,
+        leaf: Option<&collection::Target>,
+    ) -> Result<(), ApiError> {
+        let after = resolve_current_results_root(&self.snapshot, &self.expected_run_id)?;
+        if let Some(target) = leaf {
+            let before_member = self
+                .source
+                .members
+                .iter()
+                .find(|member| member.root == target.root);
+            let after_member = after
+                .members
+                .iter()
+                .find(|member| member.root == target.root);
+            if before_member.is_none()
+                || before_member != after_member
+                || self.source.run_id != after.run_id
+            {
+                return Err(map_results_error(ResultsError::SourceChanged));
+            }
+            fullmag_workspace_inspect::ensure_results_revision(
+                &target.root,
+                &target.revision,
+                Some(&target.run_id),
+            )
+            .map_err(map_results_error)?;
+        } else {
+            if self.source != after {
+                return Err(map_results_error(ResultsError::SourceChanged));
+            }
+            if let Some(view) = view {
+                view.ensure_unchanged().map_err(map_results_error)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn catalog(&self, query: WorkspaceResultsQuery) -> Result<WorkspaceResultsCatalog, ApiError> {
+        let _budget = fullmag_workspace_inspect::ResultsReadBudget::begin();
+        let view = self.capture()?;
+        let limit = query.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT);
+        let result = if let Some(view) = &view {
+            view.catalog(query.cursor.as_deref(), limit)
+                .map_err(map_results_error)?
+        } else {
+            read_results_catalog(
+                &self.source.root,
+                query.cursor.as_deref(),
+                limit,
+                Some(&self.source.run_id),
+                WorkspaceResultsSource::Current,
+            )
+            .map_err(map_results_error)?
+        };
+        self.verify(view.as_ref(), None)?;
+        Ok(result)
+    }
+
+    fn array(&self, id: &str, revision: &str) -> Result<WorkspaceResultArray, ApiError> {
+        let _budget = fullmag_workspace_inspect::ResultsReadBudget::begin();
+        let view = self.capture_request(id, revision)?;
+        let target = self.target(view.as_ref(), id, revision)?;
+        let array = read_results_array(
+            &target.root,
+            &target.inner_id,
+            &target.revision,
+            Some(&target.run_id),
+        )
+        .map_err(map_results_error)?;
+        let array = enrich_fem_array(&target.root, array, Some(&target.run_id))?;
+        fullmag_workspace_inspect::ensure_results_revision(
+            &target.root,
+            &target.revision,
+            Some(&target.run_id),
+        )
+        .map_err(map_results_error)?;
+        self.verify(
+            view.as_ref(),
+            (view.is_some() && revision.starts_with("leaf:")).then_some(&target),
+        )?;
+        Ok(if let Some(view) = &view {
+            view.normalize_array(&target, array)
+        } else {
+            array
+        })
+    }
+
+    fn geometry(
+        &self,
+        id: &str,
+        query: &WorkspacePlaybackGeometryQuery,
+    ) -> Result<Vec<u8>, ApiError> {
+        let _budget = fullmag_workspace_inspect::ResultsReadBudget::begin();
+        let view = self.capture_request(id, &query.revision)?;
+        let target = self.target(view.as_ref(), id, &query.revision)?;
+        let bytes = results_geometry_from_root(
+            &target.root,
+            &target.inner_id,
+            &WorkspacePlaybackGeometryQuery {
+                revision: target.revision.clone(),
+                part: query.part.clone(),
+            },
+            Some(&target.run_id),
+        )?;
+        self.verify(
+            view.as_ref(),
+            (view.is_some() && query.revision.starts_with("leaf:")).then_some(&target),
+        )?;
+        Ok(bytes)
+    }
+
+    fn sample(
+        &self,
+        id: &str,
+        index: usize,
+        revision: &str,
+    ) -> Result<fullmag_workspace_inspect::WorkspaceResultSample, ApiError> {
+        let _budget = fullmag_workspace_inspect::ResultsReadBudget::begin();
+        let view = self.capture_request(id, revision)?;
+        let target = self.target(view.as_ref(), id, revision)?;
+        let mut sample = read_results_sample(
+            &target.root,
+            &target.inner_id,
+            index,
+            &target.revision,
+            Some(&target.run_id),
+        )
+        .map_err(map_results_error)?;
+        self.verify(
+            view.as_ref(),
+            (view.is_some() && revision.starts_with("leaf:")).then_some(&target),
+        )?;
+        if let Some(view) = &view {
+            sample.array_id = id.into();
+            sample.revision = view.array_revision(&target);
+        }
+        Ok(sample)
+    }
+
+    fn entry(&self, id: &str, revision: &str) -> Result<WorkspaceResultEntryPayload, ApiError> {
+        let _budget = fullmag_workspace_inspect::ResultsReadBudget::begin();
+        let view = self.capture()?;
+        let target = self.target(view.as_ref(), id, revision)?;
+        let payload = read_results_entry(
+            &target.root,
+            &target.inner_id,
+            &target.revision,
+            Some(&target.run_id),
+        )
+        .map_err(map_results_error)?;
+        self.verify(view.as_ref(), None)?;
+        Ok(if let Some(view) = &view {
+            view.normalize_entry(&target, payload)
+        } else {
+            payload
+        })
+    }
+}
+
 async fn current_results_root(
     state: &Arc<AppState>,
-) -> Result<
-    (
-        crate::types::CurrentLiveRequestContext,
-        PathBuf,
-        Option<String>,
-    ),
-    ApiError,
-> {
+) -> Result<(crate::types::CurrentLiveRequestContext, CurrentResultsRead), ApiError> {
     let context = crate::capture_current_live_read_context(state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
@@ -487,27 +633,31 @@ async fn current_results_root(
     let expected_run_id = run_id
         .ok_or_else(|| ApiError::not_found("no run identity for the active artifact directory"))?;
     drop(guard);
-    let (root, published_run_id) = tokio::task::spawn_blocking(move || {
-        resolve_current_results_root(&snapshot, &expected_run_id)
+    let results = tokio::task::spawn_blocking(move || {
+        let source = resolve_current_results_root(&snapshot, &expected_run_id)?;
+        Ok::<_, ApiError>(CurrentResultsRead {
+            snapshot,
+            expected_run_id,
+            source,
+        })
     })
     .await
     .map_err(|error| ApiError::internal(format!("result root task failed: {error}")))??;
-    Ok((context, root, Some(published_run_id)))
+    Ok((context, results))
 }
 
-/// Resolve the current run's published result leaf without deriving an
+/// Resolve all current-run result leaves without deriving an
 /// attempt suffix or trusting the stale live artifact projection.
 ///
-/// Docker accepted runs publish `run.json` only after `AcceptedProjectStorage`
-/// has copied the completed numerical data and finalized the output-storage
-/// lease.  The receipt's `resolved_output_storage.run_id` is therefore the
-/// expected identity for the result inspector; the API must not synthesize it
-/// from the live run id.  A running/unknown publication is an explicit state,
-/// never an invitation to read another child of the output parent.
+/// Incremental Zarr autosave publishes an immutable `run.json` before the
+/// runner starts. Its accepted-run/attempt binding and per-array sample commit
+/// policy permit reads while the storage lease is running. Older outputs keep
+/// the completed-publication boundary. The declared resolved run identity is
+/// checked against the manifest and storage receipt in either case.
 fn resolve_current_results_root(
     snapshot: &crate::types::SessionStateResponse,
     current_run_id: &str,
-) -> Result<(PathBuf, String), ApiError> {
+) -> Result<ResolvedCurrentResults, ApiError> {
     let Some(startup) = snapshot
         .metadata
         .as_deref()
@@ -515,7 +665,12 @@ fn resolve_current_results_root(
     else {
         let root = crate::session::current_artifact_dir(snapshot)
             .ok_or_else(|| ApiError::not_found("no artifact directory for the active workspace"))?;
-        return Ok((root, current_run_id.to_owned()));
+        return Ok(ResolvedCurrentResults {
+            root,
+            run_id: current_run_id.to_owned(),
+            members: Vec::new(),
+            collection: false,
+        });
     };
 
     fullmag_session::repository_path::validate_store_id(current_run_id).map_err(|error| {
@@ -599,9 +754,10 @@ fn resolve_current_results_root(
     }
     reject_reparse_directory(&run_parent, "current accepted run output parent")?;
     let mut candidates = 0usize;
+    let mut receipt_budget = MAX_ACCEPTED_OUTPUT_DISCOVERY_BYTES;
     let mut saw_identity_mismatch = false;
     let mut saw_unfinished_publication = false;
-    let mut published: Option<(PathBuf, String)> = None;
+    let mut published = Vec::new();
     let entries = fs::read_dir(&run_parent).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             return publication_state_error(snapshot, "no accepted output leaf has been published");
@@ -646,7 +802,11 @@ fn resolve_current_results_root(
         if !descriptor_path.exists() {
             continue;
         }
-        let descriptor = read_bounded_json(&descriptor_path, "accepted output receipt")?;
+        let descriptor = read_bounded_json(
+            &descriptor_path,
+            "accepted output receipt",
+            &mut receipt_budget,
+        )?;
         if descriptor.get("schema").and_then(Value::as_str) != Some(ACCEPTED_OUTPUT_SCHEMA) {
             return Err(ApiError::conflict_with_code(
                 "current_results_publication_invalid",
@@ -712,15 +872,18 @@ fn resolve_current_results_root(
             continue;
         }
 
-        let manifest: fullmag_workspace_inspect::manifest::RunManifest = serde_json::from_value(
-            read_bounded_json(&candidate.join("fullmag-run.json"), "accepted run manifest")?,
-        )
-        .map_err(|error| {
-            ApiError::conflict_with_code(
-                "current_results_publication_invalid",
-                format!("accepted output run manifest cannot be parsed: {error}"),
-            )
-        })?;
+        let manifest: fullmag_workspace_inspect::manifest::RunManifest =
+            serde_json::from_value(read_bounded_json(
+                &candidate.join("fullmag-run.json"),
+                "accepted run manifest",
+                &mut receipt_budget,
+            )?)
+            .map_err(|error| {
+                ApiError::conflict_with_code(
+                    "current_results_publication_invalid",
+                    format!("accepted output run manifest cannot be parsed: {error}"),
+                )
+            })?;
         if manifest.schema != fullmag_workspace_inspect::manifest::RUN_MANIFEST_SCHEMA {
             return Err(ApiError::conflict_with_code(
                 "current_results_publication_invalid",
@@ -731,17 +894,20 @@ fn resolve_current_results_root(
             saw_identity_mismatch = true;
             continue;
         }
-        if manifest.status != "completed" {
-            saw_unfinished_publication = true;
-            continue;
-        }
+        let incremental = validate_incremental_publication(
+            &descriptor,
+            &manifest,
+            current_run_id,
+            &published_run_id,
+            &attempt_receipt,
+        )?;
 
         let storage_receipt = read_bounded_json(
             &candidate.join("output-storage.json"),
             "accepted output-storage receipt",
+            &mut receipt_budget,
         )?;
         if storage_receipt.get("schema").and_then(Value::as_str) != Some(OUTPUT_STORAGE_SCHEMA)
-            || storage_receipt.get("state").and_then(Value::as_str) != Some("succeeded")
             || storage_receipt
                 .pointer("/resolved/run_id")
                 .and_then(Value::as_str)
@@ -756,22 +922,65 @@ fn resolve_current_results_root(
             saw_unfinished_publication = true;
             continue;
         }
+        let storage_state = storage_receipt.get("state").and_then(Value::as_str);
+        let completed = manifest.status == "completed" && storage_state == Some("succeeded");
+        // The sample commit protocol also preserves readable prefixes after
+        // cancellation or failed finalization. These states are not success
+        // claims; the persisted manifests remain visible in the collection.
+        let committed_prefix = incremental
+            && matches!(
+                manifest.status.as_str(),
+                "running" | "completed" | "failed" | "cancelled"
+            )
+            && matches!(
+                storage_state,
+                Some("running" | "finalizing" | "finalization_failed" | "succeeded" | "failed")
+            )
+            && storage_receipt
+                .pointer("/resolved/data_format")
+                .and_then(Value::as_str)
+                == Some("zarr");
+        if !completed && !committed_prefix {
+            saw_unfinished_publication = true;
+            continue;
+        }
         if !is_result_dir(&candidate) {
             return Err(ApiError::conflict_with_code(
                 "current_results_publication_invalid",
                 "accepted output receipt points at a non-result directory",
             ));
         }
-        if published.replace((candidate, published_run_id)).is_some() {
-            return Err(ApiError::conflict_with_code(
-                "current_results_publication_ambiguous",
-                "the current run has more than one published result leaf",
-            ));
-        }
+        let label = candidate
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| {
+                ApiError::conflict_with_code(
+                    "current_results_publication_invalid",
+                    "output leaf name must be UTF-8",
+                )
+            })?
+            .to_owned();
+        let identity = descriptor
+            .pointer("/publication/output_identity")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| attempt_receipt.to_string_lossy().into_owned());
+        published.push(collection::Member {
+            root: candidate,
+            run_id: published_run_id,
+            label,
+            identity,
+        });
     }
 
-    if let Some(published) = published {
-        return Ok(published);
+    if !published.is_empty() {
+        published.sort_by(|left, right| left.label.cmp(&right.label));
+        return Ok(ResolvedCurrentResults {
+            root: run_parent,
+            run_id: current_run_id.to_owned(),
+            members: published,
+            collection: true,
+        });
     }
     if saw_identity_mismatch {
         return Err(ApiError::conflict_with_code(
@@ -789,6 +998,83 @@ fn resolve_current_results_root(
         snapshot,
         "no canonical accepted output receipt has been published",
     ))
+}
+
+/// Validate the producer's immutable incremental-publication declaration.
+/// Presence is authoritative: a malformed declaration cannot downgrade to the
+/// legacy completed-folder contract. This is a data provenance check, not a
+/// replacement for private worker-receipt reconciliation.
+fn validate_incremental_publication(
+    descriptor: &Value,
+    manifest: &fullmag_workspace_inspect::manifest::RunManifest,
+    accepted_run_id: &str,
+    resolved_run_id: &str,
+    attempt_receipt: &Path,
+) -> Result<bool, ApiError> {
+    let Some(publication) = descriptor.get("publication") else {
+        return Ok(false);
+    };
+    let invalid = || {
+        ApiError::conflict_with_code(
+        "current_results_publication_invalid",
+        "incremental output publication does not match its accepted run, attempt or sample policy",
+    )
+    };
+    if publication.get("schema").and_then(Value::as_str)
+        != Some("fullmag.accepted_results_publication.v1")
+        || publication.get("sample_policy").and_then(Value::as_str)
+            != Some("fullmag.zarr.sample_publication.v1")
+        || publication.get("accepted_run_id").and_then(Value::as_str) != Some(accepted_run_id)
+        || descriptor
+            .pointer("/resolved_output_storage/data_format")
+            .and_then(Value::as_str)
+            != Some("zarr")
+    {
+        return Err(invalid());
+    }
+    let epoch = publication
+        .get("ownership_epoch")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .ok_or_else(invalid)?;
+    let task_id = publication
+        .get("task_id")
+        .and_then(Value::as_str)
+        .ok_or_else(invalid)?;
+    let attempt_id = publication
+        .get("attempt_id")
+        .and_then(Value::as_str)
+        .ok_or_else(invalid)?;
+    let step_id = publication
+        .get("step_id")
+        .and_then(Value::as_str)
+        .ok_or_else(invalid)?;
+    for id in [task_id, attempt_id, step_id] {
+        fullmag_session::repository_path::validate_store_id(id).map_err(|_| invalid())?;
+    }
+    let identity = publication
+        .get("output_identity")
+        .and_then(Value::as_str)
+        .ok_or_else(invalid)?;
+    uuid::Uuid::parse_str(identity).map_err(|_| invalid())?;
+    let fingerprint = publication
+        .get("specification_fingerprint")
+        .and_then(Value::as_str)
+        .ok_or_else(invalid)?;
+    let expected_receipt_suffix = PathBuf::from(accepted_run_id)
+        .join("worker-attempts")
+        .join(task_id)
+        .join(attempt_id)
+        .join(format!("epoch-{epoch}"));
+    if resolved_run_id != format!("{accepted_run_id}-{epoch}")
+        || !attempt_receipt.ends_with(expected_receipt_suffix)
+        || fingerprint.len() != 64
+        || !fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || manifest.run_spec_sha256.as_deref() != Some(fingerprint)
+    {
+        return Err(invalid());
+    }
+    Ok(true)
 }
 
 fn publication_state_error(
@@ -849,7 +1135,18 @@ fn reject_reparse_directory(path: &Path, label: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
-fn read_bounded_json(path: &Path, label: &str) -> Result<Value, ApiError> {
+fn read_bounded_json(path: &Path, label: &str, remaining: &mut usize) -> Result<Value, ApiError> {
+    let limit = (*remaining).min(MAX_ACCEPTED_OUTPUT_RECEIPT_BYTES as usize);
+    let budget_error = || {
+        ApiError::with_status_and_code(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "current_results_discovery_budget_exceeded",
+            "accepted-output receipt discovery exceeds its aggregate byte budget",
+        )
+    };
+    if limit == 0 {
+        return Err(budget_error());
+    }
     let parent = path.parent().ok_or_else(|| {
         ApiError::conflict_with_code(
             "current_results_publication_invalid",
@@ -865,17 +1162,19 @@ fn read_bounded_json(path: &Path, label: &str) -> Result<Value, ApiError> {
                 format!("{label} has no portable file name"),
             )
         })?;
-    let bytes = fullmag_session::repository_path::read_bounded_regular_file(
-        parent,
-        name,
-        MAX_ACCEPTED_OUTPUT_RECEIPT_BYTES as usize,
-    )
-    .map_err(|error| {
-        ApiError::conflict_with_code(
-            "current_results_publication_unavailable",
-            format!("cannot read {label}: {error}"),
-        )
-    })?;
+    let bytes = fullmag_session::repository_path::read_bounded_regular_file(parent, name, limit)
+        .map_err(|error| {
+            if limit < MAX_ACCEPTED_OUTPUT_RECEIPT_BYTES as usize
+                && error.is::<fullmag_session::repository_path::MetadataByteBudgetExceeded>()
+            {
+                return budget_error();
+            }
+            ApiError::conflict_with_code(
+                "current_results_publication_unavailable",
+                format!("cannot read {label}: {error}"),
+            )
+        })?;
+    *remaining -= bytes.len();
     serde_json::from_slice(&bytes).map_err(|error| {
         ApiError::conflict_with_code(
             "current_results_publication_invalid",
@@ -984,10 +1283,135 @@ fn geometry_response(body: Vec<u8>) -> Response {
     response
 }
 
+/// Both current-run and saved-folder routes resolve geometry by array identity.
+/// A malformed new binding is never reinterpreted as a legacy magnetization field.
+fn results_geometry_from_root(
+    root: &Path,
+    array_id: &str,
+    query: &WorkspacePlaybackGeometryQuery,
+    expected_run_id: Option<&str>,
+) -> Result<Vec<u8>, ApiError> {
+    if !matches!(query.part.as_str(), "topology" | "support") {
+        return Err(ApiError::bad_request(
+            "result geometry part must be topology or support",
+        ));
+    }
+    let body = if let Some(geometry) = fullmag_workspace_inspect::read_results_fem_nodal_geometry(
+        root,
+        array_id,
+        &query.revision,
+        expected_run_id,
+    )
+    .map_err(map_results_error)?
+    {
+        match query.part.as_str() {
+            "support" => saved_geometry_binary::encode_saved_support(&geometry.active_node_mask)?,
+            "topology" => saved_geometry_binary::encode_saved_mesh_topology(geometry.mesh.mesh)?,
+            _ => unreachable!("geometry part validated before read"),
+        }
+    } else {
+        let playback_revision = fullmag_workspace_inspect::locate_results_fem_playback_revision(
+            root,
+            array_id,
+            &query.revision,
+            expected_run_id,
+        )
+        .map_err(map_results_error)?;
+        super::workspace_items::playback_geometry_from_root(
+            root,
+            &WorkspacePlaybackGeometryQuery {
+                revision: playback_revision,
+                part: query.part.clone(),
+            },
+        )?
+    };
+    fullmag_workspace_inspect::ensure_results_revision(root, &query.revision, expected_run_id)
+        .map_err(map_results_error)?;
+    Ok(body)
+}
+
+fn enrich_nodal_array(
+    array: &mut WorkspaceResultArray,
+    geometry: fullmag_workspace_inspect::ResultsFemNodalGeometry,
+) -> Result<(), ApiError> {
+    let mut mesh = fullmag_workspace_inspect::SavedPlaybackFemMesh {
+        node_count: geometry.mesh.mesh.nodes.len(),
+        cell_count: geometry.mesh.mesh.cells.len(),
+        facet_count: geometry.mesh.mesh.facets.len(),
+        geometry_sha256: geometry.geometry_sha256.clone(),
+        topology_byte_length: None,
+        topology_sha256: None,
+        support_byte_length: None,
+        support_sha256: None,
+    };
+    if let Some((length, hash)) =
+        saved_geometry_binary::mesh_topology_binary_identity(&geometry.mesh.mesh)?
+    {
+        mesh.topology_byte_length = Some(length);
+        mesh.topology_sha256 = Some(hash);
+    }
+    if let Some((body, hash)) =
+        saved_geometry_binary::bounded_support_binary_identity(&geometry.active_node_mask)?
+    {
+        mesh.support_byte_length = Some(body.len());
+        mesh.support_sha256 = Some(hash);
+    }
+    let binary_available = mesh.topology_sha256.is_some() && mesh.support_sha256.is_some();
+    let reason = (!binary_available)
+        .then(|| "exact FEM geometry exceeds the bounded binary transport budget".to_string());
+    array.geometry = Some(fullmag_workspace_inspect::WorkspaceResultGeometry {
+        kind: WorkspaceResultGeometryKind::FemP1,
+        cells_xyz: None,
+        cell_size_m: None,
+        origin_m: None,
+        component_count: Some(geometry.binding.component_count),
+        node_count: Some(mesh.node_count),
+        cell_count: Some(mesh.cell_count),
+        topology_array_id: None,
+        playback_geometry_sha256: Some(geometry.geometry_sha256),
+        fem_mesh: Some(mesh),
+        reason: reason.clone(),
+    });
+    // The validated producer contract is authoritative also for canonical
+    // scalar/vector quantities absent from the legacy reader's small catalog.
+    array.component_count = Some(geometry.binding.component_count);
+    array.field_layout = Some(geometry.binding.field_layout.as_str().to_string());
+    array.can_visualize_3d = array.can_read_values && binary_available;
+    if array.can_read_values {
+        array.reason = reason;
+    }
+    Ok(())
+}
+
 fn enrich_fem_array(
     root: &Path,
     mut array: WorkspaceResultArray,
+    expected_run_id: Option<&str>,
 ) -> Result<WorkspaceResultArray, ApiError> {
+    match fullmag_workspace_inspect::read_results_fem_nodal_geometry(
+        root,
+        &array.id,
+        &array.revision,
+        expected_run_id,
+    ) {
+        Ok(Some(geometry)) => {
+            enrich_nodal_array(&mut array, geometry)?;
+            return Ok(array);
+        }
+        Ok(None) => {} // Only an absent binding permits legacy playback.
+        Err(
+            error @ (ResultsError::Invalid(_)
+            | ResultsError::Unsupported(_)
+            | ResultsError::TooLarge(_)
+            | ResultsError::Link(_)),
+        ) => {
+            array.can_visualize_3d = false;
+            array.geometry = None;
+            array.reason = Some(error.to_string());
+            return Ok(array);
+        }
+        Err(error) => return Err(map_results_error(error)),
+    }
     let Some(expected_hash) = array.geometry.as_ref().and_then(|geometry| {
         (geometry.kind == WorkspaceResultGeometryKind::FemP1)
             .then(|| geometry.playback_geometry_sha256.clone())
@@ -1053,4 +1477,55 @@ fn entry_response(payload: WorkspaceResultEntryPayload) -> Result<Response, ApiE
         body,
     )
         .into_response())
+}
+
+#[cfg(test)]
+mod receipt_budget_tests {
+    use super::*;
+
+    #[test]
+    fn reduced_budget_does_not_disguise_missing_files_or_non_files() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("receipt.json"), b"{}").unwrap();
+        fs::create_dir(root.path().join("directory")).unwrap();
+        for name in ["missing.json", "directory"] {
+            let mut remaining = 1;
+            let error =
+                read_bounded_json(&root.path().join(name), "receipt", &mut remaining).unwrap_err();
+            assert_eq!(error.status, StatusCode::CONFLICT);
+            assert_eq!(
+                error.code.as_deref(),
+                Some("current_results_publication_unavailable")
+            );
+            assert_eq!(remaining, 1);
+        }
+        let mut remaining = 1;
+        let error = read_bounded_json(&root.path().join("receipt.json"), "receipt", &mut remaining)
+            .unwrap_err();
+        assert_eq!(error.status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(
+            error.code.as_deref(),
+            Some("current_results_discovery_budget_exceeded")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reduced_budget_keeps_symlink_rejection_distinct() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("receipt.json"), b"{}").unwrap();
+        std::os::unix::fs::symlink(
+            root.path().join("receipt.json"),
+            root.path().join("link.json"),
+        )
+        .unwrap();
+        let mut remaining = 1;
+        let error = read_bounded_json(&root.path().join("link.json"), "receipt", &mut remaining)
+            .unwrap_err();
+        assert_eq!(error.status, StatusCode::CONFLICT);
+        assert_eq!(
+            error.code.as_deref(),
+            Some("current_results_publication_unavailable")
+        );
+    }
 }

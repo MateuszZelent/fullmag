@@ -22,6 +22,7 @@ pub mod dataset_slice;
 pub mod descriptor;
 pub mod eval;
 pub mod fem_state_field;
+pub mod fem_nodal_field;
 pub mod fem_state_snapshot_receipt;
 pub mod fem_local_node_map;
 pub mod fem_native_indexed_geometry;

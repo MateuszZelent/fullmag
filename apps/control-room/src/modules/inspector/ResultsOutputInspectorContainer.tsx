@@ -185,11 +185,11 @@ function ResultsOutputInspectorContainerBody({
     [activeDefinition, identity, sampleCount, setSampleIndex, snapshotController],
   );
   const onLoadTo3D = useCallback(() => {
-    if (!identity || !snapshotController || array?.can_visualize_3d !== true) return;
+    if (!identity || !snapshotController || sampleCount < 1 || array?.can_visualize_3d !== true) return;
     snapshotController.select(identity);
     kernel.layout.setActiveViewportMainModule("viewport-3d");
     kernel.layout.setFocusedSlot("viewport-main");
-  }, [array?.can_visualize_3d, identity, kernel.layout, snapshotController]);
+  }, [array?.can_visualize_3d, identity, kernel.layout, sampleCount, snapshotController]);
   const onAppearanceChange = useCallback(
     (patch: SnapshotVisualizationAppearancePatch) => {
       if (!identity || !identityKey || !snapshotController) return;

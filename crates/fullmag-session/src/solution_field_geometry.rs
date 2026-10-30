@@ -73,7 +73,7 @@ pub struct SolutionFieldGeometryManifest {
     pub geometry: SavedFieldGeometryRef,
 }
 
-fn serialize_saved_mesh<S: serde::Serializer>(
+pub(crate) fn serialize_saved_mesh<S: serde::Serializer>(
     mesh: &MeshIR,
     serializer: S,
 ) -> std::result::Result<S::Ok, S::Error> {

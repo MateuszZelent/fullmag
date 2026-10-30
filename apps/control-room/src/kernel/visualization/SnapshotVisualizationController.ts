@@ -97,7 +97,10 @@ export function snapshotVisualizationKey(
   ]);
 }
 
-/** Stable identity for one dataset/quantity series across its samples. */
+/**
+ * Stable logical identity for one dataset/quantity series across revisions
+ * and samples.
+ */
 function snapshotVisualizationSeriesKey(
   identity: SnapshotVisualizationIdentity,
 ): string {
@@ -106,7 +109,22 @@ function snapshotVisualizationSeriesKey(
     identity.stageId,
     identity.datasetId,
     identity.quantityId,
-    identity.revision,
+  ]);
+}
+
+/**
+ * Stable logical identity for one sample's appearance preference across
+ * revisions.
+ */
+function snapshotVisualizationAppearancePreferenceKey(
+  identity: SnapshotVisualizationIdentity,
+): string {
+  return JSON.stringify([
+    identity.runId,
+    identity.stageId,
+    identity.datasetId,
+    identity.quantityId,
+    identity.sampleIndex,
   ]);
 }
 
@@ -120,9 +138,8 @@ export class SnapshotVisualizationController {
   private readonly listeners = new Set<SnapshotVisualizationListener>();
   /**
    * Definitions are capped so browsing a very large result folder cannot
-   * retain an unbounded set of render-side identities. Only definitions with
-   * edited appearance are retained after eviction; untouched defaults are
-   * recreated on demand.
+   * retain an unbounded set of revision-pinned render identities. The logical
+   * appearance preference cache is separately capped to the same bound.
    */
   private readonly archivedDefinitions = new Map<
     string,
@@ -130,10 +147,17 @@ export class SnapshotVisualizationController {
   >();
   private readonly lastUsed = new Map<string, number>();
   private usageCounter = 0;
-  /** Last Inspector sample per exact dataset series, bounded like definitions. */
+  /** Last Inspector sample per logical dataset series, bounded like definitions. */
   private readonly rememberedSampleIndices = new Map<string, number>();
   private readonly rememberedSampleUsage = new Map<string, number>();
   private sampleUsageCounter = 0;
+  /** Latest edited appearance per logical sample, independent of metadata revision. */
+  private readonly appearancePreferences = new Map<
+    string,
+    SnapshotVisualizationAppearance
+  >();
+  private readonly appearancePreferenceUsage = new Map<string, number>();
+  private appearancePreferenceCounter = 0;
 
   getSnapshot(): SnapshotVisualizationState {
     return this.snapshot;
@@ -146,7 +170,8 @@ export class SnapshotVisualizationController {
 
   /**
    * Remembers Inspector navigation without changing the active viewport source.
-   * The series key includes run, dataset, quantity, and source revision.
+   * The series key includes run, stage, dataset, and quantity; metadata
+   * revisions do not reset the Inspector's selected sample.
    */
   rememberSampleIndex(identity: SnapshotVisualizationIdentity): boolean {
     if (!isSnapshotVisualizationIdentity(identity)) return false;
@@ -174,28 +199,33 @@ export class SnapshotVisualizationController {
   }
 
   /**
-   * Resolves the sample an Inspector should restore for one exact series.
-   * An active viewport definition wins over an Inspector-only preference.
+   * Resolves the sample an Inspector should restore for one logical series.
+   * The latest explicit Inspector selection wins across metadata revisions;
+   * the active viewport is a fallback when no Inspector preference remains.
    */
   getPreferredSampleIndex(
     identity: SnapshotVisualizationIdentity,
   ): number | null {
     if (!isSnapshotVisualizationIdentity(identity)) return null;
 
+    const key = snapshotVisualizationSeriesKey(identity);
+    const remembered = this.rememberedSampleIndices.get(key);
+    if (remembered !== undefined) {
+      this.touchRememberedSample(key);
+      return remembered;
+    }
+
     const activeDefinition = this.snapshot.activeKey
       ? this.snapshot.definitions[this.snapshot.activeKey]
       : undefined;
     if (
       activeDefinition &&
-      snapshotVisualizationSeriesKey(activeDefinition.identity) ===
-        snapshotVisualizationSeriesKey(identity)
+      snapshotVisualizationSeriesKey(activeDefinition.identity) === key
     ) {
       return activeDefinition.identity.sampleIndex;
     }
 
-    const key = snapshotVisualizationSeriesKey(identity);
-    const remembered = this.rememberedSampleIndices.get(key);
-    return remembered ?? null;
+    return null;
   }
 
   /** Selects a saved snapshot, creating its default definition on first use. */
@@ -234,7 +264,15 @@ export class SnapshotVisualizationController {
     }
 
     const archived = this.archivedDefinitions.get(key);
-    const definition = archived ?? makeDefinition(identity);
+    const inheritedAppearance = archived
+      ? null
+      : this.getAppearancePreference(identity);
+    const definition =
+      archived ??
+      makeDefinition(
+        identity,
+        inheritedAppearance ?? DEFAULT_SNAPSHOT_VISUALIZATION_APPEARANCE,
+      );
     this.archivedDefinitions.delete(key);
 
     const definitions = { ...this.snapshot.definitions };
@@ -288,6 +326,10 @@ export class SnapshotVisualizationController {
       identity: currentDefinition.identity,
       appearance: Object.freeze(nextAppearance),
     });
+    this.rememberAppearancePreference(
+      currentDefinition.identity,
+      definition.appearance,
+    );
     if (this.snapshot.definitions[key]) {
       const definitions = Object.freeze({
         ...this.snapshot.definitions,
@@ -323,7 +365,8 @@ export class SnapshotVisualizationController {
       this.snapshot.activeKey === null &&
       Object.keys(this.snapshot.definitions).length === 0 &&
       this.archivedDefinitions.size === 0 &&
-      this.rememberedSampleIndices.size === 0
+      this.rememberedSampleIndices.size === 0 &&
+      this.appearancePreferences.size === 0
     ) {
       return false;
     }
@@ -334,6 +377,9 @@ export class SnapshotVisualizationController {
     this.rememberedSampleIndices.clear();
     this.rememberedSampleUsage.clear();
     this.sampleUsageCounter = 0;
+    this.appearancePreferences.clear();
+    this.appearancePreferenceUsage.clear();
+    this.appearancePreferenceCounter = 0;
     this.notify();
     return true;
   }
@@ -346,6 +392,44 @@ export class SnapshotVisualizationController {
   private touchRememberedSample(key: string): void {
     this.sampleUsageCounter += 1;
     this.rememberedSampleUsage.set(key, this.sampleUsageCounter);
+  }
+
+  private getAppearancePreference(
+    identity: SnapshotVisualizationIdentity,
+  ): SnapshotVisualizationAppearance | null {
+    const key = snapshotVisualizationAppearancePreferenceKey(identity);
+    const appearance = this.appearancePreferences.get(key);
+    if (appearance) this.touchAppearancePreference(key);
+    return appearance ?? null;
+  }
+
+  private rememberAppearancePreference(
+    identity: SnapshotVisualizationIdentity,
+    appearance: SnapshotVisualizationAppearance,
+  ): void {
+    const key = snapshotVisualizationAppearancePreferenceKey(identity);
+    if (
+      !this.appearancePreferences.has(key) &&
+      this.appearancePreferences.size >= MAX_SNAPSHOT_VISUALIZATION_DEFINITIONS
+    ) {
+      const evictable = [...this.appearancePreferences.keys()].sort(
+        (left, right) =>
+          (this.appearancePreferenceUsage.get(left) ?? 0) -
+          (this.appearancePreferenceUsage.get(right) ?? 0),
+      )[0];
+      if (evictable) {
+        this.appearancePreferences.delete(evictable);
+        this.appearancePreferenceUsage.delete(evictable);
+      }
+    }
+
+    this.appearancePreferences.set(key, appearance);
+    this.touchAppearancePreference(key);
+  }
+
+  private touchAppearancePreference(key: string): void {
+    this.appearancePreferenceCounter += 1;
+    this.appearancePreferenceUsage.set(key, this.appearancePreferenceCounter);
   }
 
   private notify(): void {
@@ -362,6 +446,8 @@ function makeSnapshot(
 
 function makeDefinition(
   identity: SnapshotVisualizationIdentity,
+  appearance: SnapshotVisualizationAppearance =
+    DEFAULT_SNAPSHOT_VISUALIZATION_APPEARANCE,
 ): SnapshotVisualizationDefinition {
   return Object.freeze({
     identity: Object.freeze({
@@ -372,7 +458,7 @@ function makeDefinition(
       sampleIndex: identity.sampleIndex,
       revision: identity.revision,
     }),
-    appearance: DEFAULT_SNAPSHOT_VISUALIZATION_APPEARANCE,
+    appearance: Object.freeze({ ...appearance }),
   });
 }
 

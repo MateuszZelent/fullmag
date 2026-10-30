@@ -606,8 +606,14 @@ fn saved_mesh_payload(
     geometry: SavedFieldGeometry,
     topology_fingerprint: String,
 ) -> Result<fullmag_runner::FemMeshPayload, ApiError> {
-    let mesh = geometry.mesh;
-    Ok(fullmag_runner::FemMeshPayload {
+    Ok(mesh_payload(geometry.mesh, topology_fingerprint))
+}
+
+fn mesh_payload(
+    mesh: fullmag_ir::MeshIR,
+    topology_fingerprint: String,
+) -> fullmag_runner::FemMeshPayload {
+    fullmag_runner::FemMeshPayload {
         mesh_name: mesh.mesh_name,
         mesh_id: topology_fingerprint,
         nodes: mesh.nodes,
@@ -624,7 +630,30 @@ fn saved_mesh_payload(
         generation_id: None,
         per_domain_quality: std::collections::HashMap::new(),
         build_report: None,
-    })
+    }
+}
+
+/// Encode an already validated mesh without inventing quantity-specific semantics.
+/// New per-array FEM bindings share the same bounded FMMT wire codec as legacy playback.
+pub(crate) fn encode_saved_mesh_topology(mesh: fullmag_ir::MeshIR) -> Result<Vec<u8>, ApiError> {
+    let estimated = estimated_fmmt_v2_len_for_geometry(&mesh)?;
+    if estimated > MAX_BINARY_RESPONSE_BYTES {
+        return Err(ApiError::unprocessable(
+            "saved FEM topology exceeds the bounded binary transport limit",
+        ));
+    }
+    let fingerprint = mesh.topology_fingerprint_v6();
+    let payload = mesh_payload(mesh, fingerprint);
+    let body =
+        crate::field_store::serialize_fem_mesh_topology_binary_v2(&payload).map_err(|error| {
+            ApiError::unprocessable(format!("saved FEM topology is unsupported: {error}"))
+        })?;
+    if body.len() != estimated {
+        return Err(ApiError::internal(
+            "saved topology length differs from its bounded preflight",
+        ));
+    }
+    Ok(body)
 }
 
 fn fem_mesh_payload_borrowed(
@@ -657,7 +686,7 @@ pub(crate) fn topology_binary_identity(
     mesh_topology_binary_identity(&geometry.mesh)
 }
 
-fn mesh_topology_binary_identity(
+pub(crate) fn mesh_topology_binary_identity(
     mesh: &fullmag_ir::MeshIR,
 ) -> Result<Option<(usize, String)>, ApiError> {
     let topology_fingerprint = mesh.topology_fingerprint_v6();
@@ -696,9 +725,7 @@ fn estimated_fmmt_v2_len(mesh: &fullmag_runner::FemMeshPayload) -> Result<usize,
     )
 }
 
-fn estimated_fmmt_v2_len_for_geometry(
-    mesh: &fullmag_ir::MeshIR,
-) -> Result<usize, ApiError> {
+fn estimated_fmmt_v2_len_for_geometry(mesh: &fullmag_ir::MeshIR) -> Result<usize, ApiError> {
     let sections = [
         (mesh.nodes.len(), 24_usize),
         (mesh.cells.types.len(), 4),

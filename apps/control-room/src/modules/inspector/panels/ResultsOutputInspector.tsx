@@ -368,7 +368,10 @@ export function ResultsOutputInspector({
   const selectedSampleIndex = clampResultsSampleIndex(sampleIndex, sampleCount);
   const hasSamples = sampleCount > 0;
   const lastSampleIndex = Math.max(0, sampleCount - 1);
-  const loadDisabled = array?.can_visualize_3d !== true;
+  const loadDisabled = !hasSamples || array?.can_visualize_3d !== true;
+  const loadDisabledReason = array && !hasSamples
+    ? "No snapshots have been published yet."
+    : array?.reason ?? "This output has no verified 3D visualization.";
 
   const selectSample = (next: number) => {
     if (!hasSamples) return;
@@ -386,7 +389,7 @@ export function ResultsOutputInspector({
           {canReturnToLive ? <Button size="sm" type="button" variant="secondary" onClick={onReturnToLive}>{returnActionLabel}</Button> : null}
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button disabled={loadDisabled} disabledReason={array?.reason ?? "This output has no verified 3D visualization."} size="sm" type="button" variant="primary" onClick={onLoadTo3D}>Load into 3D</Button>
+          <Button disabled={loadDisabled} disabledReason={loadDisabledReason} size="sm" type="button" variant="primary" onClick={onLoadTo3D}>Load into 3D</Button>
           <span className="self-center text-fm-xs text-fm-muted">{kindLabel(entry)} · {status}</span>
         </div>
       </header>

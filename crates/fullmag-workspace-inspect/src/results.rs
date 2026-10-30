@@ -6,9 +6,15 @@
 //! small, explicitly supported little-endian f64 subset.
 
 use crate::playback::SavedPlaybackResource;
-use crate::results_fs::{open_directory, open_regular, PinnedDirectory};
+use crate::results_fs::{PinnedDirectory, open_directory, open_regular};
+use fullmag_session::saved_fem_nodal::{
+    FEM_NODAL_OBJECT_DIRECTORY, SavedFemNodalArrayBinding, SavedFemP1MeshGeometry,
+    object_relative_path as fem_nodal_object_relative_path,
+};
+use fullmag_session::solution_field_geometry::SavedFieldGeometryRef;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsStr;
 use std::fs::{self, Metadata};
 use std::io::Read;
 use std::marker::PhantomData;
@@ -198,6 +204,18 @@ pub struct WorkspaceResultGeometry {
     pub reason: Option<String>,
 }
 
+/// Strictly validated mesh and active support for one saved FEM nodal array.
+///
+/// This records the producer's saved H1/P1 declaration. It does not prove the
+/// native solver's degree-of-freedom mapping.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResultsFemNodalGeometry {
+    pub binding: SavedFemNodalArrayBinding,
+    pub mesh: SavedFemP1MeshGeometry,
+    pub active_node_mask: Vec<bool>,
+    pub geometry_sha256: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct WorkspaceResultSampleCoordinate {
@@ -375,8 +393,14 @@ pub fn read_results_catalog(
     }
     let run_id = read_and_validate_run_id(root, expected_run_id)?;
     let geometry = read_geometry_context(root, false)?;
-    let mut entries = scan
+    let public_entries = scan
         .entries
+        .iter()
+        .filter(|entry| !is_internal_geometry_path(&entry.relative))
+        .collect::<Vec<_>>();
+    let total_count = public_entries.len();
+    let end = offset.saturating_add(limit).min(total_count);
+    let mut entries = public_entries
         .iter()
         .skip(offset)
         .take(limit)
@@ -397,8 +421,6 @@ pub fn read_results_catalog(
             WorkspaceResultEntryStatus::Unsupported | WorkspaceResultEntryStatus::Unreadable
         )
     });
-    let total_count = scan.entries.len();
-    let end = offset.saturating_add(limit).min(total_count);
     let next_cursor = (end < total_count).then(|| format!("{}:{end}", scan.revision));
     let page = entries;
     let revision = scan.revision.clone();
@@ -442,10 +464,105 @@ pub fn read_results_array(
     ensure_expected_revision(&scan.revision, revision)?;
     let _ = read_and_validate_run_id(root, expected_run_id)?;
     let entry = find_array(&scan, array_id)?;
-    let geometry = read_geometry_context(root, true)?;
-    let result = array_to_public(root, entry, geometry.as_ref(), revision)?;
+    let metadata = parse_array_metadata_for_root(root, &entry.path, scan.root_policy)?;
+    let geometry = if metadata.attrs.get("fem_nodal_binding").is_some() {
+        None
+    } else {
+        read_geometry_context(root, true)?
+    };
+    let result = array_to_public_with_metadata(root, entry, geometry.as_ref(), revision, metadata)?;
     ensure_unchanged(root, revision)?;
     Ok(result)
+}
+
+/// Read the saved FEM P1 mesh and support mask bound to one results array.
+///
+/// The immutable objects are loaded only for this selected-array request. A
+/// present but malformed binding is an error; only a missing key returns
+/// `Ok(None)` so adapters can retain legacy behavior for older folders.
+pub fn read_results_fem_nodal_geometry(
+    root: &Path,
+    array_id: &str,
+    revision: &str,
+    expected_run_id: Option<&str>,
+) -> Result<Option<ResultsFemNodalGeometry>, ResultsError> {
+    let _read_budget = ReadBudget::begin();
+    let scan = scan_root(root)?;
+    ensure_expected_revision(&scan.revision, revision)?;
+    let entry = find_array(&scan, array_id)?;
+    let result = (|| {
+        let _ = read_and_validate_run_id(root, expected_run_id)?;
+        let metadata = parse_array_metadata_for_root(root, &entry.path, scan.root_policy)?;
+        let Some(binding_value) = metadata.attrs.get("fem_nodal_binding") else {
+            return Ok(None);
+        };
+        let binding: SavedFemNodalArrayBinding = serde_json::from_value(binding_value.clone())
+            .map_err(|error| {
+                ResultsError::Invalid(format!("invalid FEM nodal array binding: {error}"))
+            })?;
+        binding.validate().map_err(|error| {
+            ResultsError::Invalid(format!("invalid FEM nodal array binding: {error}"))
+        })?;
+        let store_relative = validate_fem_nodal_array_binding(entry, &metadata, &binding)?;
+        // Accepted output leaves contain target.zarr stores. Bind geometry to
+        // the exact store that owns this stages/... array, never the outer
+        // browser folder or a sibling store with the same quantity name.
+        if !store_relative.as_os_str().is_empty()
+            && read_json(&root.join(&store_relative).join(".zgroup"))?
+                .get("zarr_format").and_then(Value::as_u64) != Some(2)
+        {
+            return Err(ResultsError::Invalid("FEM nodal array has no owning Zarr v2 store".into()));
+        }
+        let mut root_directory = open_directory(root).map_err(|error| match error.kind() {
+            std::io::ErrorKind::InvalidInput => {
+                ResultsError::Link("cannot safely pin FEM nodal results root".into())
+            }
+            _ => ResultsError::Io(format!("cannot pin FEM nodal results root: {error}")),
+        })?;
+        for component in store_relative.components() {
+            let std::path::Component::Normal(name) = component else {
+                return Err(ResultsError::Invalid("invalid FEM nodal store path".into()));
+            };
+            root_directory = root_directory.open_child_directory(name)
+                .map_err(|error| fem_geometry_open_error("owning Zarr store", error))?;
+        }
+        let objects = root_directory
+            .open_child_directory(OsStr::new(FEM_NODAL_OBJECT_DIRECTORY))
+            .map_err(|error| fem_geometry_open_error(FEM_NODAL_OBJECT_DIRECTORY, error))?;
+        let mesh_name = fem_nodal_object_name(&binding.mesh)?;
+        let semantics_name = fem_nodal_object_name(&binding.semantics)?;
+        let mesh_bytes =
+            read_pinned_fem_geometry_object(&objects, &mesh_name, binding.mesh.byte_length)?;
+        let semantics_bytes = read_pinned_fem_geometry_object(
+            &objects,
+            &semantics_name,
+            binding.semantics.byte_length,
+        )?;
+        let (mesh, semantics) = binding
+            .parse_payloads(&mesh_bytes, &semantics_bytes)
+            .map_err(|error| {
+                ResultsError::Invalid(format!(
+                    "FEM nodal geometry objects do not match their binding: {error}"
+                ))
+            })?;
+        let binding_bytes = serde_json::to_vec(&binding).map_err(|error| {
+            ResultsError::Invalid(format!(
+                "cannot serialize validated FEM nodal binding: {error}"
+            ))
+        })?;
+        let geometry_sha256 = hex_bytes(&Sha256::digest(binding_bytes));
+        Ok(Some(ResultsFemNodalGeometry {
+            binding,
+            mesh,
+            active_node_mask: semantics.active_node_mask,
+            geometry_sha256,
+        }))
+    })();
+    // Re-scan even on parse/read errors so a concurrent replacement is
+    // reported as a changed snapshot instead of a misleading bad-payload
+    // diagnosis. The immutable CAS entries participate in this revision.
+    ensure_unchanged(root, revision)?;
+    result
 }
 
 /// Read one complete, source-declared f64LE sample from an uncompressed Zarr
@@ -462,14 +579,19 @@ pub fn read_results_sample(
     ensure_expected_revision(&scan.revision, revision)?;
     let _ = read_and_validate_run_id(root, expected_run_id)?;
     let entry = find_array(&scan, array_id)?;
-    let geometry = read_geometry_context(root, true)?;
-    let array = array_to_public(root, entry, geometry.as_ref(), revision)?;
+    let metadata = parse_array_metadata_for_root(root, &entry.path, scan.root_policy)?;
+    let geometry = if metadata.attrs.get("fem_nodal_binding").is_some() {
+        None
+    } else {
+        read_geometry_context(root, true)?
+    };
+    let array =
+        array_to_public_with_metadata(root, entry, geometry.as_ref(), revision, metadata.clone())?;
     if !array.can_read_values {
         return Err(ResultsError::Unsupported(array.reason.unwrap_or_else(
             || "array is not an uncompressed little-endian f64 array".into(),
         )));
     }
-    let metadata = parse_array_metadata(&entry.path)?;
     let sample_count = usize::try_from(metadata.shape[0])
         .map_err(|_| ResultsError::TooLarge("sample count exceeds usize".into()))?;
     if sample_index >= sample_count {
@@ -510,7 +632,7 @@ pub fn read_results_entry(
     let entry = scan
         .entries
         .iter()
-        .find(|entry| entry.entry_id() == entry_id)
+        .find(|entry| !is_internal_geometry_path(&entry.relative) && entry.entry_id() == entry_id)
         .ok_or_else(|| ResultsError::NotFound(entry_id.to_string()))?;
     if !matches!(entry.kind, RawKind::File) {
         return Err(ResultsError::Unsupported(
@@ -569,7 +691,7 @@ pub fn locate_results_fem_playback_revision(
     let context = read_geometry_context(root, true)?.ok_or_else(|| {
         ResultsError::Unsupported("result array has no validated FEM playback descriptor".into())
     })?;
-    let array = array_to_public(root, entry, Some(&context), revision)?;
+    let array = array_to_public(root, entry, Some(&context), revision, scan.root_policy)?;
     let geometry = array.geometry.as_ref().ok_or_else(|| {
         ResultsError::Unsupported("result array has no exact FEM geometry binding".into())
     })?;
@@ -632,6 +754,7 @@ impl RawEntry {
 struct Scan {
     entries: Vec<RawEntry>,
     revision: String,
+    root_policy: ResultsRootPolicy,
 }
 
 fn scan_root(root: &Path) -> Result<Scan, ResultsError> {
@@ -671,7 +794,8 @@ fn scan_root(root: &Path) -> Result<Scan, ResultsError> {
         }
     }
     let revision = revision_of(&entries)?;
-    Ok(Scan { entries, revision })
+    let root_policy = read_results_root_policy(root)?;
+    Ok(Scan { entries, revision, root_policy })
 }
 
 fn walk_directory(
@@ -968,6 +1092,7 @@ fn is_revision_metadata_path(path: &Path) -> bool {
             | ".zgroup"
             | "playback.json"
             | "fullmag-run.json"
+            | "run.json"
             | "run_manifest.json"
             | "metadata.json"
             | "output-storage.json"
@@ -1075,7 +1200,7 @@ fn entry_to_public(
             Some("zarr_v2".into()),
             Some("application/json; charset=utf-8".into()),
         ),
-        RawKind::Array => match array_to_public(root, entry, geometry, "catalog-metadata-only") {
+        RawKind::Array => match array_to_public(root, entry, geometry, "catalog-metadata-only", scan.root_policy) {
             Ok(array) => (
                 WorkspaceResultEntryKind::ZarrArray,
                 Some(array.id),
@@ -1136,8 +1261,147 @@ fn entry_to_public(
 fn find_array<'a>(scan: &'a Scan, array_id: &str) -> Result<&'a RawEntry, ResultsError> {
     scan.entries
         .iter()
-        .find(|entry| matches!(entry.kind, RawKind::Array) && entry.array_id() == array_id)
+        .find(|entry| {
+            matches!(entry.kind, RawKind::Array)
+                && !is_internal_geometry_path(&entry.relative)
+                && entry.array_id() == array_id
+        })
         .ok_or_else(|| ResultsError::NotFound(format!("array {array_id}")))
+}
+
+fn is_internal_geometry_path(path: &Path) -> bool {
+    path.components().any(|component| {
+        matches!(component, std::path::Component::Normal(name)
+            if name == OsStr::new(FEM_NODAL_OBJECT_DIRECTORY))
+    })
+}
+
+fn validate_fem_nodal_array_binding(
+    entry: &RawEntry,
+    metadata: &ArrayMetadata,
+    binding: &SavedFemNodalArrayBinding,
+) -> Result<PathBuf, ResultsError> {
+    let invalid = |detail: &str| {
+        ResultsError::Invalid(format!(
+            "FEM nodal binding does not match its Zarr array: {detail}"
+        ))
+    };
+    let binding_path = Path::new(&binding.array_path);
+    let store_relative = entry.relative.ancestors().nth(binding_path.components().count())
+        .ok_or_else(|| invalid("array_path is outside the owning store"))?.to_path_buf();
+    if store_relative.join(binding_path) != entry.relative {
+        return Err(invalid("array_path differs from the owning array path"));
+    }
+
+    let quantity = binding.quantity_id.as_str();
+    let quantity_keys = ["quantity", "quantity_id", "observable"];
+    let mut found_quantity = false;
+    for key in quantity_keys {
+        if let Some(value) = metadata.attrs.get(key) {
+            found_quantity = true;
+            if value.as_str() != Some(quantity) {
+                return Err(invalid("quantity metadata is missing or contradictory"));
+            }
+        }
+    }
+    if !found_quantity
+        || metadata.quantity_id.as_deref() != Some(quantity)
+        || metadata.quantity_ids.len() != 1
+        || metadata.quantity_ids.first().map(String::as_str) != Some(quantity)
+    {
+        return Err(invalid(
+            "quantity metadata does not bind exactly one quantity",
+        ));
+    }
+
+    if metadata.attrs.get("unit").and_then(Value::as_str) != Some(binding.unit.as_str()) {
+        return Err(invalid("unit differs from the bound field semantics"));
+    }
+
+    let layout = binding.field_layout.as_str();
+    let layout_keys = ["field_layout", "storage_layout", "layout"];
+    let mut found_layout = false;
+    for key in layout_keys {
+        if let Some(value) = metadata.attrs.get(key) {
+            found_layout = true;
+            if value.as_str() != Some(layout) {
+                return Err(invalid("layout metadata is missing or contradictory"));
+            }
+        }
+    }
+    if !found_layout {
+        return Err(invalid("explicit field layout is missing"));
+    }
+
+    if let Some(value) = metadata.attrs.get("component_count") {
+        let component_count = value.as_u64().and_then(|value| usize::try_from(value).ok());
+        if component_count != Some(binding.component_count) {
+            return Err(invalid("component_count differs from the bound field"));
+        }
+    }
+    if metadata
+        .component_count
+        .is_some_and(|count| count != binding.component_count)
+    {
+        return Err(invalid("component_count differs from the bound field"));
+    }
+
+    let width = binding
+        .node_count
+        .checked_mul(binding.component_count)
+        .ok_or_else(|| invalid("node_count times component_count overflows"))?;
+    let width = u64::try_from(width).map_err(|_| invalid("field width exceeds u64"))?;
+    if metadata.shape.len() != 2
+        || metadata.shape[1] != width
+        || metadata.chunks.len() != 2
+        || metadata.chunks[0] != 1
+        || metadata.chunks[1] != width
+        || metadata.dimension_order.len() != 2
+        || metadata.dimension_order[0] != "sample"
+        || metadata.dimension_order[1] != "value"
+    {
+        return Err(invalid(
+            "shape, chunks, or dimension_order differ from the flattened nodal field",
+        ));
+    }
+    Ok(store_relative)
+}
+
+fn fem_nodal_object_name(
+    reference: &SavedFieldGeometryRef,
+) -> Result<std::ffi::OsString, ResultsError> {
+    let relative = fem_nodal_object_relative_path(reference).map_err(|error| {
+        ResultsError::Invalid(format!("invalid FEM geometry reference: {error}"))
+    })?;
+    let path = Path::new(&relative);
+    if path.parent() != Some(Path::new(FEM_NODAL_OBJECT_DIRECTORY)) {
+        return Err(ResultsError::Invalid(
+            "FEM geometry reference is outside its immutable object directory".into(),
+        ));
+    }
+    path.file_name()
+        .map(std::ffi::OsStr::to_os_string)
+        .ok_or_else(|| ResultsError::Invalid("FEM geometry reference has no object name".into()))
+}
+
+fn fem_geometry_open_error(name: &str, error: std::io::Error) -> ResultsError {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        return ResultsError::Invalid(format!("referenced FEM geometry object is missing: {name}"));
+    }
+    let is_symlink = {
+        #[cfg(unix)]
+        {
+            error.raw_os_error() == Some(libc::ELOOP)
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
+    };
+    if error.kind() == std::io::ErrorKind::InvalidInput || is_symlink {
+        return ResultsError::Link(format!("unsafe FEM geometry object path: {name}"));
+    }
+    ResultsError::Io(format!("cannot open FEM geometry object {name}: {error}"))
 }
 
 #[derive(Debug, Clone)]
@@ -1162,6 +1426,64 @@ struct ArrayMetadata {
 const SAMPLE_PUBLICATION_SCHEMA: &str = "fullmag.zarr.sample_publication.v1";
 const SAMPLE_PUBLICATION_FILE: &str = ".fullmag-samples.json";
 const SAMPLE_COORDINATE_HEADER: &str = "sample,physical_time_s,accepted_step";
+const ACCEPTED_RESULTS_PUBLICATION_SCHEMA: &str = "fullmag.accepted_results_publication.v1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ResultsRootPolicy {
+    require_sample_publication: bool,
+}
+
+fn read_results_root_policy(root: &Path) -> Result<ResultsRootPolicy, ResultsError> {
+    let descriptor = match read_json(&root.join("run.json")) {
+        Ok(value) => value,
+        Err(ResultsError::NotFound(_)) => {
+            return Ok(ResultsRootPolicy {
+                require_sample_publication: false,
+            });
+        }
+        Err(error) => return Err(error),
+    };
+    let Some(publication) = descriptor.get("publication") else {
+        if !descriptor.is_object() {
+            return Err(ResultsError::Invalid(
+                "results run.json must be an object".into(),
+            ));
+        }
+        return Ok(ResultsRootPolicy {
+            require_sample_publication: false,
+        });
+    };
+    if publication.get("schema").and_then(Value::as_str)
+        != Some(ACCEPTED_RESULTS_PUBLICATION_SCHEMA)
+        || publication.get("sample_policy").and_then(Value::as_str)
+            != Some(SAMPLE_PUBLICATION_SCHEMA)
+    {
+        return Err(ResultsError::Invalid(
+            "unsupported or malformed accepted-results publication policy".into(),
+        ));
+    }
+    Ok(ResultsRootPolicy {
+        require_sample_publication: true,
+    })
+}
+
+fn parse_array_metadata_for_root(
+    root: &Path,
+    directory: &Path,
+    policy: ResultsRootPolicy,
+) -> Result<ArrayMetadata, ResultsError> {
+    let metadata = parse_array_metadata(directory)?;
+    if policy.require_sample_publication && metadata.published_coordinates.is_none() {
+        let relative = directory
+            .strip_prefix(root)
+            .map(relative_display)
+            .unwrap_or_else(|_| "array outside results root".into());
+        return Err(ResultsError::Invalid(format!(
+            "incremental results array is missing a valid sample-publication watermark: {relative}"
+        )));
+    }
+    Ok(metadata)
+}
 
 /// New autosave arrays expose only a committed prefix. An absent policy is the
 /// legacy contract, but an orphan marker or an unknown policy fails closed.
@@ -1448,11 +1770,27 @@ fn array_to_public(
     entry: &RawEntry,
     geometry: Option<&GeometryContext>,
     revision: &str,
+    policy: ResultsRootPolicy,
 ) -> Result<WorkspaceResultArray, ResultsError> {
-    let mut metadata = parse_array_metadata(&entry.path)?;
+    let metadata = parse_array_metadata_for_root(root, &entry.path, policy)?;
+    array_to_public_with_metadata(root, entry, geometry, revision, metadata)
+}
+
+fn array_to_public_with_metadata(
+    root: &Path,
+    entry: &RawEntry,
+    geometry: Option<&GeometryContext>,
+    revision: &str,
+    mut metadata: ArrayMetadata,
+) -> Result<WorkspaceResultArray, ResultsError> {
+    let has_fem_nodal_binding = metadata.attrs.get("fem_nodal_binding").is_some();
     let sample_count = usize::try_from(metadata.shape[0])
         .map_err(|_| ResultsError::TooLarge("sample count exceeds usize".into()))?;
-    let descriptor_stage = geometry.and_then(|context| playback_stage(context, entry));
+    let descriptor_stage = if has_fem_nodal_binding {
+        None
+    } else {
+        geometry.and_then(|context| playback_stage(context, entry))
+    };
     // The legacy playback sidecar is itself the producer declaration for the
     // exact m array.  Older FDM folders have no .zattrs, so retain that
     // explicit identity without inferring it from a vector length.
@@ -1539,7 +1877,18 @@ fn array_to_public(
             "sample payload exceeds the bounded read limit".into()
         });
     }
-    let array_geometry = geometry_for_array(root, entry, &metadata, geometry);
+    let array_geometry = if has_fem_nodal_binding {
+        // The array's immutable FEM binding is authoritative. Catalog/detail
+        // projection stays lazy; the selected-resource adapter must validate
+        // both CAS objects before exposing geometry. Never reinterpret a bad
+        // or not-yet-loaded binding as an older FDM or FEM declaration.
+        if reason.is_none() {
+            reason = Some("FEM nodal geometry binding requires strict validation".into());
+        }
+        None
+    } else {
+        geometry_for_array(root, entry, &metadata, geometry)
+    };
     let known_field_layout = metadata.component_count == Some(1)
         || (metadata.component_count == Some(3)
             && matches!(
@@ -1694,6 +2043,63 @@ fn read_exact_payload(path: &Path, expected: usize) -> Result<Vec<u8>, ResultsEr
         .metadata()
         .map_err(|error| ResultsError::Io(error.to_string()))?;
     let path_after = open_regular(path)
+        .map_err(|_| ResultsError::SourceChanged)?
+        .metadata()
+        .map_err(|error| ResultsError::Io(error.to_string()))?;
+    if bytes.len() != expected
+        || !same_file_identity(&before, &after)
+        || !same_file_identity(&path_before, &path_after)
+    {
+        return Err(ResultsError::SourceChanged);
+    }
+    Ok(bytes)
+}
+
+fn read_pinned_fem_geometry_object(
+    directory: &PinnedDirectory,
+    name: &OsStr,
+    expected_length: u64,
+) -> Result<Vec<u8>, ResultsError> {
+    charge_metadata(expected_length)?;
+    let expected = usize::try_from(expected_length)
+        .map_err(|_| ResultsError::TooLarge("FEM geometry object length exceeds usize".into()))?;
+    let display_name = name.to_string_lossy();
+    let file = directory
+        .open_child_regular(name)
+        .map_err(|error| fem_geometry_open_error(&display_name, error))?;
+    let before = file
+        .metadata()
+        .map_err(|error| ResultsError::Io(error.to_string()))?;
+    if !before.is_file() {
+        return Err(ResultsError::Link(format!(
+            "FEM geometry object is not a regular file: {display_name}"
+        )));
+    }
+    if before.len() != expected_length {
+        return Err(ResultsError::Invalid(format!(
+            "FEM geometry object length differs from its reference: {display_name}"
+        )));
+    }
+    let path_before = directory
+        .open_child_regular(name)
+        .map_err(|_| ResultsError::SourceChanged)?
+        .metadata()
+        .map_err(|error| ResultsError::Io(error.to_string()))?;
+    if !same_file_identity(&before, &path_before) {
+        return Err(ResultsError::SourceChanged);
+    }
+
+    let mut bytes = Vec::with_capacity(expected.min(1024 * 1024));
+    let mut bounded = file.take(expected.saturating_add(1) as u64);
+    bounded
+        .read_to_end(&mut bytes)
+        .map_err(|error| ResultsError::Io(error.to_string()))?;
+    let after = bounded
+        .get_ref()
+        .metadata()
+        .map_err(|error| ResultsError::Io(error.to_string()))?;
+    let path_after = directory
+        .open_child_regular(name)
         .map_err(|_| ResultsError::SourceChanged)?
         .metadata()
         .map_err(|error| ResultsError::Io(error.to_string()))?;
@@ -2549,6 +2955,12 @@ fn read_and_validate_run_id(
 mod tests {
     use super::*;
     use crate::playback::SavedPlaybackFemMesh;
+    use fullmag_ir::MeshIR;
+    use fullmag_quantities::{fem_nodal_field::FemP1NodalFieldSemantics, QuantityId};
+    use fullmag_session::saved_fem_nodal::{
+        FEM_NODAL_ARRAY_BINDING_SCHEMA, FEM_P1_MESH_GEOMETRY_SCHEMA,
+    };
+    use fullmag_session::solution_field_geometry::SavedFieldGeometryRef;
 
     fn write_json(path: &Path, value: Value) {
         fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
@@ -2587,6 +2999,200 @@ mod tests {
                 "coordinate_bytes": coordinates.len(),
             }),
         );
+    }
+
+    fn saved_tet_mesh() -> MeshIR {
+        MeshIR::from_legacy_tet4(
+            "workspace-inspect-saved-nodal-tet".into(),
+            vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [0., 0., 1.]],
+            vec![[0, 1, 2, 3]],
+            vec![1],
+            vec![[0, 2, 1], [0, 1, 3], [1, 2, 3], [2, 0, 3]],
+            vec![1; 4],
+            vec![],
+            vec![],
+            Default::default(),
+        )
+    }
+
+    fn saved_geometry_reference(schema_id: &str, bytes: &[u8]) -> SavedFieldGeometryRef {
+        SavedFieldGeometryRef {
+            schema_id: schema_id.into(),
+            object_ref: hex_bytes(&Sha256::digest(bytes)),
+            byte_length: bytes.len() as u64,
+        }
+    }
+
+    fn write_fem_nodal_fixture(
+        root: &Path,
+        quantity: QuantityId,
+        layout: fullmag_session::saved_fem_nodal::FemNodalStorageLayout,
+    ) -> SavedFemNodalArrayBinding {
+        use fullmag_session::saved_fem_nodal::{SavedFemNodalArrayBinding, SavedFemP1MeshGeometry};
+        use fullmag_session::solution_field_geometry::SavedFieldRepresentationEvidence;
+
+        let mesh = SavedFemP1MeshGeometry {
+            schema_version: FEM_P1_MESH_GEOMETRY_SCHEMA.into(),
+            coordinate_unit: "m".into(),
+            representation_evidence: SavedFieldRepresentationEvidence::NotVerified,
+            mesh: saved_tet_mesh(),
+        };
+        let active_node_mask = if quantity == QuantityId::M {
+            vec![true, false, true, true]
+        } else {
+            vec![true; mesh.mesh.nodes.len()]
+        };
+        let semantics = FemP1NodalFieldSemantics::new(
+            quantity,
+            &mesh.mesh.topology_fingerprint_v6(),
+            mesh.mesh.nodes.len(),
+            active_node_mask,
+        )
+        .expect("canonical FEM nodal semantics");
+        let mesh_bytes = serde_json::to_vec(&mesh).expect("mesh JSON");
+        let semantics_bytes = serde_json::to_vec(&semantics).expect("semantics JSON");
+        let binding = SavedFemNodalArrayBinding {
+            schema_version: FEM_NODAL_ARRAY_BINDING_SCHEMA.into(),
+            array_path: format!("stages/relax/fields/{}", quantity.as_str()),
+            quantity_id: quantity,
+            unit: semantics.descriptor.unit.clone(),
+            component_count: if semantics.descriptor.tensor_rank == 0 {
+                1
+            } else {
+                3
+            },
+            node_count: mesh.mesh.nodes.len(),
+            cell_count: mesh.mesh.cells.len(),
+            field_layout: layout,
+            topology_fingerprint: mesh.mesh.topology_fingerprint_v6(),
+            mesh: saved_geometry_reference(FEM_P1_MESH_GEOMETRY_SCHEMA, &mesh_bytes),
+            semantics: saved_geometry_reference(
+                fullmag_quantities::fem_nodal_field::FEM_P1_NODAL_FIELD_SEMANTICS_FORMAT,
+                &semantics_bytes,
+            ),
+        };
+
+        let object_directory = root.join(FEM_NODAL_OBJECT_DIRECTORY);
+        fs::create_dir_all(&object_directory).expect("create immutable object directory");
+        for (reference, bytes) in [
+            (&binding.mesh, mesh_bytes),
+            (&binding.semantics, semantics_bytes),
+        ] {
+            let relative = fem_nodal_object_relative_path(reference).expect("object path");
+            let path = root.join(relative);
+            fs::write(path, bytes).expect("write immutable geometry object");
+        }
+
+        let width = binding.node_count * binding.component_count;
+        let attrs = serde_json::json!({
+            "quantity": quantity.as_str(),
+            "unit": binding.unit.as_str(),
+            "storage_layout": layout.as_str(),
+            "field_layout": layout.as_str(),
+            "dimension_order": ["sample", "value"],
+            "sample_publication": SAMPLE_PUBLICATION_SCHEMA,
+            // The writer does not emit component_count; the canonical
+            // quantity semantics and bound shape provide it.
+            "fem_nodal_binding": serde_json::to_value(&binding).expect("binding JSON"),
+        });
+        let relative = binding.array_path.clone();
+        let values = vec![1.0; width];
+        write_array(root, &relative, &values, attrs);
+        publish_test_prefix(
+            &root.join(relative),
+            1,
+            &format!("{SAMPLE_COORDINATE_HEADER}\n0,0.0,\n"),
+        );
+        binding
+    }
+
+    fn fixture_array_id(root: &Path, binding: &SavedFemNodalArrayBinding) -> (String, String) {
+        fixture_array_id_for_path(root, &binding.array_path)
+    }
+
+    fn fixture_array_id_for_path(root: &Path, array_path: &str) -> (String, String) {
+        let catalog =
+            read_results_catalog(root, None, 100, None, WorkspaceResultsSource::WorkspaceItem)
+                .expect("catalog");
+        let array_id = catalog
+            .entries
+            .iter()
+            .find(|entry| entry.path == array_path)
+            .and_then(|entry| entry.array_id.clone())
+            .expect("bound Zarr array");
+        (array_id, catalog.revision)
+    }
+
+    #[test]
+    fn incremental_root_never_falls_back_to_legacy_array_visibility() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        write_array(root, "m", &[1.0], serde_json::json!({}));
+        // The same historical array remains readable without an incremental
+        // declaration. Adding that declaration must not preserve this fallback.
+        let legacy = read_results_catalog(root, None, 100, None, WorkspaceResultsSource::WorkspaceItem).unwrap();
+        let id = legacy.entries.iter().find_map(|entry| entry.array_id.clone()).unwrap();
+        assert!(read_results_sample(root, &id, 0, &legacy.revision, None).is_ok());
+        write_json(&root.join("run.json"), serde_json::json!({"publication": {
+            "schema": ACCEPTED_RESULTS_PUBLICATION_SCHEMA,
+            "sample_policy": SAMPLE_PUBLICATION_SCHEMA
+        }}));
+        let current = read_results_catalog(root, None, 100, None, WorkspaceResultsSource::WorkspaceItem).unwrap();
+        assert!(!current.can_read_values);
+        assert!(matches!(read_results_array(root, &id, &current.revision, None), Err(ResultsError::Invalid(_))));
+        assert!(matches!(read_results_sample(root, &id, 0, &current.revision, None), Err(ResultsError::Invalid(_))));
+        assert!(matches!(read_results_fem_nodal_geometry(root, &id, &current.revision, None), Err(ResultsError::Invalid(_))));
+        write_json(&root.join("m/.zattrs"), serde_json::json!({"sample_publication": SAMPLE_PUBLICATION_SCHEMA}));
+        for count in [0, 1] {
+            let csv = if count == 0 { format!("{SAMPLE_COORDINATE_HEADER}\n") }
+                else { format!("{SAMPLE_COORDINATE_HEADER}\n0,0.25,\n") };
+            publish_test_prefix(&root.join("m"), count, &csv);
+            let catalog = read_results_catalog(root, None, 100, None, WorkspaceResultsSource::WorkspaceItem).unwrap();
+            let array = read_results_array(root, &id, &catalog.revision, None).unwrap();
+            assert_eq!(array.sample_count, count as usize);
+            assert!(matches!(read_results_sample(root, &id, count as usize, &catalog.revision, None), Err(ResultsError::NotFound(_))));
+            if count > 0 {
+                assert_eq!(read_results_sample(root, &id, 0, &catalog.revision, None).unwrap().bytes, 1.0_f64.to_le_bytes());
+            }
+        }
+    }
+
+    #[test]
+    fn root_policy_content_changes_invalidate_same_size_same_time_revisions() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        write_array(root, "m", &[1.0], serde_json::json!({"sample_publication":SAMPLE_PUBLICATION_SCHEMA}));
+        publish_test_prefix(&root.join("m"), 1, &format!("{SAMPLE_COORDINATE_HEADER}\n0,0,\n"));
+        let descriptor = root.join("run.json");
+        write_json(&descriptor, serde_json::json!({"publication": {
+            "schema":ACCEPTED_RESULTS_PUBLICATION_SCHEMA, "sample_policy":SAMPLE_PUBLICATION_SCHEMA
+        }}));
+        let before = read_results_catalog(root, None, 100, None, WorkspaceResultsSource::WorkspaceItem).unwrap();
+        let id = before.entries.iter().find_map(|entry| entry.array_id.clone()).unwrap();
+        let metadata = fs::metadata(&descriptor).unwrap();
+        let original = fs::read_to_string(&descriptor).unwrap();
+        fs::write(&descriptor, original.replace("\"publication\"", "\"publicatioN\"")).unwrap();
+        fs::OpenOptions::new().write(true).open(&descriptor).unwrap()
+            .set_times(fs::FileTimes::new().set_modified(metadata.modified().unwrap())).unwrap();
+        assert_eq!(fs::metadata(&descriptor).unwrap().len(), metadata.len());
+        assert_eq!(fs::metadata(&descriptor).unwrap().modified().unwrap(), metadata.modified().unwrap());
+        assert!(matches!(read_results_array(root, &id, &before.revision, None), Err(ResultsError::StaleRevision)));
+    }
+
+    #[test]
+    fn malformed_root_publication_is_not_a_legacy_folder() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        write_array(root, "m", &[1.0], serde_json::json!({}));
+        for publication in [
+            Value::Null,
+            serde_json::json!({}),
+            serde_json::json!({"schema":"future", "sample_policy":SAMPLE_PUBLICATION_SCHEMA}),
+            serde_json::json!({"schema":ACCEPTED_RESULTS_PUBLICATION_SCHEMA, "sample_policy":"future"}),
+        ] {
+            write_json(&root.join("run.json"), serde_json::json!({"publication":publication}));
+            assert!(matches!(read_results_catalog(root, None, 100, None, WorkspaceResultsSource::WorkspaceItem), Err(ResultsError::Invalid(_))));
+        }
     }
 
     #[test]
@@ -3975,6 +4581,306 @@ mod tests {
             ),
             Err(ResultsError::RunMismatch { actual, .. })
                 if actual.contains("run-a") && actual.contains("run-b")
+        ));
+    }
+
+    #[test]
+    fn fem_nodal_reader_uses_the_nested_autosave_store_and_hides_its_objects() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let store = root.join("results_browser.zarr");
+        write_json(&store.join(".zgroup"), serde_json::json!({"zarr_format":2}));
+        let binding = write_fem_nodal_fixture(&store, QuantityId::HEff,
+            fullmag_session::saved_fem_nodal::FemNodalStorageLayout::SoaComponentMajor);
+        let array_path = format!("results_browser.zarr/{}", binding.array_path);
+        let (id, revision) = fixture_array_id_for_path(root, &array_path);
+        let geometry = read_results_fem_nodal_geometry(root, &id, &revision, None).unwrap().unwrap();
+        assert_eq!(geometry.binding, binding);
+        assert_eq!(geometry.active_node_mask, vec![true; 4]);
+        let catalog = read_results_catalog(root, None, 100, None, WorkspaceResultsSource::WorkspaceItem).unwrap();
+        assert!(!catalog.entries.iter().any(|entry| entry.path.contains(FEM_NODAL_OBJECT_DIRECTORY)));
+        // A matching object in the outer folder must never replace a missing
+        // object in the store named by the owning array's exact path.
+        let relative = fem_nodal_object_relative_path(&binding.mesh).unwrap();
+        fs::create_dir_all(root.join(FEM_NODAL_OBJECT_DIRECTORY)).unwrap();
+        fs::copy(store.join(&relative), root.join(&relative)).unwrap();
+        fs::remove_file(store.join(&relative)).unwrap();
+        let (id, revision) = fixture_array_id_for_path(root, &array_path);
+        assert!(matches!(read_results_fem_nodal_geometry(root, &id, &revision, None), Err(ResultsError::Invalid(_))));
+    }
+
+    #[test]
+    fn fem_nodal_reader_accepts_bound_m_and_full_domain_h_eff() {
+        for (quantity, layout, expected_mask) in [
+            (
+                QuantityId::M,
+                fullmag_session::saved_fem_nodal::FemNodalStorageLayout::AosNodeMajor,
+                vec![true, false, true, true],
+            ),
+            (
+                QuantityId::HEff,
+                fullmag_session::saved_fem_nodal::FemNodalStorageLayout::SoaComponentMajor,
+                vec![true; 4],
+            ),
+        ] {
+            let temp = tempfile::tempdir().expect("temp");
+            let root = temp.path();
+            let binding = write_fem_nodal_fixture(root, quantity, layout);
+            write_json(
+                &root.join("fullmag-run.json"),
+                serde_json::json!({"run_id":"saved-nodal-run"}),
+            );
+            let (array_id, revision) = fixture_array_id(root, &binding);
+            let geometry = read_results_fem_nodal_geometry(
+                root,
+                &array_id,
+                &revision,
+                Some("saved-nodal-run"),
+            )
+            .expect("read strict FEM geometry")
+            .expect("binding present");
+            assert_eq!(geometry.binding, binding);
+            assert_eq!(geometry.active_node_mask, expected_mask);
+            assert_eq!(geometry.mesh.mesh.nodes.len(), binding.node_count);
+            assert_eq!(geometry.mesh.mesh.cells.len(), binding.cell_count);
+            assert_eq!(geometry.binding.field_layout, layout);
+            let binding_bytes = serde_json::to_vec(&binding).expect("binding JSON");
+            assert_eq!(
+                geometry.geometry_sha256,
+                hex_bytes(&Sha256::digest(binding_bytes))
+            );
+        }
+    }
+
+    #[test]
+    fn absent_binding_is_none_but_null_binding_is_invalid() {
+        let temp = tempfile::tempdir().expect("temp");
+        write_array(
+            temp.path(),
+            "stages/relax/fields/m",
+            &[1.0; 12],
+            serde_json::json!({
+                "quantity":"m",
+                "unit":"1",
+                "field_layout":"aos_node_major",
+                "dimension_order":["sample","value"]
+            }),
+        );
+        let (array_id, revision) = fixture_array_id_for_path(temp.path(), "stages/relax/fields/m");
+        assert!(
+            read_results_fem_nodal_geometry(temp.path(), &array_id, &revision, None,)
+                .expect("missing binding is legacy-compatible")
+                .is_none()
+        );
+
+        let attrs_path = temp.path().join("stages/relax/fields/m/.zattrs");
+        let mut attrs: Value = serde_json::from_slice(&fs::read(&attrs_path).unwrap()).unwrap();
+        attrs["fem_nodal_binding"] = Value::Null;
+        write_json(&attrs_path, attrs);
+        let (_, null_revision) = fixture_array_id_for_path(temp.path(), "stages/relax/fields/m");
+        assert!(matches!(
+            read_results_fem_nodal_geometry(temp.path(), &array_id, &null_revision, None),
+            Err(ResultsError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn fem_nodal_binding_rejects_metadata_drift_in_unit_layout_component_path_and_shape() {
+        fn assert_invalid(mutate: impl FnOnce(&Path, &mut Value)) {
+            let temp = tempfile::tempdir().expect("temp");
+            let root = temp.path();
+            let binding = write_fem_nodal_fixture(
+                root,
+                QuantityId::M,
+                fullmag_session::saved_fem_nodal::FemNodalStorageLayout::AosNodeMajor,
+            );
+            let attrs_path = root.join(&binding.array_path).join(".zattrs");
+            let mut attrs: Value = serde_json::from_slice(&fs::read(&attrs_path).unwrap()).unwrap();
+            mutate(root, &mut attrs);
+            write_json(&attrs_path, attrs);
+            let (array_id, revision) = fixture_array_id(root, &binding);
+            assert!(matches!(
+                read_results_fem_nodal_geometry(root, &array_id, &revision, None),
+                Err(ResultsError::Invalid(_))
+            ));
+        }
+
+        assert_invalid(|_, attrs| attrs["unit"] = serde_json::json!("A/m"));
+        assert_invalid(|_, attrs| attrs["quantity"] = serde_json::json!("H_eff"));
+        assert_invalid(|_, attrs| attrs["field_layout"] = serde_json::json!("soa_component_major"));
+        assert_invalid(|_, attrs| attrs["component_count"] = serde_json::json!(1));
+        assert_invalid(|_, attrs| attrs["fem_nodal_binding"]["node_count"] = serde_json::json!(5));
+        assert_invalid(|_, attrs| {
+            attrs["fem_nodal_binding"]["array_path"] = serde_json::json!("stages/other/fields/m")
+        });
+        assert_invalid(|_, attrs| attrs["fem_nodal_binding"]["cell_count"] = serde_json::json!(2));
+        assert_invalid(|root, _| {
+            let zarray_path = root.join("stages/relax/fields/m/.zarray");
+            let mut zarray: Value =
+                serde_json::from_slice(&fs::read(&zarray_path).unwrap()).unwrap();
+            zarray["shape"][1] = serde_json::json!(11);
+            zarray["chunks"][1] = serde_json::json!(11);
+            write_json(&zarray_path, zarray);
+        });
+    }
+
+    #[test]
+    fn fem_nodal_reference_hashes_are_verified_for_both_objects() {
+        for corrupt_mesh in [true, false] {
+            let temp = tempfile::tempdir().expect("temp");
+            let root = temp.path();
+            let binding = write_fem_nodal_fixture(
+                root,
+                QuantityId::M,
+                fullmag_session::saved_fem_nodal::FemNodalStorageLayout::AosNodeMajor,
+            );
+            let reference = if corrupt_mesh {
+                &binding.mesh
+            } else {
+                &binding.semantics
+            };
+            let object_path = root
+                .join(fem_nodal_object_relative_path(reference).expect("immutable object path"));
+            let mut bytes = fs::read(&object_path).expect("object bytes");
+            bytes[0] ^= 1;
+            fs::write(object_path, bytes).expect("corrupt referenced object");
+            let (array_id, revision) = fixture_array_id(root, &binding);
+            assert!(matches!(
+                read_results_fem_nodal_geometry(root, &array_id, &revision, None),
+                Err(ResultsError::Invalid(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn fem_nodal_reference_lengths_are_verified_before_parsing() {
+        let temp = tempfile::tempdir().expect("temp");
+        let root = temp.path();
+        let binding = write_fem_nodal_fixture(
+            root,
+            QuantityId::M,
+            fullmag_session::saved_fem_nodal::FemNodalStorageLayout::AosNodeMajor,
+        );
+        let object_path =
+            root.join(fem_nodal_object_relative_path(&binding.mesh).expect("mesh object path"));
+        let mut bytes = fs::read(&object_path).expect("mesh object");
+        bytes.pop();
+        fs::write(object_path, bytes).expect("truncate mesh object");
+        let (array_id, revision) = fixture_array_id(root, &binding);
+        assert!(matches!(
+            read_results_fem_nodal_geometry(root, &array_id, &revision, None),
+            Err(ResultsError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn fem_nodal_binding_never_falls_back_and_internal_objects_stay_hidden_but_revisioned() {
+        let temp = tempfile::tempdir().expect("temp");
+        let root = temp.path();
+        let binding = write_fem_nodal_fixture(
+            root,
+            QuantityId::M,
+            fullmag_session::saved_fem_nodal::FemNodalStorageLayout::AosNodeMajor,
+        );
+        let attrs_path = root.join(&binding.array_path).join(".zattrs");
+        let mut attrs: Value = serde_json::from_slice(&fs::read(&attrs_path).unwrap()).unwrap();
+        attrs["field_geometry"] = serde_json::json!({
+            "backend":"fdm",
+            "grid_cells":[4,1,1],
+            "cell_size_m":[1.0,1.0,1.0],
+            "origin_m":[0.0,0.0,0.0]
+        });
+        attrs["fem_nodal_binding"]["array_path"] = serde_json::json!("stages/other/fields/m");
+        write_json(&attrs_path, attrs);
+
+        let (array_id, revision) = fixture_array_id(root, &binding);
+        let array = read_results_array(root, &array_id, &revision, None).expect("array metadata");
+        assert!(array.geometry.is_none());
+        assert!(!array.can_visualize_3d);
+        assert!(array
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("FEM nodal geometry binding")));
+        assert!(matches!(
+            read_results_fem_nodal_geometry(root, &array_id, &revision, None),
+            Err(ResultsError::Invalid(_))
+        ));
+
+        let catalog =
+            read_results_catalog(root, None, 100, None, WorkspaceResultsSource::WorkspaceItem)
+                .expect("catalog excludes internal geometry objects");
+        assert!(catalog
+            .entries
+            .iter()
+            .all(|entry| !entry.path.starts_with(FEM_NODAL_OBJECT_DIRECTORY)));
+        let public_count = catalog.total_count;
+        let internal_relative =
+            PathBuf::from(fem_nodal_object_relative_path(&binding.mesh).expect("mesh object path"));
+        let internal_id = opaque_id("entry", &internal_relative);
+        assert!(matches!(
+            read_results_entry(root, &internal_id, &catalog.revision, None),
+            Err(ResultsError::NotFound(_))
+        ));
+
+        fs::write(
+            root.join(FEM_NODAL_OBJECT_DIRECTORY).join("extra.json"),
+            b"{}",
+        )
+        .expect("change internal geometry namespace");
+        let updated =
+            read_results_catalog(root, None, 100, None, WorkspaceResultsSource::WorkspaceItem)
+                .expect("revised catalog");
+        assert_ne!(updated.revision, catalog.revision);
+        assert_eq!(updated.total_count, public_count);
+        assert!(matches!(
+            read_results_fem_nodal_geometry(root, &array_id, &catalog.revision, None),
+            Err(ResultsError::StaleRevision)
+        ));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn fem_nodal_geometry_object_symlink_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("temp");
+        let root = temp.path();
+        let binding = write_fem_nodal_fixture(
+            root,
+            QuantityId::M,
+            fullmag_session::saved_fem_nodal::FemNodalStorageLayout::AosNodeMajor,
+        );
+        let (array_id, revision) = fixture_array_id(root, &binding);
+        let object_path =
+            root.join(fem_nodal_object_relative_path(&binding.mesh).expect("mesh object path"));
+        fs::remove_file(&object_path).expect("remove object");
+        symlink("/etc/passwd", &object_path).expect("install symlink");
+        assert!(matches!(
+            read_results_fem_nodal_geometry(root, &array_id, &revision, None),
+            Err(ResultsError::Link(_))
+        ));
+    }
+
+    #[test]
+    fn fem_nodal_geometry_references_obey_the_shared_metadata_budget() {
+        let temp = tempfile::tempdir().expect("temp");
+        let root = temp.path();
+        let mut binding = write_fem_nodal_fixture(
+            root,
+            QuantityId::M,
+            fullmag_session::saved_fem_nodal::FemNodalStorageLayout::AosNodeMajor,
+        );
+        binding.mesh.object_ref = "a".repeat(64);
+        binding.mesh.byte_length = 33 * 1024 * 1024;
+        let attrs_path = root.join(&binding.array_path).join(".zattrs");
+        let mut attrs: Value = serde_json::from_slice(&fs::read(&attrs_path).unwrap()).unwrap();
+        attrs["fem_nodal_binding"] =
+            serde_json::to_value(&binding).expect("oversized reference JSON");
+        write_json(&attrs_path, attrs);
+        let (array_id, revision) = fixture_array_id(root, &binding);
+        assert!(matches!(
+            read_results_fem_nodal_geometry(root, &array_id, &revision, None),
+            Err(ResultsError::TooLarge(_))
         ));
     }
 }
