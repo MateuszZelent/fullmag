@@ -205,8 +205,9 @@ def derive_document(document, actual, source, identity=file_identity, guest=gues
                     "Frontend root source differs from trusted backend alias")
         else:
             require(isinstance(observed.get("Source"), str)
-                    and observed["Source"].startswith("/run/desktop/mnt/host/wsl/"),
-                    "Frontend descendant lacks a WSL daemon alias")
+                    and (observed["Source"].startswith("/run/desktop/mnt/host/wsl/")
+                         or observed["Source"] == str(host)),
+                    "Frontend descendant lacks a WSL alias or exact declared host source")
         backend_path = bm["target"] + suffix
         paths = [(host, backend_path, target)]
         if host == source.resolve():

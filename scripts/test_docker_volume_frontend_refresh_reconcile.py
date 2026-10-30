@@ -74,6 +74,28 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(len(witness[target]['files']), 2)
         self.assertTrue(witness[target]['files'][1]['backend'].endswith('/apps/control-room/app/layout.tsx'))
 
+    def test_mixed_host_namespace_child_still_requires_independent_file_proof(self):
+        child = self.source / 'apps/control-room/src'
+        child.mkdir(parents=True)
+        (child / 'entry.ts').write_bytes(b'marked source')
+        target = '/state/development/workspace/apps/control-room/src'
+        self.document['services']['frontend']['volumes'].append({'type': 'bind',
+            'source': str(child), 'target': target, 'read_only': True})
+        self.document['services']['frontend']['x-fullmag-daemon-binds'][target] = '/run/desktop/mnt/host/wsl/old'
+        self.actual['frontend']['Mounts'].append({'Destination': target,
+            'Source': str(child), 'Type': 'bind', 'RW': False})
+        result, witness = self.derive()
+        self.assertEqual(result['services']['frontend']['x-fullmag-daemon-binds'][target], str(child))
+        self.assertEqual(len(witness[target]['files']), 2)
+        def wrong_guest(container, path):
+            return {'device': 999, 'inode': 1} if container == 'frontend' and path.startswith(target) else self.identity
+        with self.assertRaises(BuildControlError):
+            recovery.derive_document(self.document, self.actual, self.source,
+                identity=lambda path: self.identity, guest=wrong_guest)
+        self.actual['frontend']['Mounts'][-1]['Source'] = '/foreign/src'
+        with self.assertRaises(BuildControlError):
+            self.derive()
+
     def test_foreign_backend_pin_refused(self):
         self.document['services']['backend']['x-fullmag-daemon-binds']['/opt/fullmag/source'] += '-foreign'
         with self.assertRaises(BuildControlError): self.derive()
