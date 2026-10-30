@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 
 import { VISUALIZATION_STATE_PATH } from "../api/apiPaths";
 import type { VisualizationStateResource } from "../api/apiTypes";
@@ -36,7 +36,7 @@ export function useVisualizationStateResource({
     }) => api.visualization.state({ sessionScopeKey, signal }),
     [api],
   );
-  useSyncExternalStore(
+  const syncVersion = useSyncExternalStore(
     (onStoreChange) => visualizationSync.subscribe(onStoreChange),
     () => visualizationSync.getSnapshot().version,
     () => visualizationSync.getSnapshot().version,
@@ -61,7 +61,16 @@ export function useVisualizationStateResource({
     }
   }, [cameraRegistry, resource.data, visualization, visualizationSync]);
 
-  const optimisticData = visualizationSync.applyOptimisticState(resource.data);
+  // Applying a pending patch builds a new state object. Recompute it only when
+  // the remote state or the sync snapshot changes; otherwise every render
+  // during a pending patch hands consumers a new identity and memoized views
+  // (the 2D render model) rebuild and re-publish evidence in a loop.
+  const optimisticData = useMemo(
+    () => visualizationSync.applyOptimisticState(resource.data),
+    // syncVersion bumps on every snapshot change applyOptimisticState reads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [resource.data, syncVersion, visualizationSync],
+  );
 
   return {
     ...resource,

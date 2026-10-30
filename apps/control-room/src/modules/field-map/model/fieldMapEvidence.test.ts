@@ -4,6 +4,7 @@ import {
   assertPlanarEvidenceReady,
   createPlanarEvidence,
   resolvePlanarEvidenceStatus,
+  samePlanarRenderEvidence,
 } from "./fieldMapEvidence";
 
 describe("field-map evidence", () => {
@@ -137,5 +138,32 @@ describe("field-map evidence", () => {
         scalarStatus: "ready",
       }),
     ).toBe("loading");
+  });
+
+  it("treats a republished frame with equal values as the same evidence", () => {
+    const evidence = {
+      glyphCount: 12,
+      overlayCounts: { boundsSegments: 4, contours: 0, meshSegments: 886, pointMarkers: 0 },
+      raster: { checksum: "fnv1a32:64aa6ccd", max: 1, min: 0.5, sampleCount: 262144 },
+      sampleIdentity: "frame-a",
+    };
+    // The renderer builds a fresh object on every overlay redraw; equal values
+    // must not count as a change, or the evidence state re-renders in a loop.
+    const republished = structuredClone(evidence);
+
+    expect(samePlanarRenderEvidence(null, evidence)).toBe(false);
+    expect(samePlanarRenderEvidence(evidence, republished)).toBe(true);
+    expect(samePlanarRenderEvidence(evidence, { ...republished, glyphCount: 13 })).toBe(false);
+    expect(samePlanarRenderEvidence(evidence, {
+      ...republished,
+      overlayCounts: { ...republished.overlayCounts, meshSegments: 885 },
+    })).toBe(false);
+    expect(samePlanarRenderEvidence(evidence, {
+      ...republished,
+      raster: { ...republished.raster, checksum: "fnv1a32:00000000" },
+    })).toBe(false);
+    expect(samePlanarRenderEvidence(evidence, { ...republished, raster: null })).toBe(false);
+    expect(samePlanarRenderEvidence({ ...evidence, raster: null }, { ...republished, raster: null })).toBe(true);
+    expect(samePlanarRenderEvidence(evidence, { ...republished, sampleIdentity: "frame-b" })).toBe(false);
   });
 });
