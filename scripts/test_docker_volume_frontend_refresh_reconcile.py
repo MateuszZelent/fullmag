@@ -93,6 +93,42 @@ class CompletionTests(unittest.TestCase):
             recovery.derive_document(self.document, self.actual, self.source,
                 identity=lambda p: self.identity, guest=guest)
 
+    def test_child_src_failure_requires_declared_readonly_source_and_verified_witness(self):
+        target = '/state/development/workspace/apps/control-room/src'
+        self.document['services']['frontend']['volumes'].append({
+            'type': 'bind', 'read_only': True, 'source': str(self.source / 'apps/control-room/src'),
+            'target': target})
+        self.original['error'] = 'Retained source/runtime bind differs: ' + target
+        recovery.validate_unknown(self.original, self.previous, self.document, self.control,
+                                  self.source, 'a'*32, 'b'*32)
+        self.assertEqual(recovery.require_failed_source_witness(
+            self.original, self.document, self.source, {target: {'files': ['verified']}}), target)
+        for witness in (None, {}, {'/opt/fullmag/source': {'files': ['verified']}}):
+            with self.subTest(witness=witness), self.assertRaises(BuildControlError):
+                recovery.require_failed_source_witness(self.original, self.document, self.source, witness)
+        mount = self.document['services']['frontend']['volumes'][-1]
+        for key, value in (('read_only', False), ('type', 'volume'), ('source', '/foreign/src')):
+            changed = copy.deepcopy(self.document)
+            changed['services']['frontend']['volumes'][-1][key] = value
+            with self.subTest(key=key), self.assertRaises(BuildControlError):
+                recovery.validate_unknown(self.original, self.previous, changed, self.control,
+                                          self.source, 'a'*32, 'b'*32)
+        self.document['services']['frontend']['volumes'].pop()
+        with self.assertRaises(BuildControlError):
+            recovery.validate_unknown(self.original, self.previous, self.document, self.control,
+                                      self.source, 'a'*32, 'b'*32)
+
+    def test_failure_scope_rejects_arbitrary_targets_even_if_readonly_declared(self):
+        for target in ('/state/development/workspace/apps/control-room/src/foreign',
+                       '/state/development/workspace/apps/control-room/node_modules', '/foreign'):
+            changed = copy.deepcopy(self.document)
+            changed['services']['frontend']['volumes'].append({'type': 'bind', 'read_only': True,
+                'source': str(self.source), 'target': target})
+            original = {**self.original, 'error': 'Retained source/runtime bind differs: ' + target}
+            with self.subTest(target=target), self.assertRaises(BuildControlError):
+                recovery.validate_unknown(original, self.previous, changed, self.control,
+                                          self.source, 'a'*32, 'b'*32)
+
     def test_wrong_unknown_class_refused(self):
         recovery.validate_unknown(self.original, self.previous, self.document, self.control,
                                   self.source, 'a'*32, 'b'*32)

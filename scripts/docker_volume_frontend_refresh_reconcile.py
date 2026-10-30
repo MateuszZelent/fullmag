@@ -67,11 +67,36 @@ def validate_request(r):
     require(isinstance(r["evidence"], dict) and bool(r["evidence"]), "Pinned observation required")
 
 
+def failed_source_target(original, document, source):
+    targets = {"/opt/fullmag/source": Path(source)}
+    targets.update({"/state/development/workspace/apps/control-room/" + name:
+                    Path(source) / "apps/control-room" / name
+                    for name in ("app", "src", "public", "scripts")})
+    errors = {"Retained source/runtime bind differs: " + target: target for target in targets}
+    target = errors.get(original.get("error"))
+    require(target is not None, "Unknown failure is outside declared frontend source scope")
+    matches = [m for m in document.get("services", {}).get("frontend", {}).get("volumes", [])
+               if isinstance(m, dict) and m.get("target") == target]
+    require(len(matches) == 1 and matches[0].get("type") == "bind"
+            and matches[0].get("read_only") is True
+            and isinstance(matches[0].get("source"), str)
+            and Path(matches[0]["source"]).resolve() == targets[target].resolve(),
+            "Failed frontend target is not its declared readonly selected source bind")
+    return target
+
+
+def require_failed_source_witness(original, document, source, witness):
+    target = failed_source_target(original, document, source)
+    require(isinstance(witness, dict) and target in witness,
+            "Verified source witness does not cover the reported failed frontend target")
+    return target
+
+
 def validate_unknown(original, previous, document, control, source, attempt, base_attempt):
+    failed_source_target(original, document, source)
     require(original.get("schema") == "fullmag.docker-build-operation.v1"
         and original.get("phase") == "development"
         and original.get("state") == "outcome-unknown-resources-retained"
-        and original.get("error") == ERROR
         and original.get("attempt") == attempt
         and original.get("compose_project") == control.project
         and original.get("control_volume") == control.volume
@@ -292,7 +317,8 @@ def observe(control, source, attempt, base_attempt, port):
     lease_log = dev.docker_text("logs", actual["lease"]["Id"])
     require(lease_log.splitlines() == ["READY", "LOGGED"],
             "Original helper has not durably consumed its build log")
-    derived, witness = derive_document(document, actual, source)
+    derived, witness = dev._repin_frontend_daemon_binds(document, actual, source, sys.modules[__name__])
+    require_failed_source_witness(original, document, source, witness)
     for name in ("backend", "frontend"):
         image = json.loads(dev.docker_text("image", "inspect", actual[name]["Image"]))[0]
         dev._validate_retained_service(derived, actual[name], name, image["Config"])
