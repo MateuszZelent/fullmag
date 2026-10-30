@@ -333,6 +333,18 @@ class DockerDevDefaultsTests(unittest.TestCase):
             self.assertEqual(result.port, 32900)
             self.assertEqual(result.attempt, attempt)
             self.assertEqual(network.call_args.args[-1], 32900)
+            digest = defaults.hashlib.sha256(defaults.canonical(document)).hexdigest()
+            with patch.object(defaults, "_verified_original_attempts", side_effect=AssertionError("explicit pins must not rediscover another attempt")):
+                pinned = defaults._discover_pins(
+                    self.main, defaults.ScriptDefaults(self.worktree, 3197),
+                    expected_attempt=attempt, expected_config_sha256=digest,
+                )
+                self.assertEqual(pinned, result)
+                with self.assertRaises(defaults.DiscoveryError):
+                    defaults._discover_pins(
+                        self.main, defaults.ScriptDefaults(self.worktree, 3197),
+                        expected_attempt=attempt, expected_config_sha256="0" * 64,
+                    )
             with self.assertRaises(defaults.DiscoveryError):
                 defaults._discover_pins(self.main, defaults.ScriptDefaults(self.worktree, 3197), requested_port=3197)
             control.read.reset_mock()
