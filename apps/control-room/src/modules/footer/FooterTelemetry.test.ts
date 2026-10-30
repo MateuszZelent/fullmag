@@ -321,6 +321,18 @@ describe("FooterTelemetry", () => {
     expect(model.metrics.some((metric) => metric.id === "time")).toBe(true);
   });
 
+  it("keeps telemetry cards stable while a retained nonmagnetic scene refreshes", () => {
+    const scene = { objects: [{ id: "conductor", name: "Conductor" }], revision: 1 } satisfies SceneResource;
+    const cards = (["ready", "stale", "ready"] as const).map((resourceStatus) => {
+      const magneticModelPresent = resolveFooterMagneticModelPresent({ data: scene, status: resourceStatus });
+      return buildFooterTelemetryModel(currentStatus, null, null, null, null, null, null, null,
+        { magneticModelPresent }).metrics.map(({ id }) => id);
+    });
+    expect(cards[1]).toEqual(cards[0]);
+    expect(cards[2]).toEqual(cards[0]);
+    expect(cards[0]).not.toContain("energy-total");
+  });
+
   it("retains global magnetic telemetry when a nonmagnetic object is selected in a mixed scene", () => {
     const scene = { objects: [
       { id: "conductor", name: "Conductor" },
@@ -459,6 +471,7 @@ describe("FooterTelemetry", () => {
         step: 123,
         time: 2.5,
       },
+      requestScopeEpoch: "test-api:0",
       runId: "run-1",
       sessionId: "session-1",
       step: 123,
@@ -534,10 +547,19 @@ describe("FooterTelemetry", () => {
       null,
       null,
       {
+        columns: ["step", "time", "mx", "my", "mz"],
+        current_observation: {
+          request_scope_epoch: "test-api:0",
+          run_id: "run-1",
+          scalar_revision: 22,
+          session_id: "session-1",
+          source_step: 99,
+        },
+        observation_frames: [],
+        returned_rows: 1,
         revision: 22,
-        row: { step: 99, time: 1.25e-9, mx: 0.25, my: -0.5, mz: 0.75 },
-        runId: "run-1",
-        sessionId: "session-1",
+        rows: [[99, 1.25e-9, 0.25, -0.5, 0.75]],
+        total_rows: 1,
       },
     );
     const byId = Object.fromEntries(model.metrics.map((metric) => [metric.id, metric]));
@@ -545,7 +567,7 @@ describe("FooterTelemetry", () => {
     expect(byId["avg-mx"]?.value).toBe("0.250000");
     expect(byId["avg-my"]?.value).toBe("-0.500000");
     expect(byId["avg-mz"]?.value).toBe("0.750000");
-    expect(byId["avg-mx"]?.subdetail).toBe("Scalar history resource");
+    expect(byId["avg-mx"]?.subdetail).toBe("Accepted scalar observation");
   });
 
   it("shows pseudotime and keeps physical simulation time separate for direct minimizers", () => {
@@ -590,6 +612,7 @@ describe("FooterTelemetry", () => {
           step: 9,
           time: 0,
         },
+        requestScopeEpoch: "test-api:0",
         runId: "run-1",
         sessionId: "session-1",
         step: 9,
@@ -1078,6 +1101,136 @@ describe("FooterTelemetry", () => {
     expect(model.frequencyDomainProgress?.detail).not.toContain("range 2.000-5.000 GHz");
   });
 
+  it("does not use unscoped scalar history as current-run telemetry", () => {
+    const live = {
+      revision: 26,
+      sessionId: currentStatus!.sessionId,
+      requestScopeEpoch: "test-api:0",
+      runId: currentStatus!.run!.run_id,
+      step: 9,
+      time: 0,
+      row: {
+        step: 9,
+        time: 0,
+        mx: 1,
+        my: 0,
+        mz: 0,
+        pseudo_time_s: 9e-6,
+        active_runtime_s: 3,
+        solver_dt: 1e-8,
+        e_ex: 7,
+        e_total: 8,
+      },
+    };
+    const unscopedHistory = {
+      revision: 26,
+      total_rows: 1,
+      returned_rows: 1,
+      columns: ["step", "time", "mx", "my", "mz", "e_total"],
+      rows: [[9, 0, 1, 0, 0, 8]],
+      observation_frames: [],
+    };
+    const before = buildFooterTelemetryModel(currentStatus, null, null, live);
+    const after = buildFooterTelemetryModel(
+      currentStatus,
+      null,
+      null,
+      live,
+      null,
+      null,
+      null,
+      unscopedHistory,
+    );
+    expect(after.metrics).toEqual(before.metrics);
+    expect(after.metrics.find(({ id }) => id === "time")?.label).toBe("Pseudo time");
+
+    const completedStatus = selectFooterTelemetryStatus({
+      data: {
+        ...status,
+        energies: { ...status.energies, total: -3.668191276379833e-16 },
+        run: { ...status.run!, solver_steps: 10, solver_time: 0 },
+        solver: { ...status.solver, state: "completed" },
+      },
+      error: null,
+      refetch: () => {},
+      revision: 2,
+      status: "ready",
+    });
+    const olderRealtime = {
+      ...live,
+      step: 0,
+      row: { step: 0, time: 0, mx: 1, my: 0, mz: 0, e_total: 8 },
+    };
+    const newerUnscopedHistory = {
+      ...unscopedHistory,
+      revision: 27,
+      rows: [[11, 0, 0, 1, 0, 12]],
+    };
+    const terminalBaseline = buildFooterTelemetryModel(completedStatus, null);
+    // A newer table tail has no run identity and cannot supersede this run's status.
+    const updated = buildFooterTelemetryModel(
+      completedStatus,
+      null,
+      null,
+      olderRealtime,
+      null,
+      null,
+      null,
+      newerUnscopedHistory,
+    );
+    expect(updated.metrics).toEqual(terminalBaseline.metrics);
+    expect(updated.metrics.find(({ id }) => id === "step")?.value).toBe("10");
+    expect(updated.metrics.find(({ id }) => id === "time")?.label).toBe("Sim time");
+    expect(updated.metrics.some(({ id }) => id === "active-runtime")).toBe(false);
+    expect(
+      updated.metrics.find(({ id }) => id === "energy-total")?.subdetail,
+    ).toBe("Session summary");
+  });
+
+  it.each(["previous-api:0", null])(
+    "ignores higher-revision realtime samples from scope %s after API restart",
+    (requestScopeEpoch) => {
+      const completedStatus = {
+        ...currentStatus!,
+        solver: { ...currentStatus!.solver, state: "completed" },
+      };
+      const model = buildFooterTelemetryModel(
+        completedStatus,
+        null,
+        null,
+        {
+          requestScopeEpoch,
+          revision: 999,
+          row: { step: 12, time: 3601, mx: -1, my: 0, mz: 0 },
+          runId: completedStatus.run!.run_id,
+          sessionId: completedStatus.sessionId,
+          step: 12,
+          time: 3601,
+        },
+        null,
+        null,
+        null,
+        {
+          columns: ["step", "time", "mx", "my", "mz", "e_total"],
+          current_observation: {
+            request_scope_epoch: completedStatus.requestScopeEpoch,
+            run_id: completedStatus.run!.run_id,
+            scalar_revision: 26,
+            session_id: completedStatus.sessionId,
+            source_step: 12,
+          },
+          observation_frames: [],
+          returned_rows: 1,
+          revision: 26,
+          rows: [[12, 3601, 0.5, 0, 0, 1.5]],
+          total_rows: 1,
+        },
+      );
+      expect(model.metrics.find(({ id }) => id === "avg-mx")?.value).toBe("0.500000");
+      expect(model.metrics.find(({ id }) => id === "step")?.value).toBe("12");
+    },
+  );
+
   it("ignores stale live scalar samples from a previous run", () => {
     const telemetryStatus = selectFooterTelemetryStatus({
       data: {
@@ -1099,6 +1252,7 @@ describe("FooterTelemetry", () => {
         step: 9,
         time: 0,
       },
+      requestScopeEpoch: "test-api:0",
       runId: "run-1",
       sessionId: "session-1",
       step: 9,

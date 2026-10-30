@@ -80,6 +80,7 @@ import {
   DATA_PLANAR_FIELD_MESH_OVERLAY_PATH,
   DATA_PLANAR_FIELD_META_PATH,
   DATA_PLANAR_FIELD_PROBE_PATH,
+  DATA_PLANAR_FIELD_PROFILE_PATH,
   DATA_PLANAR_FIELD_RENDER_PNG_PATH,
   DATA_PLANAR_FIELD_SCALAR_PATH,
   DATA_PLANAR_FIELD_VECTORS_PATH,
@@ -87,6 +88,7 @@ import {
   DATA_PLANAR_DEFAULT_FIELD_MESH_OVERLAY_PATH,
   DATA_PLANAR_DEFAULT_FIELD_META_PATH,
   DATA_PLANAR_DEFAULT_FIELD_PROBE_PATH,
+  DATA_PLANAR_DEFAULT_FIELD_PROFILE_PATH,
   DATA_PLANAR_DEFAULT_FIELD_RENDER_PNG_PATH,
   DATA_PLANAR_DEFAULT_FIELD_SCALAR_PATH,
   DATA_PLANAR_DEFAULT_FIELD_VECTORS_PATH,
@@ -355,6 +357,8 @@ import type {
   PlanarFieldMetaResource,
   PlanarFieldProbeQuery,
   PlanarFieldProbeResource,
+  PlanarFieldProfileQuery,
+  PlanarFieldProfileResource,
   PlanarFieldQuery,
   PlanarFieldSource,
   AnalyticReferenceModelCollectionResource,
@@ -2122,6 +2126,23 @@ export class ControlRoomApi {
             DATA_PLANAR_DEFAULT_FIELD_PROBE_PATH,
           );
           return this.requestJson<PlanarFieldProbeResource>(request.path, options, {
+            path: request.pathParams,
+            query,
+          });
+        },
+        profile: (
+          quantityId: string,
+          source: PlanarFieldSource,
+          query: PlanarFieldProfileQuery,
+          options?: RequestOptions,
+        ) => {
+          const request = planarRequestSpec(
+            source,
+            quantityId,
+            DATA_PLANAR_FIELD_PROFILE_PATH,
+            DATA_PLANAR_DEFAULT_FIELD_PROFILE_PATH,
+          );
+          return this.requestJson<PlanarFieldProfileResource>(request.path, options, {
             path: request.pathParams,
             query,
           });

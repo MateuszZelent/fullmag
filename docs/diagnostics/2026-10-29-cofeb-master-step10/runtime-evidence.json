@@ -1,0 +1,466 @@
+{
+  "schema": "fullmag.cofeb-runtime-visualization-evidence.v1",
+  "captured_at_utc": "2026-10-29T00:25:03.163711+00:00",
+  "checkout": "/home/kkingstoun/git/fullmag/fullmag",
+  "branch": "master",
+  "head_observed": "b2b159c58fb921efbf278c120d12d268d958d03b",
+  "backend_build_commit": "b502a4c2a838301e5091ea8b840918ee854fc399",
+  "backend_source_snapshot": "e03aae332099a71882223973fb63dc7587d2776683f4a1d31cc305edfa7aa633",
+  "development_attempt": "176c53b2754048829eb049e7d7239863",
+  "compose_sha256": "5b9568299bb7e0ee0ec63b5d7df209d7b448cf764a59995ed1e4187b4df50db8",
+  "backend_container": "b63c8eeac1b735fe662c9349e301c973e3968613f3e16d2fe78cae0a072dabe6",
+  "backend_limits": {
+    "memory_bytes": 137438953472,
+    "nano_cpus": 16000000000
+  },
+  "activation_attempt": "da24dcf82a1048438126c12540703dea",
+  "activation_state": "succeeded",
+  "run_id": "run-live-f83f7552cf05f87b1eeb213f88de34fbf9202abcbf918bfa8634bb8f17db68c1",
+  "task_id": "task-58e5bc29e907141d1df87f3b36ba92424fba93d7a8a20857faf6821e007f3b0f",
+  "worker_attempt_id": "attempt-1d6a7c57956c4615ab34c5cb7d90c802",
+  "execution": {
+    "backend": "fem",
+    "device": "gpu",
+    "precision": "double",
+    "mode": "strict",
+    "engine_id": "fem_native_gpu",
+    "algorithm": "projected_gradient_bb",
+    "completed_step_count": 10
+  },
+  "native_completion_sha256": "a2f1ef5bdd03a3e16c39e911a840b3d1e67ef04b90cdb92afd2b96723223aa19",
+  "native_gpu_snapshot": {
+    "schema_version": "fullmag.fem.gpu.accepted-state-snapshot.v1",
+    "clock": {
+      "accepted_step": 10,
+      "time_seconds": 0.0
+    },
+    "values_sha256": "sha256:f87c4d4ea756c9a9f287c12d0465c07981cd9d3dd3296207e0cabfed44392f26",
+    "native_node_map_sha256": "sha256:f65a1651e2e5299345066e44b29101d5f4b408868c4587200fdc030b88ce4f39",
+    "native_indexed_geometry_sha256": "sha256:96259acb91eae7d3af48ecefa2a0d565574917bdeb55dc6144674fcd0880217a",
+    "gpu_uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937",
+    "gpu_execution_receipt_sha256": "sha256:eb214cd96e9de7f1086b01f297f70d9c7a44d20c8727b69805ad598f8197b023",
+    "gpu_execution_identity_sha256": "sha256:c322861c6d14d259f82eb04d29d282312df5d1fe7421ddae0dbba9d934d6d732",
+    "clock_digest": "sha256:a62c11cb6de01bf1c188aedcbba5069bd9d44f1ee8180bf4b32d136d51692951",
+    "state_digest": "sha256:abb84b2cdb4c8e832c8bb9f4839a37f345291c08ec1936d7ab586b89af3dd5ad",
+    "primary_carrier_ids": [
+      "fem.gpu.native-local-node-values-f64le.v1",
+      "fem.gpu.native-local-node-map.v1",
+      "fem.gpu.native-indexed-geometry.v1",
+      "fem.gpu.execution-receipt.v1"
+    ]
+  },
+  "fields": {
+    "m/full": {
+      "meta": {
+        "observation_frame": {
+          "observation_frame_id": "obs:docker-startup-686d9815e6baf65c192902be573912aeefc8f1f11585b739ef250c0c8d3e58ce@1793231133015:14850812098407037233:2:10:0000000000000000",
+          "session_epoch": "docker-startup-686d9815e6baf65c192902be573912aeefc8f1f11585b739ef250c0c8d3e58ce@1793231133015",
+          "domain_generation_id": "14850812098407037233",
+          "topology_revision": "2",
+          "source_step": 10,
+          "source_time_seconds": 0.0
+        },
+        "quantity_id": "m",
+        "label": "Magnetization",
+        "kind": "vector_field",
+        "components": 3,
+        "location": "magnetic_only",
+        "unit": "dimensionless",
+        "field_revision": 3,
+        "domain_generation_id": "14850812098407037233",
+        "stats": {
+          "min": -0.9999999998686845,
+          "max": 0.9999994185663572,
+          "mean": -0.03968274109922787
+        },
+        "source_step": 10,
+        "source_time_seconds": 0.0,
+        "source_revision": 2,
+        "materialized_at_unix_ms": 0,
+        "stale_by_steps": 0,
+        "materialization_wall_time_ns": 0,
+        "state": "complete",
+        "resolved_capability": {
+          "quantity_id": "m",
+          "provider": "available",
+          "request": "field_vector",
+          "materialization": "materialized",
+          "render": "renderable",
+          "publication": "interactive",
+          "scope": "full",
+          "lane": "fem_native_gpu",
+          "precision": "double",
+          "carriers": [
+            {
+              "carrier_id": "fem:sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e:full",
+              "carrier_fingerprint": "sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e",
+              "scope": "full",
+              "scope_kind": "full",
+              "components": 3,
+              "indexing": "node",
+              "view": "3D",
+              "payload_state": "current"
+            }
+          ]
+        }
+      },
+      "binary": {
+        "quantity": "m",
+        "scope": "full",
+        "http": 200,
+        "version": 3,
+        "n_comp": 3,
+        "point_count": 183764,
+        "value_count": 551292,
+        "finite": true,
+        "min": -0.9999999998686845,
+        "max": 0.9999994185663572,
+        "values_sha256": "f87c4d4ea756c9a9f287c12d0465c07981cd9d3dd3296207e0cabfed44392f26",
+        "full_payload_sha256": "5afc8f8256b139ea745db4224368cd098c073ffb7b0777eb7a7672d32b10e6c4",
+        "headers": {
+          "x-fullmag-field-revision": "3",
+          "x-fullmag-domain-generation-id": "14850812098407037233",
+          "x-fullmag-quantity-id": "m",
+          "x-fullmag-component": "full",
+          "x-fullmag-encoding": "FMVP;version=3",
+          "x-fullmag-point-count": "183764",
+          "x-fullmag-value-count": "551292",
+          "x-fullmag-n-comp": "3",
+          "x-fullmag-payload-state": "current",
+          "x-fullmag-mesh-topology-hash": "sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e",
+          "x-fullmag-field-indexing": "full_domain",
+          "x-fullmag-carrier-revision": "2",
+          "x-fullmag-api-instance": "bb4b4c49-9c3d-4231-9902-72babf5376b7"
+        },
+        "run": {
+          "run_id": "run-live-f83f7552cf05f87b1eeb213f88de34fbf9202abcbf918bfa8634bb8f17db68c1",
+          "stage_index": 0,
+          "stage_label": "",
+          "stage_count": 1,
+          "started_at": "1793231133015",
+          "solver_steps": 10,
+          "solver_time": 0.0,
+          "requested_device": "gpu",
+          "resolved_device": "gpu",
+          "selection_reason": "explicit_device_request"
+        }
+      }
+    },
+    "H_demag/airbox": {
+      "meta": {
+        "observation_frame": {
+          "observation_frame_id": "obs:docker-startup-686d9815e6baf65c192902be573912aeefc8f1f11585b739ef250c0c8d3e58ce@1793231133015:14850812098407037233:2:10:0000000000000000",
+          "session_epoch": "docker-startup-686d9815e6baf65c192902be573912aeefc8f1f11585b739ef250c0c8d3e58ce@1793231133015",
+          "domain_generation_id": "14850812098407037233",
+          "topology_revision": "2",
+          "source_step": 10,
+          "source_time_seconds": 0.0
+        },
+        "quantity_id": "H_demag",
+        "label": "Demagnetization Field",
+        "kind": "vector_field",
+        "components": 3,
+        "location": "full_domain",
+        "unit": "A/m",
+        "field_revision": 3,
+        "domain_generation_id": "14850812098407037233",
+        "stats": {
+          "min": -786837.5321663134,
+          "max": 627966.1914355665,
+          "mean": 1197.549533149726
+        },
+        "source_step": 10,
+        "source_time_seconds": 0.0,
+        "source_revision": 0,
+        "materialized_at_unix_ms": 0,
+        "stale_by_steps": 0,
+        "materialization_wall_time_ns": 0,
+        "state": "complete",
+        "resolved_capability": {
+          "quantity_id": "H_demag",
+          "provider": "available",
+          "request": "field_vector",
+          "materialization": "materialized",
+          "render": "renderable",
+          "publication": "interactive",
+          "scope": "airbox",
+          "lane": "fem_native_gpu",
+          "precision": "double",
+          "carriers": [
+            {
+              "carrier_id": "fem:sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e:airbox:airbox",
+              "carrier_fingerprint": "sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e",
+              "scope": "airbox",
+              "scope_kind": "airbox",
+              "scope_id": "airbox",
+              "components": 3,
+              "indexing": "node",
+              "view": "3D",
+              "payload_state": "current"
+            }
+          ]
+        }
+      },
+      "binary": {
+        "quantity": "H_demag",
+        "scope": "airbox",
+        "http": 200,
+        "version": 3,
+        "n_comp": 3,
+        "point_count": 157393,
+        "value_count": 472179,
+        "finite": true,
+        "min": -786837.5321663134,
+        "max": 627966.1914355665,
+        "values_sha256": "da81dc5f5d9efe31f0293c539995cefd6b1e91d146a8b263ef12481ea3dc3118",
+        "full_payload_sha256": "afc4a7ccbc9bdc66e0cae982c1d371043c657662914b150472687665680ab657",
+        "headers": {
+          "x-fullmag-field-revision": "3",
+          "x-fullmag-domain-generation-id": "14850812098407037233",
+          "x-fullmag-quantity-id": "H_demag",
+          "x-fullmag-component": "full",
+          "x-fullmag-encoding": "FMVP;version=3",
+          "x-fullmag-point-count": "157393",
+          "x-fullmag-value-count": "472179",
+          "x-fullmag-n-comp": "3",
+          "x-fullmag-payload-state": "current",
+          "x-fullmag-mesh-topology-hash": "sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e",
+          "x-fullmag-field-indexing": "explicit_node_indices",
+          "x-fullmag-node-index-count": "157393",
+          "x-fullmag-carrier-revision": "2",
+          "x-fullmag-scope-kind": "airbox",
+          "x-fullmag-scope-id": "airbox",
+          "x-fullmag-api-instance": "bb4b4c49-9c3d-4231-9902-72babf5376b7"
+        },
+        "run": {
+          "run_id": "run-live-f83f7552cf05f87b1eeb213f88de34fbf9202abcbf918bfa8634bb8f17db68c1",
+          "stage_index": 0,
+          "stage_label": "",
+          "stage_count": 1,
+          "started_at": "1793231133015",
+          "solver_steps": 10,
+          "solver_time": 0.0,
+          "requested_device": "gpu",
+          "resolved_device": "gpu",
+          "selection_reason": "explicit_device_request"
+        }
+      }
+    },
+    "H_eff/airbox": {
+      "meta": {
+        "observation_frame": {
+          "observation_frame_id": "obs:docker-startup-686d9815e6baf65c192902be573912aeefc8f1f11585b739ef250c0c8d3e58ce@1793231133015:14850812098407037233:2:10:0000000000000000",
+          "session_epoch": "docker-startup-686d9815e6baf65c192902be573912aeefc8f1f11585b739ef250c0c8d3e58ce@1793231133015",
+          "domain_generation_id": "14850812098407037233",
+          "topology_revision": "2",
+          "source_step": 10,
+          "source_time_seconds": 0.0
+        },
+        "quantity_id": "H_eff",
+        "label": "Effective Field",
+        "kind": "vector_field",
+        "components": 3,
+        "location": "full_domain",
+        "unit": "A/m",
+        "field_revision": 3,
+        "domain_generation_id": "14850812098407037233",
+        "stats": {
+          "min": -786837.5321663134,
+          "max": 627966.1914355665,
+          "mean": 1197.549533149726
+        },
+        "source_step": 10,
+        "source_time_seconds": 0.0,
+        "source_revision": 0,
+        "materialized_at_unix_ms": 0,
+        "stale_by_steps": 0,
+        "materialization_wall_time_ns": 0,
+        "state": "complete",
+        "resolved_capability": {
+          "quantity_id": "H_eff",
+          "provider": "available",
+          "request": "field_vector",
+          "materialization": "materialized",
+          "render": "renderable",
+          "publication": "interactive",
+          "scope": "airbox",
+          "lane": "fem_native_gpu",
+          "precision": "double",
+          "carriers": [
+            {
+              "carrier_id": "fem:sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e:airbox:airbox",
+              "carrier_fingerprint": "sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e",
+              "scope": "airbox",
+              "scope_kind": "airbox",
+              "scope_id": "airbox",
+              "components": 3,
+              "indexing": "node",
+              "view": "3D",
+              "payload_state": "current"
+            }
+          ]
+        }
+      },
+      "binary": {
+        "quantity": "H_eff",
+        "scope": "airbox",
+        "http": 200,
+        "version": 3,
+        "n_comp": 3,
+        "point_count": 157393,
+        "value_count": 472179,
+        "finite": true,
+        "min": -786837.5321663134,
+        "max": 627966.1914355665,
+        "values_sha256": "da81dc5f5d9efe31f0293c539995cefd6b1e91d146a8b263ef12481ea3dc3118",
+        "full_payload_sha256": "9cef708a98b5cab8b2d029b7e00b2e0951b9038343c479443b374d0245bfe93a",
+        "headers": {
+          "x-fullmag-field-revision": "3",
+          "x-fullmag-domain-generation-id": "14850812098407037233",
+          "x-fullmag-quantity-id": "H_eff",
+          "x-fullmag-component": "full",
+          "x-fullmag-encoding": "FMVP;version=3",
+          "x-fullmag-point-count": "157393",
+          "x-fullmag-value-count": "472179",
+          "x-fullmag-n-comp": "3",
+          "x-fullmag-payload-state": "current",
+          "x-fullmag-mesh-topology-hash": "sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e",
+          "x-fullmag-field-indexing": "explicit_node_indices",
+          "x-fullmag-node-index-count": "157393",
+          "x-fullmag-carrier-revision": "2",
+          "x-fullmag-scope-kind": "airbox",
+          "x-fullmag-scope-id": "airbox",
+          "x-fullmag-api-instance": "bb4b4c49-9c3d-4231-9902-72babf5376b7"
+        },
+        "run": {
+          "run_id": "run-live-f83f7552cf05f87b1eeb213f88de34fbf9202abcbf918bfa8634bb8f17db68c1",
+          "stage_index": 0,
+          "stage_label": "",
+          "stage_count": 1,
+          "started_at": "1793231133015",
+          "solver_steps": 10,
+          "solver_time": 0.0,
+          "requested_device": "gpu",
+          "resolved_device": "gpu",
+          "selection_reason": "explicit_device_request"
+        }
+      }
+    }
+  },
+  "energies": {
+    "revision": 33,
+    "step": 10,
+    "time_seconds": 0.0,
+    "exchange": 1.4576915063166036e-17,
+    "demag": 2.5962013506951533e-15,
+    "zeeman": 0.0,
+    "anisotropy": -2.9775973933963028e-15,
+    "dmi": 0.0,
+    "total": -3.668191276379833e-16
+  },
+  "commands": [
+    {
+      "command_id": "fm-2d70d294-0839-45e8-a081-9686a0237185",
+      "request_id": "fm-da4602ec-7020-41f3-b6b7-5217e4667f25",
+      "client_intent_id": "cofeb-master-solve10-20261029-01",
+      "seq": 1,
+      "kind": "solve",
+      "target": {
+        "kind": "run",
+        "run_id": "run-live-f83f7552cf05f87b1eeb213f88de34fbf9202abcbf918bfa8634bb8f17db68c1"
+      },
+      "reason": "CoFeB visualization recovery; one explicitly authorized command",
+      "status": "completed",
+      "created_at_unix_ms": 1793231949099,
+      "completed_at_unix_ms": 1793232608050,
+      "completion_status": "completed"
+    },
+    {
+      "command_id": "fm-6b08ecf0-a9f2-4f70-b64d-5d5aecd5ab84",
+      "request_id": "fm-f32ac2fc-848f-4cd0-ad63-1e960c870a47",
+      "client_intent_id": "cofeb-master-fields-step10-20261029-01",
+      "seq": 2,
+      "kind": "compute_fields",
+      "target": {
+        "kind": "study"
+      },
+      "reason": "CoFeB visualization recovery; one explicitly authorized command",
+      "status": "completed",
+      "created_at_unix_ms": 1793232630931,
+      "completed_at_unix_ms": 1793232631304,
+      "completion_status": "completed"
+    }
+  ],
+  "browser": {
+    "attempt": "bdd1ea76bff04970b0efde4f0f017478",
+    "state": "passed",
+    "session": {
+      "request_scope_epoch": "bb4b4c49-9c3d-4231-9902-72babf5376b7:1",
+      "session_epoch": "docker-startup-686d9815e6baf65c192902be573912aeefc8f1f11585b739ef250c0c8d3e58ce@1793231133015",
+      "session_id": "docker-startup-686d9815e6baf65c192902be573912aeefc8f1f11585b739ef250c0c8d3e58ce"
+    },
+    "canvas_after": {
+      "context_type": "WebGL2RenderingContext",
+      "context_lost": false,
+      "drawing_buffer_width": 617,
+      "drawing_buffer_height": 495,
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)"
+    },
+    "console_errors": 0,
+    "page_errors": 0,
+    "http_errors": [],
+    "field_data_proven_by_harness": false,
+    "binary_data_proven_separately": true,
+    "png_sha256": "83c55cfadc91010394a00cf47242ea79c889c3d8c4cd5b2aa2ce62863797761c",
+    "visual_review": "Viewed PNG: colored magnetic surfaces and vector glyphs outside the magnetic objects.",
+    "note": "SwiftShader proves browser rendering; native GPU execution is proven separately.",
+    "actual_network_capture": "browser-field-network.json",
+    "actual_network_payload_checks": [
+      {
+        "url": "sessions/current/data/fields/H_demag/samples/vector?component=full&max_samples=9600&scope_id=airbox&scope_kind=airbox",
+        "payload_sha256": "1fdb2b5a2b1ff5a2adeb5b66873143a0be8d9a718f24f6668cd683056e41d4ef",
+        "matches_browser_response": true,
+        "value_count": 28800
+      },
+      {
+        "url": "sessions/current/data/fields/H_demag/samples/vector?component=full&max_samples=1200&scope_id=part%3A__air__&scope_kind=airbox",
+        "payload_sha256": "db2da45ebf245fca1a090398b526694f2da1c5ee9c532647162cadc98fd14072",
+        "matches_browser_response": true,
+        "value_count": 3600
+      },
+      {
+        "url": "sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full",
+        "payload_sha256": "f87c4d4ea756c9a9f287c12d0465c07981cd9d3dd3296207e0cabfed44392f26",
+        "matches_browser_response": true,
+        "value_count": 551292
+      }
+    ],
+    "m_browser_matches_api_and_native_gpu": true
+  },
+  "source_sha256": {
+    "crates/fullmag-authoring/src/geometry.rs": "e111d1cc3badd27860f2a9d5b7c619e20a23bb86106800f7ceb98350a64c46c9",
+    "crates/fullmag-api/src/router_v2/handlers/platform/development_restart.rs": "0a60d54d8fd2b2b2199b204baaf0c025fbb49d822aee3f6a4aaaee9140937a49",
+    "crates/fullmag-api/src/run_intent_persistence.rs": "d1aabe0e47f05f742788a9a32733680aef6944caba581b9ed2c294ec3253d55c",
+    "crates/fullmag-runtime-control/src/lib.rs": "79a27eb0f0a749985c1d05e76c59f88ff76f98b57e674987d6c9dc8a819d0a3e",
+    "crates/fullmag-runtime-control/src/study.rs": "ca0c12c94a93ec46e87e5c24a3c9741948272474e663c1c833783f828326b89b",
+    "scripts/docker_dev.py": "c0998e9d443a778a50a5bd1cba5dcd1eb3ddcbd3380b7442ce4c39927fd4e8aa",
+    "scripts/docker_volume_dev.py": "d835487a3a59bd721636867bf1d29d54266f73734eca79625cb1cf229fd03d33",
+    "scripts/docker_volume_fresh_runtime.py": "7c4aa49405f4354e864773e5f43a3f463ea2f0276b45939bbf7596cb75082b99",
+    "scripts/docker_volume_preparation_abort.py": "f5837319300201ef3efed8a7a575753cf7117dd479f34bb167487d0327c65bcc",
+    "scripts/docker_volume_stop_diagnostic.py": "3be63c911334bac0a4856a35b61293c626d7d4410ea98496672654346f926c37",
+    "scripts/docker_volume_catalog_failure.py": "fef16e04807d7963314d82354bd7466d1ff840eb97fe8f4d5e64341cff0e717e",
+    "scripts/docker_volume_stop_preowner_policy.py": "2ed64ec47df05ee10a38d53402113c6d8d61ac4e30ac073db760582a47532b51",
+    "scripts/docker_dev_browser_qa.py": "3be47386fe125ea5e3e0fac4abc8490b8a18116db763e55c7ea5ca542d1cddbf",
+    "examples/permalloy_layer_cofeb_rings_relax_300nm.py": "c986e1d8472cca81aef393d24118f4e0dbd215e1587727d114e3a859f8045cf6"
+  },
+  "remaining": {
+    "telemetry_scalar_provenance": "/data/scalars tail returns prepared step0 while native run, current energies and vector fields are step10",
+    "scientific_qualification": "not_evaluated",
+    "unit_tests": "not_run_by_user_request",
+    "fresh_FDM_runtime": "not_run_in_this_task"
+  },
+  "cache_maintenance": {
+    "state": "succeeded",
+    "attempt": "d3361d22698343f8970fcd2b2b066a2f"
+  }
+}

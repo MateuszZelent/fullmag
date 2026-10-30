@@ -1,4 +1,5 @@
 mod contract;
+mod element_index;
 mod fdm;
 mod fem;
 mod frame;

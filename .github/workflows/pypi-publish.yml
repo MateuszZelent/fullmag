@@ -1,0 +1,170 @@
+name: pypi-publish
+
+# Builds the pure-Python `fullmag` package (packages/fullmag-py) and publishes it
+# through PyPI Trusted Publishing (OIDC). No API token is stored anywhere.
+#
+# - pull_request / push to master: build + checks only, never uploads.
+# - workflow_dispatch: build with the requested public version, then upload to
+#   the chosen index. PyPI uploads are accepted only from master and only after
+#   the package declares a license; each target uses its own GitHub environment
+#   so required reviewers can gate the upload.
+
+on:
+  pull_request:
+    paths:
+      - packages/fullmag-py/**
+      - Cargo.toml
+      - .github/workflows/pypi-publish.yml
+  push:
+    branches: [master]
+    paths:
+      - packages/fullmag-py/**
+      - Cargo.toml
+      - .github/workflows/pypi-publish.yml
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Public PEP 440 version, base must equal Cargo [workspace.package].version (e.g. 0.1.0rc1, 0.1.0, 0.1.0.dev1)'
+        required: true
+        type: string
+      target:
+        description: 'Package index to upload to'
+        required: true
+        default: testpypi
+        type: choice
+        options: [testpypi, pypi]
+
+permissions:
+  contents: read
+
+# Check builds supersede each other; every manual (upload) run gets its own
+# group so it is never cancelled mid-upload.
+concurrency:
+  group: pypi-publish-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'check' }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build sdist and wheel
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Resolve release version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          base="$(python -c "import tomllib;print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])")"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            version="$INPUT_VERSION"
+          else
+            # Check builds only; this version is never uploaded.
+            version="${base}.dev${RUN_NUMBER}"
+          fi
+          echo "base=${base} version=${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        env:
+          FULLMAG_RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade build twine
+          python -m build --outdir dist packages/fullmag-py
+          ls -l dist
+
+      - name: Check distributions
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          python -m twine check --strict dist/*
+          test -f "dist/fullmag-${VERSION}-py3-none-any.whl"
+          test -f "dist/fullmag-${VERSION}.tar.gz"
+          python - <<'EOF'
+          import pathlib, zipfile
+          (wheel,) = pathlib.Path("dist").glob("*.whl")
+          names = zipfile.ZipFile(wheel).namelist()
+          stray = [n for n in names if not n.startswith(("fullmag/", "fullmag-"))]
+          if stray:
+              raise SystemExit(f"unexpected wheel entries: {stray}")
+          print(f"{wheel.name}: {len(names)} entries")
+          EOF
+
+      - name: Smoke-install wheel in a clean venv
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/python -m pip install dist/*.whl
+          cd /tmp
+          /tmp/smoke/bin/python -I -c "import fullmag as fm, importlib.metadata as m; print('fullmag', m.version('fullmag')); fm.geometry(fm.Box(1e-8, 1e-8, 1e-8), name='smoke')"
+          /tmp/smoke/bin/fullmag-python --help > /dev/null
+
+      - name: Require a declared license before publishing
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          python - <<'EOF'
+          import pathlib, zipfile
+          (wheel,) = pathlib.Path("dist").glob("*.whl")
+          z = zipfile.ZipFile(wheel)
+          (meta,) = [n for n in z.namelist() if n.endswith(".dist-info/METADATA")]
+          headers = z.read(meta).decode().split("\n\n", 1)[0]
+          if "License-Expression:" not in headers:
+              raise SystemExit("packages/fullmag-py/pyproject.toml declares no license; refusing to publish")
+          EOF
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: python-package-distributions
+          path: dist/
+          if-no-files-found: error
+
+  publish-testpypi:
+    name: upload to TestPyPI
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/fullmag/${{ needs.build.outputs.version }}/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: python-package-distributions
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish-pypi:
+    name: upload to PyPI
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.target == 'pypi'
+      && github.ref == 'refs/heads/master'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/fullmag/${{ needs.build.outputs.version }}/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: python-package-distributions
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

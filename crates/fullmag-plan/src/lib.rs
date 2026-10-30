@@ -67,7 +67,9 @@ pub use error::PlanError;
 pub use fdm::{
     checked_multilayer_aggregate_memory_bytes, checked_multilayer_pair_kernel_footprint,
     fdm_multilayer_cuda_containment_reason_codes, fdm_multilayer_cuda_material_field_errors,
-    fdm_multilayer_cuda_native_single_grid_eligible, resolve_multilayer_kernel_memory,
+    fdm_multilayer_cuda_native_single_grid_eligible,
+    fdm_multilayer_cuda_native_single_grid_eligible_with_body_local_dmi,
+    resolve_multilayer_kernel_memory,
     ResolvedMultilayerKernelMemory, FDM_CUDA_MULTILAYER_HETEROGENEOUS_NATIVE_HZ_UNQUALIFIED,
     FDM_CUDA_MULTILAYER_MATERIAL_FIELD_UNQUALIFIED, FDM_CUDA_MULTILAYER_PUSH_PULL_UNQUALIFIED,
     FDM_CUDA_MULTILAYER_TWO_D_STACK_UNQUALIFIED, FDM_CUDA_MULTILAYER_XY_OFFSET_UNQUALIFIED,
@@ -137,6 +139,23 @@ fn routes_to_fdm_multilayer(problem: &ProblemIR) -> bool {
         .map(|demag| demag.strategy.as_str())
         .unwrap_or("auto");
     problem.magnets.len() > 1 || requested_demag_strategy == "multilayer_convolution"
+}
+
+/// Packs a shared-domain mesh realized from geometry alone (ADR 0074) into
+/// object segments and mesh parts. No materials are involved; each region
+/// marker's geometry name is the scene object id.
+pub fn pack_geometry_only_shared_domain_mesh(
+    mesh: &fullmag_ir::MeshIR,
+    region_markers: &[fullmag_ir::FemDomainRegionMarkerIR],
+) -> Result<
+    (
+        fullmag_ir::MeshIR,
+        Vec<fullmag_ir::FemObjectSegmentIR>,
+        Vec<fullmag_ir::FemMeshPartIR>,
+    ),
+    String,
+> {
+    mesh::reorder_shared_domain_mesh(mesh, region_markers, true)
 }
 
 /// Plans a `ProblemIR` into an `ExecutionPlanIR`.

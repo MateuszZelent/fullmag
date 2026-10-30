@@ -1,0 +1,11 @@
+SetGridSize(128, 128, 2)
+SetCellSize(4e-9, 4e-9, 4e-9)
+SetGeom(Circle(400e-9))
+Msat = 800e3
+Aex = 13e-12
+alpha = 0.5
+m = Vortex(1, 1)
+snapshot(m)
+snapshotAs(m.Comp(2), "mz.jpg")
+save(m)
+print(m.Average())

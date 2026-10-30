@@ -5,7 +5,7 @@ import type {
 import type { FieldMapCapability, PlanarInspectorCapabilities } from "@/kernel/visualization/planarCapabilities";
 import type { PlanarResolutionPreset } from "@/kernel/visualization/planarSectionModel";
 import { Button } from "@/shared/ui/Button";
-import { ArrowRightLeft, Crosshair, Eye, ScanLine, SquareDashed } from "lucide-react";
+import { ArrowRightLeft, Crosshair, Eye, ScanLine, SquareDashed, Waves } from "lucide-react";
 
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
@@ -91,6 +91,15 @@ export function PlanarDisplayPassesSection({
             label: "Vectors",
             pressed: visible && layers.vectors,
             onToggle: () => toggle("vectors"),
+          },
+          {
+            // Streamlines trace the same frame-vector raster as the quiver.
+            disabled: !capabilities.vectors.enabled,
+            icon: <Waves aria-hidden="true" size={13} strokeWidth={1.75} />,
+            id: "streamlines",
+            label: "Streamlines",
+            pressed: visible && Boolean(layers.streamlines),
+            onToggle: () => toggle("streamlines"),
           },
           {
             ariaLabel: "Toggle Points",

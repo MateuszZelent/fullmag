@@ -66,8 +66,9 @@ function formatStatusFreshnessLabel(status: ResourceStatus): string {
   switch (status) {
     case "ready":
       return "ready";
+    // Retained data while the status resource refetches, not a failure.
     case "stale":
-      return "stale";
+      return "refreshing";
     case "loading":
       return "loading";
     case "error":

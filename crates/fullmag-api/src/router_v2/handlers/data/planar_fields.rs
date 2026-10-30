@@ -28,6 +28,7 @@ use crate::{
             is_fdm_multilayer_snapshot, load_fdm_multilayer_airbox_carrier_for_quantity, persisted_hysteresis_magnetization_values,
             resolved_fdm_multilayer_airbox_field, validate_hysteresis_snapshot_stage_scope,
         },
+        data::fdm_multilayer_composite::resolve_fdm_multilayer_composite,
         data::resolved_spatial_field::{
             resolve_current_spatial_field, resolve_fdm_multilayer_native_layer_field,
             resolve_spatial_field_from_values, SpatialFieldProvenance, SpatialFieldSourceKind,
@@ -46,6 +47,10 @@ use crate::{
 const DEFAULT_RESOLUTION: u32 = 128;
 const MIN_RESOLUTION: u32 = 16;
 const MAX_RESOLUTION: u32 = 2048;
+
+#[path = "planar_profile.rs"]
+pub mod planar_profile;
+pub use planar_profile::*;
 
 #[derive(Debug, Clone)]
 enum PlanarDataSource {
@@ -80,6 +85,8 @@ struct BuiltPlanarField {
     scope_kind: String,
     scope_id: Option<String>,
     scope_region_id: Option<String>,
+    /// Default-source position override (multislice panel), echoed into links.
+    position_fraction: Option<f64>,
     etag: String,
     sample_token: String,
 }
@@ -505,19 +512,31 @@ async fn build_planar_field_from_source(
     let planar_state = presentation
         .visualization_planar
         .unwrap_or_else(crate::schemas::visualization_state::default_planar_visualization_state);
+    // Ok(None) unless the plan is an FDM multilayer; an error matters only to
+    // the scopes that sample the composite carrier.
+    let multilayer_composite = resolve_fdm_multilayer_composite(snapshot);
     let resolved_source = match &source {
         PlanarDataSource::Default => {
-            let domain = super::domain::domain_meta_for_snapshot(snapshot);
+            let mut domain = super::domain::domain_meta_for_snapshot(snapshot);
+            if let Ok(Some(composite)) = &multilayer_composite {
+                composite.apply_to_domain(&mut domain);
+            }
             let stops = snapshot
                 .fem_mesh
                 .as_ref()
                 .and_then(|mesh| mesh.build_report.as_ref())
                 .and_then(FemNodePlaneStops::from_build_report);
-            resolve_default_planar_source_with_stops(
-                &domain,
-                &planar_state.default_slice,
-                stops.as_ref(),
-            )?
+            let mut default_slice = planar_state.default_slice.clone();
+            if let Some(position_fraction) = query.position_fraction {
+                // Multislice panel: same plane and operator, its own position.
+                default_slice.position_fraction = position_fraction;
+            }
+            resolve_default_planar_source_with_stops(&domain, &default_slice, stops.as_ref())?
+        }
+        PlanarDataSource::Monitor(_) if query.position_fraction.is_some() => {
+            return Err(ApiError::bad_request(
+                "planar_position_fraction_requires_default_source: position_fraction applies only to the default source",
+            ));
         }
         PlanarDataSource::Monitor(monitor_id) => {
             let scene = snapshot
@@ -627,6 +646,18 @@ async fn build_planar_field_from_source(
                 "quantity_not_materialized: field '{quantity_id}' is not published"
             ))
         })?
+    };
+    let resolved_field = if matches!(
+        query.scope_kind.as_deref().unwrap_or("monitor_target"),
+        "monitor_target" | "region"
+    ) {
+        match multilayer_composite {
+            Ok(Some(composite)) => composite.embed(resolved_field)?,
+            Ok(None) => resolved_field,
+            Err(error) => return Err(error),
+        }
+    } else {
+        resolved_field
     };
     let field_revision = resolved_field.quantity_revision;
     let source_revision = resolved_source.identity.source_revision;
@@ -846,6 +877,7 @@ async fn build_planar_field_from_source(
         scope_kind,
         scope_id: query.scope_id.clone(),
         scope_region_id: query.scope_region_id.clone(),
+        position_fraction: query.position_fraction,
         etag,
         sample_token,
     })
@@ -979,6 +1011,7 @@ async fn planar_probe_response(
         expected_mesh_revision: probe.expected_mesh_revision,
         expected_carrier_revision: probe.expected_carrier_revision,
         expected_field_revision: probe.expected_field_revision,
+        position_fraction: None,
     };
     let built = build_planar_field_from_source(state, quantity_id, source, &query).await?;
     let bounds = built.result.meta.bounds_uv_m;
@@ -1520,6 +1553,10 @@ fn canonical_sample_query(built: &BuiltPlanarField) -> String {
     }
     if let Some(scope_region_id) = &built.scope_region_id {
         entries.push(("scope_region_id", scope_region_id.clone()));
+    }
+    if let Some(position_fraction) = built.position_fraction {
+        // Shortest round-trip decimal, so the link names the same slice.
+        entries.push(("position_fraction", position_fraction.to_string()));
     }
     if let Some(stage_id) = &built.stage_id {
         entries.push(("stage_id", stage_id.clone()));

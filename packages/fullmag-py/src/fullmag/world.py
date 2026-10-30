@@ -561,6 +561,13 @@ class MagnetHandle:
         layer.m     = fm.texture.uniform(1, 0, 0)
     """
 
+    # Public state consumed by export, plus the dedicated control handles.
+    # Unknown attributes must not appear to configure physics and then vanish.
+    _PUBLIC_ATTRIBUTES = frozenset({
+        "region_name", "Ms", "Aex", "Dind", "Dbulk", "Ku1", "anisU", "Kc1",
+        "mesh", "regions",
+    })
+
     def __init__(
         self,
         shape: object,
@@ -605,6 +612,13 @@ class MagnetHandle:
             owner_state = self.__dict__.get("_owner_state")
             if owner_state is not None:
                 self._assert_active_context()
+            if name not in self._PUBLIC_ATTRIBUTES and not isinstance(
+                getattr(type(self), name, None), property
+            ):
+                raise AttributeError(
+                    f"MagnetHandle does not support attribute {name!r}; "
+                    "use a supported handle property or an explicit Material configuration"
+                )
         object.__setattr__(self, name, value)
 
     def _assert_active_context(self) -> None:
@@ -2450,6 +2464,8 @@ class StudyUniverseConfig:
     airbox_hmin: float | None = None
     airbox_growth_rate: float | None = None
     airbox_grading: str | None = None
+    airbox_curvature_factor: float | None = None
+    airbox_narrow_region_resolution: float | None = None
 
     def __post_init__(self) -> None:
         if self.mode not in {"auto", "manual"}:
@@ -2487,6 +2503,18 @@ class StudyUniverseConfig:
                     "airbox_grading must be one of 'auto', 'geometric', or 'linear'"
                 )
             object.__setattr__(self, "airbox_grading", normalized_grading)
+        # Note 0107: air feature controls relax toward the far-air maximum.
+        for name in ("airbox_curvature_factor", "airbox_narrow_region_resolution"):
+            value = getattr(self, name)
+            if value is None:
+                continue
+            object.__setattr__(self, name, float(value))
+            if not math.isfinite(getattr(self, name)) or getattr(self, name) <= 0.0:
+                raise ValueError(f"{name} must be finite and greater than 0")
+            if self.airbox_hmax is None:
+                raise ValueError(
+                    f"{name} requires the universe maximum_element_size"
+                )
         # Validate that minimum_element_size <= maximum_element_size if both are set
         if self.airbox_hmin is not None and self.airbox_hmax is not None:
             if self.airbox_hmin > self.airbox_hmax:
@@ -2497,7 +2525,7 @@ class StudyUniverseConfig:
             raise ValueError("manual universe mode requires an explicit size")
 
     def to_ir(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "mode": self.mode,
             "size": list(self.size) if self.size is not None else None,
             "center": list(self.center),
@@ -2507,6 +2535,12 @@ class StudyUniverseConfig:
             "airbox_growth_rate": self.airbox_growth_rate,
             "airbox_grading": self.airbox_grading,
         }
+        # Emitted only when authored so existing IR bytes stay unchanged.
+        if self.airbox_curvature_factor is not None:
+            payload["airbox_curvature_factor"] = self.airbox_curvature_factor
+        if self.airbox_narrow_region_resolution is not None:
+            payload["airbox_narrow_region_resolution"] = self.airbox_narrow_region_resolution
+        return payload
 
 
 # ---------------------------------------------------------------------------
@@ -5142,6 +5176,8 @@ def _configure_study_universe(
     airbox_hmin: float | None = None,
     airbox_growth_rate: float | None = None,
     airbox_grading: str | None = None,
+    airbox_curvature_factor: float | None = None,
+    airbox_narrow_region_resolution: float | None = None,
 ) -> StudyUniverseConfig:
     current = _state._study_universe or StudyUniverseConfig()
     universe = StudyUniverseConfig(
@@ -5157,6 +5193,16 @@ def _configure_study_universe(
             else float(airbox_growth_rate)
         ),
         airbox_grading=current.airbox_grading if airbox_grading is None else str(airbox_grading),
+        airbox_curvature_factor=(
+            current.airbox_curvature_factor
+            if airbox_curvature_factor is None
+            else float(airbox_curvature_factor)
+        ),
+        airbox_narrow_region_resolution=(
+            current.airbox_narrow_region_resolution
+            if airbox_narrow_region_resolution is None
+            else float(airbox_narrow_region_resolution)
+        ),
     )
     _state._study_universe = universe
     return universe
@@ -5396,6 +5442,8 @@ class StudyUniverseHandle:
         growth_rate: float | None = None,
         maximum_element_growth_rate: float | None = None,
         grading: str | None = None,
+        curvature_factor: float | None = None,
+        narrow_region_resolution: float | None = None,
     ) -> "StudyBuilder":
         resolved_hmax = maximum_element_size if maximum_element_size is not None else hmax
         resolved_hmin = minimum_element_size if minimum_element_size is not None else hmin
@@ -5414,11 +5462,14 @@ class StudyUniverseHandle:
                 growth_rate,
                 maximum_element_growth_rate,
                 grading,
+                curvature_factor,
+                narrow_region_resolution,
             )
         ):
             raise ValueError(
                 "cell_size cannot be combined with maximum_element_size, "
-                "minimum_element_size, growth_rate, or grading"
+                "minimum_element_size, growth_rate, grading, curvature_factor, "
+                "or narrow_region_resolution"
             )
         if cell_size is not None:
             vector = as_vector3(cell_size, "study.universe.mesh.cell_size")
@@ -5443,6 +5494,8 @@ class StudyUniverseHandle:
             airbox_hmin=resolved_hmin,
             airbox_growth_rate=resolved_growth_rate,
             airbox_grading=grading,
+            airbox_curvature_factor=curvature_factor,
+            airbox_narrow_region_resolution=narrow_region_resolution,
         )
         return self._owner
 

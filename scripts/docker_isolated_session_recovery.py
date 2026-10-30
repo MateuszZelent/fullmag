@@ -26,6 +26,7 @@ from docker_isolated_sqlite_fence import hold_managed_workspace_database
 from docker_isolated_control_snapshot import snapshot_control_workspace
 import docker_linux_host_readmission as retained
 import docker_volume_container_recovery as recovery
+from docker_isolated_stopped_predecessor import load_stopped_predecessor, validate_stopped_incarnations
 import fullmag_storage as storage
 import linux_native_host as host
 
@@ -45,6 +46,87 @@ def _once(control, relative, raw):
     if before is None: control.write_bytes(relative, raw)
     if control.read_bytes(relative) != raw:
         raise BuildControlError('Isolated snapshot evidence readback differs: '+relative)
+
+
+def _successor_admission_pins(control, pins, terminal_raw, *, context=None, compose=None, state=None,
+                              validation_terminal_raw=None):
+    """Require a completed prior admission; preserve its immutable authority."""
+    from docker_control_namespace import assert_namespace_activation
+    native_path='isolated-snapshot/native-validation.json'
+    native_raw=control.read_bytes(native_path)
+    assert_namespace_activation(control)
+    if control.read_bytes(native_path)!=native_raw:
+        raise BuildControlError('Successor snapshot native admission changed during validation')
+    original=retained._parse_object(terminal_raw,'successor original development terminal receipt')
+    terminal=retained._parse_object(validation_terminal_raw if validation_terminal_raw is not None else terminal_raw,
+                                   'successor development terminal receipt')
+    identity_fields=('backend_container','frontend_container')
+    if (canonical({k:v for k,v in original.items() if k not in identity_fields})
+            !=canonical({k:v for k,v in terminal.items() if k not in identity_fields})
+            or any(original.get(k) is not None and original[k]!=terminal.get(k) for k in identity_fields)):
+        raise BuildControlError('Successor terminal normalization changed original semantics')
+    expected={'schema':'fullmag.docker-build-operation.v1','phase':'development',
+              'attempt':pins['development_attempt'],
+              'config_sha256':pins['compose_config_sha256'],
+              'backend_container':pins['backend_container_id'],
+              'frontend_container':pins['frontend_container_id'],
+              'control_namespace':control.namespace,
+              'namespace_registry_sha256':control.namespace_registry_sha256}
+    if (terminal.get('state') not in ('succeeded','failed-confirmed')
+            or any(terminal.get(key)!=value for key,value in expected.items())):
+        raise BuildControlError('Successor snapshot requires the exact admitted predecessor')
+    result={}
+    for path in ('development/current.json','development/verified.json'):
+        raw=control.read_bytes(path)
+        if path=='development/verified.json' and terminal['state']=='failed-confirmed':
+            if context is None or compose is None or state is None:
+                raise BuildControlError('Failed successor requires the validated source state and Compose context')
+            verified=retained._parse_object(raw,'successor verified development receipt')
+            previous=dict(pins)
+            fields=(('development_attempt','attempt',retained._ATTEMPT),
+                    ('backend_container_id','backend_container',retained._CONTAINER_ID),
+                    ('frontend_container_id','frontend_container',retained._CONTAINER_ID))
+            for target,source,pattern in fields:
+                value=verified.get(source)
+                if not isinstance(value,str) or pattern.fullmatch(value) is None:
+                    raise BuildControlError('Successor verified predecessor has malformed '+source)
+                previous[target]=value
+            previous['compose_config_sha256']=retained._sha(verified.get('config_sha256'),'verified Compose digest')
+            inputs=verified.get('inputs')
+            image=inputs.get('image_id') if isinstance(inputs,dict) else None
+            if not isinstance(image,str) or retained._IMAGE_ID.fullmatch(image) is None:
+                raise BuildControlError('Successor verified predecessor has malformed image')
+            previous['old_image_id']=image
+            if (previous['development_attempt']==pins['development_attempt']
+                    or previous['backend_container_id']==previous['frontend_container_id']
+                    or verified.get('control_namespace')!=control.namespace
+                    or verified.get('namespace_registry_sha256')!=control.namespace_registry_sha256):
+                raise BuildControlError('Successor verified predecessor namespace or service pins differ')
+            terminal_path,compose_path=retained._terminal_paths(previous['development_attempt'])
+            previous_terminal=retained._read_control(control,terminal_path)
+            previous_compose=retained._read_control(control,compose_path)
+            if raw!=previous_terminal:
+                raise BuildControlError('Successor verified pointer differs from its immutable terminal')
+            _,validated_compose,validated_state=retained._validate_terminal_and_compose(
+                control,previous,context['identity'],previous_terminal,previous_compose,context['layout'])
+            if (validated_state!=state
+                    or _data_root(validated_compose,context['layout'])!=_data_root(compose,context['layout'])):
+                raise BuildControlError('Successor verified predecessor state or user-data root differs')
+            result[control.namespace+'/'+terminal_path]=previous_terminal
+            result[control.namespace+'/'+compose_path]=previous_compose
+        elif raw!=terminal_raw:
+            raise BuildControlError('Successor snapshot predecessor pointer differs: '+path)
+        result[control.namespace+'/'+path]=raw
+    result[control.namespace+'/'+native_path]=native_raw
+    return result
+
+
+def _merge_control_pins(target, *sources):
+    for source in sources:
+        for path,raw in source.items():
+            if path in target and target[path]!=raw:
+                raise BuildControlError('Conflicting original control evidence: '+path)
+            target[path]=raw
 
 
 def _stopped_pair(context, pins, compose):
@@ -157,33 +239,60 @@ def _remove_stopped(record):
 def recover(args):
     if not re.fullmatch('[0-9a-f]{32}',args.recovery_id):
         raise BuildControlError('Recovery requires an explicit 32-hex identity')
-    pins,pin_raw,pin_path=retained._read_operator_file(args.operator_pins)
+    parser=(retained.parse_snapshot_operator_bytes if getattr(args,'successor_snapshot',False)
+            else retained.parse_operator_bytes)
+    pins,pin_raw,pin_path=retained._read_operator_file(args.operator_pins,parser=parser)
     context=retained._request_context(args,pins); control=context['control']; raw_control=_root_control(control)
     if control.project!='fullmag-master':
         raise BuildControlError('Initial isolated retained-snapshot route is qualified only for master')
     prior=(control.namespace_registry or {}).get('retirement',{})
+    successor=False
     if prior.get('schema')==SNAPSHOT_SCHEMA:
-        if prior['recovery_id']!=args.recovery_id:
-            raise BuildControlError('A different isolated snapshot is already selected')
-        if control.read('isolated-snapshot/start.json')['restore_run_id'] != args.restore_run_id:
-            raise BuildControlError('Snapshot selected model differs from this recovery')
-        if args.apply: _remove_stopped(prior)
-        return {'state':'snapshot-awaiting-gated-start','namespace':control.namespace,'original_preserved':True}
+        if prior['recovery_id']==args.recovery_id:
+            if control.read('isolated-snapshot/start.json')['restore_run_id'] != args.restore_run_id:
+                raise BuildControlError('Snapshot selected model differs from this recovery')
+            if args.apply: _remove_stopped(prior)
+            return {'state':'snapshot-awaiting-gated-start','namespace':control.namespace,'original_preserved':True}
+        if not getattr(args,'successor_snapshot',False):
+            raise BuildControlError('A different isolated snapshot is already selected; explicit successor required')
+        successor=True
+    elif getattr(args,'successor_snapshot',False):
+        raise BuildControlError('Successor snapshot requires a selected isolated predecessor')
     token=args.recovery_id; root='namespace-recovery/'+token; namespace='namespaces/'+token
     terminal_rel,compose_rel=retained._terminal_paths(pins['development_attempt'])
     terminal_raw=retained._read_control(control,terminal_rel); compose_raw=retained._read_control(control,compose_rel)
-    terminal,compose,state=retained._validate_terminal_and_compose(control,pins,context['identity'],terminal_raw,compose_raw,context['layout'])
+    proof_path=getattr(args,'stopped_predecessor_proof',None)
+    proof_sha=getattr(args,'stopped_predecessor_proof_sha256',None)
+    if (proof_path is None)!=(proof_sha is None):
+        raise BuildControlError('Stopped predecessor proof requires both its control path and SHA-256')
+    validation_raw=terminal_raw; stopped_pins={}; stopped_services=None
+    if proof_path is not None:
+        if not successor or retained._parse_object(terminal_raw,'original development terminal').get('state')!='failed-confirmed':
+            raise BuildControlError('Stopped predecessor proof requires an explicit failed successor snapshot')
+        validation_raw,stopped_pins,stopped_services=load_stopped_predecessor(control,pins,terminal_raw,proof_path,proof_sha)
+    terminal,compose,state=retained._validate_terminal_and_compose(control,pins,context['identity'],validation_raw,compose_raw,context['layout'],
+        allowed_terminal_states=('succeeded','failed-confirmed') if successor else ('succeeded',))
+    admission_pins=(_successor_admission_pins(control,pins,terminal_raw,context=context,compose=compose,state=state,
+                                           validation_terminal_raw=validation_raw)
+                    if successor else {})
+    def observe_pair():
+        pair=_stopped_pair(context,pins,compose)
+        if stopped_services is not None:
+            validate_stopped_incarnations(pair,stopped_services)
+        return pair
     runtime=retained._read_runtime_records(control,pins)
     if digest(host.read_owned_regular(state/host.CERTIFICATE_NAME))!=pins['expected_certificate_sha256'] or digest(host.read_owned_regular(state/host.OWNER_NAME))!=pins['expected_owner_sha256']:
         raise BuildControlError('Original host admission bytes changed')
     certificate=json.loads(host.read_owned_regular(state/host.CERTIFICATE_NAME))
     if (state.stat().st_ino!=pins['expected_inode']
             or certificate.get('host_inode')!=pins['expected_inode']
+            or certificate.get('host_device')!=pins['old_host_device']
+            or state.stat().st_dev!=pins['new_host_device']
             or certificate.get('engine_id')!=retained._engine_id()
             or retained._filesystem_uuid(state)!=pins['filesystem_uuid']):
         raise BuildControlError('Source state inode, engine or current filesystem identity differs')
     old_registry=_raw(raw_control,REGISTRY_PATH)
-    pair=_stopped_pair(context,pins,compose)
+    pair=observe_pair()
     user_data=_data_root(compose,context['layout'])
     terminal_pins=json.loads(host.read_owned_regular(args.retained_terminal_runs.absolute(),1024*1024))
     held_pins=json.loads(host.read_owned_regular(args.retained_held_manual_runs.absolute(),1024*1024))
@@ -197,7 +306,9 @@ def recover(args):
     destination_user=Path(context['layout']['storage_root'])/'user-data'/(control.project+'-isolated-'+token)
     prefix=(control.namespace+'/') if control.namespace else ''
     paths={prefix+terminal_rel:terminal_raw,prefix+compose_rel:compose_raw}
-    for name,relative in retained._RUNTIME_RECORDS.items(): paths[prefix+relative]=runtime[name]
+    _merge_control_pins(paths,admission_pins,stopped_pins)
+    for name,relative in retained._RUNTIME_RECORDS.items():
+        _merge_control_pins(paths,{prefix+relative:runtime[name]})
     previous_registry_path=root+'/previous-registry.json'; paths[previous_registry_path]=old_registry
     record={
       'schema':SNAPSHOT_SCHEMA,'state':SNAPSHOT_STATE,'recovery_id':token,'namespace':namespace,
@@ -228,7 +339,7 @@ def recover(args):
                 raise BuildControlError('Source store differs from the locked directory')
         verify_store_binding()
         workspace_fence.verify()
-        pair_before=_stopped_pair(context,pins,compose)
+        pair_before=observe_pair()
         live_workspace=snapshot_control_workspace(control,token,image_id=pins['old_image_id'])['source']
         source={'schema':'fullmag.isolated-session-snapshot-manifest.v1',
                 'state':snapshot_tree(state/'runs'),'user_data':snapshot_tree(user_data),
@@ -258,9 +369,11 @@ def recover(args):
                   'script_sha256':{name:digest((executor_root/'scripts'/name).read_bytes()) for name in (
                     'docker_isolated_session_recovery.py','docker_isolated_snapshot_copy.py',
                     'docker_isolated_sqlite_snapshot.py','docker_isolated_sqlite_fence.py',
-                    'docker_isolated_control_snapshot.py')}}
-        with control.operation('isolated-session-snapshot',{'source_root':str(context['selected']),
-                               'recovery_id':token,'executor':executor}) as operation:
+                    'docker_isolated_control_snapshot.py','docker_isolated_stopped_predecessor.py')}}
+        operation_inputs={'source_root':str(context['selected']),'recovery_id':token,'executor':executor}
+        if proof_path is not None:
+            operation_inputs['stopped_predecessor_proof']={'path':proof_path,'sha256':proof_sha}
+        with control.operation('isolated-session-snapshot',operation_inputs) as operation:
             destination.mkdir(mode=0o700,exist_ok=False)
             host.admit_runtime_uid(destination)
             copy_verified_tree(state/'runs',destination/'runs',source['state'])
@@ -282,7 +395,7 @@ def recover(args):
             if snapshot_tree(state/'runs')!=source['state'] or snapshot_tree(user_data)!=source['user_data']:
                 raise BuildControlError('Original source drifted during isolated snapshot')
             verify_store_binding()
-            _stopped_pair(context,pins,compose)
+            observe_pair()
             for path,raw in paths.items():
                 if path!=previous_registry_path and _raw(raw_control,path)!=raw:
                     raise BuildControlError('Original control evidence changed')
@@ -316,7 +429,7 @@ def recover(args):
         # Re-pin after releasing the old namespace operation. The registry
         # switch occurs under the same global lock, with a byte-exact CAS.
         verify_store_binding()
-        _stopped_pair(context,pins,compose)
+        observe_pair()
         workspace_fence.verify()
         registry={'schema':REGISTRY_SCHEMA,'recovery_id':token,'namespace':namespace,
                   'receipt_path':root+'/terminal.json','receipt_sha256':digest(receipt_raw),
@@ -339,6 +452,10 @@ def main(argv=None):
     p.add_argument('--operator-pins',type=Path,required=True);p.add_argument('--recovery-id',required=True)
     p.add_argument('--retained-terminal-runs',type=Path,required=True);p.add_argument('--retained-held-manual-runs',type=Path,required=True)
     p.add_argument('--restore-run-id',required=True,help='Explicit held-manual model to restore without script replay')
+    p.add_argument('--successor-snapshot',action='store_true',
+                   help='Copy a stopped, previously admitted snapshot into a new pinned namespace')
+    p.add_argument('--stopped-predecessor-proof',help='Explicit control-relative typed stop proof for a failed successor')
+    p.add_argument('--stopped-predecessor-proof-sha256',help='Exact raw SHA-256 of the typed stop proof')
     p.add_argument('--apply',action='store_true')
     args=p.parse_args(argv)
     try: print(json.dumps(recover(args),indent=2,ensure_ascii=False))

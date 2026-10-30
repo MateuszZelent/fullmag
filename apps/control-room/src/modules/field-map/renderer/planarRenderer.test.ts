@@ -72,6 +72,43 @@ describe("planar renderer lifecycle", () => {
     expect(context.closePath).toHaveBeenCalledTimes(8);
   });
 
+  it("draws streamlines in physical coordinates only when the layer is enabled", () => {
+    const makeContext = () => ({
+      arc: vi.fn(), beginPath: vi.fn(), clearRect: vi.fn(), closePath: vi.fn(), fill: vi.fn(),
+      fillStyle: "", globalAlpha: 1, lineCap: "butt", lineJoin: "miter", lineTo: vi.fn(),
+      lineWidth: 0, moveTo: vi.fn(), restore: vi.fn(), save: vi.fn(), stroke: vi.fn(), strokeStyle: "",
+    }) as unknown as CanvasRenderingContext2D;
+    const streamlines = {
+      lineCount: 1,
+      offsets: new Uint32Array([0, 3]),
+      pointCount: 3,
+      points: new Float64Array([0, 0.5, 0.5, 0.5, 1, 0.5]),
+      separation: 0.25,
+      truncated: false,
+    };
+    const enabled = makeContext();
+    drawPlanarOverlays(enabled, 100, 100, {
+      gridWidth: 2,
+      layers: { contours: false, mesh: false, streamlines: true, vectors: false },
+      meshViewport: [0, 1, 0, 1],
+      streamlines,
+      vectorColorMode: "contrast",
+    });
+    // Halo and line pass: each starts the polyline at u = 0 (x = 0, y = 50).
+    expect(enabled.moveTo).toHaveBeenCalledWith(0, 50);
+    expect(enabled.lineTo).toHaveBeenCalledWith(100, 50);
+    expect(enabled.stroke).toHaveBeenCalledTimes(2);
+
+    const disabled = makeContext();
+    drawPlanarOverlays(disabled, 100, 100, {
+      gridWidth: 2,
+      layers: { contours: false, mesh: false, streamlines: false, vectors: false },
+      meshViewport: [0, 1, 0, 1],
+      streamlines,
+    });
+    expect(disabled.lineTo).not.toHaveBeenCalled();
+  });
+
   it("draws only explicitly enabled overlay layers", () => {
     const context = {
       beginPath: vi.fn(),

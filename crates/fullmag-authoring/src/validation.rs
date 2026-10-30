@@ -4185,6 +4185,44 @@ mod tests {
         );
     }
 
+    #[test]
+    fn material_field_units_reject_non_si_in_scene_assignments_and_overrides() {
+        for regional in [false, true] {
+            for field in [
+                serde_json::json!({"kind": "constant", "value": 13.0, "unit": "pJ/m"}),
+                serde_json::json!({"kind": "linear", "base": 13.0, "gradient": [0.0, 0.0, 0.0], "unit": "pJ/m"}),
+                serde_json::json!({"kind": "radial", "center": [0.0, 0.0, 0.0], "radius": 1e-8, "inside": 13.0, "outside": 14.0, "unit": "pJ/m"}),
+                serde_json::json!({"kind": "sampled", "asset_id": "aex:samples", "component_count": 1, "location": "node", "unit": "pJ/m"}),
+            ] {
+                let mut scene = region_owned_scene();
+                if regional {
+                    scene.objects[0].material_parameter_fields.clear();
+                    let value = &mut scene.objects[0].regions[0].material_overrides[0];
+                    value.parameter = crate::SceneMaterialParameterName::Aex;
+                    value.value = serde_json::from_value(field.clone()).unwrap();
+                } else {
+                    scene.objects[0].regions[0].material_overrides.clear();
+                    scene.objects[0].material_parameter_fields[0].value =
+                        serde_json::from_value(field.clone()).unwrap();
+                }
+                let error = validate_scene_document(&scene)
+                    .expect_err("unit labels must not silently reinterpret values in SI");
+                assert!(error.message.contains("unit") && error.message.contains("J/m"), "{}", error.message);
+
+                let mut si = field;
+                si["unit"] = serde_json::json!("J/m");
+                if regional {
+                    scene.objects[0].regions[0].material_overrides[0].value =
+                        serde_json::from_value(si).unwrap();
+                } else {
+                    scene.objects[0].material_parameter_fields[0].value =
+                        serde_json::from_value(si).unwrap();
+                }
+                validate_scene_document(&scene).expect("canonical SI field must remain valid");
+            }
+        }
+    }
+
     fn region_owned_scene() -> SceneDocument {
         serde_json::from_value(serde_json::json!({
             "version": "scene.v2",
@@ -5834,6 +5872,9 @@ fn validate_material_parameter_field(
     parameter: MaterialParameterNameIR,
     field: &MaterialParameterFieldIR,
 ) -> Result<(), SceneDocumentValidationError> {
+    field
+        .validate_unit(parameter)
+        .map_err(|error| SceneDocumentValidationError::new(format!("{path}: {error}")))?;
     match field {
         MaterialParameterFieldIR::Constant { value, .. } => {
             if let Some(number) = value.as_f64() {

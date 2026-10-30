@@ -37,6 +37,24 @@
   gap: var(--fm-space-2);
 }
 
+.fm-notifications__technical {
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-notifications__technical summary {
+  cursor: pointer;
+}
+
+.fm-notifications__technical code {
+  display: block;
+  max-height: 8rem;
+  margin-top: var(--fm-space-1);
+  overflow: auto;
+  overflow-wrap: anywhere;
+  font-family: var(--fm-font-mono);
+}
+
 .fm-notifications__close {
   flex: 0 0 auto;
   color: var(--fm-text-muted);

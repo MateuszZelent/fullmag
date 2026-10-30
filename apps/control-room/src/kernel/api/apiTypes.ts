@@ -136,6 +136,8 @@ export type PlanarSampleSourceResource =
   components["schemas"]["PlanarSampleSourceResource"];
 export type PlanarFieldProbeResource =
   components["schemas"]["PlanarFieldProbeResource"];
+export type PlanarFieldProfileResource =
+  components["schemas"]["PlanarFieldProfileResource"];
 export type PostprocessingDataRef = components["schemas"]["PostprocessingDataRef"];
 export type PostprocessingDefinition = components["schemas"]["PostprocessingDefinition"];
 export type AnalyticReferenceModelCollectionResource =
@@ -186,6 +188,8 @@ export interface PlanarFieldQuery {
   expected_source_revision?: string;
   expected_scene_revision?: string;
   include_mesh?: boolean;
+  /** Default source only: multislice panel position along the plane normal (note 0970). */
+  position_fraction?: number;
   quality?: string;
   resolution_x?: number;
   resolution_y?: number;
@@ -219,6 +223,14 @@ export interface PlanarFieldProbeQuery
   > {
   u_m: number;
   v_m: number;
+}
+/** Line profile of one planar sample (note 0970, `eq-planar-line-profile`). */
+export interface PlanarFieldProfileQuery extends Omit<PlanarFieldProbeQuery, "u_m" | "v_m"> {
+  samples?: number;
+  u0_m: number;
+  u1_m: number;
+  v0_m: number;
+  v1_m: number;
 }
 export type CrossSectionPlane = "xy" | "xz" | "yz";
 export type CrossSectionQualityMetric =

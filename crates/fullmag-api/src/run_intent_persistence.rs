@@ -403,6 +403,16 @@ enum CommitAssetPayloads<'a> {
     Owned(BTreeMap<String, Vec<u8>>),
 }
 
+struct ValidatedRunIntentInputs<'a> {
+    intent: RunIntent,
+    definition: &'a ProjectEnvelope,
+    study: &'a StudyPlan,
+    catalog: &'a StudyProblemCatalog,
+    execution_plan: fullmag_plan::StudyExecutionPlan,
+    study_bytes: Vec<u8>,
+    catalog_bytes: Vec<u8>,
+}
+
 impl CommitAssetPayloads<'_> {
     fn as_map(&self) -> &BTreeMap<String, Vec<u8>> {
         match self {
@@ -449,6 +459,37 @@ pub(crate) fn prepare_owned_run_intent_commit(
     )
 }
 
+/// Reuse the final accepted-study materialization produced after continuation
+/// has settled the Study and catalog. The sealed application value binds these
+/// immutable inputs to the canonical Study bytes, plan, and catalog bytes.
+pub(crate) fn prepare_owned_run_intent_commit_from_materialization(
+    materialization: fullmag_application::PreparedRunIntentMaterialization<'_>,
+    asset_payloads: BTreeMap<String, Vec<u8>>,
+) -> Result<PreparedRunIntentCommit<'static>> {
+    let (intent, definition, study, catalog, execution_plan, study_bytes, catalog_bytes) =
+        materialization.into_parts();
+    intent.validate().context("validate typed run intent")?;
+    intent.specification.snapshot.verify_envelope(definition)?;
+    if intent.specification.study.study_id.as_str() != study.study_id
+        || intent.specification.study.plan_version != study.schema_version
+    {
+        bail!("run study reference does not match the exact typed study plan");
+    }
+
+    prepare_validated_run_intent_commit(
+        ValidatedRunIntentInputs {
+            intent,
+            definition,
+            study,
+            catalog,
+            execution_plan,
+            study_bytes,
+            catalog_bytes,
+        },
+        CommitAssetPayloads::Owned(asset_payloads),
+    )
+}
+
 fn prepare_borrowed_run_intent_commit<'a>(
     intent: &RunIntent,
     definition: &ProjectEnvelope,
@@ -465,6 +506,19 @@ fn prepare_borrowed_run_intent_commit<'a>(
     )
 }
 
+fn validate_accepted_document_sizes(definition: &[u8], study: &[u8], catalog: &[u8]) -> Result<()> {
+    for (label, bytes, maximum) in [
+        ("definition", definition, fullmag_runtime_control::MAX_ACCEPTED_MODEL_DOCUMENT_BYTES),
+        ("Study plan", study, fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES),
+        ("Study catalog", catalog, fullmag_runtime_control::MAX_ACCEPTED_MODEL_DOCUMENT_BYTES),
+    ] {
+        if bytes.len() as u64 > maximum {
+            bail!("accepted {label} requires {} bytes; its decode budget is {maximum} bytes", bytes.len());
+        }
+    }
+    Ok(())
+}
+
 fn prepare_run_intent_commit<'a>(
     intent: RunIntent,
     definition: &ProjectEnvelope,
@@ -479,8 +533,11 @@ fn prepare_run_intent_commit<'a>(
         .context("validate typed study plan")?;
     if intent.specification.study.study_id.as_str() != study.study_id
         || intent.specification.study.plan_version != study.schema_version
-        || intent.specification.study.plan_sha256 != study.canonical_sha256()?
     {
+        bail!("run study reference does not match the exact typed study plan");
+    }
+    let study_bytes = study.canonical_json_bytes()?;
+    if intent.specification.study.plan_sha256 != fullmag_session::hex_sha256(&study_bytes) {
         bail!("run study reference does not match the exact typed study plan");
     }
     catalog
@@ -500,6 +557,36 @@ fn prepare_run_intent_commit<'a>(
     }
     let execution_plan = fullmag_plan::lower_study_plan_with_catalog(study, catalog)
         .context("lower immutable submission through the canonical planner")?;
+    let catalog_value = serde_json::to_value(catalog)?;
+    let catalog_bytes = fullmag_session::canonical_json_bytes(&catalog_value);
+
+    prepare_validated_run_intent_commit(
+        ValidatedRunIntentInputs {
+            intent,
+            definition,
+            study,
+            catalog,
+            execution_plan,
+            study_bytes,
+            catalog_bytes,
+        },
+        asset_payloads,
+    )
+}
+
+fn prepare_validated_run_intent_commit<'i, 'a>(
+    inputs: ValidatedRunIntentInputs<'i>,
+    asset_payloads: CommitAssetPayloads<'a>,
+) -> Result<PreparedRunIntentCommit<'a>> {
+    let ValidatedRunIntentInputs {
+        intent,
+        definition,
+        study,
+        catalog,
+        execution_plan,
+        study_bytes,
+        catalog_bytes,
+    } = inputs;
     fullmag_runtime_control::validate_requested_execution(
         &intent.specification,
         catalog,
@@ -512,13 +599,11 @@ fn prepare_run_intent_commit<'a>(
     if definition_sha256 != intent.specification.snapshot.definition_sha256 {
         bail!("stored definition object differs from run snapshot digest");
     }
-    let study_bytes = study.canonical_json_bytes()?;
     let study_sha256 = fullmag_session::hex_sha256(&study_bytes);
     if study_sha256 != intent.specification.study.plan_sha256 {
         bail!("stored study object differs from run plan digest");
     }
-    let catalog_value = serde_json::to_value(catalog)?;
-    let catalog_bytes = fullmag_session::canonical_json_bytes(&catalog_value);
+    validate_accepted_document_sizes(&definition_bytes, &study_bytes, &catalog_bytes)?;
     let catalog_sha256 = fullmag_session::hex_sha256(&catalog_bytes);
     if intent.specification.study_catalog_sha256 != catalog_sha256 {
         bail!("run study catalog digest does not match immutable planner inputs");
@@ -828,6 +913,7 @@ pub(crate) fn commit_archived_batch_intent(
     let definition_bytes = opened.envelope.raw_definition.raw_bytes();
     let study_bytes = study.canonical_json_bytes()?;
     let catalog_bytes = fullmag_session::canonical_json_bytes(&catalog_value);
+    validate_accepted_document_sizes(definition_bytes, &study_bytes, &catalog_bytes)?;
     let (snapshot_schema, output_storage_snapshot) = if let Some(existing) = existing_intent {
         let schema = existing
             .specification
@@ -1480,9 +1566,13 @@ pub(crate) fn materialize_accepted_run_catalog(
             updated_at: Utc::now(),
             tasks,
         };
-        match fullmag_runtime_control::retry_store_writer_busy(|| {
-            store.commit_run_catalog(&materialized)
-        }) {
+        // A busy writer leaves nothing published, so waiting longer is safe;
+        // on a Windows-folder store five seconds left accepted runs in
+        // recovery for a writer that was only briefly held.
+        match fullmag_runtime_control::retry_store_writer_busy_within(
+            RUN_CATALOG_WRITER_WAIT,
+            || store.commit_run_catalog(&materialized),
+        ) {
             Ok(()) => materialized,
             Err(error) => {
                 if let Some(existing) = store.read_run_catalog(run_id)? {
@@ -1537,6 +1627,9 @@ pub(crate) fn materialize_accepted_run_catalog(
     }
     Ok(catalog)
 }
+
+/// How long run catalog publication waits for a busy session-store writer.
+const RUN_CATALOG_WRITER_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
 fn same_task_identity(existing: &[FmsTaskCatalogEntry], expected: &[FmsTaskCatalogEntry]) -> bool {
     existing.len() == expected.len()

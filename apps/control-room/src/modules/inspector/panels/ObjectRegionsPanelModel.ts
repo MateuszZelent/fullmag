@@ -57,6 +57,8 @@ export type RegionMaterialParameter = "aex" | "ms" | "alpha" | "ku1";
 export type RegionMaterialConflictPolicy = "error" | "higher_priority_wins";
 
 export interface RegionMaterialOverrideDraft {
+  /** Retained verbatim when the scalar editor cannot represent this override. */
+  preservedOverride?: components["schemas"]["SceneRegionMaterialOverride"];
   conflictPolicy: RegionMaterialConflictPolicy;
   parameter: RegionMaterialParameter;
   priority: number;
@@ -500,14 +502,21 @@ function resolveMaterialOverrideDrafts(
 ): RegionMaterialOverrideDraft[] {
   return (region?.material_overrides ?? []).map((override) => {
     const field = override.value;
-    const value = field?.kind === "constant" && typeof field.value === "number" ? field.value : 0;
+    const parameter = String(override.parameter).toLowerCase();
+    const editable = ["ms", "aex", "alpha", "ku1"].includes(parameter)
+      && field?.kind === "constant"
+      && typeof field.value === "number"
+      && Number.isFinite(field.value)
+      && [undefined, null, "error", "higher_priority_wins"].includes(override.conflict_policy);
+    const value = field?.kind === "constant" && typeof field.value === "number" ? field.value : undefined;
     const unit = field?.kind === "constant" ? (field.unit ?? "") : "";
     return {
+      ...(editable ? {} : { preservedOverride: structuredClone(override) }),
       conflictPolicy: normalizeConflictPolicy(override.conflict_policy ?? null),
       parameter: normalizeMaterialParameter(override.parameter as string),
       priority: Math.round(override.priority ?? region?.priority ?? 0),
       unit: unit || defaultMaterialOverrideUnit(override.parameter as RegionMaterialParameter),
-      value: value || defaultMaterialOverrideValue(override.parameter as RegionMaterialParameter),
+      value: value ?? defaultMaterialOverrideValue(override.parameter as RegionMaterialParameter),
     };
   });
 }
@@ -786,6 +795,7 @@ export function objectRegionDraftKey(model: ObjectRegionPanelModel): string {
           override.unit,
           override.priority,
           override.conflictPolicy,
+          JSON.stringify(override.preservedOverride ?? null),
         ].join(","),
       )
       .join("|"),
@@ -877,6 +887,7 @@ export function validateObjectRegionDraft(
     }
   }
   for (const override of draft.materialOverrides) {
+    if (override.preservedOverride) continue;
     if (!Number.isFinite(override.priority) || !Number.isInteger(override.priority)) {
       errors.push(`${override.parameter} override priority must be an integer.`);
     }
@@ -891,8 +902,7 @@ export function validateObjectRegionDraft(
     }
     if (
       (override.parameter === "aex" ||
-        override.parameter === "alpha" ||
-        override.parameter === "ku1") &&
+        override.parameter === "alpha") &&
       override.value < 0
     ) {
       errors.push(`${override.parameter} override must be non-negative.`);
@@ -940,6 +950,7 @@ export function buildObjectRegionPatch(
       }
     : null;
   const materialOverrides: components["schemas"]["SceneRegionMaterialOverride"][] = draft.materialOverrides.map((override) => {
+    if (override.preservedOverride) return structuredClone(override.preservedOverride);
     const value: components["schemas"]["SceneMaterialParameterField"] = {
       kind: "constant",
       value: override.value,

@@ -1027,7 +1027,9 @@ fn live_fields_from_observables(
     stats: &StepStats,
 ) -> Result<Vec<LivePreviewField>, RunError> {
     let quantities = crate::quantities::field_materialization_quantity_ids();
-    let active = active_fdm_multilayer_preview_quantities(plan, &quantities);
+    let active = crate::live_demand::retain_demanded_live_quantities(
+        active_fdm_multilayer_preview_quantities(plan, &quantities),
+    );
     let request = crate::types::LivePreviewRequest {
         all_layers: true, every_n: 1, auto_scale_enabled: false, max_points: u32::MAX,
         ..crate::types::LivePreviewRequest::default()

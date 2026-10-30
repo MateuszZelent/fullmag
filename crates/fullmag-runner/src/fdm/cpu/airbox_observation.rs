@@ -388,7 +388,9 @@ pub(crate) fn build_airbox_observation_artifacts(
             "grid": target_grid,
             "values": values,
         });
-        let field_bytes = serde_json::to_vec_pretty(&field_payload)
+        // Compact JSON: indentation of millions of vector samples tripled the
+        // artifact (308 MB for a 3.45 M-cell target grid) and its hashing time.
+        let field_bytes = serde_json::to_vec(&field_payload)
             .map_err(|error| format!("Airbox {quantity_id} field serialization failed: {error}"))?;
         let field_hash = sha256_hex(&field_bytes);
         let field_generation_seed = json!({

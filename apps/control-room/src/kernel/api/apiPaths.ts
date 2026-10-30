@@ -328,6 +328,10 @@ export const DATA_PLANAR_FIELD_PROBE_PATH = openApiV2Path(
   "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/probe",
 );
 
+export const DATA_PLANAR_FIELD_PROFILE_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/profile",
+);
+
 export const DATA_PLANAR_FIELD_RENDER_PNG_PATH = openApiV2Path(
   "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/render.png",
 );
@@ -354,6 +358,10 @@ export const DATA_PLANAR_DEFAULT_FIELD_MESH_OVERLAY_PATH = openApiV2Path(
 
 export const DATA_PLANAR_DEFAULT_FIELD_PROBE_PATH = openApiV2Path(
   "/v2/sessions/current/data/fields/{quantity_id}/planar-default/probe",
+);
+
+export const DATA_PLANAR_DEFAULT_FIELD_PROFILE_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/planar-default/profile",
 );
 
 export const DATA_PLANAR_DEFAULT_FIELD_RENDER_PNG_PATH = openApiV2Path(

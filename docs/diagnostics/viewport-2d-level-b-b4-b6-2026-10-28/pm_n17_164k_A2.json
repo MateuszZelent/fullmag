@@ -1,0 +1,74 @@
+{
+ "xy@0.21": {
+  "coord_nm": -17.4,
+  "scalar": "4e5ec3114d062db7",
+  "mask": "c545610fe0bed834",
+  "meta_ms": 424
+ },
+ "xy@0.43": {
+  "coord_nm": -4.2,
+  "scalar": "6f476846f7ff3686",
+  "mask": "c545610fe0bed834",
+  "meta_ms": 399
+ },
+ "xy@0.57": {
+  "coord_nm": 4.2,
+  "scalar": "e267d80b70bebad5",
+  "mask": "c545610fe0bed834",
+  "meta_ms": 415
+ },
+ "xy@0.79": {
+  "coord_nm": 17.4,
+  "scalar": "c34159a4316bd2a6",
+  "mask": "c545610fe0bed834",
+  "meta_ms": 413
+ },
+ "xz@0.21": {
+  "coord_nm": -23.2,
+  "scalar": "c39aeb1704956b98",
+  "mask": "1ddf0571ecedf147",
+  "meta_ms": 377
+ },
+ "xz@0.43": {
+  "coord_nm": -5.6,
+  "scalar": "9dcb1d2953c27da2",
+  "mask": "1ddf0571ecedf147",
+  "meta_ms": 358
+ },
+ "xz@0.57": {
+  "coord_nm": 5.6,
+  "scalar": "507ea68751222e32",
+  "mask": "1ddf0571ecedf147",
+  "meta_ms": 374
+ },
+ "xz@0.79": {
+  "coord_nm": 23.2,
+  "scalar": "b610c6768b138a7b",
+  "mask": "1ddf0571ecedf147",
+  "meta_ms": 384
+ },
+ "yz@0.21": {
+  "coord_nm": -29.0,
+  "scalar": "c6a8cc5c43a59617",
+  "mask": "6c5637220066786c",
+  "meta_ms": 367
+ },
+ "yz@0.43": {
+  "coord_nm": -7.0,
+  "scalar": "e58399c10e072e92",
+  "mask": "6c5637220066786c",
+  "meta_ms": 389
+ },
+ "yz@0.57": {
+  "coord_nm": 7.0,
+  "scalar": "8d4329f4eaa59beb",
+  "mask": "6c5637220066786c",
+  "meta_ms": 376
+ },
+ "yz@0.79": {
+  "coord_nm": 29.0,
+  "scalar": "6b099ccdca6e2f68",
+  "mask": "6c5637220066786c",
+  "meta_ms": 357
+ }
+}

@@ -372,8 +372,21 @@ export const Viewport3DCanvas = forwardRef<
     const lifecycle = lifecycleRef.current;
     return () => {
       const teardown = lifecycle.unmountRoot();
-      rootStateRef.current?.events.disconnect?.();
+      const rootState = rootStateRef.current;
+      rootState?.events.disconnect?.();
+      // three.js shares one module-level BufferGeometry between all Sprites;
+      // every renderer that drew it adds a `dispose` listener which closes over
+      // its WebGL context. Neither WebGLRenderer.dispose() nor the R3F teardown
+      // removes it, so each unmounted viewport stayed reachable. Disposing the
+      // shared geometry lets every renderer release its listener; live
+      // renderers upload it again on their next frame.
+      releaseSharedSpriteGeometries(rootState?.scene);
       rootStateRef.current = null;
+      // Closures handed to the R3F store (onPointerMissed, configure().then)
+      // keep these refs alive with the last scene element and its buffers.
+      latestSceneRef.current = null;
+      latestPointerMissedRef.current = undefined;
+      latestCreatedRef.current = undefined;
       rootRef.current?.unmount();
       if (teardown.disconnectEvents) {
         recordVisualizationDebugCanvasLifecycle("events-disconnected");
@@ -410,3 +423,13 @@ export const Viewport3DCanvas = forwardRef<
     </div>
   );
 });
+
+function releaseSharedSpriteGeometries(scene: { traverse: (visit: (object: unknown) => void) => void } | undefined): void {
+  if (!scene) return;
+  const geometries = new Set<{ dispose: () => void }>();
+  scene.traverse((object) => {
+    const sprite = object as { isSprite?: boolean; geometry?: { dispose: () => void } };
+    if (sprite.isSprite && sprite.geometry) geometries.add(sprite.geometry);
+  });
+  geometries.forEach((geometry) => geometry.dispose());
+}

@@ -58,6 +58,7 @@ import {
   MESHING_CAPABILITIES_PATH,
   VISUALIZATION_STATE_PATH,
 } from "@/kernel/api/apiPaths";
+import { SCALAR_COLOR_PALETTE_ITEMS } from "@/shared/visualization/scalarColorPalette";
 import type {
   CommandQueueStatusResource,
   FieldCatalogResource,
@@ -2781,13 +2782,7 @@ function buildQuantityAction(
             id: "quantity:shader",
             label: "Colormap",
             value: colormap,
-            items: [
-              { value: "viridis", label: "Viridis" },
-              { value: "inferno", label: "Inferno" },
-              { value: "magma", label: "Magma" },
-              { value: "coolwarm", label: "Coolwarm" },
-              { value: "jet", label: "Jet" },
-            ],
+            items: SCALAR_COLOR_PALETTE_ITEMS,
             commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
             commandInput: (value: string) =>
               visualizationStateCommandInput({

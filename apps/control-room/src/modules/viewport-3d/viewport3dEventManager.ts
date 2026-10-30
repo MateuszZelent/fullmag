@@ -126,6 +126,21 @@ export function createViewport3DPointerMoveHandler(
   };
 }
 
+/** Gizmos that take the pointer-down before orbit while mounted (not the move tool). */
+const PROBE_GIZMOS = new Set(["move-axis", "planar-normal", "planar-rotate"]);
+let registeredProbeGizmos = 0;
+
+/** Registers a mounted probe gizmo (planar normal handle); returns the unregister. */
+export function registerViewport3DProbeGizmo(): () => void {
+  registeredProbeGizmos += 1;
+  let registered = true;
+  return () => {
+    if (!registered) return;
+    registered = false;
+    registeredProbeGizmos -= 1;
+  };
+}
+
 export function createViewport3DEventManager(
   store: Parameters<typeof createPointerEvents>[0],
   isMoveToolActive: () => boolean = () => false,
@@ -139,7 +154,11 @@ export function createViewport3DEventManager(
   const originalFilter = manager.filter;
   const handleMovePointerDownCapture = (event: PointerEvent) => {
     movePointerDownHandled = false;
-    if (!isMoveToolActive() || event.button !== 0 || isViewport3DImmediatePointerDownRegion(event)) return;
+    if (
+      (!isMoveToolActive() && registeredProbeGizmos === 0) ||
+      event.button !== 0 ||
+      isViewport3DImmediatePointerDownRegion(event)
+    ) return;
     probingMoveHandle = true;
     try {
       pickedHandlers?.onPointerDown?.(event);
@@ -159,7 +178,7 @@ export function createViewport3DEventManager(
     filter: (intersections, state) => {
       const filtered = originalFilter?.(intersections, state) ?? intersections;
       return probingMoveHandle
-        ? filtered.filter((hit) => hit.object.userData.gizmo === "move-axis")
+        ? filtered.filter((hit) => PROBE_GIZMOS.has(hit.object.userData.gizmo))
         : filtered;
     },
     connect: (target) => {

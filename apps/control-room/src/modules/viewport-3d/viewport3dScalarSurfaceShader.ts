@@ -1,4 +1,9 @@
 import { ShaderMaterial, type Side } from "three";
+import {
+  getScalarColorPaletteStops,
+  SCALAR_COLOR_PALETTE_ITEMS,
+  type ScalarColorPalette,
+} from "@/shared/visualization/scalarColorPalette";
 
 import {
   floquetPhaseAdapter,
@@ -250,23 +255,38 @@ function shaderColorModeId(mode: string | null | undefined): number {
   }
 }
 
-function scalarPaletteId(palette: string | null | undefined): number {
-  if (palette?.trim().toLowerCase().replace(/[\s-]+/g, "_") === "twilight") {
-    return 5;
-  }
+// Preserve the existing phase/scalar IDs, and derive new IDs from the shared
+// catalog. GPU surfaces, CPU glyphs and CSS legends interpolate the same stops.
+const SHADER_PALETTES: readonly (ScalarColorPalette | "twilight")[] = [
+  "viridis", "coolwarm", "inferno", "jet", "magma", "twilight",
+  ...SCALAR_COLOR_PALETTE_ITEMS.map(({ value }) => value).filter(
+    (value) => !["viridis", "coolwarm", "inferno", "jet", "magma"].includes(value),
+  ),
+];
 
-  switch (normalizeViewport3DColorPalette(palette)) {
-    case "coolwarm":
-      return 1;
-    case "inferno":
-      return 2;
-    case "jet":
-      return 3;
-    case "magma":
-      return 4;
-    case "viridis":
-      return 0;
-  }
+function scalarPaletteId(palette: string | null | undefined): number {
+  const normalized = palette?.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return SHADER_PALETTES.indexOf(
+    normalized === "twilight" ? "twilight" : normalizeViewport3DColorPalette(palette),
+  );
+}
+
+function scalarPaletteGlsl(): string {
+  const number = (value: number) => value.toFixed(10);
+  return SHADER_PALETTES.map((palette, id) => {
+    const stops = getScalarColorPaletteStops(palette);
+    const segments = stops.slice(0, -1).map((start, index) => {
+      const end = stops[index + 1];
+      const lower = index / (stops.length - 1);
+      const upper = (index + 1) / (stops.length - 1);
+      const color = (stop: readonly number[]) => `vec3(${stop.map(number).join(", ")})`;
+      const expression = `mix(${color(start)}, ${color(end)}, (t - ${number(lower)}) * ${number(stops.length - 1)})`;
+      return index === stops.length - 2
+        ? `return ${expression};`
+        : `if (t < ${number(upper)}) return ${expression};`;
+    });
+    return `if (fmPaletteId == ${id}) {\n${segments.join("\n")}\n}`;
+  }).join("\n");
 }
 
 const SCALAR_SURFACE_VERTEX_SHADER = `
@@ -440,53 +460,9 @@ uniform float fmScalarMax;
 varying float vScalarValue;
 varying vec3 vNormalView;
 
-vec3 mixStops3(float t, vec3 a, vec3 b, vec3 c) {
-  if (t < 0.5) {
-    return mix(a, b, t * 2.0);
-  }
-  return mix(b, c, (t - 0.5) * 2.0);
-}
-
-vec3 mixStops4(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
-  if (t < 0.3333333) {
-    return mix(a, b, t * 3.0);
-  }
-  if (t < 0.6666667) {
-    return mix(b, c, (t - 0.3333333) * 3.0);
-  }
-  return mix(c, d, (t - 0.6666667) * 3.0);
-}
-
-vec3 mixStops5(float t, vec3 a, vec3 b, vec3 c, vec3 d, vec3 e) {
-  if (t < 0.25) {
-    return mix(a, b, t * 4.0);
-  }
-  if (t < 0.5) {
-    return mix(b, c, (t - 0.25) * 4.0);
-  }
-  if (t < 0.75) {
-    return mix(c, d, (t - 0.5) * 4.0);
-  }
-  return mix(d, e, (t - 0.75) * 4.0);
-}
-
 vec3 paletteColor(float t) {
-  if (fmPaletteId == 1) {
-    return mixStops3(t, vec3(0.231, 0.298, 0.753), vec3(0.867, 0.867, 0.867), vec3(0.706, 0.016, 0.149));
-  }
-  if (fmPaletteId == 2) {
-    return mixStops5(t, vec3(0.0, 0.0, 0.016), vec3(0.259, 0.039, 0.408), vec3(0.576, 0.169, 0.365), vec3(0.867, 0.318, 0.227), vec3(0.988, 1.0, 0.643));
-  }
-  if (fmPaletteId == 3) {
-    return mixStops5(t, vec3(0.0, 0.0, 0.498), vec3(0.0, 0.498, 1.0), vec3(0.498, 1.0, 0.498), vec3(1.0, 0.498, 0.0), vec3(0.498, 0.0, 0.0));
-  }
-  if (fmPaletteId == 4) {
-    return mixStops5(t, vec3(0.0, 0.0, 0.016), vec3(0.231, 0.059, 0.439), vec3(0.549, 0.161, 0.502), vec3(0.871, 0.286, 0.408), vec3(0.988, 0.992, 0.749));
-  }
-  if (fmPaletteId == 5) {
-    return mixStops5(t, vec3(0.184, 0.079, 0.213), vec3(0.384, 0.461, 0.731), vec3(0.886, 0.85, 0.886), vec3(0.698, 0.338, 0.322), vec3(0.184, 0.079, 0.213));
-  }
-  return mixStops4(t, vec3(0.267, 0.004, 0.329), vec3(0.192, 0.408, 0.557), vec3(0.208, 0.718, 0.475), vec3(0.992, 0.906, 0.145));
+  ${scalarPaletteGlsl()}
+  return vec3(0.0);
 }
 
 vec3 srgbToLinearVec3(vec3 c) {

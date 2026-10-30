@@ -2709,52 +2709,53 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
-  it("prefers backend airbox target quantity over the global quantity", () => {
-    expect(
-      resolveAirboxVisualizationSettingsFromState({
-        active_quantity_id: "m",
-        quantity: { active_quantity_id: "m" },
-        targets: {
-          airbox: {
-            label: "Airbox",
-            scope: "airbox",
-            scope_id: "airbox",
-            settings: {
-              active_quantity_id: "H_demag",
-              bounds_opacity: 1,
-              bounds_visible: false,
-              geometry_scope: "full",
-              opacity: 0.28,
-              point_color: "var(--fm-info)",
-              point_opacity: 1,
-              points_visible: false,
-              render_mode: "surface",
-              scalar_color_palette: "viridis",
-              surface_color_source: "solid",
-              surface_projection_mode: "raw_nodal",
-              surface_mono_color: "var(--fm-airbox-fill)",
-              surface_opacity: 0.28,
-              surface_visible: true,
-              viewport_colorbar_visible: false,
-              vector_alpha: 1,
-              vector_budget: 1200,
-              vector_color_mode: "orientation",
-              vector_length_scale: 1,
-              vector_mono_color: "var(--fm-info)",
-              vector_thickness: 1,
-              vectors_visible: false,
-              visible: true,
-              wireframe_color: "var(--fm-airbox-wire)",
-              wireframe_opacity: 1,
-              wireframe_visible: false,
-            },
-            source: "airbox",
+  it("prefers backend Airbox quantity and palette over global presentation", () => {
+    const settings = resolveAirboxVisualizationSettingsFromState({
+      active_quantity_id: "m",
+      quantity: { active_quantity_id: "m", colormap: "magma" },
+      colormap: "jet",
+      targets: {
+        airbox: {
+          label: "Airbox",
+          scope: "airbox",
+          scope_id: "airbox",
+          settings: {
+            active_quantity_id: "H_demag",
+            bounds_opacity: 1,
+            bounds_visible: false,
+            geometry_scope: "full",
+            opacity: 0.28,
+            point_color: "var(--fm-info)",
+            point_opacity: 1,
+            points_visible: false,
+            render_mode: "surface",
+            scalar_color_palette: "plasma",
+            surface_color_source: "solid",
+            surface_projection_mode: "raw_nodal",
+            surface_mono_color: "var(--fm-airbox-fill)",
+            surface_opacity: 0.28,
+            surface_visible: true,
+            viewport_colorbar_visible: false,
+            vector_alpha: 1,
+            vector_budget: 1200,
+            vector_color_mode: "orientation",
+            vector_length_scale: 1,
+            vector_mono_color: "var(--fm-info)",
+            vector_thickness: 1,
+            vectors_visible: false,
+            visible: true,
+            wireframe_color: "var(--fm-airbox-wire)",
+            wireframe_opacity: 1,
+            wireframe_visible: false,
           },
-          objects: [],
-          parts: [],
+          source: "airbox",
         },
-      }).activeQuantityId,
-    ).toBe("H_demag");
+        objects: [],
+        parts: [],
+      },
+    });
+    expect(settings.activeQuantityId).toBe("H_demag");
+    expect(settings.scalarColorPalette).toBe("plasma");
   });
 
   it("falls back to canonical visualization quantity before compatibility quantity", () => {

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import inspect
 import json
 import time
 from collections.abc import Mapping
@@ -27,11 +28,30 @@ def _fail(message):
     raise BuildControlError(message)
 
 
-def _store_probe(backend_id, activation):
+def _catalog_ledger_control_sha256(value):
+    state = value.get("runtime_state")
+    if (not isinstance(state, dict) or set(state) != {"schema_version", "readiness_sha256", "snapshot_sha256"}
+            or state.get("schema_version") != "host_runtime_state.v1"):
+        raise ValueError("Catalog-failure ledger has no exact v4 runtime state")
+    for field in ("readiness_sha256", "snapshot_sha256"):
+        digest = state.get(field)
+        if (not isinstance(digest, str) or len(digest) != 64
+                or any(character not in "0123456789abcdef" for character in digest)):
+            raise ValueError("Catalog-failure ledger has an invalid runtime-state digest")
+    # Inventory samples advance independently of reservations. Preserve every
+    # other field, including readiness, policy, ownership and all reservations.
+    stable = {**value, "runtime_state": {**state, "snapshot_sha256": None}}
+    return hashlib.sha256(json.dumps(stable, sort_keys=True, separators=(",", ":"),
+                                     ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def _store_probe(backend_id, activation, *, catalog_failure=False):
     # Only the exact current unreleased startup run is eligible. Historical
     # runs remain untouched; an archive-only exception permits one exact
     # pending preparation lease, without cancelling or releasing it.
-    script = "ACTIVATION = " + repr(activation) + "\n" + r'''import fcntl,hashlib,json,os,pathlib,stat
+    script = ("ACTIVATION = " + repr(activation) + "\nCATALOG_FAILURE = " + repr(catalog_failure)
+              + "\n" + inspect.getsource(_catalog_ledger_control_sha256)
+              + r'''import fcntl,hashlib,json,os,pathlib,stat,time
 root=pathlib.Path('/state/runs/docker-all/session-store')
 def raw(path,maximum=16*1024*1024):
     if path.parent.resolve(strict=True)!=path.parent: raise RuntimeError('noncanonical store parent')
@@ -87,9 +107,18 @@ def linux_native_store_id():
     encoded=json.dumps(stable,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode('utf-8')
     return 'sha256:'+hashlib.sha256(encoded).hexdigest()
 def obj(path): return json.loads(raw(path),object_pairs_hook=unique)
+def lock_for_probe(descriptor):
+    deadline=time.monotonic()+2.0
+    while True:
+        try:
+            fcntl.flock(descriptor,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if not CATALOG_FAILURE or time.monotonic()>=deadline: raise
+            time.sleep(0.02)
 ledger=pathlib.Path('/host-ledger/ledger')
 lf=os.open(ledger/'WRITER.lock',os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
-fcntl.flock(lf,fcntl.LOCK_EX|fcntl.LOCK_NB)
+lock_for_probe(lf)
 data=raw(ledger/'HOST_RESOURCE_LEDGER.json'); value=json.loads(data,object_pairs_hook=unique)
 rows=value.get('reservations')
 if isinstance(rows,dict): rows=list(rows.values())
@@ -99,8 +128,8 @@ active_rows=[r for r in rows if r.get('state')!='released']
 fd=os.open(root/'WRITER.lock',os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
 try:
     if not stat.S_ISREG(os.fstat(fd).st_mode): raise RuntimeError('store writer lock is not regular')
-    fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
-    found=[]; pins={}; active_preparation=[]
+    lock_for_probe(fd)
+    found=[]; pins={}; active_preparation=[]; matched_project_id=None
     runs=list((root/'runs').iterdir())
     if len(runs)>256: raise RuntimeError('store exceeds bounded abort scope')
     for run in runs:
@@ -127,27 +156,45 @@ try:
         params=specification.get('parameters',{})
         command=params.get('live_workspace',{}).get('command',{})
         if command.get('request_id')!=ACTIVATION['request_id']: continue
-        catalog_path=run/'run_catalog.json'; catalog=obj(catalog_path)
-        tasks=catalog.get('tasks',[])
+        catalog_path=run/'run_catalog.json'
+        try: catalog=obj(catalog_path)
+        except FileNotFoundError:
+            if not CATALOG_FAILURE: raise
+            catalog=None
         if (intent.get('schema_version')!='run_intent.v1' or intent.get('run_id')!=run.name
             or specification.get('schema_version')!='run_spec.v2' or specification.get('run_id')!=run.name
             or hashlib.sha256(json.dumps(specification,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest()!=intent.get('payload_sha256')
-            or catalog.get('schema_version')!='run_catalog.v1' or catalog.get('run_id')!=run.name
-            or type(catalog.get('revision')) is not int or catalog['revision']<=0
             or params.get('fullmag.accepted_run_start')!={'schema_version':'accepted_run_start_policy.v1','mode':'manual'}
             or command.get('kind')!='startup_script'
             or command.get('source_sha256')!=ACTIVATION['source_sha256']
-            or intent.get('idempotency_key')!='live-http-'+ACTIVATION['activation_receipt_key']
+            or intent.get('idempotency_key')!='live-http-'+ACTIVATION['activation_receipt_key']):
+            raise RuntimeError('activation is not an exact unreleased, unprepared manual run')
+        if CATALOG_FAILURE:
+            if catalog is not None: raise RuntimeError('catalog-failure archive requires an absent RunCatalog')
+        else:
+            tasks=catalog.get('tasks',[])
+            if (catalog.get('schema_version')!='run_catalog.v1' or catalog.get('run_id')!=run.name
+            or type(catalog.get('revision')) is not int or catalog['revision']<=0
             or len(tasks)!=1 or tasks[0].get('lifecycle')!='accepted'
             or tasks[0].get('readiness')!={'state':'blocked','reason':'accepted_task_awaiting_preparation'}
             or tasks[0].get('artifact_ids')!=[]):
-            raise RuntimeError('activation is not an exact unreleased, unprepared manual run')
+                raise RuntimeError('activation is not an exact unreleased, unprepared manual task')
         found.append(run.name)
-        for p in (intent_path,catalog_path): pins[str(p.relative_to(root))]=hashlib.sha256(raw(p)).hexdigest()
+        if CATALOG_FAILURE:
+            matched_project_id=specification.get('snapshot',{}).get('project_id')
+            if not valid_id(matched_project_id): raise RuntimeError('accepted run project identity is invalid')
+        for p in ([intent_path] if CATALOG_FAILURE else [intent_path,catalog_path]):
+            pins[str(p.relative_to(root))]=hashlib.sha256(raw(p)).hexdigest()
     if len(found)!=1: raise RuntimeError('activation has no unique held RunIntent')
-    run_id=found[0]; run=root/'runs'/run_id; catalog=obj(run/'run_catalog.json'); task=catalog['tasks'][0]
+    run_id=found[0]; run=root/'runs'/run_id
+    task=None if CATALOG_FAILURE else obj(run/'run_catalog.json')['tasks'][0]
     target_lease=[entry for entry in active_preparation if entry[0]==run_id]
-    if not active_rows and not active_preparation:
+    if CATALOG_FAILURE:
+        if active_rows or active_preparation or {p.name for p in run.iterdir()}!={'run_intent.json'}:
+            raise RuntimeError('catalog-failure run acquired admission, release, task or lease state')
+        mode='unmaterialized_catalog'
+        run_inventory={'directories':[],'files':['run_intent.json']}
+    elif not active_rows and not active_preparation:
         mode='unadmitted'
         if {p.name for p in run.iterdir()}!={'run_intent.json','run_catalog.json'}:
             raise RuntimeError('unadmitted activation acquired durable task state')
@@ -238,11 +285,14 @@ try:
             pins[str(path.relative_to(root))]=hashlib.sha256(raw(path)).hexdigest()
         if pins.get(lease_relative)!=lease_sha:
             raise RuntimeError('active preparation lease pin changed during proof')
-    print(json.dumps({'run_id':run_id,'mode':mode,'run_inventory':run_inventory,'store_pins':pins,'ledger_sha256':hashlib.sha256(data).hexdigest(),'run_ids':sorted(p.name for p in runs)},sort_keys=True))
+    proof={'run_id':run_id,'mode':mode,'run_inventory':run_inventory,'store_pins':pins,'ledger_sha256':hashlib.sha256(data).hexdigest(),'run_ids':sorted(p.name for p in runs)}
+    if CATALOG_FAILURE:
+        proof.update(project_id=matched_project_id,ledger_control_sha256=_catalog_ledger_control_sha256(value))
+    print(json.dumps(proof,sort_keys=True))
 finally:
     os.close(fd)
     os.close(lf)
-'''
+''')
     return json.loads(docker_capture("exec", backend_id, "python3", "-B", "-c", script, timeout=30).stdout)
 
 
@@ -266,7 +316,7 @@ def _run_inventory(run):
     return {"directories": sorted(directories), "files": sorted(files)}
 
 
-def _stopped_ledger_sha256(container_id):
+def _stopped_ledger_sha256(container_id, *, catalog_failure=False):
     archive = docker_capture(
         "cp", container_id + ":/host-ledger/ledger/HOST_RESOURCE_LEDGER.json", "-", timeout=90
     ).stdout
@@ -282,7 +332,8 @@ def _stopped_ledger_sha256(container_id):
             data = stream.read(16 * 1024 * 1024 + 1)
             if len(data) != members[0].size:
                 _fail("Stopped backend host-ledger document changed while reading")
-            return hashlib.sha256(data).hexdigest()
+            return (_catalog_ledger_control_sha256(json.loads(data)) if catalog_failure else
+                    hashlib.sha256(data).hexdigest())
     except (tarfile.TarError, OSError) as error:
         raise BuildControlError("Stopped backend host-ledger archive is invalid") from error
 
@@ -301,11 +352,25 @@ def abort_pending_preparation(args, control, selected, identity, previous, docum
         _project_container_ids, _volume_consumer_ids, _publish_immutable,
     )
     attempt = args.pending_activation
+    catalog_failure = bool(getattr(args, "catalog_failure", False))
+    if catalog_failure:
+        from docker_volume_catalog_failure import probe_catalog_failure, verify_catalog_failure_drain
+    evidence_keys = (("runtime_config_sha256", "process_receipt_sha256", "ready_owner_identity",
+                      "api_instance_id", "session_identity", "preparation_sha256", "commands_sha256")
+                     if catalog_failure else ("runtime_config_sha256", "failed_owner_sha256",
+                                             "process_receipt_sha256", "api_failure_fence_sha256"))
+    def same_store(left, right):
+        if not catalog_failure:
+            return left == right
+        return ({key: value for key, value in left.items() if key != "ledger_sha256"}
+                == {key: value for key, value in right.items() if key != "ledger_sha256"})
     if ATTEMPT_RE.fullmatch(attempt) is None:
         _fail("Pending activation is not a complete attempt identity")
     root = "activation/attempts/" + attempt
     abort_root = root + "/preparation-abort"
     saved_preflight = control.read(abort_root + "/preflight.json", optional=True)
+    if catalog_failure and getattr(args, "preview", False) and saved_preflight is not None:
+        _fail("Catalog-failure stop already has an intent; preview cannot resume it")
     image, ids, actual = _container_snapshot(
         args, selected, identity, control, previous, document,
         allow_stopped_backend=saved_preflight is not None,
@@ -360,21 +425,30 @@ def abort_pending_preparation(args, control, selected, identity, previous, docum
         if image_now != image or ids_now != ids or any(
             actual_now[s]["State"]["StartedAt"] != actual[s]["State"]["StartedAt"] for s in ids):
             _fail("Compose incarnation changed")
-        probe = _probe_backend(ids["backend"])
-        return _probe_evidence(control, previous_root, probe), _store_probe(ids["backend"], inputs)
+        before = (probe_catalog_failure(ids["backend"], inputs) if catalog_failure else
+                  _probe_evidence(control, previous_root, _probe_backend(ids["backend"])))
+        store = _store_probe(ids["backend"], inputs, catalog_failure=catalog_failure)
+        if catalog_failure and any(before[k] != store[k] for k in ("run_id", "project_id")):
+            _fail("Catalog failure API and locked store identify different runs")
+        return before, store
     if saved_preflight is None:
         before, store = recheck()
         again, again_store = recheck()
-        if (any(before[k] != again[k] for k in (
-            "runtime_config_sha256", "failed_owner_sha256", "process_receipt_sha256", "api_failure_fence_sha256"))
-            or store != again_store):
+        if (any(before[k] != again[k] for k in evidence_keys)
+            or not same_store(store, again_store)):
             _fail("Failed owner or unreleased store changed before stop")
+        if catalog_failure and getattr(args, "preview", False):
+            return {"state": "preview-passed", "stop_applied": False,
+                    "run_id": store["run_id"], "store_mode": store["mode"],
+                    "backend_container_id": ids["backend"],
+                    "proof_sha256": hashlib.sha256(canonical({"runtime": before, "store": store})).hexdigest()}
         preflight = {"schema": SCHEMA, "state": "stopping-confirmed-unreleased-preparation",
             **expected, "activation_attempt": attempt, "backend_started_at": actual["backend"]["State"]["StartedAt"],
             "request_id": inputs["request_id"],
             "marker_sha256": hashlib.sha256(marker_raw).hexdigest(),
             "store": store, "process_receipt_sha256": before["process_receipt_sha256"],
-            "failed_owner_sha256": before["failed_owner_sha256"], "diagnostic_evidence": before,
+            "catalog_failure": catalog_failure,
+            "failed_owner_sha256": before.get("failed_owner_sha256"), "diagnostic_evidence": before,
             "created_at": time.time()}
         _publish_immutable(control, abort_root + "/preflight.json", canonical(preflight) + b"\n")
         docker_capture("stop", "--time", "60", ids["backend"], timeout=90)
@@ -383,6 +457,7 @@ def abort_pending_preparation(args, control, selected, identity, previous, docum
         if (preflight.get("schema") != SCHEMA
             or preflight.get("state") != "stopping-confirmed-unreleased-preparation"
             or preflight.get("activation_attempt") != attempt
+            or preflight.get("catalog_failure", False) != catalog_failure
             or any(preflight.get(k) != v for k, v in expected.items())
             or preflight.get("backend_started_at") != actual["backend"]["State"]["StartedAt"]
             or preflight.get("marker_sha256") != hashlib.sha256(marker_raw).hexdigest()):
@@ -390,7 +465,7 @@ def abort_pending_preparation(args, control, selected, identity, previous, docum
         before, store = preflight["diagnostic_evidence"], preflight["store"]
         if actual["backend"]["State"]["Running"]:
             again, again_store = recheck()
-            if (any(again[k] != before[k] for k in ("runtime_config_sha256", "failed_owner_sha256", "process_receipt_sha256", "api_failure_fence_sha256")) or again_store != store):
+            if (any(again[k] != before[k] for k in evidence_keys) or not same_store(store, again_store)):
                 _fail("Running generation changed after retained abort preflight")
             docker_capture("stop", "--time", "60", ids["backend"], timeout=90)
     stopped = json.loads(docker_capture("inspect", ids["backend"]).stdout)[0]
@@ -405,7 +480,7 @@ def abort_pending_preparation(args, control, selected, identity, previous, docum
         _fail("Run inventory changed during preparation abort")
     post_pins = {}
     store_mode = store.get("mode", "unadmitted")
-    if store_mode not in {"unadmitted", "held_preparation"}:
+    if store_mode not in {"unadmitted", "held_preparation", "unmaterialized_catalog"}:
         _fail("Preparation abort store proof has an unknown mode")
     held_mode = store_mode == "held_preparation"
     for run in runs:
@@ -426,7 +501,9 @@ def abort_pending_preparation(args, control, selected, identity, previous, docum
                         raise BuildControlError("Held preparation run file is no longer safely readable") from error
                     post_pins[str(p.relative_to(store_root))] = hashlib.sha256(raw).hexdigest()
             else:
-                if {p.name for p in run.iterdir()} != {"run_intent.json", "run_catalog.json"}:
+                expected_files = ({"run_intent.json"} if store_mode == "unmaterialized_catalog" else
+                                  {"run_intent.json", "run_catalog.json"})
+                if {p.name for p in run.iterdir()} != expected_files:
                     _fail("The held activation acquired a release, claim, lease or other state")
                 for p in run.iterdir():
                     post_pins[str(p.relative_to(store_root))] = _file_hash(p)
@@ -444,15 +521,18 @@ def abort_pending_preparation(args, control, selected, identity, previous, docum
                     post_pins[str(p.relative_to(store_root))] = _file_hash(p)
     if post_pins != store["store_pins"]:
         _fail("Retained store or lease inventory changed during preparation abort")
-    if _stopped_ledger_sha256(ids["backend"]) != store.get("ledger_sha256"):
+    ledger_pin = "ledger_control_sha256" if catalog_failure else "ledger_sha256"
+    if _stopped_ledger_sha256(ids["backend"], catalog_failure=catalog_failure) != store.get(ledger_pin):
         _fail("Host reservation ledger changed while stopping the preparation owner")
     if _read_raw(control, root + "/receipt.json") != final_raw:
         _fail("Acknowledged unknown activation receipt changed during stop")
     operation = {"root": abort_root, "receipt": {"image_id": image,
         "inputs": {**operation_inputs, "frontend_container_id": ids["frontend"]}}}
-    stop = _terminal_receipt(control, operation, ids["backend"], before, stopped, resume_pin)
+    stop = (verify_catalog_failure_drain(control, stopped, before) if catalog_failure else
+            _terminal_receipt(control, operation, ids["backend"], before, stopped, resume_pin))
+    outcome = "accepted-catalog-materialization-failed" if catalog_failure else "accepted-preparation-failed"
     terminal = {**preflight, "state": "stopped-awaiting-fresh-archive",
-        "activation_outcome": "accepted-preparation-failed", "execution_state": "not-started",
+        "activation_outcome": outcome, "execution_state": "not-started",
         "restart_policy": "fresh-state-only", "original_receipt_sha256": hashlib.sha256(final_raw).hexdigest(),
         "stop": stop, "finished_at": time.time()}
     existing_terminal = control.read(abort_root + "/terminal.json", optional=True)
@@ -477,7 +557,7 @@ def abort_pending_preparation(args, control, selected, identity, previous, docum
     # The original receipt/started marker remain byte-for-byte intact. Only
     # this authenticated helper removes its own active marker after this ACK.
     helper_terminal = {**final_receipt, "state": "failed-confirmed",
-        "activation_state": "accepted-preparation-failed", "execution_state": "not-started",
+        "activation_state": outcome, "execution_state": "not-started",
         "restart_policy": "fresh-state-only", "preparation_abort_path": abort_root + "/terminal.json",
         "preparation_abort_sha256": hashlib.sha256(terminal_raw).hexdigest()}
     _publish_immutable(control, root + "/terminal.json", canonical(helper_terminal) + b"\n")

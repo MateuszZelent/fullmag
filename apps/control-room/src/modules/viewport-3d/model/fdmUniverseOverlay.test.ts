@@ -216,6 +216,64 @@ describe("resolveFdmUniverseOutsideSupportOverlayModel", () => {
     ).toBeNull();
   });
 
+  it("keeps the airbox overlay for a support inscribed in its grid with inactive cells", () => {
+    // A disk inscribed in a square grid: equal AABBs, inactive corner cells.
+    const presentation = fdmPresentation({
+      magneticSupport: {
+        activeCellCount: 452,
+        activeUnassignedCellCount: 0,
+        bounds: { min: [-2, -2, -2], max: [2, 2, 2] },
+        inactiveCellCount: 124,
+        kind: "magnetic-support",
+      },
+    });
+    expect(
+      resolveFdmUniverseOutsideSupportOverlayFromPresentation(presentation),
+    ).toMatchObject({
+      inactiveCellCount: 124,
+      kind: "fdm-universe-outside-magnetic-support",
+      legend: { outsideSupport: "Airbox · 124 inactive cells" },
+      magneticSupportBounds: { size: [4, 4, 4] },
+      universeBounds: { size: [4, 4, 4] },
+    });
+    expect(
+      resolveFdmUniverseOutsideSupportOverlayModel({
+        activeCellCount: 452,
+        inactiveCellCount: 124,
+        magneticSupportBounds: support,
+        semanticRole: "universe-outside-magnetic-support",
+        universeBounds: support,
+      }),
+    ).not.toBeNull();
+  });
+
+  it("still rejects realized support that leaves the universe envelope", () => {
+    expect(
+      resolveFdmUniverseOutsideSupportOverlayModel({
+        activeCellCount: 452,
+        inactiveCellCount: 124,
+        magneticSupportBounds: support,
+        semanticRole: "universe-outside-magnetic-support",
+        universeBounds: { center: [1.5, 0, 0], radius: 1, size: [2, 2, 2] },
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps the authored overlay strict before membership proves inactive cells", () => {
+    expect(
+      resolveFdmUniverseOutsideSupportOverlayFromPresentation(fdmPresentation({
+        magneticSupport: null,
+        resourceStatus: "authoring-grid",
+        universeOutsideMagneticSupport: {
+          bounds: { min: [-2, -2, -2], max: [2, 2, 2] },
+          magneticSupportBounds: { min: [-2, -2, -2], max: [2, 2, 2] },
+          kind: "universe-outside-magnetic-support",
+          reason: "authored-universe-exceeds-magnetic-support",
+        },
+      })),
+    ).toBeNull();
+  });
+
   it("rejects a partially overlapping universe envelope", () => {
     expect(
       resolveFdmUniverseOutsideSupportOverlayModel({

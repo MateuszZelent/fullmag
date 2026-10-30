@@ -18,6 +18,8 @@ export interface FieldMapRenderLayers {
   points?: boolean;
   probes?: boolean;
   raster: boolean;
+  /** In-plane streamlines of the vector raster (presentation, note 0970). */
+  streamlines?: boolean;
   vectors: boolean;
 }
 
@@ -277,7 +279,7 @@ export function buildFieldMapRenderModel(
     layers: {
       ...input.layers,
       ...(!input.visible && input.visible !== undefined
-        ? { boundaries: false, bounds: false, contours: false, mesh: false, points: false, probes: false, raster: false, vectors: false }
+        ? { boundaries: false, bounds: false, contours: false, mesh: false, points: false, probes: false, raster: false, streamlines: false, vectors: false }
         : {}),
       boundaries: Boolean(input.visible !== false && input.layers.boundaries && boundariesExact),
       probes: input.layers.probes ?? true,

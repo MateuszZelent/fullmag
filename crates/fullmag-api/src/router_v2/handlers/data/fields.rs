@@ -3026,6 +3026,7 @@ pub async fn get_field_meta(
     let request_context = crate::capture_current_live_request_context(&state).await?;
     let quantity_id = canonical_quantity_id(&quantity_id);
     let quantity_id = quantity_id.as_ref();
+    crate::live_field_demand::note_live_field_request(quantity_id);
     if let Some(field)=super::inspection_field_provider::resolve(&state,quantity_id,query.stage_id.as_deref(),
         query.carrier_id.as_deref(),query.view.as_deref()).await? {
         let locator=super::inspection_field_provider::validate_scope(&field,query.scope_kind.as_deref(),query.scope_id.as_deref(),
@@ -4842,11 +4843,7 @@ fn sample_field_scope(
         return scope;
     }
 
-    let sample_count = max_samples.max(1);
-    let stride = (scope.node_indices.len() / sample_count).max(1);
-    let sampled_positions = (0..sample_count)
-        .map(|sample| sample * stride)
-        .collect::<Vec<_>>();
+    let sampled_positions = uniform_sample_positions(scope.node_indices.len(), max_samples);
     scope.node_indices = sampled_positions
         .iter()
         .filter_map(|position| scope.node_indices.get(*position).copied())
@@ -4872,11 +4869,12 @@ fn field_node_indices_cache_token(node_indices: Option<&[u32]>) -> String {
     if node_indices.is_empty() {
         return "empty".to_string();
     }
-    node_indices
-        .iter()
-        .map(u32::to_string)
-        .collect::<Vec<_>>()
-        .join(",")
+    // A digest keeps the key bounded; the text form of a 1.75 M-cell layer was ~13 MB.
+    let mut hasher = Sha256::new();
+    for index in node_indices {
+        hasher.update(index.to_le_bytes());
+    }
+    format!("{}:{:x}", node_indices.len(), hasher.finalize())
 }
 
 fn mesh_topology_hash_bytes(hash: &str) -> Result<[u8; 32], ApiError> {
@@ -4918,19 +4916,30 @@ fn sample_unscoped_field_values(
         return (raw_values, grid, None);
     }
 
-    let sample_count = max_samples.max(1);
-    let start = point_count.saturating_sub(sample_count) / 2;
-    let mut sampled = Vec::with_capacity(sample_count * n_comp);
-    for point_index in start..start + sample_count {
+    let positions = uniform_sample_positions(point_count, max_samples);
+    let mut sampled = Vec::with_capacity(positions.len() * n_comp);
+    for &point_index in &positions {
         let offset = point_index * n_comp;
         sampled.extend_from_slice(&raw_values[offset..offset + n_comp]);
     }
 
-    (
-        sampled,
-        [sample_count as u32, 1, 1],
-        Some((start..start + sample_count).collect()),
-    )
+    (sampled, [positions.len() as u32, 1, 1], Some(positions))
+}
+
+/// Deterministic display sample of `total` ordinals: `floor(i * total / count)`.
+///
+/// This is the same rule as the Control Room's `sampleFdmDisplayCellIndices`,
+/// so a budgeted response covers exactly the cells the renderer draws. A
+/// stride of `floor(total / count)` instead would return only a contiguous
+/// prefix whenever `count < total < 2 * count`.
+fn uniform_sample_positions(total: usize, max_samples: usize) -> Vec<usize> {
+    let count = max_samples.max(1).min(total);
+    (0..count)
+        .map(|sample| {
+            let position = (sample as u128 * total as u128 / count as u128) as usize;
+            position.min(total - 1)
+        })
+        .collect()
 }
 
 // ── Binary vector — P1 ───────────────────────────────────────────────────────
@@ -4983,6 +4992,8 @@ pub async fn get_field_vector(
     let request_context = crate::capture_current_live_request_context(&state).await?;
     crate::validate_current_live_request_context(&state, &request_context).await?;
     let canonical=canonical_quantity_id(&quantity_id);
+    // A read keeps its quantity in the live capture demand of an active run.
+    crate::live_field_demand::note_live_field_request(canonical.as_ref());
     if let Some(field)=super::inspection_field_provider::resolve(&state,canonical.as_ref(),query.stage_id.as_deref(),
         query.carrier_id.as_deref(),query.view.as_deref()).await? {
         super::inspection_field_provider::require_binary_pins(query.stage_id.as_deref(),

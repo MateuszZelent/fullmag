@@ -122,6 +122,7 @@ export function useViewport3DFieldRenderOptions({
 
     const partVectorBudgets = new Map<string, number>();
     const partVectorAnchorModes = new Map<string, "center" | "tail">();
+    const partVectorColorModes = new Map<string, string>();
     const partVectorScopes = new Map<string, "surface" | "full">();
     const partVectorScales = new Map<string, number>();
     const partVectorSurfaceOffsetEnabled = new Set<string>();
@@ -151,6 +152,8 @@ export function useViewport3DFieldRenderOptions({
         const partId = partModel.part.id;
         const settings = getPartSettings(partModel.part);
         partQuantityIds.set(partId, settings.activeQuantityId);
+        partVectorColorModes.set(partId, settings.vectorColorMode);
+        partScalarColorPalettes.set(partId, settings.scalarColorPalette);
         const visible =
           magneticVectorsAllowed &&
           settings.visible &&
@@ -160,7 +163,6 @@ export function useViewport3DFieldRenderOptions({
           scalarColorsVisible = true;
           scalarColorModes.add(scalarColorMode);
           partScalarColorModes.set(partId, scalarColorMode);
-          partScalarColorPalettes.set(partId, settings.scalarColorPalette);
         }
         partVectorScopes.set(partId, settings.geometryScope);
         if (!settings.vectorCenteringEnabled) {
@@ -204,12 +206,13 @@ export function useViewport3DFieldRenderOptions({
     for (const partModel of topologyRenderModel.airboxParts) {
       const partId = partModel.part.id;
       partQuantityIds.set(partId, airboxSettings.activeQuantityId);
+      partVectorColorModes.set(partId, airboxSettings.vectorColorMode);
+      partScalarColorPalettes.set(partId, airboxSettings.scalarColorPalette);
       const scalarColorMode = airboxScalarColorMode;
       if (scalarColorMode) {
         scalarColorsVisible = true;
         scalarColorModes.add(scalarColorMode);
         partScalarColorModes.set(partId, scalarColorMode);
-        partScalarColorPalettes.set(partId, airboxSettings.scalarColorPalette);
       }
       partVectorScopes.set(partId, airboxSettings.geometryScope);
       if (!airboxSettings.vectorCenteringEnabled) {
@@ -244,6 +247,7 @@ export function useViewport3DFieldRenderOptions({
         partVectorBudgets,
         partVectorScales: partVectorScales.size > 0 ? partVectorScales : undefined,
         partVectorScopes,
+        partVectorColorModes,
         partVectorSurfaceOffsetEnabled:
           partVectorSurfaceOffsetEnabled.size > 0
             ? partVectorSurfaceOffsetEnabled
@@ -271,6 +275,7 @@ export function useViewport3DFieldRenderOptions({
 
     return retainViewport3DFieldRenderOptions(topologyRenderModel, next);
   }, [
+    airboxSettings.vectorColorMode,
     airboxSettings.vectorBudget,
     airboxSettings.vectorCenteringEnabled,
     airboxSettings.vectorLengthScale,
@@ -441,6 +446,7 @@ export function sameViewport3DFieldRenderOptions(
     sameNumberMap(left.partVectorBudgets, right.partVectorBudgets) &&
     sameNumberMap(left.partVectorScales, right.partVectorScales) &&
     sameStringMap(left.partVectorScopes, right.partVectorScopes) &&
+    sameStringMap(left.partVectorColorModes, right.partVectorColorModes) &&
     sameStringMap(left.partQuantityIds, right.partQuantityIds) &&
     sameStringMap(left.partScalarColorModes, right.partScalarColorModes) &&
     sameStringMap(left.partScalarColorPalettes, right.partScalarColorPalettes) &&

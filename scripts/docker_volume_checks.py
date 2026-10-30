@@ -25,7 +25,8 @@ OPTIONAL_IMPLEMENTATIONS = ('docker_helper_source', 'docker_volume_activation_re
                             'docker_volume_pre_admission_recreate', 'docker_volume_pre_admission_selector',
                             'docker_volume_pending_continuation', 'docker_volume_native_init_successor',
                             'docker_volume_drained_successor', 'docker_volume_reconcile',
-                            'docker_volume_prestart_recovery', 'docker_volume_terminal_prestart_recovery')
+                            'docker_volume_prestart_recovery', 'docker_volume_terminal_prestart_recovery',
+                            'docker_volume_network_failure_reconcile')
 
 
 _ORACLE_WHEEL_ROOT = Path('/opt/fullmag/control/verification')
@@ -108,16 +109,52 @@ def _validate_offline_result(value, modules, *, implementations=BASE_IMPLEMENTAT
     return value
 
 
-def _offline_checks(control, selected, observed, modules):
+def _initial_offline_image(receipt, document, identity, attempt):
+    inputs = receipt.get('inputs', {})
+    image = inputs.get('image_id')
+    if (receipt.get('phase') != 'development'
+            or receipt.get('attempt') != attempt
+            or receipt.get('compose_project') != identity['project_name']
+            or inputs.get('source_root') != identity['source_root']
+            or inputs.get('source_worktree_id') != identity['worktree_id']
+            or inputs.get('source_project_id') != identity['project_id']
+            or document.get('name') != identity['project_name']
+            or document.get('services', {}).get('backend', {}).get('image') != image
+            or not isinstance(image, str)
+            or re.fullmatch(r'sha256:[0-9a-f]{64}', image) is None):
+        raise BuildControlError('Initial offline checks require the selected attempt and immutable Compose image')
+    return image
+
+
+def _offline_checks(control, selected, observed, modules, *, initial_attempt=None):
     """Verify source contracts without starting a stopped application service.
 
     The short helper is part of the selected Compose group. It has no network,
     daemon socket, GPU, or user-data mount. Only its control volume is writable.
     """
-    if observed.get('State', {}).get('Running') is not False:
-        raise BuildControlError('Offline checks require a stopped selected backend')
-    validate_source_labels(observed, control.identity)
-    image = observed.get('Image')
+    initial_binding = None
+    if initial_attempt is not None:
+        if observed is not None or re.fullmatch(r'[0-9a-f]{32}', initial_attempt) is None:
+            raise BuildControlError('Initial offline checks require an explicit attempt without a backend')
+        for service in ('backend', 'frontend'):
+            consumers = docker_capture('ps', '--all', '--quiet', '--filter',
+                'label=com.docker.compose.project=' + control.project, '--filter',
+                'label=com.docker.compose.service=' + service).stdout.strip()
+            if consumers:
+                raise BuildControlError('Initial offline checks require absent application services')
+        root = 'development/attempts/' + initial_attempt
+        receipt_raw = control.read_bytes(root + '/receipt.json')
+        compose_raw = control.read_bytes(root + '/compose.json')
+        image = _initial_offline_image(json.loads(receipt_raw), json.loads(compose_raw),
+                                       control.identity, initial_attempt)
+        initial_binding = {'attempt': initial_attempt,
+            'receipt_sha256': hashlib.sha256(receipt_raw).hexdigest(),
+            'compose_sha256': hashlib.sha256(compose_raw).hexdigest()}
+    else:
+        if observed.get('State', {}).get('Running') is not False:
+            raise BuildControlError('Offline checks require a stopped selected backend')
+        validate_source_labels(observed, control.identity)
+        image = observed.get('Image')
     if not isinstance(image, str) or re.fullmatch(r'sha256:[0-9a-f]{64}', image) is None:
         raise BuildControlError('Offline checks require the immutable retained backend image')
     images = json.loads(docker_capture('image', 'inspect', image).stdout)
@@ -163,7 +200,8 @@ print(json.dumps({'exit_code':result.returncode if before==after else 2,'source_
     # Interpreted Python contracts need more headroom than a shell-only probe.
     arguments[arguments.index('--memory') + 1] = '256m'
     receipt = {'schema': 'fullmag.volume-dev-offline-interpreted-checks.v1',
-               'container_id': observed['Id'], 'image_id': image,
+               'container_id': observed['Id'] if observed is not None else None, 'image_id': image,
+               'initial_attempt_binding': initial_binding,
                'compose_project': control.project, 'modules': modules,
                'helper_container': helper_name, 'state': 'starting',
                'runtime_qualification': 'NOT VERIFIED'}
@@ -273,16 +311,37 @@ VISUALIZATION_COMMANDS = (
 )
 
 
+TELEMETRY_FILES = (
+    'src/modules/footer/FooterTelemetry.tsx',
+    'src/modules/footer/FooterTelemetry.test.ts',
+    'src/modules/footer/FooterTelemetry.refresh.test.tsx',
+)
+TELEMETRY_COMMANDS = (
+    *FRONTEND_COMMANDS[:2],
+    ('vitest-focused', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'vitest', 'run',
+                       *TELEMETRY_FILES[1:], '--pool=threads', '--maxWorkers=1')),
+    ('lint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'lint')),
+    ('vitest-full', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'vitest', 'run',
+                    '--pool=threads', '--maxWorkers=2')),
+    ('architecture', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'check:architecture-hygiene')),
+    ('api-hygiene', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'check:api-hygiene')),
+)
+
+
 def frontend_import_checks(control, selected, identity, *, scope='frontend-import'):
     import hashlib
     import time
     import docker_dev_codegen as codegen
-    if scope not in ('frontend-import', 'frontend-antenna', 'frontend-visualization'):
+    if scope not in ('frontend-import', 'frontend-antenna', 'frontend-visualization', 'frontend-telemetry', 'frontend-telemetry-focused'):
         raise BuildControlError('Unknown frontend verification scope')
     source_files, commands = {
         'frontend-import': (IMPORT_FILES, FRONTEND_COMMANDS),
         'frontend-antenna': (ANTENNA_FILES, ANTENNA_COMMANDS),
         'frontend-visualization': (VISUALIZATION_FILES, VISUALIZATION_COMMANDS),
+        'frontend-telemetry': (TELEMETRY_FILES, TELEMETRY_COMMANDS),
+        'frontend-telemetry-focused': (TELEMETRY_FILES, (*TELEMETRY_COMMANDS[:3],
+            ('eslint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'eslint',
+                        *TELEMETRY_FILES, '--max-warnings=0')))),
     }[scope]
     receipt = {'schema': f'fullmag.volume-dev-{scope}-checks.v1', 'scope': scope,
                'compose_project': control.project, 'state': 'running', 'commands': [],
@@ -293,7 +352,9 @@ def frontend_import_checks(control, selected, identity, *, scope='frontend-impor
         result = {}
         for name in ('backend', 'frontend'):
             _identifier, document = codegen._running_service(control.project, name, identity, selected)
-            if document.get('State', {}).get('Health', {}).get('Status') != 'healthy':
+            # Telemetry source checks need the healthy frontend; the pinned backend
+            # may still be compiling in its persistent service. This proves no runtime.
+            if (name == 'frontend' or scope not in ('frontend-telemetry', 'frontend-telemetry-focused')) and document.get('State', {}).get('Health', {}).get('Status') != 'healthy':
                 raise codegen.CodegenError('Frontend checks require healthy existing services')
             result[name] = (document['Id'], document)
         return result
@@ -325,7 +386,7 @@ def frontend_import_checks(control, selected, identity, *, scope='frontend-impor
             command = ('/usr/bin/flock', '-n', '/state/development/cache/.fullmag-frontend-import-checks.lock',
                 '/usr/bin/env', 'FULLMAG_FRONTEND_ROOT=/state/development/cache', 'FULLMAG_NEXT_DIST_DIR=.next',
                 'TMPDIR=/state/development/tmp', 'TMP=/state/development/tmp', 'TEMP=/state/development/tmp',
-                'CI=1', *arguments)
+                'CI=1', 'FULLMAG_TEST_SOURCE_ROOT=/opt/fullmag/source', *arguments)
             try:
                 stdout, stderr = codegen._run_frontend(before['frontend'][0], command, timeout=600,
                                                        stdout_limit=1024 * 1024)
@@ -378,9 +439,12 @@ def main():
     parser.add_argument('--source-root', type=Path, required=True)
     parser.add_argument('--oracle-wheel', help='Explicit registered mpmath wheel in the group verification volume (all scope only)')
     parser.add_argument('--offline', action='store_true', help='Run interpreted checks in a private group helper when backend is stopped')
+    parser.add_argument('--initial-attempt', help='Pinned pre-service development attempt for offline checks')
     parser.add_argument('--modules', nargs='+', help='Explicit unittest modules (offline mode only)')
-    parser.add_argument('--scope', choices=('all', 'source-capture', 'frontend-import', 'frontend-antenna', 'frontend-visualization', 'frontend-tools', 'field-only'), default='all')
+    parser.add_argument('--scope', choices=('all', 'source-capture', 'frontend-import', 'frontend-antenna', 'frontend-visualization', 'frontend-tools', 'field-only', 'network-failure', 'empty-authoring', 'frontend-telemetry', 'frontend-telemetry-focused'), default='all')
     args = parser.parse_args()
+    if args.initial_attempt is not None and not args.offline:
+        raise BuildControlError('--initial-attempt requires --offline')
     if args.oracle_wheel is not None and (args.offline or args.scope != 'all'):
         raise BuildControlError('Oracle wheel is supported only for live all checks')
     if args.offline:
@@ -399,8 +463,10 @@ def main():
     helper = configured["services"]["fem-gpu-toolchain"]["build"]["args"]["FULLMAG_CUDA_BASE_IMAGE"]
     control = BuildControl(identity, helper)
     control.prepare()
-    if args.scope in ('frontend-import', 'frontend-antenna', 'frontend-visualization'):
+    if args.scope in ('frontend-import', 'frontend-antenna', 'frontend-visualization', 'frontend-telemetry', 'frontend-telemetry-focused'):
         return frontend_import_checks(control, selected, identity, scope=args.scope)
+    if args.initial_attempt is not None:
+        return _offline_checks(control, selected, None, args.modules, initial_attempt=args.initial_attempt)
     ids = docker_capture('ps', *(['--all'] if args.offline else []), '--quiet', '--no-trunc', '--filter', 'label=com.docker.compose.project='+control.project,
                          '--filter', 'label=com.docker.compose.service=backend').stdout.decode().split()
     if len(ids) != 1:
@@ -430,17 +496,21 @@ if oracle_binding is not None:
     from docker_volume_checks import _verify_oracle_wheel
     oracle_before = _verify_oracle_wheel(oracle_binding)
     environment['PYTHONPATH'] = oracle_binding['path'] + (os.pathsep + environment['PYTHONPATH'] if environment.get('PYTHONPATH') else '')
-command=[sys.executable,'-B','-m','unittest','test_docker_dev_defaults','test_docker_dev_up','test_docker_dev_owned_control','test_docker_dev_codegen','test_docker_volume_activate','test_docker_volume_reconcile','test_docker_activation_preflight','test_antenna_rt0_surface_oracle','test_docker_volume_container_recovery','test_docker_volume_stop_unadmitted','test_docker_volume_dev_runtime_state','test_docker_runtime_control_volume','test_docker_container_runtime_recovery','test_runtime_service_recovery_busy_retry','test_docker_backend_volume_cache','test_bootstrap_docker_toolchain','test_docker_toolchain_host_inputs','test_docker_compose_identity','test_docker_host_ledger','test_docker_group_ledger','test_docker_volume_receipts','test_docker_volume_device_access','test_docker_volume_retained_device_lifecycle','test_docker_volume_native_init_successor','test_docker_dev_host','test_docker_volume_wsl','test_docker_wsl_bind','test_linux_native_host','test_linux_native_probe','test_docker_python_no_test_build','test_mfem_cuda_fast_compile','test_docker_frontend_dev','test_docker_dev_browser_qa','test_docker_development_inputs_linux','test_docker_backend_dev','test_docker_dev_fast_loop','test_docker_backend_live_source','test_docker_candidate_retirement','test_docker_startup_script','test_backend_volume_cache_maintenance','test_docker_cpu_access','test_docker_dev_storage','test_docker_dev_image_context','test_docker_dev_recreate','test_docker_volume_pre_admission_recreate','test_docker_volume_pre_admission_selector','test_docker_volume_pre_admission_integration','test_docker_volume_post_build_generation','test_docker_volume_post_build_integration','test_docker_volume_pending_continuation','test_docker_volume_pending_resume','test_docker_native_failed_recreate','test_docker_prestart_resume','test_docker_frontend_cache','test_docker_frontend_cache_named_volume','test_fullmag_docker_runtime','test_docker_orphan_recovery','test_recover_docker_orphan','test_just_orphan_recovery_shell','test_docker_volume_checks','test_docker_shared_build_storage','test_backend_shared_store','test_backend_shared_integration','test_backend_shared_recovery','test_backend_group_retirement','test_backend_compiler_cache','test_docker_cache_retirement','test_docker_worktree_finish','test_backend_auto_maintenance','test_docker_helper_source','test_backend_package_backup_retirement']
+command=[sys.executable,'-B','-m','unittest','test_docker_dev_defaults','test_docker_dev_up','test_docker_dev_owned_control','test_docker_dev_codegen','test_docker_volume_activate','test_docker_volume_reconcile','test_docker_volume_network_failure_reconcile','test_docker_activation_preflight','test_antenna_rt0_surface_oracle','test_docker_volume_container_recovery','test_docker_volume_stop_unadmitted','test_docker_volume_dev_runtime_state','test_docker_runtime_control_volume','test_docker_container_runtime_recovery','test_runtime_service_recovery_busy_retry','test_docker_backend_volume_cache','test_bootstrap_docker_toolchain','test_docker_toolchain_host_inputs','test_docker_compose_identity','test_docker_host_ledger','test_docker_group_ledger','test_docker_volume_receipts','test_docker_volume_device_access','test_docker_volume_retained_device_lifecycle','test_docker_volume_native_init_successor','test_docker_dev_host','test_docker_volume_wsl','test_docker_wsl_bind','test_linux_native_host','test_linux_native_probe','test_docker_python_no_test_build','test_mfem_cuda_fast_compile','test_docker_frontend_dev','test_docker_dev_browser_qa','test_docker_development_inputs_linux','test_docker_backend_dev','test_docker_dev_fast_loop','test_docker_backend_live_source','test_docker_candidate_retirement','test_docker_startup_script','test_backend_volume_cache_maintenance','test_docker_cpu_access','test_docker_dev_storage','test_docker_dev_image_context','test_docker_dev_recreate','test_docker_volume_pre_admission_recreate','test_docker_volume_pre_admission_selector','test_docker_volume_pre_admission_integration','test_docker_volume_post_build_generation','test_docker_volume_post_build_integration','test_docker_volume_pending_continuation','test_docker_volume_pending_resume','test_docker_native_failed_recreate','test_docker_prestart_resume','test_docker_frontend_cache','test_docker_frontend_cache_named_volume','test_fullmag_docker_runtime','test_docker_orphan_recovery','test_recover_docker_orphan','test_just_orphan_recovery_shell','test_docker_volume_checks','test_docker_shared_build_storage','test_backend_shared_store','test_backend_shared_integration','test_backend_shared_recovery','test_backend_group_retirement','test_backend_compiler_cache','test_docker_cache_retirement','test_docker_worktree_finish','test_backend_auto_maintenance','test_docker_helper_source','test_backend_package_backup_retirement']
 if sys.argv[1] == 'frontend-tools':
     command = [sys.executable, '-B', '-m', 'unittest', 'test_docker_dev_codegen', 'test_docker_volume_checks', 'test_docker_volume_frontend_recovery', 'test_docker_volume_dev_runtime_state', 'test_docker_volume_receipts', 'test_docker_dev_browser_qa']
+if sys.argv[1] == 'network-failure':
+    command = [sys.executable, '-B', '-m', 'unittest', 'test_docker_volume_network_failure_reconcile', 'test_docker_volume_checks']
+if sys.argv[1] == 'empty-authoring':
+    command = [sys.executable, '-B', '-m', 'unittest', 'test_docker_volume_receipts', 'test_docker_saved_authoring_history', 'test_docker_preclaim_cancelled_restart', 'test_docker_volume_prestart_recovery', 'test_docker_volume_checks']
 if sys.argv[1] == 'field-only':
     environment.update(PYTHONPATH='/opt/fullmag/source/packages/fullmag-py/src', FULLMAG_TEST_TEMP_ROOT='/build/verification-tmp')
     result = subprocess.call([sys.executable, '-B', '-m', 'unittest', 'discover',
         '-s', '/opt/fullmag/source/packages/fullmag-py/tests', '-p', 'test_antenna_field_only_nonmagnetic.py', '-v'],
         cwd='/opt/fullmag/source', env=environment)
 else:
-    result = subprocess.call(command,cwd='/opt/fullmag/source/scripts',env=environment) if sys.argv[1] in ('all', 'frontend-tools') else 0
-if result == 0 and sys.argv[1] not in ('field-only', 'frontend-tools'):
+    result = subprocess.call(command,cwd='/opt/fullmag/source/scripts',env=environment) if sys.argv[1] in ('all', 'frontend-tools', 'network-failure', 'empty-authoring') else 0
+if result == 0 and sys.argv[1] not in ('field-only', 'frontend-tools', 'network-failure', 'empty-authoring'):
     result = subprocess.call([sys.executable, '-B', '/opt/fullmag/source/scripts/verify_accepted_source_scene_capture.py',
                               '--fullmag-root', '/opt/fullmag/source/packages/fullmag-py/src/fullmag',
                               '--output-dir', '/build/verification-tmp'], env=environment)
@@ -457,7 +527,9 @@ sys.exit(result)
              'stdout':result.stdout.decode('utf-8','replace'), 'stderr':result.stderr.decode('utf-8','replace')}
     if oracle_dependency is not None:
         receipt['oracle_dependency'] = oracle_dependency
-    control.write('verification/interpreted-frontend-tools-checks.json' if args.scope == 'frontend-tools' else
+    control.write('verification/interpreted-empty-authoring-checks.json' if args.scope == 'empty-authoring' else
+                  'verification/interpreted-network-failure-checks.json' if args.scope == 'network-failure' else
+                  'verification/interpreted-frontend-tools-checks.json' if args.scope == 'frontend-tools' else
                   'verification/interpreted-checks.json' if args.scope == 'all' else
                   'verification/interpreted-field-only-checks.json' if args.scope == 'field-only' else
                   'verification/interpreted-source-capture-checks.json',receipt)

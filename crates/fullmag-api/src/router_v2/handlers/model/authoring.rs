@@ -3837,6 +3837,8 @@ fn apply_universe_fit(
             airbox_hmin: None,
             airbox_growth_rate: None,
             airbox_grading: None,
+            airbox_curvature_factor: None,
+            airbox_narrow_region_resolution: None,
         });
     universe.mode = "box".to_string();
     universe.size = Some(size);

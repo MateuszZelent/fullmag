@@ -11,8 +11,8 @@ use fullmag_session::compute_node_snapshot::{
 };
 use fullmag_session::host_resource_ledger::HostResourceLedger;
 use fullmag_session::host_resource_ledger::{
-    HostReservationRequest, HostResourceLedgerSnapshot, HostResourceReservationState,
-    TransientGpuInventoryUnavailable,
+    ComputeNodeSampleNotCurrent, HostReservationRequest, HostResourceLedgerSnapshot,
+    HostResourceReservationState, TransientGpuInventoryUnavailable,
 };
 use fullmag_session::runtime_service::RuntimeServiceConfig;
 use fullmag_session::{
@@ -296,6 +296,52 @@ mod recovery_tests {
             fixture.context.compute_snapshot_admission_failure().unwrap(),
             Some("compute-node snapshot is missing".into())
         );
+    }
+
+    #[test]
+    fn required_current_snapshot_preserves_missing_sample_reason_as_typed_error() {
+        let fixture = recovery_fixture_without_sample();
+
+        let error = fixture
+            .context
+            .required_current_compute_node_snapshot()
+            .unwrap_err();
+
+        assert!(error.chain().any(|cause| {
+            cause.is::<fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent>()
+        }));
+        assert!(format!("{error:#}").contains("compute-node snapshot is missing"));
+    }
+
+    #[test]
+    fn required_current_snapshot_keeps_configured_owner_mismatch_fatal() {
+        let fixture = recovery_fixture_without_sample();
+        let mut snapshot = crate::compute_node_probe::sample_compute_node_for_owner(
+            &fixture.ledger,
+            fixture.inventory_owner.descriptor(),
+            None,
+        )
+        .unwrap();
+        snapshot.schema_version =
+            fullmag_session::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V1.into();
+        snapshot.host_owner_id = None;
+        snapshot.host_owner_epoch = None;
+        snapshot.runtime_owner_id = "different-ledger-owner".into();
+        fixture
+            .ledger
+            .publish_compute_node_snapshot(&snapshot)
+            .unwrap();
+
+        let error = fixture
+            .context
+            .required_current_compute_node_snapshot()
+            .unwrap_err();
+
+        assert!(!error.chain().any(|cause| {
+            cause.is::<fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent>()
+        }));
+        assert!(format!("{error:#}")
+            .contains("compute-node sample does not match the configured host ledger owner"));
     }
 
     #[test]
@@ -1059,6 +1105,19 @@ impl HostRuntimeAdmission {
         Ok(self.current_compute_snapshot_or_failure()?.ok())
     }
 
+    /// Require the current compute-node observation for an operation that may
+    /// launch a worker. A temporarily unavailable sample keeps its typed
+    /// admission outcome and the producer's specific reason; I/O, owner, and
+    /// configuration failures remain hard errors.
+    pub fn required_current_compute_node_snapshot(
+        &self,
+    ) -> Result<fullmag_session::compute_node_snapshot::ComputeNodeSnapshot> {
+        match self.current_compute_snapshot_or_failure()? {
+            Ok(snapshot) => Ok(snapshot),
+            Err(reason) => Err(anyhow::Error::new(ComputeNodeSampleNotCurrent).context(reason)),
+        }
+    }
+
     fn current_compute_snapshot_or_failure(
         &self,
     ) -> Result<std::result::Result<fullmag_session::compute_node_snapshot::ComputeNodeSnapshot, String>> {
@@ -1778,7 +1837,7 @@ impl HostRuntimeAdmission {
 
     fn ensure_committed_request(&self, request: &HostReservationRequest) -> Result<()> {
         let current_snapshot = self
-            .current_compute_node_snapshot()?
+            .required_current_compute_node_snapshot()
             .context("process spawn requires a current compute-node sample for this boot")?;
         if !request.exclusive_gpu_uuids.is_empty() {
             match &current_snapshot.gpus {

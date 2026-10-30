@@ -37,7 +37,7 @@ docker-dev source_root="" port="" script="" gpu_access="auto":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" up {{if port == "" { "" } else { "--port " + quote(port) } }} --gpu-access {{quote(gpu_access)}} {{if source_root == "" { "" } else { "--source-root " + quote(source_root) } }} {{if script == "" { "" } else { "--script " + quote(script) } }}
 
 # Ensure the persistent DEV services, then execute exactly one explicit script.
-# Noninteractive execution waits for its outcome; API/frontend and caches stay up.
+# Execution stays attached until terminal; API/frontend and caches stay up.
 fullmag-dev-container script source_root="" port="" gpu_access="auto":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" up {{if port == "" { "" } else { "--port " + quote(port) } }} --gpu-access {{quote(gpu_access)}} {{if source_root == "" { "" } else { "--source-root " + quote(source_root) } }}
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" run-script --script {{quote(script)}} {{if port == "" { "" } else { "--port " + quote(port) } }} {{if source_root == "" { "" } else { "--source-root " + quote(source_root) } }}
@@ -48,6 +48,11 @@ docker-dev-codegen source_root="":
 # Stop only a pinned supervisor whose failed admission already reaped the API.
 docker-dev-stop-failed source_root container_id image_id process_receipt_sha256:
     @{{storage_python}} "{{repo_root}}/scripts/docker_volume_stop_failed.py" --source-root {{quote(source_root)}} --container-id {{quote(container_id)}} --image-id {{quote(image_id)}} --process-receipt-sha256 {{quote(process_receipt_sha256)}}
+
+# Invoke the native WorkerNoSpawn operator in the exact diagnostic backend.
+# Preview is read-only; apply preserves all run data and never repeats Solve.
+docker-dev-cancel-failed-no-spawn source_root container_id image_id process_receipt_sha256 request request_sha256 apply="false" reconcile_attempt="" failed_receipt_sha256="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_no_spawn_cancellation.py" --source-root {{quote(source_root)}} --backend-container-id {{quote(container_id)}} --image-id {{quote(image_id)}} --process-receipt-sha256 {{quote(process_receipt_sha256)}} --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}}{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}{{if reconcile_attempt == "" { if failed_receipt_sha256 == "" { "" } else { error("both loader reconciliation pins are required") } } else { if failed_receipt_sha256 == "" { error("both loader reconciliation pins are required") } else { " --reconcile-loader-failure " + quote(reconcile_attempt) + " --failed-receipt-sha256 " + quote(failed_receipt_sha256) } } }}
 
 # Release one unknown activation whose recorded HTTP 500 precedes any API mutation,
 # after the backend stopped gracefully with an empty accepted-run store. Never retries the script.
@@ -110,6 +115,10 @@ docker-dev-reconcile-iteration request request_sha256 source_root port="3197" pr
 docker-dev-reconcile-development request request_sha256 source_root apply="false":
     @{{storage_python}} "{{repo_root}}/scripts/docker_volume_development_interrupted.py" --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}} --source-root {{quote(source_root)}}{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}
 
+# Failure-only recovery for an initial Compose rejection before either service exists.
+docker-dev-reconcile-network-failure source_root attempt receipt_sha256 compose_sha256 engine_id apply="false":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_network_failure_reconcile.py" --source-root {{quote(source_root)}} --attempt {{quote(attempt)}} --receipt-sha256 {{quote(receipt_sha256)}} --compose-sha256 {{quote(compose_sha256)}} --engine-id {{quote(engine_id)}}{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}
+
 # Confirm one exact post-reboot resume failure; never start services or change native ownership.
 docker-dev-reconcile-resume request request_sha256 source_root apply="false":
     @{{storage_python}} "{{repo_root}}/scripts/docker_volume_development_interrupted.py" --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}} --source-root {{quote(source_root)}}{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}
@@ -131,10 +140,10 @@ docker-dev-reconcile-activation request request_sha256 source_root port="3197" p
 docker-dev-script script source_root="" port="" request_id="":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" script --script {{quote(script)}} {{if source_root == "" { "" } else { "--source-root " + quote(source_root) } }} {{if port == "" { "" } else { "--port " + quote(port) } }} {{if request_id == "" { "" } else { "--request-id " + quote(request_id) } }}
 
-# Pinned activation for recovery, audits, and callers that already hold the
-# exact attempt/config/source identity.
+# Run in the foreground with live progress and exact-run Ctrl+C cancellation.
+# Explicit attempt/config/source pins are verified before activation.
 docker-dev-script-pinned attempt config_sha256 source_root script request_id="":
-    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" activate-script --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --script {{quote(script)}} {{if request_id == "" { "" } else { "--request-id " + quote(request_id) } }}
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" run-script --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --script {{quote(script)}} {{if request_id == "" { "" } else { "--request-id " + quote(request_id) } }}
 
 # Restart a pinned healthy backend only when its API confirms no active session.
 # Replace only the frontend generation; backend/source correspondence is required.
@@ -177,8 +186,8 @@ docker-dev-stop-saved-authoring attempt config_sha256 source_root checkpoint che
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" restart-idle-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --saved-authoring-checkpoint {{quote(checkpoint)}} --saved-authoring-checkpoint-sha256 {{quote(checkpoint_sha256)}} --stop-only
 
 # Read-only preview by default; apply creates a verified copy for one stopped master.
-docker-dev-recover-isolated source_root operator_pins recovery_id terminal_runs held_runs restore_run_id apply="false":
-    @{{storage_python}} "{{repo_root}}/scripts/docker_isolated_session_recovery.py" --repo-root "{{repo_root}}" --source-root {{quote(source_root)}} --operator-pins {{quote(operator_pins)}} --recovery-id {{quote(recovery_id)}} --retained-terminal-runs {{quote(terminal_runs)}} --retained-held-manual-runs {{quote(held_runs)}} --restore-run-id {{quote(restore_run_id)}} {{if apply == "true" { "--apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}
+docker-dev-recover-isolated source_root operator_pins recovery_id terminal_runs held_runs restore_run_id apply="false" successor_snapshot="false":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_isolated_session_recovery.py" --repo-root "{{repo_root}}" --source-root {{quote(source_root)}} --operator-pins {{quote(operator_pins)}} --recovery-id {{quote(recovery_id)}} --retained-terminal-runs {{quote(terminal_runs)}} --retained-held-manual-runs {{quote(held_runs)}} --restore-run-id {{quote(restore_run_id)}} {{if apply == "true" { "--apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }} {{if successor_snapshot == "true" { "--successor-snapshot" } else if successor_snapshot == "false" { "" } else { error("successor_snapshot must be true or false") } }}
 
 # Explicit managed recovery of one stopped Docker namespace. The old attempt,
 # Compose config digest, source checkout, frontend port, and control-volume

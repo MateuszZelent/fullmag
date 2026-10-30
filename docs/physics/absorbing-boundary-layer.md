@@ -94,6 +94,14 @@ the object's translation. `frame="universe"` uses the explicit study-universe
 box; when the universe is automatic, the planner uses the sampled object
 bounds as the deterministic fallback.
 
+W FEM bounds obejmują sumę węzłów wszystkich segmentów należących do jednego
+obiektu, z deduplikacją wspólnych węzłów. Marker podregionu konformalnego nie
+tworzy nowego brzegu warstwy tłumiącej. Pole alpha obiektu jest rozwiązywane
+raz dla tej sumy, więc kolejność markerów nie zmienia profilu ani wartości na
+ich wspólnej granicy. Ta sama reguła dotyczy fallbacku automatycznego universe;
+różne obiekty zachowują odrębne bounds. Regresja planera sprawdza mapę alpha,
+bez deklaracji nowej kwalifikacji dynamiki FEM CPU/GPU.
+
 (assumptions-and-validity)=
 ### 2.3 Assumptions and approximations
 
@@ -286,3 +294,4 @@ parameter, backend lane, and implementation symbol cited here:
 | `crates/fullmag-plan/src/fem.rs` | `build_region_material_fields` | FEM material-field handoff |
 | `crates/fullmag-plan/src/validate.rs` | `validate_region_owned_planning` | FDM CUDA fail-closed gate |
 | `apps/control-room/src/modules/inspector/panels/ObjectAbsorbingBoundaryPanel.tsx` | `ObjectAbsorbingBoundaryPanel` | UI authoring and persistence |
+| `crates/fullmag-plan/src/tests/material_audit_fem.rs` | `fem_absorber_uses_the_union_of_conformal_owner_segments` | Mapa alpha nie zależy od podziału ownera na markery ani ich kolejności. |

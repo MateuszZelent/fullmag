@@ -10,6 +10,14 @@ type Planar = NonNullable<VisualizationState["planar"]>;
 export function projectPlanarPresentationState(
   data: VisualizationState | null | undefined,
   optimisticData: VisualizationState | null | undefined,
+  options: {
+    /**
+     * True when switching between the authoritative and the optimistic
+     * component is computed client-side from data already in memory; the
+     * component is then presentation, not sample identity (D2D-12).
+     */
+    clientComponent?: (authoritative: string, optimistic: string) => boolean;
+  } = {},
 ): Planar | null {
   const authoritative = data?.planar;
   if (!authoritative) return null;
@@ -18,6 +26,9 @@ export function projectPlanarPresentationState(
 
   return {
     ...authoritative,
+    component: options.clientComponent?.(authoritative.component, optimistic.component)
+      ? optimistic.component
+      : authoritative.component,
     visible: optimistic.visible,
     colormap: optimistic.colormap,
     display_unit: optimistic.display_unit,

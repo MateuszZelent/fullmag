@@ -285,6 +285,17 @@ Nie może zastąpić strefowego $\max\mathcal L$ ani przyciąć lokalnego upper
 target. `airbox.regular_tet_equivalent_size.v1` jest jawnie
 tetra-equivalent diagnostic, nie `cell.max_edge.v1` i nie mixed-topology gate.
 
+Autorskie `growth_rate` w `mesh_options` jest wskazówką gradacji Gmsh
+(`Mesh.SmoothRatio`), a nie kontraktem $\rho_{KL}\le g(1+0.05)$. Gmsh nie
+ogranicza ilorazu sąsiadów: dla dwóch sfer ($h_\mathrm{max}=10$ nm,
+$h_\mathrm{air}=30$ nm) $\max\rho_{KL}\approx2.2$–$2.6$ przy $g=1.3$, $1.8$ i $3.0$,
+a p95 $\approx1.39$ niezależnie od $g$. Dlatego `_mesh_result_payload` dla
+samego `growth_rate` publikuje `adjacent_size_growth` jako diagnostykę
+(`enforced: false`), bez blokowania builda. Twardy gate (tolerancja 0,
+wymagane pary) działa tylko na jawne żądanie kwalifikacji
+`enforce_growth_gate: true`. Gate z tej tabeli, związany z
+`growth.max_neighbor_ratio` w `fem_mesh_policy.v1`, pozostaje planowany.
+
 ### 8.3 Mixed-mesh statistics and metric availability
 
 The bounded mesh-statistics report covers supported linear `tet4`, `prism6`,

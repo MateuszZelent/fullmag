@@ -126,7 +126,7 @@ function makeFixture() {
       summary = mode === "empty" || state.objectZero ? {} : { demag: 2, zeeman: 0 };
       state.telemetryRevision++;
       resources.invalidate(SESSION_STATUS_RESOURCE_KEY, state.telemetryRevision);
-      bus.emit("telemetry:scalar-sample", { revision: state.telemetryRevision, sessionId: "primitive-fixture", runId: "telemetry-fixture-run", step: 0, time: 0, row: mode === "empty" ? {} : { mx: 0.25, my: 0, mz: 0.5, ...(state.objectZero ? {} : { e_total: 0 }) } });
+      bus.emit("telemetry:scalar-sample", { requestScopeEpoch: `${API_INSTANCE}:1`, revision: state.telemetryRevision, sessionId: "primitive-fixture", runId: "telemetry-fixture-run", step: 0, time: 0, row: mode === "empty" ? {} : { mx: 0.25, my: 0, mz: 0.5, ...(state.objectZero ? {} : { e_total: 0 }) } });
     },
     read: () => ({ calls: [...calls], renders: state.renders, pending: pending.length, pendingWrites: pendingWrites.length, unexpected: [...unexpected], settings: resolveTargetVisualization({ snapshot: visualization.getSnapshot(), target, visualizationState: remote }).settings, airboxSettings: resolveTargetVisualization({ snapshot: visualization.getSnapshot(), target: { kind: "airbox", id: "airbox", label: "Airbox" }, visualizationState: remote }).settings }),
     invalidate: () => { state.hold = true; remote = { ...remote, revision: ++state.revision }; resources.invalidate(VISUALIZATION_STATE_PATH, state.revision); },

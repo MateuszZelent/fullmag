@@ -196,11 +196,11 @@ class TypedQualityDispatchTests(unittest.TestCase):
                 facet_global_ordinals=np.asarray([], dtype=np.int64),
             )
 
-    def test_remesh_payload_rejects_measured_growth_violation(self) -> None:
+    @staticmethod
+    def _far_apex_neighbor_mesh() -> MeshData:
         # Two positively oriented tetrahedra share one face, but the second
-        # apex is deliberately far away.  The declared growth law must be a
-        # hard publication gate rather than diagnostic metadata.
-        mesh = MeshData(
+        # apex is deliberately far away.
+        return MeshData(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -224,15 +224,19 @@ class TypedQualityDispatchTests(unittest.TestCase):
             facet_global_ordinals=np.asarray([], dtype=np.int64),
         )
 
+    def test_remesh_payload_rejects_measured_growth_violation(self) -> None:
+        # A qualification request makes the declared growth law a hard
+        # publication gate rather than diagnostic metadata.
         with TemporaryDirectory() as artifact_dir:
             with self.assertRaises(MeshGrowthValidationError) as caught:
                 _mesh_result_payload(
-                    mesh,
+                    self._far_apex_neighbor_mesh(),
                     mesh_name="growth-gate",
                     generation_mode="generated",
                     mesh_provenance={"mesh_options": {"growth_rate": 1.3}},
                     topology_artifact_dir=artifact_dir,
                     inline_topology_max_bytes=0,
+                    enforce_growth_gate=True,
                 )
             self.assertEqual(list(Path(artifact_dir).iterdir()), [])
         self.assertEqual(caught.exception.code, "adjacent_size_growth_exceeded")
@@ -241,6 +245,21 @@ class TypedQualityDispatchTests(unittest.TestCase):
         self.assertEqual(growth_payload["schema_version"], "mesh_quality_failure.v2")
         self.assertEqual(growth_payload["metric_id"], "adjacent_size_growth.v1")
         self.assertGreater(growth_payload["details"]["violation_count"], 0)
+
+    def test_remesh_payload_publishes_authored_growth_hint_as_diagnostic(self) -> None:
+        # An authored growth_rate is a Gmsh grading hint; without a
+        # qualification request the realized ratios are reported, not gated.
+        payload = _mesh_result_payload(
+            self._far_apex_neighbor_mesh(),
+            mesh_name="growth-hint",
+            generation_mode="generated",
+            mesh_provenance={"mesh_options": {"growth_rate": 1.3}},
+        )
+        growth = payload["adjacent_size_growth"]
+        self.assertFalse(growth["enforced"])
+        self.assertFalse(growth["is_valid"])
+        self.assertGreater(growth["violation_count"], 0)
+        self.assertEqual(growth["metric_definition_id"], "adjacent_size_growth.v1")
 
     def test_remesh_payload_rejects_declared_growth_without_neighbor_pairs(self) -> None:
         mesh = MeshData.from_legacy_tet4(
@@ -265,6 +284,7 @@ class TypedQualityDispatchTests(unittest.TestCase):
                 mesh_name="growth-pair-gate",
                 generation_mode="generated",
                 mesh_provenance={"mesh_options": {"growth_rate": 1.3}},
+                enforce_growth_gate=True,
             )
         self.assertEqual(caught.exception.report.evaluated_pair_count, 0)
         self.assertFalse(caught.exception.report.is_valid)

@@ -884,6 +884,14 @@ print(json.dumps({'sha256':hashlib.sha256(raw).hexdigest(),'receipt':document,'a
 '''
     observed=json.loads(docker_capture('exec',args.container_id,'/usr/local/bin/python3','-B','-c',script).stdout)
     receipt=observed['receipt']
+    if (receipt.get('state') == 'failed_outcome_retained'
+            and receipt.get('error') == SUPERVISION_FAILURE_ERROR
+            and 'FULLMAG_SESSION_STORAGE_PROFILE=linux-native-v1' in actual.get('Config', {}).get('Env', [])):
+        from docker_volume_linux_supervision_stop import stop as stop_linux_supervision
+        result = stop_linux_supervision(args, selected, identity, actual)
+        print(json.dumps({'state': result['state'], 'failure_kind': result['failure_kind'],
+                          'container_id': args.container_id}))
+        return
     if (receipt.get('state') == 'failed_outcome_retained' and 'service_owner' in receipt
             and receipt.get('error') == SUPERVISION_FAILURE_ERROR
             and 'FULLMAG_SESSION_STORAGE_PROFILE=windows-folder-v1' in actual.get('Config', {}).get('Env', [])):

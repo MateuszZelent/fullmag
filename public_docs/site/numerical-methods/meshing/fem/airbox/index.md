@@ -111,8 +111,8 @@ interfaces and through-thickness modes can demand a smaller local size.
 | `airbox_growth_rate` / `grading_ratio` | 1 | `1.3` in `AirboxOptions` | positive; typically >1 for geometric grading | rate at which element size grows away from the magnet |
 | `airbox_grading` / `grading_mode` | 1 | `geometric` | `auto`, `geometric`, `linear` in the UI contract | controls the transition from interface to far field |
 | `boundary_marker` | 1 | `99` in direct Python options | integer marker not colliding with region semantics | identifies the outer boundary used by the physical closure |
-| `curvature_factor` | 1 | unset | positive when set | curvature-based sizing in the exterior geometry |
-| `narrow_region_resolution` | 1 | unset | positive when set | resolution request for narrow exterior gaps |
+| `study.universe.mesh(curvature_factor=...)` / `airbox_curvature_factor` | 1 | unset | finite $>0$; requires the air maximum element size | air target $cR$ next to curved magnetic surfaces, relaxing with the growth rate |
+| `study.universe.mesh(narrow_region_resolution=...)` / `airbox_narrow_region_resolution` | 1 | unset | finite $>0$; requires the air maximum element size | elements across air gaps between bodies or a body and the outer boundary |
 
 ## Python API
 

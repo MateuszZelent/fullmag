@@ -979,9 +979,10 @@ ValueError: no fixed timestep
         rendered["ir"]["study"]["dynamics"]["integrator"] = json!("heun");
         rendered["stages"] = json!([]);
         let notes = compare_lowered(&original, &rendered);
-        assert_eq!(notes.len(), 2, "{notes:?}");
+        assert_eq!(notes.len(), 3, "{notes:?}");
         assert!(notes[0].starts_with("study dynamics differs"));
         assert!(notes[1].starts_with("study stages differs"));
+        assert!(notes[2].starts_with("stage antenna and transport declarations differs"));
     }
 
     fn lowered_document(

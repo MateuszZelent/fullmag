@@ -24,9 +24,14 @@ defined in `airboxMeshPolicyDraft.ts`; the UI is implemented by
 | Maximum / minimum element size | `airbox_hmax`, `airbox_hmin` | m |
 | Maximum element growth rate | `airbox_growth_rate` | 1 |
 | Element grading | `airbox_grading` | `auto`, `geometric`, `linear` |
-| Curvature factor | `curvature_factor` | 1 |
-| Narrow-region resolution | `narrow_region_resolution` | 1 |
+| Curvature factor | `airbox_curvature_factor` (alias `curvature_factor`) | 1 |
+| Narrow-region resolution | `airbox_narrow_region_resolution` (alias `narrow_region_resolution`) | 1 |
 | Advanced JSON | complete universe policy | mixed |
+
+Curvature factor and narrow-region resolution refine only the air (next to curved magnet
+surfaces and across narrow air gaps) and require the maximum element size. They are
+exported to Python as `study.universe.mesh(curvature_factor=..., narrow_region_resolution=...)`.
+Exact-layer, swept and mixed air routes reject them.
 
 For FDM, FEM-only air-mesh keys are filtered; the panel exposes only structured-domain geometry.
 For FEM, **Apply Airbox Policy** stores authored intent and makes the realized shared-domain mesh

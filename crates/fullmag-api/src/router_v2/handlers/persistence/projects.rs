@@ -2805,6 +2805,8 @@ fn authoring_scene_wire_projection(raw: &Value, scene: &SceneDocument) -> Option
         for (current, legacy) in [
             ("maximum_element_size", "airbox_hmax"),
             ("minimum_element_size", "airbox_hmin"),
+            ("curvature_factor", "airbox_curvature_factor"),
+            ("narrow_region_resolution", "airbox_narrow_region_resolution"),
         ] {
             if supplied.contains_key(current) {
                 // Values come only from the validated typed state, never raw JSON.
@@ -2813,7 +2815,8 @@ fn authoring_scene_wire_projection(raw: &Value, scene: &SceneDocument) -> Option
             }
         }
         for field in ["size", "center", "padding", "airbox_hmax", "airbox_hmin",
-            "airbox_growth_rate", "airbox_grading"] {
+            "airbox_growth_rate", "airbox_grading", "airbox_curvature_factor",
+            "airbox_narrow_region_resolution"] {
             if supplied.get(field) == Some(&Value::Null) && !canonical.contains_key(field) {
                 canonical.insert(field.into(), Value::Null);
             }

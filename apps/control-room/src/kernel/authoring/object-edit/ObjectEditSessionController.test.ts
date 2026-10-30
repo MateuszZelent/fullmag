@@ -179,4 +179,23 @@ describe("ObjectEditSessionController", () => {
     expect(controller.hasPendingWrite("scope-a")).toBe(true);
     expect(controller.endSceneMutation(newer)).toBe(true);
   });
+
+  it("rebases a dirty draft only through the supplied rebase against the previous canonical", () => {
+    type Draft = { base: number; name: string };
+    const controller = new ObjectEditSessionController<Draft>();
+    const identity = controller.activate({ objectId: "a", sessionScopeKey: "s", targetKey: "a" }, { base: 4, name: "Canonical" });
+    controller.updateDraft(identity, (draft) => ({ ...draft, name: "Edited" }));
+    const seen: Array<[Draft, Draft, Draft]> = [];
+
+    controller.refreshCanonical(identity, { base: 5, name: "Canonical" }, (draft, previous, canonical) => {
+      seen.push([draft, previous, canonical]);
+      return { ...draft, base: canonical.base };
+    });
+
+    expect(seen).toEqual([[{ base: 4, name: "Edited" }, { base: 4, name: "Canonical" }, { base: 5, name: "Canonical" }]]);
+    expect(controller.getSnapshot()).toMatchObject({ dirty: true, draft: { base: 5, name: "Edited" } });
+
+    controller.refreshCanonical(identity, { base: 6, name: "Canonical" });
+    expect(controller.getSnapshot().draft).toEqual({ base: 5, name: "Edited" });
+  });
 });

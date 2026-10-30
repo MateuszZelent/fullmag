@@ -241,6 +241,7 @@ fn scalar_fdm_field(
             membership: Some(membership),
             membership_error: None,
             multilayer_scope: None,
+            coverage: None,
         },
     }
 }

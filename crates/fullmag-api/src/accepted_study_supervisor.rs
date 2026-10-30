@@ -794,25 +794,16 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
     let _allocated_cpu_millis = lease.budget.cpu_millis;
     let (gpu_uuid, cpu_ids, _cpu_capacity_millis) = if let Some(host) = host {
         if let Err(error) = verify_host_solver_claim_before_spawn(host, store, &claim) {
-            if error.chain().any(|cause| {
-                cause.is::<fullmag_session::StoreWriterBusy>()
-                    || cause.is::<
-                        fullmag_session::host_resource_ledger::TransientGpuInventoryUnavailable,
-                    >()
-            }) {
-                // No launch token has been issued and no child exists. Release
-                // only this supervision slot, retaining the exact lease/Start.
-                // The scheduler can resume admission after servicing drain and
-                // cancellation instead of treating contention as owner failure.
-                slot.release().context("release deferred worker supervision slot")?;
-                return Err(error.context(WorkerLaunchDeferred));
-            }
-            return Err(error);
+            return Err(defer_pre_spawn_worker_launch_error(slot, error));
         }
-        let placement = host.solver_placement(&lease.resource_id)?;
-        let snapshot = host
-            .current_compute_node_snapshot()?
-            .context("accepted worker launch requires a current compute-node sample")?;
+        let placement = match host.solver_placement(&lease.resource_id) {
+            Ok(placement) => placement,
+            Err(error) => return Err(defer_pre_spawn_worker_launch_error(slot, error)),
+        };
+        let snapshot = match current_compute_snapshot_before_worker_launch(host) {
+            Ok(snapshot) => snapshot,
+            Err(error) => return Err(defer_pre_spawn_worker_launch_error(slot, error)),
+        };
         let cpu_capacity_millis = match snapshot.cpu.effective_capacity_millis {
             fullmag_session::compute_node_snapshot::Observation::Available { value } => value,
             _ => bail!("accepted worker launch requires measured effective CPU capacity"),
@@ -834,13 +825,8 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
             .context("recover coordinator before spawning accepted worker")
     {
         Ok(recovered) => recovered,
-        Err(error) if host.is_some()
-            && error.chain().any(|cause| cause.is::<fullmag_session::StoreWriterBusy>()) => {
-            // Host-bound scheduling can resume this exact admitted claim.
-            // No launch token or child exists yet. Retain the lease and durable
-            // Start, releasing only this process's supervision slot.
-            slot.release().context("release deferred worker supervision slot")?;
-            return Err(error.context(WorkerLaunchDeferred));
+        Err(error) if host.is_some() => {
+            return Err(defer_pre_spawn_worker_launch_error(slot, error));
         }
         Err(error) => return Err(error),
     };
@@ -962,9 +948,13 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
     let linux_cgroup = None;
     let mut active_lease = lease;
     let mut pending_heartbeat = None;
-    let host_launch_token = host
-        .map(|host| authorize_host_worker_launch(host.ledger(), store, &active_lease))
-        .transpose()?;
+    let host_launch_token = match host
+        .map(|host| authorize_host_worker_launch(host, store, &active_lease))
+        .transpose()
+    {
+        Ok(token) => token,
+        Err(error) => return Err(defer_pre_spawn_worker_launch_error(slot, error)),
+    };
     let outcome = match spawn_worker(
         worker_executable,
         store.root(),
@@ -1101,40 +1091,87 @@ fn verify_host_solver_claim_before_spawn(
     store: &SessionStore,
     claim: &fullmag_application::TaskClaim,
 ) -> Result<()> {
-    retry_host_worker_launch(|| host.ensure_solver_claim_committed(store, claim), || {})
+    verify_host_solver_claim_before_spawn_with_timeout(
+        host,
+        store,
+        claim,
+        Duration::from_secs(30),
+        || {},
+    )
+}
+
+fn verify_host_solver_claim_before_spawn_with_timeout(
+    host: &fullmag_runtime_control::host_runtime::HostRuntimeAdmission,
+    store: &SessionStore,
+    claim: &fullmag_application::TaskClaim,
+    retry_timeout: Duration,
+    on_retry: impl FnMut(),
+) -> Result<()> {
+    retry_host_worker_launch_with_timeout(
+        || host.ensure_solver_claim_committed(store, claim),
+        on_retry,
+        retry_timeout,
+    )
         .context("verify committed host solver claim before worker spawn")
 }
 
 fn authorize_host_worker_launch(
-    ledger: &fullmag_session::host_resource_ledger::HostResourceLedger,
+    host: &fullmag_runtime_control::host_runtime::HostRuntimeAdmission,
     store: &SessionStore,
     lease: &FmsResourceLease,
 ) -> Result<String> {
-    retry_host_worker_launch(|| ledger.authorize_worker_launch(store, lease), || {})
-        .context("authorize host worker launch")
+    authorize_host_worker_launch_with_timeout(
+        host,
+        store,
+        lease,
+        Duration::from_secs(30),
+        || {},
+    )
+}
+
+fn authorize_host_worker_launch_with_timeout(
+    host: &fullmag_runtime_control::host_runtime::HostRuntimeAdmission,
+    store: &SessionStore,
+    lease: &FmsResourceLease,
+    retry_timeout: Duration,
+    on_retry: impl FnMut(),
+) -> Result<String> {
+    retry_host_worker_launch_with_timeout(
+        || {
+            // Preserve the sampler's unavailable reason if the sample ages
+            // between the second preflight read and the locked launch CAS.
+            host.required_current_compute_node_snapshot()?;
+            host.ledger().authorize_worker_launch(store, lease)
+        },
+        on_retry,
+        retry_timeout,
+    )
+    .context("authorize host worker launch")
 }
 
 fn retry_host_worker_launch<T>(
     mut operation: impl FnMut() -> Result<T>,
+    on_retry: impl FnMut(),
+) -> Result<T> {
+    retry_host_worker_launch_with_timeout(operation, on_retry, Duration::from_secs(30))
+}
+
+fn retry_host_worker_launch_with_timeout<T>(
+    mut operation: impl FnMut() -> Result<T>,
     mut on_retry: impl FnMut(),
+    retry_timeout: Duration,
 ) -> Result<T> {
     use std::hash::{Hash, Hasher};
 
     // Both retryable errors precede one-shot permit consumption: writer
-    // contention prevents admission locks, and a transient GPU sample is
-    // returned by the read-only inventory validation.
-    let deadline = Instant::now() + Duration::from_secs(30);
+    // contention prevents admission locks, while an unavailable compute-node
+    // sample and transient GPU inventory are read-only validation failures.
+    let deadline = Instant::now() + retry_timeout;
     let mut attempt = 0_u64;
     loop {
         match operation() {
             Ok(value) => return Ok(value),
-            Err(error)
-                if error.chain().any(|cause| {
-                    cause.is::<fullmag_session::StoreWriterBusy>()
-                        || cause.is::<
-                            fullmag_session::host_resource_ledger::TransientGpuInventoryUnavailable,
-                        >()
-                }) && Instant::now() < deadline =>
+            Err(error) if is_retryable_pre_spawn_host_error(&error) && Instant::now() < deadline =>
             {
                 on_retry();
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -1143,6 +1180,7 @@ fn retry_host_worker_launch<T>(
                 attempt.hash(&mut hasher);
                 let inventory_unavailable = error.chain().any(|cause| {
                     cause.is::<fullmag_session::host_resource_ledger::TransientGpuInventoryUnavailable>()
+                        || cause.is::<fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent>()
                 });
                 let delay = if inventory_unavailable {
                     Duration::from_secs(1)
@@ -1154,6 +1192,58 @@ fn retry_host_worker_launch<T>(
             }
             Err(error) => return Err(error),
         }
+    }
+}
+
+fn current_compute_snapshot_before_worker_launch(
+    host: &fullmag_runtime_control::host_runtime::HostRuntimeAdmission,
+) -> Result<fullmag_session::compute_node_snapshot::ComputeNodeSnapshot> {
+    current_compute_snapshot_before_worker_launch_with_timeout(
+        host,
+        Duration::from_secs(30),
+        || {},
+    )
+}
+
+fn current_compute_snapshot_before_worker_launch_with_timeout(
+    host: &fullmag_runtime_control::host_runtime::HostRuntimeAdmission,
+    retry_timeout: Duration,
+    on_retry: impl FnMut(),
+) -> Result<fullmag_session::compute_node_snapshot::ComputeNodeSnapshot> {
+    retry_host_worker_launch_with_timeout(
+        || host.required_current_compute_node_snapshot(),
+        on_retry,
+        retry_timeout,
+    )
+}
+
+fn is_retryable_pre_spawn_host_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause.is::<fullmag_session::StoreWriterBusy>()
+            || cause.is::<
+                fullmag_session::host_resource_ledger::TransientGpuInventoryUnavailable,
+            >()
+            || cause.is::<
+                fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent,
+            >()
+    })
+}
+
+fn defer_pre_spawn_worker_launch_error(
+    slot: SupervisorSlot,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    // These call sites are all before launch authorization and child creation.
+    // Only typed host contention/inventory failures may free the slot for the
+    // scheduler to resume this same claim, Start, and lease.
+    if !is_retryable_pre_spawn_host_error(&error) {
+        return error;
+    }
+    match slot.release() {
+        Ok(()) => error.context(WorkerLaunchDeferred),
+        Err(release_error) => release_error.context(format!(
+            "release accepted-worker supervision slot while deferring host launch; original error: {error:#}"
+        )),
     }
 }
 
@@ -3116,7 +3206,8 @@ mod tests {
                     "solver_config": {"preset_id": "s", "version": "v1"},
                     "discretization": {"recipe_id": "d", "version": "v1"},
                     "execution_profile": {"profile_id": "e", "version": "v1"},
-                    "until_seconds": 1e-9, "acceptance": {"kind": "any"}, "acquisition": "exclusive"
+                    "until_seconds": 1e-9, "acceptance": {"kind": "any"}, "acquisition": "exclusive",
+                    "completion_dependencies": []
                 }]
             })).unwrap();
             let problems = StudyProblemCatalog::from_entries(&study, vec![
@@ -3132,7 +3223,9 @@ mod tests {
                     plan_version: STUDY_PLAN_SCHEMA_VERSION.into(), plan_sha256: study_ref.clone() },
                 catalog_ref.clone(), serde_json::json!({}),
                 RequestedExecution { backend: "fdm".into(), device: "cpu".into(), precision: "double".into(),
-                    mode: "strict".into(), minimum_resources: None },
+                    mode: "strict".into(), minimum_resources: Some(fullmag_application::RequestedResourceBudget {
+                        cpu_millis: 100, memory_bytes: 1024, gpu_memory_bytes: 0, storage_bytes: 1024,
+                    }) },
             );
             let mut intent = fullmag_session::FmsRunIntent::new(specification.run_id.as_str(),
                 "reported-failure-fixture", serde_json::to_value(&specification).unwrap());
@@ -3186,11 +3279,12 @@ mod tests {
             prior_lease.resource_id = "prior-cpu".into();
             prior_lease.lease_token = "prior-lease".into();
             store.commit_resource_lease(&prior_lease).unwrap();
+            let prior_object = store.cas().put(b"prior result").unwrap();
             let artifact = fullmag_session::FmsArtifactCatalogEntry {
                 artifact_id: "prior-result".into(), task_id: prior_lease.task_id.clone(),
                 attempt_id: prior_lease.attempt_id.clone(), ownership_epoch: prior_lease.ownership_epoch,
                 logical_path: "prior-result.bin".into(), artifact_type: "diagnostic".into(),
-                content_sha256: "a".repeat(64), object_ref: None,
+                content_sha256: prior_object.clone(), object_ref: Some(prior_object.clone()),
                 status: fullmag_session::FmsArtifactStatus::Published, required: false, study_output: None,
             };
             store.append_artifact_catalog_entries_for_lease(&prior_lease, &[artifact.clone()]).unwrap();
@@ -3398,6 +3492,7 @@ mod tests {
     struct HostLaunchTestFixture {
         store: SessionStore,
         ledger: fullmag_session::host_resource_ledger::HostResourceLedger,
+        host: fullmag_runtime_control::host_runtime::HostRuntimeAdmission,
         application_state_root: PathBuf,
         ledger_root: PathBuf,
         lease: FmsResourceLease,
@@ -3464,10 +3559,57 @@ mod tests {
             .unwrap();
 
         let resource_id = "compute.accepted-supervisor-test".to_owned();
+        let preparation_resource_id = "prep.accepted-supervisor-test".to_owned();
         let run_id = "run-accepted-supervisor-test".to_owned();
         let task_id = "task-accepted-supervisor-test".to_owned();
         let attempt_id = "attempt-accepted-supervisor-test".to_owned();
         let lease_token = "lease-accepted-supervisor-test".to_owned();
+        let host_config = fullmag_session::runtime_service::RuntimeServiceConfig {
+            schema_version: "runtime_service_config.v2".into(),
+            store_root: store.root().to_owned(),
+            target_id: "desktop".into(),
+            compute_pool_id: "compute.accepted-supervisor-test".into(),
+            preparation_pool_id: "prep.accepted-supervisor-test".into(),
+            compute_resources: vec![fullmag_session::FmsSchedulerResourceOffer {
+                resource_id: resource_id.clone(),
+                kind: fullmag_session::FmsResourceKind::Cpu,
+                budget: budget.clone(),
+            }],
+            preparation_resources: vec![fullmag_session::FmsPreparationResourceOffer {
+                resource_id: preparation_resource_id.clone(),
+                budget: budget.clone(),
+            }],
+            worker_timeout_seconds: 30,
+            preparation_timeout_seconds: 30,
+            heartbeat_interval_milliseconds: 1000,
+            startup_timeout_seconds: 10,
+            drain_timeout_seconds: 30,
+            host_execution: Some(fullmag_session::runtime_service_host::RuntimeServiceHostExecution {
+                schema_version: fullmag_session::runtime_service_host::RUNTIME_SERVICE_HOST_EXECUTION_SCHEMA_V1.into(),
+                ledger_root: ledger_root.clone(),
+                policy: policy.clone(),
+                runtime_generation_sha256: None,
+                compute_max_concurrency: 1,
+                preparation_max_concurrency: 1,
+                compute_placements: std::collections::BTreeMap::from([(
+                    resource_id.clone(),
+                    fullmag_session::runtime_service_host::RuntimeServiceHostPlacement {
+                        cpu_ids: BTreeSet::new(),
+                        gpu_uuid: None,
+                    },
+                )]),
+                preparation_cpu_ids: std::collections::BTreeMap::from([(
+                    preparation_resource_id,
+                    BTreeSet::new(),
+                )]),
+            }),
+        };
+        let host = fullmag_runtime_control::host_runtime::HostRuntimeAdmission::open_for_application(
+            &host_config,
+            &application_state_root,
+        )
+        .unwrap()
+        .unwrap();
         store
             .commit_run_catalog(&fullmag_session::FmsRunCatalog {
                 schema_version: fullmag_session::FMS_RUN_CATALOG_SCHEMA.into(),
@@ -3563,6 +3705,7 @@ mod tests {
         HostLaunchTestFixture {
             store,
             ledger,
+            host,
             application_state_root,
             ledger_root,
             lease: active_lease,
@@ -3570,6 +3713,273 @@ mod tests {
             _inventory_owner: inventory_owner,
             _root: root,
         }
+    }
+
+    #[test]
+    fn missing_sample_retries_exact_claim_without_consuming_launch_permit() {
+        let fixture = host_launch_test_fixture();
+        let snapshot_path = fixture.ledger_root.join("COMPUTE_NODE_SNAPSHOT.json");
+        std::fs::remove_file(snapshot_path).unwrap();
+
+        let mut retries = 0;
+        let error = verify_host_solver_claim_before_spawn_with_timeout(
+            &fixture.host,
+            &fixture.store,
+            &fixture.claim,
+            Duration::from_millis(250),
+            || retries += 1,
+        )
+        .unwrap_err();
+
+        assert!(retries > 0, "missing sample should be retried before deferral");
+        assert!(error.chain().any(|cause| {
+            cause.is::<fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent>()
+        }));
+        assert!(format!("{error:#}").contains("compute-node snapshot is missing"));
+        assert_eq!(
+            fullmag_runtime_control::load_current_task_claim(
+                &fixture.store,
+                &fixture.claim.run_id,
+                fixture.claim.task_id.as_str(),
+            )
+            .unwrap(),
+            fixture.claim
+        );
+        assert_eq!(
+            fixture
+                .store
+                .read_resource_lease(
+                    &fixture.lease.run_id,
+                    &fixture.lease.resource_id,
+                    &fixture.lease.lease_token,
+                )
+                .unwrap()
+                .unwrap(),
+            fixture.lease
+        );
+        let reservation = fixture
+            .ledger
+            .read()
+            .unwrap()
+            .reservations
+            .into_iter()
+            .find(|reservation| reservation.identity.lease_token == fixture.lease.lease_token)
+            .unwrap();
+        assert_eq!(
+            reservation.state,
+            fullmag_session::host_resource_ledger::HostResourceReservationState::Committed
+        );
+        assert_eq!(reservation.identity.run_id, fixture.lease.run_id);
+        assert_eq!(reservation.identity.task_id, fixture.lease.task_id);
+        assert_eq!(reservation.identity.resource_id, fixture.lease.resource_id);
+        assert_eq!(reservation.identity.lease_token, fixture.lease.lease_token);
+        assert_eq!(
+            reservation.worker_launch_gate,
+            Some(fullmag_session::host_resource_ledger::HostWorkerLaunchGate::Pending)
+        );
+    }
+
+    #[test]
+    fn inactive_inventory_owner_retries_before_spawn_without_releasing_claim() {
+        let fixture = host_launch_test_fixture();
+        drop(fixture._inventory_owner);
+        let mut retries = 0;
+        let error = verify_host_solver_claim_before_spawn_with_timeout(
+            &fixture.host,
+            &fixture.store,
+            &fixture.claim,
+            Duration::from_millis(250),
+            || retries += 1,
+        )
+        .unwrap_err();
+        assert!(retries > 0, "{error:#}");
+        assert!(error.downcast_ref::<
+            fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent,
+        >().is_some());
+        assert!(format!("{error:#}").contains("no active compute-node inventory owner"));
+        assert_eq!(fullmag_runtime_control::load_current_task_claim(
+            &fixture.store, &fixture.claim.run_id, fixture.claim.task_id.as_str(),
+        ).unwrap(), fixture.claim);
+        assert_eq!(fixture.store.read_resource_lease(
+            &fixture.lease.run_id, &fixture.lease.resource_id, &fixture.lease.lease_token,
+        ).unwrap().unwrap(), fixture.lease);
+        let reservation = fixture.ledger.read().unwrap().reservations.into_iter()
+            .find(|row| row.identity.lease_token == fixture.lease.lease_token).unwrap();
+        assert_eq!(reservation.worker_launch_gate,
+            Some(fullmag_session::host_resource_ledger::HostWorkerLaunchGate::Pending));
+    }
+
+    #[test]
+    fn exhausted_stale_sample_retry_defers_second_read_and_authorization_without_consuming_claim_start_lease() {
+        let fixture = host_launch_test_fixture();
+        let task = fullmag_application::TaskRecord {
+            run_id: fixture.claim.run_id.clone(),
+            task_id: fixture.claim.task_id.clone(),
+            input_fingerprint: "a".repeat(64),
+            lifecycle: TaskLifecycle::Preparing,
+            readiness: fullmag_application::TaskReadiness::Ready,
+            observation: None,
+            assessment: None,
+            attempt_id: Some(fixture.claim.attempt_id.clone()),
+            ownership_epoch: Some(fixture.claim.ownership_epoch),
+            claim: Some(fixture.claim.clone()),
+        };
+        let mut coordinator = fullmag_application::DurableWorkerCoordinator::new(
+            fullmag_application::WorkerCoordinator::new(task, fixture.claim.clone()).unwrap(),
+        );
+        fullmag_runtime_control::commit_coordinator_genesis(
+            &fixture.store,
+            &coordinator.checkpoint(),
+        )
+        .unwrap();
+        coordinator
+            .commit_command(WorkerCommand::Start, None, |transition| {
+                fullmag_runtime_control::commit_transition(&fixture.store, transition)
+                    .map(|_| ())
+                    .map_err(|error| {
+                        fullmag_application::CoordinatorError::Invalid(format!("{error:#}"))
+                    })
+            })
+            .unwrap();
+        let started = fullmag_runtime_control::recover_coordinator(&fixture.store, &fixture.claim)
+            .unwrap();
+        let start_before = started
+            .commands
+            .iter()
+            .find(|command| {
+                command.claim.matches_claim(&fixture.claim)
+                    && matches!(&command.command, WorkerCommand::Start)
+            })
+            .cloned()
+            .expect("durable Start should exist before launch deferral");
+
+        let now = chrono::Utc::now();
+        let mut stale = fullmag_runtime_control::compute_node_probe::sample_compute_node_for_owner(
+            &fixture.ledger,
+            fixture._inventory_owner.descriptor(),
+            None,
+        )
+        .unwrap();
+        stale.cpu.effective_capacity_millis =
+            fullmag_session::compute_node_snapshot::Observation::Available {
+                value: fixture.ledger.policy().total_budget.cpu_millis,
+            };
+        stale.enforcement.cpu_quota =
+            fullmag_session::compute_node_snapshot::EnforcementStatus::Supported;
+        stale.sample.collected_at = now.clone() - chrono::Duration::seconds(31);
+        stale.sample.refresh_freshness_at(now);
+        fixture
+            .ledger
+            .publish_compute_node_snapshot_with_owner(&fixture._inventory_owner, &stale)
+            .unwrap();
+
+        let mut sample_read_retries = 0;
+        let second_read_error = current_compute_snapshot_before_worker_launch_with_timeout(
+            &fixture.host,
+            Duration::from_millis(250),
+            || sample_read_retries += 1,
+        )
+        .unwrap_err();
+        assert!(
+            sample_read_retries > 0,
+            "the sample read should be retried before deferral"
+        );
+        assert!(second_read_error.chain().any(|cause| {
+            cause.is::<fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent>()
+        }));
+        assert!(format!("{second_read_error:#}").contains("freshness is Stale"));
+
+        let mut authorization_retries = 0;
+        let error = authorize_host_worker_launch_with_timeout(
+            &fixture.host,
+            &fixture.store,
+            &fixture.lease,
+            Duration::from_millis(100),
+            || authorization_retries += 1,
+        )
+        .unwrap_err();
+        assert!(
+            authorization_retries > 0,
+            "stale authorization should be retried before deferral"
+        );
+        assert!(error.chain().any(|cause| {
+            cause.is::<fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent>()
+        }));
+        assert!(format!("{error:#}").contains("freshness is Stale"));
+
+        let resource_id = fixture.lease.resource_id.clone();
+        let slot_path = fixture
+            .store
+            .root()
+            .join(SUPERVISOR_DIRECTORY)
+            .join(format!(
+                "resource-{}",
+                fullmag_session::hex_sha256(resource_id.as_bytes())
+            ));
+        let slot = SupervisorSlot::acquire(
+            &fixture.store,
+            fixture.claim.run_id.as_str(),
+            fixture.claim.task_id.as_str(),
+            &resource_id,
+            1,
+            false,
+        )
+        .unwrap();
+        assert!(slot_path.exists());
+        let deferred = defer_pre_spawn_worker_launch_error(slot, error);
+        // The scheduler downcasts anyhow context, which is not a standalone
+        // std::error::Error source in the cause iterator.
+        assert!(deferred.downcast_ref::<WorkerLaunchDeferred>().is_some());
+        assert!(format!("{deferred:#}").contains("freshness is Stale"));
+        assert!(!slot_path.exists(), "deferred launch must release its supervision slot");
+
+        let after_claim = fullmag_runtime_control::load_current_task_claim(
+            &fixture.store,
+            &fixture.claim.run_id,
+            fixture.claim.task_id.as_str(),
+        )
+        .unwrap();
+        assert_eq!(after_claim, fixture.claim);
+        assert_eq!(
+            fixture
+                .store
+                .read_resource_lease(
+                    &fixture.lease.run_id,
+                    &fixture.lease.resource_id,
+                    &fixture.lease.lease_token,
+                )
+                .unwrap()
+                .unwrap(),
+            fixture.lease
+        );
+        let reservation = fixture
+            .ledger
+            .read()
+            .unwrap()
+            .reservations
+            .into_iter()
+            .find(|reservation| reservation.identity.lease_token == fixture.lease.lease_token)
+            .unwrap();
+        assert_eq!(
+            reservation.state,
+            fullmag_session::host_resource_ledger::HostResourceReservationState::Committed
+        );
+        assert_eq!(
+            reservation.worker_launch_gate,
+            Some(fullmag_session::host_resource_ledger::HostWorkerLaunchGate::Pending)
+        );
+        let resumed =
+            fullmag_runtime_control::recover_coordinator(&fixture.store, &fixture.claim).unwrap();
+        let start_after = resumed
+            .commands
+            .iter()
+            .find(|command| {
+                command.claim.matches_claim(&fixture.claim)
+                    && matches!(&command.command, WorkerCommand::Start)
+            })
+            .cloned()
+            .expect("the original Start should remain available for scheduler resumption");
+        assert_eq!(start_after, start_before);
     }
 
     #[test]
@@ -3657,7 +4067,7 @@ mod tests {
             )
         );
 
-        let second = authorize_host_worker_launch(&fixture.ledger, &fixture.store, &fixture.lease)
+        let second = authorize_host_worker_launch(&fixture.host, &fixture.store, &fixture.lease)
             .unwrap_err();
         assert!(format!("{second:#}").contains("worker launch permit is not pending and committed"));
         let after = fixture

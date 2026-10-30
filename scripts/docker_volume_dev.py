@@ -717,8 +717,8 @@ def _backend_cache(control, operation, layout, selected, image, toolchain):
         source_root=selected, toolchain_image=toolchain, active_consumers=consumers,
         control_volume_name=control.volume, control_namespace=control.namespace,
         shared_packages=True)
-    snapshot = (getattr(control, "namespace_registry", None) or {}).get("retirement", {})
-    if snapshot.get("schema") == "fullmag.docker-isolated-session-snapshot.v1":
+    snapshot = _active_isolated_snapshot(control)
+    if snapshot is not None:
         from docker_isolated_control_prepare import prepare_snapshot_control
         prepare_snapshot_control(control, snapshot, operation=operation)
     overlay = cache.maintenance_overlay(profile)
@@ -862,23 +862,9 @@ def _group_ledger(control, operation, image, *, new_render=False):
     empty_generation = _empty_stopped_namespace_ledger_generation(control)
     generation = empty_generation
     if generation_record is not None:
-        if (not isinstance(generation_record, Mapping)
-                or generation_record.get("schema") != "fullmag.docker-group-ledger-generation.v1"
-                or generation_record.get("compose_project") != control.project
-                or not re.fullmatch(r"[0-9a-f]{32}", str(generation_record.get("generation", "")))):
-            raise BuildControlError("Fresh group ledger generation is malformed")
+        from docker_volume_fresh_runtime import pinned_group_archive
+        pinned_group_archive(control, generation_record)
         generation = generation_record["generation"]
-        terminal_path = "recreate-services/attempts/" + generation + "/runtime-control-archive-terminal.json"
-        if generation_record.get("archive_terminal_path") != terminal_path:
-            raise BuildControlError("Fresh ledger generation has another archive path")
-        terminal = control.read(terminal_path)
-        if (terminal.get("state") != "succeeded"
-                or terminal.get("operation_attempt") != generation
-                or terminal.get("compose_project") != control.project
-                or terminal.get("preserved_group_ledger_volume") != generation_record.get("preserved_volume")
-                or hashlib.sha256(canonical(terminal)).hexdigest()
-                   != generation_record.get("archive_terminal_sha256")):
-            raise BuildControlError("Fresh ledger generation has no exact completed runtime archive")
     generation = _select_group_ledger_generation(empty_generation, generation_record)
     key = group_ledger.volume_key(daemon["id_sha256"], control.project, generation)
     volume = _owned_volume(control, group_ledger.VOLUME_ROLE, key)
@@ -925,6 +911,14 @@ def _snapshot_certificate_placeholder(control, state, certificate_path, snapshot
             or control.read_bytes("isolated-snapshot/native-validation.json", optional=True) is not None
             or host.read_owned_regular(certificate_path, 1) != b""):
         raise BuildControlError("Existing snapshot certificate is not the pinned pre-admission placeholder")
+
+
+def _active_isolated_snapshot(control):
+    snapshot = (getattr(control, "namespace_registry", None) or {}).get("retirement", {})
+    if snapshot.get("schema") != "fullmag.docker-isolated-session-snapshot.v1":
+        return None
+    from docker_volume_fresh_runtime import snapshot_bootstrap_retired
+    return None if snapshot_bootstrap_retired(control, snapshot) else snapshot
 
 
 def _empty_stopped_namespace_ledger_generation(control):
@@ -1941,10 +1935,8 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
     else:
         control = provided_control
         toolchain, images = _validate_prepared_start_context(prepared)
-    snapshot = (control.namespace_registry or {}).get("retirement", {})
-    if snapshot.get("schema") != "fullmag.docker-isolated-session-snapshot.v1":
-        snapshot = None
-    elif (snapshot["source_root"] != str(selected) or args.script is not None
+    snapshot = _active_isolated_snapshot(control)
+    if snapshot is not None and (snapshot["source_root"] != str(selected) or args.script is not None
           or getattr(args, "fresh_state", False)):
         raise BuildControlError("Isolated snapshot start must preserve its source and cannot replay a script")
     from docker_volume_cancelled_activation_guard import assert_start_allowed
@@ -2332,7 +2324,10 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             backend["environment"].update(terminal_observation["environment"])
         backend["environment"].pop("FULLMAG_ISOLATED_SNAPSHOT_START", None)
         backend["environment"].pop("FULLMAG_ISOLATED_SNAPSHOT_START_SHA256", None)
-        if snapshot is not None:
+        # A validated terminal observation selects its exact current run. Keep
+        # the imported snapshot/archive intact, but do not hydrate that older
+        # workspace before the terminal observation requires a fresh API.
+        if snapshot is not None and terminal_observation is None:
             meta_raw = control.read_bytes("isolated-snapshot/start.json")
             meta_pin = snapshot["control_pins"].get(
                 control.namespace + "/isolated-snapshot/start.json"
@@ -4213,6 +4208,7 @@ def _retained_startup_enabled(container):
 
 
 _SAVED_AUTHORING_MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
+_SAVED_EMPTY_AUTHORING_RESTART_SCHEMA = 'fullmag.saved-empty-authoring-restart.v1'
 
 
 _SAVED_AUTHORING_SCENE_FIELDS = (
@@ -4248,6 +4244,11 @@ def _saved_authoring_document(raw):
 
 
 def _saved_authoring_validate_request(request, *, project, attempt, config_sha256, selected):
+    empty_authoring = isinstance(request, dict) and request.get('schema') == _SAVED_EMPTY_AUTHORING_RESTART_SCHEMA
+    if empty_authoring:
+        _saved_authoring_require(not any(key in request for key in (
+            'cancelled_preclaim', 'historical_preclaim', 'retained_run_catalogs')),
+            'empty authoring checkpoint cannot include run-history extensions')
     cancelled = preclaim_restart.validate_checkpoint(request)
     historical = preclaim_restart.validate_historical_checkpoint(request)
     retained = retained_history.validate_retained_catalogs(request)
@@ -4256,7 +4257,8 @@ def _saved_authoring_validate_request(request, *, project, attempt, config_sha25
         'package', 'service_owner_sha256'} | ({'cancelled_preclaim'} if cancelled else set())
         | ({'historical_preclaim'} if historical else set())
         | ({'retained_run_catalogs'} if retained is not None else set())), 'checkpoint fields differ')
-    _saved_authoring_require(request['schema'] in {'fullmag.saved-authoring-restart.v1', preclaim_restart.SCHEMA}
+    _saved_authoring_require(request['schema'] in {'fullmag.saved-authoring-restart.v1', preclaim_restart.SCHEMA,
+                                                    _SAVED_EMPTY_AUTHORING_RESTART_SCHEMA}
         and request['compose_project'] == project and request['attempt'] == attempt
         and request['config_sha256'] == config_sha256
         and request['source_root'] == str(selected)
@@ -4268,8 +4270,16 @@ def _saved_authoring_validate_request(request, *, project, attempt, config_sha25
     session = request['session']
     _saved_authoring_require(isinstance(session, dict) and set(session) == {'api_instance_id', 'session_id',
         'session_epoch', 'request_scope_epoch', 'source_kind'}, 'session pins differ')
-    for value in (*session.values(), archive['path'], archive['project_id'], archive['source_entry']):
+    for value in (*session.values(), archive['path'], archive['project_id']):
         _saved_authoring_require(isinstance(value, str) and value and len(value) < 4096, 'missing identity pin')
+    _saved_authoring_require((archive['source_entry'] is None) == (archive['source_sha256'] is None),
+        'source entry and digest must be both present or both absent')
+    if empty_authoring:
+        _saved_authoring_require(archive['source_entry'] is None and archive['source_sha256'] is None,
+            'empty authoring source pins must be explicitly null')
+    else:
+        _saved_authoring_require(isinstance(archive['source_entry'], str) and archive['source_entry']
+            and len(archive['source_entry']) < 4096, 'missing identity pin')
     epoch_pattern = re.escape(session['session_id']) + r'@[0-9]+'
     if cancelled and 'stop_command_id' in cancelled:
         epoch_pattern += r':tombstone:[0-9]+'
@@ -4281,11 +4291,16 @@ def _saved_authoring_validate_request(request, *, project, attempt, config_sha25
     _saved_authoring_require(0 < archive['bytes'] <= _SAVED_AUTHORING_MAX_ARCHIVE_BYTES, 'archive size exceeds checkpoint budget')
     _saved_authoring_require(isinstance(request['package'], dict) and set(request['package']) ==
         {'provenance_sha256', 'source_snapshot_sha256'}, 'package source pins differ')
-    _saved_authoring_require(session['source_kind'] == 'ui_authoring'
-        and (archive['source_entry'] == 'project/source/script.py'
-             or re.fullmatch(r'project/source-history/[0-9a-f]{64}\.py', archive['source_entry'])),
-        'UI authoring/source archive binding differs')
-    hashes = [archive[k] for k in ('sha256', 'scene_sha256', 'source_sha256')]
+    _saved_authoring_require(session['source_kind'] == 'ui_authoring', 'UI authoring source kind differs')
+    if empty_authoring:
+        _saved_authoring_require(archive['source_entry'] is None, 'empty UI authoring cannot bind a source file')
+    else:
+        _saved_authoring_require(archive['source_entry'] == 'project/source/script.py'
+            or re.fullmatch(r'project/source-history/[0-9a-f]{64}\.py', archive['source_entry']),
+            'UI authoring/source archive binding differs')
+    hashes = [archive[k] for k in ('sha256', 'scene_sha256')]
+    if not empty_authoring:
+        hashes.append(archive['source_sha256'])
     hashes += [request['service_owner_sha256'], *request['package'].values()]
     _saved_authoring_require(all(isinstance(v, str) and re.fullmatch('[0-9a-f]{64}', v) for v in hashes), 'invalid digest pin')
     _saved_authoring_require(isinstance(request['containers'], dict) and set(request['containers']) ==
@@ -4315,6 +4330,11 @@ def _saved_authoring_validate_services(request, actual, *, quiesced=False):
 
 def _saved_authoring_validate_archive(raw, pin):
     _saved_authoring_require(len(raw) == pin['bytes'] and _saved_authoring_sha(raw) == pin['sha256'], 'saved Windows archive changed')
+    source_entry = pin.get('source_entry')
+    source_sha256 = pin.get('source_sha256')
+    source_less = source_entry is None and source_sha256 is None
+    _saved_authoring_require((source_entry is None) == (source_sha256 is None),
+        'source entry and digest must be both present or both absent')
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
         entries = archive.infolist()
         _saved_authoring_require(0 < len(entries) <= 8192 and sum(e.file_size for e in entries) <= _SAVED_AUTHORING_MAX_ARCHIVE_BYTES,
@@ -4337,23 +4357,32 @@ def _saved_authoring_validate_archive(raw, pin):
             and manifest.get('scene') == 'project/scene_document.json', 'runtime-free project manifest required')
         allowed = {'manifest/project.json', 'project/definition.json', 'project/scene_document.json'}
         source = manifest.get('source')
-        if source is not None:
+        if source_less:
+            _saved_authoring_require(source is None, 'empty UI authoring must not contain a source script')
+        elif source is not None:
             _saved_authoring_require(source in ('project/source.py', 'project/source/script.py'), 'unexpected authoring source path')
             allowed.add(source)
         assets = manifest.get('assets')
         opaque = manifest.get('opaque_documents')
         _saved_authoring_require(isinstance(assets, list) and isinstance(opaque, list), 'manifest lists missing')
+        if source_less:
+            _saved_authoring_require(assets == [], 'empty UI authoring cannot contain unbound assets')
         for asset in assets:
             _saved_authoring_require(isinstance(asset, dict) and isinstance(asset.get('path'), str)
                 and asset['path'].startswith('assets/'), 'unexpected asset path')
             allowed.add(asset['path'])
         for name in opaque:
-            _saved_authoring_require(isinstance(name, str) and (name in {'project/provenance.json',
-                'project/source/script.py', 'project/source/script.json'}
-                or re.fullmatch(r'project/source-history/[0-9a-f]{64}\.py', name)),
-                'non-authoring opaque document is not admissible')
+            if source_less:
+                _saved_authoring_require(isinstance(name, str) and name == 'project/provenance.json',
+                    'empty UI authoring cannot contain source files, metadata, or history')
+            else:
+                _saved_authoring_require(isinstance(name, str) and (name in {'project/provenance.json',
+                    'project/source/script.py', 'project/source/script.json'}
+                    or re.fullmatch(r'project/source-history/[0-9a-f]{64}\.py', name)),
+                    'non-authoring opaque document is not admissible')
             allowed.add(name)
-        _saved_authoring_require(set(names) == allowed and pin['source_entry'] in allowed, 'archive contains missing/extra runtime entries')
+        _saved_authoring_require(set(names) == allowed and (source_less or source_entry in allowed),
+            'archive contains missing/extra runtime entries')
         definition = _saved_authoring_document(archive.read('project/definition.json'))
         scene = _saved_authoring_document(archive.read('project/scene_document.json'))
         _saved_authoring_require(definition.get('schema') == 'fullmag.project.v1'
@@ -4362,11 +4391,25 @@ def _saved_authoring_validate_archive(raw, pin):
             and definition.get('scene') == scene and scene.get('version') == 'scene.v2'
             and scene.get('revision') == pin['scene_revision']
             and _saved_authoring_sha(canonical(scene)) == pin['scene_sha256'], 'saved project/revision/scene differs')
-        _saved_authoring_require(_saved_authoring_sha(archive.read(pin['source_entry'])) == pin['source_sha256'], 'preserved authoring source differs')
+        if source_less:
+            nested_scene = scene.get('scene')
+            _saved_authoring_require(isinstance(nested_scene, dict)
+                and nested_scene.get('source_of_truth') == 'ui'
+                and ('objects' not in scene or scene['objects'] == []),
+                'empty UI authoring scene must have UI source of truth and no objects')
+        else:
+            _saved_authoring_require(_saved_authoring_sha(archive.read(source_entry)) == source_sha256,
+                'preserved authoring source differs')
         if 'project/provenance.json' in allowed:
-            _saved_authoring_require(_saved_authoring_document(archive.read('project/provenance.json')).get('runs') == [], 'archive retains runtime runs')
-        if 'project/source/script.json' in allowed:
-            _saved_authoring_require(_saved_authoring_document(archive.read('project/source/script.json')).get('sha256') == pin['source_sha256'],
+            provenance = _saved_authoring_document(archive.read('project/provenance.json'))
+            _saved_authoring_require(provenance.get('runs') == [], 'archive retains runtime runs')
+            if source_less:
+                _saved_authoring_require(provenance.get('history', []) == []
+                    and provenance.get('authors', []) == []
+                    and set(provenance).issubset({'authors', 'history', 'runs'}),
+                    'empty UI authoring provenance retains source metadata or history')
+        if not source_less and 'project/source/script.json' in allowed:
+            _saved_authoring_require(_saved_authoring_document(archive.read('project/source/script.json')).get('sha256') == source_sha256,
                     'source metadata digest differs')
     return scene
 
@@ -4887,6 +4930,12 @@ def _native_failed_stop_recovery_context(
     if journal_raw is None:
         return None
     journal = _json(journal_raw, "native failed-stop journal")
+    if journal.get("failure_kind") == "native-runtime-supervision-linux-retained":
+        from docker_volume_linux_supervision_stop import retained_context
+        return retained_context(
+            control, previous, journal, journal_raw, backend_id, fresh_state,
+            removed_container_proof=removed_container_proof,
+        )
     if journal.get("failure_kind") == "native-runtime-supervision-failure":
         from docker_volume_stop_failed import _supervision_failed_restart_context
         return _supervision_failed_restart_context(
@@ -7073,9 +7122,14 @@ def _retained_operation(
             config_sha256=args.config_sha256, selected=selected)
         _saved_authoring_validate_services(saved_authoring, actual)
     if restart_idle_service:
-        if (not actual["backend"]["State"]["Running"]
-                or actual["backend"]["State"].get("Health", {}).get("Status") != "healthy"):
+        diagnostic_terminal = None
+        if not actual["backend"]["State"]["Running"]:
             raise BuildControlError("Idle restart requires a healthy backend; an active build is never interrupted")
+        if actual["backend"]["State"].get("Health", {}).get("Status") != "healthy":
+            if not stop_after_drain or saved_authoring is not None:
+                raise BuildControlError("An unhealthy backend requires explicit diagnostic stop-only")
+            from docker_volume_terminal_observation import diagnostic_terminal_stop_probe
+            diagnostic_terminal = diagnostic_terminal_stop_probe(control, previous, actual["backend"])
         state = storage.validate_path(Path(previous["state_root"]), layout["runtime_root"], "retained Windows sessions")
         certificate_path = _certificate_path(state)
         certificate = _retained_certificate(state, document)
@@ -7116,17 +7170,17 @@ def _retained_operation(
                         or fresh["backend"]["State"].get("Running") is not True):
                     raise BuildControlError("Frontend is not quiesced or backend is no longer running")
                 _assert_private_restart_network(fresh, ids, control.project)
-                probe = """import json,urllib.request
+                probe = "EXPECTED_HEALTH = " + repr("degraded" if diagnostic_terminal else "ok") + "\n" + """import json,urllib.request
 with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5) as response:
  document=json.load(response)
- if (response.status!=200 or document.get('status')!='ok'
+ if (response.status!=200 or document.get('status')!=EXPECTED_HEALTH
          or (document.get('active_session') is not False
              and document.get('active_session') is not True)):
   raise RuntimeError('Backend health is unknown; restart refused')
  print(json.dumps(document))
 """
                 health = json.loads(docker_text("exec", ids["backend"], "/usr/local/bin/python3", "-B", "-c", probe))
-                if health.get("status") != "ok":
+                if health.get("status") != ("degraded" if diagnostic_terminal else "ok"):
                     raise BuildControlError("Backend health is not ready; idle restart refused")
                 active_session = health.get("active_session")
                 authoring_probe = None
@@ -7139,6 +7193,20 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     control.write(operation["root"] + "/saved-authoring-checkpoint.json", saved_authoring)
                     control.write(operation["root"] + "/saved-authoring-preflight.json", authoring_probe)
                     operation["receipt"]["saved_authoring_restore_required"] = saved_authoring["archive"]
+                elif diagnostic_terminal is not None:
+                    from docker_volume_terminal_observation import diagnostic_terminal_stop_probe
+                    diagnostic_fresh = diagnostic_terminal_stop_probe(control, previous, fresh["backend"])
+                    # Uptime/version are not part of the stable stop pin.
+                    if diagnostic_fresh != diagnostic_terminal or any(
+                        health.get(key) != value for key, value in diagnostic_terminal["health"].items()
+                    ):
+                        raise BuildControlError("Diagnostic terminal stop proof changed under lease")
+                    control.write(operation["root"] + "/diagnostic-terminal-preflight.json", diagnostic_terminal)
+                    operation["receipt"]["diagnostic_terminal_stop_sha256"] = hashlib.sha256(canonical(diagnostic_terminal)).hexdigest()
+                    diagnostic_process = control.read_bytes("runtime-control/runtime-service/process-tree.json")
+                    if hashlib.sha256(diagnostic_process).hexdigest() != diagnostic_terminal["process_sha256"]:
+                        raise BuildControlError("Diagnostic process changed before stop archival")
+                    control.write_bytes(operation["root"] + "/diagnostic-terminal-process-before.json", diagnostic_process)
                 elif active_session is True:
                     if startup_enabled:
                         raise BuildControlError("Backend has an active session; idle restart refused")
@@ -7187,7 +7255,7 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     != actual["backend"].get("State", {}).get("StartedAt")
                     or stopped["State"].get("Running") is not False
                     or stopped["State"].get("OOMKilled") is not False
-                    or stopped["State"].get("ExitCode") != 0):
+                    or stopped["State"].get("ExitCode") != (1 if diagnostic_terminal else 0)):
                 raise BuildControlError("Backend termination is not confirmed graceful; restart withheld")
             from docker_volume_stop_unadmitted import _read_terminal_process_receipt
             drained_raw, drained = _read_terminal_process_receipt(stopped, control)
@@ -7219,6 +7287,9 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     backend_container=ids["backend"], frontend_container=ids["frontend"],
                     config_sha256=args.config_sha256,
                 )
+                if diagnostic_terminal is not None:
+                    operation["receipt"]["backend_exit_code"] = stopped["State"]["ExitCode"]
+                    operation["receipt"]["native_drain_authenticated"] = True
                 return
             docker_capture("start", ids["backend"], timeout=90)
             docker_capture("start", ids["frontend"], timeout=90)
@@ -7366,9 +7437,11 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
             and native_restart.get("image_id") == image
             and native_restart.get("claim_pending") is False
         )
+        from docker_volume_linux_supervision_stop import LinuxSupervisionContext
+        linux_supervision_stop = isinstance(recovery_context, LinuxSupervisionContext)
         if (not fresh_state and pre_activation_stop is None and not pre_api_stopped
                 and not original_after_ready_stop and not native_init_successor and not drained_successor
-                and not startup_diagnostic_stopped
+                and not startup_diagnostic_stopped and not linux_supervision_stop
                 and certificate.get("restart_verified") is True):
             retained_environment = document["services"]["backend"]["environment"]
             retained_reattach_declared = (
@@ -7539,7 +7612,11 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 control.write(operation["root"] + "/helper-source-binding.json", helper_source_binding)
             successor_actual = ({service: json.loads(docker_text("inspect", identifier))[0]
                 for service, identifier in ids.items()} if drained_successor else actual)
-            leased_recovery_context = _retained_recovery_context(
+            # Match the pre-lease choice: explicit fresh state archives the
+            # complete old runtime and its recovery authority without consuming
+            # or carrying it. The fresh-state incarnation/archive fences below
+            # still apply under this same lease.
+            leased_recovery_context = {} if fresh_state else _retained_recovery_context(
                 control, previous, document, fresh_state=fresh_state,
                 backend_id=actual["backend"].get("Id"),
                 drained_successor=drained_successor_pins, actual=successor_actual,
@@ -7644,10 +7721,15 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 _retained_certificate(state, document)
                 if terminal_observation is not None:
                     from docker_volume_terminal_observation import revalidate_context
-                    revalidate_context(
+                    preowner_successor = revalidate_context(
                         control, terminal_observation, source_root=str(selected),
                         attempt=args.attempt, config_sha256=args.config_sha256, actual=leased_actual,
                     )
+                    if preowner_successor is not None:
+                        context_key = ("terminal_diagnostic_successor"
+                            if preowner_successor.get("schema") == "fullmag.terminal-diagnostic-drain-context.v1"
+                            else "preowner_drained_successor")
+                        operation["receipt"][context_key] = dict(preowner_successor)
                     operation["receipt"]["terminal_observation"] = terminal_observation["metadata"]
                 actual = leased_actual
             if pre_admission_recreate_proof is not None:
@@ -7821,6 +7903,22 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     or observed["State"].get("StartedAt") != actual[service]["State"].get("StartedAt")
                 ):
                     raise BuildControlError("Service restarted during fresh session: " + service)
+            snapshot_record = (control.namespace_registry or {}).get("retirement", {})
+            if fresh_state and snapshot_record.get("schema") == "fullmag.docker-isolated-session-snapshot.v1":
+                from docker_volume_stop_unadmitted import _read_terminal_process_receipt
+                native_raw, _ = _read_terminal_process_receipt(actual["backend"], control)
+                native_path = operation["root"] + "/snapshot-native-drain.json"
+                control.write_bytes(native_path, native_raw)
+                operation["receipt"]["snapshot_bootstrap_retirement"] = {
+                    "schema": "fullmag.docker-snapshot-bootstrap-retirement.v1",
+                    "snapshot_sha256": hashlib.sha256(canonical(snapshot_record)).hexdigest(),
+                    "backend_container_id": ids["backend"],
+                    "image_id": actual["backend"]["Image"],
+                    "backend_started_at": actual["backend"]["State"]["StartedAt"],
+                    "native_drain_path": native_path,
+                    "native_drain_sha256": hashlib.sha256(native_raw).hexdigest(),
+                }
+                control.write(operation["root"] + "/receipt.json", operation["receipt"])
             _revalidate_helper_source_binding(helper_source_binding, selected)
             docker_capture("rm", *ids.values())
             if helper_ids:

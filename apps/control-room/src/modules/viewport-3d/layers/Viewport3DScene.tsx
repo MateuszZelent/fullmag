@@ -162,6 +162,9 @@ import {
   ClipPlaneLayer,
   PlanarMonitorFramePreviewLayer,
 } from "./ClipPlaneLayer";
+import { PlanarMonitorFacePicker } from "./PlanarMonitorFacePicker";
+import { PlanarMonitorNormalHandle } from "./PlanarMonitorNormalHandle";
+import { PlanarMonitorRotationRings } from "./PlanarMonitorRotationRings";
 import { pickRegionOverlayFromRay } from "./regionOverlayPicking";
 import type { ClipPlaneIntersectionMarkerBuffers } from "./clipPlaneModel";
 import {
@@ -984,11 +987,12 @@ function Viewport3DOverlayLayerStack({
   onSelectFdmTarget,
   onSelectFdmUniverseOutsideSupport,
   onSelectPlanarMonitor,
+  onPlanarHandleGestureActiveChange,
   scaleLabelsVisible,
   scaleUnitMode,
   selectionBounds,
   tracker,
-}: Pick<
+}: { onPlanarHandleGestureActiveChange?: (active: boolean) => void } & Pick<
   Viewport3DSceneProps,
   | "airboxSettings"
   | "bounds"
@@ -1054,13 +1058,26 @@ function Viewport3DOverlayLayerStack({
       {viewport3DClipLayersEnabledFromBrowserConfig() &&
       planarMonitorFramePreview &&
       !clip?.enabled ? (
-        <PlanarMonitorFramePreviewLayer
-          colors={colors}
-          onSelect={onSelectPlanarMonitor}
-          preview={planarMonitorFramePreview}
-          tracker={tracker}
-        />
+        <>
+          <PlanarMonitorFramePreviewLayer
+            colors={colors}
+            onSelect={onSelectPlanarMonitor}
+            preview={planarMonitorFramePreview}
+            tracker={tracker}
+          />
+          <PlanarMonitorNormalHandle
+            colors={colors}
+            onGestureActiveChange={onPlanarHandleGestureActiveChange}
+            preview={planarMonitorFramePreview}
+          />
+          <PlanarMonitorRotationRings
+            colors={colors}
+            onGestureActiveChange={onPlanarHandleGestureActiveChange}
+            preview={planarMonitorFramePreview}
+          />
+        </>
       ) : null}
+      <PlanarMonitorFacePicker />
       {viewport3DBoundsLayersEnabledFromBrowserConfig() ? (
         <>
           <DomainBoxLayer
@@ -2364,6 +2381,7 @@ export function Viewport3DScene({
         onSelectFdmTarget={onSelectFdmTarget}
         onSelectFdmUniverseOutsideSupport={onSelectFdmUniverseOutsideSupport}
         onSelectPlanarMonitor={onSelectPlanarMonitor}
+        onPlanarHandleGestureActiveChange={handleMoveGestureActiveChange}
         scaleLabelsVisible={scaleLabelsVisible}
         scaleUnitMode={scaleUnitMode}
         selectionBounds={selectionBounds}

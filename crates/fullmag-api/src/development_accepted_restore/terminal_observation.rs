@@ -1,4 +1,4 @@
-//! Candidate only: private first reattachment of a failed accepted observation.
+//! Candidate only: private first reattachment of a terminal accepted observation.
 //! Kept separate from held activation and accepted-successor ACK contracts.
 use super::*;
 
@@ -209,7 +209,11 @@ fn restore(
     let public_run = preflight.get("run").context("terminal preflight has no run")?;
     equal(public_run, "run_id", &proof.run_id)?;
     equal(public_run, "session_id", &proof.session_id)?;
-    equal(public_run, "status", "failed")?;
+    let expected_outcome = match string(public_run, "status")? {
+        "failed" => "failed",
+        "completed" => "completed",
+        _ => bail!("terminal observation public run status is unsupported"),
+    };
     let session_started_at = string(public_run, "started_at")?.parse::<u64>()?;
     if session_started_at == 0 {
         bail!("terminal observation has no positive historical session timestamp");
@@ -247,10 +251,38 @@ fn restore(
     equal(&drain, "backend_container_id", string(&operation, "backend_container")?)?;
     validate_container_id(string(&drain, "backend_container_id")?, "historical backend")?;
     let process = drain.get("process_receipt").context("terminal drain has no native process receipt")?;
-    let expected_process_fields = [
+    let mut expected_process_fields = [
         "schema", "state", "api_pid", "api_exit_code", "accepted_store",
         "bootstrap", "qualification", "service_owner", "terminal_service_owner",
     ].into_iter().collect::<std::collections::BTreeSet<_>>();
+    let historical_recovery = process.get("container_recovery");
+    let historical_authorization = process.get("container_recovery_authorization");
+    match (historical_recovery, historical_authorization) {
+        (None, None) => {}
+        (Some(recovered), Some(authorized)) => {
+            // These annotations bind only a completed historical recovery;
+            // they cannot replace the current owner/drain or terminal fence.
+            recovered.as_object().context("historical recovery is not an object")?;
+            authorized.as_object().context("historical recovery authorization is not an object")?;
+            equal(recovered, "schema_version", "runtime_service_container_recovery.v1")?;
+            equal(authorized, "schema_version", "fullmag.docker-container-recovery-authorization.v1")?;
+            equal(recovered, "status", "recovered")?;
+            if !matches!(string(recovered, "outcome")?,
+                "retained_attempt_history_recovered" | "retained_manual_held_runs_recovered"
+                | "retained_terminal_runs_recovered" | "empty_namespace_recovered"
+                | "retained_cancelled_runs_recovered") {
+                bail!("historical recovery outcome is unsupported");
+            }
+            fullmag_session::repository_path::validate_store_id(string(recovered, "request_id")?)?;
+            for key in ["request_id", "request_sha256", "config_sha256", "attestation_sha256", "owner_sha256_after"] {
+                let value = string(recovered, key)?;
+                equal(authorized, key, value)?;
+                if key != "request_id" { validate_digest(value, "historical recovery binding")?; }
+            }
+            expected_process_fields.extend(["container_recovery", "container_recovery_authorization"]);
+        }
+        _ => bail!("historical recovery annotations are incomplete"),
+    }
     if process.as_object().context("native process receipt is not an object")?
         .keys().map(String::as_str).collect::<std::collections::BTreeSet<_>>()
         != expected_process_fields
@@ -385,12 +417,12 @@ fn restore(
     raw(store.root(), &format!("{relative}/run_catalog.json"), &proof.catalog_sha256)?;
     let catalog = store.read_run_catalog(&proof.run_id)?.context("terminal observation catalog is absent")?;
     let terminal_outcome = terminal_catalog_outcome(&catalog)?;
-    if catalog.revision != proof.catalog_revision || terminal_outcome != "failed" {
-        bail!("terminal observation requires the exact durable Failed catalog");
+    if catalog.revision != proof.catalog_revision || terminal_outcome != expected_outcome {
+        bail!("terminal observation catalog differs from the hash-bound public run outcome");
     }
     raw(store.root(), &format!("{relative}/start_release.json"), &proof.start_release_sha256)?;
     if !store.accepted_run_start_permitted(&proof.run_id)? {
-        bail!("failed terminal observation has no canonical Start release");
+        bail!("terminal observation has no canonical Start release");
     }
     let mut planned_inputs = std::collections::BTreeMap::new();
     for step in accepted.lowered.steps.iter().filter(|step| step.enabled
@@ -432,7 +464,7 @@ fn restore(
         "api_instance_id": state.request_scope_instance_id,
         "run_id": proof.run_id, "session_id": proof.session_id,
         "session_epoch": proof.session_epoch, "scene_revision": proof.scene_revision,
-        "terminal_outcome": "failed", "proof_sha256": input.proof_sha256,
+        "terminal_outcome": terminal_outcome, "proof_sha256": input.proof_sha256,
         "launch_sha256": input.launch_sha256,
         "source_image_id": proof.image_id, "source_config_sha256": proof.config_sha256,
         "target_build_id": input.target_build_id,

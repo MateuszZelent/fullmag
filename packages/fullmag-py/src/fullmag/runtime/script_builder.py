@@ -2598,6 +2598,19 @@ def _render_universe_mesh_kwargs(mesh: Mapping[str, object], *, backend: str) ->
         numeric = _finite_number(mesh.get(key))
         if numeric is not None:
             result[key] = numeric
+    result.update(_universe_feature_refinement_kwargs(mesh))
+    return result
+
+
+def _universe_feature_refinement_kwargs(universe: Mapping[str, object]) -> dict[str, float]:
+    """Air curvature / narrow-gap controls of note 0107 as ``study.universe.mesh`` kwargs."""
+    result: dict[str, float] = {}
+    for key in ("curvature_factor", "narrow_region_resolution"):
+        numeric = _finite_number(universe.get(f"airbox_{key}"))
+        if numeric is None:
+            numeric = _finite_number(universe.get(key))
+        if numeric is not None:
+            result[key] = numeric
     return result
 
 
@@ -3614,6 +3627,8 @@ def _render_runtime(
                 )  # type: ignore[arg-type]
             if isinstance(airbox_grading, str) and airbox_grading:
                 universe_mesh_kwargs.append(f"grading={_py_repr(airbox_grading)}")
+            for key, value in _universe_feature_refinement_kwargs(universe).items():
+                universe_mesh_kwargs.append(f"{key}={_py_number(value)}")
             if universe_mesh_kwargs:
                 lines.append(
                     f"{_surface_call(surface, 'universe')}.mesh({', '.join(universe_mesh_kwargs)})"
@@ -11201,6 +11216,10 @@ def _export_universe(problem: Problem) -> dict[str, object] | None:
             float(airbox_growth_rate) if airbox_growth_rate is not None else None
         ),
         "airbox_grading": str(airbox_grading) if isinstance(airbox_grading, str) else None,
+        **{
+            f"airbox_{key}": value
+            for key, value in _universe_feature_refinement_kwargs(universe).items()
+        },
     }
 
 

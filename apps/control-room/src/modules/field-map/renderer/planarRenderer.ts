@@ -1,6 +1,7 @@
 import { directionHslSrgb } from "@/shared/visualization/directionColor";
 import { scalarColorSrgb } from "@/shared/visualization/scalarColorPalette";
 
+import type { PlanarStreamlines } from "./planarStreamlines";
 import { glyphSpacingForBudget, layoutScreenGlyphs, type ScreenGlyph } from "./vectorGlyphs";
 
 export interface PlanarRenderer {
@@ -31,11 +32,13 @@ export interface PlanarOverlayLayers {
     /** Physical sample bounds [uMin, uMax, vMin, vMax]. */
     sampleBounds: readonly [number, number, number, number];
   } | null;
+  /** In-plane streamlines in physical (u, v); drawn under the quiver. */
+  streamlines?: PlanarStreamlines | null;
   gridWidth: number;
   gridHeight?: number;
   boundarySegments?: Float32Array;
   boundsOutline?: readonly [number, number, number, number] | null;
-  layers?: { boundaries?: boolean; bounds?: boolean; contours: boolean; mesh: boolean; points?: boolean; vectors: boolean };
+  layers?: { boundaries?: boolean; bounds?: boolean; contours: boolean; mesh: boolean; points?: boolean; streamlines?: boolean; vectors: boolean };
   meshBounds?: readonly [number, number, number, number];
   meshSegments?: Float32Array;
   meshViewport?: readonly [number, number, number, number];
@@ -145,6 +148,9 @@ export function drawPlanarOverlays(
     context.stroke();
   }
 
+  if (layers.layers?.streamlines && layers.streamlines && layers.meshViewport) {
+    drawStreamlines(context, layers.streamlines, layers.meshViewport, canvasWidth, canvasHeight, layers.vectorColorMode, layers.vectorStyle);
+  }
   if (layers.layers?.vectors !== false && layers.vectorField && layers.meshViewport) {
     const field = layers.vectorField;
     const glyphs = layoutScreenGlyphs({
@@ -245,6 +251,58 @@ function glyphColor(
     return `rgb(${Math.round(red * 255)} ${Math.round(green * 255)} ${Math.round(blue * 255)})`;
   }
   return monochrome;
+}
+
+/**
+ * Streamlines as polylines with one chevron at the middle of each line to show
+ * the sense of the in-plane projection. Monochrome; dark over a direction image.
+ */
+function drawStreamlines(
+  context: CanvasRenderingContext2D,
+  lines: PlanarStreamlines,
+  viewport: readonly [number, number, number, number],
+  canvasWidth: number,
+  canvasHeight: number,
+  colorMode: string | undefined,
+  style: PlanarOverlayLayers["vectorStyle"],
+) {
+  const viewU = viewport[1] - viewport[0];
+  const viewV = viewport[3] - viewport[2];
+  if (lines.lineCount === 0 || !(viewU > 0) || !(viewV > 0)) return;
+  const x = (u: number) => ((u - viewport[0]) / viewU) * canvasWidth;
+  const y = (v: number) => canvasHeight - ((v - viewport[2]) / viewV) * canvasHeight;
+  const lineWidth = Math.max(1, style?.thickness ?? 1);
+  const contrast = colorMode === "contrast";
+  const color = contrast ? GLYPH_CONTRAST : resolveCanvasPaintColor(context, style?.color ?? "currentColor");
+  const { offsets, points } = lines;
+  context.save();
+  context.globalAlpha = style?.opacity ?? 1;
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  for (const pass of ["halo", "line"] as const) {
+    context.strokeStyle = pass === "halo" ? (contrast ? GLYPH_CONTRAST_HALO : GLYPH_HALO) : color;
+    context.lineWidth = pass === "halo" ? lineWidth + 2 : lineWidth;
+    context.beginPath();
+    for (let line = 0; line < lines.lineCount; line += 1) {
+      const start = offsets[line]!;
+      const end = offsets[line + 1]!;
+      context.moveTo(x(points[start * 2]!), y(points[start * 2 + 1]!));
+      for (let index = start + 1; index < end; index += 1) {
+        context.lineTo(x(points[index * 2]!), y(points[index * 2 + 1]!));
+      }
+      const middle = start + Math.floor((end - start) / 2);
+      if (middle + 1 >= end) continue;
+      const tipX = x(points[(middle + 1) * 2]!);
+      const tipY = y(points[(middle + 1) * 2 + 1]!);
+      const angle = Math.atan2(tipY - y(points[middle * 2 + 1]!), tipX - x(points[middle * 2]!));
+      const head = 3 + 2 * lineWidth;
+      context.moveTo(tipX - head * Math.cos(angle - 0.5), tipY - head * Math.sin(angle - 0.5));
+      context.lineTo(tipX, tipY);
+      context.lineTo(tipX - head * Math.cos(angle + 0.5), tipY - head * Math.sin(angle + 0.5));
+    }
+    context.stroke();
+  }
+  context.restore();
 }
 
 function traceArrow(context: CanvasRenderingContext2D, glyph: ScreenGlyph, lineWidth: number) {

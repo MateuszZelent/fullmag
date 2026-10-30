@@ -2566,7 +2566,7 @@ def _parser() -> argparse.ArgumentParser:
     script_parser = subparsers.add_parser(
         "script",
         help=(
-            "activate one script in the exactly validated running DEV group; "
+            "run one script in the foreground in the exactly validated DEV group; "
             "attempt and configuration pins are discovered from control receipts"
         ),
     )
@@ -2595,6 +2595,8 @@ def _parser() -> argparse.ArgumentParser:
     run_script_parser.add_argument("--source-root", type=Path)
     run_script_parser.add_argument("--port", type=int)
     run_script_parser.add_argument("--request-id")
+    run_script_parser.add_argument("--attempt")
+    run_script_parser.add_argument("--config-sha256")
     run_script_parser.add_argument(
         "--timeout-seconds", type=float, default=None,
         help="optional observation deadline; expiration does not cancel or replay the script",
@@ -2687,6 +2689,10 @@ def _parser() -> argparse.ArgumentParser:
         "--pending-activation",
         help="close one exact unreleased preparation after native owner failure; permits only subsequent fresh-state archival",
     )
+    stop_diagnostic.add_argument(
+        "--catalog-failure", action="store_true",
+        help="drain a Ready runtime after an exact unreleased startup catalog failure; requires --pending-activation and fresh-state archival",
+    )
     stop_held = subparsers.add_parser(
         "stop-held-retirement-volume",
         help="preview a pinned diagnostic backend drain; apply requires an explicit UI-reset acknowledgement and plan digest",
@@ -2712,6 +2718,16 @@ def _parser() -> argparse.ArgumentParser:
     cancelled_activation.add_argument("--port", type=int, required=True)
     cancelled_activation.add_argument("--apply", action="store_true")
     cancelled_activation.add_argument("--expected-plan-sha256")
+    preowner_policy = subparsers.add_parser(
+        "stop-preowner-policy-volume",
+        help="preview or gracefully stop the exact startup-only diagnostic group after a refused budget",
+    )
+    for option in ("attempt", "config-sha256", "source-root", "backend-container-id", "image-id"):
+        preowner_policy.add_argument("--" + option, required=True)
+    preowner_policy.add_argument("--apply", action="store_true")
+    preowner_policy.add_argument("--expected-plan-sha256")
+    preowner_policy.add_argument("--terminal-observation-proof", dest="proof_path")
+    preowner_policy.add_argument("--terminal-observation-proof-sha256", dest="proof_sha256")
     stop_bootstrap = subparsers.add_parser(
         "stop-bootstrap-volume",
         help="stop one pinned backend retaining only its exact pre-owner startup-fenced diagnostic API",
@@ -3001,6 +3017,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             from docker_volume_stop_diagnostic import stop_diagnostic
             result = stop_diagnostic(args)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        elif args.action == "stop-preowner-policy-volume":
+            if bool(args.proof_path) != bool(args.proof_sha256):
+                raise _fail("Terminal observation successor requires paired proof path and digest")
+            if args.proof_path:
+                from docker_volume_preowner_drained import stop
+            else:
+                from docker_volume_stop_preowner_policy import stop
+            stop(args)
         elif args.action == "stop-held-retirement-volume":
             from docker_volume_stop_held_retirement import apply, plan
             from docker_volume_retirement_probe import inspect_retirement
@@ -3074,15 +3098,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.action == "activate-script":
             from docker_volume_activate import activate
             activate(args)
-        elif args.action == "script":
-            from docker_dev_defaults import activate_discovered
-            activate_discovered(args)
-        elif args.action == "run-script":
+        elif args.action in {"script", "run-script"}:
             from docker_dev_run_script import run_script
             result = run_script(
                 args.repo_root, args.script, source_root=args.source_root,
                 port=args.port, request_id=args.request_id,
-                timeout_seconds=args.timeout_seconds,
+                timeout_seconds=getattr(args, "timeout_seconds", None),
+                attempt=getattr(args, "attempt", None),
+                config_sha256=getattr(args, "config_sha256", None),
             )
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
             return int(result["exit_code"])

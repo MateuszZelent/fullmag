@@ -24,6 +24,35 @@ backend then executes the solve. This page installs both from a source checkout.
 
 ## Install the Python DSL
 
+### From PyPI
+
+```{note}
+The `fullmag` distribution is available on PyPI once its first release is published. Until
+then, install from a source checkout as described below.
+```
+
+```console
+pip install fullmag
+```
+
+With [uv](https://docs.astral.sh/uv/):
+
+```console
+uv add fullmag            # in a uv project
+uv pip install fullmag    # in an existing environment
+```
+
+Optional extras are `meshing` (FEM geometry and meshing), `figures` (Pillow) and `jupyter`
+(IPython, matplotlib), for example `pip install "fullmag[meshing,jupyter]"`.
+
+The PyPI package is pure Python. It provides model authoring and the live API client
+({ref}`fm.connect() <public-docs-python-api-runtime-live-session>`), which executes stages on a running
+Fullmag instance over HTTP. It does not contain the FDM/FEM solvers: without a live session or
+the native runner, `fm.relax()` and `fm.run()` return a result with
+`status="not-executable"`. Prepare a solver runtime as described below.
+
+### From a source checkout
+
 Clone the repository and install the embedded Python package:
 
 ```console

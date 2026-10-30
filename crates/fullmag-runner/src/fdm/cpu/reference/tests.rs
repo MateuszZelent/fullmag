@@ -1820,3 +1820,4 @@ fn effective_field_and_torque_due_outputs_share_direct_effective_field_cache() {
 
 #[path = "tests/final_relax.rs"]
 mod final_relax;
+mod unbounded_relaxation;

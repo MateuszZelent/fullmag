@@ -312,6 +312,35 @@ describe("viewport3DColorbarPlan", () => {
     });
   });
 
+  it("uses exact target glyph ranges and rejects stale palettes for vector-only legends", () => {
+    const targets = ["airbox-a", "airbox-b"].map((id) => airboxPlan(id, {
+      shaderVisible: false, vectorColorMode: "x", vectorsVisible: true,
+      viewportColorbarVisible: true,
+    }));
+    const plans = planViewport3DColorbars({ targets });
+    const fieldModel = {
+      scalarColorsByMode: new Map(),
+      scalarColorsByPartAndMode: new Map(),
+      targetPasses: new Map(targets.map((target, index) => [target.targetId, {
+        surface: { scalarColorMode: null, scalarColors: null },
+        vectors: { colorScale: {
+          colorMode: "x", colorPalette: "viridis", quantityId: "m",
+          range: { min: -1 - index, max: 1 + index },
+        } },
+      }])),
+    };
+    const ranges = resolveViewport3DColorbarRangeStates({ fieldModel, plans });
+    expect(plans).toHaveLength(2);
+    for (const plan of plans) {
+      const bound = plan.targetIds[0] === "airbox-a" ? 1 : 2;
+      expect(ranges.get(plan.groupKey)).toEqual({ range: { min: -bound, max: bound }, state: "current" });
+    }
+    const stale = resolveViewport3DColorbarRangeStates({
+      fieldModel, plans: plans.map((plan) => ({ ...plan, palette: "turbo" })),
+    });
+    for (const plan of plans) expect(stale.get(plan.groupKey)?.state).toBe("pending");
+  });
+
   it("resolves an FDM vector-only colorbar range from the vector scalar buffer", () => {
     const target = {
       ...objectPlan("fdm", {

@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from time import monotonic_ns
 from typing import Mapping, Sequence
 import zipfile
 
@@ -21,6 +22,7 @@ from fullmag._core import (
     preflight_mixed_mesh_arrays,
     validate_mesh_ir,
 )
+from fullmag._progress import emit_progress
 
 from ._certification_receipt import (
     ARTIFACT_SCHEMA_V2,
@@ -904,12 +906,46 @@ def _load_mesh_artifact_full_audit(
     if source.suffix != ".fullmag-mesh":
         raise ValueError("study.mesh.load() accepts only .fullmag-mesh artifacts")
     manifest, members = _read_native_artifact(source)
+    return _audit_mesh_artifact_members(
+        source,
+        manifest,
+        members,
+        expected_authoring_document=expected_authoring_document,
+        require_native=require_native,
+        artifact_trust=artifact_trust,
+    )
+
+
+def _audit_mesh_artifact_members(
+    source: Path,
+    manifest: Mapping[str, object],
+    members: Mapping[str, bytes],
+    *,
+    expected_authoring_document: Mapping[str, object] | None,
+    require_native: bool,
+    artifact_trust: str,
+    decoded_topology: (
+        tuple[MeshData, MixedLayerTopologyCertificateLike | None] | None
+    ) = None,
+) -> MeshArtifact:
+    """Run the full artifact audit over one already digest-checked member set.
+
+    ``decoded_topology`` is an internal reuse seam for the trusted-cache loader:
+    it may pass the mesh and detached certificate it just decoded from this
+    exact member set. Public artifact loads use the normal decode path below.
+    """
     schema = manifest["schema"]
+    if decoded_topology is not None and schema != ARTIFACT_SCHEMA_V2:
+        raise MeshArtifactCorruptionError(
+            "predecoded topology is only valid for v2 native mesh artifacts"
+        )
     receipt: CertificationReceiptV1 | CertificationReceiptV2 | None = None
     native_backend = "python_reference"
     if schema == ARTIFACT_SCHEMA_V2:
-        unsigned, certificate = _deserialize_mesh_with_detached_certificate(
-            members["topology.npz"]
+        unsigned, certificate = (
+            decoded_topology
+            if decoded_topology is not None
+            else _deserialize_mesh_with_detached_certificate(members["topology.npz"])
         )
         if certificate is None:
             raise MeshArtifactCorruptionError("v2 artifact is missing mixed certificate")
@@ -1114,6 +1150,7 @@ def _load_trusted_cached_mesh_artifact(
     source = Path(path)
     if source.suffix != ".fullmag-mesh":
         raise ValueError("trusted mesh cache accepts only .fullmag-mesh artifacts")
+    cache_load_started_ns = monotonic_ns()
     manifest, members = _read_native_artifact(source)
     if manifest.get("schema") != ARTIFACT_SCHEMA_V2:
         raise MeshArtifactVersionError(
@@ -1128,11 +1165,14 @@ def _load_trusted_cached_mesh_artifact(
         # The legacy native preflight receipt only proves the v1 topology
         # contract.  A v2 artifact must take the schema-native full audit;
         # never feed it through the v1 trusted shortcut.
-        audited = _load_mesh_artifact_full_audit(
+        audited = _audit_mesh_artifact_members(
             source,
+            manifest,
+            members,
             expected_authoring_document=None,
             require_native=True,
             artifact_trust="forced_audit_v2",
+            decoded_topology=(unsigned, certificate),
         )
         receipt = _receipt_from_members(members)
         allowed_algorithms = (
@@ -1151,6 +1191,11 @@ def _load_trusted_cached_mesh_artifact(
             raise MeshArtifactCorruptionError(
                 "trusted v2 cache receipt does not match expected bindings"
             )
+        elapsed_ms = (monotonic_ns() - cache_load_started_ns) / 1_000_000
+        emit_progress(
+            "Mixed-v2 mesh-cache load and full audit completed in "
+            f"{elapsed_ms:.3f} ms"
+        )
         return audited
     native = None
     if use_native_fingerprint:

@@ -153,18 +153,29 @@ export function StageInspectorFrame({
 
       <InspectorGroup title="Authoring" badge={kindLabel}>
         {draft && isExpectedDraft ? (
-          <StudyStageDraftEditor
-            algorithmsAvailable={algorithmsAvailable}
-            demagEnabled={demagEnabled}
-            draft={draft}
-            index={draftIndex}
-            requestedBackend={requestedBackend}
-            requestedDevice={requestedDevice}
-            requestedMode={requestedMode}
-            view={authoringView}
-            validation={validation}
-            onUpdate={onUpdateDraft}
-          />
+          <fieldset
+            className="m-0 min-w-0 border-0 p-0"
+            disabled={Boolean(draft.pipelineNodeId)}
+          >
+            {draft.pipelineNodeId && draft.kind !== "unsupported" && draft.kind !== "antenna_field_solve" ? (
+              <div className="fm-study-stage-note">
+                Canonical pipeline stage (read-only). The configuration is shown
+                as authored in the study pipeline.
+              </div>
+            ) : null}
+            <StudyStageDraftEditor
+              algorithmsAvailable={algorithmsAvailable}
+              demagEnabled={demagEnabled}
+              draft={draft}
+              index={draftIndex}
+              requestedBackend={requestedBackend}
+              requestedDevice={requestedDevice}
+              requestedMode={requestedMode}
+              view={authoringView}
+              validation={validation}
+              onUpdate={onUpdateDraft}
+            />
+          </fieldset>
         ) : (
           <div className="fm-study-stage-empty">
             Selected tree node does not match the current study draft.

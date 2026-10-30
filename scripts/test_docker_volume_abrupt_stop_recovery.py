@@ -217,16 +217,34 @@ class AbruptStopTests(unittest.TestCase):
     def test_desktop_drive_paths_do_not_bypass_abrupt_consumer_fence(self):
         proof, _, compose = self.fixture()
         backend, frontend = proof['containers'].values()
+        control = SimpleNamespace(project=compose['name'])
         for source in ('/run/desktop/mnt/host/c/work', '/run/desktop/mnt/host/e/storage',
                        '/host_mnt/c/work', '/mnt/host/e/storage', '/run/desktop/mnt/host',
                        '//host_mnt/c/work', '//run/desktop/mnt/host/c/work'):
             foreign = {'Id': 'a' * 64, 'Mounts': [{'Type': 'bind', 'Source': source,
                        'Destination': '/data', 'RW': True}]}
-            with self.subTest(source=source), patch.object(r, 'docker_capture', side_effect=[
-                    SimpleNamespace(stdout=('a' * 64).encode()),
-                    SimpleNamespace(stdout=json.dumps([foreign]).encode())]):
+            with self.subTest(source=source), \
+                 patch.object(r, 'docker_capture', side_effect=[
+                     SimpleNamespace(stdout=('a' * 64).encode()),
+                     SimpleNamespace(stdout=json.dumps([foreign]).encode())]), \
+                 patch.object(r, '_retained_compose_state_root',
+                              return_value=Path('/retained/state')) as retained_root, \
+                 patch('docker_windows_bind_isolation.prove_windows_bind_disjoint',
+                       side_effect=ValueError('physical identity unresolved')) as present_proof, \
+                 patch('docker_windows_absent_bind_isolation.prove_absent_stopped_windows_bind',
+                       side_effect=ValueError('no positive absence proof')) as absent_proof:
                 with self.assertRaisesRegex(r.ContainerRecoveryError, 'Windows.*unresolved|unsafe'):
-                    r._assert_no_foreign_storage_consumers(SimpleNamespace(), backend, frontend, compose)
+                    r._assert_no_foreign_storage_consumers(control, backend, frontend, compose)
+            if source.startswith('//'):
+                retained_root.assert_not_called()
+                present_proof.assert_not_called()
+                absent_proof.assert_not_called()
+            else:
+                retained_root.assert_called_once_with(backend, compose, project=compose['name'])
+                present_proof.assert_called_once_with(
+                    control, backend, foreign, source, Path('/retained/state'))
+                absent_proof.assert_called_once_with(
+                    control, backend, foreign, source, Path('/retained/state'))
 
     def test_unknown_foreign_alias_uses_only_exact_disjoint_proof_and_keeps_other_guards(self):
         proof, _, compose = self.fixture()

@@ -958,7 +958,10 @@ def stop_diagnostic(args: argparse.Namespace) -> dict[str, object]:
     ):
         _fail("Resume attempt is not a complete lowercase identity")
     preview = bool(getattr(args, "preview", False))
-    if preview and getattr(args, "pending_activation", None) is not None:
+    if getattr(args, "catalog_failure", False) and getattr(args, "pending_activation", None) is None:
+        _fail("Catalog-failure drain requires one exact pending activation")
+    if (preview and getattr(args, "pending_activation", None) is not None
+            and not getattr(args, "catalog_failure", False)):
         _fail("Diagnostic preview cannot abort a pending activation")
     require_host()
     selected, layout = _select_source(Path(args.repo_root).resolve(strict=True), args.source_root)

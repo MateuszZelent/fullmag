@@ -115,7 +115,7 @@ async function main() {
       waitUntil: "domcontentloaded",
     });
     const workerBaseline = await readPlanarWorkerSnapshot(page);
-    const open2d = page.getByRole("button", { name: "2D", exact: true });
+    const open2d = page.getByRole("tab", { name: "2D View", exact: true });
     await open2d.waitFor({ state: "visible", timeout: timeoutMs });
     const initialOpenStarted = performance.now();
     await open2d.click();
@@ -130,7 +130,7 @@ async function main() {
     if (initialOpenMs > 10_000) {
       throw new Error(`initial 2D open exceeded 10 s: ${initialOpenMs}`);
     }
-    const open3d = page.getByRole("button", { name: "3D", exact: true });
+    const open3d = page.getByRole("tab", { name: "3D Viewport", exact: true });
     await open3d.click();
     await page.keyboard.press("2");
     await assertFieldMapCanvas(page);
@@ -373,7 +373,7 @@ async function runDefaultSliceSmoke(playwright) {
     });
     const initialWebGL = await assertHealthyWebGL(page, "initial default 3D");
     const workerBaseline = await readPlanarWorkerSnapshot(page);
-    const open2d = page.getByRole("button", { name: "2D", exact: true });
+    const open2d = page.getByRole("tab", { name: "2D View", exact: true });
     await open2d.waitFor({ state: "visible", timeout: timeoutMs });
     const initialOpenStarted = performance.now();
     await open2d.click();
@@ -472,7 +472,7 @@ async function runDefaultSliceSmoke(playwright) {
     if (memoryBefore == null) {
       throw new Error("performance.memory is unavailable; heap lifecycle gate cannot run");
     }
-    const open3d = page.getByRole("button", { name: "3D", exact: true });
+    const open3d = page.getByRole("tab", { name: "3D Viewport", exact: true });
     for (let index = 0; index < switchCount; index += 1) {
       await open3d.click();
       await assertHealthyWebGL(page, `Default lifecycle cycle ${index + 1}`);
@@ -650,14 +650,33 @@ async function installPlanarWorkerAudit(page, baseUrl) {
   }, baseUrl);
 }
 
-function expectedDefaultFrame(domain, plane, positionFraction) {
+/**
+ * Default-slice coordinate along the normal (note 0970,
+ * eq-planar-default-layer): a plane sample on a structured FDM grid snaps to
+ * the cell centre `origin + (k + 1/2) h` with `k = clamp(ceil(q N) - 1)`;
+ * slabs and unstructured domains keep the requested coordinate.
+ */
+function expectedDefaultCoordinate(domain, axis, positionFraction, operatorKind) {
+  const min = domain.bounds.min[axis];
+  const continuous = min + positionFraction * (domain.bounds.max[axis] - min);
+  const grid = domain.grid;
+  if (domain.discretization !== "fdm" || !grid || operatorKind !== "plane_sample") {
+    return continuous;
+  }
+  const count = grid.shape[axis];
+  const scaled = positionFraction * count;
+  const index = Math.min(scaled <= 0 ? 0 : Math.ceil(scaled) - 1, count - 1);
+  return grid.origin[axis] + (index + 0.5) * grid.spacing[axis];
+}
+
+function expectedDefaultFrame(domain, plane, positionFraction, operatorKind = "plane_sample") {
   const min = domain.bounds.min;
   const max = domain.bounds.max;
   const lengths = max.map((value, index) => value - min[index]);
   const center = min.map((value, index) => (value + max[index]) * 0.5);
   const origin = [...center];
   if (plane === "xy") {
-    origin[2] = min[2] + positionFraction * lengths[2];
+    origin[2] = expectedDefaultCoordinate(domain, 2, positionFraction, operatorKind);
     return {
       boundsUvM: [-0.5 * lengths[0], 0.5 * lengths[0], -0.5 * lengths[1], 0.5 * lengths[1]],
       normal: [0, 0, 1],
@@ -668,7 +687,7 @@ function expectedDefaultFrame(domain, plane, positionFraction) {
     };
   }
   if (plane === "xz") {
-    origin[1] = min[1] + positionFraction * lengths[1];
+    origin[1] = expectedDefaultCoordinate(domain, 1, positionFraction, operatorKind);
     return {
       boundsUvM: [-0.5 * lengths[0], 0.5 * lengths[0], -0.5 * lengths[2], 0.5 * lengths[2]],
       normal: [0, -1, 0],
@@ -678,7 +697,7 @@ function expectedDefaultFrame(domain, plane, positionFraction) {
       resolvedCoordinateM: origin[1],
     };
   }
-  origin[0] = min[0] + positionFraction * lengths[0];
+  origin[0] = expectedDefaultCoordinate(domain, 0, positionFraction, operatorKind);
   return {
     boundsUvM: [-0.5 * lengths[1], 0.5 * lengths[1], -0.5 * lengths[2], 0.5 * lengths[2]],
     normal: [1, 0, 0],
@@ -693,7 +712,7 @@ function assertDefaultMetaGeometry(meta, domain, expected) {
   if (meta.source?.kind !== "default") {
     throw new Error(`Default meta source mismatch: ${JSON.stringify(meta.source)}`);
   }
-  const frame = expectedDefaultFrame(domain, expected.plane, expected.positionFraction);
+  const frame = expectedDefaultFrame(domain, expected.plane, expected.positionFraction, expected.operatorKind);
   for (const [key, value] of [
     ["origin_m", frame.origin],
     ["u_axis", frame.uAxis],
@@ -712,7 +731,7 @@ function assertDefaultMetaGeometry(meta, domain, expected) {
 }
 
 async function assertDefaultEvidence(page, domain, expected, observedPlanarMeta) {
-  const frame = expectedDefaultFrame(domain, expected.plane, expected.positionFraction);
+  const frame = expectedDefaultFrame(domain, expected.plane, expected.positionFraction, expected.operatorKind);
   const evidence = await assertPlanarEvidence(
     page,
     expectedDefaultEvidence(expected, frame),
@@ -1010,7 +1029,12 @@ async function assertPlanarEvidence(page, expected, observedPlanarMeta) {
       try {
         const evidence = JSON.parse(raw);
         if (evidence.status === "error") return evidence;
+        // A layer step keeps the previous frame on screen (retained, still
+        // "ready"); wait for the frame of the requested section itself.
+        const sectionMatches = ["defaultPlane", "positionFraction", "resolvedCoordinateM"]
+          .every((key) => request[key] === undefined || evidence[key] === request[key]);
         return evidence.status === "ready" &&
+          sectionMatches &&
           evidence.sourceKind === request.sourceKind &&
           evidence.sourceId === request.sourceId &&
           evidence.operatorKind === request.operatorKind &&

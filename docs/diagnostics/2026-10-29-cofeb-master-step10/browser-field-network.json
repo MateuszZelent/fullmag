@@ -1,0 +1,506 @@
+{
+  "url": "http://localhost:3198/session/permalloy_layer_cofeb_rings_relax_300nm",
+  "mutations": "none issued by harness",
+  "rows": [
+    {
+      "url": "http://localhost:3198/v2/sessions/current/model/material-fields",
+      "status": 200,
+      "metadata": {
+        "scene_revision": 1,
+        "region_coefficients_revision": 0,
+        "fields": []
+      }
+    },
+    {
+      "url": "http://localhost:3198/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields",
+      "status": 200,
+      "metadata": {
+        "revision": 2,
+        "realized_size_fields": {
+          "source": "unavailable",
+          "reason": "size_fields_realized is missing from the current mesh workspace/build report"
+        }
+      }
+    },
+    {
+      "url": "http://localhost:3198/v2/sessions/current/data/fields",
+      "status": 200,
+      "metadata": {
+        "revision": 5,
+        "domain_generation_id": "14850812098407037233",
+        "quantities": [
+          {
+            "quantity_id": "H_ani",
+            "label": "Anisotropy Field",
+            "ui_exposed": true,
+            "spatial": true,
+            "domain": "magnetic_only",
+            "kind": "vector_field",
+            "components": 3,
+            "location": "node",
+            "unit": "A/m",
+            "field_revision": 3,
+            "domain_generation_id": "14850812098407037233",
+            "available": true,
+            "source_step": 10,
+            "source_time_seconds": 0,
+            "source_revision": 0,
+            "materialized_at_unix_ms": 0,
+            "stale_by_steps": 0,
+            "materialization_wall_time_ns": 0,
+            "state": "complete",
+            "resolved_capability": {
+              "quantity_id": "H_ani",
+              "provider": "available",
+              "request": "field_vector",
+              "materialization": "materialized",
+              "render": "renderable",
+              "publication": "interactive",
+              "scope": "magnetic_only",
+              "lane": "fem_native_gpu",
+              "precision": "double",
+              "carriers": [
+                {
+                  "carrier_id": "fem:sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e:full",
+                  "carrier_fingerprint": "sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e",
+                  "scope": "full",
+                  "scope_kind": "full",
+                  "components": 3,
+                  "indexing": "node",
+                  "view": "3D",
+                  "payload_state": "current"
+                }
+              ]
+            }
+          },
+          {
+            "quantity_id": "H_demag",
+            "label": "Demagnetization Field",
+            "ui_exposed": true,
+            "spatial": true,
+            "domain": "full_domain",
+            "kind": "vector_field",
+            "components": 3,
+            "location": "node",
+            "unit": "A/m",
+            "field_revision": 3,
+            "domain_generation_id": "14850812098407037233",
+            "available": true,
+            "source_step": 10,
+            "source_time_seconds": 0,
+            "source_revision": 0,
+            "materialized_at_unix_ms": 0,
+            "stale_by_steps": 0,
+            "materialization_wall_time_ns": 0,
+            "state": "complete",
+            "resolved_capability": {
+              "quantity_id": "H_demag",
+              "provider": "available",
+              "request": "field_vector",
+              "materialization": "materialized",
+              "render": "renderable",
+              "publication": "interactive",
+              "scope": "full_domain",
+              "lane": "fem_native_gpu",
+              "precision": "double",
+              "carriers": [
+                {
+                  "carrier_id": "fem:sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e:full",
+                  "carrier_fingerprint": "sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e",
+                  "scope": "full",
+                  "scope_kind": "full",
+                  "components": 3,
+                  "indexing": "node",
+                  "view": "3D",
+                  "payload_state": "current"
+                }
+              ]
+            }
+          },
+          {
+            "quantity_id": "H_eff",
+            "label": "Effective Field",
+            "ui_exposed": true,
+            "spatial": true,
+            "domain": "full_domain",
+            "kind": "vector_field",
+            "components": 3,
+            "location": "node",
+            "unit": "A/m",
+            "field_revision": 3,
+            "domain_generation_id": "14850812098407037233",
+            "available": true,
+            "source_step": 10,
+            "source_time_seconds": 0,
+            "source_revision": 0,
+            "materialized_at_unix_ms": 0,
+            "stale_by_steps": 0,
+            "materialization_wall_time_ns": 0,
+            "state": "complete",
+            "resolved_capability": {
+              "quantity_id": "H_eff",
+              "provider": "available",
+              "request": "field_vector",
+              "materialization": "materialized",
+              "render": "renderable",
+              "publication": "interactive",
+              "scope": "full_domain",
+              "lane": "fem_native_gpu",
+              "precision": "double",
+              "carriers": [
+                {
+                  "carrier_id": "fem:sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e:full",
+                  "carrier_fingerprint": "sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e",
+                  "scope": "full",
+                  "scope_kind": "full",
+                  "components": 3,
+                  "indexing": "node",
+                  "view": "3D",
+                  "payload_state": "current"
+                }
+              ]
+            }
+          },
+          {
+            "quantity_id": "H_ex",
+            "label": "Exchange Field",
+            "ui_exposed": true,
+            "spatial": true,
+            "domain": "magnetic_only",
+            "kind": "vector_field",
+            "components": 3,
+            "location": "node",
+            "unit": "A/m",
+            "field_revision": 3,
+            "domain_generation_id": "14850812098407037233",
+            "available": true,
+            "source_step": 10,
+            "source_time_seconds": 0,
+            "source_revision": 0,
+            "materialized_at_unix_ms": 0,
+            "stale_by_steps": 0,
+            "materialization_wall_time_ns": 0,
+            "state": "complete",
+            "resolved_capability": {
+              "quantity_id": "H_ex",
+              "provider": "available",
+              "request": "field_vector",
+              "materialization": "materialized",
+              "render": "renderable",
+              "publication": "interactive",
+              "scope": "magnetic_only",
+              "lane": "fem_native_gpu",
+              "precision": "double",
+              "carriers": [
+                {
+                  "carrier_id": "fem:sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e:full",
+                  "carrier_fingerprint": "sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e",
+                  "scope": "full",
+                  "scope_kind": "full",
+                  "components": 3,
+                  "indexing": "node",
+                  "view": "3D",
+                  "payload_state": "current"
+                }
+              ]
+            }
+          },
+          {
+            "quantity_id": "eden_ani",
+            "label": "Anisotropy Energy Density",
+            "ui_exposed": true,
+            "spatial": true,
+            "domain": "magnetic_only",
+            "kind": "spatial_scalar",
+            "components": 1,
+            "location": "fem_nodal_visualization_projection",
+            "unit": "J/m³",
+            "field_revision": 3,
+            "domain_generation_id": "14850812098407037233",
+            "available": true,
+            "source_step": 10,
+            "source_time_seconds": 0,
+            "source_revision": 0,
+            "materialized_at_unix_ms": 0,
+            "stale_by_steps": 0,
+            "materialization_wall_time_ns": 0,
+            "state": "complete",
+            "resolved_capability": {
+              "quantity_id": "eden_ani",
+              "provider": "available",
+              "request": "field_vector",
+              "materialization": "materialized",
+              "render": "renderable",
+              "publication": "interactive",
+              "scope": "magnetic_only",
+              "lane": "fem_native_gpu",
+              "precision": "double",
+              "carriers": [
+                {
+                  "carrier_id": "fem:sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e:full",
+                  "carrier_fingerprint": "sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e",
+                  "scope": "full",
+                  "scope_kind": "full",
+                  "components": 1,
+                  "indexing": "cell",
+                  "view": "magnitude",
+                  "payload_state": "current"
+                }
+              ]
+            }
+          },
+          {
+            "quantity_id": "eden_demag",
+            "label": "Demagnetization Energy Density",
+            "ui_exposed": true,
+            "spatial": true,
+            "domain": "magnetic_only",
+            "kind": "spatial_scalar",
+            "components": 1,
+            "location": "fem_nodal_visualization_projection",
+            "unit": "J/m³",
+            "field_revision": 3,
+            "domain_generation_id": "14850812098407037233",
+            "available": true,
+            "source_step": 10,
+            "source_time_seconds": 0,
+            "source_revision": 0,
+            "materialized_at_unix_ms": 0,
+            "stale_by_steps": 0,
+            "materialization_wall_time_ns": 0,
+            "state": "complete",
+            "resolved_capability": {
+              "quantity_id": "eden_demag",
+              "provider": "available",
+              "request": "field_vector",
+              "materialization": "materialized",
+              "render": "renderable",
+              "publication": "interactive",
+              "scope": "magnetic_only",
+              "lane": "fem_native_gpu",
+              "precision": "double",
+              "carriers": [
+                {
+                  "carrier_id": "fem:sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e:full",
+                  "carrier_fingerprint": "sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e",
+                  "scope": "full",
+                  "scope_kind": "full",
+                  "components": 1,
+                  "indexing": "cell",
+                  "view": "magnitude",
+                  "payload_state": "current"
+                }
+              ]
+            }
+          },
+          {
+            "quantity_id": "eden_ex",
+            "label": "Exchange Energy Density",
+            "ui_exposed": true,
+            "spatial": true,
+            "domain": "magnetic_only",
+            "kind": "spatial_scalar",
+            "components": 1,
+            "location": "fem_nodal_visualization_projection",
+            "unit": "J/m³",
+            "field_revision": 3,
+            "domain_generation_id": "14850812098407037233",
+            "available": true,
+            "source_step": 10,
+            "source_time_seconds": 0,
+            "source_revision": 0,
+            "materialized_at_unix_ms": 0,
+            "stale_by_steps": 0,
+            "materialization_wall_time_ns": 0,
+            "state": "complete",
+            "resolved_capability": {
+              "quantity_id": "eden_ex",
+              "provider": "available",
+              "request": "field_vector",
+              "materialization": "materialized",
+              "render": "renderable",
+              "publication": "interactive",
+              "scope": "magnetic_only",
+              "lane": "fem_native_gpu",
+              "precision": "double",
+              "carriers": [
+                {
+                  "carrier_id": "fem:sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e:full",
+                  "carrier_fingerprint": "sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e",
+                  "scope": "full",
+                  "scope_kind": "full",
+                  "components": 1,
+                  "indexing": "cell",
+                  "view": "magnitude",
+                  "payload_state": "current"
+                }
+              ]
+            }
+          },
+          {
+            "quantity_id": "eden_total",
+            "label": "Total Energy Density",
+            "ui_exposed": true,
+            "spatial": true,
+            "domain": "magnetic_only",
+            "kind": "spatial_scalar",
+            "components": 1,
+            "location": "fem_nodal_visualization_projection",
+            "unit": "J/m³",
+            "field_revision": 3,
+            "domain_generation_id": "14850812098407037233",
+            "available": true,
+            "source_step": 10,
+            "source_time_seconds": 0,
+            "source_revision": 0,
+            "materialized_at_unix_ms": 0,
+            "stale_by_steps": 0,
+            "materialization_wall_time_ns": 0,
+            "state": "complete",
+            "resolved_capability": {
+              "quantity_id": "eden_total",
+              "provider": "available",
+              "request": "field_vector",
+              "materialization": "materialized",
+              "render": "renderable",
+              "publication": "interactive",
+              "scope": "magnetic_only",
+              "lane": "fem_native_gpu",
+              "precision": "double",
+              "carriers": [
+                {
+                  "carrier_id": "fem:sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e:full",
+                  "carrier_fingerprint": "sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e",
+                  "scope": "full",
+                  "scope_kind": "full",
+                  "components": 1,
+                  "indexing": "cell",
+                  "view": "magnitude",
+                  "payload_state": "current"
+                }
+              ]
+            }
+          },
+          {
+            "quantity_id": "m",
+            "label": "Magnetization",
+            "ui_exposed": true,
+            "spatial": true,
+            "domain": "magnetic_only",
+            "kind": "vector_field",
+            "components": 3,
+            "location": "node",
+            "unit": "dimensionless",
+            "field_revision": 3,
+            "domain_generation_id": "14850812098407037233",
+            "available": true,
+            "source_step": 10,
+            "source_time_seconds": 0,
+            "source_revision": 2,
+            "materialized_at_unix_ms": 0,
+            "stale_by_steps": 0,
+            "materialization_wall_time_ns": 0,
+            "state": "complete",
+            "resolved_capability": {
+              "quantity_id": "m",
+              "provider": "available",
+              "request": "field_vector",
+              "materialization": "materialized",
+              "render": "renderable",
+              "publication": "interactive",
+              "scope": "magnetic_only",
+              "lane": "fem_native_gpu",
+              "precision": "double",
+              "carriers": [
+                {
+                  "carrier_id": "fem:sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e:full",
+                  "carrier_fingerprint": "sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e",
+                  "scope": "full",
+                  "scope_kind": "full",
+                  "components": 3,
+                  "indexing": "node",
+                  "view": "3D",
+                  "payload_state": "current"
+                }
+              ]
+            }
+          },
+          {
+            "quantity_id": "torque",
+            "label": "Torque",
+            "ui_exposed": true,
+            "spatial": true,
+            "domain": "magnetic_only",
+            "kind": "vector_field",
+            "components": 3,
+            "location": "node",
+            "unit": "T",
+            "field_revision": 3,
+            "domain_generation_id": "14850812098407037233",
+            "available": true,
+            "source_step": 10,
+            "source_time_seconds": 0,
+            "source_revision": 0,
+            "materialized_at_unix_ms": 0,
+            "stale_by_steps": 0,
+            "materialization_wall_time_ns": 0,
+            "state": "complete",
+            "resolved_capability": {
+              "quantity_id": "torque",
+              "provider": "available",
+              "request": "field_vector",
+              "materialization": "materialized",
+              "render": "renderable",
+              "publication": "interactive",
+              "scope": "magnetic_only",
+              "lane": "fem_native_gpu",
+              "precision": "double",
+              "carriers": [
+                {
+                  "carrier_id": "fem:sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e:full",
+                  "carrier_fingerprint": "sha256:1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e",
+                  "scope": "full",
+                  "scope_kind": "full",
+                  "components": 3,
+                  "indexing": "node",
+                  "view": "magnitude",
+                  "payload_state": "current"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "url": "http://localhost:3198/v2/sessions/current/data/fields/H_demag/samples/vector?component=full&max_samples=9600&scope_id=airbox&scope_kind=airbox",
+      "status": 200,
+      "format": 3,
+      "quantity": "H_demag",
+      "value_count": 28800,
+      "payload_bytes": 230400,
+      "size_valid": true,
+      "payload_sha256": "1fdb2b5a2b1ff5a2adeb5b66873143a0be8d9a718f24f6668cd683056e41d4ef"
+    },
+    {
+      "url": "http://localhost:3198/v2/sessions/current/data/fields/H_demag/samples/vector?component=full&max_samples=1200&scope_id=part%3A__air__&scope_kind=airbox",
+      "status": 200,
+      "format": 3,
+      "quantity": "H_demag",
+      "value_count": 3600,
+      "payload_bytes": 28800,
+      "size_valid": true,
+      "payload_sha256": "db2da45ebf245fca1a090398b526694f2da1c5ee9c532647162cadc98fd14072"
+    },
+    {
+      "url": "http://localhost:3198/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full",
+      "status": 200,
+      "format": 3,
+      "quantity": "m",
+      "value_count": 551292,
+      "payload_bytes": 4410336,
+      "size_valid": true,
+      "payload_sha256": "f87c4d4ea756c9a9f287c12d0465c07981cd9d3dd3296207e0cabfed44392f26"
+    }
+  ]
+}

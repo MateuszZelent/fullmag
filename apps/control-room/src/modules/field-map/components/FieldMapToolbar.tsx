@@ -21,6 +21,7 @@ import {
   planarComponentPresetPatch,
   type PlanarComponentPreset,
 } from "../model/planarComponentPresets";
+import { evenMultisliceFractions } from "../model/planarMultislice";
 
 type PlanarState = NonNullable<VisualizationStateResource["planar"]>;
 type PlanarPatch = Partial<Omit<PlanarState, "layers">> & { layers?: PlanarState["layers"] };
@@ -149,6 +150,17 @@ export function FieldMapToolbar({
           Arrows
         </Button>
         <Button
+          aria-pressed={planar.layers.streamlines ?? false}
+          disabled={!vectorQuantity}
+          size="sm"
+          title="In-plane streamlines of the vector field (presentation)"
+          type="button"
+          variant={planar.layers.streamlines ? "primary" : "ghost"}
+          onClick={() => onPatch({ layers: { ...planar.layers, streamlines: !planar.layers.streamlines } })}
+        >
+          Lines
+        </Button>
+        <Button
           aria-keyshortcuts="G"
           aria-pressed={planar.layers.mesh}
           size="sm"
@@ -158,6 +170,33 @@ export function FieldMapToolbar({
         >
           Mesh
         </Button>
+        {planar.source?.kind === "default" ? (
+          <Button
+            aria-pressed={planar.multislice?.enabled ?? false}
+            size="sm"
+            title="Panels of the default slice at several positions along the normal"
+            type="button"
+            variant={planar.multislice?.enabled ? "primary" : "ghost"}
+            onClick={() => onPatch({
+              multislice: {
+                enabled: !planar.multislice?.enabled,
+                position_fractions: planar.multislice?.position_fractions ?? evenMultisliceFractions(3),
+              },
+            })}
+          >
+            Slices
+          </Button>
+        ) : null}
+        {planar.source?.kind === "default" && planar.multislice?.enabled ? (
+          <SegmentedControl
+            aria-label="Slice panels"
+            options={["2", "3", "4"].map((value) => ({ label: value, value }))}
+            value={String(planar.multislice.position_fractions.length)}
+            onValueChange={(value) => onPatch({
+              multislice: { enabled: true, position_fractions: evenMultisliceFractions(Number(value)) },
+            })}
+          />
+        ) : null}
       </div>
     </div>
   );

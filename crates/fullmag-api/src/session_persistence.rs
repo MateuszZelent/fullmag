@@ -369,6 +369,7 @@ impl From<PersistedCurrentLiveSnapshot> for SessionStateResponse {
             simulation_preparation: None,
             scene_document: value.scene_document,
             scalar_rows: value.scalar_rows,
+            latest_scalar_source: None,
             engine_log: value.engine_log,
             solver_profile: crate::schemas::diagnostics::SolverProfileResource::default(),
             quantities: value.quantities,

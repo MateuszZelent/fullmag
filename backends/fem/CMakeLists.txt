@@ -1699,6 +1699,7 @@ target_include_directories(fem_state_io_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_state_io_contract COMMAND fem_state_io_contract)
+add_test(NAME fem_torque_observable_contract COMMAND fem_state_io_contract --torque-only)
 
 add_executable(fem_snapshot_contract tests/snapshot_contract.cpp)
 target_link_libraries(fem_snapshot_contract PRIVATE fullmag_fem)

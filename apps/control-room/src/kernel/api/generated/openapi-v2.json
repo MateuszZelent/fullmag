@@ -28107,6 +28107,70 @@
         ],
         "type": "object"
       },
+      "PlanarFieldProfileResource": {
+        "properties": {
+          "component": {
+            "type": "string"
+          },
+          "length_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/PlanarProfilePointResource"
+            },
+            "type": "array"
+          },
+          "quantity_id": {
+            "type": "string"
+          },
+          "sample_token": {
+            "description": "Identity of the planar sample the profile was evaluated on.",
+            "type": "string"
+          },
+          "sampling_method": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/PlanarSampleSourceResource"
+          },
+          "source_entity_kind": {
+            "type": "string"
+          },
+          "u0_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "u1_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "v0_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "v1_m": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "source",
+          "quantity_id",
+          "component",
+          "sample_token",
+          "source_entity_kind",
+          "u0_m",
+          "v0_m",
+          "u1_m",
+          "v1_m",
+          "length_m",
+          "sampling_method",
+          "points"
+        ],
+        "type": "object"
+      },
       "PlanarFramePresetSchema": {
         "enum": [
           "xy",
@@ -28215,6 +28279,10 @@
             "type": "boolean"
           },
           "raster": {
+            "type": "boolean"
+          },
+          "streamlines": {
+            "description": "In-plane streamlines of the vector raster (presentation only, note 0970\n`eq-planar-streamlines`); absent in state persisted before the layer.",
             "type": "boolean"
           },
           "vectors": {
@@ -28471,6 +28539,27 @@
           }
         ]
       },
+      "PlanarMultisliceState": {
+        "additionalProperties": false,
+        "description": "Multislice presentation (F6 B2, note 0970 § Multislice panels): panels of\nthe Default source at fixed position fractions along the current plane\nnormal, sharing quantity, component, colour range and palette. Each panel\nis its own sample (`position_fraction` query override).",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "position_fractions": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "enabled",
+          "position_fractions"
+        ],
+        "type": "object"
+      },
       "PlanarOperatorSchema": {
         "oneOf": [
           {
@@ -28571,6 +28660,65 @@
           "color",
           "opacity",
           "size"
+        ],
+        "type": "object"
+      },
+      "PlanarProfilePointResource": {
+        "properties": {
+          "entity_id": {
+            "description": "Cell or element id, per `source_entity_kind`.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "`uniform` or `element_face` (a FEM element face inside the plane).",
+            "type": "string"
+          },
+          "occupancy": {
+            "description": "`occupied`, `empty` (outside the target) or `outside` (outside the frame).",
+            "type": "string"
+          },
+          "s_m": {
+            "description": "Arc length from the segment start.",
+            "format": "double",
+            "type": "number"
+          },
+          "scalar": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "u_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "v_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "vector": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "s_m",
+          "u_m",
+          "v_m",
+          "kind",
+          "occupancy"
         ],
         "type": "object"
       },
@@ -29075,6 +29223,16 @@
               }
             ]
           },
+          "multislice": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PlanarMultisliceState"
+              }
+            ]
+          },
           "point_style": {
             "oneOf": [
               {
@@ -29215,6 +29373,9 @@
           },
           "layers": {
             "$ref": "#/components/schemas/PlanarLayerState"
+          },
+          "multislice": {
+            "$ref": "#/components/schemas/PlanarMultisliceState"
           },
           "point_style": {
             "$ref": "#/components/schemas/PlanarPointStyleState"
@@ -34560,6 +34721,38 @@
         ],
         "type": "object"
       },
+      "ScalarObservationSource": {
+        "description": "Process-authenticated source of the single current scalar observation.\nAbsent for historical, imported, or unqualified rows.",
+        "properties": {
+          "request_scope_epoch": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "scalar_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "source_step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_id",
+          "run_id",
+          "request_scope_epoch",
+          "source_step",
+          "scalar_revision"
+        ],
+        "type": "object"
+      },
       "ScalarWindow": {
         "properties": {
           "columns": {
@@ -34567,6 +34760,17 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "current_observation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ScalarObservationSource",
+                "description": "Present only when the window contains exactly the current accepted row."
+              }
+            ]
           },
           "observation_frames": {
             "items": {
@@ -56088,6 +56292,16 @@
             }
           },
           {
+            "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "expected_scene_revision",
             "required": false,
@@ -56305,6 +56519,16 @@
             "required": false,
             "schema": {
               "type": "boolean"
+            }
+          },
+          {
+            "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -56528,6 +56752,16 @@
             "required": false,
             "schema": {
               "type": "boolean"
+            }
+          },
+          {
+            "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -56866,6 +57100,259 @@
         ]
       }
     },
+    "/v2/sessions/current/data/fields/{quantity_id}/planar-default/profile": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fields_quantity_id_planar_default_profile",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quantity_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "u0_m",
+            "required": true,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "v0_m",
+            "required": true,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "u1_m",
+            "required": true,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "v1_m",
+            "required": true,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Uniform samples along the segment (2..=4096, default 256); FEM\nprofiles add every in-plane element-face crossing.",
+            "in": "query",
+            "name": "samples",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sample_token",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "component",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution_x",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution_y",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "quality",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope_kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Region id within the `scope_id` object when `scope_kind=region`.",
+            "in": "query",
+            "name": "scope_region_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "snapshot_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_scene_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_monitor_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_source_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_mesh_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_carrier_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_field_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanarFieldProfileResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid planar query or segment"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Field or domain missing"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale source"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported planar sampling or too many profile points"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
     "/v2/sessions/current/data/fields/{quantity_id}/planar-default/render.png": {
       "get": {
         "operationId": "data_get_sessions_current_data_fields_quantity_id_planar_default_render_png",
@@ -56979,6 +57466,16 @@
             "required": false,
             "schema": {
               "type": "boolean"
+            }
+          },
+          {
+            "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -57199,6 +57696,16 @@
             }
           },
           {
+            "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "expected_scene_revision",
             "required": false,
@@ -57416,6 +57923,16 @@
             "required": false,
             "schema": {
               "type": "boolean"
+            }
+          },
+          {
+            "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -57647,6 +58164,16 @@
             }
           },
           {
+            "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "expected_scene_revision",
             "required": false,
@@ -57875,6 +58402,16 @@
             }
           },
           {
+            "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "expected_scene_revision",
             "required": false,
@@ -58100,6 +58637,16 @@
             "required": false,
             "schema": {
               "type": "boolean"
+            }
+          },
+          {
+            "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -58446,6 +58993,267 @@
         ]
       }
     },
+    "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/profile": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_profile",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quantity_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "monitor_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "u0_m",
+            "required": true,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "v0_m",
+            "required": true,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "u1_m",
+            "required": true,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "v1_m",
+            "required": true,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Uniform samples along the segment (2..=4096, default 256); FEM\nprofiles add every in-plane element-face crossing.",
+            "in": "query",
+            "name": "samples",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sample_token",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "component",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution_x",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution_y",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "quality",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope_kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Region id within the `scope_id` object when `scope_kind=region`.",
+            "in": "query",
+            "name": "scope_region_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "snapshot_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_scene_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_monitor_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_source_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_mesh_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_carrier_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_field_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanarFieldProfileResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid planar query or segment"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Field or monitor missing"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale source"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported planar sampling or too many profile points"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
     "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/render.png": {
       "get": {
         "operationId": "data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_render_png",
@@ -58567,6 +59375,16 @@
             "required": false,
             "schema": {
               "type": "boolean"
+            }
+          },
+          {
+            "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -58795,6 +59613,16 @@
             }
           },
           {
+            "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "expected_scene_revision",
             "required": false,
@@ -59020,6 +59848,16 @@
             "required": false,
             "schema": {
               "type": "boolean"
+            }
+          },
+          {
+            "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {

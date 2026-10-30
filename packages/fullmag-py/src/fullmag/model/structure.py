@@ -173,6 +173,19 @@ _MATERIAL_PARAMETER_NAMES = {
     "Dind",
     "Dbulk",
 }
+_MATERIAL_PARAMETER_UNITS = {
+    "Ms": "A/m",
+    "Aex": "J/m",
+    "Alpha": "1",
+    "AnisotropyAxis": "1",
+    "Ku1": "J/m^3",
+    "Ku2": "J/m^3",
+    "Kc1": "J/m^3",
+    "Kc2": "J/m^3",
+    "Kc3": "J/m^3",
+    "Dind": "J/m^2",
+    "Dbulk": "J/m^2",
+}
 
 _REGION_FRAMES = {"object", "world"}
 _REGION_REALIZATION_POLICIES = {"inherit", "conformal", "project"}
@@ -278,6 +291,7 @@ class RegionMaterialOverride:
         _validate_material_parameter_field(parameter, self.value)
 
     def to_ir(self) -> dict[str, object]:
+        _validate_material_parameter_field(_normalize_parameter_name(self.parameter), self.value)
         return {
             "parameter": _parameter_name_to_ir(self.parameter),
             "value": self.value.to_ir(),
@@ -610,6 +624,7 @@ class MaterialParameterAssignment:
         )
 
     def to_ir(self) -> dict[str, object]:
+        _validate_material_parameter_field(_normalize_parameter_name(self.parameter), self.value)
         payload: dict[str, object] = {
             "assignment_id": require_non_empty(self.assignment_id, "assignment_id"),
             "owner_object": require_non_empty(self.owner_object, "owner_object"),
@@ -683,7 +698,22 @@ def _parameter_name_to_ir(value: str) -> str:
 
 def _validate_material_parameter_field(parameter: str, field_value: MaterialParameterField) -> None:
     payload = field_value.to_ir()
-    if payload.get("kind") != "constant":
+    expected_unit = _MATERIAL_PARAMETER_UNITS[parameter]
+    field_kind = payload.get("kind")
+    unit = payload.get("unit")
+    if field_kind == "sampled" and not isinstance(unit, str):
+        raise ValueError(f"{parameter} sampled field unit must be {expected_unit!r}")
+    if parameter in {"Alpha", "AnisotropyAxis"}:
+        allowed_units = {expected_unit, "dimensionless"}
+    else:
+        allowed_units = {expected_unit}
+    if unit is not None and (
+        not isinstance(unit, str) or unit.strip() not in allowed_units
+    ):
+        raise ValueError(
+            f"{parameter} unit must be one of {sorted(allowed_units)!r}, got {unit!r}"
+        )
+    if field_kind != "constant":
         return
     value = payload.get("value")
     if not isinstance(value, (int, float)):

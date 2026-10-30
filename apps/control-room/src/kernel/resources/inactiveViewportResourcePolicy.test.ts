@@ -151,4 +151,29 @@ describe("inactiveViewportResourcePolicy", () => {
 
     expect(releasePause).toHaveBeenCalledTimes(2);
   });
+
+  it("keeps 3D resources loading while the 3D viewport is the split companion", () => {
+    const layout = new LayoutController(new EventBus<KernelEventMap>());
+    layout.setActiveViewportMainModule("analysis-plots");
+    layout.setViewportCompanion({ moduleId: "viewport-3d", placement: "beside" });
+    const pausedPredicates: Array<(resourceKey: string) => boolean> = [];
+    const runtimeStore = {
+      beginPauseMatching: vi.fn((predicate: (resourceKey: string) => boolean) => {
+        pausedPredicates.push(predicate);
+        return vi.fn();
+      }),
+    };
+
+    const dispose = createViewport3DInactiveResourcePauseController({
+      layout,
+      runtimeStore,
+    });
+
+    expect(pausedPredicates).not.toContain(isViewport3DExclusiveResourceKey);
+
+    layout.setViewportCompanion(null);
+    expect(pausedPredicates).toContain(isViewport3DExclusiveResourceKey);
+
+    dispose();
+  });
 });
