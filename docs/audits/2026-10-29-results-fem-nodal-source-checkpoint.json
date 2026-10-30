@@ -1,7 +1,7 @@
 {
   "schema": "fullmag.results-fem-nodal-source-checkpoint.v1",
-  "observed_at": "2026-10-30T12:43:20.336099+00:00",
-  "head": "286953713830f54d509623210537a197329ffc6f",
+  "observed_at": "2026-10-30T13:17:13.228057+00:00",
+  "head": "b55376444e33a5750349add966c2a10f556d4065",
   "source_sha256": {
     "crates/fullmag-quantities/src/fem_nodal_field.rs": "5852067389b8b9408dc9a41750e22e9fa7e7611cea37bc1acd9d64b1652ed5cd",
     "crates/fullmag-quantities/src/lib.rs": "a77045805d298eff2d6be7c03a193bab40026a8e2f424564342b8e2615aac877",
@@ -35,13 +35,17 @@
     "apps/control-room/src/design/styles/analysis-plots.css": "942095ad0607c853e351052e00dfb10ef32ffb97b2b2a13177963c035365f365",
     "crates/fullmag-workspace-inspect/src/manifest.rs": "a738027d84367cb2f74ee6cf5a82f7ee584d57372ac3665f7303ce8a90d87873",
     "scripts/docker_bind_overlap_probe.py": "f0e20c36f49ef7e56d8ae3625bebf783caf71fee10806ac72b3159c31c0728a2",
-    "apps/control-room/src/modules/results-navigator/ResultsNavigatorModule.selection.test.ts": "f2a10678b72cbdac38283590a8e6030e4d79c75b9084380f974421d7e1f71a4e"
+    "apps/control-room/src/modules/results-navigator/ResultsNavigatorModule.selection.test.ts": "f2a10678b72cbdac38283590a8e6030e4d79c75b9084380f974421d7e1f71a4e",
+    "crates/fullmag-api/src/router_v2/tests.rs": "5db8da554e17181364fd8a9bc8715f5b1ac7a2de709a37e1d9f6ca6055d10bea",
+    "scripts/test_docker_volume_receipts.py": "d18fd4459201f96fd16311f32bc3d40baab021fb5886e4a04b91a9c291425f84",
+    "apps/control-room/scripts/smoke-analysis-plots.mjs": "318e519131f703784e1a7809ac5c9e1e5885940fd4a6cf30f3db170d13254891",
+    "apps/control-room/src/modules/viewport-3d/SavedResultsPlaybackViewport.tsx": "2276340fb358e25df01349be58877fc11a25f01b9924963dd749f5f6bbc9c102"
   },
   "scope": "FEM producer/reader/API, accepted-output collection, aggregate discovery budget and cross-revision snapshot preferences implemented in source; compilation and current UI verification pending",
   "checks": {
     "rustfmt_owned_files": "passed (skip_children=true)",
     "git_diff_check": "passed",
-    "cargo_tests": "Rust run41046759452 at76e2c9d84 compiled; read-only playback step FAILED: workspace-inspect 102 passed, 1 failed (eligible_attestation_read_failure_preserves_running_manifest_for_retry: publication lock WouldBlock). Later playback route/producer commands did not execute. UI rerun pending.",
+    "cargo_tests": "Run41057502235 b553: startup/projection, 28/28 receipt regressions and read-only FDM/FEM playback/binary routes PASS. Later broad API suite 1201 passed/1 failed/3 ignored: exact OpenAPI tag list missing new workspace_results. Expectation corrected; full rerun pending.",
     "new_runtime": "NOT RUN",
     "new_browser": "NOT RUN",
     "review": "Payload/hash API and Windows directory replacement findings addressed in source; Windows execution NOT VERIFIED",
@@ -54,14 +58,14 @@
     "collection": "Independent source review PASS after aggregate receipt budget fix; geometry sibling/stale and aggregate-budget route tests added; NOT RUN.",
     "receipt_budget": "16 MiB aggregate per discovery, typed regular-file oversize error distinguishes missing/type/symlink/I/O failures; independent source review PASS; tests NOT RUN.",
     "snapshot_preferences": "Bounded logical appearance/sample preferences preserve explicit selections across metadata revisions; exact render keys remain revision-pinned and new definitions do not activate preview. Primary source review PASS; Vitest/typecheck/browser NOT RUN.",
-    "ci": "Rust run41046759452 failed workspace-inspect lock retry (102/103); UI run41048512203 passed Inspector actions but failed TS test parse and chart title width. Source fixes pending rerun; no green qualification.",
+    "ci": "Run41057502235 has Control Room, generated API, Inspector actions and Windows gates PASS; failed later exact OpenAPI tag expectation and Python retained-profile fixture. Eigensolve UI failed doctor cleanup recognition; source fixes pending rerun.",
     "cargo_lock": "Byte-exact Cargo-produced artifact12971087642 from run41043411407, matching input manifests; sha256 4dbaff705d3e94f64559dd1e50c6088a9bccfe974ea1b49a013d014fe6cb5fbb.",
-    "browser_harness": "Five resonance leaf routing cases passed in UI run41048512203; artifact12974341222 hash verified and screenshot visually reviewed. Broader browser gate failed later on zero-width chart title.",
+    "browser_harness": "Responsive chart assertions passed; later reference-import Results root hidden behind closed accordion. Idempotent opening and full current catalog DTO added; full browser rerun pending.",
     "completed_run_identity": "Exact completed-stage manifest binding implemented; two test assertion parse errors fixed after UI run41048512203. Tests pending.",
     "recovery_sources": "Owned six-file recovery delta preserved in15fb39d23; Python parser and justfile parse PASS. Earlier managed tests remain historical; master integration and renewed recovery qualification pending.",
-    "chart_layout": "Header flex-wrap and 12rem title basis address observed zero-width title at1280. Browser rerun pending.",
+    "chart_layout": "Responsive chart assertions PASS in run41057502235; full browser gate failed later in another fixture.",
     "completion_merge": "Independent source recheck PASS after undefined serde helper, scalar lineage and positive durable-dt findings were addressed. Explicit canonical/legacy dispatch and compatibility preserved; source regressions added. Cargo/CI/runtime pending.",
-    "receipt_ci_coverage": "Required startup/projection step now explicitly runs accepted_final_step_stats_tests on the accepted-worker binary; execution pending.",
+    "receipt_ci_coverage": "28/28 accepted_final_step_stats_tests PASS on accepted-worker binary in run41057502235, including legacy refs/dt and real-CAS tampering.",
     "react_doctor": "First merge scan incomplete due oxlint AST decoder error; second scan two incoming QA lookup warnings. No suppression. Project lint/typecheck still required in CI."
   },
   "formatter_recovery": {
@@ -69,10 +73,11 @@
     "proof": "Each file matched rustfmt(HEAD) byte-for-byte; restored original bytes. lib.rs retained only module declaration."
   },
   "runtime_blocker": {
-    "phase": "authorization-publication",
-    "state": "read-only-preflight-passed",
-    "native_recovery_executed": false,
-    "qualification": "Application restart, current source deployment and actual UI remain NOT VERIFIED"
+    "phase": "managed-container-recovery",
+    "state": "started-awaiting-result",
+    "preparation_operation_state": "succeeded",
+    "native_recovery_executed": "in progress; outcome not yet inspected",
+    "qualification": "Current-source deployment and actual UI remain NOT VERIFIED"
   },
   "remaining": [
     "Complete authorized owned runtime recovery and deploy current source without changing foreign groups",
@@ -93,7 +98,7 @@
   },
   "recovery_gap": {
     "control_operation": "Resolved using explicit failed-stop schema; original helper released its own operation lease after failure-only CAS publication. No native owner/store mutation.",
-    "native_owner": "Read-only preparation validated the existing native v3 Ready/terminal-run state and qualified Windows/DrvFs bind disjointness. Authorization publication in progress; native recovery not yet executed.",
+    "native_owner": "Published recovery authorization verified against succeeded operation receipt and exact retained Compose. Managed recovery started on frontend port3298; outcome pending.",
     "guard_policy": "Preserve all stores and foreign consumers. No widening of Windows aliases into the WSL/POSIX-only proof."
   },
   "runtime_blocker_before_settlement": {
@@ -389,5 +394,17 @@
       "stderr": "......................................\n----------------------------------------------------------------------\nRan 38 tests in 21.610s\n\nOK\n"
     }
   ],
-  "integrated_master": "3bf5e0c86d728f7cadfeb4a175e5cb39cb83a814"
+  "integrated_master": "3bf5e0c86d728f7cadfeb4a175e5cb39cb83a814",
+  "recovery_prepared_20261030": {
+    "schema": "fullmag.container-recovery-preparation-result.v1",
+    "state": "prepared-awaiting-explicit-start",
+    "compose_project": "fullmag-worktree-results-snapshot-inspector-20261-aeb868db9dd9674f",
+    "proof_path": "runtime-services/container-recovery/103c7000-cc23-4f8d-96a1-ba2e8888def5/abrupt-stop-proof.json",
+    "proof_sha256": "83d194f98d5394166b60931a51270fe499329ea14343c8655a6dbd892175bdca",
+    "operator_authorization_path": "runtime-services/container-recovery/103c7000-cc23-4f8d-96a1-ba2e8888def5/operator.json",
+    "operator_authorization_sha256": "314182bd8cde8c7d37501c27b5d0c5a9a7ffdd0797c16df5803f148336ba8fca",
+    "application_started": false,
+    "compute_started": false,
+    "operation_attempt": "ba1746e116c94044a54f057ab228a73f"
+  }
 }

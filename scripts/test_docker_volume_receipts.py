@@ -1050,6 +1050,7 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
         import docker_volume_dev as dev
         import docker_dev_codegen as codegen
         import docker_development_inputs as frontend_inputs
+        import docker_group_ledger as group_ledger
         import windows_folder_host,linux_native_host,fullmag_storage,docker_volume_reconcile,docker_build_control
         host = linux_native_host if linux else windows_folder_host
         certificate_name = Path(host.HOST_CERT_PATH).name
@@ -1067,15 +1068,34 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
         def write(path,value):
             if fault=='last-proof' and path.endswith('/frontend-source-view.json'):raise OSError('proof write failed')
             writes[path]=copy.deepcopy(value)
-        control.write.side_effect=write;control.read.return_value={'retained':'same'}
+        control.write.side_effect=write
         backend={'Id':'b'*64,'State':{'StartedAt':'same','Running':True,'Health':{'Status':'healthy'}}}
         frontend={'Id':'f'*64,'Image':'image','State':{'StartedAt':'new','Running':True,'Health':{'Status':'healthy'}}}
         frontend['HostConfig']={'Memory':6*1024**3 if fault=='memory-drift' else 8*1024**3}
-        document={'services':{'backend':{'same':'declaration'},'frontend':{'environment':{'FULLMAG_FRONTEND_HOST_PORT':'3202'},'mem_limit':'6442450944'}},
-                  'volumes':{'frontend-build':{'name':'old'}}}
+        daemon_sha='d'*64
+        group_volume=group_ledger.VOLUME_PREFIX+'e'*64
+        group_profile=group_ledger.profile(daemon_sha,control.project,group_volume,'image')
+        backend_declaration={'same':'declaration',**group_profile['backend']}
+        document={'name':control.project,
+                  'services':{'backend':backend_declaration,'frontend':{'environment':{'FULLMAG_FRONTEND_HOST_PORT':'3202'},'mem_limit':'6442450944'}},
+                  'volumes':{'frontend-build':{'name':'old'},group_ledger.COMPOSE_VOLUME:group_profile['compose_volume']}}
+        group_record={'schema':'fullmag.docker-group-ledger.v1','profile':group_ledger.PROFILE,
+                      'daemon_id_sha256':daemon_sha,'compose_project':control.project,
+                      'volume_name':group_volume,
+                      'host_id':group_profile['environment'][group_ledger.HOST_ID_ENV]}
+        retained_documents={
+            'development/attempts/old/backend-cache.json':{'cache':'retained'},
+            'development/attempts/old/group-ledger.json':group_record,
+        }
+        def read(path,*,optional=False):
+            if path=='frontend/development-inputs.json':return {'retained':'same'}
+            return copy.deepcopy(retained_documents[path])
+        control.read.side_effect=read
         old={'backend':backend,'frontend':{**frontend,'Id':'o'*64,'HostConfig':{'Memory':6*1024**3}}}
         args=types.SimpleNamespace(port=3202,attempt='a'*32,config_sha256='c'*64)
-        previous={'inputs':{'attempt':'old','config_sha256':'old'},'state_root':'/state','backend_volumes':{'same':'cache'},'frontend_volume':'old'}
+        previous={'inputs':{'attempt':'old','config_sha256':'old'},'state_root':'/state',
+                  'backend_volumes':{'same':'cache',group_ledger.COMPOSE_VOLUME:group_volume},
+                  'frontend_volume':'old'}
         seed={'files':[],'source_commit':'commit'}
         source={'commit':'commit','source_digest':'digest','snapshot':'snapshot'}
         stopped=[]
@@ -1125,10 +1145,10 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
                 if fault is None:raise
         if fault=='source-mismatch' or fault=='unknown-source':stopped_call.assert_not_called()
         else:stopped_call.assert_called_once_with('stop','--time','60','o'*64,timeout=90)
-        return writes,seeded,composed,logger
+        return writes,seeded,composed,logger,backend_declaration
 
     def test_successful_handoff_recreates_only_frontend_and_retains_backend(self):
-        writes,seeded,composed,logger=self.run_refresh()
+        writes,seeded,composed,logger,backend_declaration=self.run_refresh()
         terminal=next(value for path,value in writes.items() if path.endswith('/terminal.json'))
         self.assertEqual(terminal['state'],'succeeded')
         self.assertEqual(terminal['backend_container'],'b'*64)
@@ -1140,12 +1160,12 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
             source_root='/selected',image='image',config_sha256=terminal['config_sha256']),[terminal])
         lifecycle=composed.call_args_list[0]
         self.assertEqual(lifecycle.args[1:],('up','--detach','--no-build','--pull','never','--no-deps','--force-recreate','frontend'))
-        self.assertEqual(lifecycle.args[0]['services']['backend'],{'same':'declaration'})
+        self.assertEqual(lifecycle.args[0]['services']['backend'],backend_declaration)
         self.assertEqual(lifecycle.args[0]['services']['frontend']['mem_limit'],'8589934592')
         self.assertTrue(any(path.endswith('/rollback-compose.json') for path in writes))
 
     def test_linux_refresh_uses_native_certificate_and_preserves_backend(self):
-        writes,seeded,composed,logger=self.run_refresh(linux=True)
+        writes,seeded,composed,logger,_backend_declaration=self.run_refresh(linux=True)
         terminal=next(value for path,value in writes.items() if path.endswith('/terminal.json'))
         self.assertEqual(terminal['state'],'succeeded')
         self.assertEqual(terminal['backend_container'],'b'*64)
@@ -1154,21 +1174,21 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
     def test_linux_refresh_retains_control_on_certificate_or_owner_byte_drift(self):
         for fault in ('certificate-drift','owner-drift'):
             with self.subTest(fault=fault):
-                writes,seeded,composed,logger=self.run_refresh(fault,linux=True)
+                writes,seeded,composed,logger,_backend_declaration=self.run_refresh(fault,linux=True)
                 self.assertFalse(any(path.endswith('/terminal.json') for path in writes))
                 receipt=next(value for path,value in writes.items() if path.endswith('/receipt.json'))
                 self.assertEqual(receipt['state'],'outcome-unknown-resources-retained')
                 logger.wait.assert_not_called()
 
     def test_source_mismatch_refuses_before_seeding_or_lifecycle(self):
-        writes,seeded,composed,logger=self.run_refresh('source-mismatch')
+        writes,seeded,composed,logger,_backend_declaration=self.run_refresh('source-mismatch')
         seeded.assert_not_called();composed.assert_not_called()
         self.assertEqual(next(value for path,value in writes.items() if path.endswith('/terminal.json'))['state'],'failed-confirmed')
 
     def test_unknown_probe_or_late_proof_failure_retains_real_control_lease(self):
         for fault in ('unknown-source','unknown-stop','post-quiesce-health','last-proof','certificate-drift','owner-drift','memory-drift'):
             with self.subTest(fault=fault):
-                writes,seeded,composed,logger=self.run_refresh(fault)
+                writes,seeded,composed,logger,_backend_declaration=self.run_refresh(fault)
                 self.assertFalse(any(path.endswith('/terminal.json') for path in writes))
                 receipt=next(value for path,value in writes.items() if path.endswith('/receipt.json'))
                 self.assertEqual(receipt['state'],'outcome-unknown-resources-retained')

@@ -147,7 +147,10 @@ function SavedCamera({geometry,frameIndex}: {geometry:Geometry|ReturnType<typeof
     report();
     invalidate();
   },[camera,geometry,invalidate,report,size.height,size.width]);
-  useLayoutEffect(()=>viewport3dStore.registerSavedCameraOwner({fit:fitSavedCamera,reset:resetSavedCamera}),[fitSavedCamera,resetSavedCamera]);
+  useLayoutEffect(()=>{
+    const unregister=viewport3dStore.registerSavedCameraOwner({fit:fitSavedCamera,reset:resetSavedCamera});
+    return ()=>unregister();
+  },[fitSavedCamera,resetSavedCamera]);
   useLayoutEffect(()=>{
     if(fitted.current===geometry || size.width<=0 || size.height<=0)return;
     resetSavedCamera();
