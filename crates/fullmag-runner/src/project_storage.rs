@@ -12,6 +12,133 @@ use std::path::{Component, Path, PathBuf};
 
 const OWNER_FILE: &str = ".fullmag-tmp-owner.json";
 const ACTIVE_FILE: &str = ".fullmag-active.lock";
+const RESERVATION_GATE_SUFFIX: &str = ".fullmag-reservation.lock";
+
+struct ReservationGate {
+    path: PathBuf,
+    token: String,
+    file: Option<File>,
+    ancestor_gates: Vec<(PathBuf, String)>,
+}
+
+impl ReservationGate {
+    #[cfg(test)]
+    fn acquire(output: &Path) -> Result<Self, String> {
+        Self::try_acquire(output, &[])?.ok_or_else(|| {
+            format!("an active run reservation is present: {}", output.display())
+        })
+    }
+
+    fn try_acquire(output: &Path, ancestors: &[Self]) -> Result<Option<Self>, String> {
+        let path = reservation_gate_path(output)?;
+        ensure_no_reparse_ancestors(&path)?;
+        let file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(None),
+            Err(error) => return Err(message(error)),
+        };
+        let mut gate = Self {
+            path,
+            token: uuid::Uuid::new_v4().to_string(),
+            file: Some(file),
+            ancestor_gates: ancestors.iter()
+                .map(|gate| (gate.path.clone(), gate.token.clone()))
+                .collect(),
+        };
+        let file = gate.file.as_mut().expect("created reservation gate");
+        file.write_all(gate.token.as_bytes()).map_err(message)?;
+        file.sync_all().map_err(message)?;
+        gate.verify_identity()?;
+        Ok(Some(gate))
+    }
+
+    fn verify_identity(&self) -> Result<(), String> {
+        verify_ancestor_gates(&self.path, &self.ancestor_gates)?;
+        ensure_no_reparse_ancestors(&self.path)?;
+        if !fs::symlink_metadata(&self.path).map_err(message)?.is_file()
+            || fs::read_to_string(&self.path).map_err(message)? != self.token
+        {
+            return Err("result preparation gate ownership changed; retained".into());
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ReservationGate {
+    fn drop(&mut self) {
+        let owned = self.verify_identity().is_ok();
+        self.file.take();
+        if owned {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+fn reservation_gate_path(output: &Path) -> Result<PathBuf, String> {
+    let name = output.file_name().ok_or("output directory has no name")?;
+    let mut gate_name = std::ffi::OsString::from(".");
+    gate_name.push(name);
+    gate_name.push(RESERVATION_GATE_SUFFIX);
+    Ok(output.with_file_name(gate_name))
+}
+
+fn reservation_path_exists(path: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(message(error)),
+    }
+}
+
+fn acquire_result_ancestor_gates(output: &Path) -> Result<Vec<ReservationGate>, String> {
+    let mut ancestors: Vec<_> = output.ancestors().skip(1).collect();
+    ancestors.reverse();
+    let mut gates = Vec::new();
+    for ancestor in ancestors {
+        if ancestor.file_name().is_none() {
+            continue;
+        }
+        let gate_path = reservation_gate_path(ancestor)?;
+        // Check again after metadata reads: a remover can erase the metadata
+        // while holding its sibling gate outside the tree being removed.
+        if reservation_path_exists(&gate_path)?
+            || reservation_path_exists(&ancestor.join(ACTIVE_FILE))?
+            || is_fullmag_result_directory(ancestor)
+            || reservation_path_exists(&gate_path)?
+        {
+            let gate = ReservationGate::try_acquire(ancestor, &gates)?
+                .ok_or_else(|| format!(
+                    "an active run reservation is present: {}", ancestor.display()
+                ))?;
+            gates.push(gate);
+        }
+    }
+    Ok(gates)
+}
+
+fn verify_ancestor_gates(path: &Path, gates: &[(PathBuf, String)]) -> Result<(), String> {
+    for ancestor in path.ancestors().skip(1) {
+        if ancestor.file_name().is_none() {
+            continue;
+        }
+        let path = reservation_gate_path(ancestor)?;
+        if reservation_path_exists(&path)? {
+            let owned = gates.iter().any(|(owned_path, token)| {
+                *owned_path == path && fs::read_to_string(&path).ok().as_deref() == Some(token.as_str())
+            });
+            if !owned {
+                return Err(format!(
+                    "an active run reservation is present: {}", ancestor.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ResolvedOutputStorage {
@@ -61,6 +188,7 @@ impl ProjectStorageLease {
         }
         let (desired, scratch_parent) =
             preflight_project_storage(settings, default_output_dir, source_dir)?;
+        let ancestor_gates = acquire_result_ancestor_gates(&desired)?;
         let parent = desired.parent().ok_or("output directory has no parent")?;
         ensure_real_directory(parent)?;
         let parent = fs::canonicalize(parent).map_err(message)?;
@@ -73,50 +201,50 @@ impl ProjectStorageLease {
             return Err("result directory and temporary parent must be separate locations".into());
         }
         let mut output_dir = desired.clone();
-        let mut reserved = false;
-        let mut replaced = false;
+        let mut output_gate = None;
         for attempt in 0..100 {
-            match fs::create_dir(&output_dir) {
-                Ok(()) => {
-                    reserved = true;
-                    break;
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    match settings.existing_output {
-                        ExistingOutputIR::Error => {
-                            return Err(format!(
-                                "result location already exists: {}",
-                                output_dir.display()
-                            ));
-                        }
-                        ExistingOutputIR::Overwrite => {
-                            // Replace once; a directory that reappears after the
-                            // removal belongs to a concurrent writer.
-                            if replaced {
+            // A sibling gate survives removal of the result tree. All writers
+            // hold it until the active marker and receipt are published.
+            if let Some(gate) = ReservationGate::try_acquire(&output_dir, &ancestor_gates)? {
+                match fs::create_dir(&output_dir) {
+                    Ok(()) => {
+                        output_gate = Some(gate);
+                        break;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        match settings.existing_output {
+                            ExistingOutputIR::Error => {
                                 return Err(format!(
-                                    "result location reappeared while overwriting: {}",
+                                    "result location already exists: {}",
                                     output_dir.display()
                                 ));
                             }
-                            remove_inactive_result(&output_dir)?;
-                            replaced = true;
-                            continue;
+                            ExistingOutputIR::Overwrite => {
+                                remove_inactive_result(&output_dir)?;
+                                fs::create_dir(&output_dir).map_err(message)?;
+                                output_gate = Some(gate);
+                                break;
+                            }
+                            ExistingOutputIR::Timestamp => {}
                         }
-                        ExistingOutputIR::Timestamp => {}
                     }
-                    let name = desired_name.to_string_lossy();
-                    let (stem, suffix) = name
-                        .strip_suffix(".zarr")
-                        .map(|stem| (stem, ".zarr"))
-                        .unwrap_or((&name, ""));
-                    output_dir = parent.join(format!("{stem}-{run_id}-{attempt}{suffix}"));
+                    Err(error) => return Err(message(error)),
                 }
-                Err(error) => return Err(message(error)),
+            } else if settings.existing_output != ExistingOutputIR::Timestamp {
+                return Err(format!(
+                    "an active run reservation is present: {}",
+                    output_dir.display()
+                ));
             }
+            let name = desired_name.to_string_lossy();
+            let (stem, suffix) = name
+                .strip_suffix(".zarr")
+                .map(|stem| (stem, ".zarr"))
+                .unwrap_or((&name, ""));
+            output_dir = parent.join(format!("{stem}-{run_id}-{attempt}{suffix}"));
         }
-        if !reserved {
-            return Err("unable to reserve a fresh result directory after 100 attempts".into());
-        }
+        let _output_gate = output_gate
+            .ok_or("unable to reserve a fresh result directory after 100 attempts")?;
         ensure_no_reparse_ancestors(&output_dir)?;
         let output_dir = fs::canonicalize(&output_dir).map_err(message)?;
         let token = uuid::Uuid::new_v4().to_string();
@@ -153,6 +281,7 @@ impl ProjectStorageLease {
             .write_all(lease.token.as_bytes())
             .map_err(message)?;
         active_file.sync_all().map_err(message)?;
+        lease.verify_ancestor_reservations(&ancestor_gates)?;
         let owner = serde_json::json!({
             "schema": "fullmag.private_tmp.v1", "token": lease.token,
             "run_id": run_id, "output_dir": lease.resolved.output_dir, "pid": std::process::id(),
@@ -241,6 +370,14 @@ impl ProjectStorageLease {
         copy_fresh_tree(&staged, &self.resolved.output_dir)
     }
 
+    fn verify_ancestor_reservations(&self, gates: &[ReservationGate]) -> Result<(), String> {
+        let identities = gates.iter()
+            .map(|gate| (gate.path.clone(), gate.token.clone()))
+            .collect::<Vec<_>>();
+        verify_ancestor_gates(&self.resolved.output_dir, &identities)?;
+        self.verify_active_identity()
+    }
+
     fn verify_active_identity(&self) -> Result<(), String> {
         ensure_no_reparse_ancestors(&self.resolved.output_dir)?;
         if fs::canonicalize(&self.resolved.output_dir).map_err(message)? != self.resolved.output_dir
@@ -249,6 +386,9 @@ impl ProjectStorageLease {
         }
         let active_path = self.resolved.output_dir.join(ACTIVE_FILE);
         reject_reparse(&active_path)?;
+        if !fs::symlink_metadata(&active_path).map_err(message)?.is_file() {
+            return Err("result reservation is not a regular file; retained".into());
+        }
         if fs::read_to_string(active_path).map_err(message)? != self.token {
             return Err("result reservation ownership changed; retained".into());
         }
@@ -361,7 +501,8 @@ fn message(error: impl std::fmt::Display) -> String {
 
 /// Remove an existing result directory for the `overwrite` policy. Only an
 /// inactive fullmag result without links/reparse points is removed; any other
-/// directory is refused and left untouched.
+/// directory is refused and left untouched. The caller holds the target and
+/// result ancestor gates until the new active marker is published.
 fn remove_inactive_result(path: &Path) -> Result<(), String> {
     let refuse = |reason: &str| {
         format!(
@@ -373,6 +514,11 @@ fn remove_inactive_result(path: &Path) -> Result<(), String> {
     ensure_no_reparse_ancestors(path).map_err(|error| refuse(error.as_str()))?;
     if !fs::symlink_metadata(path).map_err(message)?.is_dir() {
         return Err(refuse("not a directory"));
+    }
+    for ancestor in path.ancestors().skip(1) {
+        if reservation_path_exists(&ancestor.join(ACTIVE_FILE))? {
+            return Err(refuse("an active run reservation is present in an ancestor"));
+        }
     }
     reject_reparse_tree(path).map_err(|error| refuse(error.as_str()))?;
     if contains_active_reservation(path)? {
@@ -389,7 +535,11 @@ fn remove_inactive_result(path: &Path) -> Result<(), String> {
 fn contains_active_reservation(path: &Path) -> Result<bool, String> {
     for entry in fs::read_dir(path).map_err(message)? {
         let entry = entry.map_err(message)?;
-        if entry.file_name() == ACTIVE_FILE {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name == ACTIVE_FILE
+            || (name.starts_with('.') && name.ends_with(RESERVATION_GATE_SUFFIX))
+        {
             return Ok(true);
         }
         if entry.file_type().map_err(message)?.is_dir()
@@ -415,7 +565,10 @@ fn is_fullmag_result_directory(path: &Path) -> bool {
         receipt.get("schema").and_then(serde_json::Value::as_str)
             == Some("fullmag.output_storage.resolved.v1")
     });
-    zattrs_marked || receipt_marked
+    let sequence_marked = read_json("sequence_manifest.json").is_some_and(|manifest| {
+        manifest.get("kind").and_then(serde_json::Value::as_str) == Some("flat_sequence")
+    });
+    zattrs_marked || receipt_marked || sequence_marked
 }
 
 /// Add the primary field/table writer before planning. Runtime writer
@@ -825,5 +978,206 @@ mod overwrite_tests {
             .expect("active result must be refused");
         assert!(error.contains("active run reservation"), "{error}");
         assert!(output.join(ACTIVE_FILE).exists());
+    }
+
+    #[test]
+    fn overwrite_refuses_a_held_reservation_gate() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let output = root.path().join("results.zarr");
+        let temp = root.path().join("scratch");
+        let settings = settings(&output, &temp);
+        let gate = ReservationGate::acquire(&output).expect("reservation gate");
+
+        let error = ProjectStorageLease::prepare(&settings, &output, root.path(), "other")
+            .err()
+            .expect("held gate must refuse a second writer");
+        assert!(error.contains("active run reservation"), "{error}");
+        assert!(!output.exists());
+        assert!(reservation_gate_path(&output).unwrap().exists());
+
+        drop(gate);
+        let mut lease = ProjectStorageLease::prepare(&settings, &output, root.path(), "owner")
+            .expect("released gate permits reservation");
+        lease.finish(true).expect("finish owner");
+    }
+
+    #[test]
+    fn timestamp_selects_a_fresh_path_when_the_target_gate_is_held() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let output = root.path().join("results.zarr");
+        let temp = root.path().join("scratch");
+        let mut settings = settings(&output, &temp);
+        settings.existing_output = ExistingOutputIR::Timestamp;
+        let _gate = ReservationGate::acquire(&output).expect("reservation gate");
+
+        let mut lease = ProjectStorageLease::prepare(&settings, &output, root.path(), "other")
+            .expect("timestamp reservation");
+        assert_eq!(
+            lease.resolved().output_dir,
+            fs::canonicalize(root.path().join("results-other-0.zarr")).unwrap()
+        );
+        assert!(!output.exists());
+        assert!(reservation_gate_path(&output).unwrap().exists());
+        lease.finish(true).expect("finish timestamp run");
+    }
+
+    #[test]
+    fn parent_removal_gate_refuses_a_new_stage_writer() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let output = root.path().join("results.zarr");
+        fs::create_dir(&output).expect("sequence root");
+        fs::write(
+            output.join(".zattrs"),
+            b"{\"schema_version\":\"fullmag.project_results.v1\"}",
+        )
+        .expect("result metadata");
+        let _gate = ReservationGate::acquire(&output).expect("parent removal gate");
+        let stage = output.join("stage_02_run.zarr");
+        let settings = settings(&stage, &root.path().join("scratch"));
+
+        let error = ProjectStorageLease::prepare(&settings, &stage, root.path(), "stage")
+            .err()
+            .expect("parent gate must refuse a new stage");
+        assert!(error.contains("active run reservation"), "{error}");
+        assert!(!stage.exists());
+    }
+
+    #[test]
+    fn entering_stage_holds_the_parent_removal_gate() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let output = root.path().join("results.zarr");
+        fs::create_dir(&output).expect("sequence root");
+        fs::write(
+            output.join("sequence_manifest.json"),
+            b"{\"kind\":\"flat_sequence\"}",
+        )
+        .expect("sequence metadata");
+        let stage = output.join("stage_02_run.zarr");
+        let _gates = acquire_result_ancestor_gates(&stage).expect("stage ancestor gates");
+        let settings = settings(&output, &root.path().join("scratch"));
+
+        let error = ProjectStorageLease::prepare(&settings, &output, root.path(), "overwrite")
+            .err()
+            .expect("entering stage must refuse parent removal");
+        assert!(error.contains("active run reservation"), "{error}");
+        assert!(output.join("sequence_manifest.json").exists());
+    }
+
+    #[test]
+    fn active_sequence_protects_completed_stages_but_allows_fresh_children() {
+        for stage_parent in ["", "stages"] {
+            let root = tempfile::tempdir().expect("temporary root");
+            let output = root.path().join("results.zarr");
+            let temp = root.path().join("scratch");
+            let sequence_settings = settings(&output, &temp);
+            let mut sequence = ProjectStorageLease::prepare(
+                &sequence_settings, &output, root.path(), "sequence",
+            )
+            .expect("sequence reservation");
+            let stage = output.join(stage_parent).join("stage_01_run.zarr");
+            let stage_settings = settings(&stage, &temp);
+            let mut first = ProjectStorageLease::prepare(
+                &stage_settings, &stage, root.path(), "first",
+            )
+            .expect("fresh first stage");
+            fs::write(stage.join("result.bin"), b"first stage").expect("stage result");
+            first.finish(true).expect("finish first stage");
+            drop(first);
+            assert!(!stage.join(ACTIVE_FILE).exists());
+
+            let error = ProjectStorageLease::prepare(
+                &stage_settings, &stage, root.path(), "other",
+            )
+            .err()
+            .expect("active ancestor must protect completed stage");
+            assert!(error.contains("active run reservation"), "{error}");
+            assert_eq!(fs::read(stage.join("result.bin")).unwrap(), b"first stage");
+            assert!(output.join(ACTIVE_FILE).exists());
+
+            let next_stage = stage.parent().unwrap().join("stage_02_run.zarr");
+            let next_settings = settings(&next_stage, &temp);
+            let mut next = ProjectStorageLease::prepare(
+                &next_settings, &next_stage, root.path(), "next",
+            )
+            .expect("active sequence permits fresh stages");
+            next.finish(true).expect("finish next stage");
+            sequence.finish(true).expect("finish sequence");
+
+            let mut replacement = ProjectStorageLease::prepare(
+                &stage_settings, &stage, root.path(), "replacement",
+            )
+            .expect("inactive ancestor permits stage replacement");
+            assert!(!stage.join("result.bin").exists());
+            replacement.finish(true).expect("finish replacement");
+        }
+    }
+
+    #[test]
+    fn published_child_refuses_an_unowned_ancestor_gate() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let parent = root.path().join("parent");
+        let stage = parent.join("stage.zarr");
+        let settings = settings(&stage, &root.path().join("scratch"));
+        let mut lease = ProjectStorageLease::prepare(&settings, &stage, root.path(), "stage")
+            .expect("stage reservation");
+        let gate = ReservationGate::acquire(&parent).expect("parent removal gate");
+
+        let error = lease.verify_ancestor_reservations(&[])
+            .expect_err("commit must detect a previously skipped ancestor gate");
+        assert!(error.contains("active run reservation"), "{error}");
+        lease.verify_ancestor_reservations(std::slice::from_ref(&gate))
+            .expect("owned ancestor gate is permitted");
+        drop(gate);
+        lease.finish(true).expect("finish stage");
+    }
+
+    #[test]
+    fn published_child_requires_its_original_marker_after_ancestor_checks() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let output = root.path().join("stage.zarr");
+        let settings = settings(&output, &root.path().join("scratch"));
+        let mut lease = ProjectStorageLease::prepare(&settings, &output, root.path(), "stage")
+            .expect("stage reservation");
+        let original = fs::read(output.join(ACTIVE_FILE)).expect("original marker");
+        fs::write(output.join(ACTIVE_FILE), b"another generation").expect("replaced marker");
+
+        let error = lease.verify_ancestor_reservations(&[])
+            .expect_err("commit must detect a replaced generation");
+        assert!(error.contains("ownership changed"), "{error}");
+        fs::write(output.join(ACTIVE_FILE), original).expect("restore owned marker");
+        lease.finish(true).expect("finish stage");
+    }
+
+    #[test]
+    fn pending_descendant_gate_prevents_ancestor_removal() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let output = root.path().join("results.zarr");
+        fs::create_dir(&output).expect("result root");
+        fs::write(
+            output.join(".zattrs"),
+            b"{\"schema_version\":\"fullmag.project_results.v1\"}",
+        )
+        .expect("result metadata");
+        fs::write(output.join("result.bin"), b"old result").expect("existing result");
+        let _gate = ReservationGate::acquire(&output.join("stage.zarr"))
+            .expect("pending stage gate");
+        let settings = settings(&output, &root.path().join("scratch"));
+
+        let error = ProjectStorageLease::prepare(&settings, &output, root.path(), "overwrite")
+            .err()
+            .expect("pending descendant gate must prevent removal");
+        assert!(error.contains("active run reservation"), "{error}");
+        assert_eq!(fs::read(output.join("result.bin")).unwrap(), b"old result");
+    }
+
+    #[test]
+    fn gate_cleanup_preserves_another_owner_token() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let output = root.path().join("results.zarr");
+        let gate = ReservationGate::acquire(&output).expect("target gate");
+        let path = gate.path.clone();
+        fs::write(&path, b"another owner").expect("changed gate owner");
+        drop(gate);
+        assert_eq!(fs::read(path).unwrap(), b"another owner");
     }
 }
