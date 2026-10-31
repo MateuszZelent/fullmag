@@ -170,9 +170,11 @@ int copy_demag_phi_observable_f64(
             error = "Fredkin-Koehler demag scalar-potential nodal projection size mismatch";
             return FULLMAG_FEM_ERR_INVALID;
         }
+        // Vector::Read() returns the device pointer once MFEM runs on CUDA;
+        // the host memcpy below needs the host mirror.
         std::memcpy(
             out,
-            nodal_values.Read(),
+            audited_host_read(nodal_values),
             static_cast<size_t>(sizeof(double) * out_len));
         record_device_to_host(ctx.transfer_audit.audit, sizeof(double) * out_len);
         return FULLMAG_FEM_OK;
@@ -198,9 +200,11 @@ int copy_demag_phi_observable_f64(
                     std::to_string(nodal_values.Size()) + " values";
             return FULLMAG_FEM_ERR_INVALID;
         }
+        // GetNodalValues may leave the projection device-resident on CUDA;
+        // read the host mirror, never Vector::Read(), before the host memcpy.
         std::memcpy(
             out,
-            nodal_values.Read(),
+            audited_host_read(nodal_values),
             static_cast<size_t>(sizeof(double) * out_len));
     }
     record_device_to_host(ctx.transfer_audit.audit, sizeof(double) * out_len);

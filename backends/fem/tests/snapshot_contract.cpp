@@ -94,6 +94,11 @@ void demag_phi_snapshot_contract_is_declared() {
         state_io.find("potential->GetNodalValues(nodal_values)") != std::string::npos,
         "P2 demag phi snapshots must evaluate the scalar potential at mesh vertices");
     check(
+        state_io.find("nodal_values.Read()") == std::string::npos &&
+            state_io.find("audited_host_read(nodal_values)") != std::string::npos,
+        "demag phi nodal projections must be copied from the host mirror; "
+        "Vector::Read() yields a device pointer on CUDA");
+    check(
         state_io.find("FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER") != std::string::npos &&
             state_io.find("ctx.demag_fem_bem.workspace") != std::string::npos &&
             state_io.find("total_potential") != std::string::npos,
