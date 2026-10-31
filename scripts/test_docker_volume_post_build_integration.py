@@ -21,6 +21,7 @@ from unittest import mock
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from docker_build_control import BuildControl
 import docker_volume_post_build_generation as continuation
 import test_docker_volume_post_build_generation as generation_fixtures
 
@@ -65,6 +66,9 @@ class _Operation:
 
 
 class _Control:
+    path = staticmethod(BuildControl.path)
+    subpath = BuildControl.subpath
+
     project = generation_fixtures._Control.project
     volume = project + "-control"
     namespace = ""
@@ -148,7 +152,7 @@ class PostBuildStartIntegrationTests(unittest.TestCase):
     def _exercise_start(self, *, drift=False) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="fullmag-post-build-start-")
         self.addCleanup(temporary.cleanup)
-        source = Path(temporary.name)
+        source = Path(temporary.name).resolve(strict=True)
         fixture, metadata = self._metadata_fixture(source)
         events: list[object] = []
         control = _Control(events)

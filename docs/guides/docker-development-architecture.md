@@ -16,7 +16,7 @@ worktree; oba kontenery dostają jego readonly bind mount.
 | Usługa | Odpowiedzialność | Dostęp sieciowy |
 | --- | --- | --- |
 | `frontend` | Przypięte zależności JS, Next.js dev, HMR i proxy API | Jeden wybrany port `127.0.0.1:<port>:8080` |
-| `backend` | Przyrostowy build, potem API, Python DSL i native runtime | Wyłącznie `backend:8081` w prywatnej sieci projektu |
+| `backend` | Walidacja pakietu, build do publikacji gdy potrzebny, potem API, Python DSL i native runtime | Wyłącznie `backend:8081` w prywatnej sieci projektu |
 
 Backend zawiera FDM CPU, FDM GPU, FEM CPU i FEM GPU. Wybór realizacji następuje
 w modelu i plannerze, a wymuszone GPU nie ma cichego fallbacku CPU. Obecność
@@ -55,34 +55,36 @@ kontenerem budującym a runtime. Przygotowanie przypiętego obrazu toolchaina
 oraz krótkie narzędzia sprawdzające storage są osobnymi operacjami utrzymania,
 a nie dodatkowymi usługami aplikacji.
 
-Backend DEV używa profilu v2 opisanego w ADR 0061: jawnej pary prywatnych
-wolumenów Docker pod `/build` i `/opt/fullmag/package`. Cache Cargo, CMake,
-CUDA, MFEM, hypre, libCEED, zależności pnpm, staging, pakiety, logi, receipty
-i provenance należą do technicznych wolumenów grupy; Docker Desktop przechowuje
-je w swoim wewnętrznym dysku danych, a nie w Windows `storage` projektu.
-Control volume przechowuje kontrolę operacji, manifesty, receipty i provenance
-launchera, a package volume przechowuje kandydata, bieżący pakiet, rollback oraz
-metadane rotacji. Warstwy obrazów i ich BuildKit context pozostają w magazynie
-obrazu/BuildKit Dockera. Mały hostowy run root może zawierać wyłącznie dane
-operacyjne sesji i handoffu; nie jest stagingiem, cache'em ani magazynem
-receiptów buildu.
-Frontend ma analogiczny nazwany wolumen cache/control. Przygotowanie wolumenów
-i migracja technicznych markerów mają dowód częściowy; cold build, API, mounty,
-brak zapisu buildu do hosta oraz pomiary restartu i kompilacji przyrostowej
-pozostają **NOT VERIFIED**. Stare cache zachowujemy do osobnej kontroli użycia
-i rollbacku. Nie usuwaj ani nie przenoś aktywnego cache ręcznie.
+ADR 0076 zastępuje dotychczasową topologię wielu prywatnych volume’ów dla daily
+DEV. Wymagany jest jeden stabilny `BuildControl.volume` na grupę: dotychczasowy
+root control/lock/namespace zostaje, `private/backend` montuje się jako `/build`,
+`private/frontend` jako frontend state, a `private/ledger` jako `/host-ledger`.
+Frontend nie montuje rootu control, backend cache ani ledgeru. Pakiet backendu,
+Cargo registry/git i pnpm store pozostają w globalnych shared volumes; obrazy i
+BuildKit w magazynie Dockera. Nie zmieniaj nazwy prywatnego volume przy zmianie
+toolchaina, profilu, dependency hash ani próby. Fingerprint weryfikuje cache;
+niezgodny cache można inwalidować pod blokadą, po zachowaniu pakietu current i
+jednego zweryfikowanego rollbacku. Hostowy run root, źródła, sesje i wyniki
+zachowują dotychczasową granicę. Stare cache wymagają migracji pojedynczej,
+stopped/drained grupy, archiwum i kontroli referencji. Ta decyzja jest
+kontraktem; implementacja, mounty, restart i compiler-output cleanup są **NOT VERIFIED**.
+Zakres supersession: [ADR 0076](../adr/0076-single-private-volume-per-dev-group.md).
+ Cleanup compiler outputs `.fullmag-build`, cache-hit i nieudana generacja
+ podlegają sekcji 7 ADR 0076; runtime pozostaje **NOT VERIFIED** do czasu dowodu
+ z docelowej grupy.
 
-Niezmienione pliki cienia zachowują zawartość i metadane potrzebne kompilacji
-przyrostowej. Zmiana modułu przebudowuje go oraz rzeczywistych zależnych konsumentów;
-zmiana wspólnego typu może wymagać więcej pracy niż zmiana pliku wykonawczego.
+Historyczny opis incremental compiler outputs zachowujemy jako dowód starszego
+wariantu; nie określa on nowej retencji `.fullmag-build` z ADR 0076.
 Zmiana kodu aplikacji nie przebudowuje automatycznie CUDA, MFEM, hypre ani
 libCEED. Zmiana zależności, kompilatora lub flag może unieważnić szerszy cache.
-Blokada backendu chroni konkretny trwały wolumen; odrębne grupy mogą kompilować
-równolegle. Blokady i rejestry techniczne buildu pozostają w granicy grupy Compose.
+Blokada grupy chroni wszystkie zapisy do stabilnego `BuildControl.volume`;
+odrębne grupy mogą kompilować równolegle. Toolchain/ABI fingerprint steruje
+zgodnością i inwalidacją cache, nie tworzy nowej nazwy volume. Blokady i rejestry
+techniczne buildu pozostają w granicy grupy Compose.
 Przydziały CPU/RAM/GPU grupy przechodzą przez jej własny ledger
 (`group-ledger-v1`, [ADR 0067](../adr/0067-docker-dev-group-isolation.md)):
-nazwany wolumen grupy pod `/host-ledger`, operacyjny stan runtime, a nie cache
-buildu ani dane sesji. Grupy nie rezerwują zasobów między sobą; chronią je
+`private/ledger` w tym samym stabilnym `BuildControl.volume`, montowany pod
+`/host-ledger`; operacyjny stan runtime, nie cache buildu ani dane sesji. Grupy nie rezerwują zasobów między sobą; chronią je
 statyczne budżety `FULLMAG_DEV_*`. Globalny `host-ledger-v1` dotyczy release,
 kwalifikacji i managed runtime.
 
@@ -184,8 +186,8 @@ Docker Desktop: tam znajdują się named volumes i BuildKit. `FULLMAG_PROJECT_ST
 zawiera dane użytkownika i nie powinien być używany jako rezerwuar cache buildu.
 Dokładne progi dla cache frontendu, Cargo i toolchaina muszą być sprawdzane przez
 launcher; ich zgodność z tym podziałem pozostaje **NOT VERIFIED**. Brak miejsca
-powinien przerwać start przed kosztownym buildem i zachować dotychczasowy cache,
-sesje oraz wyniki.
+powinien przerwać start przed kosztownym buildem i zachować sesje, wyniki oraz
+współdzielone zależności; compiler outputs podlegają ADR 0076.
 
 Odpowiednik bez `just`:
 
@@ -209,7 +211,7 @@ Frontend reaguje przez HMR na zapis plików. Tryb obserwacji wynika z mountu
 Po wykryciu zmiany Next przebudowuje zmienione moduły. Docker DEV pomija wygenerowane
 katalogi `.fullmag-frontend`, `.next*` i `node_modules`; `app`, `src`, `public`
 i `scripts` pozostają obserwowane. Zależności pnpm i cache Next zostają w
-nazwanym wolumenie frontendowym; HMR nie buduje backendu ani toolchaina.
+subpath `private/frontend` stabilnego volume; HMR nie buduje backendu ani toolchaina.
 
 Tailwind używa jawnych wzorców plików w `app/globals.css`, ograniczonych do
 `app` i `src`. Nowe pasujące pliki i klasy pozostają wykrywane przez HMR.
@@ -228,7 +230,7 @@ docker logs -f <backend-container-id>
 
 Usługi Compose DEV ustawiają Docker `json-file` logging z rotacją `10m × 3`
 na każdy kontener. Frontend zapisuje szczegóły Next w stałym
-`/state/development/next.log` z named volume, z limitem 64 MiB. Nadmiar trafia
+`/state/development/next.log` z subpath `private/frontend`, z limitem 64 MiB. Nadmiar trafia
 do rotowanego logu Docker. Przy następnym starcie, pod blokadą procesu,
 pełny log jest atomowo przenoszony do jednej poprzedniej kopii
 `next.log.rollback`; niepełny log pozostaje do dalszego dopisywania.
@@ -236,10 +238,10 @@ Szczegóły i pozostałe ograniczenia retencji opisuje
 [cykl danych](docker-build-storage-lifecycle.md#4-co-sprzątamy-automatycznie-a-co-pozostaje).
 Limity logów nie są quota dla cache, wolumenów ani BuildKit.
 
-Każdy start sam sprawdza aktualne zamontowane źródła. Bez zmian używa istniejącego
-wyniku; po edycji kompiluje zmienione moduły oraz ich zależnych konsumentów,
-zachowując cache. Użytkownik nie odświeża osobno manifestu i nie uruchamia drugiego
-kontenera budującego. Frontend pozostaje uruchomiony.
+Każdy start weryfikuje aktualne zamontowane źródła i pakiet. Zgodny pakiet
+pozwala przejść do API bez kompilacji; po zmianie wejść build może wymagać pełnej
+kompilacji, której private compiler outputs podlegają ADR 0076. Użytkownik nie
+odświeża osobno manifestu i nie uruchamia drugiego kontenera budującego. Frontend pozostaje uruchomiony.
 
 Przy zgodnym obrazie i mountach restart zachowuje ID backendu. Zmiana obrazu lub
 mountów może wymagać odtworzenia usługi. Sesje, wyniki i baza grupy pozostają.
@@ -336,9 +338,9 @@ just docker-dev-recreate-volume `
 
 Resume zachowuje istniejące usługi i wolumeny; `restart_backend=true` można
 ustawić tylko dla zatrzymanego, dokładnie przypiętego backendu. Recreate-volume
-zachowuje named build/package/frontend/control volumes i dane sesji, a
-`fresh_state=true` tworzy nowy root sesji wyłącznie w zwykłej, jawnie wybranej
-recreacji. Żadna z tych komend nie uruchamia osobnego `up`, kontenera budującego,
+zachowuje stabilny `BuildControl.volume`, shared package namespace i dane sesji;
+nie tworzy nowego prywatnego volume dla toolchaina/profilu. `fresh_state=true`
+tworzy nowy root sesji wyłącznie w zwykłej, jawnie wybranej recreacji. Żadna z tych komend nie uruchamia osobnego `up`, kontenera budującego,
 startupowego POST ani Solve.
 
 Ta ścieżka nie jest recovery nieznanego ownera. Nie używaj jej dla aktywnego
@@ -452,26 +454,30 @@ i rzeczywiste granice automatycznego sprzątania:
 | Dane | Trwałe miejsce |
 | --- | --- |
 | Źródła | Wybrany checkout Windows, readonly bind; frontend HMR |
-| Toolchain, zależności, cache kompilatorów, staging i pakiet dev | Nazwane wolumeny Docker grupy Compose oraz BuildKit; nie hostowy `storage` |
-| Manifesty wejściowe, konteksty, logi buildu, receipty i provenance | Techniczne wolumeny Docker grupy Compose; nie Windows storage |
-| Kontrola runtime i metadata usług technicznych | Wydzielony podwolumen Docker grupy Compose; nie katalog sesji użytkownika |
+| Toolchain, cache backendu, staging i logi | `private/backend` stabilnego `BuildControl.volume`; zależności obrazu w BuildKit |
+| Manifesty, receipty, locks i provenance | Dotychczasowy root `BuildControl.volume`; nie Windows storage |
+| Frontend cache i Next state | `private/frontend` tego samego volume; bez dostępu do rootu control/backendu/ledgeru |
+| Control i ledger grupy | Root volume oraz `private/ledger`; nie są cache i nie podlegają rebuild wipe |
+| Pakiet dev, Cargo registry/git i pnpm store | Project-scoped `fullmag-shared-*`; pakiet w dokładnym `groups/<unit_key>` |
 | Sesje, modele, wyniki i logi symulacji | Fizyczny storage Windows, mount `/state` |
 | Ustawienia, ostatnie projekty i historia grupy | `storage/user-data/<compose-project>/workspace.db`, mount `/user-data` |
-| Przydziały CPU/RAM/GPU grupy | Ledger grupy `group-ledger-v1` w jej nazwanym wolumenie Docker, mount `/host-ledger`; nie cache buildu. Release i kwalifikacja używają `host-ledger-v1` |
+| Przydziały CPU/RAM/GPU grupy | DEV `group-ledger-v1` w `private/ledger` pod `/host-ledger`; release i kwalifikacja zachowują `host-ledger-v1` |
 
 ### Granica zapisu i kontrola wzrostu danych technicznych
 
-Launcher powinien tworzyć oraz przypinać do jednej grupy Compose osobne
-przestrzenie techniczne dla backendowego `/build`, opublikowanego pakietu
-`/opt/fullmag/package`, wspólnego control/provenance, runtime-control oraz
-frontendowego cache i stanu developmentu. Ich nazwy, klucze profilu i marker
-właściciela wynikają z projektu Compose oraz worktree; operator nie wskazuje
-drugiego hostowego katalogu jako zamiennika. `subpath` może izolować frontend od
-backendowych receiptów, ale nie zmienia własności ani trwałości wolumenu.
+Launcher powinien tworzyć i przypinać do grupy dokładnie jeden prywatny named
+volume: istniejący stabilnie nazwany `BuildControl.volume`. Jego root zachowuje
+control/lock/namespace, bez wymaganego katalogu `control/`; `/build`, frontend
+state i `/host-ledger` mapują na `private/backend`, `private/frontend` i
+`private/ledger`. Mount frontendu obejmuje wyłącznie jego subpath, nigdy volume
+root, backend cache ani ledger. Nazwa zależy od Compose project/worktree ID, a
+nie od profilu, toolchaina, dependency hash lub attempt. Global shared
+Cargo/pnpm/packages oraz image/BuildKit pozostają osobnymi zasobami.
 
 BuildKit przechowuje warstwy obrazu i cache zależności na dysku danych Docker
-Desktop. Named volumes przechowują wynik przyrostowego buildu, staging, pakiet,
-logi, receipty i provenance do czasu kontrolowanej retencji. Samo zatrzymanie
+Desktop. Named volumes przechowują workspace źródeł, logi, receipty i provenance;
+compiler outputs `.fullmag-build` podlegają ADR 0076, a pakiety current/rollback
+pozostają w shared package volume. Samo zatrzymanie
 lub usunięcie kontenera nie powinno usuwać tych danych; ich usunięcie wymaga
 jawnej operacji lifecycle dla dokładnej grupy, po sprawdzeniu aktywnych runów,
 mountów, lease i możliwości rollbacku. `docker compose down --volumes`, globalny
@@ -479,9 +485,9 @@ prune oraz ręczne kasowanie katalogów nie są procedurą codziennego restartu.
 
 Każdy nowy build używa klucza wejścia i istniejącego cache. Zastąpiony pakiet
 można usunąć dopiero po trwałym zapisaniu nowego pakietu, receiptów rotacji i
-dowodu, że żaden run, sesja, rollback ani proces go nie referuje. Cache
-kompilatorów i zależności pozostaje, bo jego ponowne pobranie lub przebudowa
-generuje duplikaty i wydłuża następny start. Automatyczna retencja technicznych
+dowodu, że żaden run, sesja, rollback ani proces go nie referuje. Współdzielone
+cache zależności pozostają według własnej retencji; prywatne compiler outputs
+nie są zachowywane po udanej publikacji. Automatyczna retencja technicznych
 wolumenów, jej pomiar rozmiaru oraz bezpieczne odtworzenie pozostają
 **NOT VERIFIED** w obecnym wariancie.
 
@@ -678,13 +684,13 @@ zadania w rozwiązanym storage, nie do rosnącej historii komend w tym przewodni
 2. Zdefiniować w Compose dwa serwisy, źródła, storage, sieć i port.
 3. Przygotować obraz narzędziowy.
 4. Podłączyć wybór checkoutu/worktree i przygotowanie źródeł backendu.
-5. Uruchomić trwały cache kompilacji backendu.
+5. Uruchomić kompilację backendu i opisać retencję compiler outputs.
 6. Zbudować pełny backend: FDM/FEM, CPU/GPU.
 7. Uruchomić frontend Next.js z montowanych źródeł.
 8. Uruchomić oba kontenery w grupie checkoutu, z osobną siecią i portem.
 9. Sprawdzić widoczny Home i komunikację UI–API.
 10. Potwierdzić HMR po edycji pliku w Windows.
-11. Potwierdzić przyrostową przebudowę backendu bez utraty cache.
+11. Potwierdzić cache-hit pakietu oraz kompilację i retencję według ADR 0076.
 12. Sprawdzić parametr skryptu, aktywację modelu, wykonanie GPU i zapis wyników w Windows.
 13. Uzupełnić instrukcję, przeprowadzić wymagane CI/review i scalić na `master`.
 

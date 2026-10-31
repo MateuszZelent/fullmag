@@ -18,10 +18,25 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
       - name: Check storage paths, links and concurrent writers
         run: python -B scripts/test_fullmag_storage.py
       - name: Check Windows launcher refusal before writes
         run: python -B scripts/test_windows_storage_preflight.py
+      - name: Check private group storage and source-only build identity
+        env:
+          PYTHONPATH: scripts
+        run: >-
+          python -B -m unittest
+          test_docker_group_storage test_docker_group_backend_cache
+          test_docker_group_ledger test_docker_cache_retirement
+          test_docker_compose_identity.SourceOnlyComposeIdentityTests
+          test_backend_group_cache_cleanup test_docker_group_frontend_seed
+          test_docker_dev_defaults test_bootstrap_docker_toolchain
+          test_docker_volume_post_build_integration
       - name: Check frontend cleanup boundaries
         run: node --test scripts/clean-control-room-next.test.mjs
 

@@ -43,6 +43,7 @@ TERMINAL_STATES = frozenset({"succeeded", "failed-confirmed"})
 IMAGE_HELPER_SOURCES = (
     ("backend_dev.py", "docker/all-in-one/backend_dev.py"),
     ("backend_source.py", "docker/all-in-one/backend_source.py"),
+    ("backend_group_cache_cleanup.py", "docker/all-in-one/backend_group_cache_cleanup.py"),
     ("backend_volume_cache_maintenance.py", "docker/all-in-one/backend_volume_cache_maintenance.py"),
     ("entrypoint.py", "docker/all-in-one/entrypoint.py"),
     ("frontend_dev.py", "docker/all-in-one/frontend_dev.py"),
@@ -1234,7 +1235,7 @@ def _reconcile_group(group: RetainedGroup, args: argparse.Namespace) -> None:
         return
     # A stopped backend is resumed with the exact retained receipt.  The
     # backend's image-owned start path captures the mounted source and either
-    # reuses the verified package or performs the incremental build in /build.
+    # reuses the verified package or performs the canonical build in /build.
     try:
         _image_helpers_match(group)
     except ImageHelperDrift:
