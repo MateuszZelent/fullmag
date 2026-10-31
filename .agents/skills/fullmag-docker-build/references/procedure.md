@@ -91,8 +91,9 @@ Nie przykrywaj całego /opt/fullmag mutowalnym wolumenem tylko po to, aby
 zmieścić jeden plik provenance.
 
 Nie utożsamiaj named volume z warstwą kontenera. Odtworzenie kontenera ma
-zachować cache. Volume oznacz rolą, grupą/checkoutem, profilem i tożsamością
-toolchaina. Zmiana źródeł ani UUID runu nie powinny rotować cache. Izoluj profile
+zachować stabilny named volume; lifecycle compiler outputs podlega ADR 0076.
+Volume oznacz rolą i grupą/checkoutem. Zmiana źródeł ani UUID runu nie powinny
+rotować volume. Izoluj profile
 dev/release i nie współdziel mutable targetu między niezgodnymi toolchainami.
 
 Przed buildem:
@@ -148,13 +149,10 @@ runnera. docker-dev-build jest aliasem zgodności, który uruchamia
 usługi, a nie bezpiecznym poleceniem build-only.
 
 Źródła wybranego checkoutu są readonly bindami. Przy każdym starcie backend
-sprawdza ich aktualną tożsamość. Jeżeli wejścia się nie zmieniły, używa
-zweryfikowanego pakietu z named volume; w przeciwnym razie uruchamia
-przyrostowy Cargo/Make w /build, publikuje pakiet do /opt/fullmag/package i
-zapisuje build-provenance/logi w control volume. API oraz native runtime
-startują w tym samym stałym kontenerze backend. Zmienione zależności mogą
-wymagać przebudowy większego fragmentu; nie obiecuj, że każda edycja dotknie
-dokładnie jeden crate.
+weryfikuje pakiet; zgodny pakiet pozwala przejść do API bez kompilacji. W
+przeciwnym razie build, publikacja oraz retencja compiler outputs podlegają
+ADR 0076; zmiana źródeł lub zależności może wymagać pełnej kompilacji. API oraz
+native runtime startują w tym samym stałym kontenerze backend.
 
 Frontend czyta ten sam readonly checkout i zapisuje pnpm, node_modules, Next.js,
 wygenerowane pliki oraz next.log w named volume. Zmiany frontendowe są
@@ -162,9 +160,9 @@ wykrywane przez HMR. To wymaga żywego frontendu i nie dowodzi jeszcze, że Home
 jest poprawnie widoczny — potrzebny jest test przeglądarkowy.
 
 Po zmianie backendu zapisz projekt, zakończ symulacje i uruchom ponownie
-backend swojej grupy. Zwykły restart nie usuwa cache i sam nie ponawia Solve.
-Zmiana obrazu albo mountów może wymagać kontrolowanego recreate. Nie kasuj
-wolumenów, aby wymusić rebuild.
+backend swojej grupy. Cache-hit nie kompiluje ani nie czyści `.fullmag-build`;
+przy rzeczywistej kompilacji jej lifecycle określa ADR 0076. Zmiana obrazu albo
+mountów może wymagać kontrolowanego recreate. Nie kasuj wolumenów, aby wymusić rebuild.
 
 Skrypt .py rozwiąż względem wybranego checkoutu, np. examples/...py.
 Launcher waliduje ścieżkę i hash, a backend wczytuje model jako aktywny w
@@ -203,7 +201,7 @@ trasy. Nowa próba przechowuje konfigurację i wynik w wolumenie kontrolnym.
 
 ## 4. Miejsce i retencja
 
-Nowe grupy korzystają z [kontraktu współdzielenia i retencji](../../../../docs/guides/shared-build-storage.md). Po udanym zarządzanym starcie retencja pakietów i prywatnego incremental działa automatycznie; `docker-dev-maintain-cache` służy również do jawnego ponowienia. Przed usunięciem worktree `worktree-finish ... completed` wykonuje kwalifikowane sprzątanie jego prywatnych wolumenów/namespace; aktywny konsument blokuje zakończenie. Nigdy nie usuwa całego `fullmag-shared-*`.
+Prywatne compiler outputs, cleanup `.fullmag-build`, cache-hit i retencja nieudanego builda podlegają [ADR 0076](../../../../docs/adr/0076-single-private-volume-per-dev-group.md); starsze reguły retencji prywatnego incremental są historyczne. Retencja pakietu current/rollback i globalnych shared volumes pozostaje opisana w [shared build storage](../../../../docs/guides/shared-build-storage.md).
 
 
 Stosuj [kontrakt danych builda](artifact-policy.md): mapa writerów, ograniczenie
@@ -229,9 +227,9 @@ Retencja ma odróżniać:
   po trwałej publikacji i pod blokadą. Retired zachowuje receipt i rotację, bez
   pełnych kopii logów; limit wynosi 8 archiwów i 64 MiB plików. Legacy logi
   są hashowane tylko dla wpisów, które pozostaną w budżecie;
-- **aktywny cache przyrostowy:** pozostaje dla kolejnego buildu;
-- **nieaktywne generacje:** kandydaci do osobnego bounded cleanup po ustaleniu
-  właścicieli, mountów, lease, rollbacku i referencji wyników;
+- **prywatne compiler outputs:** `.fullmag-build`, cache-hit i retencja jednej
+  nieudanej generacji podlegają ADR 0076;
+- **wspólne zależności:** pozostają w shared volumes i podlegają ich odrębnej retencji;
 - **orphan staging po awarii:** nie usuwać wyłącznie po nazwie lub wieku;
   wymaga dowodu zakończenia procesu/operacji i braku referencji;
 - **logi i metadane:** stdout/stderr usługi Compose ma obecnie rotację
@@ -242,9 +240,9 @@ Retencja ma odróżniać:
   Cargo/CMake/BuildKit i stare wolumeny nadal nie mają ogólnego GC;
 - **sesje/wyniki/settings/ledger:** poza cleanupem builda.
 
-Nie wykonuj globalnego `docker system prune`, `volume prune`, kasowania targetu
-ani usuwania wszystkich starych grup. Zachowaj istniejący cache, jeżeli nie
-można dowieść jego zbędności. Przed autoryzowanym cleanupem ponów kontrolę
+Nie wykonuj globalnego `docker system prune`, `volume prune` ani usuwania
+wszystkich starych grup. Zachowaj shared dependency cache i nieznane dane, jeżeli
+nie można dowieść ich zbędności; `.fullmag-build` podlega ADR 0076. Przed autoryzowanym cleanupem ponów kontrolę
 konsumentów; zachowaj plan, receipt i pomiar faktycznie odzyskanych bajtów.
 Nie wolno zastąpić tej procedury wyłączaniem blokad ani usuwaniem provenance.
 
@@ -265,12 +263,14 @@ Minimalny dowód wykonania:
 
 ## 6. Aktualne granice i dowody
 
-Bieżąca ścieżka live-shadow-v1 ma named volumes na backend /build,
-/opt/fullmag/package, frontend /state/development i techniczne receipty.
-Szczegóły oraz wyjątki hostowe są w bieżącej sekcji inwentarza writerów.
-Historyczne tabele audytu zachowują stan sprzed migracji i nie opisują
-automatycznie aktualnego HEAD. Przy zmianie kodu ponownie sprawdź mounty,
-launchery i wszystkie writery; nie cofaj się do starej oceny bez nowych dowodów.
+Obowiązującą topologię daily DEV określa [ADR 0076](../../../../docs/adr/0076-single-private-volume-per-dev-group.md):
+jeden stabilny `BuildControl.volume` na grupę, z dotychczasowym rootem
+control/lock/namespace oraz subpaths `private/backend`, `private/frontend` i
+`private/ledger`. Shared Cargo/pnpm/packages pozostają osobnymi wolumenami
+współdzielonymi. Inwentarz writerów niżej jest historycznym zapisem źródeł,
+nie potwierdzeniem nowego układu. Sprawdź ponownie Compose, launcher, mounty i
+receipts; dopóki brak dowodu z docelowego runtime, zgodność pozostaje
+**NOT VERIFIED**.
 
 Znane ograniczenia, które trzeba raportować w każdym odbiorze:
 
@@ -278,5 +278,5 @@ Znane ograniczenia, które trzeba raportować w każdym odbiorze:
 - brak ogólnego GC/quota dla named volumes, BuildKit oraz cache Cargo/CMake;
   nie twierdź, że całe zużycie Docker jest ograniczone;
 - Docker Desktop cold build/start, rzeczywisty inspect, restart cache-hit,
-  incremental rebuild, frontend HMR, uruchomienie .py i GPU pozostają
+  backend rebuild, frontend HMR, uruchomienie .py i GPU pozostają
   NOT VERIFIED, dopóki nie ma dowodu z tej grupy na docelowym hoście.

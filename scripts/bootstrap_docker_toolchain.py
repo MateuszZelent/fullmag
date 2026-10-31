@@ -682,16 +682,16 @@ def main(argv=None):
             raise BootstrapError("Development wrappers require --direct-development")
         if args.direct_development:
             from docker_dev_host import require_host
-            from docker_dev_defaults import resolve_defaults
             require_host()
-            args.repo_root = resolve_defaults(args.repo_root).source_root
+            # Image-only builds follow the explicitly selected checkout. Runtime
+            # source/port defaults in host storage are not build prerequisites.
+            args.repo_root = Path(args.repo_root).resolve(strict=True)
         receipt = build(args.repo_root, direct_development=args.direct_development)
         if args.prepare_development_images:
             from docker_build_control import BuildControl, build_volume_runtime_images
-            from docker_compose_identity import compose_project_identity
-            layout = storage.resolve_layout(args.repo_root, "docker-all-gpu")
+            from docker_compose_identity import compose_source_identity
             helper = receipt["inputs"]["build_args"]["FULLMAG_CUDA_BASE_IMAGE"]
-            control = BuildControl(compose_project_identity(layout), helper)
+            control = BuildControl(compose_source_identity(args.repo_root), helper)
             build_volume_runtime_images(args.repo_root, control, receipt)
     except (ValueError, storage.StorageError, OSError, subprocess.SubprocessError,
             BuildControlError) as error:

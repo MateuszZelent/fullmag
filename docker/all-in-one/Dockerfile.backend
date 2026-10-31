@@ -22,6 +22,7 @@ COPY ${FULLMAG_DOCKER_HELPERS}backend_source.py /opt/fullmag/backend_source.py
 COPY ${FULLMAG_DOCKER_HELPERS}backend_shared_store.py /opt/fullmag/backend_shared_store.py
 COPY ${FULLMAG_DOCKER_HELPERS}backend_shared_recovery.py /opt/fullmag/backend_shared_recovery.py
 COPY ${FULLMAG_DOCKER_HELPERS}backend_compiler_cache.py /opt/fullmag/backend_compiler_cache.py
+COPY ${FULLMAG_DOCKER_HELPERS}backend_group_cache_cleanup.py /opt/fullmag/backend_group_cache_cleanup.py
 COPY ${FULLMAG_DOCKER_HELPERS}backend_group_retirement.py /opt/fullmag/backend_group_retirement.py
 COPY ${FULLMAG_DOCKER_HELPERS}backend_candidate_retirement.py /opt/fullmag/backend_candidate_retirement.py
 COPY ${FULLMAG_DOCKER_HELPERS}worker_cgroup_gate.py /opt/fullmag/worker_cgroup_gate.py
@@ -49,7 +50,7 @@ RUN set -eu; \
         rmdir /workspace; \
     fi; \
     ln -s /build/workspace /workspace; \
-    chown -R 65532:65532 /build /output /opt/fullmag/backend_dev.py /opt/fullmag/backend_source.py /opt/fullmag/backend_candidate_retirement.py /opt/fullmag/backend_volume_cache_maintenance.py; \
+    chown -R 65532:65532 /build /output /opt/fullmag/backend_dev.py /opt/fullmag/backend_source.py /opt/fullmag/backend_candidate_retirement.py /opt/fullmag/backend_volume_cache_maintenance.py /opt/fullmag/backend_group_cache_cleanup.py; \
     chmod 0755 /opt/fullmag/backend_dev.py; \
     chmod 0644 /opt/fullmag/backend_source.py /opt/fullmag/backend_candidate_retirement.py; \
     chmod 0755 /opt/fullmag/backend_volume_cache_maintenance.py

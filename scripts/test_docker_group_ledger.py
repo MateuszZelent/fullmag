@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from bootstrap_docker_toolchain import control_volume_name
 import docker_group_ledger as group_ledger
 
 DAEMON = "d" * 64
@@ -68,11 +69,61 @@ class GroupLedgerIdentityTest(unittest.TestCase):
         with self.assertRaises(group_ledger.GroupLedgerError):
             group_ledger.profile(DAEMON, PROJECT, "fullmag-dev-frontend-v1-x", "sha256:" + "1" * 64)
 
+    def test_private_group_profile_uses_one_canonical_volume_and_ledger_subpath(self):
+        volume = control_volume_name(PROJECT)
+        current = group_ledger.profile(
+            DAEMON, PROJECT, volume, "sha256:" + "1" * 64, ledger_subpath="private/ledger")
+        other_generation = group_ledger.profile(
+            "e" * 64, PROJECT, volume, "sha256:" + "2" * 64,
+            ledger_subpath="private/ledger")
+        self.assertEqual(current["volume_name"], volume)
+        self.assertEqual(other_generation["volume_name"], volume)
+        self.assertEqual(current["ledger_subpath"], "private/ledger")
+        self.assertEqual(current["environment"]["FULLMAG_PRIVATE_GROUP_STORAGE"], "group-volume-v1")
+        self.assertEqual(current["environment"]["FULLMAG_HOST_LEDGER_PROFILE"], "group-ledger-v1")
+        self.assertEqual(current["backend"]["volumes"], [{
+            "type": "volume", "source": "group-ledger", "target": "/host-ledger",
+            "volume": {"nocopy": True, "subpath": "private/ledger"},
+        }])
+        self.assertEqual(current["compose_volume"], {"name": volume, "external": True})
+
+    def test_private_group_profile_rejects_wrong_volume_and_unsafe_role_paths(self):
+        image = "sha256:" + "1" * 64
+        for volume, subpath in (
+            ("fullmag-dev-group-ledger-v1-" + "0" * 24, "private/ledger"),
+            (control_volume_name(PROJECT + "-other"), "private/ledger"),
+            (control_volume_name(PROJECT), ""),
+            (control_volume_name(PROJECT), "/"),
+            (control_volume_name(PROJECT), "private/../backend"),
+            (control_volume_name(PROJECT), "private/backend"),
+            (control_volume_name(PROJECT), "namespaces/" + "a" * 32 + "/private/ledger/../backend"),
+        ):
+            with self.subTest(volume=volume, subpath=subpath), self.assertRaises(group_ledger.GroupLedgerError):
+                group_ledger.profile(DAEMON, PROJECT, volume, image, ledger_subpath=subpath)
+
+    def test_private_namespace_subpath_is_retained_exactly(self):
+        volume = control_volume_name(PROJECT)
+        subpath = "namespaces/" + "a" * 32 + "/private/ledger"
+        profile = group_ledger.profile(
+            DAEMON, PROJECT, volume, "sha256:" + "1" * 64, ledger_subpath=subpath)
+        document = {
+            "name": PROJECT,
+            "services": {"backend": {"environment": dict(profile["environment"]),
+                                     "volumes": profile["backend"]["volumes"]}},
+            "volumes": {"group-ledger": {"name": volume, "external": True}},
+        }
+        self.assertEqual(group_ledger.retained_profile(document, profile["image_id"]), profile)
+        document["services"]["backend"]["volumes"][0]["volume"]["subpath"] = "private/ledger"
+        moved = group_ledger.retained_profile(document, profile["image_id"])
+        self.assertEqual(moved["ledger_subpath"], "private/ledger")
+        self.assertNotEqual(moved, profile)
+
     def test_retained_profile_requires_the_projects_own_identity(self):
         volume = group_ledger.VOLUME_PREFIX + "0" * 24
         profile = group_ledger.profile(DAEMON, PROJECT, volume, "sha256:" + "1" * 64)
         document = {"name": PROJECT,
-                    "services": {"backend": {"environment": dict(profile["environment"])}},
+                    "services": {"backend": {"environment": dict(profile["environment"]),
+                                               "volumes": profile["backend"]["volumes"]}},
                     "volumes": {"group-ledger": {"name": volume, "external": True}}}
         self.assertEqual(group_ledger.retained_profile(document, profile["image_id"]), profile)
         moved = copy.deepcopy(document)
@@ -89,6 +140,16 @@ class GroupLedgerContainerTest(unittest.TestCase):
 
     def docker_text(self, *args, **_kwargs):
         self.calls.append(args)
+        if args[:2] == ("volume", "inspect"):
+            name = args[2]
+            return json.dumps([{
+                "Name": name, "Driver": "local", "Options": None,
+                "Mountpoint": f"/var/lib/docker/volumes/{name}/_data",
+                "Labels": {"com.fullmag.compose.project": PROJECT,
+                           "com.fullmag.toolchain.control.schema": "fullmag.docker-toolchain-control.v1",
+                           "com.fullmag.toolchain.control.mount": "/opt/fullmag/control",
+                           "com.fullmag.toolchain.control.project": PROJECT},
+            }])
         return ""
 
     def test_attests_own_writable_volume(self):
@@ -114,10 +175,58 @@ class GroupLedgerContainerTest(unittest.TestCase):
 
     def test_global_consumer_classification(self):
         self.assertTrue(group_ledger.is_group_ledger_mount(inspect_document(self.profile)["Mounts"][0]))
+        control_volume = control_volume_name(PROJECT)
+        self.assertTrue(group_ledger.is_group_ledger_mount({
+            "Type": "volume", "Name": control_volume, "Destination": "/host-ledger",
+        }))
+        self.assertFalse(group_ledger.is_group_ledger_mount({
+            "Type": "volume", "Name": "fullmag-build-control-not-canonical",
+            "Destination": "/host-ledger",
+        }))
         self.assertFalse(group_ledger.is_group_ledger_mount(
             {"Type": "bind", "Source": "/mnt/fullmag-host-ledger-p", "Destination": "/host-ledger"}))
         self.assertFalse(group_ledger.is_group_ledger_mount(
             {"Type": "volume", "Name": "fullmag-host-ledger-v1-p", "Destination": "/host-ledger"}))
+
+    def test_private_group_container_attestation_requires_exact_subpath(self):
+        private = group_ledger.profile(
+            DAEMON, PROJECT, control_volume_name(PROJECT), "sha256:" + "1" * 64,
+            ledger_subpath="private/ledger")
+        document = inspect_document(private)
+        document["HostConfig"]["Mounts"] = [{
+            "Type": "volume", "Source": private["volume_name"], "Target": "/host-ledger",
+            "VolumeOptions": {"NoCopy": True, "Subpath": "private/ledger"},
+        }]
+        attestation = group_ledger.validate_container(document, private, self.docker_text)
+        self.assertEqual(attestation["ledger_subpath"], "private/ledger")
+        self.assertEqual(self.calls[0][:2], ("exec", "c" * 64))
+
+        wrong = copy.deepcopy(document)
+        wrong["HostConfig"]["Mounts"][0]["VolumeOptions"]["Subpath"] = "private/backend"
+        with self.assertRaises(group_ledger.GroupLedgerError):
+            group_ledger.validate_container(wrong, private, self.docker_text)
+
+        unknown = copy.deepcopy(document)
+        unknown["HostConfig"]["Mounts"][0]["VolumeOptions"].pop("Subpath")
+        unknown["Mounts"][0].pop("Source", None)
+        with self.assertRaises(group_ledger.GroupLedgerError):
+            group_ledger.validate_container(unknown, private, self.docker_text)
+
+    def test_private_group_container_can_prove_subpath_from_validated_mountpoint(self):
+        private = group_ledger.profile(
+            DAEMON, PROJECT, control_volume_name(PROJECT), "sha256:" + "1" * 64,
+            ledger_subpath="private/ledger")
+        document = inspect_document(private)
+        document["HostConfig"]["Mounts"] = [{
+            "Type": "volume", "Source": private["volume_name"], "Target": "/host-ledger",
+            "VolumeOptions": {"NoCopy": True},
+        }]
+        mountpoint = f"/var/lib/docker/volumes/{private['volume_name']}/_data"
+        document["Mounts"][0]["Source"] = mountpoint + "/private/ledger"
+        attestation = group_ledger.validate_container(document, private, self.docker_text)
+        self.assertEqual(attestation["ledger_subpath"], "private/ledger")
+        self.assertEqual(self.calls[0], ("volume", "inspect", private["volume_name"]))
+        self.assertEqual(self.calls[1][:2], ("exec", "c" * 64))
 
 
 class LedgerProfileSelectionTest(unittest.TestCase):

@@ -21,7 +21,7 @@ BASE_IMPLEMENTATIONS = ('docker_build_control', 'docker_volume_dev', 'docker_vol
                         'docker_volume_stop_failed', 'docker_volume_checks',
                         'docker_shared_build_storage', 'docker_backend_volume_cache',
                         'docker_volume_cache_maintenance', 'docker_cache_retirement', 'docker_worktree_finish')
-OPTIONAL_IMPLEMENTATIONS = ('docker_helper_source', 'docker_volume_activation_reconcile', 'docker_volume_accepted_reattach',
+OPTIONAL_IMPLEMENTATIONS = ('docker_group_storage', 'docker_helper_source', 'docker_volume_activation_reconcile', 'docker_volume_accepted_reattach',
                             'docker_volume_pre_admission_recreate', 'docker_volume_pre_admission_selector',
                             'docker_volume_pending_continuation', 'docker_volume_native_init_successor',
                             'docker_volume_drained_successor', 'docker_volume_reconcile',

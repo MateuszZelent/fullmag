@@ -31,7 +31,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Any, NoReturn
+from typing import Any, Callable, NoReturn
 
 try:
     import fcntl
@@ -5557,6 +5557,8 @@ def _retain_package_backups(
     control_root: Path,
     current_receipt: Mapping[str, Any],
     current_receipt_bytes: bytes,
+    *,
+    cache_identity: Mapping[str, Any] | None = None,
 ) -> None:
     """Retain the direct rollback and retire only a verified older chain."""
 
@@ -5564,6 +5566,15 @@ def _retain_package_backups(
     control_root = _absolute(control_root, "backend package development control directory")
     if control_root != output / PACKAGE_DEVELOPMENT_DIRNAME:
         _fail("backend package retention control directory is not under the package mount")
+    group_binding = None
+    if os.environ.get("FULLMAG_PRIVATE_GROUP_STORAGE") == "group-volume-v1":
+        import backend_group_cache_cleanup as group_cache_cleanup
+        try:
+            group_binding = group_cache_cleanup.validate_group_cache_identity(
+                cache_identity, package_root=output
+            )
+        except group_cache_cleanup.BackendGroupCacheCleanupError as error:
+            _fail(f"group package retention identity is invalid: {error}")
     _ensure_package_development_root(output)
     archive_root = control_root / PACKAGE_RETENTION_ARCHIVE_DIRNAME
     backups_root = control_root / PACKAGE_BACKUPS_DIRNAME
@@ -5617,8 +5628,13 @@ def _retain_package_backups(
         mode, build, toolchain = _retention_receipt_identity(
             receipt, f"backend package backup {backup.name}"
         )
-        if mode != current_mode or build != current_build or toolchain != current_toolchain:
-            _fail(f"backend package backup {backup.name} has a different cache identity")
+        if group_binding is None:
+            if mode != current_mode or build != current_build or toolchain != current_toolchain:
+                _fail(f"backend package backup {backup.name} has a different cache identity")
+        elif mode != current_mode:
+            # The group-bound namespace retains one direct rollback across ABI
+            # changes, but retention never activates or runs that old package.
+            _fail(f"backend package backup {backup.name} has a different source mode")
         rotation, rotation_bytes = _read_json(
             backup / "rotation.json",
             f"backend package backup {backup.name} rotation metadata",
@@ -5837,7 +5853,7 @@ def _shared_package_identity(manifest: Path, toolchain: Mapping[str, Any], archi
     # The commit and native snapshot are compiled into fullmag-build-info.
     # Never relabel a package from another commit as a newly compiled binary.
     helpers = {}
-    for name in ("backend_dev.py", "backend_source.py", "backend_shared_store.py", "backend_shared_recovery.py"):
+    for name in ("backend_dev.py", "backend_source.py", "backend_shared_store.py", "backend_shared_recovery.py", "backend_group_cache_cleanup.py"):
         helpers[name] = _sha256_file(Path(__file__).with_name(name), "trusted builder helper")[0]
     return {
         "runtime_source_digest": _runtime_source_digest(capsule),
@@ -5854,10 +5870,48 @@ def _shared_package_identity(manifest: Path, toolchain: Mapping[str, Any], archi
     }
 
 
-def _prepare_with_shared_package(args, build_root, output, jobs, toolchain, direct_install_root):
+def _cleanup_group_build_outputs(workspace: Path, *, phase: str) -> dict[str, Any]:
+    """Run the exact owned compiler-tree cleanup and record its phase."""
+
+    if os.environ.get("FULLMAG_PRIVATE_GROUP_STORAGE") != "group-volume-v1":
+        _fail("group build cleanup is reserved for private group storage")
+    import backend_group_cache_cleanup as group_cache_cleanup
+
+    cache_identity = _backend_cache_receipt()
+    try:
+        if cache_identity is None:
+            _fail("private group build has no backend cache receipt")
+        cleanup = group_cache_cleanup.cleanup_group_compiler_outputs(
+            workspace, cache_identity=cache_identity, phase=phase
+        )
+    except group_cache_cleanup.BackendGroupCacheCleanupError as error:
+        _fail(f"private group compiler cleanup failed: {error}")
+    _log_phase(
+        "group-cache-cleanup", "complete", cleanup_phase=phase,
+        removed_files=cleanup["removed_files"], removed_bytes=cleanup["removed_bytes"],
+        receipt=cleanup["receipt_path"],
+    )
+    return cleanup
+
+
+def _prepare_with_shared_package(
+    args,
+    build_root,
+    output,
+    jobs,
+    toolchain,
+    direct_install_root,
+    *,
+    on_actual_build: Callable[[], None] | None = None,
+):
     configured = os.environ.get("FULLMAG_SHARED_BACKEND_STORE", "")
     if not configured:
-        return _prepare_locked(args, build_root, output, jobs, toolchain, direct_install_root)
+        if on_actual_build is None:
+            return _prepare_locked(args, build_root, output, jobs, toolchain, direct_install_root)
+        return _prepare_locked(
+            args, build_root, output, jobs, toolchain, direct_install_root,
+            on_actual_build=on_actual_build,
+        )
     import backend_shared_store as shared
     if configured != str(shared.ROOT) or direct_install_root != output:
         _fail("shared packages require the fixed managed volume and direct candidate")
@@ -5905,7 +5959,13 @@ def _prepare_with_shared_package(args, build_root, output, jobs, toolchain, dire
             previous = os.environ.get(DEV_CUDA_ARCHITECTURES_ENV)
             os.environ[DEV_CUDA_ARCHITECTURES_ENV] = architectures or "all"
             try:
-                result = _prepare_locked(args, build_root, output, jobs, toolchain, direct_install_root)
+                if on_actual_build is None:
+                    result = _prepare_locked(args, build_root, output, jobs, toolchain, direct_install_root)
+                else:
+                    result = _prepare_locked(
+                        args, build_root, output, jobs, toolchain, direct_install_root,
+                        on_actual_build=on_actual_build,
+                    )
             finally:
                 if previous is None:
                     os.environ.pop(DEV_CUDA_ARCHITECTURES_ENV, None)
@@ -5932,6 +5992,8 @@ def _prepare_locked(
     jobs: int,
     toolchain: Mapping[str, Any],
     direct_install_root: Path | None = None,
+    *,
+    on_actual_build: Callable[[], None] | None = None,
 ) -> int:
     source_tar = Path(args.source_tar) if args.source_tar is not None else None
     direct_install = direct_install_root is not None
@@ -5974,11 +6036,15 @@ def _prepare_locked(
         build_log = workspace / ".fullmag" / "local" / "direct-backend-build.log"
     make_target = "install-cli-dev" if cargo_profile == "backend-dev" else "install-cli"
     command = [shutil.which("make") or "/usr/bin/make", make_target]
+    if direct_install and os.environ.get("FULLMAG_PRIVATE_GROUP_STORAGE") == "group-volume-v1":
+        _cleanup_group_build_outputs(workspace, phase="pre-build")
     if direct_install:
         build_log = _begin_failed_make_attempt(build_root, output, make_target)
     else:
         _ensure_directory(build_log.parent, "backend build log parent")
     assert build_log is not None
+    if on_actual_build is not None:
+        on_actual_build()
     return_code = _run_canonical_make(command, workspace, environment, build_log)
     if direct_install:
         _finish_failed_make_attempt(build_root, output, return_code)
@@ -6329,6 +6395,14 @@ def _start(args: argparse.Namespace) -> int:
     provenance_publish_started = False
     publication_committed = False
     promotion_spec: Any | None = None
+    group_storage = os.environ.get("FULLMAG_PRIVATE_GROUP_STORAGE") == "group-volume-v1"
+    actual_build_started = False
+
+    def mark_actual_build_started() -> None:
+        nonlocal actual_build_started
+        if actual_build_started:
+            _fail("backend build start callback was invoked more than once")
+        actual_build_started = True
     # Keep the lock across package verification and the exec handoff.  The
     # descriptor is O_CLOEXEC, so the API process does not inherit a stale
     # build lock after execvpe.  A failed build therefore cannot start API.
@@ -6414,14 +6488,25 @@ def _start(args: argparse.Namespace) -> int:
                     state="building",
                 )
                 try:
-                    result = _prepare_with_shared_package(
-                        start_args,
-                        build_root,
-                        candidate,
-                        jobs,
-                        toolchain,
-                        candidate,
-                    )
+                    if group_storage:
+                        result = _prepare_with_shared_package(
+                            start_args,
+                            build_root,
+                            candidate,
+                            jobs,
+                            toolchain,
+                            candidate,
+                            on_actual_build=mark_actual_build_started,
+                        )
+                    else:
+                        result = _prepare_with_shared_package(
+                            start_args,
+                            build_root,
+                            candidate,
+                            jobs,
+                            toolchain,
+                            candidate,
+                        )
                 except (BackendBuildError, OSError):
                     if _discard_failed_candidate_if_owned(candidate, output, build_root):
                         candidate = None
@@ -6498,6 +6583,18 @@ def _start(args: argparse.Namespace) -> int:
                 _log_phase("retention", "deferred", reason="outside-startup", backups="retained")
             else:
                 _log_phase("retention", "skipped", reason="pending-rotation-journal")
+            if group_storage and (actual_build_started or promotion_spec is not None):
+                # A package is copied into its own verified inventory before
+                # compiler scratch is reclaimed.  Its ELF launchers use the
+                # package-relative lib directory, not this workspace cache.
+                _validated_package(
+                    output,
+                    "published backend package before group build cleanup",
+                    exclude_development_control=True,
+                )
+                _cleanup_group_build_outputs(
+                    build_root / "workspace", phase="post-publish"
+                )
         except (BackendBuildError, OSError) as error:
             if publication_committed:
                 _log_phase(
@@ -6913,7 +7010,14 @@ def _maintain_packages(args) -> int:
         if (control / PACKAGE_ROTATION_JOURNAL_NAME).exists():
             _fail("package rotation is pending; retention refused")
         receipt, raw, _ = _validated_package(output, "current backend package", exclude_development_control=True)
-        _retain_package_backups(output, control, receipt, raw)
+        cache_identity = (
+            _backend_cache_receipt()
+            if os.environ.get("FULLMAG_PRIVATE_GROUP_STORAGE") == "group-volume-v1"
+            else None
+        )
+        _retain_package_backups(
+            output, control, receipt, raw, cache_identity=cache_identity
+        )
         shared_result = None
         configured = os.environ.get("FULLMAG_SHARED_BACKEND_STORE", "")
         if configured:

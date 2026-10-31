@@ -7,6 +7,21 @@ launcher je egzekwuje. Audyt Compose obejmuje tylko część tej granicy.
 Bieżące funkcje i niezgodne miejsca zapisu wskazuje
 [audyt writerów](writer-inventory.md). Zweryfikuj je ponownie po zmianie kodu.
 
+## Prywatny storage daily DEV
+
+Daily Docker DEV używa dokładnie jednego prywatnego named volume na grupę:
+stabilnego `BuildControl.volume`. Istniejący root zachowuje control/lock/namespace;
+`/build`, frontend state i group-ledger są subpaths `private/backend`,
+`private/frontend` i `private/ledger`. Nie zmieniaj nazwy wolumenu przy zmianie
+toolchaina, profilu, dependency hash ani próby. Weryfikuj nadal fingerprint
+ABI/toolchain; compiler outputs `.fullmag-build` podlegają ADR 0076 niezależnie
+od tożsamości volume. Zachowuj
+control, ledger, źródła, wyniki oraz current + jeden verified rollback do udanej
+publikacji. Migracja jest per stopped/drained group; stare zasoby czekają na
+archiwizację i pełny reference check. Szczegóły:
+[ADR 0076](../../../../docs/adr/0076-single-private-volume-per-dev-group.md);
+runtime pozostaje **NOT VERIFIED** bez rzeczywistego receipt/mount proof.
+
 ## Jeden właściciel i jedno miejsce dla każdego zapisu
 
 Dla każdej recepty prześledź zależności, wrappery, subprocessy i narzędzia do
@@ -22,10 +37,10 @@ w `justfile` nie czyni jej dozwolonym fallbackiem DEV.
 
 | Klasa | Docelowa kontrola powielania |
 | --- | --- |
-| Źródła | Jeden readonly checkout + jeden synchronizowany cień na profil. Kopiuj tylko zmienione pliki; usuwaj z cienia pliki usunięte ze źródła, nie cache. Bez pełnego snapshotu/archive na każdy run. |
+| Źródła | Jeden readonly checkout + jeden synchronizowany cień na grupę. Kopiuj tylko zmienione pliki i usuwaj z cienia pliki usunięte ze źródła; compiler outputs `.fullmag-build` podlegają ADR 0076. Bez pełnego snapshotu/archive na każdy run. |
 | Kontekst Docker | Minimalna allowlista i `.dockerignore`; bez storage, target, node_modules, VHDX, sekretów, `.git` poza wymaganymi danymi wersji. Generowany kontekst w volume, identyczna treść ponownie użyta. |
 | Toolchain | Przypięty digest/wersje; nowa generacja tylko przy zmianie rzeczywistych wejść. Wspólne immutable warstwy mogą obsługiwać kilka grup. |
-| Cargo/CMake | Stałe ścieżki i cache zależne od toolchaina/profilu/ABI; commit, port, czas i UUID uruchomienia nie tworzą nowego targetu. Zmiany kodu obsługuje system przyrostowy. |
+| Cargo/CMake | Stały private volume; compiler outputs `.fullmag-build` oraz ich retencja podlegają ADR 0076. Cargo registry/git pozostają w project-scoped shared volume. |
 | pnpm/Next/Python | Jawne store, node_modules, `.next*`, Corepack, pip/uv, venv i `__pycache__` w Docker-managed miejscu; frozen lockfile. Ponowny start bez zmiany wejść nie tworzy nowego workspace. |
 | Publikacja aplikacji | Jeden bieżący pakiet, jeden zweryfikowany rollback i najwyżej jeden aktywny kandydat pod blokadą. Cache-hit nie kopiuje ani nie pakuje ponownie aplikacji. |
 | Eksporty | DEV nie produkuje wheel/ZIP/TAR/OCI-export per start. Artefakt wydania tylko na jawnej trasie release, raz na tożsamość wejść; eksport na host tylko gdy zamówiony. |
@@ -92,7 +107,8 @@ Budżety bajtów/generacji i reserve muszą być jawne w konfiguracji oraz
 sprawdzane przed alokacją. Nie wymyślaj uniwersalnej wartości GiB. Rozmiar
 pierwszego buildu jest estymacją; mierz peak, nie tylko stan po zakończeniu.
 Gdy bezpieczne usuwanie nie zwolni wymaganej rezerwy, zatrzymaj alokację z
-konkretną diagnozą. Nie kasuj aktywnego cache dla sztucznego zmieszczenia buildu.
+konkretną diagnozą. Nie kasuj shared dependency cache ani nieznanych danych, aby
+sztucznie zmieścić build; rozpoznane `.fullmag-build` obsługuje ADR 0076.
 
 Do decyzji GC używaj grafu referencji: aktywne procesy i kontenery (także
 zatrzymane z zaplanowanym wznowieniem), mounty, lease, bieżący pakiet, rollback,
@@ -109,7 +125,7 @@ retencję kompletną. Symulacyjne provenance i ledger nie są logami builda do G
 
 | Operacja | Efekt wymagany w DEV |
 | --- | --- |
-| Restart backendu | Cache i wolumeny pozostają; weryfikacja wejść, przyrostowy build tylko gdy potrzebny. |
+| Restart backendu | Weryfikacja wejść; zgodny pakiet może dać cache-hit bez kompilacji, a build/retencja compiler outputs podlegają ADR 0076. |
 | Odtworzenie/usunięcie kontenera | Warstwa zapisywalna kontenera znika; named volumes, obrazy i BuildKit pozostają. To **nie jest sprzątnięcie builda**. |
 | Usunięcie build-data jednej grupy | Osobna jawnie autoryzowana operacja na wyliczonych nazwach/etykietach build volumes po kontroli wszystkich konsumentów; cache tej grupy zostaje utracony. |
 | Usunięcie nieużywanego toolchaina/BuildKit | Oddzielna decyzja dla współdzielonych danych; skasowanie grupy nie uprawnia do usunięcia zasobów innych grup. |

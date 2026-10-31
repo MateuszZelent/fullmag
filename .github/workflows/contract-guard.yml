@@ -22,6 +22,15 @@ jobs:
         run: python -B scripts/test_fullmag_storage.py
       - name: Check Windows launcher refusal before writes
         run: python -B scripts/test_windows_storage_preflight.py
+      - name: Check private group storage and source-only build identity
+        env:
+          PYTHONPATH: scripts
+        run: >-
+          python -B -m unittest
+          test_docker_group_storage test_docker_group_backend_cache
+          test_docker_group_ledger test_docker_cache_retirement
+          test_docker_compose_identity.SourceOnlyComposeIdentityTests
+          test_backend_group_cache_cleanup test_docker_group_frontend_seed
       - name: Check frontend cleanup boundaries
         run: node --test scripts/clean-control-room-next.test.mjs
 

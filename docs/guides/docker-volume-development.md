@@ -41,10 +41,12 @@ Nie kompiluje aplikacji; ta buduje się w stałym `backend`.
 `just docker-dev` obsługuje również grupę istniejącą dla wybranego checkoutu.
 Działający backend z pasującymi wejściami jest używany ponownie. Zmiana źródeł
 uruchamia kontrolowany restart bez aktywnych obliczeń; backend sprawdza istniejący
-pakiet i wykonuje przyrostowy build tylko wtedy, gdy jego wejścia się zmieniły.
+pakiet; cache-hit przechodzi do API bez kompilacji, a build po zmianie wejść może
+wymagać pełnej kompilacji zgodnie z ADR 0076.
 Zatrzymana grupa jest wznawiana z przypiętej konfiguracji. Domyślnie pozostaje
 jej zapisany port; jawna zmiana portu wymaga odtworzenia konfiguracji.
-Cache i dane użytkownika pozostają zachowane. Nieznany wynik wcześniejszej
+Współdzielone zależności, pakiety current/rollback i dane użytkownika zachowują
+własną retencję; prywatne compiler outputs podlegają ADR 0076. Nieznany wynik wcześniejszej
 aktywacji lub obcy właściciel blokuje automatyczny restart; launcher nie kasuje
 blokad i nie powtarza historycznego Solve. Kolejny skrypt jest aktywowany dopiero
 w gotowej grupie przez tę samą ścieżkę co `docker-dev-script`.
@@ -303,8 +305,8 @@ grupy, bo zwalnia lease):
    i kończy działanie; potwierdź brak `active` i kod wyjścia helpera 0.
 4. Zwykłe `just docker-dev "<checkout>" <port>` widzi zatrzymaną grupę i wybiera
    `resume` z `restart_backend=true` (przy dryfie wejść builda lub helperów
-   obrazu: zarządzane recreate bez drainu). Resume to przyrostowy build w tym
-   samym kontenerze `backend`, bez zmiany storage i bez ponawiania Solve.
+   obrazu: zarządzane recreate bez drainu). Build odbywa się w tym samym
+   kontenerze `backend` zgodnie z ADR 0076, bez zmiany storage i bez ponawiania Solve.
 
 Nie usuwaj helpera, wolumenu control ani pliku `active` ręcznie i nie twórz
 nowego namespace jako obejścia. Automatyczny reconciler tej fazy pozostaje
@@ -324,9 +326,11 @@ osobny receipt `frontend-recovery` potwierdza odzyskanie procesu UI.
 
 Starszy frontend bez prywatnego tmpfs właściciela nie jest uruchamiany ponownie.
 Launcher wymaga już przygotowanego obrazu zgodnego z bieżącą receptą oraz
-zweryfikowanego łańcucha receiptów toolchain → development → backend. Tworzy nowy
-seed i wolumen frontendu, dodaje tmpfs i odtwarza wyłącznie usługę `frontend`.
-Zachowuje stary wolumen i konfigurację do przeglądu. Nowy receipt `development`
+zweryfikowanego łańcucha receiptów toolchain → development → backend. Opisana
+tu operacja tworząca osobny wolumen frontendu dotyczy wyłącznie recovery
+historycznego layoutu. Nie jest wzorcem dla nowej grupy; odpowiedni recovery
+w `private/frontend` i migration pozostają **NOT VERIFIED**. Zachowaj stary
+wolumen i konfigurację do przeglądu. Nowy receipt `development`
 z `recovery_scope=legacy-oom-frontend-recreation` przypina osobno obrazy obu usług.
 Backend zachowuje swój obraz, kontener, procesy, pakiet, sesję i rewizję sceny;
 launcher porównuje te dane przed odtworzeniem frontendu i po nim.
@@ -525,7 +529,7 @@ just docker-dev-browser-qa "$source" 3197
 
 Kontrola wymaga istniejącego control volume, dokładnie jednej zdrowej pary
 `backend`/`frontend`, zgodnych receiptów źródła i portu oraz przypiętego
-frontend state volume. Nie tworzy brakującego control volume, nie naprawia
+subpath `private/frontend`. Nie tworzy brakującego control root, nie naprawia
 named volume i nie restartuje usług. Domyślny limit pracy przeglądarki wynosi
 180 sekund, a osobny limit pobrania brakującego obrazu wynosi 1800 sekund;
 parametry `timeout` i `pull_timeout` są ostatnimi argumentami pozycyjnymi
@@ -656,20 +660,37 @@ komendy nie zastępuje brakującego potwierdzenia.
 
 ## Granica zapisu i retencja
 
+Daily DEV ma jeden stabilny prywatny `BuildControl.volume` na grupę:
+dotychczasowy root control/lock/namespace oraz subpaths `private/backend`,
+`private/frontend` i `private/ledger` zgodnie z [ADR 0076](../adr/0076-single-private-volume-per-dev-group.md).
+Shared Cargo/pnpm/packages i image/BuildKit pozostają poza tym prywatnym volume.
+Fingerprint ABI/toolchain nadal weryfikuje cache; nie zmienia nazwy volume.
+Rebuild może inwalidować tylko zastąpione cache pod blokadą. Control, ledger,
+checkout, sesje i wyniki nie należą do rebuild wipe. Zachowaj current + jeden
+zweryfikowany rollback do udanej publikacji. Migracja dotyczy jednej
+stopped/drained grupy naraz; stare zasoby pozostają do archiwizacji i kontroli
+referencji. Kontrakt nie potwierdza runtime: mounty i implementacja pozostają
+**NOT VERIFIED**.
+Retencję `.fullmag-build` po rzeczywistej kompilacji, brak cleanupu przy cache-hit,
+failed-generation limit i pełny rebuild po zmianie źródeł określa ADR 0076;
+nie traktuj historycznych opisów incremental output jako aktualnego kontraktu.
+
 | Dane | Miejsce |
 | --- | --- |
-| Cargo/CMake, cień źródeł, log Make, CUDA cache | backend build named volume |
-| Pakiet, kandydat, zweryfikowany rollback, archiwum metadanych | backend package named volume |
-| pnpm, Next, metadata workspace, next.log | frontend named volume |
-| Konfiguracje, provenance, receipty, manifesty, logi BuildKit i dowody kontroli | build-control named volume |
+| Cargo/CMake, cień źródeł, log Make, CUDA cache | `private/backend` w `BuildControl.volume` |
+| Pakiet, kandydat, current/rollback | Shared packages volume, namespace `groups/<unit_key>` |
+| pnpm, Next, metadata workspace, next.log | `private/frontend` w tym samym `BuildControl.volume` |
+| Konfiguracje, provenance, receipty, locks, namespace | Dotychczasowy root `BuildControl.volume` |
+| Ledger DEV | `private/ledger` w tym samym volume, mount `/host-ledger` |
 | Warstwy zależności/helperów | Docker image store / BuildKit |
 | Sesje, wyniki, ustawienia, historia, ledger | skonfigurowany storage hosta Windows albo Linux/WSL |
 
 Źródła są readonly. Krótkie helpery utrzymania należą do tej samej grupy;
 nie budują ani nie uruchamiają aplikacji i nie mają Docker socketu.
-Helper utrzymania cache ma wyłącznie `CHOWN` i `DAC_OVERRIDE`, aby inicjalizować
-markery również w katalogach należących do UID backendu; widzi tylko trzy
-zweryfikowane named volumes, bez sieci, writable rootfs ani bindów hosta.
+Kontrakt jednego prywatnego volume wymaga, by helper utrzymania widział tylko
+zweryfikowane subpaths i mounty potrzebne operacji, bez sieci, writable rootfs
+ani bindów hosta. Opisane niżej uprawnienia trzech historycznych named volumes
+są dowodem starego układu; nie dowodzą jeszcze implementacji nowej topologii.
 Inicjalizator control-volume ma dodatkowo `FOWNER`; przejmuje wyłącznie znane
 katalogi metadanych, bez rekurencyjnej zmiany właścicieli. Kanoniczny helper
 bootstrap otrzymuje `DAC_OVERRIDE` tylko dla operacji na tym samym wolumenie,
@@ -700,14 +721,15 @@ przeglądu przed następnym startem. Log operacji ma limit 32 MiB, dokument 8 Mi
 liczba prób jednej fazy i archiwów metadanych pakietu jest ograniczona do 64.
 Wyczerpanie budżetu zatrzymuje dalszy zapis, zachowując dowody.
 
-Retencja binariów zachowuje pakiet bieżący i zweryfikowany rollback. Aktywnego
-cache nie usuwa. Start backendu zachowuje wszystkie historyczne pakiety i
-raportuje odroczenie retencji; ich pełna walidacja i usuwanie nie blokują API.
-Odrębna operacja retencji nie jest obecnie udostępniona przez ten launcher.
-Przed następnym buildem nadal oceń miejsce i zachowywane dane.
-Nie ma automatycznego globalnego GC BuildKit, starych obrazów
-ani nieaktywnych grup. Ich usunięcie wymaga osobnego planu właścicieli/referencji
-i zgody. Samo usunięcie kontenera nie odzyskuje wolumenów ani fizycznego VHDX.
+Polityka pakietów zachowuje current i jeden zweryfikowany rollback do udanej
+publikacji nowego pakietu; ostatni dobry pakiet pozostaje do końca kompilacji i
+walidacji następcy. Zastąpiony cache backend/frontend można czyścić wyłącznie
+w jego subpath pod blokadą. Wpis ADR 0061 o odroczeniu retencji jest historyczny
+i superseded przez [ADR 0076](../adr/0076-single-private-volume-per-dev-group.md).
+Zgodność źródeł z tym kontraktem i runtime retencji pozostają **NOT VERIFIED**.
+Nie ma automatycznego globalnego GC BuildKit, starych obrazów ani nieaktywnych
+grup. Ich usunięcie wymaga osobnego planu właścicieli/referencji i autoryzacji.
+Samo usunięcie kontenera nie odzyskuje wolumenów ani fizycznego VHDX.
 
 `just docker-dev-control-checks <source>` uruchamia interpretowane regresje
 launcherów w istniejącym backendzie; nie kompiluje natywnych testów jednostkowych.

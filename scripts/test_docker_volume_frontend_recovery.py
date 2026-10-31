@@ -1,6 +1,6 @@
 """Regressions for restoring one exact OOM-stopped DEV frontend."""
 import copy
-from contextlib import contextmanager, nullcontext, redirect_stdout
+from contextlib import ExitStack, contextmanager, nullcontext, redirect_stdout
 import io
 import json
 from pathlib import Path
@@ -134,6 +134,8 @@ class LegacyFrontendRecoveryTests(unittest.TestCase):
     def run_legacy(self, fault=None):
         control = mock.Mock(spec=build_control.BuildControl)
         control.project, control.volume, control.namespace = 'own', 'control', ''
+        control._active_operation = None
+        control._pin_operation_helper.return_value = 'c'*64
         control.operation = build_control.BuildControl.operation.__get__(control)
         control.path.side_effect = lambda path: '/control/' + path
         control.space.return_value = {'available_bytes': 64 * 1024**3}
@@ -222,25 +224,26 @@ class LegacyFrontendRecoveryTests(unittest.TestCase):
                 new_frontend['State']['Running'] = False
             return {'files': []}
 
-        with mock.patch.object(build_control.subprocess, 'Popen', return_value=logger), \
-             mock.patch.object(fullmag_storage, 'validate_path', return_value=Path('/state')), \
-             mock.patch.object(dev, '_session_host', return_value=windows_folder_host), \
-             mock.patch.object(windows_folder_host, 'read_owned_regular', return_value=b'{"owner":"same"}'), \
-             mock.patch.object(dev, '_retained_startup_enabled', return_value=False), \
-             mock.patch.object(dev, 'docker_text', side_effect=text), \
-             mock.patch.object(dev, 'docker_capture') as stopped, \
-             mock.patch.object(dev, '_assert_private_restart_network'), \
-             mock.patch.object(reconcile, 'fingerprint', side_effect=lambda doc: doc['Id']), \
-             mock.patch.object(dev, '_verified_frontend_recovery_image', side_effect=verified_image), \
-             mock.patch.object(dev, '_frontend_recovery_backend_observation', side_effect=observation), \
-             mock.patch.object(codegen, '_backend_documents', side_effect=documents), \
-             mock.patch.object(codegen, '_validate_backend', return_value=(source, 'p', 'b')), \
-             mock.patch.object(codegen, '_probe_source', side_effect=AssertionError('native source qualification forbidden')), \
-             mock.patch.object(frontend_inputs, 'describe', return_value=seed), \
-             mock.patch.object(frontend_inputs, 'frontend_view', side_effect=view), \
-             mock.patch.object(dev, '_frontend', side_effect=seeded), \
-             mock.patch.object(dev, 'compose_capture', side_effect=compose), \
-             mock.patch.object(dev, '_validate_retained_service'):
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(build_control.subprocess, 'Popen', return_value=logger))
+            stack.enter_context(mock.patch.object(fullmag_storage, 'validate_path', return_value=Path('/state')))
+            stack.enter_context(mock.patch.object(dev, '_session_host', return_value=windows_folder_host))
+            stack.enter_context(mock.patch.object(windows_folder_host, 'read_owned_regular', return_value=b'{"owner":"same"}'))
+            stack.enter_context(mock.patch.object(dev, '_retained_startup_enabled', return_value=False))
+            stack.enter_context(mock.patch.object(dev, 'docker_text', side_effect=text))
+            stopped = stack.enter_context(mock.patch.object(dev, 'docker_capture'))
+            stack.enter_context(mock.patch.object(dev, '_assert_private_restart_network'))
+            stack.enter_context(mock.patch.object(reconcile, 'fingerprint', side_effect=lambda doc: doc['Id']))
+            stack.enter_context(mock.patch.object(dev, '_verified_frontend_recovery_image', side_effect=verified_image))
+            stack.enter_context(mock.patch.object(dev, '_frontend_recovery_backend_observation', side_effect=observation))
+            stack.enter_context(mock.patch.object(codegen, '_backend_documents', side_effect=documents))
+            stack.enter_context(mock.patch.object(codegen, '_validate_backend', return_value=(source, 'p', 'b')))
+            stack.enter_context(mock.patch.object(codegen, '_probe_source', side_effect=AssertionError('native source qualification forbidden')))
+            stack.enter_context(mock.patch.object(frontend_inputs, 'describe', return_value=seed))
+            stack.enter_context(mock.patch.object(frontend_inputs, 'frontend_view', side_effect=view))
+            stack.enter_context(mock.patch.object(dev, '_frontend', side_effect=seeded))
+            stack.enter_context(mock.patch.object(dev, 'compose_capture', side_effect=compose))
+            stack.enter_context(mock.patch.object(dev, '_validate_retained_service'))
             try:
                 dev._refresh_frontend_services(control, args, 'development/attempts/old', previous,
                     document, Path('/selected'), {'runtime_root': '/runtime'}, observed,
@@ -363,14 +366,14 @@ class FrontendRecoveryDispatchTests(unittest.TestCase):
         backend_image, frontend_image = 'sha256:' + '1'*64, 'sha256:' + ('1' if legacy else '2')*64
         source = Path('/selected')
         document = {'name': 'own', 'services': {
-            'backend': {'image': backend_image},
+            'backend': {'image': backend_image, 'environment': {}},
             'frontend': {'image': frontend_image, 'tmpfs': [] if legacy else [
                 dev._FRONTEND_OWNER_TMPFS + ':rw,nosuid,nodev,noexec,size=1m,uid=65532,gid=65532,mode=0700']}}}
         previous = {'state': 'succeeded', 'compose_project': 'own',
                     'backend_container': 'b'*64, 'frontend_container': 'f'*64,
                     'inputs': {'source_root': str(source), 'image_id': backend_image}}
         control = mock.Mock(project='own')
-        control.read.side_effect = lambda path: document if path.endswith('/compose.json') else previous
+        control.read.side_effect = lambda path, optional=False: (None if optional else document if path.endswith('/compose.json') else previous)
         args = SimpleNamespace(repo_root=str(Path(__file__).resolve().parent.parent), source_root=str(source),
                                attempt='a'*32, config_sha256=hashlib.sha256(build_control.canonical(document)).hexdigest(),
                                port=3202)
@@ -384,7 +387,8 @@ class FrontendRecoveryDispatchTests(unittest.TestCase):
             return json.dumps([{'Id': argv[1], 'Image': image, 'Config': {'Labels': {
                 'com.docker.compose.project': 'own', 'com.docker.compose.service': service,
                 'org.fullmag.source.worktree-id': 'worktree'}}}])
-        with mock.patch.object(dev, 'require_host'), \
+        with mock.patch('docker_volume_cancelled_activation_guard.read_record', return_value=None), \
+             mock.patch.object(dev, 'require_host'), \
              mock.patch.object(docker_dev, '_select_source', return_value=(source, {})), \
              mock.patch.object(docker_dev, '_compose_identity', return_value={'worktree_id': 'worktree'}), \
              mock.patch.object(build_control, 'toolchain_configuration', return_value={
