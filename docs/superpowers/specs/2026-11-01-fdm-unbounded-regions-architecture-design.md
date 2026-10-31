@@ -153,6 +153,18 @@ Liczby Fullmag: m (24 B fp64), `active_mask` (1 B), `region_mask` (4 B), zapis `
 | **H (heterogeneous)** | niejednorodne A lub dowolny override | współczynniki ścianowe $A_f$ (+x/+y/+z na komórkę); mapa regionów nie jest czytana | opcjonalne tablice, `NULL → skalar` |
 | **P (material id + tablice)** | **odłożony** | id materiału `u16`/`u32` + tablice parametrów; średnia harmoniczna w kernelu, rzadka tablica par | z tablic materiałów |
 
+**Zależność od PR #374 (fdm-hot-loop-perf).** PR dodaje `Context::exchange_lut_uniform`
+(`backends/fdm/include/context.hpp`), ustawiane w `fullmag_fdm_backend_create_impl`
+(`backends/fdm/api/c_api.cpp`), gdy wszystkie wpisy LUT są równe `ctx->A`. Wtedy
+`launch_exchange_field_fp64` kieruje przypadek „regiony bez override'ów” na szybki
+laplasjan. Jest to dokładnie reguła wejścia do poziomu U. Pomiar z tego PR: gałąź
+jednorodna jest 1.65× szybsza na kernel. Szerokość maski (u8 vs u32) i liczba
+regionów (1 vs 64) nie zmieniały czasu kernela. Implementacja tego projektu musi
+bazować na `master` po scaleniu #374. Punktem odniesienia dla bitowej zgodności
+przypadku jednorodnego z regionami jest wtedy szybki laplasjan, a nie ścieżka LUT.
+Wybór poziomu U przenosi się z testu `all_of` na LUT do planera/buildera
+(`ExchangeFaces` = `None`).
+
 Poziom P realizuje „medium path” ze specyfikacji `material-assignment-and-spatial-fields-v0.md`.
 Planer może nadal operować pojęciem tabeli materiałów; na GPU poziom H obsługuje
 zarówno przypadek kawałkami stały, jak i pola ciągłe.
