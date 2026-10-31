@@ -5087,8 +5087,9 @@ pub struct AuxiliaryArtifact {
 
 pub(crate) struct LiveStepConsumer<'a> {
     pub grid: [u32; 3],
-    /// Cadence for heavier live payloads such as full magnetization snapshots.
-    pub field_every_n: u64,
+    /// Step and wall-clock cadence for heavy live payloads: the magnetization
+    /// copy and, at a stride of one step, the full observation catalog.
+    pub field_cadence: crate::LiveFieldCadence,
     /// Whether this consumer needs a full step-0 physics snapshot before
     /// the first accepted step.
     pub initial_snapshot: bool,

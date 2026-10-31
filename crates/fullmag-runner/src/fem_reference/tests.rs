@@ -672,7 +672,7 @@ fn fem_callback_emits_live_updates() {
         &[],
         Some(LiveStepConsumer {
             grid: [0, 0, 0],
-            field_every_n: 2,
+            field_cadence: crate::LiveFieldCadence::every_n_steps(2),
             initial_snapshot: false,
             display_selection: None,
             interrupt_requested: None,

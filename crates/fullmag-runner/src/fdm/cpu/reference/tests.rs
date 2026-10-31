@@ -646,7 +646,7 @@ fn live_scalar_updates_use_step_report_without_reobserving_every_step() {
         &[],
         Some(LiveStepConsumer {
             grid: plan.grid.cells,
-            field_every_n: u64::MAX,
+            field_cadence: crate::LiveFieldCadence::every_n_steps(u64::MAX),
             initial_snapshot: false,
             display_selection: None,
             interrupt_requested: None,
@@ -696,7 +696,7 @@ fn live_direct_preview_uses_state_without_reobserving_every_refresh() {
         &[],
         Some(LiveStepConsumer {
             grid: plan.grid.cells,
-            field_every_n: u64::MAX,
+            field_cadence: crate::LiveFieldCadence::every_n_steps(u64::MAX),
             initial_snapshot: false,
             display_selection: Some(&display_selection),
             interrupt_requested: None,
@@ -740,7 +740,7 @@ fn live_magnetization_payload_reads_state_without_reobserving_every_refresh() {
         &[],
         Some(LiveStepConsumer {
             grid: plan.grid.cells,
-            field_every_n: 1,
+            field_cadence: crate::LiveFieldCadence::every_n_steps(1),
             initial_snapshot: false,
             display_selection: None,
             interrupt_requested: None,
@@ -797,7 +797,7 @@ fn live_initial_snapshot_emits_step_zero_magnetization_before_first_step() {
         &[],
         Some(LiveStepConsumer {
             grid: plan.grid.cells,
-            field_every_n: u64::MAX,
+            field_cadence: crate::LiveFieldCadence::every_n_steps(u64::MAX),
             initial_snapshot: true,
             display_selection: Some(&display_selection),
             interrupt_requested: None,
@@ -841,7 +841,7 @@ fn live_callback_pause_returns_paused_status_and_stops_stepping() {
         &[],
         Some(LiveStepConsumer {
             grid: plan.grid.cells,
-            field_every_n: 1,
+            field_cadence: crate::LiveFieldCadence::every_n_steps(1),
             initial_snapshot: false,
             display_selection: None,
             interrupt_requested: None,

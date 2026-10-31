@@ -162,6 +162,7 @@ pub mod interactive;
 mod interactive_runtime;
 mod live_demand;
 pub use live_demand::{live_quantity_demand, set_live_quantity_demand};
+mod live_field_cadence;
 mod native_fem;
 #[cfg(feature = "fem-native")]
 pub use native_fem::prepare_fem_mesh_space;
@@ -671,6 +672,7 @@ pub use solver_trace::{
     SolverTraceSegment, SolverTraceSegmentKind, SolverTraceValidationError,
     SOLVER_TRACE_FORMAT_VERSION,
 };
+pub use live_field_cadence::LiveFieldCadence;
 pub use timestep_qualification::{
     validation_state_for, TimestepExecutionIdentityKey, TimestepPolicyKind,
     QUALIFICATION_REGISTRY_VERSION,
@@ -4169,7 +4171,7 @@ fn run_planned_problem_with_callback_artifact_context(
                 &runtime_outputs,
                 Some(types::LiveStepConsumer {
                     grid,
-                    field_every_n,
+                    field_cadence: LiveFieldCadence::every_n_steps(field_every_n),
                     initial_snapshot: false,
                     display_selection: None,
                     interrupt_requested: None,
@@ -4192,7 +4194,7 @@ fn run_planned_problem_with_callback_artifact_context(
                 &runtime_outputs,
                 Some((
                     &fdm.common_cells,
-                    field_every_n,
+                    LiveFieldCadence::every_n_steps(field_every_n),
                     live_layout.as_ref(),
                     &mut on_step as &mut dyn FnMut(StepUpdate) -> StepAction,
                 )),
@@ -4214,7 +4216,7 @@ fn run_planned_problem_with_callback_artifact_context(
             let crossover_decision = resolution.fem_crossover_decision.clone();
             let live = Some(types::LiveStepConsumer {
                 grid: [0, 0, 0],
-                field_every_n,
+                field_cadence: LiveFieldCadence::every_n_steps(field_every_n),
                 initial_snapshot: false,
                 display_selection: None,
                 interrupt_requested: None,
@@ -4597,7 +4599,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         until_seconds,
         output_dir,
         output_dir,
-        field_every_n,
+        LiveFieldCadence::every_n_steps(field_every_n),
         display_selection,
         interrupt_requested,
         initial_snapshot,
@@ -4612,7 +4614,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     until_seconds: f64,
     output_dir: &Path,
     autosave_root: &Path,
-    field_every_n: u64,
+    field_cadence: LiveFieldCadence,
     display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
     initial_snapshot: bool,
@@ -4625,7 +4627,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         until_seconds,
         output_dir,
         autosave_root,
-        field_every_n,
+        field_cadence,
         display_selection,
         interrupt_requested,
         initial_snapshot,
@@ -4659,7 +4661,7 @@ pub fn run_planned_problem_with_live_preview_and_artifact_identity(
         until_seconds,
         output_dir,
         autosave_root,
-        field_every_n,
+        LiveFieldCadence::every_n_steps(field_every_n),
         display_selection,
         interrupt_requested,
         initial_snapshot,
@@ -4683,7 +4685,7 @@ pub fn run_planned_problem_with_live_preview_and_frozen_stage_context(
 ) -> Result<RunResult, RunError> {
     run_planned_problem_with_live_preview_and_frozen_stage_context_and_observer(
         problem, plan, until_seconds, output_dir, autosave_root, interrupt_requested,
-        frozen, source_frozen_plan, u64::MAX, |_| StepAction::Continue,
+        frozen, source_frozen_plan, LiveFieldCadence::every_n_steps(u64::MAX), |_| StepAction::Continue,
     )
 }
 
@@ -4698,12 +4700,12 @@ pub fn run_planned_problem_with_live_preview_and_frozen_stage_context_and_observ
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
     frozen: &constraints::FrozenStageContextV1,
     source_frozen_plan: Option<&fullmag_ir::ResolvedFrozenSpinsPlanIR>,
-    field_every_n: u64,
+    field_cadence: LiveFieldCadence,
     on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
     let display_selection = DisplaySelectionState::default;
     run_planned_problem_with_live_preview_artifact_context(problem, plan, None, until_seconds,
-        output_dir, autosave_root, field_every_n, &display_selection, interrupt_requested,
+        output_dir, autosave_root, field_cadence, &display_selection, interrupt_requested,
         false, on_step, None, Some((frozen, source_frozen_plan)))
 }
 
@@ -4714,7 +4716,7 @@ fn run_planned_problem_with_live_preview_artifact_context(
     until_seconds: f64,
     output_dir: &Path,
     autosave_root: &Path,
-    field_every_n: u64,
+    field_cadence: LiveFieldCadence,
     display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
     initial_snapshot: bool,
@@ -4723,6 +4725,7 @@ fn run_planned_problem_with_live_preview_artifact_context(
     frozen_stage: Option<(&constraints::FrozenStageContextV1, Option<&fullmag_ir::ResolvedFrozenSpinsPlanIR>)>,
 ) -> Result<RunResult, RunError> {
     let mut on_step = bind_live_magnetization_layout(plan, on_step);
+    let field_every_n = field_cadence.every_n();
     let live_layout = study_magnetization_layout_for_plan(plan).ok();
     if frozen_stage.is_some() && !matches!(plan.backend_plan, BackendPlanIR::Fdm(_)) {
         return Err(RunError { message: "frozen stage context requires an accepted FDM CPU plan".into() });
@@ -4800,7 +4803,7 @@ fn run_planned_problem_with_live_preview_artifact_context(
                 &runtime_outputs,
                 Some(types::LiveStepConsumer {
                     grid,
-                    field_every_n,
+                    field_cadence: field_cadence.clone(),
                     initial_snapshot,
                     display_selection: live_display_selection,
                     interrupt_requested,
@@ -4823,7 +4826,7 @@ fn run_planned_problem_with_live_preview_artifact_context(
                 &runtime_outputs,
                 Some((
                     &fdm.common_cells,
-                    field_every_n,
+                    field_cadence.clone(),
                     live_layout.as_ref(),
                     &mut on_step as &mut dyn FnMut(StepUpdate) -> StepAction,
                 )),
@@ -4850,7 +4853,7 @@ fn run_planned_problem_with_live_preview_artifact_context(
             );
             let live = Some(types::LiveStepConsumer {
                 grid: [0, 0, 0],
-                field_every_n,
+                field_cadence: field_cadence.clone(),
                 initial_snapshot,
                 display_selection: live_display_selection,
                 interrupt_requested,
@@ -5145,7 +5148,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         until_seconds,
         output_dir,
         autosave_root,
-        field_every_n,
+        LiveFieldCadence::every_n_steps(field_every_n),
         display_selection,
         interrupt_requested,
         initial_snapshot,
@@ -5175,8 +5178,8 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             field_every_n, display_selection, interrupt_requested, initial_snapshot, hysteresis_stage_id, on_step);
     }
     run_planned_problem_with_live_preview_artifact_context(problem, plan, fem_mesh_identity,
-        until_seconds, output_dir, autosave_root, field_every_n, display_selection,
-        interrupt_requested, initial_snapshot, on_step, None, frozen_stage)
+        until_seconds, output_dir, autosave_root, LiveFieldCadence::every_n_steps(field_every_n),
+        display_selection, interrupt_requested, initial_snapshot, on_step, None, frozen_stage)
 }
 
 /// Run an FDM problem using a persistent interactive runtime for low-latency
@@ -10917,7 +10920,7 @@ mod tests {
             2e-13,
             &output_dir,
             &output_dir,
-            1,
+            LiveFieldCadence::every_n_steps(1),
             &display_selection,
             None,
             true,

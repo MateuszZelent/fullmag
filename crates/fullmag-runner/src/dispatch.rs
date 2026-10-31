@@ -4519,7 +4519,7 @@ mod tests {
             .expect("active CUDA execution body should be present");
         let execution = &execute[execution_start..];
         assert!(
-            execution.contains("let heavy_payload_due = stats.step % heavy_payload_every == 0;")
+            execution.contains("let heavy_payload_due = live.field_cadence.heavy_payload_due(stats.step);")
                 && execution.contains("if heavy_payload_due && !due_scalar_row")
                 && execution.contains("let magnetization = if heavy_payload_due"),
             "native CUDA live rows carrying a full magnetization payload must use the averaged stats"
@@ -10122,9 +10122,7 @@ mod tests {
 
         assert!(
             source.contains("artifacts.record_scalar(&accepted_stats)?;")
-                && source.contains(
-                    "let magnetization = if current_stats.step % heavy_payload_every == 0"
-                )
+                && source.contains("let magnetization = if heavy_payload_due && !full_catalog_due {")
                 && source.contains("stats: live_stats,")
                 && source.contains("magnetization,")
                 && source.contains("let action = (live.on_step)(StepUpdate {")

@@ -111,7 +111,7 @@ mod tests {
         };
         let mut live = LiveStepConsumer {
             grid: [0, 0, 0],
-            field_every_n: 8,
+            field_cadence: crate::LiveFieldCadence::every_n_steps(8),
             initial_snapshot: false,
             display_selection: None,
             interrupt_requested: None,
@@ -154,7 +154,7 @@ mod tests {
         };
         let mut live = LiveStepConsumer {
             grid: [0, 0, 0],
-            field_every_n: 8,
+            field_cadence: crate::LiveFieldCadence::every_n_steps(8),
             initial_snapshot: true,
             display_selection: None,
             interrupt_requested: None,
