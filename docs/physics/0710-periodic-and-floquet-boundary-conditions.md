@@ -221,6 +221,30 @@ remain in the output provenance. Non-finite components are never accepted as
 Gamma. At this threshold, any physical comparison still uses the declared SI
 wavevector and the independently validated boundary conditions.
 
+## Static periodic class reduction in FEM
+
+A static (k = 0) periodic FEM mesh keeps every periodic image node, but the
+images of one node class $c$ are a single degree of freedom. Local operators
+that are evaluated element by element and then divided by a lumped nodal
+weight must therefore reduce over the class before the division. A seam node
+sees only the elements on its own side of the seam, so its weak residual and
+its lumped weight are both partial; dividing per node and then averaging or
+copying a representative gives a wrong field at the seam unless both sides
+carry equal weight. Summing first gives the value of the interior node that
+the periodic image represents
+({ref}`eq-0710-class-reduction`).
+
+This applies to the interfacial and bulk DMI fields (weak residual
+$\mathbf R_i$ over lumped mass $M_i$, divided by $\mu_0 M_s$) and to the
+Poisson demag field recovery (weighted gradient $\mathbf G_i$ over recovery
+weight $W_i$). The FEM CPU lane reduces both on the fly and fails closed on a
+reduced-node map that does not cover every node. The FEM GPU lane uploads the
+class members in CSR form, ascending node order, so every image sums the same
+members in the same order and receives a bit-identical value at O(N) cost; its
+demag recovery merges the recovery weights and sparse recovery rows per class
+once at setup. Rotated interfacial DMI with periodic node pairs remains
+rejected by the planner until it is validated against this reduction.
+
 ## Contract index for this page
 
 (problem-statement)=
@@ -241,6 +265,13 @@ q_{\mathrm{dst}}=p(k)\,(T_{\mathrm{dst}}^\mathsf{T}T_{\mathrm{src}})q_{\mathrm{s
 ```
 
 ```{math}
+:label: eq-0710-class-reduction
+\mathbf H_{\mathrm{DMI},i} = -\frac{\sum_{j\in c(i)}\mathbf R_j}{\mu_0 M_s\sum_{j\in c(i)} M_j},
+\qquad
+\mathbf H_{\mathrm{d},i} = \frac{\sum_{j\in c(i)}\mathbf G_j}{\sum_{j\in c(i)} W_j}.
+```
+
+```{math}
 :label: eq-0710-gamma-classification
 \max_i|k_i|\leq 10^{-12}\,\mathrm{rad\,m^{-1}}
 \quad\Longrightarrow\quad \text{numerical Gamma routing}.
@@ -254,6 +285,15 @@ q_{\mathrm{dst}}=p(k)\,(T_{\mathrm{dst}}^\mathsf{T}T_{\mathrm{src}})q_{\mathrm{s
 | $p$ | Floquet phase | $1$ |
 | $q$ | tangent coefficients | $1$ |
 | $T_{\mathrm{dst}}^\mathsf{T}T_{\mathrm{src}}$ | tangent transport | $1$ |
+| $c(i)$ | static periodic node class of node $i$ | $1$ |
+| $\mathbf R_j$ | DMI weak residual at node $j$ | $\mathrm{J\,m^{-3}}\cdot\mathrm{m^{3}}$ |
+| $M_j$ | lumped nodal mass at node $j$ | $\mathrm{m^{3}}$ |
+| $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
+| $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H_{\mathrm{DMI},i}$ | nodal DMI field | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf G_j$ | weighted demag-gradient sum at node $j$ | $\mathrm{A\,m^{-1}}\cdot\mathrm{m^{3}}$ |
+| $W_j$ | demag recovery weight at node $j$ | $\mathrm{m^{3}}$ |
+| $\mathbf H_{\mathrm{d},i}$ | recovered nodal demag field | $\mathrm{A\,m^{-1}}$ |
 
 (assumptions-and-validity)=
 Pair metadata must provide a unique source and destination map, a translation,
@@ -324,3 +364,7 @@ ferromagnetic films*, J. Phys. C 19 (1986), DOI:10.1088/0022-3719/19/35/7013.
 | `crates/fullmag-ir/src/eigen_contract.rs` | `PhaseConventionIR` | Serialize the canonical phase convention. |
 | `crates/fullmag-runner/src/eigen/path.rs` | `expand_k_sampling` | Expand open and closed k paths deterministically. |
 | `crates/fullmag-runner/src/fem/eigen_constants.rs` | `GAMMA_K_TOLERANCE_RAD_PER_M` | Define the numerical Gamma routing threshold. |
+| `backends/fem/cpu/mfem/interactions/dmi_workspace.cpp` | `accumulate_dmi_periodic_residual_and_mass` | Sum DMI residual and lumped mass per static periodic class on FEM CPU. |
+| `backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu` | `dmi_project_field_kernel` | Project the class-reduced DMI field on FEM GPU over the class-member CSR. |
+| `backends/fem/gpu/cuda/state/runtime_coefficients_upload.cpp` | `gpu_runtime_coefficients_upload` | Build and upload the periodic class-member CSR in ascending node order. |
+| `backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp` | `recover_demag_poisson_field` | Reduce the demag recovery gradient and weight per static periodic class on FEM CPU. |
