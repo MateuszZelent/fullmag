@@ -21,6 +21,6 @@ pub(crate) use direct_minimizer_reference::{execute_nonlinear_cg, execute_projec
 pub(crate) use provenance::apply_fem_direct_minimizer_policy_provenance;
 pub(crate) use provenance::NATIVE_LLG_TIME_INTEGRATOR_REALIZATION;
 pub(crate) use provenance::{
-    apply_energy_minimizer_provenance, native_direct_minimizer_realization,
-    CPU_SOA_DIRECT_MINIMIZER_REALIZATION,
+    apply_energy_minimizer_provenance, cpu_direct_minimizer_realization,
+    expected_cpu_direct_minimizer_realization, native_direct_minimizer_realization,
 };

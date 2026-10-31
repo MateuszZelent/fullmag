@@ -639,8 +639,12 @@ The single-grid runner (`fullmag-runner/src/fdm/cpu/reference.rs`) dispatches:
 
 CPU FDM run provenance records direct minimization explicitly. BB and NCG runs populate
 `requested_energy_minimizer`, `resolved_energy_minimizer`, and
-`energy_minimizer_realization = "cpu_soa_tangent_gradient"`; LLG time-integration
-relaxation leaves those fields unset and reports the resolved integrator instead.
+`energy_minimizer_realization`. The realization is `"cpu_soa_tangent_gradient"`
+when the problem admits the SoA fast path and `"cpu_aos_tangent_gradient"` when
+it rejects it (Frozen Spins, spatial `Ms`/`A`/`alpha`); the same predicate selects
+the BB/NCG kernels, and final-artifact validation derives the expected value from
+`fdm_cpu_state_layout.rejection_reason`. LLG time-integration relaxation leaves
+those fields unset and reports the resolved integrator instead.
 
 ### 4.4 Multilayer FDM status
 

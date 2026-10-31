@@ -650,7 +650,9 @@ fn validate_direct_minimizer_realization(
 
     let expected_realization = match &plan.backend_plan {
         BackendPlanIR::Fdm(_) if resolved_device == "cpu" => {
-            Some(crate::relaxation::CPU_SOA_DIRECT_MINIMIZER_REALIZATION)
+            Some(crate::relaxation::expected_cpu_direct_minimizer_realization(
+                provenance.fdm_cpu_state_layout.as_ref(),
+            ))
         }
         BackendPlanIR::Fdm(_) | BackendPlanIR::Fem(_) => {
             crate::relaxation::native_direct_minimizer_realization(

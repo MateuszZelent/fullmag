@@ -2,9 +2,9 @@
 
 use fullmag_ir::{RelaxationAlgorithmIR, RelaxationControlIR};
 
-use crate::types::ExecutionProvenance;
 #[cfg(any(feature = "fem-gpu", test))]
 use crate::types::FemDirectMinimizerPolicyProvenance;
+use crate::types::{ExecutionProvenance, FdmCpuStateLayoutProvenance};
 
 #[cfg(any(feature = "fem-gpu", test))]
 const DIRECTION_POLICY_ENV: &str = "FULLMAG_FEM_DIRECT_MINIMIZER_DIRECTION_POLICY";
@@ -23,7 +23,35 @@ fn direct_energy_minimizer_name(algorithm: RelaxationAlgorithmIR) -> Option<&'st
 }
 
 pub(crate) const CPU_SOA_DIRECT_MINIMIZER_REALIZATION: &str = "cpu_soa_tangent_gradient";
+/// AoS BB/NCG kernels used when the problem rejects the SoA fast path
+/// (Frozen Spins, spatial Ms/A/alpha).
+pub(crate) const CPU_AOS_DIRECT_MINIMIZER_REALIZATION: &str = "cpu_aos_tangent_gradient";
 pub(crate) const NATIVE_LLG_TIME_INTEGRATOR_REALIZATION: &str = "native_llg_time_integrator";
+/// Layout rejection recorded by the CPU runner for coupled spin transport.
+/// It forces the AoS state but leaves the direct-minimizer kernels on SoA.
+const COUPLED_SPIN_TRANSPORT_LAYOUT_REJECTION: &str = "coupled_spin_transport";
+
+/// CPU FDM direct-minimizer realization; `soa_supported` must be the
+/// `ExchangeLlgProblem::soa_fast_path_supported` value that also selects the
+/// BB/NCG kernels.
+pub(crate) fn cpu_direct_minimizer_realization(soa_supported: bool) -> &'static str {
+    if soa_supported {
+        CPU_SOA_DIRECT_MINIMIZER_REALIZATION
+    } else {
+        CPU_AOS_DIRECT_MINIMIZER_REALIZATION
+    }
+}
+
+/// Expected CPU FDM direct-minimizer realization derived from the recorded
+/// state layout: a problem-level SoA rejection selects the AoS kernels.
+pub(crate) fn expected_cpu_direct_minimizer_realization(
+    layout: Option<&FdmCpuStateLayoutProvenance>,
+) -> &'static str {
+    let problem_rejected_soa = layout
+        .and_then(|layout| layout.rejection_reason.as_deref())
+        .is_some_and(|reason| reason != COUPLED_SPIN_TRANSPORT_LAYOUT_REJECTION);
+    cpu_direct_minimizer_realization(!problem_rejected_soa)
+}
 
 pub(crate) fn native_direct_minimizer_realization(
     algorithm: RelaxationAlgorithmIR,
@@ -204,6 +232,40 @@ mod tests {
         assert_eq!(policy.resolved_linear_solver, "not_used");
         assert_eq!(policy.resolved_preconditioner, "not_used");
         assert!(policy.environment_overrides.is_empty());
+    }
+
+    #[test]
+    fn cpu_fdm_realization_follows_problem_soa_rejection() {
+        let layout = |executed: &str, reason: Option<&str>| FdmCpuStateLayoutProvenance {
+            requested: "auto".to_string(),
+            resolved: executed.to_string(),
+            executed: executed.to_string(),
+            rejection_reason: reason.map(str::to_string),
+            projection_policy: None,
+            projection_realization: None,
+        };
+        assert_eq!(
+            expected_cpu_direct_minimizer_realization(Some(&layout("soa_xyz", None))),
+            CPU_SOA_DIRECT_MINIMIZER_REALIZATION
+        );
+        assert_eq!(
+            expected_cpu_direct_minimizer_realization(Some(&layout(
+                "aos_xyz",
+                Some("frozen_spins")
+            ))),
+            CPU_AOS_DIRECT_MINIMIZER_REALIZATION
+        );
+        assert_eq!(
+            expected_cpu_direct_minimizer_realization(Some(&layout(
+                "aos_xyz",
+                Some(COUPLED_SPIN_TRANSPORT_LAYOUT_REJECTION)
+            ))),
+            CPU_SOA_DIRECT_MINIMIZER_REALIZATION
+        );
+        assert_eq!(
+            cpu_direct_minimizer_realization(false),
+            CPU_AOS_DIRECT_MINIMIZER_REALIZATION
+        );
     }
 
     #[test]
