@@ -136,11 +136,13 @@ class FakeControl:
 class RetirementTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve(strict=True)
         self.source = self.root / "source"
         self.source.mkdir()
+        self.source = self.source.resolve(strict=True)
         self.storage_root = self.root / "storage"
         self.storage_root.mkdir()
+        self.storage_root = self.storage_root.resolve(strict=True)
         self.layout = {
             "repo_root": str(self.source), "storage_root": str(self.storage_root),
             "worktree_id": WORKTREE_ID, "project_id": PROJECT_ID,

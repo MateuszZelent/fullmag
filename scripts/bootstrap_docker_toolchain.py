@@ -683,9 +683,12 @@ def main(argv=None):
         if args.direct_development:
             from docker_dev_host import require_host
             require_host()
-            # Image-only builds follow the explicitly selected checkout. Runtime
-            # source/port defaults in host storage are not build prerequisites.
-            args.repo_root = Path(args.repo_root).resolve(strict=True)
+            from docker_dev_defaults import resolve_defaults
+            # Keep Git/process/.env source selection without reading runtime
+            # settings from host storage during image-only builds.
+            args.repo_root = resolve_defaults(
+                args.repo_root, include_host_settings=False
+            ).source_root
         receipt = build(args.repo_root, direct_development=args.direct_development)
         if args.prepare_development_images:
             from docker_build_control import BuildControl, build_volume_runtime_images

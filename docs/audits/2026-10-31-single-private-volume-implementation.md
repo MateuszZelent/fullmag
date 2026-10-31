@@ -32,8 +32,8 @@ obecne dodatkowe etykiety nie mogą wskazywać obcej grupy.
 ## Zależność od hosta
 
 Build samych obrazów potrzebuje Git, wybranego checkoutu i Dockera. Usunięto
-wywołanie hostowego resolvera storage dla samej Compose identity oraz wybór
-źródeł z hostowego indeksu runtime w direct bootstrap. Nowe API
+wywołanie hostowego resolvera storage dla samej Compose identity oraz odczyt
+indeksu runtime w direct bootstrap; wybór źródeł z Git/process/.env pozostaje. Nowe API
 `compose_source_identity` zachowuje dotychczasowe nazwy grup i sprawdza rejestr
 worktree w Git. Plan cache nowej grupy nie korzysta z hostowego runroot.
 
@@ -71,3 +71,18 @@ migracja zatrzymanych, rozpoznanych grup pozostają kolejnym zakresem operacyjny
 nie należy restartować aktywnych cudzych grup ani usuwać ich danych na podstawie
 samego merge tego kodu. Pełny rozmiar Dockera, warstwy BuildKit i shared store
 wymagają dalszego pomiaru i osobnej retencji; jeden wolumen nie stanowi quota.
+
+## Kontrole integracji Windows i Linux
+
+CI uruchamia te same kontrole storage, izolacji grupy, retencji i wyboru źródeł
+na `ubuntu-latest` i `windows-latest` z Python 3.11. Windows CI ujawniło alias
+w katalogu TEMP; fixture używają teraz kanonicznych ścieżek bez poluzowania
+produkcyjnego odrzucania obcych/junction/symlink paths. Test bootstrapu sprawdza
+wybór skonfigurowanego checkoutu przy nieistniejącym host storage i zabrania
+odczytu host-settings. Rzeczywiste mounty i restart w obu profilach runtime
+wymagają osobnych receiptów i pozostają NOT VERIFIED.
+
+Lokalny przebieg po poprawkach integracyjnych odtworzył Windows TEMP z junction:
+138 testów, zero błędów, 13 pominięć wymagających POSIX. Nie uruchamiano Dockera
+ani WSL; docelowy wynik Ubuntu/Windows CI jest przypięty do HEAD PR #369 w
+zewnętrznym checkpointcie zadania.

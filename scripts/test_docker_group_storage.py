@@ -51,8 +51,10 @@ class DockerGroupStorageTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.source = Path(self.temporary.name) / "source"
+        self.temp_root = Path(self.temporary.name).resolve(strict=True)
+        self.source = self.temp_root / "source"
         self.source.mkdir()
+        self.source = self.source.resolve(strict=True)
         self.control = FakeControl(self.source)
         self.operation = self.operation_for(self.control, self.source)
         self.control._active_operation = self.operation
@@ -207,13 +209,13 @@ class DockerGroupStorageTests(unittest.TestCase):
         self.assertEqual(self.helper_calls, [])
 
     def test_wrong_source_path_and_source_symlink_refuse_before_docker(self):
-        other = Path(self.temporary.name) / "other"
+        other = self.temp_root / "other"
         other.mkdir()
         with self.assertRaises(group_storage.GroupStorageError):
             self.prepare(source=other)
         self.assertEqual(self.inspect_calls, [])
 
-        link = Path(self.temporary.name) / "source-link"
+        link = self.temp_root / "source-link"
         try:
             link.symlink_to(self.source, target_is_directory=True)
         except (OSError, NotImplementedError):

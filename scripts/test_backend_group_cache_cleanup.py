@@ -27,10 +27,16 @@ CACHE_RECEIPT_SCHEMA = "fullmag.direct-compose.backend-volume-cache-receipt.v1"
 OWNER_SCHEMA = "fullmag.backend-build-cache-owner.v2"
 
 
+def _fixture_root(path: str | os.PathLike[str]) -> Path:
+    """Resolve TEMP aliases/junctions before constructing related targets."""
+    return Path(path).resolve(strict=True)
+
+
 def _cache_identity(root: Path, package_root: Path | None = None) -> dict:
-    build_root = root / "build"
-    package_root = package_root or (root / "package")
-    control_root = root / "control"
+    root = Path(root).resolve()
+    build_root = (root / "build").resolve()
+    package_root = Path(package_root or (root / "package")).resolve()
+    control_root = (root / "control").resolve()
     unit_key = "a" * 64
     return {
         "schema": CACHE_RECEIPT_SCHEMA,
@@ -110,6 +116,7 @@ def _owned_workspace(root: Path, identity: dict) -> Path:
 class BackendGroupCacheCleanupTests(unittest.TestCase):
     @staticmethod
     def _start_fixture(root: Path):
+        root = _fixture_root(root)
         fixture_module = importlib.import_module("test_docker_backend_dev")
         fixture = fixture_module.BackendPackageTests(
             "test_start_prepares_and_serves_in_one_container"
@@ -173,6 +180,7 @@ class BackendGroupCacheCleanupTests(unittest.TestCase):
 
     @staticmethod
     def _simulate_candidate_build(fixture, root, candidate, package, build_root):
+        root = _fixture_root(root)
         workspace = fixture._package_workspace(root / "candidate-workspace")
         records = fixture._copy_into_marked_candidate(
             workspace, candidate, package, build_root
@@ -214,7 +222,7 @@ class BackendGroupCacheCleanupTests(unittest.TestCase):
     @unittest.skipIf(os.name == "nt", "backend start requires POSIX flock")
     def test_actual_group_build_cleans_before_make_and_after_verified_publication(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = _fixture_root(temporary)
             fixture, package, manifest_path, _manifest, toolchain, identity, workspace = (
                 self._start_fixture(root)
             )
@@ -279,7 +287,7 @@ class BackendGroupCacheCleanupTests(unittest.TestCase):
     @unittest.skipIf(os.name == "nt", "backend start requires POSIX flock")
     def test_group_current_package_cache_hit_skips_pre_and_post_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = _fixture_root(temporary)
             _fixture, package, manifest_path, _manifest, toolchain, identity, _workspace = (
                 self._start_fixture(root)
             )
@@ -322,7 +330,7 @@ class BackendGroupCacheCleanupTests(unittest.TestCase):
     @unittest.skipIf(os.name == "nt", "backend start requires POSIX flock")
     def test_group_build_publication_failure_keeps_only_prebuild_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = _fixture_root(temporary)
             fixture, package, manifest_path, _manifest, toolchain, identity, workspace = (
                 self._start_fixture(root)
             )
@@ -401,7 +409,7 @@ class BackendGroupCacheCleanupTests(unittest.TestCase):
 
     def test_removes_only_compiler_root_and_writes_completion_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = _fixture_root(temporary)
             identity = _cache_identity(root)
             workspace = _owned_workspace(root, identity)
             compiled_bytes = sum(path.stat().st_size for path in (workspace / ".fullmag-build").rglob("*") if path.is_file())
@@ -426,7 +434,7 @@ class BackendGroupCacheCleanupTests(unittest.TestCase):
 
     def test_internal_symlink_is_unlinked_without_deleting_its_external_target(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = _fixture_root(temporary)
             identity = _cache_identity(root)
             workspace = _owned_workspace(root, identity)
             outside = root / "outside.bin"
@@ -444,7 +452,7 @@ class BackendGroupCacheCleanupTests(unittest.TestCase):
 
     def test_compiler_root_symlink_is_rejected_without_touching_target(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = _fixture_root(temporary)
             identity = _cache_identity(root)
             workspace = _owned_workspace(root, identity)
             target = root / "outside-cache"
@@ -467,7 +475,7 @@ class BackendGroupCacheCleanupTests(unittest.TestCase):
             "test_retention_keeps_direct_rollback_and_archives_verified_obsolete_chain"
         )
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = _fixture_root(temporary)
             package, control, _toolchain = fixture._rotated_package_fixture(root, versions=1)
             current = backend._validated_package(
                 package, "test current package", exclude_development_control=True
@@ -489,7 +497,7 @@ class BackendGroupCacheCleanupTests(unittest.TestCase):
 
     def test_unset_group_mode_preserves_compiler_tree(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = _fixture_root(temporary)
             identity = _cache_identity(root)
             workspace = _owned_workspace(root, identity)
             with patch.dict(os.environ, {}, clear=True):
@@ -501,7 +509,7 @@ class BackendGroupCacheCleanupTests(unittest.TestCase):
 
     def test_interrupted_cleanup_receipt_resumes_after_target_was_removed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = _fixture_root(temporary)
             identity = _cache_identity(root)
             workspace = _owned_workspace(root, identity)
             remove = group_cleanup._remove_owned_cache_tree
@@ -543,7 +551,7 @@ class BackendGroupCacheCleanupTests(unittest.TestCase):
             "test_retention_keeps_direct_rollback_and_archives_verified_obsolete_chain"
         )
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = _fixture_root(temporary)
             package, control, _toolchain = fixture._rotated_package_fixture(root, versions=1)
             current = backend._validated_package(
                 package, "test current package", exclude_development_control=True
@@ -586,7 +594,7 @@ class BackendGroupCacheCleanupTests(unittest.TestCase):
             "test_retention_keeps_direct_rollback_and_archives_verified_obsolete_chain"
         )
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = _fixture_root(temporary)
             package, control, _toolchain = fixture._rotated_package_fixture(root, versions=1)
             current = backend._validated_package(
                 package, "test current package", exclude_development_control=True
