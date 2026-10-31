@@ -159,6 +159,38 @@ just ensure-managed-fem-runtime
 Platform-specific setup is documented in the
 [installation guide](https://fullmag.mzelent.pl/getting-started/installation.html).
 
+### Live control from Python and Jupyter
+
+A plain Python process, an interactive interpreter or a Jupyter kernel can drive a running
+Fullmag instance. After `fm.connect()` every DSL call that changes the model is committed to the
+current session of a [Docker DEV group](#docker-development-workspace) at once, the Control Room
+shows each change, and `fm.relax()` / `fm.run()` become runtime commands whose results come back
+as numpy arrays:
+
+```python
+import fullmag as fm
+
+fm.connect("http://127.0.0.1:3197")   # or set FULLMAG_URL
+fm.engine("fdm")
+fm.device("cpu")
+fm.cell(5e-9, 5e-9, 10e-9)
+fm.solver(fix_dt=1e-13)
+layer = fm.geometry(fm.Box(400e-9, 100e-9, 10e-9), name="layer")
+layer.Ms, layer.Aex, layer.alpha = 800e3, 13e-12, 0.02
+layer.m = fm.texture.uniform(1, 0.1, 0)
+fm.relax(dt=1e-13, tolT=1e-5, max_steps=20_000)
+print(fm.m.average())
+m = fm.field("m").to_numpy()
+```
+
+[`examples/live/`](examples/live/) holds runnable scripts, each with a matching Jupyter notebook
+(`.ipynb`): FDM relaxation and field readout, FEM Airbox demagnetizing fields, transactions and
+dynamics, a parameter sweep, and a live Jupyter monitor (`pip install "./packages/fullmag-py[jupyter]"`).
+Run one against a started group with
+`FULLMAG_URL=http://127.0.0.1:<port> python examples/live/01_fdm_relax_read_m.py`. The contract,
+parameters and failure semantics are documented in
+[Live Session](https://fullmag.mzelent.pl/python-api/runtime/live-session.html).
+
 ## Docker development workspace
 
 ### Quick guide: working with the containers on Windows and WSL
