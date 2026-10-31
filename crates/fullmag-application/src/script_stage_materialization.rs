@@ -1372,10 +1372,8 @@ fn materialize_pipeline_primitive(
         "add_solved_antenna_drive" => {
             materialize_pipeline_add_solved_antenna_drive(current_ir, payload, antenna_inventory).map(Some)
         }
-        "run" => {
-            validate_pipeline_run_primitive_payload(payload)?;
-            materialize_pipeline_run(current_ir, payload, default_until_seconds).map(Some)
-        }
+        "run" => materialize_pipeline_run_primitive(current_ir, payload, default_until_seconds)
+            .map(Some),
         "relax" => materialize_pipeline_relax(current_ir, payload).map(Some),
         "eigenmodes" => materialize_pipeline_eigenmodes(current_ir, payload).map(Some),
         "frequency_response" => {
@@ -2067,6 +2065,49 @@ fn payload_field_is_set(payload: &BTreeMap<String, Value>, field: &str) -> bool 
     })
 }
 
+/// The Python DSL realizes `relax(relax_alpha=...)` as the damping of every
+/// material in the relaxation stage only (precession is off for
+/// llg_overdamped); later stages keep the authored material damping.
+fn apply_relax_alpha(ir: &mut ProblemIR, payload: &BTreeMap<String, Value>) -> Result<()> {
+    let Some(relax_alpha) = payload_f64(payload, "relax_alpha")? else {
+        return Ok(());
+    };
+    if !relax_alpha.is_finite() || relax_alpha <= 0.0 {
+        bail!("relax stage relax_alpha must be a positive finite damping");
+    }
+    if ir.material_parameter_fields.iter()
+        .any(|field| field.parameter == fullmag_ir::MaterialParameterNameIR::Alpha)
+    {
+        bail!("relax stage relax_alpha cannot override spatially varying alpha fields");
+    }
+    for material in &mut ir.materials {
+        material.damping = relax_alpha;
+    }
+    Ok(())
+}
+
+/// A script stage carries the uniform B_ext (tesla) that was active when the
+/// script called it, if that differs from the end-of-script base problem
+/// (mumax3 sequential semantics); it applies to this stage only.
+fn apply_stage_external_field(ir: &mut ProblemIR, payload: &BTreeMap<String, Value>) -> Result<()> {
+    let Some(value) = payload.get("external_field").filter(|value| !value.is_null()) else {
+        return Ok(());
+    };
+    let components = value
+        .as_array()
+        .filter(|components| components.len() == 3)
+        .context("stage external_field must be a 3-component array in tesla")?;
+    let mut field_t = [0.0; 3];
+    for (slot, component) in field_t.iter_mut().zip(components) {
+        *slot = component
+            .as_f64()
+            .filter(|value| value.is_finite())
+            .context("stage external_field components must be finite numbers")?;
+    }
+    apply_pipeline_external_field(ir, field_t);
+    Ok(())
+}
+
 fn reject_direct_minimizer_llg_payload(
     algorithm: fullmag_ir::RelaxationAlgorithmIR,
     payload: &BTreeMap<String, Value>,
@@ -2115,27 +2156,84 @@ fn materialize_pipeline_run(
     ))
 }
 
+/// A plain Run node may override its LLG integrator and fixed step, like relax,
+/// eigenmode and frequency-response nodes. Macros pass their whole config to
+/// `materialize_pipeline_run`, so the overrides apply only to this primitive.
+fn materialize_pipeline_run_primitive(
+    base_ir: &ProblemIR,
+    payload: &BTreeMap<String, Value>,
+    default_until_seconds: Option<f64>,
+) -> Result<ResolvedScriptStage> {
+    validate_pipeline_run_primitive_payload(payload)?;
+    let mut dynamics = required_study_dynamics(&base_ir.study, "run pipeline stage")?;
+    apply_dynamics_overrides(&mut dynamics, payload)?;
+    require_study_run_field_refresh(&dynamics, payload)?;
+    require_study_run_sampling(base_ir.study.sampling(), payload)?;
+    let mut ir = base_ir.clone();
+    ir.study = fullmag_ir::StudyIR::TimeEvolution {
+        dynamics,
+        sampling: base_ir.study.sampling().clone(),
+    };
+    apply_stage_external_field(&mut ir, payload)?;
+    materialize_pipeline_run(&ir, payload, default_until_seconds)
+}
+
 fn validate_pipeline_run_primitive_payload(payload: &BTreeMap<String, Value>) -> Result<()> {
     let unsupported = payload
         .keys()
-        .filter(|key| {
-            !matches!(
-                key.as_str(),
-                "entrypoint_kind"
-                    | "kind"
-                    | "stage_id"
-                    | "until_seconds"
-                    | "output_every_seconds"
-                    | "autosave"
-            )
+        .filter(|key| match key.as_str() {
+            "entrypoint_kind" | "kind" | "stage_id" | "until_seconds" | "output_every_seconds"
+            | "autosave" | "integrator" | "fixed_timestep" | "demag_interval_s" | "sampling"
+            | "external_field" => {
+                false
+            }
+            // Script-exported Run drafts carry empty relaxation and spectral placeholders.
+            "relax_algorithm" | "torque_tolerance" | "energy_tolerance" | "max_steps"
+            | "spin_wave_response" => payload_field_is_set(payload, key),
+            _ => true,
         })
         .cloned()
         .collect::<Vec<_>>();
     if !unsupported.is_empty() {
         bail!(
-            "run pipeline stage accepts only until_seconds; configure solver, table_autosave, autosave, and fft_response independently (unsupported: {})",
+            "run pipeline stage accepts until_seconds, autosave and its LLG integrator controls; configure table_autosave and fft_response independently (unsupported: {})",
             unsupported.join(", ")
         );
+    }
+    Ok(())
+}
+
+fn require_study_run_field_refresh(
+    dynamics: &fullmag_ir::DynamicsIR,
+    payload: &BTreeMap<String, Value>,
+) -> Result<()> {
+    let Some(requested) = payload_f64(payload, "demag_interval_s")? else {
+        return Ok(());
+    };
+    let study = match dynamics {
+        fullmag_ir::DynamicsIR::Llg { field_refresh, .. } => {
+            field_refresh.as_ref().and_then(|policy| policy.demag_interval_s)
+        }
+    };
+    if study != Some(requested) {
+        bail!(
+            "run pipeline stage demag_interval_s={requested} differs from the study field refresh {study:?}; configure it on the study solver"
+        );
+    }
+    Ok(())
+}
+
+fn require_study_run_sampling(
+    study: &fullmag_ir::SamplingIR,
+    payload: &BTreeMap<String, Value>,
+) -> Result<()> {
+    let Some(value) = payload.get("sampling").filter(|value| !value.is_null()) else {
+        return Ok(());
+    };
+    let stage: fullmag_ir::SamplingIR = serde_json::from_value(value.clone())
+        .context("run pipeline stage sampling is not a valid SamplingIR")?;
+    if time_domain_sampling_from(&stage).outputs != time_domain_sampling_from(study).outputs {
+        bail!("run pipeline stage outputs differ from the study outputs; configure outputs on the study");
     }
     Ok(())
 }
@@ -2146,6 +2244,7 @@ pub fn materialize_pipeline_relax(
     payload: &BTreeMap<String, Value>,
 ) -> Result<ResolvedScriptStage> {
     let mut ir = base_ir.clone();
+    apply_stage_external_field(&mut ir, payload)?;
     let mut sampling = time_domain_sampling_from(ir.study.sampling());
     if let Some(value) = payload.get("table_autosave") {
         let table: TableAutosaveIR = serde_json::from_value(value.clone())
@@ -2167,6 +2266,7 @@ pub fn materialize_pipeline_relax(
     let dynamics = if algorithm == fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped {
         let mut dynamics = required_study_dynamics(&ir.study, "LLG relaxation pipeline stage")?;
         apply_dynamics_overrides(&mut dynamics, payload)?;
+        apply_relax_alpha(&mut ir, payload)?;
         Some(dynamics)
     } else {
         None

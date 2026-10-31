@@ -4100,6 +4100,68 @@ mod tests {
     }
 
     #[test]
+    fn materialize_pipeline_llg_relax_applies_relax_alpha_to_this_stage_only() {
+        let base = sample_problem_ir();
+        let authored_damping = base.materials[0].damping;
+        let payload = serde_json::from_value(json!({
+            "relax_algorithm": "llg_overdamped",
+            "relax_alpha": "1"
+        }))
+        .expect("payload");
+
+        let stage = materialize_pipeline_relax(&base, &payload).expect("llg relax stage");
+        assert!(stage.ir.materials.iter().all(|material| material.damping == 1.0));
+        assert_eq!(base.materials[0].damping, authored_damping);
+
+        let unset = serde_json::from_value(json!({"relax_algorithm": "llg_overdamped"}))
+            .expect("payload");
+        let stage = materialize_pipeline_relax(&base, &unset).expect("llg relax stage");
+        assert_eq!(stage.ir.materials[0].damping, authored_damping);
+
+        let invalid = serde_json::from_value(json!({
+            "relax_algorithm": "llg_overdamped",
+            "relax_alpha": 0.0
+        }))
+        .expect("payload");
+        assert!(materialize_pipeline_relax(&base, &invalid).is_err());
+    }
+
+    #[test]
+    fn materialize_script_stages_restores_authored_damping_after_relax_alpha() {
+        let ir = sample_problem_ir();
+        let authored_damping: Vec<f64> = ir.materials.iter().map(|material| material.damping).collect();
+        let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
+            ir,
+            shared_geometry_assets: None,
+            default_until_seconds: Some(1e-12),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    primitive_node(
+                        "relax",
+                        "relax",
+                        json!({"relax_algorithm": "llg_overdamped", "relax_alpha": "1"}),
+                    ),
+                    primitive_node(
+                        "run",
+                        "run",
+                        json!({"entrypoint_kind": "flat_run", "until_seconds": 1e-12}),
+                    ),
+                ],
+            }),
+            stages: vec![],
+        };
+
+        let stages = materialize_script_stages(config).expect("relax then run should materialize");
+        assert_eq!(stages.len(), 2);
+        assert!(stages[0].ir.materials.iter().all(|material| material.damping == 1.0));
+        let run_damping: Vec<f64> =
+            stages[1].ir.materials.iter().map(|material| material.damping).collect();
+        assert_eq!(run_damping, authored_damping);
+    }
+
+    #[test]
     fn session_command_direct_minimizer_rejects_llg_only_controls() {
         let base_problem = sample_problem_ir();
         let command = crate::types::SessionCommand {
@@ -4758,6 +4820,110 @@ mod tests {
         assert_eq!(stages[0].entrypoint_kind, "pipeline_run_after_context");
         assert_eq!(zeeman_field(&stages[0].ir), Some([0.0, 0.0, 0.025]));
         assert_eq!(stages[0].ir.current_density, Some([0.0, 2.5e10, 0.0]));
+    }
+
+    fn script_stage_node(id: &str, stage_kind: &str, payload: Value) -> StudyPipelineNode {
+        StudyPipelineNode::Primitive {
+            id: id.to_string(),
+            label: String::new(),
+            enabled: true,
+            notes: None,
+            source: Some("script_imported".to_string()),
+            stage_kind: stage_kind.to_string(),
+            payload: serde_json::from_value(payload).expect("payload"),
+        }
+    }
+
+    #[test]
+    fn script_stages_use_the_external_field_active_when_they_were_called() {
+        // mumax3 order: relax() at B=0, then run() at 10 mT; the end-of-script
+        // base problem holds the last b_ext (99 mT), which no stage saw.
+        let mut ir = sample_problem_ir();
+        ir.energy_terms
+            .push(fullmag_ir::EnergyTermIR::Zeeman { b: [0.099, 0.0, 0.0] });
+        let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
+            ir,
+            shared_geometry_assets: None,
+            default_until_seconds: Some(1e-12),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    script_stage_node(
+                        "stage_1_relax",
+                        "relax",
+                        json!({
+                            "kind": "relax",
+                            "entrypoint_kind": "flat_relax",
+                            "relax_algorithm": "llg_overdamped",
+                            "torque_tolerance": "1e-4",
+                            "max_steps": "25",
+                            "external_field": [0.0, 0.0, 0.0]
+                        }),
+                    ),
+                    script_stage_node(
+                        "stage_2_run",
+                        "run",
+                        json!({
+                            "kind": "run",
+                            "entrypoint_kind": "flat_run",
+                            "until_seconds": "1e-12",
+                            "external_field": [0.01, 0.0, 0.0]
+                        }),
+                    ),
+                    script_stage_node(
+                        "stage_3_run",
+                        "run",
+                        json!({
+                            "kind": "run",
+                            "entrypoint_kind": "flat_run",
+                            "until_seconds": "1e-12"
+                        }),
+                    ),
+                ],
+            }),
+            stages: vec![],
+        };
+
+        let stages = materialize_script_stages(config).expect("pipeline should materialize");
+        assert_eq!(stages.len(), 3);
+        assert_eq!(zeeman_field(&stages[0].ir), Some([0.0, 0.0, 0.0]));
+        assert_eq!(zeeman_field(&stages[1].ir), Some([0.01, 0.0, 0.0]));
+        // The override is stage-local: a stage without one keeps the base field.
+        assert_eq!(zeeman_field(&stages[2].ir), Some([0.099, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn script_stage_external_field_rejects_malformed_vectors() {
+        for field in [json!([0.0, 0.0]), json!("0.01"), json!([0.0, "x", 0.0])] {
+            let config = ScriptExecutionConfig {
+                antenna_inventory: Default::default(),
+                ir: sample_problem_ir(),
+                shared_geometry_assets: None,
+                default_until_seconds: None,
+                study_pipeline: Some(StudyPipelineDocument {
+                    version: "study_pipeline.v1".to_string(),
+                    nodes: vec![script_stage_node(
+                        "stage_1_relax",
+                        "relax",
+                        json!({
+                            "kind": "relax",
+                            "entrypoint_kind": "flat_relax",
+                            "relax_algorithm": "llg_overdamped",
+                            "torque_tolerance": "1e-4",
+                            "max_steps": "25",
+                            "external_field": field
+                        }),
+                    )],
+                }),
+                stages: vec![],
+            };
+            let error = materialize_script_stages(config).expect_err("malformed field must fail");
+            assert!(
+                format!("{error:#}").contains("external_field"),
+                "unexpected error: {error:#}"
+            );
+        }
     }
 
     #[test]
@@ -5614,32 +5780,56 @@ mod tests {
     }
 
     #[test]
-    fn materialize_script_stages_rejects_hidden_configuration_inside_plain_run() {
-        let config = ScriptExecutionConfig {
+    fn materialize_script_stages_applies_run_integrator_and_rejects_relax_controls() {
+        let run_config = |payload: serde_json::Value| ScriptExecutionConfig {
             antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(2e-9),
             study_pipeline: Some(StudyPipelineDocument {
                 version: "study_pipeline.v1".to_string(),
-                nodes: vec![primitive_node(
-                    "run",
-                    "run",
-                    json!({
-                        "entrypoint_kind": "flat_run",
-                        "until_seconds": 2e-9,
-                        "fixed_timestep": 1e-13
-                    }),
-                )],
+                nodes: vec![primitive_node("run", "run", payload)],
             }),
             stages: vec![],
         };
 
-        let error = materialize_script_stages(config)
-            .expect_err("plain Run must reject hidden solver/output configuration");
+        // Same shape as a Run draft exported by fullmag.runtime.script_builder.
+        let stages = materialize_script_stages(run_config(json!({
+            "kind": "run",
+            "entrypoint_kind": "flat_run",
+            "integrator": "heun",
+            "fixed_timestep": "2e-13",
+            "demag_interval_s": "",
+            "until_seconds": "2e-9",
+            "relax_algorithm": "",
+            "torque_tolerance": "",
+            "energy_tolerance": "",
+            "max_steps": "",
+            "sampling": {"outputs": []},
+            "spin_wave_response": null
+        })))
+        .expect("script-exported Run draft must materialize");
+        match stages[0].ir.study.optional_dynamics() {
+            Some(fullmag_ir::DynamicsIR::Llg {
+                integrator,
+                fixed_timestep,
+                ..
+            }) => {
+                assert_eq!(integrator.as_str(), "heun");
+                assert_eq!(*fixed_timestep, Some(2e-13));
+            }
+            other => panic!("Run stage must keep LLG dynamics: {other:?}"),
+        }
+
+        let error = materialize_script_stages(run_config(json!({
+            "entrypoint_kind": "flat_run",
+            "until_seconds": 2e-9,
+            "torque_tolerance": "1e-4"
+        })))
+        .expect_err("plain Run must reject relaxation controls");
         let error = format!("{error:#}");
-        assert!(error.contains("run pipeline stage accepts only until_seconds"));
-        assert!(error.contains("fixed_timestep"));
+        assert!(error.contains("run pipeline stage accepts until_seconds"));
+        assert!(error.contains("torque_tolerance"));
     }
 
     #[test]

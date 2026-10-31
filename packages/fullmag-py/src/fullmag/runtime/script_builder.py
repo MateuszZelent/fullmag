@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 import math
 import re
@@ -340,7 +341,7 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "universe": _export_universe(base_problem),
         "domain_frame": _export_domain_frame(base_problem, source_root=source_root),
         "stages": [
-            _export_stage_draft_with_identity(stage)
+            _export_stage_draft_with_identity(stage, base_problem=base_problem)
             for stage in _builder_stage_sequence(loaded)
         ],
         "study_pipeline": export_study_pipeline_document(loaded),
@@ -678,6 +679,7 @@ def render_loaded_problem_as_script(
         surface=surface,
         magnet_vars=magnet_vars,
         initial_outputs=_study_outputs(base_problem.study),
+        base_problem=base_problem,
     )
     if stage_lines:
         lines.append("")
@@ -1296,13 +1298,9 @@ def _render_scene_document_bootstrap(
     if demag_enabled is False:
         lines.append("study.disable_demag()")
 
-    external_field = builder.get("external_field")
-    if isinstance(external_field, (list, tuple)) and len(external_field) == 3:
-        values = tuple(_finite_number(value) for value in external_field)
-        if all(value is not None for value in values):
-            lines.append(
-                "fm.b_ext(" + ", ".join(_python_literal(value) for value in values) + ")"
-            )
+    base_field_line = _render_b_ext_line(builder.get("external_field"))
+    if base_field_line is not None:
+        lines.append(base_field_line)
 
     universe = builder.get("universe")
     if isinstance(universe, Mapping):
@@ -1334,10 +1332,27 @@ def _render_scene_document_bootstrap(
         if not isinstance(raw_stages, list):
             raise ValueError("SceneDocument stages must be a list")
         authored_stages = _scene_antenna_stage_sequence(builder)
+        # A stage's own external_field is the b_ext() active when the script
+        # called it; stages capture the world field when they are added.
+        world_field_line = base_field_line
         for index, stage in enumerate(_enabled_scene_stages(authored_stages)):
             if not isinstance(stage, Mapping):
                 raise ValueError(f"SceneDocument stages[{index}] must be an object")
+            stage_field_line = base_field_line
+            if stage.get("external_field") is not None:
+                stage_field_line = _render_b_ext_line(stage["external_field"])
+                if stage_field_line is None:
+                    raise ValueError(
+                        f"SceneDocument stages[{index}] external_field must be "
+                        "3 finite numbers in tesla"
+                    )
+            if stage_field_line != world_field_line:
+                lines.append(stage_field_line or _render_b_ext_line([0.0, 0.0, 0.0]))
+                world_field_line = stage_field_line
             lines.extend(_render_scene_stage_bootstrap(stage, index=index, solver=solver, magnet_vars=snapshot_handles))
+        if world_field_line != base_field_line:
+            # The base problem is the end-of-script world state.
+            lines.append(base_field_line or _render_b_ext_line([0.0, 0.0, 0.0]))
     elif include_legacy_relax_stages:
         for stage in raw_stages:
             if not isinstance(stage, Mapping) or str(stage.get("kind") or "relax") != "relax":
@@ -1395,6 +1410,11 @@ def _scene_antenna_stage_sequence(builder: Mapping[str, object]) -> list[dict[st
                     stage = dict(payload)
                     stage["kind"] = node["stage_kind"]
                     stage.setdefault("stage_id", node["id"])
+                    if stage["kind"] == "relax" and (
+                        stage.get("algorithm") or stage.get("relax_algorithm") or "llg_overdamped"
+                    ) == "llg_overdamped":
+                        # Pipeline omission keeps material damping; DSL omission uses 1.0.
+                        stage.setdefault("relax_alpha", None)
                     stages.append(stage)
                 else:
                     raise ValueError("scene pipeline requires the shared study pipeline materializer")
@@ -1556,6 +1576,16 @@ def _enabled_scene_stages(stages: list[object]) -> list[object]:
     return enabled
 
 
+def _render_b_ext_line(external_field: object) -> str | None:
+    """Render a uniform B_ext (tesla) as ``fm.b_ext(...)``; None if unusable."""
+    if not isinstance(external_field, (list, tuple)) or len(external_field) != 3:
+        return None
+    values = tuple(_finite_number(value) for value in external_field)
+    if any(value is None for value in values):
+        return None
+    return "fm.b_ext(" + ", ".join(_python_literal(value) for value in values) + ")"
+
+
 def _render_scene_stage_bootstrap(
     stage: Mapping[str, object],
     *,
@@ -1608,6 +1638,8 @@ def _render_scene_stage_bootstrap(
                 "g",
                 "autosave",
                 "table_autosave",
+                "relax_alpha",
+                "external_field",
             },
         )
         kwargs = _scene_relax_stage_kwargs(stage, solver=solver)
@@ -1641,6 +1673,7 @@ def _render_scene_stage_bootstrap(
                 "g",
                 "autosave",
                 "sampling",
+                "external_field",
             },
         )
         until_seconds = _finite_number(stage.get("until_seconds"))
@@ -1682,6 +1715,7 @@ def _render_scene_stage_bootstrap(
                 "g",
                 "autosave",
                 "table_autosave",
+                "external_field",
             },
         )
         kwargs = _scene_relax_stage_kwargs(stage, solver=solver)
@@ -2011,7 +2045,13 @@ def _render_scene_stage_bootstrap(
             hysteresis_args = ", ".join(_render_hysteresis_payload_args(stage))
         # The current public hysteresis builder allocates IDs internally. A
         # custom ID cannot be faithfully replayed through that public API.
-        if stage_id is not None and not stage_id.startswith("hysteresis-"):
+        # ``stage_<n>_hysteresis`` is the pipeline's positional ID for an
+        # unnamed stage; replaying the stage at its position regenerates it.
+        if (
+            stage_id is not None
+            and not stage_id.startswith("hysteresis-")
+            and re.fullmatch(r"stage_[0-9]+_hysteresis", stage_id) is None
+        ):
             raise ValueError(
                 "SceneDocument hysteresis stage IDs must use the public generated form"
             )
@@ -2358,6 +2398,8 @@ def _scene_relax_stage_kwargs(
     max_relaxation_time_s = _finite_number(stage.get("max_relaxation_time_s"))
     if max_relaxation_time_s is not None:
         kwargs["max_relaxation_time_s"] = max_relaxation_time_s
+    if (algorithm or "llg_overdamped") == "llg_overdamped" and "relax_alpha" in stage:
+        kwargs["relax_alpha"] = _finite_number(stage.get("relax_alpha"))
     kwargs.update(_relax_stage_timestep_kwargs(stage, solver))
     return kwargs
 
@@ -2748,17 +2790,23 @@ def export_study_pipeline_document(loaded: LoadedProblem) -> dict[str, object] |
     stages = _builder_stage_sequence(loaded)
     if not stages:
         return None
+    base_problem = _builder_base_problem(loaded)
     return {
         "version": "study_pipeline.v1",
         "nodes": [
-            _export_study_pipeline_node(stage, index=index)
+            _export_study_pipeline_node(stage, index=index, base_problem=base_problem)
             for index, stage in enumerate(stages)
         ],
     }
 
 
-def _export_stage_draft_with_identity(stage: LoadedStage) -> dict[str, object]:
+def _export_stage_draft_with_identity(
+    stage: LoadedStage,
+    *,
+    base_problem: Problem,
+) -> dict[str, object]:
     payload = _export_stage_draft(stage)
+    _bind_stage_world_state(payload, stage, base_problem)
     if stage.stage_id is not None:
         payload["stage_id"] = stage.stage_id
     if stage.output_every_seconds is not None:
@@ -2768,8 +2816,13 @@ def _export_stage_draft_with_identity(stage: LoadedStage) -> dict[str, object]:
     return payload
 
 
-def _export_study_pipeline_node(stage: LoadedStage, *, index: int) -> dict[str, object]:
-    draft = _export_stage_draft_with_identity(stage)
+def _export_study_pipeline_node(
+    stage: LoadedStage,
+    *,
+    index: int,
+    base_problem: Problem,
+) -> dict[str, object]:
+    draft = _export_stage_draft_with_identity(stage, base_problem=base_problem)
     stage_kind = _infer_pipeline_stage_kind(draft)
     if stage_kind == "antenna_field_solve":
         definition = cast(dict[str, object], draft["definition"])
@@ -2789,6 +2842,81 @@ def _export_study_pipeline_node(stage: LoadedStage, *, index: int) -> dict[str, 
         "stage_kind": stage_kind,
         "payload": draft,
     }
+
+
+def _bind_stage_world_state(
+    payload: dict[str, object],
+    stage: LoadedStage,
+    base_problem: Problem,
+) -> None:
+    """Keep the world state a script stage saw when it was called (mumax3 order).
+
+    Pipeline materialization starts every stage from the end-of-script base
+    problem. A relax/run stage therefore carries its own uniform B_ext when it
+    differs from that base; other differences would be silently replaced by the
+    end-of-script values, so they are rejected here.
+    """
+    if stage.action is not None or stage.problem.study is None:
+        return
+    stage_kind = _infer_pipeline_stage_kind(payload)
+    study = stage.problem.study
+    relax_alpha_stage = isinstance(study, Relaxation) and study.algorithm == "llg_overdamped"
+    relax_alpha = _finite_number(payload.get("relax_alpha")) if relax_alpha_stage else None
+    ignore_alpha = relax_alpha is not None and all(
+        magnet.material.alpha == relax_alpha for magnet in stage.problem.magnets
+    )
+    _reject_stage_material_changes(stage, base_problem, ignore_alpha=ignore_alpha)
+    if ignore_alpha and _stage_damping_matches_base(stage, base_problem):
+        # Omit redundant scalars, but keep None for the Python round trip.
+        payload.pop("relax_alpha", None)
+    if stage_kind == "hysteresis":
+        # Every hysteresis point sets its own field.
+        return
+    stage_field = _problem_external_field(stage.problem)
+    if stage_field == _problem_external_field(base_problem):
+        return
+    if stage_kind not in {"relax", "run"}:
+        raise ValueError(
+            f"b_ext() changes before a {stage_kind} stage are not supported yet; "
+            "set the field once for the whole script"
+        )
+    payload["external_field"] = stage_field if stage_field is not None else [0.0, 0.0, 0.0]
+
+
+def _stage_damping_matches_base(stage: LoadedStage, base_problem: Problem) -> bool:
+    base_alpha = {magnet.name: magnet.material.alpha for magnet in base_problem.magnets}
+    return all(
+        base_alpha.get(magnet.name) == magnet.material.alpha
+        for magnet in stage.problem.magnets
+    )
+
+
+def _reject_stage_material_changes(
+    stage: LoadedStage,
+    base_problem: Problem,
+    *,
+    ignore_alpha: bool,
+) -> None:
+    base_materials = {magnet.name: magnet.material for magnet in base_problem.magnets}
+    for magnet in stage.problem.magnets:
+        expected = base_materials.get(magnet.name)
+        if expected is None:
+            continue
+        actual = magnet.material
+        if ignore_alpha:
+            # relax(relax_alpha=...) travels as the stage's relax_alpha.
+            actual = dataclasses.replace(actual, alpha=expected.alpha)
+        if actual == expected:
+            continue
+        changed = sorted(
+            parameter.name
+            for parameter in dataclasses.fields(expected)
+            if getattr(actual, parameter.name) != getattr(expected, parameter.name)
+        )
+        raise ValueError(
+            f"material parameters of {magnet.name!r} ({', '.join(changed)}) change between "
+            "script stages; per-stage material changes are not supported yet"
+        )
 
 
 def _infer_pipeline_stage_kind(stage_draft: dict[str, object]) -> str:
@@ -3018,6 +3146,15 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
             payload["table_autosave"] = stage.table_autosave.to_ir()
         if stage.autosave is not None:
             payload["autosave"] = stage.autosave.to_ir()
+        # relax(relax_alpha=...) is realized as this stage's material damping;
+        # export it so pipeline materialization applies it to this stage only.
+        relax_alphas = {float(magnet.material.alpha) for magnet in stage.problem.magnets}
+        if study.algorithm == "llg_overdamped":
+            # The pipeline accepts only positive scalar damping overrides.
+            payload["relax_alpha"] = (
+                _py_float_roundtrip(relax_alphas.pop()).removesuffix(".0")
+                if len(relax_alphas) == 1 and min(relax_alphas) > 0.0 else None
+            )
         if study.dynamics is not None:
             payload.update(
                 {
@@ -4810,21 +4947,30 @@ def _render_external_field(
     overrides: dict[str, object],
     surface: str,
 ) -> list[str]:
-    explicit_override = _override_external_field(overrides.get("external_field"))
-    if explicit_override is not None:
-        return [
-            "# External field",
-            f"{_surface_call(surface, 'b_ext')}({_py_number(explicit_override[0])}, {_py_number(explicit_override[1])}, {_py_number(explicit_override[2])})",
-        ]
-    if "external_field" in overrides and overrides.get("external_field") is None:
-        return []
-    field = _problem_external_field(problem)
+    field = _rendered_external_field(problem, overrides=overrides)
     if field is None:
         return []
-    return [
-        "# External field",
-        f"{_surface_call(surface, 'b_ext')}({_py_number(field[0])}, {_py_number(field[1])}, {_py_number(field[2])})",
-    ]
+    return ["# External field", _render_b_ext_call(field, surface=surface)]
+
+
+def _rendered_external_field(
+    problem: Problem,
+    *,
+    overrides: dict[str, object],
+) -> list[float] | None:
+    explicit_override = _override_external_field(overrides.get("external_field"))
+    if explicit_override is not None:
+        return [float(value) for value in explicit_override]
+    if "external_field" in overrides and overrides.get("external_field") is None:
+        return None
+    return _problem_external_field(problem)
+
+
+def _render_b_ext_call(field: Sequence[float], *, surface: str) -> str:
+    return (
+        f"{_surface_call(surface, 'b_ext')}"
+        f"({_py_number(field[0])}, {_py_number(field[1])}, {_py_number(field[2])})"
+    )
 
 
 def _render_region_ref_payload(payload: object) -> str:
@@ -8153,6 +8299,7 @@ def _render_stages(
     surface: str,
     magnet_vars: dict[str, str],
     initial_outputs: Sequence[object],
+    base_problem: Problem,
 ) -> list[str]:
     if not stages:
         return []
@@ -8162,6 +8309,12 @@ def _render_stages(
     active_outputs = list(initial_outputs)
     lines = ["# Stages" if is_study_surface else "# Run"]
     previous_dynamics_signature: dict[str, object] | None = None
+    # Each stage captured the b_ext() active when the script called it (mumax3
+    # order). A stage that saw the end-of-script field follows the rendered base
+    # field, so an edited scene field still applies to it.
+    script_base_field = _problem_external_field(base_problem)
+    rendered_base_field = _rendered_external_field(base_problem, overrides=overrides)
+    world_field = rendered_base_field
     for index, stage in enumerate(stages):
         if is_study_surface and stage.problem.study is not None:
             output_lines, active_outputs = _sync_stage_output_snapshot(
@@ -8432,15 +8585,21 @@ def _render_stages(
         if stage.problem.study is None:
             continue
         study = stage.problem.study
+        if isinstance(study, (FieldOnly, AntennaFieldSolve)):
+            continue
+        _bind_stage_world_state(_export_stage_draft(stage), stage, base_problem)
         stage_override = _stage_override_for(stage_overrides, index=index, stage=stage)
+        stage_field = _problem_external_field(stage.problem)
+        target_field = rendered_base_field if stage_field == script_base_field else stage_field
+        if target_field != world_field:
+            lines.append(_render_b_ext_call(target_field or [0.0, 0.0, 0.0], surface=surface))
+            world_field = target_field
         if isinstance(study, Hysteresis):
             if not is_study_surface:
                 raise ValueError("canonical hysteresis rewrite requires the study API surface")
             lines.append(
                 f"study.stages.add_hysteresis_sweep({', '.join(_render_hysteresis_stage_args(study))})"
             )
-            continue
-        if isinstance(study, (FieldOnly, AntennaFieldSolve)):
             continue
         stage_dynamics = stage.problem.study.dynamics
         dynamics_signature = (
@@ -8776,6 +8935,13 @@ def _render_stages(
                         f"energy_tolerance={_py_number(energy_tolerance)}"
                     )
             if algorithm == "llg_overdamped":
+                relax_alpha = _override_number(
+                    stage_override,
+                    "relax_alpha",
+                    _finite_number(_export_stage_draft(stage).get("relax_alpha", 1.0)),
+                )
+                if relax_alpha != 1.0:
+                    call_parts.append(f"relax_alpha={_py_parameter_literal(relax_alpha)}")
                 if relax_solver and relax_solver not in {"auto", "rk23"}:
                     call_parts.append(f"solver={_py_repr(relax_solver)}")
                 if relax_fixed_timestep is not None:
@@ -8843,6 +9009,9 @@ def _render_stages(
             lines.append(run_call)
         else:
             lines.append(f"{_surface_call(surface, 'run')}({_py_number(until_seconds)})")
+    if world_field != rendered_base_field:
+        # The base problem is the end-of-script world state.
+        lines.append(_render_b_ext_call(rendered_base_field or [0.0, 0.0, 0.0], surface=surface))
     return lines
 
 
@@ -9096,6 +9265,10 @@ def _render_hysteresis_settle_step(value: object) -> str:
         "retry_timestep_scale",
         "retry_max_attempts",
     ):
+        if key == "energy_tolerance" and kind == "minimize" and payload.get(key) is None:
+            # Omission would restore MinimizeStep's enabled energy default.
+            args.append("energy_tolerance=None")
+            continue
         if key not in payload:
             continue
         value = payload[key]
@@ -11894,7 +12067,10 @@ def _stage_signature(problem: Problem) -> dict[str, object]:
             }
             for magnet in problem.magnets
         ],
-        "energy_terms": [term.to_ir() for term in problem.energy],
+        # A uniform B_ext per stage is rendered as fm.b_ext() before the stage.
+        "energy_terms": [
+            term.to_ir() for term in problem.energy if not isinstance(term, Zeeman)
+        ],
         "current_modules": _stage_current_module_signatures(problem),
         "spin_torque_modules": [module.to_ir_module() for module in problem.spin_torques],
         "excitation_analysis": problem.excitation_analysis.to_ir()

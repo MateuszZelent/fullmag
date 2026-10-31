@@ -2193,7 +2193,8 @@ pub enum SettleStepIR {
     Minimize {
         method: String,
         torque_tolerance: f64,
-        energy_tolerance: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        energy_tolerance: Option<f64>,
         max_steps: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         applies_to: Option<serde_json::Value>,
