@@ -1623,6 +1623,8 @@ static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
         if (!context_upload_exchange_lut(*ctx, lut_host.data(), N * N)) {
             return reinterpret_cast<fullmag_fdm_backend *>(ctx);
         }
+        ctx->exchange_lut_uniform = std::all_of(
+            lut_host.begin(), lut_host.end(), [ctx](double value) { return value == ctx->A; });
         ctx->exchange_lut_host = std::move(lut_host);
     }
     if (plan->demag_kernel_spectrum_len != 0 &&

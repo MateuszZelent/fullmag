@@ -3,6 +3,7 @@
 use super::{
     scale, sub, ExchangeLlgProblem, Vector3, VectorFieldSoA, MU0,
 };
+use crate::fdm::cpu::soa_par::soa_for_each_row_mut;
 use crate::fdm::shared::types::{neighbor_index, AxisBoundary};
 
 #[cfg(feature = "parallel")]
@@ -161,48 +162,56 @@ impl ExchangeLlgProblem {
         let py = matches!(self.boundary_policy.y, AxisBoundary::Periodic);
         let pz = matches!(self.boundary_policy.z, AxisBoundary::Periodic);
 
-        for flat_index in 0..grid.cell_count() {
-            if !self.is_active(flat_index) {
-                continue;
-            }
-            let x = flat_index % grid.nx;
-            let y = (flat_index / grid.nx) % grid.ny;
-            let z = flat_index / (grid.nx * grid.ny);
-            let center_x = magnetization.x[flat_index];
-            let center_y = magnetization.y[flat_index];
-            let center_z = magnetization.z[flat_index];
-            let sample = |nx: usize, ny: usize, nz: usize| -> Vector3 {
-                let ni = grid.index(nx, ny, nz);
-                if self.is_active(ni) {
-                    [
-                        magnetization.x[ni],
-                        magnetization.y[ni],
-                        magnetization.z[ni],
-                    ]
-                } else {
-                    [center_x, center_y, center_z]
+        // Rows run along x, so (y, z) and the neighbouring rows' offsets are
+        // derived once per row; the per-cell arithmetic is unchanged.
+        soa_for_each_row_mut(h_eff, grid.nx, |row, hx, hy, hz| {
+            let y = row % grid.ny;
+            let z = row / grid.ny;
+            let row_start = row * grid.nx;
+            let y_minus_start = grid.index(0, neighbor_index(y, grid.ny, -1, py), z);
+            let y_plus_start = grid.index(0, neighbor_index(y, grid.ny, 1, py), z);
+            let z_minus_start = grid.index(0, y, neighbor_index(z, grid.nz, -1, pz));
+            let z_plus_start = grid.index(0, y, neighbor_index(z, grid.nz, 1, pz));
+            for x in 0..grid.nx {
+                let flat_index = row_start + x;
+                if !self.is_active(flat_index) {
+                    continue;
                 }
-            };
+                let center_x = magnetization.x[flat_index];
+                let center_y = magnetization.y[flat_index];
+                let center_z = magnetization.z[flat_index];
+                let sample = |ni: usize| -> Vector3 {
+                    if self.is_active(ni) {
+                        [
+                            magnetization.x[ni],
+                            magnetization.y[ni],
+                            magnetization.z[ni],
+                        ]
+                    } else {
+                        [center_x, center_y, center_z]
+                    }
+                };
 
-            let x_minus = sample(neighbor_index(x, grid.nx, -1, px), y, z);
-            let x_plus = sample(neighbor_index(x, grid.nx, 1, px), y, z);
-            let y_minus = sample(x, neighbor_index(y, grid.ny, -1, py), z);
-            let y_plus = sample(x, neighbor_index(y, grid.ny, 1, py), z);
-            let z_minus = sample(x, y, neighbor_index(z, grid.nz, -1, pz));
-            let z_plus = sample(x, y, neighbor_index(z, grid.nz, 1, pz));
+                let x_minus = sample(row_start + neighbor_index(x, grid.nx, -1, px));
+                let x_plus = sample(row_start + neighbor_index(x, grid.nx, 1, px));
+                let y_minus = sample(y_minus_start + x);
+                let y_plus = sample(y_plus_start + x);
+                let z_minus = sample(z_minus_start + x);
+                let z_plus = sample(z_plus_start + x);
 
-            h_eff.x[flat_index] += prefactor
-                * ((x_plus[0] - 2.0 * center_x + x_minus[0]) / dx2
-                    + (y_plus[0] - 2.0 * center_x + y_minus[0]) / dy2
-                    + (z_plus[0] - 2.0 * center_x + z_minus[0]) / dz2);
-            h_eff.y[flat_index] += prefactor
-                * ((x_plus[1] - 2.0 * center_y + x_minus[1]) / dx2
-                    + (y_plus[1] - 2.0 * center_y + y_minus[1]) / dy2
-                    + (z_plus[1] - 2.0 * center_y + z_minus[1]) / dz2);
-            h_eff.z[flat_index] += prefactor
-                * ((x_plus[2] - 2.0 * center_z + x_minus[2]) / dx2
-                    + (y_plus[2] - 2.0 * center_z + y_minus[2]) / dy2
-                    + (z_plus[2] - 2.0 * center_z + z_minus[2]) / dz2);
-        }
+                hx[x] += prefactor
+                    * ((x_plus[0] - 2.0 * center_x + x_minus[0]) / dx2
+                        + (y_plus[0] - 2.0 * center_x + y_minus[0]) / dy2
+                        + (z_plus[0] - 2.0 * center_x + z_minus[0]) / dz2);
+                hy[x] += prefactor
+                    * ((x_plus[1] - 2.0 * center_y + x_minus[1]) / dx2
+                        + (y_plus[1] - 2.0 * center_y + y_minus[1]) / dy2
+                        + (z_plus[1] - 2.0 * center_y + z_minus[1]) / dz2);
+                hz[x] += prefactor
+                    * ((x_plus[2] - 2.0 * center_z + x_minus[2]) / dx2
+                        + (y_plus[2] - 2.0 * center_z + y_minus[2]) / dy2
+                        + (z_plus[2] - 2.0 * center_z + z_minus[2]) / dz2);
+            }
+        });
     }
 }
