@@ -17,11 +17,19 @@ __global__ void add_gpu_transport_torque_fp64_kernel(
     double *rhs_x,
     double *rhs_y,
     double *rhs_z,
+    const uint8_t *frozen_mask,
+    uint32_t has_frozen_mask,
     uint64_t cells,
     double alpha)
 {
     const uint64_t cell = uint64_t(blockIdx.x) * blockDim.x + threadIdx.x;
     if (cell >= cells) return;
+    if (has_frozen_mask && frozen_mask != nullptr && frozen_mask[cell] != 0) {
+        rhs_x[cell] = 0.0;
+        rhs_y[cell] = 0.0;
+        rhs_z[cell] = 0.0;
+        return;
+    }
     const double m0 = mx[cell];
     const double m1 = my[cell];
     const double m2 = mz[cell];
@@ -64,6 +72,8 @@ bool launch_add_gpu_transport_torque_fp64(
             static_cast<double *>(rhs.x),
             static_cast<double *>(rhs.y),
             static_cast<double *>(rhs.z),
+            ctx.frozen_mask,
+            ctx.has_frozen_mask ? 1u : 0u,
             ctx.cell_count,
             ctx.alpha);
         launch_status = cudaPeekAtLastError();

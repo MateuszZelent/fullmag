@@ -3291,6 +3291,10 @@ pub(crate) fn plan_fdm(
             "Sphere (r={:.3e}) voxelized to {}x{}x{} grid, {}/{} active cells",
             radius, grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
         ),
+        GeometryShape::Ellipsoid { radii } => format!(
+            "Ellipsoid (radii=[{:.3e}, {:.3e}, {:.3e}]) voxelized to {}x{}x{} grid, {}/{} active cells",
+            radii[0], radii[1], radii[2], grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
+        ),
         GeometryShape::SinWaveguide {
             period, amplitude, ..
         } => format!(
@@ -3307,6 +3311,14 @@ pub(crate) fn plan_fdm(
         ),
         GeometryShape::Difference { .. } => format!(
             "CSG Difference voxelized to {}x{}x{} grid, {}/{} active cells",
+            grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
+        ),
+        GeometryShape::Union { .. } => format!(
+            "CSG Union voxelized to {}x{}x{} grid, {}/{} active cells",
+            grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
+        ),
+        GeometryShape::Intersection { .. } => format!(
+            "CSG Intersection voxelized to {}x{}x{} grid, {}/{} active cells",
             grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
         ),
         GeometryShape::Translate { .. } => format!(

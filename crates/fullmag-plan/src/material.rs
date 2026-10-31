@@ -364,14 +364,43 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
     // Sort overrides/assignments by priority desc, then by region_id to keep sort stable
     overrides.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
+    // A sharp transition, or none, needs only membership, which CSG regions
+    // provide without a signed distance. Compile those predicates once.
+    let membership_predicates = overrides
+        .iter()
+        .map(|&(_, _, _, region_opt, ..)| {
+            let Some(region) = region_opt else {
+                return Ok(None);
+            };
+            let RegionShapeIR::Csg { expression } = &region.shape else {
+                return Ok(None);
+            };
+            match crate::material_transition::resolved_region_transition(region, parameter) {
+                crate::material_transition::ResolvedMaterialTransition::None
+                | crate::material_transition::ResolvedMaterialTransition::Sharp => {
+                    crate::selection::geometry::GeometryPredicate::from_geometry_entry(
+                        expression,
+                        crate::selection::geometry::AffineTransform3::identity(),
+                        crate::selection::geometry::BoundaryMembership::inclusive(),
+                    )
+                    .map(Some)
+                    .map_err(|err| err.to_string())
+                }
+                _ => Ok(None),
+            }
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
     let mut resolved_values = if overrides.is_empty() {
         vec![base_value; points.len()]
     } else {
         let mut resolved_values = Vec::with_capacity(points.len());
         for (point_index, &point) in points.iter().enumerate() {
             let mut active_at_point = Vec::new();
-            for &(region_id, priority, value, region_opt, frame, policy, ref source_id) in
-                &overrides
+            for (
+                override_index,
+                &(region_id, priority, value, region_opt, frame, policy, ref source_id),
+            ) in overrides.iter().enumerate()
             {
                 let weight = if let Some(region) = region_opt {
                     let coords = match frame {
@@ -382,9 +411,18 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
                             point[2] - object_translation[2],
                         ],
                     };
-                    let distance = signed_distance_to_region_shape(coords, &region.shape)?;
                     let transition =
                         crate::material_transition::resolved_region_transition(region, parameter);
+                    let distance = match &membership_predicates[override_index] {
+                        Some(predicate) => {
+                            if predicate.contains(coords).map_err(|err| err.to_string())? {
+                                -1.0
+                            } else {
+                                1.0
+                            }
+                        }
+                        None => signed_distance_to_region_shape(coords, &region.shape)?,
+                    };
                     transition_weight(distance, transition, spacing.at(point_index))?
                 } else {
                     1.0

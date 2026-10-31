@@ -320,9 +320,10 @@ bool initialize_linear_system(
     return true;
 }
 
-bool set_zero_initial_iterate(
+bool configure_solver_initial_iterate(
     const Context &ctx,
     GpuFemBemLinearSystem &system,
+    bool reset_initial_solution,
     std::string &error)
 {
     if (system.solver == nullptr) {
@@ -330,14 +331,24 @@ bool set_zero_initial_iterate(
         return false;
     }
     if (ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_GMRES) {
-        static_cast<mfem::HypreGMRES *>(system.solver.get())->SetZeroInitialIterate();
+        auto *gmres = static_cast<mfem::HypreGMRES *>(system.solver.get());
+        if (reset_initial_solution) {
+            gmres->SetZeroInitialIterate();
+        } else {
+            gmres->iterative_mode = true;
+        }
         return true;
     }
     if (ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_CG) {
-        static_cast<mfem::HyprePCG *>(system.solver.get())->SetZeroInitialIterate();
+        auto *pcg = static_cast<mfem::HyprePCG *>(system.solver.get());
+        if (reset_initial_solution) {
+            pcg->SetZeroInitialIterate();
+        } else {
+            pcg->iterative_mode = true;
+        }
         return true;
     }
-    error = "strict FEM GPU Fredkin-Koehler cannot select a zero initial iterate for the solver";
+    error = "strict FEM GPU Fredkin-Koehler cannot select an initial iterate mode for the solver";
     return false;
 }
 
@@ -367,6 +378,7 @@ void read_solver_statistics(
 bool solve_linear_system(
     Context &ctx,
     GpuFemBemLinearSystem &system,
+    bool reset_initial_solution,
     cudaStream_t stream,
     uint64_t &iterations_out,
     double &relative_residual_out,
@@ -384,11 +396,16 @@ bool solve_linear_system(
             error)) {
         return false;
     }
-    if (!set_zero_initial_iterate(ctx, system, error)) {
+    if (!configure_solver_initial_iterate(
+            ctx, system, reset_initial_solution, error)) {
         return false;
     }
     system.b_par->HypreWrite();
-    system.x_par->HypreWrite();
+    if (reset_initial_solution) {
+        system.x_par->HypreWrite();
+    } else {
+        system.x_par->HypreReadWrite();
+    }
     system.solver->Mult(*system.b_par, *system.x_par);
     system.A_par->Mult(*system.x_par, *system.residual);
     system.residual->Add(-1.0, *system.b_par);
@@ -490,6 +507,7 @@ void destroy_gpu_workspace(GpuDemagFemBemWorkspace &workspace)
     free_array(workspace.d_boundary_tdofs);
     free_array(workspace.d_boundary_permutation);
     free_array(workspace.d_bem_boundary_values);
+    free_array(workspace.d_u1_solution);
     free_array(workspace.d_near_row_offsets);
     free_array(workspace.d_near_column_indices);
     free_array(workspace.d_near_values);
@@ -676,6 +694,12 @@ bool gpu_demag_fem_bem_initialize(Context &ctx, std::string &error)
                 std::vector<double>(workspace->boundary_nodes.size(), 0.0),
                 device_bytes,
                 "cudaMalloc Fredkin-Koehler boundary correction",
+                error) ||
+            !upload_array(
+                workspace->d_u1_solution,
+                std::vector<double>(static_cast<size_t>(scalar_rows), 0.0),
+                device_bytes,
+                "cudaMalloc Fredkin-Koehler u1 solution",
                 error)) {
             destroy_gpu_workspace(*workspace);
             return false;
@@ -684,7 +708,7 @@ bool gpu_demag_fem_bem_initialize(Context &ctx, std::string &error)
                 ctx,
                 *cpu_workspace->neumann_op,
                 gpu.demag_poisson.poisson_rhs,
-                gpu.demag_poisson.poisson_solution,
+                workspace->d_u1_solution,
                 workspace->u1_system,
                 error) ||
             !initialize_linear_system(
@@ -870,7 +894,7 @@ bool compute_device_demag_fem_bem_for_device_stage(
     if (reset_initial_solution &&
         !cuda_ok(
             cudaMemsetAsync(
-                gpu.demag_poisson.poisson_solution,
+                workspace->d_u1_solution,
                 0,
                 static_cast<size_t>(scalar_rows) * sizeof(double),
                 stream),
@@ -881,20 +905,10 @@ bool compute_device_demag_fem_bem_for_device_stage(
     if (!solve_linear_system(
             ctx,
             workspace->u1_system,
+            reset_initial_solution,
             stream,
             workspace->u1_iterations,
             workspace->u1_residual,
-            reason)) {
-        return false;
-    }
-    if (!cuda_ok(
-            cudaMemcpyAsync(
-                gpu.demag_poisson.poisson_solution_full,
-                gpu.demag_poisson.poisson_solution,
-                static_cast<size_t>(scalar_rows) * sizeof(double),
-                cudaMemcpyDeviceToDevice,
-                stream),
-            "preserve Fredkin-Koehler u1 solution",
             reason)) {
         return false;
     }
@@ -907,7 +921,7 @@ bool compute_device_demag_fem_bem_for_device_stage(
         workspace->d_far_v,
         workspace->d_boundary_permutation,
         workspace->d_boundary_tdofs,
-        gpu.demag_poisson.poisson_solution,
+        workspace->d_u1_solution,
         workspace->d_bem_boundary_values,
         boundary_rows,
         static_cast<int>(workspace->far_blocks.size()),
@@ -929,7 +943,8 @@ bool compute_device_demag_fem_bem_for_device_stage(
     if (!cuda_ok(cudaGetLastError(), "launch Fredkin-Koehler Dirichlet RHS", reason)) {
         return false;
     }
-    if (!cuda_ok(
+    if (reset_initial_solution &&
+        !cuda_ok(
             cudaMemsetAsync(
                 gpu.demag_poisson.poisson_solution,
                 0,
@@ -942,6 +957,7 @@ bool compute_device_demag_fem_bem_for_device_stage(
     if (!solve_linear_system(
             ctx,
             workspace->u2_system,
+            reset_initial_solution,
             stream,
             workspace->u2_iterations,
             workspace->u2_residual,
@@ -949,7 +965,7 @@ bool compute_device_demag_fem_bem_for_device_stage(
         return false;
     }
     fullmag_cuda_fem_bem_combine_potentials(
-        gpu.demag_poisson.poisson_solution_full,
+        workspace->d_u1_solution,
         gpu.demag_poisson.poisson_solution,
         gpu.demag_poisson.poisson_solution_full,
         scalar_rows,

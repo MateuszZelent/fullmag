@@ -37,6 +37,9 @@ struct DmiElementWorkspace {
     mfem::DenseMatrix dshape;
     mfem::Vector shape;
     std::vector<double> residual_xyz;
+    std::vector<double> periodic_lumped_mass;
+    std::vector<double> periodic_reduced_residual;
+    std::vector<double> periodic_reduced_mass;
     std::vector<double> projected_m_xyz;
 
     std::vector<mfem::Array<int>> dofs_by_thread;
@@ -64,6 +67,14 @@ bool prepare_dmi_periodic_input(
 bool refresh_dmi_grid_functions_from_magnetization(
     Context &ctx,
     const std::vector<double> &m_xyz,
+    std::string &error);
+
+// Sums the weak residual and the lumped mass over each periodic node class
+// and writes the class sums back to every member (docs/physics/0810).
+bool accumulate_dmi_periodic_residual_and_mass(
+    const Context &ctx,
+    std::vector<double> &residual_xyz,
+    DmiElementWorkspace &workspace,
     std::string &error);
 #endif
 

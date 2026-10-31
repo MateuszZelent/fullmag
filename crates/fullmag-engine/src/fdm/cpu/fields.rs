@@ -7,9 +7,8 @@ use crate::fdm::cpu::fft::{combine_fields_4, zero_vectors};
 use crate::fdm::cpu::fft_backend::FdmFftBackend;
 #[cfg(test)]
 use crate::fdm::shared::types::AxisBoundary;
-use crate::magnetoelastic;
 use crate::telemetry::{sections, StepTelemetry};
-use crate::vector::{add, cross, dot, max_cross_norm, max_norm, norm, scale, squared_norm, sub};
+use crate::vector::{add, cross, dot, max_cross_norm, max_norm, norm, scale, sub};
 use crate::{
     ExchangeLlgProblem, FftWorkspace, OerstedCylinderConfig, RhsEvaluation, SlonczewskiFormula,
     SlonczewskiSttConfig, SotConfig, SotFormula, Vector3, VectorFieldSoA, ZhangLiFormula,
@@ -1490,60 +1489,10 @@ impl ExchangeLlgProblem {
             );
         }
 
-        // Brown thermal field.  Keep this legacy public path on the same
-        // per-cell material contract as the fused execution path.
-        let thermal_dt = self.thermal_dt_for_evaluation();
-        if let (Some(base_factor), true) = (
-            thermal_base_factor(
-                self.temperature,
-                self.dynamics.gyromagnetic_ratio,
-                self.cell_size.volume(),
-            ),
-            thermal_dt > 0.0 && thermal_dt.is_finite(),
-        ) {
-            use std::cell::RefCell;
-
-            thread_local! {
-                static RNG: RefCell<u64> = const { RefCell::new(42u64) };
-            }
-
-            let dt_scale = 1.0 / thermal_dt.sqrt();
-
-            RNG.with(|seed_cell| {
-                let mut seed = *seed_cell.borrow();
-                for (i, h) in h_eff.iter_mut().enumerate() {
-                    let (n0, n1, n2) = {
-                        let next_u = |s: &mut u64| -> f64 {
-                            *s ^= *s >> 12;
-                            *s ^= *s << 25;
-                            *s ^= *s >> 27;
-                            ((*s).wrapping_mul(0x2545F4914F6CDD1D) >> 11) as f64
-                                / (1u64 << 53) as f64
-                        };
-                        let u1 = next_u(&mut seed).max(1e-300);
-                        let u2 = next_u(&mut seed);
-                        let u3 = next_u(&mut seed).max(1e-300);
-                        let u4 = next_u(&mut seed);
-                        let r1 = (-2.0 * u1.ln()).sqrt();
-                        let r2 = (-2.0 * u3.ln()).sqrt();
-                        let theta1 = 2.0 * std::f64::consts::PI * u2;
-                        let theta2 = 2.0 * std::f64::consts::PI * u4;
-                        (r1 * theta1.cos(), r1 * theta1.sin(), r2 * theta2.cos())
-                    };
-                    if let Some(sigma) = thermal_sigma_for_cell(
-                        base_factor,
-                        dt_scale,
-                        self.ms_at(i),
-                        self.alpha_at(i),
-                    ) {
-                        h[0] += sigma * n0;
-                        h[1] += sigma * n1;
-                        h[2] += sigma * n2;
-                    }
-                }
-                *seed_cell.borrow_mut() = seed;
-            });
-        }
+        // Brown thermal field. Keep this public path on the same stateless
+        // SplitMix64 counter RNG and per-cell material contract as the fused
+        // execution path.
+        self.thermal_field_add_into(&mut h_eff);
 
         // Oersted field from cylindrical conductor (STNO / MTJ)
         self.oersted_field_add_into_at_time(&mut h_eff, time_seconds);
@@ -1579,6 +1528,16 @@ impl ExchangeLlgProblem {
         debug_assert!(h_eff.len() >= n);
         debug_assert!(out.len() >= n);
         for i in 0..n {
+            if self
+                .frozen_spins
+                .as_ref()
+                .is_some_and(|frozen| frozen.is_frozen(i))
+            {
+                out.x[i] = 0.0;
+                out.y[i] = 0.0;
+                out.z[i] = 0.0;
+                continue;
+            }
             let m_dot_h = magnetization.x[i] * h_eff.x[i]
                 + magnetization.y[i] * h_eff.y[i]
                 + magnetization.z[i] * h_eff.z[i];

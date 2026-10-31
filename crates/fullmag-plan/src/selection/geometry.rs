@@ -306,6 +306,10 @@ fn node_from_geometry_entry(entry: &GeometryEntryIR) -> Result<GeometryNode, Sel
             radius_m: *radius,
             center_m: [0.0; 3],
         },
+        GeometryEntryIR::Ellipsoid { radii, .. } => GeometryNode::Ellipsoid {
+            radii_m: *radii,
+            center_m: [0.0; 3],
+        },
         GeometryEntryIR::Union { a, b, .. } => GeometryNode::Union(
             Box::new(node_from_geometry_entry(a)?),
             Box::new(node_from_geometry_entry(b)?),

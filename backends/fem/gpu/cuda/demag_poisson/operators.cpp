@@ -960,6 +960,72 @@ bool build_mixed_demag_operators(
         }
     }
 
+    if (periodic_node_class_reduction) {
+        // The reduced-node map was validated against the P1 state rows above.
+        // Periodic images are one DOF: merge recovery weights and rows per
+        // class so every image recovers the same class field.
+        const size_t reduced_count =
+            static_cast<size_t>(ctx.mesh.periodic_reduced_node_count);
+        std::vector<double> reduced_visual_weight(reduced_count, 0.0);
+        std::vector<double> reduced_recovery_weight(reduced_count, 0.0);
+        std::vector<bool> reduced_magnetic_node(reduced_count, false);
+        std::vector<std::map<uint32_t, double>> reduced_vis_x(reduced_count);
+        std::vector<std::map<uint32_t, double>> reduced_vis_y(reduced_count);
+        std::vector<std::map<uint32_t, double>> reduced_vis_z(reduced_count);
+        std::vector<std::map<uint32_t, double>> reduced_rec_x(reduced_count);
+        std::vector<std::map<uint32_t, double>> reduced_rec_y(reduced_count);
+        std::vector<std::map<uint32_t, double>> reduced_rec_z(reduced_count);
+
+        auto merge_row_map = [&](std::map<uint32_t, double> &dst,
+                                 const std::map<uint32_t, double> &src,
+                                 const char *label) {
+            for (const auto &[col, val] : src) {
+                if (!add_finite(dst[col], val, label)) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        for (size_t node = 0; node < visual_weight.size(); ++node) {
+            const size_t reduced =
+                static_cast<size_t>(ctx.mesh.periodic_reduced_node[node]);
+            if (!add_finite(
+                    reduced_visual_weight[reduced],
+                    visual_weight[node],
+                    "periodic visual recovery weight") ||
+                !add_finite(
+                    reduced_recovery_weight[reduced],
+                    recovery_weight[node],
+                    "periodic magnetic recovery weight") ||
+                !merge_row_map(reduced_vis_x[reduced], visual_x[node], "periodic visual recovery x") ||
+                !merge_row_map(reduced_vis_y[reduced], visual_y[node], "periodic visual recovery y") ||
+                !merge_row_map(reduced_vis_z[reduced], visual_z[node], "periodic visual recovery z") ||
+                !merge_row_map(reduced_rec_x[reduced], rec_x[node], "periodic magnetic recovery x") ||
+                !merge_row_map(reduced_rec_y[reduced], rec_y[node], "periodic magnetic recovery y") ||
+                !merge_row_map(reduced_rec_z[reduced], rec_z[node], "periodic magnetic recovery z")) {
+                return false;
+            }
+            if (magnetic_state_node[node]) {
+                reduced_magnetic_node[reduced] = true;
+            }
+        }
+
+        for (size_t node = 0; node < visual_weight.size(); ++node) {
+            const size_t reduced =
+                static_cast<size_t>(ctx.mesh.periodic_reduced_node[node]);
+            visual_weight[node] = reduced_visual_weight[reduced];
+            recovery_weight[node] = reduced_recovery_weight[reduced];
+            magnetic_state_node[node] = reduced_magnetic_node[reduced];
+            visual_x[node] = reduced_vis_x[reduced];
+            visual_y[node] = reduced_vis_y[reduced];
+            visual_z[node] = reduced_vis_z[reduced];
+            rec_x[node] = reduced_rec_x[reduced];
+            rec_y[node] = reduced_rec_y[reduced];
+            rec_z[node] = reduced_rec_z[reduced];
+        }
+    }
+
     for (size_t node = 0; node < visual_weight.size(); ++node) {
         if (!std::isfinite(visual_weight[node]) || visual_weight[node] <= 0.0) {
             error = "strict FEM GPU demag requires finite positive visual recovery weight for every P1 state node";

@@ -262,6 +262,12 @@ bool context_adaptive_step_graph_configuration_supported(Context &ctx) {
         ctx.last_error = "adaptive_device_loop_dynamic_oersted_unsupported";
         return false;
     }
+    // Captured stage times are baked into the graph and its key carries no
+    // time, so a time-dependent drive would be evaluated at a frozen time.
+    if (ctx.regional_field_drive_time_dependent) {
+        ctx.last_error = "adaptive_device_loop_time_dependent_regional_drive_unsupported";
+        return false;
+    }
     if (ctx.gpu_transport_rhs.active) {
         ctx.last_error = "adaptive_device_loop_gpu_transport_unsupported";
         return false;

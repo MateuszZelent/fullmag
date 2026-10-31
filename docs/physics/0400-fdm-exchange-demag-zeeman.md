@@ -397,6 +397,36 @@ $$
 
 This is the quantity that should ultimately back the canonical scalar output `E_ex`.
 
+With sub-cell boundary correction (`boundary_correction`, note 0550) the CUDA
+reductions in `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` report the
+exchange energy as a sum over forward links, each counted once with weight
+$A_{ij}\,w_{ij}\,\|\mathbf m_j-\mathbf m_i\|^2$. The dynamics use the field; this
+energy is a diagnostic.
+
+- **T0 (volume-weighted):** $w_{ij} = f_{i\to j}\,V/\Delta x^2$ with the full
+  cell volume $V$. The T0 field carries $1/\varphi_i^{\mathrm{eff}}$ and the cell
+  energy weight carries $\varphi_i^{\mathrm{eff}}V$, so $\varphi_i^{\mathrm{eff}}$
+  cancels and this energy is the exact variational partner of the T0 field.
+  Links to a neighbour with $\varphi_j = 0$ are skipped, as in the field.
+- **T1 (boundary-corrected):** the corrected field operator is not symmetric,
+  because the denominator at cell $i$ uses the boundary distance on the
+  opposite side of $i$, so no exact discrete energy exists. The reported energy
+  uses the symmetric link weight
+
+  $$
+  w_{ij} = V\cdot\frac{1}{2}\left(
+  \frac{2}{\Delta x\,(\Delta x+\delta_{\mp,i})}
+  +\frac{2}{\Delta x\,(\Delta x+\delta_{\pm,j})}
+  \right),
+  $$
+
+  which reduces to $V/\Delta x^2$ away from boundaries.
+- **Uncorrected path with volume fractions:** the link weight uses the pair
+  fraction $\tfrac12(\varphi_i+\varphi_j)\,V$, so a link has the same weight
+  whichever cell it is reduced from.
+
+Like the T0/T1 fields, these energies use open, non-periodic neighbours.
+
 #### 3.1.3 Demag: tensor convolution and FFT realization
 
 The FDM demag operator on a uniform grid should be implemented as a discrete convolution

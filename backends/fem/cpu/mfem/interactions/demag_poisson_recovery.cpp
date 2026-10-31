@@ -438,6 +438,59 @@ bool recover_demag_poisson_field(
         return false;
     }
 
+    if (!ctx.mesh.periodic_reduced_node.empty()) {
+        // Periodic images are one DOF: sum the weighted gradient and the
+        // recovery weight over each class before the division below, so every
+        // image recovers the same class field (docs/physics/0800).
+        if (ctx.mesh.periodic_reduced_node.size() != node_count ||
+            ctx.mesh.periodic_reduced_node_count == 0u) {
+            h_demag_xyz.clear();
+            ctx.demag.h_visual_xyz.clear();
+            error = "periodic demag field recovery requires a reduced-node map covering every P1 node";
+            return false;
+        }
+        const size_t reduced_count =
+            static_cast<size_t>(ctx.mesh.periodic_reduced_node_count);
+        std::vector<double> reduced_h_demag_xyz(reduced_count * 3u, 0.0);
+        std::vector<double> reduced_node_weight(reduced_count, 0.0);
+        std::vector<double> reduced_h_visual_xyz(reduced_count * 3u, 0.0);
+        std::vector<double> reduced_visual_weight(reduced_count, 0.0);
+        for (size_t node = 0; node < node_count; ++node) {
+            const size_t reduced =
+                static_cast<size_t>(ctx.mesh.periodic_reduced_node[node]);
+            if (reduced >= reduced_count) {
+                h_demag_xyz.clear();
+                ctx.demag.h_visual_xyz.clear();
+                error = "periodic demag field recovery found a node outside the periodic class map";
+                return false;
+            }
+            const size_t base = node * 3u;
+            const size_t rbase = reduced * 3u;
+            reduced_h_demag_xyz[rbase + 0] += h_demag_xyz[base + 0];
+            reduced_h_demag_xyz[rbase + 1] += h_demag_xyz[base + 1];
+            reduced_h_demag_xyz[rbase + 2] += h_demag_xyz[base + 2];
+            reduced_node_weight[reduced] += node_weight[node];
+            reduced_h_visual_xyz[rbase + 0] += ctx.demag.h_visual_xyz[base + 0];
+            reduced_h_visual_xyz[rbase + 1] += ctx.demag.h_visual_xyz[base + 1];
+            reduced_h_visual_xyz[rbase + 2] += ctx.demag.h_visual_xyz[base + 2];
+            reduced_visual_weight[reduced] += visual_node_weight[node];
+        }
+        for (size_t node = 0; node < node_count; ++node) {
+            const size_t reduced =
+                static_cast<size_t>(ctx.mesh.periodic_reduced_node[node]);
+            const size_t base = node * 3u;
+            const size_t rbase = reduced * 3u;
+            h_demag_xyz[base + 0] = reduced_h_demag_xyz[rbase + 0];
+            h_demag_xyz[base + 1] = reduced_h_demag_xyz[rbase + 1];
+            h_demag_xyz[base + 2] = reduced_h_demag_xyz[rbase + 2];
+            node_weight[node] = reduced_node_weight[reduced];
+            ctx.demag.h_visual_xyz[base + 0] = reduced_h_visual_xyz[rbase + 0];
+            ctx.demag.h_visual_xyz[base + 1] = reduced_h_visual_xyz[rbase + 1];
+            ctx.demag.h_visual_xyz[base + 2] = reduced_h_visual_xyz[rbase + 2];
+            visual_node_weight[node] = reduced_visual_weight[reduced];
+        }
+    }
+
     for (size_t node = 0; node < node_count; ++node) {
         const double visual_weight = visual_node_weight[node];
         if (!std::isfinite(visual_weight) || visual_weight <= 0.0) {

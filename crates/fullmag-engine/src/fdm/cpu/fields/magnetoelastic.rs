@@ -32,6 +32,39 @@ impl ExchangeLlgProblem {
         }
     }
 
+    /// Per-cell magnetoelastic energy density [J/m^3]; zero in inactive cells.
+    pub(crate) fn magnetoelastic_energy_density_from_vectors(
+        &self,
+        magnetization: &[Vector3],
+    ) -> Vec<f64> {
+        let config = match &self.terms.magnetoelastic {
+            Some(config) => config,
+            None => return vec![0.0; magnetization.len()],
+        };
+        let strain_at = |i: usize| match &config.strain {
+            magnetoelastic::PrescribedStrainField::Uniform(strain) => strain,
+            magnetoelastic::PrescribedStrainField::PerCell(strain) => &strain[i],
+        };
+        if let magnetoelastic::PrescribedStrainField::PerCell(strain) = &config.strain {
+            assert_eq!(
+                strain.len(),
+                magnetization.len(),
+                "strain field length must match magnetization"
+            );
+        }
+        magnetization
+            .iter()
+            .enumerate()
+            .map(|(i, &m)| {
+                if self.is_active(i) {
+                    magnetoelastic::e_mel_density_single(m, strain_at(i), &config.params)
+                } else {
+                    0.0
+                }
+            })
+            .collect()
+    }
+
     pub(crate) fn magnetoelastic_energy_soa(&self, magnetization: &VectorFieldSoA) -> f64 {
         let config = match &self.terms.magnetoelastic {
             Some(config) => config,
