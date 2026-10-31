@@ -3,8 +3,8 @@
 ## Zakres
 
 Sprawdziłem obowiązujące instrukcje `AGENTS.md`, `.agents/instructions/backend.md`
-i `frontend.md`, główny skill `fullmag-docker-build` oraz referencje
-`procedure.md`, `artifact-policy.md` i `writer-inventory.md`. Porównałem je z ADR
+i `frontend.md`, podsumowania `CLAUDE.md` i `.github/copilot-instructions.md`, główny skill `fullmag-docker-build` oraz referencje
+`procedure.md`, `artifact-policy.md`, `writer-inventory.md` i `recipe-audit.md`. Porównałem je z ADR
 0076 oraz właściwymi sekcjami dokumentów `fullmag-build-storage-governance.md`,
 `shared-build-storage.md`, `docker-build-storage-lifecycle.md`,
 `docker-development-architecture.md`, `docker-volume-development.md` i ADR 0061/0067.

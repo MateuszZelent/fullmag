@@ -60,7 +60,7 @@ Pełne lokalne logi i zbiorcze wyniki są zachowane w katalogu zadania
 
 ## Instrukcje i pozostały zakres
 
-Zmieniono AGENTS, instrukcje backend/frontend, skill `fullmag-docker-build`, jego
+Zmieniono AGENTS, podsumowania Claude/Copilot, instrukcje backend/frontend, skill `fullmag-docker-build`, jego
 referencje, pięć przewodników storage i dodano [ADR 0076](../adr/0076-single-private-volume-per-dev-group.md).
 Zaktualizowano także osobisty skill `fullmag-build-stage-cleanup` na tym hoście.
 [Audyt instrukcji](2026-10-31-storage-instructions-review.md) wskazuje rozstrzygnięte
