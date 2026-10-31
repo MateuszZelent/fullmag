@@ -682,8 +682,10 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         return;
     }
 
-    // Save original m
-    copy_field_d2d(ctx.tmp, ctx.m, ctx.cell_count, context_compute_stream(ctx));
+    // Save original m. The stage kernels below run on the orchestration
+    // (legacy default) stream; a copy on the nonblocking compute stream would
+    // not be ordered against them and races with their reads of tmp/k1.
+    copy_field_d2d(ctx.tmp, ctx.m, ctx.cell_count, context_orchestration_stream(ctx));
 
     for (;;) {
         ctx.trial_dt = dt;
@@ -691,7 +693,7 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         const FsalReuseDecision fsal_decision = rhs_allows_fsal_reuse(ctx, dt);
         context_note_fsal_decision(ctx, fsal_decision);
         if (fsal_decision.allowed) {
-            copy_field_d2d(ctx.k1, ctx.k_fsal, ctx.cell_count, context_compute_stream(ctx));
+            copy_field_d2d(ctx.k1, ctx.k_fsal, ctx.cell_count, context_orchestration_stream(ctx));
         } else {
             if (!compute_rhs_into(ctx, ctx.k1, n, grid, gamma_bar, alpha,
                                   step_start_time, 1)) return;
@@ -768,7 +770,7 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         if (policy.dt_min_exhausted) {
             context_invalidate_fsal_cache(
                 ctx, FULLMAG_FDM_FSAL_INVALIDATION_STEP_ERROR);
-            copy_field_d2d(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx));
+            copy_field_d2d(ctx.m, ctx.tmp, ctx.cell_count, context_orchestration_stream(ctx));
             context_refresh_observables(ctx);
             ctx.last_error = "dt_min_exhausted";
             return;
@@ -776,7 +778,7 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         if (policy.failed) {
             context_invalidate_fsal_cache(
                 ctx, FULLMAG_FDM_FSAL_INVALIDATION_STEP_ERROR);
-            copy_field_d2d(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx));
+            copy_field_d2d(ctx.m, ctx.tmp, ctx.cell_count, context_orchestration_stream(ctx));
             context_refresh_observables(ctx);
             return;
         }
@@ -794,7 +796,7 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             ctx, FULLMAG_FDM_FSAL_INVALIDATION_REJECTED_STEP); // fsal_rejected_step
 
         // Restore original m
-        copy_field_d2d(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx));
+        copy_field_d2d(ctx.m, ctx.tmp, ctx.cell_count, context_orchestration_stream(ctx));
         if (!context_retry_gpu_transport_step(ctx)) {
             if (ctx.last_error.empty())
                 ctx.last_error = "failed to restart bound transport adaptive trial";

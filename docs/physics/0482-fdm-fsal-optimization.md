@@ -290,6 +290,32 @@ stanem. Odrzucenie lub błąd usuwa pending cache. Telemetria ABI v2 publikuje
 `fsal_reused`, skumulowane `rhs_evaluations_saved`, liczbę losowań termicznych,
 indeks zaakceptowanego kroku i licznik każdego stabilnego powodu invalidation.
 
+### Pętla per-step: porządek strumieni i przekazanie kroku
+
+Poza batchowanym grafem warunkowym CUDA adaptive RK23/DP45 wykonuje jedną
+próbę na wywołanie `launch_rk23_step_*` / `launch_dp45_step_*`. Ta ścieżka
+obsługuje m.in. runy z konsumentem live i pełnymi statystykami kroku. Przed
+pierwszym stage'em kopiuje $\mathbf m_n$ do bufora kopii zapasowej, przy
+dozwolonym reuse kopiuje kandydata FSAL do $\mathbf K_1$, a przy odrzuceniu lub
+błędzie przywraca $\mathbf m_n$. Kernele stage'ów, RHS i estymatora błędu tej
+pętli działają na strumieniu orkiestracji (`context_orchestration_stream`,
+poza capture jest to legacy default stream). Wszystkie trzy kopie muszą być
+kolejkowane na tym samym strumieniu. Strumień obliczeniowy kontekstu ma flagę
+`cudaStreamNonBlocking`, więc kopia na nim nie jest uporządkowana względem
+kerneli: stage może odczytać nieaktualną kopię zapasową lub $\mathbf K_1$, a
+kolejny stage może nadpisać $\mathbf m$ przed jej wykonaniem. Wynik jest
+błędny i różny między identycznymi uruchomieniami. Praca wykonywana na
+strumieniu obliczeniowym (demag FFT, redukcje błędu) wchodzi na niego i wraca
+przez handoff zdarzeń `context_begin_compute_stream_work` /
+`context_end_compute_stream_work`.
+
+Zaakceptowana próba zwraca krok kandydujący kontrolera $h_{n+1}$ jako
+`suggested_next_dt`, a runner wystawia go jako `StepStats::dt_suggested`.
+Pętla runnera musi użyć tej wartości jako pierwszej próby kolejnego kroku,
+ograniczonej końcem stage'u i najbliższą nieciągłością napędu, zanim snapshot
+statystyk zastąpi rekord kroku. Ponowne użycie `dt_initial` w każdym kroku
+zamienia lane adaptive w przebieg o stałym kroku z martwym kontrolerem.
+
 (implementation-mapping)=
 ## Mapowanie implementacji
 
@@ -312,6 +338,8 @@ indeks zaakceptowanego kroku i licznik każdego stabilnego powodu invalidation.
 | termiczna realizacja FP64 / FP32 | `backends/fdm/gpu/cuda/interactions/demag_fp64.cu` + `compute_demag_field_fp64`; `demag_fp32.cu` + `compute_demag_field_fp32` |
 | Python i IR | `packages/fullmag-py/src/fullmag/model/dynamics.py` + `LLG`; `model/energy.py` + `ThermalNoise`; `crates/fullmag-ir/src/execution.rs` + `IntegratorChoice`; `crates/fullmag-ir/src/study.rs` + `EnergyTermIR` |
 | planner fail-closed | `crates/fullmag-plan/src/fdm.rs` + `plan_fdm` |
+| przekazanie `dt_suggested` w pętli per-step | `crates/fullmag-runner/src/fdm/gpu/cuda/execute.rs` + `execute_cuda_fdm`, `adaptive_batch_execution_eligible` |
+| strumień orkiestracji kopii stage'ów | `backends/fdm/include/context.hpp` + `context_orchestration_stream` |
 
 (validation)=
 ## Walidacja
@@ -409,6 +437,29 @@ bootstrapu brakującego toolchainu stable w obrazie; nie jest to zaliczone jako
 bramka stable. Sąsiedni kontrakt transakcyjny ponownie przeszedł natywne CTest
 **3/3**, checkpoint **1/1** i rollback pięciu integratorów **1/1**.
 
+Pętla per-step adaptive FDM CUDA została zweryfikowana 2026-10-31 na buildzie
+DEV `f95aa31e1` z poprawką porządku strumieni i przekazania kroku, na
+`NVIDIA GeForce RTX 4080 SUPER`. Receipt wskazał realizacje `cuda_dp45_fp64` i
+`cuda_rk23_fp64`, `graph_launch_count=0` oraz jedną synchronizację hosta na
+zaakceptowany krok. Przypadek `scripts/fdm_adaptive_macrospin_case.py`
+($4\times4\times1$ komórki po $5\,\mathrm{nm}$,
+$M_s=8\times10^5\,\mathrm{A\,m^{-1}}$, $\alpha=0.01$, pole $50\,\mathrm{mT}$
+wzdłuż $\hat{\mathbf z}$, $\mathbf m_0=\hat{\mathbf x}$, demag wyłączony,
+`dt_initial=1e-13`, `dt_max=2e-12`, do $1\,\mathrm{ns}$) porównano z rozwiązaniem
+dokładnym makrospinu za pomocą `scripts/fdm_adaptive_macrospin_check.py`:
+
+| Przypadek | CPU: kroki / odchyłka | GPU: kroki / odchyłka | Dwa przebiegi GPU |
+|---|---|---|---|
+| RK45, `max_err=1e-6` | 507 / $8.8\times10^{-15}$ | 504 / $8.6\times10^{-15}$ | identyczne |
+| RK45, `max_err=1e-9` | 504 / $8.8\times10^{-15}$ | 504 / $7.9\times10^{-15}$ | identyczne |
+| RK23, `max_err=1e-6` | 510 / $2.2\times10^{-8}$ | 506 / $2.2\times10^{-8}$ | identyczne |
+
+Przed poprawką (master `707cf85dd`) GPU RK45 wykonał $10^4$ kroków z
+odchyłką $1.2\times10^{-2}$, a dwa identyczne przebiegi różniły się o
+$3$--$4\times10^{-3}$. Kernele FP32 mają tę samą poprawkę, ale planner nie ma
+wykonywalnego wiersza adaptive CUDA w pojedynczej precyzji, więc ta ścieżka
+nie ma dowodu runtime.
+
 (limitations)=
 ## Ograniczenia
 
@@ -475,3 +526,8 @@ bramka stable. Sąsiedni kontrakt transakcyjny ponownie przeszedł natywne CTest
 | publiczne mapowanie LLG | `packages/fullmag-py/src/fullmag/model/dynamics.py` + `class LLG` | Python/IR | Python round-trip i planner tests |
 | publiczne mapowanie termiki | `packages/fullmag-py/src/fullmag/model/energy.py` + `class ThermalNoise` | Python/IR | Python round-trip i planner tests |
 | adaptive Brown fail-closed | `crates/fullmag-plan/src/fdm.rs` + `plan_fdm` | planner FDM | `adaptive_fdm_rejects_brown_thermal_noise_until_sde_replay_is_qualified` |
+| wybór pętli per-step i przekazanie `dt_suggested` | `crates/fullmag-runner/src/fdm/gpu/cuda/execute.rs` + `adaptive_batch_execution_eligible` | FDM GPU | pętla per-step w `execute_cuda_fdm`; RTX 4080 SUPER PASS 2026-10-31 |
+| strumień orkiestracji kopii stage'ów | `backends/fdm/include/context.hpp` + `context_orchestration_stream` | FDM GPU | determinizm dwóch przebiegów GPU PASS 2026-10-31 |
+| kontrakt porządku kopii per-step | `backends/fdm/tests/adaptive_error_reduction_contract.cpp` + `void adaptive_d2d_copies_use_orchestration_stream` | FDM GPU | kontrakt źródłowy; niekompilowany lokalnie (zakaz budowania testów) |
+| przypadek makrospinu adaptive RK | `scripts/fdm_adaptive_macrospin_case.py` + `INTEGRATOR` | FDM CPU/GPU | wykonany headless na CPU i GPU 2026-10-31 |
+| bramka rozwiązania dokładnego | `scripts/fdm_adaptive_macrospin_check.py` + `exact_m` | FDM CPU/GPU | RED na master `707cf85dd`, GREEN po poprawce |
