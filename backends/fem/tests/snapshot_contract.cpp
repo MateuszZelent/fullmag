@@ -99,6 +99,11 @@ void demag_phi_snapshot_contract_is_declared() {
         "demag phi nodal projections must be copied from the host mirror; "
         "Vector::Read() yields a device pointer on CUDA");
     check(
+        state_io.find("copy_gpu_poisson_demag_phi_f64") != std::string::npos &&
+            state_io.find("poisson.poisson_solution") != std::string::npos,
+        "strict GPU Poisson demag phi must be exported from the device solution, "
+        "not the host gf_potential that this lane never writes");
+    check(
         state_io.find("FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER") != std::string::npos &&
             state_io.find("ctx.demag_fem_bem.workspace") != std::string::npos &&
             state_io.find("total_potential") != std::string::npos,
