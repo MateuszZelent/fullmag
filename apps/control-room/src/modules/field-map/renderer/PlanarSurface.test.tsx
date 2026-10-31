@@ -1,5 +1,6 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -44,6 +45,18 @@ function makeRenderModel(
 }
 
 describe("PlanarSurface lifecycle", () => {
+  it("places the pinned-probe overlay inside the canvas stack", () => {
+    const html = renderToStaticMarkup(
+      <PlanarSurface
+        model={makeRenderModel([1, 2], [0, 2, 0, 1])}
+        probeOverlay={<table className="fm-field-map__pinned-probe"><tbody /></table>}
+      />,
+    );
+    expect(html).toMatch(
+      /<div class="fm-field-map__canvas-stack"[^>]*>[\s\S]*<table class="fm-field-map__pinned-probe">[\s\S]*<\/table>[\s\S]*<\/div>/,
+    );
+  });
+
   it("preserves an empty occupancy pixel through worker colorization and hover, then releases owned rendering resources", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");

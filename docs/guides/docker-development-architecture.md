@@ -160,6 +160,25 @@ zgodna para kończy się błędem. Jawne `source_root`, `port` i `request_id` mo
 przekazać jako opcjonalne argumenty recepty, a istniejące ręczne piny pozostają
 pod `just docker-dev-script-pinned`.
 
+Obie recepty działają na pierwszym planie przez cały czas przebiegu: wypisują
+adres `/workspace` na zweryfikowanym porcie, nowe wpisy engine log oraz zmiany
+statusu, kroku i czasu solvera. Końcowy JSON pozostaje na stdout; komunikaty
+terminalowe są na stderr i są opróżniane na bieżąco. `interactive=True` nie
+odłącza terminala. Przy `wait_for_solve=True` terminal czeka, aż użytkownik
+wybierze Compute w interfejsie.
+
+Ctrl+C wysyła pojedynczą komendę Stop z jawnym `target.run_id` oraz przypiętym
+API instance i session scope, następnie obserwuje stan końcowy z budżetem
+30 sekund (pojedyncze zapytanie ma dodatkowy, ograniczony timeout).
+Potwierdzone przerwanie zwraca kod 130; niepotwierdzony Stop również zwraca
+130, lecz wynik ma `state=unknown` i komunikat o konieczności sprawdzenia UI.
+Launcher nie powtarza mutacji po utracie odpowiedzi. Nie zatrzymuje usług ani
+nie usuwa wyników. Przerwanie przed uzyskaniem odpowiedzi aktywacji może mieć
+nieznany wynik; zachowane receipty wymagają wtedy uzgodnienia, bez ponawiania
+Solve. Opcjonalny `run-script --timeout-seconds` ogranicza samą obserwację i
+nie wysyła Stop. Niskopoziomowe `docker_dev.py activate-script` pozostaje
+operacją samej aktywacji dla narzędzi recovery.
+
 Na Windows wolne miejsce dla danych technicznych sprawdzaj na dysku danych
 Docker Desktop: tam znajdują się named volumes i BuildKit. `FULLMAG_PROJECT_STORAGE_ROOT`
 zawiera dane użytkownika i nie powinien być używany jako rezerwuar cache buildu.

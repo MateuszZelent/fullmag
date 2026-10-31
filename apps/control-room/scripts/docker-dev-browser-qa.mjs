@@ -11,6 +11,7 @@ import { installViewportPerformanceProbe } from "./lib/viewport-performance-proo
 import { runViewportLayoutBrowserQa } from "./lib/viewport-layout-browser-qa.mjs";
 import { runViewportQaFixtureBrowser } from "./lib/viewport-qa-fixture-browser.mjs";
 import { runViewportCameraBrowserQa } from "./lib/viewport-camera-browser-qa.mjs";
+import { runTerminalFooterTelemetryBrowserQa } from "./docker-dev-terminal-telemetry.mjs";
 
 const require = createRequire(import.meta.url);
 const playwrightPackage = require("playwright/package.json");
@@ -27,6 +28,7 @@ const fixtureSourcePath = fileURLToPath(new URL("./lib/viewport-qa-fixture-brows
 const scratchSourcePath = fileURLToPath(new URL("./lib/scratch-authoring-browser.mjs", import.meta.url));
 const fixtureDataPath = fileURLToPath(new URL("./fixtures/scratch-authoring/fdm.v1.json", import.meta.url));
 const cameraSourcePath = fileURLToPath(new URL("./lib/viewport-camera-browser-qa.mjs", import.meta.url));
+const terminalTelemetrySourcePath = fileURLToPath(new URL("./docker-dev-terminal-telemetry.mjs", import.meta.url));
 const expectedVersion = process.env.CONTROL_ROOM_EXPECTED_PLAYWRIGHT_VERSION ?? "1.62.1";
 // Leave room for bounded UI restoration and result publication before the
 // managed outer runtime deadline expires.
@@ -47,6 +49,8 @@ const scenarioSetting = process.env.CONTROL_ROOM_BROWSER_QA_SCENARIO ?? "standar
 const expectAmbiguousComputeFieldsSetting =
   process.env.CONTROL_ROOM_BROWSER_QA_EXPECT_AMBIGUOUS_COMPUTE_FIELDS ?? "0";
 const expectAmbiguousComputeFields = expectAmbiguousComputeFieldsSetting === "1";
+const expectTerminalTelemetrySetting = process.env.CONTROL_ROOM_BROWSER_QA_EXPECT_TERMINAL_TELEMETRY;
+const expectTerminalTelemetry = expectTerminalTelemetrySetting === "1";
 const maxCanvasScreenshotBytes = 512 * 1024;
 const canvasOnlySkippedAreas = [
   "viewport appearance and color-profile checks",
@@ -86,19 +90,25 @@ const collect = (target, value) => {
 };
 
 const sha256File = async (path) => createHash("sha256").update(await readFile(path)).digest("hex");
-const readHarnessSourceHashes = async () => ({
-  runner: await sha256File(runnerSourcePath),
-  appearance_helper: await sha256File(appearanceQaSourcePath),
-  loopback_proxy: await sha256File(proxySourcePath),
-  export_helper: await sha256File(exportSourcePath),
-  lifecycle_helper: await sha256File(lifecycleSourcePath),
-  performance_helper: await sha256File(performanceSourcePath),
-  layout_helper: await sha256File(layoutSourcePath),
-  fixture_helper: await sha256File(fixtureSourcePath),
-  fixture_builders: await sha256File(scratchSourcePath),
-  fixture_data: await sha256File(fixtureDataPath),
-  camera_helper: await sha256File(cameraSourcePath),
-});
+const readHarnessSourceHashes = async () => {
+  const hashes = {
+    runner: await sha256File(runnerSourcePath),
+    appearance_helper: await sha256File(appearanceQaSourcePath),
+    loopback_proxy: await sha256File(proxySourcePath),
+    export_helper: await sha256File(exportSourcePath),
+    lifecycle_helper: await sha256File(lifecycleSourcePath),
+    performance_helper: await sha256File(performanceSourcePath),
+    layout_helper: await sha256File(layoutSourcePath),
+    fixture_helper: await sha256File(fixtureSourcePath),
+    fixture_builders: await sha256File(scratchSourcePath),
+    fixture_data: await sha256File(fixtureDataPath),
+    camera_helper: await sha256File(cameraSourcePath),
+  };
+  if (expectTerminalTelemetry) {
+    hashes.terminal_telemetry_helper = await sha256File(terminalTelemetrySourcePath);
+  }
+  return hashes;
+};
 const sameHarnessSourceHashes = (left, right) =>
   Object.keys(left).every((key) => left[key] === right[key]);
 
@@ -917,6 +927,14 @@ const main = async () => {
   if (!expectFemAirboxVectors && scenarioSetting === "fem-airbox-vectors") {
     throw new Error("FEM Airbox vector scenario is missing its explicit observation flag");
   }
+  if (expectTerminalTelemetrySetting !== undefined && expectTerminalTelemetrySetting !== "1") {
+    throw new Error("CONTROL_ROOM_BROWSER_QA_EXPECT_TERMINAL_TELEMETRY must be absent or exactly 1");
+  }
+  if (expectTerminalTelemetry && (!canvasOnly || expectedLiveField !== "m" || expectAirboxVectors ||
+      expectFemAirboxVectors || expectAmbiguousComputeFields || scenarioSetting !== "standard" ||
+      process.env.CONTROL_ROOM_PREPARE_VIEWPORT_FIXTURE === "1")) {
+    throw new Error("Terminal telemetry QA requires canvas-only primary m observation and excludes mutation scenarios");
+  }
   if (!["0", "1"].includes(expectAmbiguousComputeFieldsSetting)) {
     throw new Error("CONTROL_ROOM_BROWSER_QA_EXPECT_AMBIGUOUS_COMPUTE_FIELDS must be exactly 0 or 1");
   }
@@ -1282,6 +1300,23 @@ const main = async () => {
       femAirboxObservation = await proveFemAirboxVectors(page, femRunIdentityBefore, liveFieldAfter);
       partialProof.fem_airbox_observation = femAirboxObservation;
     }
+    let terminalTelemetry = null;
+    if (expectTerminalTelemetry) {
+      try {
+        terminalTelemetry = await runTerminalFooterTelemetryBrowserQa({
+          page,
+          expectedSession: sessionBefore,
+          timeout,
+          assertCanvas: (label) => assertCanvas(page, label),
+          waitForLiveField: (quantityId, requireAirboxVectors) =>
+            waitForLiveField(page, quantityId, requireAirboxVectors),
+        });
+        partialProof.terminal_telemetry = terminalTelemetry;
+      } catch (error) {
+        if (error?.partialProof) partialProof.terminal_telemetry = error.partialProof;
+        throw error;
+      }
+    }
     if (pageErrors.length || consoleErrors.length || requestFailures.length || httpErrors.length) {
       throw new Error("Browser flow recorded page, console, transport, or HTTP failures");
     }
@@ -1304,6 +1339,10 @@ const main = async () => {
       expect_airbox_vectors: expectAirboxVectors,
       expect_ambiguous_compute_fields: expectAmbiguousComputeFields,
       ...(expectFemAirboxVectors ? { expect_fem_airbox_vectors: true } : {}),
+      ...(expectTerminalTelemetry ? {
+        expect_terminal_telemetry: true,
+        terminal_telemetry: terminalTelemetry,
+      } : {}),
       home_round_trip: true,
       home: { section: "home", visible: true, session_label: homeText.match(/Simulation open:[^\n]*/)?.[0] ?? "Simulation open:" },
       session: sessionAfter,
@@ -1398,6 +1437,10 @@ const main = async () => {
         fixture_data_after: sourceHashesAfter.fixture_data,
         camera_helper_before: sourceHashesBefore.camera_helper,
         camera_helper_after: sourceHashesAfter.camera_helper,
+        ...(expectTerminalTelemetry ? {
+          terminal_telemetry_helper_before: sourceHashesBefore.terminal_telemetry_helper,
+          terminal_telemetry_helper_after: sourceHashesAfter.terminal_telemetry_helper,
+        } : {}),
         unchanged,
       };
       if (!unchanged) throw new Error("Browser QA harness source changed during the run");
@@ -1420,6 +1463,7 @@ try {
     expect_airbox_vectors: expectAirboxVectors,
     expect_ambiguous_compute_fields: expectAmbiguousComputeFields,
     ...(expectFemAirboxVectors ? { expect_fem_airbox_vectors: true } : {}),
+    ...(expectTerminalTelemetry ? { expect_terminal_telemetry: true } : {}),
     qa_scope: expectAmbiguousComputeFields ? "canvas-home-ambiguous-compute-fields" :
       expectFemAirboxVectors ? "canvas-home-fem-airbox-vectors" :
       expectAirboxVectors ? "canvas-home-live-field-airbox" :

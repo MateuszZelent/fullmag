@@ -43,13 +43,27 @@ interface ChunkedScalarColorState {
   topology: object;
 }
 
-interface ChunkedScalarColorReducerState {
-  chunkedState: ChunkedScalarColorState | null;
-  pending: boolean;
+/** Identity of the last completed build, with or without new entries. */
+export interface ChunkedScalarColorSettledBuild {
+  buildKey: string;
+  colorPalette: string;
+  targetKind: Viewport3DFieldColorBuildTarget["kind"] | null;
+  topology: object | null;
 }
 
-type ChunkedScalarColorAction =
-  | { type: "finish" }
+export interface ChunkedScalarColorReducerState {
+  chunkedState: ChunkedScalarColorState | null;
+  pending: boolean;
+  /**
+   * A build that completed without new entries (all reused, hidden parts,
+   * failed worker) must not restart for the same identity, or the
+   * start/finish microtasks loop without yielding and hang the page.
+   */
+  settled: ChunkedScalarColorSettledBuild | null;
+}
+
+export type ChunkedScalarColorAction =
+  | { settled: ChunkedScalarColorSettledBuild; type: "finish" }
   | { type: "reset" }
   | { type: "start" }
   | {
@@ -123,9 +137,10 @@ const chunkedScalarColorBuffersByPartAndMode = new WeakMap<
 const chunkedFieldVectorIds = new WeakMap<object, number>();
 let nextChunkedFieldVectorId = 1;
 
-const CHUNKED_SCALAR_COLOR_INITIAL_STATE: ChunkedScalarColorReducerState = {
+export const CHUNKED_SCALAR_COLOR_INITIAL_STATE: ChunkedScalarColorReducerState = {
   chunkedState: null,
   pending: false,
+  settled: null,
 };
 
 export function createViewport3DFieldColorBuildReference({
@@ -223,25 +238,70 @@ export function attachViewport3DFieldColorBuildReference(
   };
 }
 
-function chunkedScalarColorReducer(
+export function chunkedScalarColorReducer(
   state: ChunkedScalarColorReducerState,
   action: ChunkedScalarColorAction,
 ): ChunkedScalarColorReducerState {
   switch (action.type) {
     case "finish":
-      return state.pending ? { ...state, pending: false } : state;
+      return state.pending ||
+        !sameChunkedScalarColorSettledBuild(state.settled, action.settled)
+        ? { ...state, pending: false, settled: action.settled }
+        : state;
     case "reset":
-      return state.chunkedState || state.pending
+      return state.chunkedState || state.pending || state.settled
         ? CHUNKED_SCALAR_COLOR_INITIAL_STATE
         : state;
     case "start":
       return state.pending ? state : { ...state, pending: true };
-    case "success":
+    case "success": {
+      const pending = action.pending ?? false;
       return {
         chunkedState: action.chunkedState,
-        pending: action.pending ?? false,
+        pending,
+        // A partial publish is not a completed build.
+        settled: pending
+          ? state.settled
+          : {
+              buildKey: action.chunkedState.buildKey,
+              colorPalette: action.chunkedState.colorPalette,
+              targetKind: action.chunkedState.targetKind,
+              topology: action.chunkedState.topology,
+            },
       };
+    }
   }
+}
+
+function sameChunkedScalarColorSettledBuild(
+  left: ChunkedScalarColorSettledBuild | null,
+  right: ChunkedScalarColorSettledBuild | null,
+): boolean {
+  return Boolean(
+    left &&
+      right &&
+      left.buildKey === right.buildKey &&
+      left.colorPalette === right.colorPalette &&
+      left.targetKind === right.targetKind &&
+      left.topology === right.topology,
+  );
+}
+
+/**
+ * Key of a completed build that already matches the current request. The
+ * build effect must not restart it: the result would be identical, and a
+ * build that settles in microtasks would restart forever.
+ */
+export function resolveChunkedScalarColorSettledBuildKey(
+  settled: ChunkedScalarColorSettledBuild | null,
+  current: Omit<ChunkedScalarColorSettledBuild, "buildKey">,
+): string | null {
+  return settled &&
+    settled.colorPalette === current.colorPalette &&
+    settled.targetKind === current.targetKind &&
+    settled.topology === current.topology
+    ? settled.buildKey
+    : null;
 }
 
 export function chunkedScalarColorStateIsCompatible(
@@ -306,6 +366,7 @@ export function shouldStartChunkedScalarColorBuild({
   currentFieldVector,
   eligibleForChunkedBuild,
   pending,
+  settledBuildKey,
 }: {
   builtBuildKey?: string | null;
   builtFieldVector: object | null;
@@ -313,12 +374,19 @@ export function shouldStartChunkedScalarColorBuild({
   currentFieldVector: object | null;
   eligibleForChunkedBuild: boolean;
   pending: boolean;
+  /** Key whose build already completed on the current topology. */
+  settledBuildKey?: string | null;
 }): boolean {
   if (
     (builtBuildKey !== undefined || currentBuildKey !== undefined) &&
     currentBuildKey
   ) {
-    return Boolean(eligibleForChunkedBuild && !pending && builtBuildKey !== currentBuildKey);
+    return Boolean(
+      eligibleForChunkedBuild &&
+        !pending &&
+        builtBuildKey !== currentBuildKey &&
+        settledBuildKey !== currentBuildKey,
+    );
   }
   return Boolean(
     eligibleForChunkedBuild &&
@@ -779,7 +847,11 @@ export function useViewport3DChunkedScalarColors({
   }, []);
 
   useEffect(() => {
+    // Only displayed colors can be stale. Resetting a pending build that has
+    // no result yet would abort it, the build effect would start it again,
+    // and a request that changes on every render would loop forever.
     if (
+      !chunkedColorState.chunkedState ||
       chunkedScalarColorStateIsCompatible(
         chunkedColorState.chunkedState,
         compatibilityRequest,
@@ -796,6 +868,11 @@ export function useViewport3DChunkedScalarColors({
   }, [chunkedColorState.chunkedState, compatibilityRequest]);
 
   useEffect(() => {
+    const settledIdentity = {
+      colorPalette,
+      targetKind: buildTargetKind,
+      topology: topology ?? null,
+    };
     if (
       !shouldStartChunkedScalarColorBuild({
         builtBuildKey: chunkedColorState.chunkedState?.buildKey ?? null,
@@ -804,6 +881,10 @@ export function useViewport3DChunkedScalarColors({
         currentFieldVector: buildIdentityFieldVector,
         eligibleForChunkedBuild,
         pending: chunkedColorState.pending,
+        settledBuildKey: resolveChunkedScalarColorSettledBuildKey(
+          chunkedColorState.settled,
+          settledIdentity,
+        ),
       }) ||
       !topology ||
       !buildIdentityFieldVector ||
@@ -1036,7 +1117,10 @@ export function useViewport3DChunkedScalarColors({
         if (builtAnyEntry) {
           publishEntries(false);
         } else {
-          dispatchChunkedColorState({ type: "finish" });
+          dispatchChunkedColorState({
+            settled: { ...settledIdentity, buildKey: combinedModesKey },
+            type: "finish",
+          });
         }
       }
       for (const token of retiredTokens) {
@@ -1044,7 +1128,10 @@ export function useViewport3DChunkedScalarColors({
       }
     })().catch(() => {
       if (activeBuildIdRef.current === buildId) {
-        dispatchChunkedColorState({ type: "finish" });
+        dispatchChunkedColorState({
+          settled: { ...settledIdentity, buildKey: combinedModesKey },
+          type: "finish",
+        });
       }
       return undefined;
     }).finally(() => {
@@ -1059,6 +1146,7 @@ export function useViewport3DChunkedScalarColors({
     chunkedColorState.chunkedState?.buildKey,
     chunkedColorState.chunkedState?.fieldVector,
     chunkedColorState.pending,
+    chunkedColorState.settled,
     buildDomainId,
     buildSessionId,
     buildIdentityFieldVector,

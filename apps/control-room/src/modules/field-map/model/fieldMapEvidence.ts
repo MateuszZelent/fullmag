@@ -145,6 +145,31 @@ export function planarRenderIdentity(
   return presentationKey ? `${scalarIdentity ?? ""}#${presentationKey}` : scalarIdentity ?? "";
 }
 
+/** True when two render evidences describe the same rendered frame and overlays. */
+export function samePlanarRenderEvidence(
+  previous: PlanarRenderEvidence | null,
+  next: PlanarRenderEvidence,
+): boolean {
+  if (!previous) return false;
+  const a = previous.overlayCounts;
+  const b = next.overlayCounts;
+  const ra = previous.raster;
+  const rb = next.raster;
+  return previous.glyphCount === next.glyphCount &&
+    previous.sampleIdentity === next.sampleIdentity &&
+    a.boundsSegments === b.boundsSegments &&
+    a.contours === b.contours &&
+    a.meshSegments === b.meshSegments &&
+    a.pointMarkers === b.pointMarkers &&
+    (ra === rb || (
+      ra !== null && rb !== null &&
+      ra.checksum === rb.checksum &&
+      Object.is(ra.max, rb.max) &&
+      Object.is(ra.min, rb.min) &&
+      ra.sampleCount === rb.sampleCount
+    ));
+}
+
 /** Scalar sample identity of a rendered frame (without its presentation key). */
 export function planarRenderScalarIdentity(renderIdentity: string | null | undefined): string | null {
   return renderIdentity == null ? null : renderIdentity.split("#")[0] ?? null;

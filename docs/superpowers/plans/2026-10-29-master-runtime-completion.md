@@ -43,26 +43,26 @@ uruchamia solvera. UI używa wspólnych resource hooks i bieżącej tożsamości
   zachować run/task/attempt/epoch/plan/topology oraz stan terminalny.
   Dowód: po kontrolowanym odtworzeniu ten sam run i krok, dostępne domena,
   m/H_demag/H_eff, identyczne wartości, brak nowego admission/Start/Solve.
-- [ ] **3. Telemetria.** Worker `footer_step_authority` zakończył swoją część;
+- [x] **3. Telemetria.** Worker `footer_step_authority` zakończył swoją część;
   root integruje stopkę z brakującymi danymi backendu i generowanym kontraktem.
   Nie mieszać prepared scalar z późniejszym zaakceptowanym krokiem.
   Dowód: API i widoczna stopka pokazują ten sam krok i energię po ukończeniu
   i odświeżeniu; brak niepotrzebnego pollingu. Poprawić także potwierdzone
   błędne wartości uptime/nazwy algorytmu i etykietę settlementu, zachowując
   istniejący kształt kontraktu albo regenerując API zarządzaną receptą.
-- [ ] **4. Czas przygotowania.** Worker `materialization_profile_map` tylko
+- [x] **4. Czas przygotowania.** Worker `materialization_profile_map` tylko
   mapuje kod i pomiary; root wybiera i wdraża zmianę. Rozdzielić generację,
   certyfikację, encode/decode, native preparation i publikację. Usunąć
   wykazaną pracę powtarzaną przy reuse, zachowując walidację/piny wejścia.
   Dowód: porównanie tego samego workloadu, konfiguracji i fingerprintów
   topologii; podać czasy i faktycznie usuniętą pracę, bez utożsamiania różnych
   etapów pomiaru i bez zmniejszania domeny.
-- [ ] **5. Wdrożenie scalonych źródeł.** Uzgodnić końcowy stan starego runu
+- [x] **5. Wdrożenie scalonych źródeł.** Uzgodnić końcowy stan starego runu
   i ownera po przerwie silnika, zachować dane i użyć istniejącej recepty
   stop/recovery/resume. Zbudować w stałym backendzie, zachować 128 GiB/16 CPU.
   Dowód: źródła/SHA/snapshot, manifest, build receipt, API Ready, mounty,
   requested/resolved GPU/double oraz kwalifikowana retencja tej próby.
-- [ ] **6. Odbiór obu rodzin.** CoFeB FEM/GPU/double: zgodny Universe i mesh,
+- [x] **6. Odbiór obu rodzin.** CoFeB FEM/GPU/double: zgodny Universe i mesh,
   dokładnie 10 nowych zleconych iteracji, skończone m oraz niezerowe
   H_demag/H_eff w Airboxie. FDM/GPU i FDM multilayer: odrębne przypięte
   wejścia, 10 kroków, właściwe mapowanie pól i zakres Airbox.
@@ -499,3 +499,205 @@ niepełny. Raport końcowy oddziela źródła, build, runtime, render i fizykę.
   startup i nowe przebiegi nadal wymagają dalszego odbioru. Nie powtarzać
   fresh-state ani usuwania kontenerów archiwum `88b6...`: stary runtime
   jest już zachowany, a kolejny krok to zwykły zarządzany start nowej sesji.
+
+### Checkpoint 30.10: wdrożony aktualny master i rzeczywisty FDM/GPU
+
+- Po wznowieniu rozmowy stare uchwyty procesów były nieobecne, a grupa mastera
+  nie miała kontenerów. Odczyt rejestru potwierdził zakończone archiwum
+  `88b6a68101a342c4ac2e13b48fe8d9c8`; nie powtarzano fresh-state ani starego Solve.
+  Master i lokalny `origin/master` wskazywały
+  `aee17a54d4c283f2fdf5aa3d89acc5ecdb638e19`, obejmujący także późniejsze
+  poprawki odświeżania pól i mapowania warstw. Obce zmiany zachowano.
+- Kanoniczny start `just docker-dev` zakończył się `succeeded`:
+  `b17bb884f3a3428aa4b1ec14da234370`, config SHA-256
+  `d4c13de733ea1b43d851e0e39f83e1f9a3d4a9363db231e7e4b26bec3c77ea52`.
+  Toolchain i oba obrazy aplikacji były cache hit; kompilacja aplikacji
+  odbyła się w stałym backendzie, `cargo_jobs=16`, make exit0 po 418 173 ms.
+  Pakiet ma 24 zweryfikowane pliki. Snapshot źródeł:
+  `53e61730cad2704aa59b324802b681c2cfee04f2673ee1409fd008acfb08adb4`.
+- Backend `4458da7cc2b404fc5d38c4f5dd0ab5e4ade72fe291b02f1be7bfbec9af499325`
+  i frontend `012a6f684a3d` są healthy. Inspekcja potwierdziła backend
+  137 438 953 472 B / 16 CPU, readonly źródła i techniczne named volumes;
+  rzeczywiste mounty sprawdzono kanonicznym `_validate_retained_service`,
+  uwzględniając aliasy bindów Docker Desktop/WSL. API
+  `b34e376b-541a-4a14-9c31-462bd4d46372` pozostało to samo podczas aktywacji.
+  Frontend: `http://127.0.0.1:3198/workspace`, potwierdzone HTTP 200.
+- Automatyczna retencja `d3df3394d073427891399530ba774b32` zakończyła się
+  `succeeded`, receipt `/opt/fullmag/runtime-control/runtime-service/cache-maintenance.json`.
+  Zachowano current i direct-rollback oraz 6 416 666 624 B używanego cache
+  incremental poniżej limitu 8 GiB. Część wspólnego cache ma jawne
+  `deferred-busy`: inna grupa ma package claim. Nie zatrzymywano jej ani nie
+  usuwano jej danych; domknięcie tej części wymaga zwolnienia claimu i ponownej
+  kwalifikacji. Nie jest to dowód odzyskania miejsca na dysku Windows.
+- Przykład `fdm_gpu_field_visualization_10_steps.py`, SHA-256
+  `9cee023300371816d13a8226116f3b097d98f416a8ae98209c7a94fe15b93bae`,
+  aktywowano jako `b4140327146f41d68da343994ddfa6c5`. Po przygotowaniu
+  1024 komórek wysłano dokładnie jeden Solve
+  `fm-81563949-ca22-461c-afde-a07948ef8f3f`; journal potwierdza completed,
+  requested/resolved FDM/GPU/double/strict i `fdm_cuda`.
+- Run `run-live-55478efd6a686af08aba30e083e3b740657b6f81f5bdc0dc921c6d71feda22e5`
+  zakończył 10 kroków, czas fizyczny 1e-12 s, energia 1.1276150962092844e-18 J.
+  Odczyt FMVP potwierdził skończone m dla siatki 16×32×2 oraz niezerowe
+  H_demag i H_eff w 640 komórkach Airboxa. Końcowy scalar window ma krok 10,
+  ten sam run/request scope i energię. Artefakt `accepted_terminal_scalar_stats.v1`
+  ma poprawny CAS SHA-256, task/attempt/ownership epoch oraz accepted/stat step 10.
+  Dowód: `backend/six-points-runtime/case-terminal-fields-27965420297e4efc99527c3a410ab8a0.json`
+  w grupowym control volume. `CurrentRunResource.total_steps=1` oznacza tutaj
+  krok Study; liczbę iteracji sprawdzono osobno w `status.run.solver_steps`.
+- Browser QA `ebc364264f3b438d985cf1683e83b8b8` zakończył się succeeded:
+  m data-ready, 384 komórki magnetyczne, 640 segmentów Airboxa, WebGL2,
+  context_lost=false, drawing buffer 617×495. Zrzut canvasa obejrzano.
+  SwiftShader dowodzi renderowania; wykonanie CUDA potwierdza odrębny journal
+  runtime. Nie stwierdzono zbieżności ani parytetu naukowego innych realizacji.
+- FDM multilayer: aktywacja `d9959257347743b38cbff5c3de8a128d`, jeden Solve
+  `fm-dcd15e91-0585-4de8-8c65-5505154874de`, run
+  `run-live-41448a23915c5ed915fc865e97e183f0e22148e8463419cd3c0ead7d18584b26`.
+  Potwierdzono completed, FDM/GPU/double/strict, 10 kroków / 1e-12 s, energię
+  1.6371057829454116e-18 J i trwały terminalny StepStats kroku 10.
+  Dowód: `backend/six-points-runtime/case-terminal-fields-bea061e379e04a179a2b460f086d1a0a.json`.
+  Magnetyzacja ma 768 próbek native, Airbox H_demag/H_eff ma 3072 próbki
+  na osobnym carrierze 16×32×6. Nie utożsamiano tego z przygotowawczym
+  `status.domain.cell_count=384`, opisującym pojedynczą siatkę native.
+- Osobny odczyt `multilayer-mapping-5854db1336ff43ec8171d6cb3b5e3c67.json`
+  w tym samym katalogu control potwierdza po 384 próbki dla `lower_layer`
+  i `upper_layer`: odczyty scoped object są identyczne z odpowiednimi
+  fragmentami packed m, średnie my mają przeciwne znaki zgodne ze skryptem,
+  a originy warstw są różne. Layout potwierdza three_d, cuFFT,
+  cuda_native_multilayer_convolution/double i target-only Airbox.
+  Browser QA `de83496651cf4c1a8b0b54f546b741b3` succeeded: dwa różne kolory
+  warstw, 768 komórek magnetycznych, 1200 segmentów Airboxa, WebGL2 bez
+  utraty kontekstu, buffer 617×527. Zrzut canvasa obejrzano.
+- Nadal otwarte: nowy CoFeB na identycznej siatce, porównanie
+  czasu przygotowania oraz widoczna stopka po odświeżeniu. Narzędzie Windows
+  Computer Use odrzuciło inicjalizację z bieżącym WSL cwd; nie obchodzono tej
+  granicy. Odbiór stopki wymaga zarządzanego harnessu przeglądarkowego.
+  Nie uruchamiano testów jednostkowych ani nowego worktree.
+
+### Checkpoint 30.10: nowy CoFeB, identyczny wynik i krótsze przygotowanie
+
+- CoFeB aktywowano raz jako `8adfcad8c89c4fc6b6a3d943981bc9d4`; SHA skryptu
+  `c986e1d8472cca81aef393d24118f4e0dbd215e1587727d114e3a859f8045cf6`.
+  Python/Gmsh, walidacja i publikacja accepted input trwały 314 995 ms,
+  native domain preparation 184 056 ms; razem 499 051 ms do Ready.
+  Względem zapisanego wcześniejszego pomiaru 429 105 + 200 702 ms oznacza
+  to 26,6% krótszą materializację i 20,8% krótsze przygotowanie do Ready.
+  To pojedyncze porównanie z wcześniejszym checkpointem, nie statystyczna
+  kwalifikacja wydajności. Admission po Compute i wykonanie solvera są
+  osobnymi kosztami, nieuwzględnionymi w tych liczbach; nadal były długie.
+- Nowy run `run-live-0096e07f45d52b68a8eb42043f9398a51efb7472295f0338d47ff836a23ba0b7`
+  wykonał dokładnie 10 iteracji BB po jednym Solve
+  `fm-370c82ef-2133-4c98-82a2-fa99ec901613`. Task
+  `task-eb52fd87df16aff2b870d3fab32759ba97da6a0f13f7f75acacd02b9a31bab27`,
+  attempt `attempt-e2983c9fa5fc474bbadf6763b5e6f795`, epoch 1: succeeded.
+  Journal i readback potwierdzają FEM/GPU/double/strict, `fem_native_gpu`.
+  Czas fizyczny pozostaje 0 s dla minimizacji; nie są to kroki LLG ani dowód zbieżności.
+- Dowód `case-terminal-fields-80aa55adc2d1455a9dfacd7ac70eba1e.json` w
+  `backend/six-points-runtime` potwierdza m: 183 764 węzły; Airbox H_demag/H_eff:
+  157 393 węzły, wszystkie wartości skończone i niezerowe wektory.
+  Metadane wszystkich trzech pól i scalar current_observation wskazują krok 10.
+  Artefakt `accepted_terminal_scalar_stats` ma poprawny CAS SHA-256
+  `79af79be5b5df27e2386440fb4f9ee1529a213c46937fa0da0387e508d5efb9d`,
+  odpowiada claimowi i ma accepted/stat step 10; energia -3.668191276379833e-16 J.
+- `cofeb-preparation-comparison-08c862ab8d93484db3b579738f086112.json`
+  w tym samym katalogu wiąże pomiary z dawnym i nowym odczytem pól.
+  Wszystkie wartości m/H_demag/H_eff mają identyczne hashe jak dawny run,
+  identyczny domain ID `14850812098407037233`, revision 2 oraz topology SHA-256
+  `1a7d1afa1af58fdce2112b1484fd8ec366b78ab8843aa7a725440e711749a18e`.
+  Nie zmniejszono siatki ani nie zmieniono wejścia w celu skrócenia czasu.
+- FEM Browser QA `826c360b68254af2ad7679de08f1b770`: succeeded. Primary m pozostaje
+  data-ready przy wyświetlaniu 1200 wektorów H_demag w `part:__air__`;
+  render przyjął target-buffer, render-snapshot health ready, bez degradacji
+  glifów. WebGL2 nie utracił kontekstu, drawing buffer 617×495. Zrzut obejrzano:
+  Universe obejmuje mniejszą warstwę i pierścień, widoczne są tekstury oraz wektory.
+- Dodano jawny odbiór `--expect-terminal-telemetry` do istniejącej recepty
+  browser QA: przypięte GET status/current-run/scalars, widoczny Step/Total
+  energy, rzeczywisty page.reload i ponowny odbiór tego samego API/runu,
+  skalarów, m i WebGL. Nie modyfikuje modelu ani nie zleca Solve.
+  Python AST i składnia obu modułów Node w istniejącym frontendzie przeszły.
+  Pierwsza rzeczywista próba `0d604d6af795481fb013903743580e14` zakończyła się
+  przed reload z błędną sygnaturą callbacku w helperze. Poprawiono dwa wywołania;
+  kolejne próby i ostateczny odbiór są opisane poniżej.
+
+### Odbiór końcowy 30.10: sześć punktów zamkniętych
+
+Stan z tego rozdziału zastępuje wcześniejsze checkpointy opisujące otwarte
+odbiory. Receipty należą do grupowego control volume
+`fullmag-build-control-fullmag-master-a7f7e9b9a4026499`, namespace
+`namespaces/c1b31c15d177439fb92ec3df61ca8e26`. Dowody pól i porównania
+przygotowania są w jego `backend/six-points-runtime`; odbiory przeglądarki
+w `browser-qa/attempts/<id>`.
+
+| Odbiór | Wynik |
+| --- | --- |
+| Docker i restore | Dostęp działa. Wcześniejszy kontrolowany restore zachował tożsamość ukończonego runu, mesh i identyczne pola bez nowego Solve; dowody w checkpointach odtworzenia powyżej. |
+| FEM CoFeB | 1 087 250 komórek, 183 764 węzły, 10 iteracji minimizacji; m i Airbox H_demag/H_eff kroku 10. Render `826c360b68254af2ad7679de08f1b770`: succeeded. |
+| FDM GPU | 10 kroków, m na siatce 16×32×2 i 640 próbek pola Airboxa. Render `ebc364264f3b438d985cf1683e83b8b8`: succeeded. |
+| FDM GPU multilayer | 10 kroków, packed m 768 próbek, odrębne scoped warstwy po 384 próbki, Airbox 3072 próbki. Render `de83496651cf4c1a8b0b54f546b741b3`: succeeded. |
+| Stopka i reload | Odbiór `773c087519d64361b7a5f4e52baf1f9c`: succeeded. Step 10, energia -3.668191e-16 J i identyfikatory zgodne przed oraz po rzeczywistym odświeżeniu. |
+| Przygotowanie | Identyczne wejście, topologia i hashe pól. Materializacja 314,995 s zamiast 429,105 s; do Ready 499,051 s zamiast 629,807 s. |
+| Wdrożenie i retencja | Build `b17bb884f3a3428aa4b1ec14da234370`, backend 128 GiB/16 CPU, API Ready; retencja `e869b9985f504531aeea2be11f15b2fd`: succeeded. |
+
+Odbiór stopki zapisano w commicie
+`3110abe1719821307ae8f01bf6e4843c0556100c`. Dwie wcześniejsze porażki
+harnessu pozostały zapisane jako failed: błędny callback oraz
+`37870d21a59f4be9a9f3adfbf8b85839`, w którym część przeglądarkowa przeszła,
+lecz hostowy walidator błędnie wymagał ścieżki `/workspace`. Aplikacja
+kanonizuje ją do `/session/permalloy_layer_cofeb_rings_relax_300nm`.
+Poprawiony walidator zachowuje ten sam publiczny origin i kontrolę ścieżki
+przed/po reload; nie poluzowano pinów API, sesji, runu ani wartości skalarów.
+Próba `7f9b774f724541afa0813843c07c0e29` przeszła cały odbiór. Następnie
+usunięto dwie uwagi hooka o tworzeniu formatterów Intl w helperze QA;
+ostateczna próba `773c087519d64361b7a5f4e52baf1f9c` ponownie przeszła
+odbiór, z SHA-256 helpera
+`f4e3d7d8fd919cb13dd8523153469a4a57a28726f608fb37300eb986b612dd8f`.
+Te same API/session/run/request scope, scalar revision 2 i source_step 10;
+m data-ready, WebGL2 bez utraty kontekstu, buffer 617×495. Nie było nowego
+Solve, Compute Fields ani restartu API.
+
+Ponowny audyt dawnych uwag telemetrycznych potwierdził, że bieżący
+`platform/system.rs` liczy uptime przez `api_started_at.elapsed()`;
+odczyt końcowy dał 3886 s, nie epokę Unix. Canonical status publikuje
+`solver.relaxation_algorithm=projected_gradient_bb` i `state=completed`.
+Ogólne `solver.algorithm=null` nie opisuje minimizera; szczegółowy,
+historyczny atrybut `algorithm=fem` nie jest nazwą algorytmu minimizacji.
+Stopka nie ma już dawnych osobnych etykiet algorytmu/settlementu; stan
+ukończonego runu i jego dane są zgodne. Nie dodano pollingu do stopki:
+jej istniejący sekundowy timer dotyczy lokalnego zegara etapu antenowego.
+Dowód odczytu: `final-status-audit-8476f75bd2424c318f9b0295c8474e02.json`.
+
+Końcowa retencja rozwiązała wcześniejsze `deferred-busy` bez zatrzymywania
+obcej grupy. Inventory shared cache: 23 383 774 296 B, evicted=[],
+staging_retained=[]; używany cache incremental 6 416 666 624 B zachowany.
+Niezależna inspekcja prywatnego namespace potwierdziła pusty katalog
+candidates, jeden rollback 2 835 424 KiB i osiem katalogów retired
+zajmujących łącznie 240 KiB metadanych. Nie było kwalifikowanych pakietów
+do usunięcia. Dostępne miejsce Docker VM przed/po wyniosło
+180 105 138 176 / 180 104 888 320 B; nie deklarujemy odzyskanych bajtów
+na C: ani kompaktowania VHDX. Wyniki, archiwum starej sesji i cudze zmiany
+pozostały zachowane.
+
+Pozostają ograniczenia poza odbiorem tych sześciu punktów:
+
+- Admission/przygotowanie po Compute nadal jest długie i wymaga osobnego
+  profilowania; skrócenie do Ready nie oznacza skrócenia całego runu o 20,8%.
+- Krótkie próby GPU dowodzą uruchomienia, mapowania, materializacji i renderu.
+  Nie kwalifikują zbieżności, parytetu FEM/FDM, realizacji CPU ani produkcji.
+- Pobrane później commity remote opisują odrębny, nadal zablokowany przypadek
+  `fem_relax_gpu_smoke.py`: natywny worker FEM GPU kończy się SIGSEGV przed
+  pierwszym krokiem. Udany CoFeB nie zamyka tego błędu;
+  [status osobnego odbioru 2D](../../status/2d-slice-capabilities.md).
+- Normalny, zatwierdzony hook React Doctor pozostawia dwie wcześniejsze
+  uwagi do lookupów w istniejącym głównym harnessie. Nie zmieniano hooka,
+  PATH ani progów kontroli; nie przedstawiamy skanera jako bezuwagowego.
+- Backend działa ze źródeł `aee17a54d4c283f2fdf5aa3d89acc5ecdb638e19`.
+  Późniejsze zmiany odbioru dotyczą harnessu i dokumentacji; nie wymagają
+  kolejnej kompilacji solvera. Backend i frontend pozostają włączone
+  na 3198 z ukończonym CoFeB. Nie uruchamiano testów jednostkowych.
+
+Przed końcową synchronizacją pobrano
+`fec56017703cef40a7321646f3367858dea0d6fb` z origin/master: sześć nowych
+commitów zmieniających wyłącznie testy i dokumentację widoku 2D. Połączono
+je bez konfliktów z własnymi commitami odbioru; nie uruchamiano tych testów
+ani kolejnego buildu. Zmiany nie modyfikują działającego solvera ani jego
+wyników. Równoległe zmiany instrukcji, poradników i submodułów zachowano
+poza commitami tego zadania.
