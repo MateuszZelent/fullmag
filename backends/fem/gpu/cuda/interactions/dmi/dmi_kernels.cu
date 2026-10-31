@@ -420,6 +420,8 @@ __global__ void dmi_project_field_kernel(
     const uint8_t *__restrict__ magnetic_node_mask,
     const uint32_t *__restrict__ periodic_reduced_node,
     const uint32_t *__restrict__ periodic_representative_nodes,
+    const uint32_t *__restrict__ periodic_class_member_offsets,
+    const uint32_t *__restrict__ periodic_class_members,
     double *__restrict__ h_dmi_x,
     double *__restrict__ h_dmi_y,
     double *__restrict__ h_dmi_z,
@@ -439,7 +441,12 @@ __global__ void dmi_project_field_kernel(
         return;
     }
     if (periodic_reduced_node != nullptr &&
-        periodic_representative_nodes != nullptr) {
+        periodic_representative_nodes != nullptr &&
+        periodic_class_member_offsets != nullptr &&
+        periodic_class_members != nullptr) {
+        // Periodic images form one DOF: sum the weak residual and lumped mass
+        // over the class, as the CPU lane does, then project once. Every
+        // member visits the same list in the same order, so images agree.
         const uint32_t reduced = periodic_reduced_node[node];
         const uint32_t representative = periodic_representative_nodes[node];
         if (representative >= static_cast<uint32_t>(node_count)) {
@@ -449,13 +456,13 @@ __global__ void dmi_project_field_kernel(
         double res_y = 0.0;
         double res_z = 0.0;
         double mass = 0.0;
-        for (int src = 0; src < node_count; ++src) {
-            if (periodic_reduced_node[src] == reduced) {
-                res_x += residual_x[src];
-                res_y += residual_y[src];
-                res_z += residual_z[src];
-                mass += lumped_mass[src];
-            }
+        for (uint32_t p = periodic_class_member_offsets[reduced];
+             p < periodic_class_member_offsets[reduced + 1u]; ++p) {
+            const uint32_t src = periodic_class_members[p];
+            res_x += residual_x[src];
+            res_y += residual_y[src];
+            res_z += residual_z[src];
+            mass += lumped_mass[src];
         }
         const double ms_i = ms != nullptr ? ms[representative] : uniform_ms;
         if (mass > 0.0 && ms_i > 0.0) {
@@ -507,7 +514,9 @@ void fullmag_cuda_dmi_field_energy(
     int node_count,
     cudaStream_t stream,
     const uint32_t *periodic_reduced_node,
-    const uint32_t *periodic_representative_nodes)
+    const uint32_t *periodic_representative_nodes,
+    const uint32_t *periodic_class_member_offsets,
+    const uint32_t *periodic_class_members)
 {
     if (node_count <= 0) {
         return;
@@ -556,6 +565,8 @@ void fullmag_cuda_dmi_field_energy(
         magnetic_node_mask,
         periodic_reduced_node,
         periodic_representative_nodes,
+        periodic_class_member_offsets,
+        periodic_class_members,
         h_dmi_x,
         h_dmi_y,
         h_dmi_z,

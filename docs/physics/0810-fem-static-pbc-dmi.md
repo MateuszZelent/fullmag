@@ -60,11 +60,12 @@ integral contributions) should appear on periodic seam faces.
    boundary terms appear there.
 3. The periodic constraint applies to **volume** operators only; surface integral BC terms
    that would arise at physical boundaries are excluded from seam faces.
-4. The implementation uses the **class-projection strategy**: after computing the FEM
-   DMI field, values at all nodes within the same periodic equivalence class are averaged
-   to enforce translational consistency.  This is correct for local-volume operators such
-   as DMI (contrast with global operators like Poisson demag which require full P^T A P
-   algebraic reduction).
+4. The implementation uses the **class-reduction strategy**: all nodes of one periodic
+   equivalence class are a single degree of freedom, so the weak residual and the lumped
+   mass are summed over the class before the field is projected (Section 6.1).  This is
+   the reduction $P^T R$, $P^T M P$ of the constrained problem.  Averaging or copying
+   per-node fields is not equivalent and is not used (contrast with global operators like
+   Poisson demag, which additionally require the full $P^T A P$ matrix reduction).
 
 ---
 
@@ -85,11 +86,20 @@ only requires enforcing the periodicity constraint on the **output field**:
 1. Input $\mathbf{m}$: apply static periodic constraints (all class nodes take the
    representative value) before element loops.
 2. Compute DMI field element-by-element (standard FEM gradient assembly).
-3. Output $\mathbf{H}_\text{DMI}$: project field values by periodic class (average /
-   copy representative value to all class nodes).
+3. Output $\mathbf{H}_\text{DMI}$: reduce the weak residual $R_i$ and the lumped mass
+   $M_i$ over each periodic class $c$ and project once:
 
-This two-step input/output projection ensures the field is periodic and free from
-spurious discontinuities at the seam.
+   $$
+   \mathbf{H}_c = -\frac{\sum_{i \in c} \mathbf{R}_i}{\mu_0 M_s \sum_{i \in c} M_i},
+   \qquad \mathbf{H}_i = \mathbf{H}_c \quad \forall i \in c .
+   $$
+
+A seam node carries only the element contributions from its own side of the seam, so its
+$R_i$ and $M_i$ are both partial.  Dividing each by its own mass and then averaging or
+copying the representative gives a field that is wrong at the seam (the partial ratios
+differ from the class ratio unless the two sides carry equal mass).  Summing first gives
+the field of the interior node that the periodic image represents.  This matches the
+exchange mass projection (`backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp`).
 
 ### 6.2 Seam boundary treatment
 
@@ -104,8 +114,9 @@ seam exclusion in PR-4).
 
 | Path | Backend | Notes |
 |---|---|---|
-| Rust reference (PR-5A) | `fullmag-engine` `FemLlgProblem` | `dmi_fields_from_vectors` / `dmi_fields_add_into` apply class projection |
-| Native C++ (PR-5B) | `mfem_bridge.cpp` | `project_static_periodic_aos` called after `compute_interfacial_dmi_field` and `compute_bulk_dmi_field` |
+| Rust reference (PR-5A) | `fullmag-engine` `FemLlgProblem` | `dmi_fields_from_vectors` / `dmi_fields_add_into` still average per-node fields without mass weights (deferred, Section 15) |
+| Native FEM CPU | `backends/fem/cpu/mfem/interactions/dmi_workspace.cpp` | `accumulate_dmi_periodic_residual_and_mass` sums residual and lumped mass per class before `dmi_project_lumped_field` (interfacial and bulk) |
+| Native FEM GPU | `backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu` | `dmi_project_field_kernel` sums over the class members listed in the `periodic_class_member_offsets` / `periodic_class_members` CSR uploaded with the runtime coefficients; fixed member order makes all images bit-identical and the cost O(N) |
 
 ---
 
@@ -186,4 +197,8 @@ plan and visible in execution records.  No additional provenance fields required
 ## 15. Deferred work
 
 - **PR-5C**: spin-spiral ground-state validation against analytical or mumax3 reference
+- Rust reference `FemLlgProblem`: replace the per-node field average with the class
+  residual/mass reduction of Section 6.1
+- Seam-pair field equality and CPU/GPU parity tests for the class reduction on a mesh
+  whose seam nodes carry unequal lumped masses
 - Full periodic seam exclusion validation for per-node `Dind_field` / `Dbulk_field` with non-uniform constants

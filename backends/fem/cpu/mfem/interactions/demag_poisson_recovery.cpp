@@ -438,9 +438,17 @@ bool recover_demag_poisson_field(
         return false;
     }
 
-    if (!ctx.mesh.periodic_reduced_node.empty() &&
-        ctx.mesh.periodic_reduced_node.size() == node_count &&
-        ctx.mesh.periodic_reduced_node_count > 0u) {
+    if (!ctx.mesh.periodic_reduced_node.empty()) {
+        // Periodic images are one DOF: sum the weighted gradient and the
+        // recovery weight over each class before the division below, so every
+        // image recovers the same class field (docs/physics/0800).
+        if (ctx.mesh.periodic_reduced_node.size() != node_count ||
+            ctx.mesh.periodic_reduced_node_count == 0u) {
+            h_demag_xyz.clear();
+            ctx.demag.h_visual_xyz.clear();
+            error = "periodic demag field recovery requires a reduced-node map covering every P1 node";
+            return false;
+        }
         const size_t reduced_count =
             static_cast<size_t>(ctx.mesh.periodic_reduced_node_count);
         std::vector<double> reduced_h_demag_xyz(reduced_count * 3u, 0.0);
@@ -451,7 +459,10 @@ bool recover_demag_poisson_field(
             const size_t reduced =
                 static_cast<size_t>(ctx.mesh.periodic_reduced_node[node]);
             if (reduced >= reduced_count) {
-                continue;
+                h_demag_xyz.clear();
+                ctx.demag.h_visual_xyz.clear();
+                error = "periodic demag field recovery found a node outside the periodic class map";
+                return false;
             }
             const size_t base = node * 3u;
             const size_t rbase = reduced * 3u;
@@ -467,9 +478,6 @@ bool recover_demag_poisson_field(
         for (size_t node = 0; node < node_count; ++node) {
             const size_t reduced =
                 static_cast<size_t>(ctx.mesh.periodic_reduced_node[node]);
-            if (reduced >= reduced_count) {
-                continue;
-            }
             const size_t base = node * 3u;
             const size_t rbase = reduced * 3u;
             h_demag_xyz[base + 0] = reduced_h_demag_xyz[rbase + 0];

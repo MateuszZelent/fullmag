@@ -95,6 +95,12 @@ bool gpu_rk_reduce_final_dmi_energy_terms(
                 : nullptr,
             gpu.mesh_regions.has_periodic_reduced_nodes
                 ? gpu.mesh_regions.periodic_representative_nodes
+                : nullptr,
+            gpu.mesh_regions.has_periodic_reduced_nodes
+                ? gpu.mesh_regions.periodic_class_member_offsets
+                : nullptr,
+            gpu.mesh_regions.has_periodic_reduced_nodes
+                ? gpu.mesh_regions.periodic_class_members
                 : nullptr);
         if (!cuda_launch_ok(
                 bulk_mode ? "launch GPU RK bulk DMI energy blocks" :

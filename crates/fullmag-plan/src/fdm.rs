@@ -1627,39 +1627,6 @@ fn build_fdm_region_legend(
         .collect()
 }
 
-fn resolve_region_constant_aex(problem: &ProblemIR, region_id: &str) -> Option<f64> {
-    let region = problem
-        .object_regions
-        .iter()
-        .find(|r| r.enabled && r.region_id == region_id)?;
-    let mut best: Option<(i32, f64)> = None;
-    for over in &region.material_overrides {
-        if over.parameter == fullmag_ir::MaterialParameterNameIR::Aex {
-            if let fullmag_ir::MaterialParameterFieldIR::Constant { value, .. } = &over.value {
-                if let Some(v) = value.as_f64().or_else(|| value.as_i64().map(|i| i as f64)) {
-                    if best.is_none_or(|(p, _)| over.priority >= p) {
-                        best = Some((over.priority, v));
-                    }
-                }
-            }
-        }
-    }
-    for field in &problem.material_parameter_fields {
-        if field.region_id.as_deref() == Some(region_id)
-            && field.parameter == fullmag_ir::MaterialParameterNameIR::Aex
-        {
-            if let fullmag_ir::MaterialParameterFieldIR::Constant { value, .. } = &field.value {
-                if let Some(v) = value.as_f64().or_else(|| value.as_i64().map(|i| i as f64)) {
-                    if best.is_none_or(|(p, _)| field.priority >= p) {
-                        best = Some((field.priority, v));
-                    }
-                }
-            }
-        }
-    }
-    best.map(|(_, v)| v)
-}
-
 fn materialize_region_exchange_couplings(
     problem: &ProblemIR,
     material_exchange: f64,
@@ -1713,21 +1680,11 @@ fn materialize_region_exchange_couplings(
             }
             ExchangeCouplingModeIR::Disabled => 0.0,
             ExchangeCouplingModeIR::HarmonicMean => {
-                let a1 = resolve_region_constant_aex(problem, source_id).unwrap_or(material_exchange);
-                let a2 = resolve_region_constant_aex(problem, target_id).unwrap_or(material_exchange);
-                let harmonic = if a1 > 0.0 && a2 > 0.0 {
-                    2.0 * a1 * a2 / (a1 + a2)
-                } else {
-                    0.0
-                };
                 let scale = scale.unwrap_or(1.0);
-                let val = harmonic * scale;
-                if (scale - 1.0).abs() <= f64::EPSILON
-                    && (val - material_exchange).abs() <= f64::EPSILON
-                {
+                if (scale - 1.0).abs() <= f64::EPSILON {
                     continue;
                 }
-                val
+                material_exchange * scale
             }
         };
         overrides.push((source_index, target_index, exchange));

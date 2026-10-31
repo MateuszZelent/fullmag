@@ -115,11 +115,28 @@ $$
 \mathbf{H}_\text{demag} = -\nabla \varphi_\text{full}
 $$
 
-Project to periodic classes to remove rounding mismatches:
+Reduce the field recovery over periodic classes. The recovered nodal field is
+the weighted gradient $\mathbf{G}_i = \sum_e w_{e,i} (-\nabla \varphi)_e$ divided
+by the recovery weight $W_i = \sum_e w_{e,i}$. A seam node sees only the
+elements on its own side of the seam, so both $\mathbf{G}_i$ and $W_i$ are
+partial. Periodic images are one degree of freedom, so the sums are taken over
+the class $c$ before the division:
 
 $$
-\mathbf{H}_\text{demag}[i] \leftarrow \text{class\_average}(\mathbf{H}_\text{demag}, c_i)
+\mathbf{H}_\text{demag}[i] \leftarrow
+\frac{\sum_{j \in c_i} \mathbf{G}_j}{\sum_{j \in c_i} W_j}.
 $$
+
+This equals the recovery at an interior node that the periodic image
+represents. Dividing per node first and then averaging or copying the
+representative is wrong at the seam (the error is local and $O(h)$ for a
+continuous potential) unless both sides carry equal weight. The CPU lane sums
+the weighted gradients and weights in `recover_demag_poisson_field`
+(`backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp`); the GPU lane
+merges the recovery weights and sparse recovery rows per class once at setup in
+`build_mixed_demag_operators`
+(`backends/fem/gpu/cuda/demag_poisson/operators.cpp`). Both fail closed on a
+reduced-node map that does not cover every P1 node.
 
 For GPU relaxation, every accepted or trial magnetisation used by the
 minimizer must also be projected onto the same static periodic classes after
@@ -1099,6 +1116,11 @@ the tested state, so the stored demag energy is non-negative.
       static periodic classes before energy/snapshot diagnostics, preventing a
       false-PBC state where `m` is periodic but `H_demag` has a side-seam
       discontinuity
+- [x] CPU and GPU demag recovery reduce the weighted gradient and the
+      recovery weight over each periodic class before dividing (Section on
+      field recovery above), instead of dividing per node and averaging
+- [ ] Seam-pair `H_demag` equality and CPU/GPU parity test on a mesh whose
+      seam nodes carry unequal recovery weights
 
 ---
 

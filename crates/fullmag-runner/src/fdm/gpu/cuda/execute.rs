@@ -412,10 +412,28 @@ fn public_gpu_device_ordinal() -> Result<i32, RunError> {
 
 #[cfg(feature = "cuda")]
 fn adaptive_batch_execution_eligible(plan: &FdmPlanIR, live: bool) -> bool {
+    // The batch ABI runs only through the adaptive CUDA graph, which bakes
+    // stage times into its capture and rejects time-dependent drives.
     plan.adaptive_timestep.is_some()
         && plan.relaxation.is_none()
         && plan.spin_transport_plans.is_empty()
+        && !plan_uploads_time_dependent_drive(plan)
         && !live
+}
+
+#[cfg(feature = "cuda")]
+/// Mirrors the drives `native.rs` uploads, enabled or not.
+fn plan_uploads_time_dependent_drive(plan: &FdmPlanIR) -> bool {
+    let dynamic = |waveform: &fullmag_ir::TimeDependenceIR| {
+        !matches!(waveform, fullmag_ir::TimeDependenceIR::Constant)
+    };
+    plan.regional_field_drive_bases
+        .iter()
+        .any(|basis| dynamic(&basis.drive.waveform))
+        || plan
+            .solved_antenna_drive_bases
+            .iter()
+            .any(|basis| dynamic(&basis.drive.waveform))
 }
 
 #[cfg(feature = "cuda")]

@@ -283,14 +283,10 @@ bool initialize_linear_system(
         return false;
     }
 
-    const double solver_tol =
-        ctx.demag.solver.relative_tolerance > 0.0
-            ? ctx.demag.solver.relative_tolerance * 0.1
-            : ctx.demag.solver.relative_tolerance;
     if (ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_GMRES) {
         auto gmres = std::make_unique<mfem::HypreGMRES>(fullmag_serial_comm());
         gmres->iterative_mode = true;
-        gmres->SetTol(solver_tol);
+        gmres->SetTol(ctx.demag.solver.relative_tolerance);
         if (ctx.demag.solver.has_absolute_tolerance &&
             ctx.demag.solver.absolute_tolerance > 0.0) {
             gmres->SetAbsTol(ctx.demag.solver.absolute_tolerance);
@@ -304,7 +300,7 @@ bool initialize_linear_system(
     } else if (ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_CG) {
         auto pcg = std::make_unique<mfem::HyprePCG>(fullmag_serial_comm());
         pcg->iterative_mode = true;
-        pcg->SetTol(solver_tol);
+        pcg->SetTol(ctx.demag.solver.relative_tolerance);
         if (ctx.demag.solver.has_absolute_tolerance &&
             ctx.demag.solver.absolute_tolerance > 0.0) {
             pcg->SetAbsTol(ctx.demag.solver.absolute_tolerance);

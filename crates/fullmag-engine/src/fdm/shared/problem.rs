@@ -469,6 +469,11 @@ impl ExchangeLlgProblem {
         Ok(self.external_energy_density_from_fields(state.magnetization(), &field))
     }
 
+    pub fn magnetoelastic_energy_density(&self, state: &ExchangeLlgState) -> Result<Vec<f64>> {
+        self.ensure_state_matches_grid(state)?;
+        Ok(self.magnetoelastic_energy_density_from_vectors(state.magnetization()))
+    }
+
     pub fn anisotropy_energy_density(&self, state: &ExchangeLlgState) -> Result<Vec<f64>> {
         self.ensure_state_matches_grid(state)?;
         Ok(self.anisotropy_energy_density_from_vectors(state.magnetization()))

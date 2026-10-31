@@ -242,6 +242,36 @@ $$
 **This is the same approach as in the initial plan and in amumax's `demag_boundary.go`.** The
 upgrade from T0 is that T1 includes the sparse correction, not just the volume-weighted packing.
 
+#### 3.2.3 Reported exchange energy (GPU reductions)
+
+The exchange energy that the CUDA reductions report
+(`backends/fdm/gpu/cuda/runtime/reductions_fp64.cu`) is a diagnostic; the
+dynamics use the field above. Each forward link $(i, j)$ is counted once with
+weight $A_{ij}\, w_{ij}\, \lVert \mathbf{m}_j - \mathbf{m}_i \rVert^2$:
+
+- **T0:** $w_{ij} = f_{i \to j}\, V / \Delta x^2$, with the full cell volume
+  $V$. The field carries $1/\varphi_i^{\text{eff}}$ and the cell energy weight
+  carries $\varphi_i^{\text{eff}} V$, so $\varphi_i^{\text{eff}}$ cancels and
+  this energy is the exact variational partner of the T0 field. Links to a
+  neighbour with $\varphi_j = 0$ are skipped, as in the field.
+- **T1:** the boundary-corrected field operator is not symmetric (the
+  denominator at cell $i$ uses the boundary distance on the opposite side of
+  $i$), so no exact discrete energy exists. The reported energy uses the
+  symmetric link weight
+  $$
+  w_{ij} = V \cdot \tfrac{1}{2}\left(
+  \frac{2}{\Delta x (\Delta x + \delta_{\mp,i})} +
+  \frac{2}{\Delta x (\Delta x + \delta_{\pm,j})}
+  \right),
+  $$
+  which reduces to $V / \Delta x^2$ away from boundaries.
+- **Uncorrected path with volume fractions:** the link weight uses the pair
+  fraction $\tfrac12(\varphi_i + \varphi_j) V$, so a link has the same weight
+  whichever cell it is reduced from.
+
+Like the T0/T1 fields, these energies use open (non-periodic) neighbours;
+periodic T0/T1 exchange is not implemented.
+
 ### 3.3 T2: AMR-enhanced (future)
 
 García-Cervera/Roma [5] showed adaptive mesh refinement combined with boundary correction. The AMR

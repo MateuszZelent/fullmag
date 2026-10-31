@@ -1150,6 +1150,21 @@ mod adaptive_decision_tests {
 }
 
 impl ExchangeLlgProblem {
+    /// FSAL reuses the last stage of the accepted step as the first stage of
+    /// the next one. That is exact only when the RHS at (t_{n+1}, m_{n+1}) is
+    /// the same function in both steps: a time-dependent Oersted source is
+    /// re-sampled per step, and Brown thermal noise is drawn per accepted step
+    /// and scaled by that step's dt, so either one invalidates the reuse.
+    /// Regional drives are evaluated at t_{n+1} by the same waveform in both
+    /// places, so they keep FSAL valid.
+    pub(crate) fn fsal_reuse_invalidated(&self) -> bool {
+        self.terms
+            .oersted_cylinder
+            .as_ref()
+            .is_some_and(|cfg| cfg.time_dep_kind != 0)
+            || self.temperature > 0.0
+    }
+
     #[inline]
     fn project_stage(&self, vector: Vector3) -> Result<Vector3> {
         self.dynamics.projection_policy.project(vector)
@@ -1940,19 +1955,14 @@ impl ExchangeLlgProblem {
         };
         let n = state.magnetization.len();
         let t0 = state.time_seconds;
-        let dynamic_oersted = self
-            .terms
-            .oersted_cylinder
-            .as_ref()
-            .is_some_and(|cfg| cfg.time_dep_kind != 0)
-            || self.regional_field_drives.iter().any(|drive| drive.enabled);
+        let fsal_invalidated = self.fsal_reuse_invalidated();
         bufs.m0[..n].copy_from_slice(&state.magnetization);
 
         loop {
             self.set_thermal_dt_for_attempt(dt);
             let mut rhs_evals = AttemptRhsCounter::default();
             // Stage 1 — FSAL: reuse k4 from previous accepted step
-            let reusable_fsal = (!dynamic_oersted).then(|| state.k_fsal.as_ref()).flatten();
+            let reusable_fsal = (!fsal_invalidated).then(|| state.k_fsal.as_ref()).flatten();
             if let Some(fsal) = reusable_fsal {
                 bufs.k[0][..n].copy_from_slice(fsal);
             } else {
@@ -2111,7 +2121,7 @@ impl ExchangeLlgProblem {
                 state.magnetization[..n].copy_from_slice(&bufs.m_stage[..n]);
                 self.restore_frozen_reference(&mut state.magnetization[..n]);
                 state.time_seconds += dt;
-                if dynamic_oersted {
+                if fsal_invalidated {
                     state.k_fsal = None;
                 } else if let Some(fsal) = &mut state.k_fsal {
                     fsal.copy_from_slice(&bufs.k[3][..n]);
@@ -2179,18 +2189,13 @@ impl ExchangeLlgProblem {
         };
         let n = state.magnetization.len();
         let t0 = state.time_seconds;
-        let dynamic_oersted = self
-            .terms
-            .oersted_cylinder
-            .as_ref()
-            .is_some_and(|cfg| cfg.time_dep_kind != 0)
-            || self.regional_field_drives.iter().any(|drive| drive.enabled);
+        let fsal_invalidated = self.fsal_reuse_invalidated();
         bufs.soa.m0.scatter_from_aos(&state.magnetization);
 
         loop {
             self.set_thermal_dt_for_attempt(dt);
             let mut rhs_evals = AttemptRhsCounter::default();
-            let reusable_fsal = (!dynamic_oersted).then(|| state.k_fsal.as_ref()).flatten();
+            let reusable_fsal = (!fsal_invalidated).then(|| state.k_fsal.as_ref()).flatten();
             if let Some(fsal) = reusable_fsal {
                 bufs.soa.k[0].scatter_from_aos(fsal);
             } else {
@@ -2297,7 +2302,7 @@ impl ExchangeLlgProblem {
                     .m_stage
                     .gather_into_aos(&mut state.magnetization[..n]);
                 state.time_seconds += dt;
-                if dynamic_oersted {
+                if fsal_invalidated {
                     state.k_fsal = None;
                 } else if let Some(fsal) = &mut state.k_fsal {
                     bufs.soa.k[3].gather_into_aos(fsal);
@@ -2370,12 +2375,7 @@ impl ExchangeLlgProblem {
         };
         let n = state.magnetization.len();
         let t0 = state.time_seconds;
-        let dynamic_oersted = self
-            .terms
-            .oersted_cylinder
-            .as_ref()
-            .is_some_and(|cfg| cfg.time_dep_kind != 0)
-            || self.regional_field_drives.iter().any(|drive| drive.enabled);
+        let fsal_invalidated = self.fsal_reuse_invalidated();
         bufs.m0[..n].copy_from_slice(&state.magnetization);
 
         // Dormand-Prince coefficients
@@ -2410,7 +2410,7 @@ impl ExchangeLlgProblem {
             self.set_thermal_dt_for_attempt(dt);
             let mut rhs_evals = AttemptRhsCounter::default();
             // Stage 1 — FSAL: reuse k7 from previous accepted step
-            let reusable_fsal = (!dynamic_oersted).then(|| state.k_fsal.as_ref()).flatten();
+            let reusable_fsal = (!fsal_invalidated).then(|| state.k_fsal.as_ref()).flatten();
             if let Some(fsal) = reusable_fsal {
                 bufs.k[0][..n].copy_from_slice(&fsal);
             } else {
@@ -2735,7 +2735,7 @@ impl ExchangeLlgProblem {
                 state.magnetization[..n].copy_from_slice(&bufs.m_stage[..n]);
                 self.restore_frozen_reference(&mut state.magnetization[..n]);
                 state.time_seconds += dt;
-                if dynamic_oersted {
+                if fsal_invalidated {
                     state.k_fsal = None;
                 } else if let Some(fsal) = &mut state.k_fsal {
                     fsal.copy_from_slice(&bufs.k[6][..n]);
@@ -2803,12 +2803,7 @@ impl ExchangeLlgProblem {
         };
         let n = state.magnetization.len();
         let t0 = state.time_seconds;
-        let dynamic_oersted = self
-            .terms
-            .oersted_cylinder
-            .as_ref()
-            .is_some_and(|cfg| cfg.time_dep_kind != 0)
-            || self.regional_field_drives.iter().any(|drive| drive.enabled);
+        let fsal_invalidated = self.fsal_reuse_invalidated();
         bufs.soa.m0.scatter_from_aos(&state.magnetization);
 
         const A21: f64 = 1.0 / 5.0;
@@ -2841,7 +2836,7 @@ impl ExchangeLlgProblem {
         loop {
             self.set_thermal_dt_for_attempt(dt);
             let mut rhs_evals = AttemptRhsCounter::default();
-            let reusable_fsal = (!dynamic_oersted).then(|| state.k_fsal.as_ref()).flatten();
+            let reusable_fsal = (!fsal_invalidated).then(|| state.k_fsal.as_ref()).flatten();
             if let Some(fsal) = reusable_fsal {
                 bufs.soa.k[0].scatter_from_aos(&fsal);
             } else {
@@ -3042,7 +3037,7 @@ impl ExchangeLlgProblem {
                     .m_stage
                     .gather_into_aos(&mut state.magnetization[..n]);
                 state.time_seconds += dt;
-                if dynamic_oersted {
+                if fsal_invalidated {
                     state.k_fsal = None;
                 } else if let Some(fsal) = &mut state.k_fsal {
                     bufs.soa.k[6].gather_into_aos(fsal);
@@ -3568,18 +3563,13 @@ impl ExchangeLlgProblem {
         };
         let n = state.magnetization.len();
         let t0 = state.time_seconds;
-        let dynamic_oersted = self
-            .terms
-            .oersted_cylinder
-            .as_ref()
-            .is_some_and(|cfg| cfg.time_dep_kind != 0)
-            || self.regional_field_drives.iter().any(|drive| drive.enabled);
+        let fsal_invalidated = self.fsal_reuse_invalidated();
         bufs.soa.m0.copy_from(&state.magnetization);
 
         loop {
             self.set_thermal_dt_for_attempt(dt);
             let mut rhs_evals = AttemptRhsCounter::default();
-            let reusable_fsal = (!dynamic_oersted).then(|| state.k_fsal.as_ref()).flatten();
+            let reusable_fsal = (!fsal_invalidated).then(|| state.k_fsal.as_ref()).flatten();
             if let Some(fsal) = reusable_fsal {
                 bufs.soa.k[0].copy_from(fsal);
             } else {
@@ -3684,7 +3674,7 @@ impl ExchangeLlgProblem {
             if let AdaptiveDecision::Accepted(dt_next) = decision {
                 state.magnetization.copy_from(&bufs.soa.m_stage);
                 state.time_seconds += dt;
-                if dynamic_oersted {
+                if fsal_invalidated {
                     state.k_fsal = None;
                 } else if let Some(fsal) = &mut state.k_fsal {
                     fsal.copy_from(&bufs.soa.k[3]);
@@ -3750,12 +3740,7 @@ impl ExchangeLlgProblem {
         };
         let n = state.magnetization.len();
         let t0 = state.time_seconds;
-        let dynamic_oersted = self
-            .terms
-            .oersted_cylinder
-            .as_ref()
-            .is_some_and(|cfg| cfg.time_dep_kind != 0)
-            || self.regional_field_drives.iter().any(|drive| drive.enabled);
+        let fsal_invalidated = self.fsal_reuse_invalidated();
         bufs.soa.m0.copy_from(&state.magnetization);
 
         const A21: f64 = 1.0 / 5.0;
@@ -3788,7 +3773,7 @@ impl ExchangeLlgProblem {
         loop {
             self.set_thermal_dt_for_attempt(dt);
             let mut rhs_evals = AttemptRhsCounter::default();
-            let reusable_fsal = (!dynamic_oersted).then(|| state.k_fsal.as_ref()).flatten();
+            let reusable_fsal = (!fsal_invalidated).then(|| state.k_fsal.as_ref()).flatten();
             if let Some(fsal) = reusable_fsal {
                 bufs.soa.k[0].copy_from(&fsal);
             } else {
@@ -3987,7 +3972,7 @@ impl ExchangeLlgProblem {
             if let AdaptiveDecision::Accepted(dt_next) = decision {
                 state.magnetization.copy_from(&bufs.soa.m_stage);
                 state.time_seconds += dt;
-                if dynamic_oersted {
+                if fsal_invalidated {
                     state.k_fsal = None;
                 } else if let Some(fsal) = &mut state.k_fsal {
                     fsal.copy_from(&bufs.soa.k[6]);

@@ -611,6 +611,7 @@ static void free_regional_field_drives(Context &ctx) {
         ctx.regional_field_drive_points = nullptr;
     }
     ctx.regional_field_drive_count = 0;
+    ctx.regional_field_drive_time_dependent = false;
     ctx.regional_field_drive_point_count = 0;
 }
 
@@ -5061,6 +5062,10 @@ bool context_upload_regional_field_drives(
     ctx.regional_field_drive_params = params_device;
     ctx.regional_field_drive_points = points_device;
     ctx.regional_field_drive_count = drive_count;
+    ctx.regional_field_drive_time_dependent = std::any_of(
+        params.begin(), params.end(), [](const RegionalFieldDriveParams &drive) {
+            return drive.waveform != FULLMAG_FDM_REGIONAL_FIELD_DRIVE_CONSTANT;
+        });
     ctx.regional_field_drive_point_count = static_cast<uint64_t>(piecewise_points.size() / 2u);
     return true;
 }

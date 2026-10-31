@@ -960,10 +960,10 @@ bool build_mixed_demag_operators(
         }
     }
 
-    if (periodic_node_class_reduction &&
-        !ctx.mesh.periodic_reduced_node.empty() &&
-        ctx.mesh.periodic_reduced_node.size() == visual_weight.size() &&
-        ctx.mesh.periodic_reduced_node_count > 0u) {
+    if (periodic_node_class_reduction) {
+        // The reduced-node map was validated against the P1 state rows above.
+        // Periodic images are one DOF: merge recovery weights and rows per
+        // class so every image recovers the same class field.
         const size_t reduced_count =
             static_cast<size_t>(ctx.mesh.periodic_reduced_node_count);
         std::vector<double> reduced_visual_weight(reduced_count, 0.0);
@@ -990,9 +990,6 @@ bool build_mixed_demag_operators(
         for (size_t node = 0; node < visual_weight.size(); ++node) {
             const size_t reduced =
                 static_cast<size_t>(ctx.mesh.periodic_reduced_node[node]);
-            if (reduced >= reduced_count) {
-                continue;
-            }
             if (!add_finite(
                     reduced_visual_weight[reduced],
                     visual_weight[node],
@@ -1017,9 +1014,6 @@ bool build_mixed_demag_operators(
         for (size_t node = 0; node < visual_weight.size(); ++node) {
             const size_t reduced =
                 static_cast<size_t>(ctx.mesh.periodic_reduced_node[node]);
-            if (reduced >= reduced_count) {
-                continue;
-            }
             visual_weight[node] = reduced_visual_weight[reduced];
             recovery_weight[node] = reduced_recovery_weight[reduced];
             magnetic_state_node[node] = reduced_magnetic_node[reduced];

@@ -364,16 +364,45 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
     // Sort overrides/assignments by priority desc, then by region_id to keep sort stable
     overrides.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
+    // A sharp transition, or none, needs only membership, which CSG regions
+    // provide without a signed distance. Compile those predicates once.
+    let membership_predicates = overrides
+        .iter()
+        .map(|&(_, _, _, region_opt, ..)| {
+            let Some(region) = region_opt else {
+                return Ok(None);
+            };
+            let RegionShapeIR::Csg { expression } = &region.shape else {
+                return Ok(None);
+            };
+            match crate::material_transition::resolved_region_transition(region, parameter) {
+                crate::material_transition::ResolvedMaterialTransition::None
+                | crate::material_transition::ResolvedMaterialTransition::Sharp => {
+                    crate::selection::geometry::GeometryPredicate::from_geometry_entry(
+                        expression,
+                        crate::selection::geometry::AffineTransform3::identity(),
+                        crate::selection::geometry::BoundaryMembership::inclusive(),
+                    )
+                    .map(Some)
+                    .map_err(|err| err.to_string())
+                }
+                _ => Ok(None),
+            }
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
     let mut resolved_values = if overrides.is_empty() {
         vec![base_value; points.len()]
     } else {
         let mut resolved_values = Vec::with_capacity(points.len());
         for (point_index, &point) in points.iter().enumerate() {
             let mut active_at_point = Vec::new();
-            for &(region_id, priority, value, region_opt, frame, policy, ref source_id) in
-                &overrides
+            for (
+                override_index,
+                &(region_id, priority, value, region_opt, frame, policy, ref source_id),
+            ) in overrides.iter().enumerate()
             {
-                let (weight, is_strictly_inside) = if let Some(region) = region_opt {
+                let weight = if let Some(region) = region_opt {
                     let coords = match frame {
                         RegionFrameIR::World => point,
                         RegionFrameIR::Object => [
@@ -384,33 +413,19 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
                     };
                     let transition =
                         crate::material_transition::resolved_region_transition(region, parameter);
-                    let distance = match (&region.shape, transition) {
-                        (
-                            RegionShapeIR::Csg { expression },
-                            crate::material_transition::ResolvedMaterialTransition::None
-                            | crate::material_transition::ResolvedMaterialTransition::Sharp,
-                        ) => {
-                            let predicate =
-                                crate::selection::geometry::GeometryPredicate::from_geometry_entry(
-                                    expression,
-                                    crate::selection::geometry::AffineTransform3::identity(),
-                                    crate::selection::geometry::BoundaryMembership::inclusive(),
-                                )
-                                .map_err(|err| err.to_string())?;
+                    let distance = match &membership_predicates[override_index] {
+                        Some(predicate) => {
                             if predicate.contains(coords).map_err(|err| err.to_string())? {
                                 -1.0
                             } else {
                                 1.0
                             }
                         }
-                        _ => signed_distance_to_region_shape(coords, &region.shape)?,
+                        None => signed_distance_to_region_shape(coords, &region.shape)?,
                     };
-                    (
-                        transition_weight(distance, transition, spacing.at(point_index))?,
-                        distance <= 0.0,
-                    )
+                    transition_weight(distance, transition, spacing.at(point_index))?
                 } else {
-                    (1.0, true)
+                    1.0
                 };
                 if weight > 0.0 {
                     active_at_point.push((
@@ -420,7 +435,6 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
                         weight,
                         policy,
                         source_id.to_string(),
-                        is_strictly_inside,
                     ));
                 }
             }
@@ -428,56 +442,33 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
             if active_at_point.is_empty() {
                 resolved_values.push(base_value);
             } else {
-                // Group by priority ascending so higher-priority regions smoothly blend
-                // over the underlying lower-priority region value instead of resetting to base_value.
-                let mut distinct_priorities = active_at_point
+                let candidates = active_at_point
                     .iter()
-                    .map(|entry| entry.1)
+                    .map(|entry| RegionConflictCandidate {
+                        region_id: entry.5.clone(),
+                        priority: entry.1,
+                        policy: entry.4,
+                    })
                     .collect::<Vec<_>>();
-                distinct_priorities.sort_unstable();
-                distinct_priorities.dedup();
-
-                let mut current_value = base_value;
-                for tier_priority in distinct_priorities {
-                    let mut tier_entries = active_at_point
-                        .iter()
-                        .filter(|entry| entry.1 == tier_priority)
-                        .collect::<Vec<_>>();
-                    // If the sample point lies geometrically inside at least one region in this
-                    // priority tier, ignore outer Boundary transition fringes (distance > 0) of
-                    // adjacent interior-disjoint regions in the same tier.
-                    if tier_entries.iter().any(|entry| entry.6) {
-                        tier_entries.retain(|entry| entry.6);
-                    }
-                    let candidates = tier_entries
-                        .iter()
-                        .map(|entry| RegionConflictCandidate {
-                            region_id: entry.5.clone(),
-                            priority: entry.1,
-                            policy: entry.4,
-                        })
-                        .collect::<Vec<_>>();
-                    let resolution = resolve_region_conflict(&candidates).map_err(|reason| {
-                        format!(
-                            "region-owned material parameter conflict: overlapping regions assign different values for {:?}; {reason}",
-                            parameter,
-                        )
-                    })?;
-                    if resolution.policy == fullmag_ir::RegionConflictPolicyIR::MinMeshSizeWins {
-                        return Err(format!(
-                            "region-owned material parameter conflict: overlapping regions assign different values for {:?}; min_mesh_size_wins is only valid for mesh-size ownership",
-                            parameter
-                        ));
-                    }
-                    let selected = tier_entries
-                        .iter()
-                        .find(|entry| entry.5.as_str() == resolution.winner_region_id.as_str())
-                        .expect("resolver winner must be one of the active candidates");
-                    let value = evaluate_parameter_field(selected.2, point, object_translation)?;
-                    validate_resolved_parameter_value(parameter, value)?;
-                    current_value += selected.3 * (value - current_value);
+                let resolution = resolve_region_conflict(&candidates).map_err(|reason| {
+                    format!(
+                        "region-owned material parameter conflict: overlapping regions assign different values for {:?}; {reason}",
+                        parameter,
+                    )
+                })?;
+                if resolution.policy == fullmag_ir::RegionConflictPolicyIR::MinMeshSizeWins {
+                    return Err(format!(
+                        "region-owned material parameter conflict: overlapping regions assign different values for {:?}; min_mesh_size_wins is only valid for mesh-size ownership",
+                        parameter
+                    ));
                 }
-                resolved_values.push(current_value);
+                let selected = active_at_point
+                    .iter()
+                    .find(|entry| entry.5.as_str() == resolution.winner_region_id.as_str())
+                    .expect("resolver winner must be one of the active candidates");
+                let value = evaluate_parameter_field(selected.2, point, object_translation)?;
+                validate_resolved_parameter_value(parameter, value)?;
+                resolved_values.push(base_value + selected.3 * (value - base_value));
             }
         }
         resolved_values

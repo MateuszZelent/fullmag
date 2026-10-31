@@ -280,7 +280,7 @@ ukrytego fallbacku.
 
 | Lane | Realizacja | Status tej noty | Dowód |
 |---|---|---|---|
-| FDM CPU | osobne implementacje referencyjne RK23/RK45 | udokumentowane osobnym kontraktem; bez promocji | testy `fullmag-engine` |
+| FDM CPU | osobne implementacje referencyjne RK23/RK45 z FSAL (AoS, SoA i persistent SoA); reuse wyłącza `fsal_reuse_invalidated` przy dynamicznym Oerstedzie i przy temperaturze > 0, tak jak termika wyłącza reuse na GPU | udokumentowane osobnym kontraktem; bez promocji | testy `fullmag-engine` |
 | FDM GPU | RK23/DP45 FP32 i FP64, centralna `rhs_allows_fsal_reuse` | zaimplementowane źródłowo; fresh actual-device gate wymagany | kontrakt C++/ABI, planowany managed CUDA runtime |
 | FEM CPU | osobny backend MFEM/hypre | poza zakresem; nie dziedziczy statusu | brak roszczenia |
 | FEM GPU | osobny backend MFEM/hypre/libCEED/CUDA | poza zakresem; nie dziedziczy statusu | brak roszczenia |

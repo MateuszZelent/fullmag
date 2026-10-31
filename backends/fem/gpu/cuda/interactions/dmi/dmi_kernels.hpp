@@ -44,7 +44,9 @@ void fullmag_cuda_dmi_field_energy(
     int node_count,
     cudaStream_t stream = nullptr,
     const uint32_t *periodic_reduced_node = nullptr,
-    const uint32_t *periodic_representative_nodes = nullptr);
+    const uint32_t *periodic_representative_nodes = nullptr,
+    const uint32_t *periodic_class_member_offsets = nullptr,
+    const uint32_t *periodic_class_members = nullptr);
 
 /// Polarized DMI increment E(m1)-E(m0) on linear tetrahedra, one value per element.
 void fullmag_cuda_dmi_energy_difference(

@@ -7,9 +7,8 @@ use crate::fdm::cpu::fft::{combine_fields_4, zero_vectors};
 use crate::fdm::cpu::fft_backend::FdmFftBackend;
 #[cfg(test)]
 use crate::fdm::shared::types::AxisBoundary;
-use crate::magnetoelastic;
 use crate::telemetry::{sections, StepTelemetry};
-use crate::vector::{add, cross, dot, max_cross_norm, max_norm, norm, scale, squared_norm, sub};
+use crate::vector::{add, cross, dot, max_cross_norm, max_norm, norm, scale, sub};
 use crate::{
     ExchangeLlgProblem, FftWorkspace, OerstedCylinderConfig, RhsEvaluation, SlonczewskiFormula,
     SlonczewskiSttConfig, SotConfig, SotFormula, Vector3, VectorFieldSoA, ZhangLiFormula,

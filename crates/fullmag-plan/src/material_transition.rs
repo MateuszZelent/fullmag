@@ -34,9 +34,6 @@ pub(crate) fn resolved_region_transition(
             }
         }
         Some(MaterialTransitionSpecIR::Sharp) => ResolvedMaterialTransition::Sharp,
-        None if matches!(region.shape, fullmag_ir::RegionShapeIR::Csg { .. }) => {
-            ResolvedMaterialTransition::None
-        }
         None if matches!(
             parameter,
             MaterialParameterNameIR::Ms | MaterialParameterNameIR::Aex

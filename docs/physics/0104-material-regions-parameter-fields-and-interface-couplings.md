@@ -273,6 +273,14 @@ supported signed-distance evaluator for the authored region shape. Unsupported
 shapes must capability-block instead of silently falling back to a bounding-box
 distance or binary mask.
 
+A `sharp` transition, and a parameter whose resolved transition is none, needs
+only membership. CSG regions have no signed-distance evaluator, so the planner
+evaluates their membership with the analytic selection predicate (inclusive
+boundary, relative tolerance `1e-12`) and uses `d = -1` inside and `d = +1`
+outside. A CSG region whose resolved transition is smooth, including the
+`Ms`/`Aex` default above, still capability-blocks; the planner never substitutes
+`sharp` for an unspecified transition.
+
 ## 3. Numerical interpretation
 
 ### 3.1 FDM
