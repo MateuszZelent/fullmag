@@ -1169,12 +1169,14 @@ fn materialize_reference_problem(
     if let Some(dt) = plan.fixed_timestep {
         problem.thermal_dt = dt;
     }
+    let exchange_operator = crate::fdm::exchange_operator::build_plan_exchange_operator(plan)?;
     problem
         .with_spatial_fields(
             plan.material.ms_field.clone(),
             plan.material.a_field.clone(),
             plan.material.alpha_field.clone(),
         )
+        .and_then(|problem| problem.with_exchange_operator(exchange_operator))
         .map_err(|e| RunError {
             message: format!("Spatial fields: {}", e),
         })
@@ -4840,6 +4842,7 @@ mod tests {
             boundary_correction: None,
             boundary_geometry: None,
             inter_region_exchange: vec![],
+            region_owner: Vec::new(),
             enable_exchange: true,
             enable_demag: false,
             external_field: None,
@@ -5991,6 +5994,7 @@ mod tests {
             boundary_correction: None,
             boundary_geometry: None,
             inter_region_exchange: vec![],
+            region_owner: Vec::new(),
             current_density: None,
             stt_degree: None,
             stt_beta: None,

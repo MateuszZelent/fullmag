@@ -1,5 +1,6 @@
 pub(crate) mod artifacts;
 pub(crate) mod cpu;
+pub(crate) mod exchange_operator;
 pub(crate) mod gpu;
 pub(crate) mod multilayer;
 pub(crate) mod schedules;
@@ -211,7 +212,7 @@ fn validate_single_grid_budget_with_policy(
         .map_err(|message| RunError {
             message: format!("FDM grid certificate rejected before allocation: {message}"),
         })?;
-    fullmag_ir::validate_fdm_region_lut_indices(&plan.region_mask, &plan.inter_region_exchange)
+    fullmag_ir::validate_fdm_exchange_pair_rules(&plan.inter_region_exchange)
         .map_err(|message| RunError { message })?;
     if certificate.origin_m != plan.origin_m
         || certificate.counts != plan.grid.cells

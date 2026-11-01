@@ -303,7 +303,7 @@ pub(crate) fn validate_region_owned_planning(
         }
     }
     for coupling in problem.couplings.iter().filter(|coupling| coupling.enabled) {
-        if region_coupling_is_executable_for_backend(problem, coupling, resolved_backend) {
+        if region_coupling_is_executable_for_backend(coupling, resolved_backend) {
             continue;
         }
         match coupling.capability_policy {
@@ -335,12 +335,12 @@ fn coupling_kind_label(kind: CouplingKindIR) -> &'static str {
 }
 
 fn region_coupling_is_executable_for_backend(
-    problem: &ProblemIR,
     coupling: &fullmag_ir::CouplingIR,
     resolved_backend: BackendTarget,
 ) -> bool {
+    // FDM CPU and CUDA both resolve region rules through the shared
+    // per-connection exchange operator (note 0104).
     if resolved_backend != BackendTarget::Fdm
-        || !runtime_requests_cuda(problem)
         || coupling.capability_policy != CouplingCapabilityPolicyIR::RequireRuntime
     {
         return false;

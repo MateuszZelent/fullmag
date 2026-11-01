@@ -4095,26 +4095,38 @@ fn build_region_exchange_pairs(
                     .to_string(),
         });
     }
+    fullmag_ir::validate_fdm_exchange_pair_rules(&plan.inter_region_exchange)
+        .map_err(|message| RunError { message })?;
     Ok(Some(
         plan.inter_region_exchange
             .iter()
-            .map(|&(region_i, region_j, inter_exchange)| {
-                if !inter_exchange.is_finite() || inter_exchange < 0.0 {
-                    return Err(RunError {
-                        message: format!(
-                            "inter_region_exchange ({region_i}, {region_j}) must be finite and >= 0"
-                        ),
-                    });
-                }
-                Ok(ffi::fullmag_fdm_exchange_pair_desc {
-                    region_i,
-                    region_j,
-                    mode: ffi::fullmag_fdm_exchange_pair_mode::FULLMAG_FDM_EXCHANGE_PAIR_EXPLICIT,
-                    scale: 1.0,
+            .map(|rule| {
+                let (mode, scale, inter_exchange) = match rule.mode {
+                    fullmag_ir::FdmExchangePairModeIR::HarmonicScale { scale } => (
+                        ffi::fullmag_fdm_exchange_pair_mode::FULLMAG_FDM_EXCHANGE_PAIR_HARMONIC_MEAN,
+                        scale,
+                        0.0,
+                    ),
+                    fullmag_ir::FdmExchangePairModeIR::Explicit { exchange_stiffness } => (
+                        ffi::fullmag_fdm_exchange_pair_mode::FULLMAG_FDM_EXCHANGE_PAIR_EXPLICIT,
+                        1.0,
+                        exchange_stiffness,
+                    ),
+                    fullmag_ir::FdmExchangePairModeIR::Disabled => (
+                        ffi::fullmag_fdm_exchange_pair_mode::FULLMAG_FDM_EXCHANGE_PAIR_DISABLED,
+                        0.0,
+                        0.0,
+                    ),
+                };
+                ffi::fullmag_fdm_exchange_pair_desc {
+                    region_i: rule.region_i,
+                    region_j: rule.region_j,
+                    mode,
+                    scale,
                     inter_exchange,
-                })
+                }
             })
-            .collect::<Result<Vec<_>, RunError>>()?,
+            .collect(),
     ))
 }
 
@@ -4609,7 +4621,13 @@ mod tests {
     fn native_fdm_region_exchange_pairs_carry_explicit_overrides() {
         let mut plan = make_relaxation_precession_test_plan();
         plan.region_mask = vec![1, 2];
-        plan.inter_region_exchange = vec![(1, 2, 4.0e-12)];
+        plan.inter_region_exchange = vec![fullmag_ir::FdmExchangePairRuleIR {
+            region_i: 1,
+            region_j: 2,
+            mode: fullmag_ir::FdmExchangePairModeIR::Explicit {
+                exchange_stiffness: 4.0e-12,
+            },
+        }];
         let pairs = build_region_exchange_pairs(&plan, true)
             .expect("region exchange pairs")
             .expect("region mask should produce pair list");
@@ -4628,7 +4646,13 @@ mod tests {
     fn native_fdm_region_exchange_pairs_require_region_mask() {
         let mut plan = make_relaxation_precession_test_plan();
         plan.region_mask = Vec::new();
-        plan.inter_region_exchange = vec![(1, 2, 4.0e-12)];
+        plan.inter_region_exchange = vec![fullmag_ir::FdmExchangePairRuleIR {
+            region_i: 1,
+            region_j: 2,
+            mode: fullmag_ir::FdmExchangePairModeIR::Explicit {
+                exchange_stiffness: 4.0e-12,
+            },
+        }];
 
         let err = build_region_exchange_pairs(&plan, false)
             .expect_err("explicit exchange overrides must not be dropped without a region mask");
@@ -4681,7 +4705,13 @@ mod tests {
     fn native_fdm_region_exchange_pairs_reject_invalid_exchange() {
         let mut plan = make_relaxation_precession_test_plan();
         plan.region_mask = vec![1, 2];
-        plan.inter_region_exchange = vec![(1, 2, -1.0e-12)];
+        plan.inter_region_exchange = vec![fullmag_ir::FdmExchangePairRuleIR {
+            region_i: 1,
+            region_j: 2,
+            mode: fullmag_ir::FdmExchangePairModeIR::Explicit {
+                exchange_stiffness: -1.0e-12,
+            },
+        }];
 
         let err = build_region_exchange_pairs(&plan, true)
             .expect_err("invalid explicit exchange must be rejected before FFI");
@@ -4912,6 +4942,7 @@ mod tests {
             regional_field_drive_bases: Vec::new(),
             time_stage: Default::default(),
             inter_region_exchange: vec![],
+            region_owner: Vec::new(),
             periodicity: None,
             resolved_periodic_images: None,
             boundary_correction: None,
@@ -5009,6 +5040,7 @@ mod tests {
             regional_field_drive_bases: Vec::new(),
             time_stage: Default::default(),
             inter_region_exchange: vec![],
+            region_owner: Vec::new(),
             periodicity: None,
             resolved_periodic_images: None,
             boundary_correction: None,
@@ -5096,6 +5128,7 @@ mod tests {
             regional_field_drive_bases: Vec::new(),
             time_stage: Default::default(),
             inter_region_exchange: vec![],
+            region_owner: Vec::new(),
             periodicity: None,
             resolved_periodic_images: None,
             boundary_correction: None,

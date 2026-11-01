@@ -17,6 +17,10 @@ pub use cpu::fft::{
     FftWorkspaceTelemetry, FDM_FFT_WORKSPACE_TELEMETRY_SCHEMA_VERSION,
 };
 
+pub use shared::exchange_operator::{
+    build_exchange_operator, harmonic_exchange, ExchangeFaces, ExchangeOperator,
+    ExchangeOperatorInputs, ExchangePairMode, ExchangePairRule,
+};
 pub use shared::problem::ExchangeLlgProblem;
 
 /// Maximum RK23 RHS evaluations for the canonical adaptive CPU oracle workload.

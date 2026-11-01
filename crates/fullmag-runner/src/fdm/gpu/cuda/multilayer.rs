@@ -326,11 +326,15 @@ struct NativeStackedCudaPlan {
     global_grid: [u32; 3],
 }
 
-fn disabled_inter_body_exchange_pairs(layer_count: usize) -> Vec<(u32, u32, f64)> {
+fn disabled_inter_body_exchange_pairs(layer_count: usize) -> Vec<fullmag_ir::FdmExchangePairRuleIR> {
     let mut pairs = Vec::new();
     for left in 0..layer_count {
         for right in (left + 1)..layer_count {
-            pairs.push(((left + 1) as u32, (right + 1) as u32, 0.0));
+            pairs.push(fullmag_ir::FdmExchangePairRuleIR {
+                region_i: (left + 1) as u32,
+                region_j: (right + 1) as u32,
+                mode: fullmag_ir::FdmExchangePairModeIR::Disabled,
+            });
         }
     }
     pairs
@@ -3595,6 +3599,7 @@ fn build_native_stacked_cuda_plan(
             zhang_li_target: None,
             zhang_li_lande_g: None,
             inter_region_exchange: disabled_inter_body_exchange_pairs(plan.layers.len()),
+            region_owner: Vec::new(),
             current_density: None,
             stt_degree: None,
             stt_beta: None,
@@ -4058,6 +4063,7 @@ fn single_layer_cuda_plan(plan: &FdmMultilayerPlanIR, layer: &FdmLayerPlanIR) ->
         zhang_li_target: None,
         zhang_li_lande_g: None,
         inter_region_exchange: vec![],
+        region_owner: Vec::new(),
         current_density: None,
         stt_degree: None,
         stt_beta: None,
@@ -6843,7 +6849,11 @@ mod tests {
 
         assert_eq!(
             native.combined_plan.inter_region_exchange,
-            vec![(1, 2, 0.0)],
+            vec![fullmag_ir::FdmExchangePairRuleIR {
+                region_i: 1,
+                region_j: 2,
+                mode: fullmag_ir::FdmExchangePairModeIR::Disabled,
+            }],
             "combined single-grid plan must preserve object-object free surfaces explicitly because the native FDM region default is harmonic mean"
         );
     }

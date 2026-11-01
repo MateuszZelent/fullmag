@@ -3927,11 +3927,20 @@ fn fdm_region_region_explicit_exchange_lowers_to_region_mask_and_pair_override()
     };
     assert!(fdm.region_mask.iter().any(|region| *region == 1));
     assert!(fdm.region_mask.iter().any(|region| *region == 2));
-    assert_eq!(fdm.inter_region_exchange, vec![(1, 2, 4.0e-12)]);
+    assert_eq!(
+        fdm.inter_region_exchange,
+        vec![fullmag_ir::FdmExchangePairRuleIR {
+            region_i: 1,
+            region_j: 2,
+            mode: fullmag_ir::FdmExchangePairModeIR::Explicit {
+                exchange_stiffness: 4.0e-12
+            },
+        }]
+    );
 }
 
 #[test]
-fn fdm_region_region_explicit_exchange_blocks_on_cpu_reference() {
+fn fdm_region_region_explicit_exchange_executes_on_cpu_reference() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.object_regions
         .push(test_box_region("strip:left", "left", [-50e-9, 0.0, 0.0], 1));
@@ -3961,16 +3970,11 @@ fn fdm_region_region_explicit_exchange_blocks_on_cpu_reference() {
         capability_policy: CouplingCapabilityPolicyIR::RequireRuntime,
     });
 
-    let err = plan(&ir).expect_err("CPU reference must not ignore explicit region exchange");
-    assert!(
-        err.reasons.iter().any(|reason| {
-            reason.contains("left_right_exchange")
-                && reason.contains("requires runtime support")
-                && reason.contains("must not silently drop authored coupling intent")
-        }),
-        "unexpected planner errors: {:?}",
-        err.reasons
-    );
+    let plan = plan(&ir).expect("CPU reference resolves region rules through the shared operator");
+    let fullmag_ir::BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    assert_eq!(fdm.inter_region_exchange.len(), 1);
 }
 
 #[test]
@@ -4024,7 +4028,7 @@ fn intra_object_region_exchange_defaults_harmonic_mean() {
     assert!(fdm.region_mask.iter().any(|region| *region == 2));
     assert!(
         fdm.inter_region_exchange.is_empty(),
-        "FDM plan should carry no zero/free-surface override; native runtime resolves empty overrides with exchange_pair_default=HARMONIC_MEAN"
+        "FDM plan should carry no zero/free-surface override; regions of one owner default to the guarded harmonic mean"
     );
 }
 
@@ -4043,7 +4047,7 @@ fn pure_inherited_region_preserves_parent_material_and_continuous_exchange() {
     );
     assert_eq!(
         fdm.inter_region_exchange,
-        Vec::<(u32, u32, f64)>::new(),
+        Vec::<fullmag_ir::FdmExchangePairRuleIR>::new(),
         "a region that only inherits parent properties must not create an explicit free-surface or material-interface exchange override"
     );
     assert_eq!(
@@ -4095,7 +4099,14 @@ fn exchange_scale_zero_disables_interface_exchange() {
     let fullmag_ir::BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
         panic!("expected FDM plan");
     };
-    assert_eq!(fdm.inter_region_exchange, vec![(1, 2, 0.0)]);
+    assert_eq!(
+        fdm.inter_region_exchange,
+        vec![fullmag_ir::FdmExchangePairRuleIR {
+            region_i: 1,
+            region_j: 2,
+            mode: fullmag_ir::FdmExchangePairModeIR::Disabled,
+        }]
+    );
 }
 
 #[test]
