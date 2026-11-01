@@ -3684,6 +3684,14 @@ pub(crate) fn plan_fdm(
         }
     }
 
+    if runtime_requests_cuda(problem) {
+        if let Some(reason) = fdm_plan.cuda_heterogeneous_material_error() {
+            return Err(PlanError {
+                reasons: vec![reason],
+            });
+        }
+    }
+
     let study_note = if let Some(control) = fdm_plan.relaxation.as_ref() {
         format!(
             "study: relaxation algorithm={} torque_tolerance={} energy_tolerance={} max_steps={}",

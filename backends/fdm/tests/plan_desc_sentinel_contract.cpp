@@ -253,6 +253,14 @@ void populate_distinct_semantic_sentinels(fullmag_fdm_plan_desc_v2 &plan) {
     plan.struct_size = sizeof(plan);
 }
 
+// The sentinel pass writes counters into the exchange-operator tail as well.
+// Keep the pointer and length sentinels, so the receipt check still covers
+// them, but give the tail a well-formed FACES discriminant.
+void make_exchange_operator_tail_well_formed(fullmag_fdm_plan_desc_v2 &plan) {
+    plan.exchange_operator_mode = FULLMAG_FDM_EXCHANGE_OPERATOR_FACES;
+    plan.reserved_exchange_operator = 0;
+}
+
 void check_semantic_receipt(
     const fullmag_fdm_plan_desc_v2 &plan,
     const fullmag_fdm_plan_desc_v2 &receipt)
@@ -291,6 +299,7 @@ void owner_ingestion_receipt_preserves_every_semantic_field() {
     plan.base.has_interfacial_dmi = 0;
     plan.base.has_bulk_dmi = 0;
     plan.has_rotated_interfacial_dmi = 1;
+    make_exchange_operator_tail_well_formed(plan);
 
     fullmag_fdm_plan_ingestion_v2 *ingestion = nullptr;
     int status = fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
@@ -318,6 +327,7 @@ void receipt_respects_legacy_output_capacity() {
     plan.base.has_interfacial_dmi = 0;
     plan.base.has_bulk_dmi = 0;
     plan.has_rotated_interfacial_dmi = 1;
+    make_exchange_operator_tail_well_formed(plan);
 
     fullmag_fdm_plan_ingestion_v2 *ingestion = nullptr;
     int status = fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
@@ -543,6 +553,46 @@ void rotated_dmi_flag_constant_and_composition_are_validated() {
     expect_rejected("rDMI cannot be combined with bulk DMI");
 }
 
+void exchange_operator_tail_is_validated_at_ingestion() {
+    fullmag_fdm_plan_desc_v2 plan{};
+    plan.abi_version = FULLMAG_FDM_PLAN_DESC_ABI_V2;
+    plan.struct_size = sizeof(plan);
+    std::array<double, 2> faces{1.3e-11, 1.3e-11};
+
+    const auto expect_status = [&plan](int expected, const char *message) {
+        fullmag_fdm_plan_ingestion_v2 *ingestion = nullptr;
+        const int status =
+            fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
+        check(status == expected, message);
+        check((ingestion != nullptr) == (expected == FULLMAG_FDM_OK),
+              "only an accepted exchange-operator tail may allocate an owner");
+        fullmag_fdm_plan_ingestion_v2_destroy(ingestion);
+    };
+
+    expect_status(FULLMAG_FDM_OK, "zeroed tail is the uniform operator");
+
+    plan.exchange_operator_mode = FULLMAG_FDM_EXCHANGE_OPERATOR_FACES;
+    plan.exchange_face_x_plus = faces.data();
+    plan.exchange_face_y_plus = faces.data();
+    plan.exchange_face_z_plus = faces.data();
+    plan.exchange_face_len = faces.size();
+    expect_status(FULLMAG_FDM_OK, "FACES with three arrays is accepted");
+
+    plan.reserved_exchange_operator = 1;
+    expect_status(FULLMAG_FDM_ERR_INVALID, "reserved exchange-operator word must be zero");
+    plan.reserved_exchange_operator = 0;
+
+    plan.exchange_operator_mode = 2;
+    expect_status(FULLMAG_FDM_ERR_INVALID, "unknown exchange-operator mode must be rejected");
+
+    plan.exchange_operator_mode = FULLMAG_FDM_EXCHANGE_OPERATOR_UNIFORM;
+    expect_status(FULLMAG_FDM_ERR_INVALID, "UNIFORM must not carry face arrays");
+
+    plan.exchange_operator_mode = FULLMAG_FDM_EXCHANGE_OPERATOR_FACES;
+    plan.exchange_face_z_plus = nullptr;
+    expect_status(FULLMAG_FDM_ERR_INVALID, "FACES requires all three face arrays");
+}
+
 void legacy_v2_size_preserves_layout_and_defaults_the_extension() {
     fullmag_fdm_plan_desc_v2 plan{};
     plan.abi_version = FULLMAG_FDM_PLAN_DESC_ABI_V2;
@@ -688,6 +738,7 @@ int main() {
     rotated_dmi_fully_periodic_boundary_may_omit_exchange();
     rotated_dmi_boundary_exchange_distinguishes_periodic_seams_from_mask_edges();
     rotated_dmi_flag_constant_and_composition_are_validated();
+    exchange_operator_tail_is_validated_at_ingestion();
     incompatible_version_and_size_fail_before_backend_allocation();
 #if FULLMAG_FDM_CONTRACT_HAS_CUDA
     checked_backend_constructor_accepts_a_runtime_valid_plan();

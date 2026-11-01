@@ -1036,6 +1036,52 @@ pub struct FdmPlanIR {
     pub mel_uniform_strain: Option<[f64; 6]>,
 }
 
+impl FdmPlanIR {
+    /// Reason the native CUDA lane cannot yet realize this plan's
+    /// heterogeneous material (note 0104, `material-regions-fdm-lane-realization`).
+    ///
+    /// Face coefficients only change exchange (including T0/T1); the terms
+    /// checked here read the scalar Ms/alpha or a local A. The planner and the
+    /// runner share this predicate so forced CUDA fails before execution and
+    /// never falls back to the CPU reference.
+    pub fn cuda_heterogeneous_material_error(&self) -> Option<String> {
+        let variable_ms = self.material.ms_field.is_some();
+        let cellwise_ms_or_alpha = variable_ms || self.material.alpha_field.is_some();
+        let variable_exchange = self.material.a_field.is_some();
+        let has_dmi = self.interfacial_dmi.is_some()
+            || self.bulk_dmi.is_some()
+            || self.rotated_interfacial_dmi.is_some();
+        let owner = if !cellwise_ms_or_alpha {
+            (has_dmi && variable_exchange).then_some("dmi_variable_exchange")
+        } else if self
+            .boundary_correction
+            .as_deref()
+            .is_some_and(|tier| tier != "none")
+        {
+            Some("boundary_correction")
+        } else if self.temperature.unwrap_or(0.0) > 0.0 {
+            Some("thermal")
+        } else if self.current_density.is_some()
+            || self.sot_current_density.is_some()
+            || !self.spin_transport_plans.is_empty()
+            || !self.fdm_gpu_charge_transports.is_empty()
+        {
+            Some("spin_torque")
+        } else if has_dmi && variable_exchange {
+            Some("dmi_variable_exchange")
+        } else if self.rotated_interfacial_dmi.is_some() && variable_ms {
+            Some("rotated_dmi_variable_ms")
+        } else {
+            None
+        };
+        owner.map(|owner| {
+            format!(
+                "fdm_cuda_heterogeneous_material_unsupported:{owner}: heterogeneous Ms/Aex/alpha does not yet combine with this term on native FDM CUDA; use device='cpu' or a uniform material"
+            )
+        })
+    }
+}
+
 /// Sub-cell boundary geometry arrays computed from SDF during planning.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BoundaryGeometryIR {

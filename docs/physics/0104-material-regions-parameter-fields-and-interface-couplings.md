@@ -419,10 +419,14 @@ region legend, without generating pair rules for every object pair.
   the scalar $M_s$), Brown thermal noise, Zhang-Li/Slonczewski/SOT and GPU
   transport torques, and rotated interfacial DMI with non-uniform $M_s$. DMI
   with non-uniform $A$ is blocked as well (its natural boundary condition
-  depends on local $A$), and cellwise DMI fields remain unsupported. Each
-  blocks backend construction with an explicit
-  `fdm_cuda_heterogeneous_material_unsupported:<owner>` error; there is no CPU
-  fallback.
+  depends on local $A$), and cellwise DMI fields remain unsupported. One
+  predicate on the FDM plan rejects each combination with an explicit
+  `fdm_cuda_heterogeneous_material_unsupported:<owner>` error: at planning time
+  for an explicit CUDA request, and again at backend construction. There is no
+  CPU fallback. The native backend also rejects a cellwise $A$ that differs from
+  the scalar on an active cell but arrives without face coefficients
+  (`a_field_requires_exchange_faces`), because CUDA exchange reads $A$ only from
+  the faces.
 
 Multilayer FDM with region-owned material/coupling is out of scope for v1 and
 must be capability-gated. It cannot silently fall through to a partially
@@ -1210,4 +1214,4 @@ must include:
 | Reguły par FDM | `crates/fullmag-ir/src/execution.rs` | `validate_fdm_exchange_pair_rules` | Walidacja reguł `harmonic_scale`/`explicit`/`disabled` na indeksach `u32` bez limitu. |
 | Plan → operator | `crates/fullmag-runner/src/fdm/exchange_operator.rs` | `build_plan_exchange_operator` | Obniżenie planu FDM do wspólnego operatora wymiany. |
 | Wymiana CUDA | `backends/fdm/gpu/cuda/interactions/exchange_fp64.cu` | `exchange_field_fp64_kernel` | Pole wymiany z współczynników na połączeniach i lokalnego $M_s$. |
-| Bramka CUDA | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `ensure_cuda_heterogeneous_material_supported` | Jawna odmowa niewspieranych kombinacji z komórkowym $M_s$/$\alpha$ i zmiennym $A$. |
+| Bramka CUDA | `crates/fullmag-ir/src/plan.rs` | `cuda_heterogeneous_material_error` | Wspólny predykat planera i runnera CUDA: jawna odmowa niewspieranych kombinacji z komórkowym $M_s$/$\alpha$ i zmiennym $A$. |

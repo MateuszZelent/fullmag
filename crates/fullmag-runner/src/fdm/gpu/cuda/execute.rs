@@ -349,6 +349,13 @@ fn apply_regional_drive_energy(
     magnetization: &[[f64; 3]],
 ) {
     let cell_volume = plan.cell_size[0] * plan.cell_size[1] * plan.cell_size[2];
+    // A cellwise Ms field weights each cell like the device energy reductions do.
+    let saturation_magnetisation = |index: usize| {
+        plan.material
+            .ms_field
+            .as_ref()
+            .map_or(plan.material.saturation_magnetisation, |ms| ms[index])
+    };
     let mut magnetization_dot_field = 0.0;
     for resolved in &plan.regional_field_drive_bases {
         if !resolved.drive.enabled {
@@ -365,7 +372,7 @@ fn apply_regional_drive_energy(
                 continue;
             }
             magnetization_dot_field += multiplier
-                * plan.material.saturation_magnetisation
+                * saturation_magnetisation(index)
                 * (m[0] * field[0] + m[1] * field[1] + m[2] * field[2]);
         }
     }
@@ -392,7 +399,7 @@ fn apply_regional_drive_energy(
             }
             magnetization_dot_field += multiplier
                 * resolved.drive.peak_current_a
-                * plan.material.saturation_magnetisation
+                * saturation_magnetisation(index)
                 * (m[0] * field[0] + m[1] * field[1] + m[2] * field[2]);
         }
     }

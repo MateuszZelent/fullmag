@@ -3673,6 +3673,33 @@ fn fdm_cuda_region_material_fields_plan_cellwise_ms() {
 }
 
 #[test]
+fn fdm_cuda_region_material_fields_with_thermal_noise_fail_at_planning() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
+    let mut region = default_test_object_region();
+    region.material_overrides = vec![fullmag_ir::RegionMaterialOverrideIR {
+        parameter: fullmag_ir::MaterialParameterNameIR::Ms,
+        value: fullmag_ir::MaterialParameterFieldIR::Constant {
+            value: serde_json::json!(750e3),
+            unit: Some("A/m".to_string()),
+        },
+        priority: 10,
+        conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+    }];
+    ir.object_regions.push(region);
+    ir.temperature = Some(300.0);
+
+    let err = plan(&ir).expect_err("forced CUDA must reject cellwise Ms with thermal noise");
+    assert!(err
+        .reasons
+        .iter()
+        .any(|reason| reason.starts_with("fdm_cuda_heterogeneous_material_unsupported:thermal")));
+}
+
+#[test]
 fn fdm_cuda_absorbing_boundary_plans_cellwise_damping() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.problem_meta.runtime_metadata.insert(

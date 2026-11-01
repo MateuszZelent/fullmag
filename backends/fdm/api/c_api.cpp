@@ -1043,6 +1043,21 @@ static bool valid_cellwise_values(
     return true;
 }
 
+static bool cellwise_values_equal_scalar(
+    const double *values,
+    uint64_t len,
+    const uint8_t *active_mask,
+    double scalar)
+{
+    for (uint64_t index = 0; index < len; ++index) {
+        const bool active = active_mask == nullptr || active_mask[index] != 0;
+        if (active && values[index] != scalar) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
     const fullmag_fdm_plan_desc *plan,
     bool reserve_rotated_dmi,
@@ -1464,6 +1479,17 @@ static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
                 "exchange face coefficients must be three finite, non-negative arrays of cell_count values";
             return reinterpret_cast<fullmag_fdm_backend *>(ctx);
         }
+    }
+    if (!exchange_operator.faces && plan->a_field != nullptr &&
+        !cellwise_values_equal_scalar(
+            plan->a_field, plan->a_field_len, plan->active_mask,
+            plan->material.exchange_stiffness)) {
+        // CUDA exchange reads A only from the face tail. A variable a_field
+        // without faces would silently run with the scalar A.
+        ctx->last_error =
+            "a_field_requires_exchange_faces: a cellwise A that differs from the scalar "
+            "exchange stiffness must be passed as FACES exchange coefficients";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
     // Face coefficients only change exchange; the terms below read the scalar
     // Ms/alpha (or a local A) and are blocked for cellwise material fields.

@@ -4091,44 +4091,8 @@ fn validate_native_snapshot_payload(
 fn ensure_cuda_heterogeneous_material_supported(
     plan: &fullmag_ir::FdmPlanIR,
 ) -> Result<(), RunError> {
-    // Face coefficients only change exchange (including T0/T1); the terms
-    // below read the scalar Ms/alpha or a local A.
-    let variable_ms = plan.material.ms_field.is_some();
-    let cellwise_ms_or_alpha = variable_ms || plan.material.alpha_field.is_some();
-    let variable_exchange = plan.material.a_field.is_some();
-    let has_dmi = plan.interfacial_dmi.is_some()
-        || plan.bulk_dmi.is_some()
-        || plan.rotated_interfacial_dmi.is_some();
-    let owner = if !cellwise_ms_or_alpha {
-        (has_dmi && variable_exchange).then_some("dmi_variable_exchange")
-    } else if plan
-        .boundary_correction
-        .as_deref()
-        .is_some_and(|tier| tier != "none")
-    {
-        Some("boundary_correction")
-    } else if plan.temperature.unwrap_or(0.0) > 0.0 {
-        Some("thermal")
-    } else if plan.current_density.is_some()
-        || has_slonczewski_stt(plan)
-        || plan.sot_current_density.is_some()
-        || !plan.spin_transport_plans.is_empty()
-        || !plan.fdm_gpu_charge_transports.is_empty()
-    {
-        Some("spin_torque")
-    } else if has_dmi && variable_exchange {
-        Some("dmi_variable_exchange")
-    } else if plan.rotated_interfacial_dmi.is_some() && variable_ms {
-        Some("rotated_dmi_variable_ms")
-    } else {
-        None
-    };
-    match owner {
-        Some(owner) => Err(RunError {
-            message: format!(
-                "fdm_cuda_heterogeneous_material_unsupported:{owner}: heterogeneous Ms/Aex/alpha does not yet combine with this term on native FDM CUDA; use device='cpu' or a uniform material"
-            ),
-        }),
+    match plan.cuda_heterogeneous_material_error() {
+        Some(message) => Err(RunError { message }),
         None => Ok(()),
     }
 }

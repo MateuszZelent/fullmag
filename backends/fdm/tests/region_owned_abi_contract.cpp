@@ -124,6 +124,9 @@ void native_backend_validates_cellwise_ms_and_alpha() {
           "native FDM backend must validate alpha_field length and range");
     check(source.find("fdm_cuda_heterogeneous_material_unsupported:") != std::string::npos,
           "native FDM backend must fail closed for unsupported heterogeneous combinations");
+    check(source.find("a_field_requires_exchange_faces") != std::string::npos &&
+              source.find("cellwise_values_equal_scalar(") != std::string::npos,
+          "native FDM backend must reject a variable a_field that arrives without FACES");
 }
 
 void reviewed_gpu_abi_proof_is_semantic_and_strict() {

@@ -846,9 +846,9 @@
     },
     {
       "id": "fdm-cuda-heterogeneous-gate",
-      "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs",
-      "symbol": "ensure_cuda_heterogeneous_material_supported",
-      "responsibility": "Fail-closed CUDA capability gate for cellwise Ms/alpha and variable-A combinations.",
+      "path": "crates/fullmag-ir/src/plan.rs",
+      "symbol": "cuda_heterogeneous_material_error",
+      "responsibility": "Fail-closed CUDA capability predicate for cellwise Ms/alpha and variable-A combinations, shared by the planner and the CUDA runner.",
       "evidence_status": "implemented"
     }
   ],
