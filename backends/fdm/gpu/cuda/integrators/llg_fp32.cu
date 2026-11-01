@@ -40,6 +40,7 @@ extern double launch_external_energy_fp32(Context &ctx);
 extern double reduce_uniaxial_anisotropy_energy_fp32(Context &ctx);
 extern double reduce_cubic_anisotropy_energy_fp32(Context &ctx);
 extern double reduce_dmi_energy_fp32(Context &ctx);
+extern double reduce_magnetoelastic_energy_fp32(Context &ctx);
 
 // Forward declaration from reductions_fp64.cu (reads fp32 as well via separate path)
 double reduce_max_norm_fp32(Context &ctx, const void *vx, const void *vy, const void *vz, uint64_t n);
@@ -61,10 +62,17 @@ __global__ void llg_rhs_fp32_kernel(
     float * __restrict__ out_z,
     int n,
     float gamma_bar, float alpha, int disable_precession,
-    SttParams stt, SotParams sot)
+    SttParams stt, SotParams sot,
+    const double * __restrict__ alpha_field, double gamma)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
+    if (alpha_field) {
+        // Cellwise damping: gamma_bar follows the local alpha.
+        const double alpha_i = alpha_field[idx];
+        alpha = static_cast<float>(alpha_i);
+        gamma_bar = static_cast<float>(gamma / (1.0 + alpha_i * alpha_i));
+    }
 
     float m0 = mx[idx], m1 = my[idx], m2 = mz[idx];
     float h0 = hx[idx], h1 = hy[idx], h2 = hz[idx];
@@ -426,7 +434,8 @@ double reduce_current_rhs_norm_fp32(Context &ctx) {
         static_cast<float*>(ctx.k1.y),
         static_cast<float*>(ctx.k1.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
-        stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+        stt_params_from_ctx(ctx), sot_params_from_ctx(ctx),
+            ctx.alpha_field, ctx.gamma);
     fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "Euler fp32 LLG RHS launch");
 
     return reduce_max_norm_fp32(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
@@ -469,7 +478,8 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             (const float*)ctx.work.x, (const float*)ctx.work.y, (const float*)ctx.work.z,
             (float*)ctx.k1.x, (float*)ctx.k1.y, (float*)ctx.k1.z,
             n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0,
-            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx),
+            ctx.alpha_field, ctx.gamma);
         context_note_local_pipeline_unfused_rhs(ctx);
         fullmag_fdm_note_llg_rhs_torque_device_launch(
             ctx, "Heun fp32 LLG RHS launch");
@@ -512,7 +522,8 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             (const float*)ctx.work.x, (const float*)ctx.work.y, (const float*)ctx.work.z,
             (float*)ctx.h_ex.x, (float*)ctx.h_ex.y, (float*)ctx.h_ex.z,
             n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0,
-            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx),
+            ctx.alpha_field, ctx.gamma);
         context_note_local_pipeline_unfused_rhs(ctx);
         fullmag_fdm_note_llg_rhs_torque_device_launch(
             ctx, "minimize fp32 LLG RHS launch");
@@ -573,7 +584,8 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     double e_aniso = reduce_uniaxial_anisotropy_energy_fp32(ctx);
     double e_cubic = reduce_cubic_anisotropy_energy_fp32(ctx);
     double e_dmi = reduce_dmi_energy_fp32(ctx);
-    double e_total = e_ex + e_demag + e_ext + e_aniso + e_cubic + e_dmi;
+    double e_mel = reduce_magnetoelastic_energy_fp32(ctx);
+    double e_total = e_ex + e_demag + e_ext + e_aniso + e_cubic + e_dmi + e_mel;
 
     double max_h_eff = reduce_max_norm_fp32(ctx, ctx.work.x, ctx.work.y, ctx.work.z, ctx.cell_count);
     double max_h_demag =

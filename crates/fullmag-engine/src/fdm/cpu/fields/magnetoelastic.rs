@@ -11,8 +11,24 @@ impl ExchangeLlgProblem {
                 &config.strain,
                 &config.params,
                 self.active_mask.as_deref(),
+                self.ms_field.as_deref(),
             ),
             None => zero_vectors(self.grid.cell_count()),
+        }
+    }
+
+    pub fn magnetoelastic_energy_density_from_vectors(
+        &self,
+        magnetization: &[Vector3],
+    ) -> Vec<f64> {
+        match &self.terms.magnetoelastic {
+            Some(config) => magnetoelastic::e_mel_density_field(
+                magnetization,
+                &config.strain,
+                &config.params,
+                self.active_mask.as_deref(),
+            ),
+            None => vec![0.0; self.grid.cell_count()],
         }
     }
 
@@ -30,39 +46,6 @@ impl ExchangeLlgProblem {
             }
             None => 0.0,
         }
-    }
-
-    /// Per-cell magnetoelastic energy density [J/m^3]; zero in inactive cells.
-    pub(crate) fn magnetoelastic_energy_density_from_vectors(
-        &self,
-        magnetization: &[Vector3],
-    ) -> Vec<f64> {
-        let config = match &self.terms.magnetoelastic {
-            Some(config) => config,
-            None => return vec![0.0; magnetization.len()],
-        };
-        let strain_at = |i: usize| match &config.strain {
-            magnetoelastic::PrescribedStrainField::Uniform(strain) => strain,
-            magnetoelastic::PrescribedStrainField::PerCell(strain) => &strain[i],
-        };
-        if let magnetoelastic::PrescribedStrainField::PerCell(strain) = &config.strain {
-            assert_eq!(
-                strain.len(),
-                magnetization.len(),
-                "strain field length must match magnetization"
-            );
-        }
-        magnetization
-            .iter()
-            .enumerate()
-            .map(|(i, &m)| {
-                if self.is_active(i) {
-                    magnetoelastic::e_mel_density_single(m, strain_at(i), &config.params)
-                } else {
-                    0.0
-                }
-            })
-            .collect()
     }
 
     pub(crate) fn magnetoelastic_energy_soa(&self, magnetization: &VectorFieldSoA) -> f64 {
@@ -117,10 +100,11 @@ impl ExchangeLlgProblem {
                 if !self.is_active(i) {
                     return;
                 }
-                let h = magnetoelastic::h_mel_single(
+                let h = magnetoelastic::h_mel_single_with_ms(
                     [magnetization.x[i], magnetization.y[i], magnetization.z[i]],
                     strain,
                     &config.params,
+                    self.ms_at(i),
                 );
                 h_eff.x[i] += h[0];
                 h_eff.y[i] += h[1];
@@ -157,6 +141,7 @@ impl ExchangeLlgProblem {
                 &config.strain,
                 &config.params,
                 self.active_mask.as_deref(),
+                self.ms_field.as_deref(),
                 h_eff,
             );
         }

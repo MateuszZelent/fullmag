@@ -4,9 +4,10 @@
  * Matches CPU reference semantics from fullmag-engine:
  *   - 6-point Laplacian stencil
  *   - Clamped-neighbor Neumann boundary conditions for void/inactive
- *   - Per-pair A_ij from exchange LUT for inter-region coupling
- *   - prefactor = 2 / (μ₀ · Ms), then multiplied by A_ij per neighbor pair
- *   - Energy: forward-neighbor pair sum: A_ij · V · |Δm|² / Δx²
+ *   - Per-connection A_f (note 0104, material-fdm-connection-coefficient):
+ *     A_xp = face_xp[i], A_xm = face_xp[xm(i)], same for y and z
+ *   - prefactor = 2 / (μ₀ · Ms_i), Ms_i from ms_field when present
+ *   - Energy: forward-neighbor pair sum: A_f · V · |Δm|² / Δx²
  */
 
 #include "context.hpp"
@@ -39,18 +40,21 @@ __global__ void exchange_field_fp64_kernel(
     const double * __restrict__ my,
     const double * __restrict__ mz,
     const uint8_t * __restrict__ active_mask,
-    const uint32_t * __restrict__ region_mask,
-    const double * __restrict__ exchange_lut,
+    const double * __restrict__ face_xp,
+    const double * __restrict__ face_yp,
+    const double * __restrict__ face_zp,
+    const double * __restrict__ ms_field,
     double * __restrict__ hx,
     double * __restrict__ hy,
     double * __restrict__ hz,
     int nx, int ny, int nz,
     int has_active_mask,
-    int has_region_mask,
-    int max_regions,
+    int has_faces,
     double inv_dx2, double inv_dy2, double inv_dz2,
     double prefactor,
     double inv_mu0_ms,
+    double two_over_mu0,
+    double two_a_over_mu0,
     bool periodic_x, bool periodic_y, bool periodic_z)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -69,8 +73,6 @@ __global__ void exchange_field_fp64_kernel(
         hz[idx] = 0.0;
         return;
     }
-
-    uint32_t center_region = has_region_mask ? region_mask[idx] : 0u;
 
     // Periodic-aware neighbor indices (wraps at boundaries if PBC enabled,
     // otherwise clamped-neighbor Neumann BC).
@@ -92,25 +94,16 @@ __global__ void exchange_field_fp64_kernel(
 
     double cx = mx[idx], cy = my[idx], cz = mz[idx];
 
-    if (has_region_mask) {
-        // Per-neighbor A_ij from exchange coupling LUT.
-        // This correctly handles:
-        //   - same region: A_ij = A_material (standard exchange)
-        //   - cross-region: A_ij from LUT (0 = decoupled, >0 = coupled)
-        //   - clamped boundary/inactive: (m_j - m_i) = 0 regardless of A_ij
-        uint32_t r_xm = region_mask[xm];
-        uint32_t r_xp = region_mask[xp];
-        uint32_t r_ym = region_mask[ym];
-        uint32_t r_yp = region_mask[yp];
-        uint32_t r_zm = region_mask[zm];
-        uint32_t r_zp = region_mask[zp];
-
-        double A_xm = exchange_lut[center_region * max_regions + r_xm];
-        double A_xp = exchange_lut[center_region * max_regions + r_xp];
-        double A_ym = exchange_lut[center_region * max_regions + r_ym];
-        double A_yp = exchange_lut[center_region * max_regions + r_yp];
-        double A_zm = exchange_lut[center_region * max_regions + r_zm];
-        double A_zp = exchange_lut[center_region * max_regions + r_zp];
+    if (has_faces) {
+        // Per-connection coefficients; the -axis coefficient is the +axis
+        // entry of the lower neighbour. A clamped boundary or inactive
+        // neighbour (index == idx) contributes (m_i - m_i) = 0.
+        double A_xm = face_xp[xm];
+        double A_xp = face_xp[idx];
+        double A_ym = face_yp[ym];
+        double A_yp = face_yp[idx];
+        double A_zm = face_zp[zm];
+        double A_zp = face_zp[idx];
 
         double ex = A_xp * (mx[xp] - cx) * inv_dx2 + A_xm * (mx[xm] - cx) * inv_dx2
                   + A_yp * (mx[yp] - cx) * inv_dy2 + A_ym * (mx[ym] - cx) * inv_dy2
@@ -124,9 +117,10 @@ __global__ void exchange_field_fp64_kernel(
                   + A_yp * (mz[yp] - cz) * inv_dy2 + A_ym * (mz[ym] - cz) * inv_dy2
                   + A_zp * (mz[zp] - cz) * inv_dz2 + A_zm * (mz[zm] - cz) * inv_dz2;
 
-        hx[idx] = inv_mu0_ms * ex;
-        hy[idx] = inv_mu0_ms * ey;
-        hz[idx] = inv_mu0_ms * ez;
+        const double scale = ms_field ? two_over_mu0 / ms_field[idx] : inv_mu0_ms;
+        hx[idx] = scale * ex;
+        hy[idx] = scale * ey;
+        hz[idx] = scale * ez;
     } else {
         // Fast path: uniform A, classic Laplacian
         double lap_x = (mx[xp] - 2.0 * cx + mx[xm]) * inv_dx2
@@ -141,9 +135,10 @@ __global__ void exchange_field_fp64_kernel(
                      + (mz[yp] - 2.0 * cz + mz[ym]) * inv_dy2
                      + (mz[zp] - 2.0 * cz + mz[zm]) * inv_dz2;
 
-        hx[idx] = prefactor * lap_x;
-        hy[idx] = prefactor * lap_y;
-        hz[idx] = prefactor * lap_z;
+        const double scale = ms_field ? two_a_over_mu0 / ms_field[idx] : prefactor;
+        hx[idx] = scale * lap_x;
+        hy[idx] = scale * lap_y;
+        hz[idx] = scale * lap_z;
     }
 }
 
@@ -158,8 +153,7 @@ extern "C" __global__ void exchange_field_t0_fp64_kernel(
     const double *,
     const double *, const double *, const double *, const double *,
     const double *, const double *,
-    const uint32_t *, const double *,
-    int, int,
+    const double *, const double *, const double *,
     double, double, double, double, double, double,
     uint32_t, uint32_t, uint32_t);
 
@@ -169,8 +163,7 @@ extern "C" __global__ void exchange_field_t1_fp64_kernel(
     const double *,
     const double *, const double *, const double *, const double *,
     const double *, const double *,
-    const uint32_t *, const double *,
-    int, int,
+    const double *, const double *, const double *,
     double, double, double, double, double, double, double,
     uint32_t, uint32_t, uint32_t);
 
@@ -197,10 +190,7 @@ void launch_exchange_field_fp64(Context &ctx, cudaStream_t stream) {
             ctx.face_link_xp, ctx.face_link_xm,
             ctx.face_link_yp, ctx.face_link_ym,
             ctx.face_link_zp, ctx.face_link_zm,
-            ctx.region_mask,
-            ctx.exchange_lut,
-            ctx.has_region_mask ? 1 : 0,
-            FULLMAG_FDM_MAX_EXCHANGE_REGIONS,
+            ctx.exchange_face_xp, ctx.exchange_face_yp, ctx.exchange_face_zp,
             ctx.Ms, ctx.A,
             inv_dx2, inv_dy2, inv_dz2,
             ctx.phi_floor,
@@ -236,10 +226,7 @@ void launch_exchange_field_fp64(Context &ctx, cudaStream_t stream) {
             ctx.delta_xp, ctx.delta_xm,
             ctx.delta_yp, ctx.delta_ym,
             ctx.delta_zp, ctx.delta_zm,
-            ctx.region_mask,
-            ctx.exchange_lut,
-            ctx.has_region_mask ? 1 : 0,
-            FULLMAG_FDM_MAX_EXCHANGE_REGIONS,
+            ctx.exchange_face_xp, ctx.exchange_face_yp, ctx.exchange_face_zp,
             ctx.Ms, ctx.A,
             ctx.dx, ctx.dy, ctx.dz,
             ctx.delta_min,
@@ -273,18 +260,21 @@ void launch_exchange_field_fp64(Context &ctx, cudaStream_t stream) {
         static_cast<const double*>(ctx.m.y),
         static_cast<const double*>(ctx.m.z),
         ctx.active_mask,
-        ctx.region_mask,
-        ctx.exchange_lut,
+        ctx.exchange_face_xp,
+        ctx.exchange_face_yp,
+        ctx.exchange_face_zp,
+        ctx.ms_field,
         static_cast<double*>(ctx.h_ex.x),
         static_cast<double*>(ctx.h_ex.y),
         static_cast<double*>(ctx.h_ex.z),
         ctx.nx, ctx.ny, ctx.nz,
         ctx.has_active_mask ? 1 : 0,
-        ctx.has_region_mask ? 1 : 0,
-        FULLMAG_FDM_MAX_EXCHANGE_REGIONS,
+        ctx.has_exchange_faces ? 1 : 0,
         inv_dx2, inv_dy2, inv_dz2,
         prefactor,
         inv_mu0_ms,
+        2.0 / MU0,
+        2.0 * ctx.A / MU0,
         ctx.periodic_x, ctx.periodic_y, ctx.periodic_z);
     const cudaError_t launch_error = cudaGetLastError();
     if (launch_error != cudaSuccess) {

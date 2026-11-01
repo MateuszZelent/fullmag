@@ -52,6 +52,10 @@ pub struct ExchangeLlgProblem {
     pub ms_field: Option<Vec<f64>>,
     pub a_field: Option<Vec<f64>>,
     pub alpha_field: Option<Vec<f64>>,
+    /// Per-connection exchange coefficients (note 0104,
+    /// `material-fdm-connection-coefficient`). `None` keeps the per-cell
+    /// harmonic stencil built from `a_field`.
+    pub exchange_faces: Option<std::sync::Arc<crate::ExchangeFaces>>,
     /// Canonical regional field drives, separate from legacy per-node fields.
     pub regional_field_drives: Vec<RegionalFieldDriveTerm>,
     /// Resolved static external H_ext profile [A/m], kept separate from the
@@ -152,6 +156,7 @@ impl ExchangeLlgProblem {
             ms_field: None,
             a_field: None,
             alpha_field: None,
+            exchange_faces: None,
             regional_field_drives: Vec::new(),
             static_external_field: None,
         })
@@ -670,6 +675,7 @@ impl ExchangeLlgProblem {
         Ok(())
     }
 
+    #[inline]
     pub(crate) fn is_active(&self, flat_index: usize) -> bool {
         self.active_mask
             .as_ref()
@@ -782,6 +788,27 @@ impl ExchangeLlgProblem {
         Ok(self)
     }
 
+    /// Attach the realized exchange operator. `Uniform` keeps the scalar
+    /// stencil; `Faces` replaces the per-cell harmonic stencil.
+    pub fn with_exchange_operator(mut self, operator: crate::ExchangeOperator) -> Result<Self> {
+        self.exchange_faces = match operator {
+            crate::ExchangeOperator::Uniform => None,
+            crate::ExchangeOperator::Faces(faces) => {
+                let cells = self.grid.cell_count();
+                if [&faces.x_plus, &faces.y_plus, &faces.z_plus]
+                    .iter()
+                    .any(|values| values.len() != cells)
+                {
+                    return Err(EngineError::new(format!(
+                        "exchange face coefficients must have {cells} entries per axis"
+                    )));
+                }
+                Some(std::sync::Arc::new(faces))
+            }
+        };
+        Ok(self)
+    }
+
     pub fn with_static_external_field(
         mut self,
         static_external_field: Option<Vec<Vector3>>,
@@ -873,6 +900,7 @@ impl Clone for ExchangeLlgProblem {
             ms_field: self.ms_field.clone(),
             a_field: self.a_field.clone(),
             alpha_field: self.alpha_field.clone(),
+            exchange_faces: self.exchange_faces.clone(),
             regional_field_drives: self.regional_field_drives.clone(),
             static_external_field: self.static_external_field.clone(),
         }
@@ -896,6 +924,7 @@ impl PartialEq for ExchangeLlgProblem {
             && self.ms_field == other.ms_field
             && self.a_field == other.a_field
             && self.alpha_field == other.alpha_field
+            && self.exchange_faces == other.exchange_faces
             && self.regional_field_drives == other.regional_field_drives
             && self.static_external_field == other.static_external_field
     }

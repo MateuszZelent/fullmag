@@ -3,6 +3,7 @@
 //! All methods are `impl ExchangeLlgProblem` — Rust allows splitting impls
 //! across multiple files within the same crate.
 
+use crate::fdm::cpu::soa_par::{soa_for_each_mut, soa_try_fill};
 use crate::vector::{add, cross, norm, scale};
 use crate::{
     AdaptiveAttemptDecision, AdaptiveAttemptReason, AdaptiveAttemptRecord, AdaptiveStepController,
@@ -1615,16 +1616,13 @@ impl ExchangeLlgProblem {
         self.effective_field_into_soa_ws_at_time(&bufs.soa.m0, ws, &mut bufs.soa.h_eff, t0);
         self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
 
-        for i in 0..n {
-            let predicted = self.project_stage([
+        soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
+            self.project_stage([
                 bufs.soa.m0.x[i] + dt * bufs.soa.k[0].x[i],
                 bufs.soa.m0.y[i] + dt * bufs.soa.k[0].y[i],
                 bufs.soa.m0.z[i] + dt * bufs.soa.k[0].z[i],
-            ])?;
-            bufs.soa.m_stage.x[i] = predicted[0];
-            bufs.soa.m_stage.y[i] = predicted[1];
-            bufs.soa.m_stage.z[i] = predicted[2];
-        }
+            ])
+        })?;
 
         self.effective_field_into_soa_ws_at_time(
             &bufs.soa.m_stage,
@@ -1827,16 +1825,13 @@ impl ExchangeLlgProblem {
         self.effective_field_into_soa_ws_at_time(&bufs.soa.m0, ws, &mut bufs.soa.h_eff, t0);
         self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
 
-        for i in 0..n {
-            let stage = self.project_stage([
+        soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
+            self.project_stage([
                 bufs.soa.m0.x[i] + 0.5 * dt * bufs.soa.k[0].x[i],
                 bufs.soa.m0.y[i] + 0.5 * dt * bufs.soa.k[0].y[i],
                 bufs.soa.m0.z[i] + 0.5 * dt * bufs.soa.k[0].z[i],
-            ])?;
-            bufs.soa.m_stage.x[i] = stage[0];
-            bufs.soa.m_stage.y[i] = stage[1];
-            bufs.soa.m_stage.z[i] = stage[2];
-        }
+            ])
+        })?;
         self.effective_field_into_soa_ws_at_time(
             &bufs.soa.m_stage,
             ws,
@@ -1845,16 +1840,13 @@ impl ExchangeLlgProblem {
         );
         self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
 
-        for i in 0..n {
-            let stage = self.project_stage([
+        soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
+            self.project_stage([
                 bufs.soa.m0.x[i] + 0.5 * dt * bufs.soa.k[1].x[i],
                 bufs.soa.m0.y[i] + 0.5 * dt * bufs.soa.k[1].y[i],
                 bufs.soa.m0.z[i] + 0.5 * dt * bufs.soa.k[1].z[i],
-            ])?;
-            bufs.soa.m_stage.x[i] = stage[0];
-            bufs.soa.m_stage.y[i] = stage[1];
-            bufs.soa.m_stage.z[i] = stage[2];
-        }
+            ])
+        })?;
         self.effective_field_into_soa_ws_at_time(
             &bufs.soa.m_stage,
             ws,
@@ -1863,16 +1855,13 @@ impl ExchangeLlgProblem {
         );
         self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[2]);
 
-        for i in 0..n {
-            let stage = self.project_stage([
+        soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
+            self.project_stage([
                 bufs.soa.m0.x[i] + dt * bufs.soa.k[2].x[i],
                 bufs.soa.m0.y[i] + dt * bufs.soa.k[2].y[i],
                 bufs.soa.m0.z[i] + dt * bufs.soa.k[2].z[i],
-            ])?;
-            bufs.soa.m_stage.x[i] = stage[0];
-            bufs.soa.m_stage.y[i] = stage[1];
-            bufs.soa.m_stage.z[i] = stage[2];
-        }
+            ])
+        })?;
         self.effective_field_into_soa_ws_at_time(
             &bufs.soa.m_stage,
             ws,
@@ -2204,16 +2193,13 @@ impl ExchangeLlgProblem {
                 rhs_evals.record();
             }
 
-            for i in 0..n {
-                let stage = self.project_stage([
+            soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
+                self.project_stage([
                     bufs.soa.m0.x[i] + 0.5 * dt * bufs.soa.k[0].x[i],
                     bufs.soa.m0.y[i] + 0.5 * dt * bufs.soa.k[0].y[i],
                     bufs.soa.m0.z[i] + 0.5 * dt * bufs.soa.k[0].z[i],
-                ])?;
-                bufs.soa.m_stage.x[i] = stage[0];
-                bufs.soa.m_stage.y[i] = stage[1];
-                bufs.soa.m_stage.z[i] = stage[2];
-            }
+                ])
+            })?;
             self.effective_field_into_soa_ws_at_time(
                 &bufs.soa.m_stage,
                 ws,
@@ -2223,16 +2209,13 @@ impl ExchangeLlgProblem {
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
             rhs_evals.record();
 
-            for i in 0..n {
-                let stage = self.project_stage([
+            soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
+                self.project_stage([
                     bufs.soa.m0.x[i] + 0.75 * dt * bufs.soa.k[1].x[i],
                     bufs.soa.m0.y[i] + 0.75 * dt * bufs.soa.k[1].y[i],
                     bufs.soa.m0.z[i] + 0.75 * dt * bufs.soa.k[1].z[i],
-                ])?;
-                bufs.soa.m_stage.x[i] = stage[0];
-                bufs.soa.m_stage.y[i] = stage[1];
-                bufs.soa.m_stage.z[i] = stage[2];
-            }
+                ])
+            })?;
             self.effective_field_into_soa_ws_at_time(
                 &bufs.soa.m_stage,
                 ws,
@@ -2242,7 +2225,7 @@ impl ExchangeLlgProblem {
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[2]);
             rhs_evals.record();
 
-            for i in 0..n {
+            soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
                 let weighted_x = (2.0 / 9.0) * bufs.soa.k[0].x[i]
                     + (1.0 / 3.0) * bufs.soa.k[1].x[i]
                     + (4.0 / 9.0) * bufs.soa.k[2].x[i];
@@ -2252,15 +2235,12 @@ impl ExchangeLlgProblem {
                 let weighted_z = (2.0 / 9.0) * bufs.soa.k[0].z[i]
                     + (1.0 / 3.0) * bufs.soa.k[1].z[i]
                     + (4.0 / 9.0) * bufs.soa.k[2].z[i];
-                let stage = self.project_stage([
+                self.project_stage([
                     bufs.soa.m0.x[i] + dt * weighted_x,
                     bufs.soa.m0.y[i] + dt * weighted_y,
                     bufs.soa.m0.z[i] + dt * weighted_z,
-                ])?;
-                bufs.soa.m_stage.x[i] = stage[0];
-                bufs.soa.m_stage.y[i] = stage[1];
-                bufs.soa.m_stage.z[i] = stage[2];
-            }
+                ])
+            })?;
 
             self.effective_field_into_soa_ws_at_time(
                 &bufs.soa.m_stage,
@@ -2845,16 +2825,13 @@ impl ExchangeLlgProblem {
                 rhs_evals.record();
             }
 
-            for i in 0..n {
-                let stage = self.project_stage([
+            soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
+                self.project_stage([
                     bufs.soa.m0.x[i] + dt * A21 * bufs.soa.k[0].x[i],
                     bufs.soa.m0.y[i] + dt * A21 * bufs.soa.k[0].y[i],
                     bufs.soa.m0.z[i] + dt * A21 * bufs.soa.k[0].z[i],
-                ])?;
-                bufs.soa.m_stage.x[i] = stage[0];
-                bufs.soa.m_stage.y[i] = stage[1];
-                bufs.soa.m_stage.z[i] = stage[2];
-            }
+                ])
+            })?;
             self.effective_field_into_soa_ws_at_time(
                 &bufs.soa.m_stage,
                 ws,
@@ -2864,16 +2841,13 @@ impl ExchangeLlgProblem {
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
             rhs_evals.record();
 
-            for i in 0..n {
-                let stage = self.project_stage([
+            soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
+                self.project_stage([
                     bufs.soa.m0.x[i] + dt * (A31 * bufs.soa.k[0].x[i] + A32 * bufs.soa.k[1].x[i]),
                     bufs.soa.m0.y[i] + dt * (A31 * bufs.soa.k[0].y[i] + A32 * bufs.soa.k[1].y[i]),
                     bufs.soa.m0.z[i] + dt * (A31 * bufs.soa.k[0].z[i] + A32 * bufs.soa.k[1].z[i]),
-                ])?;
-                bufs.soa.m_stage.x[i] = stage[0];
-                bufs.soa.m_stage.y[i] = stage[1];
-                bufs.soa.m_stage.z[i] = stage[2];
-            }
+                ])
+            })?;
             self.effective_field_into_soa_ws_at_time(
                 &bufs.soa.m_stage,
                 ws,
@@ -2883,8 +2857,8 @@ impl ExchangeLlgProblem {
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[2]);
             rhs_evals.record();
 
-            for i in 0..n {
-                let stage = self.project_stage([
+            soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
+                self.project_stage([
                     bufs.soa.m0.x[i]
                         + dt * (A41 * bufs.soa.k[0].x[i]
                             + A42 * bufs.soa.k[1].x[i]
@@ -2897,11 +2871,8 @@ impl ExchangeLlgProblem {
                         + dt * (A41 * bufs.soa.k[0].z[i]
                             + A42 * bufs.soa.k[1].z[i]
                             + A43 * bufs.soa.k[2].z[i]),
-                ])?;
-                bufs.soa.m_stage.x[i] = stage[0];
-                bufs.soa.m_stage.y[i] = stage[1];
-                bufs.soa.m_stage.z[i] = stage[2];
-            }
+                ])
+            })?;
             self.effective_field_into_soa_ws_at_time(
                 &bufs.soa.m_stage,
                 ws,
@@ -2911,8 +2882,8 @@ impl ExchangeLlgProblem {
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[3]);
             rhs_evals.record();
 
-            for i in 0..n {
-                let stage = self.project_stage([
+            soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
+                self.project_stage([
                     bufs.soa.m0.x[i]
                         + dt * (A51 * bufs.soa.k[0].x[i]
                             + A52 * bufs.soa.k[1].x[i]
@@ -2928,11 +2899,8 @@ impl ExchangeLlgProblem {
                             + A52 * bufs.soa.k[1].z[i]
                             + A53 * bufs.soa.k[2].z[i]
                             + A54 * bufs.soa.k[3].z[i]),
-                ])?;
-                bufs.soa.m_stage.x[i] = stage[0];
-                bufs.soa.m_stage.y[i] = stage[1];
-                bufs.soa.m_stage.z[i] = stage[2];
-            }
+                ])
+            })?;
             self.effective_field_into_soa_ws_at_time(
                 &bufs.soa.m_stage,
                 ws,
@@ -2942,8 +2910,8 @@ impl ExchangeLlgProblem {
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[4]);
             rhs_evals.record();
 
-            for i in 0..n {
-                let stage = self.project_stage([
+            soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
+                self.project_stage([
                     bufs.soa.m0.x[i]
                         + dt * (A61 * bufs.soa.k[0].x[i]
                             + A62 * bufs.soa.k[1].x[i]
@@ -2962,11 +2930,8 @@ impl ExchangeLlgProblem {
                             + A63 * bufs.soa.k[2].z[i]
                             + A64 * bufs.soa.k[3].z[i]
                             + A65 * bufs.soa.k[4].z[i]),
-                ])?;
-                bufs.soa.m_stage.x[i] = stage[0];
-                bufs.soa.m_stage.y[i] = stage[1];
-                bufs.soa.m_stage.z[i] = stage[2];
-            }
+                ])
+            })?;
             self.effective_field_into_soa_ws_at_time(
                 &bufs.soa.m_stage,
                 ws,
@@ -2976,8 +2941,8 @@ impl ExchangeLlgProblem {
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[5]);
             rhs_evals.record();
 
-            for i in 0..n {
-                let stage = self.project_stage([
+            soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
+                self.project_stage([
                     bufs.soa.m0.x[i]
                         + dt * (B1 * bufs.soa.k[0].x[i]
                             + B3 * bufs.soa.k[2].x[i]
@@ -2996,11 +2961,8 @@ impl ExchangeLlgProblem {
                             + B4 * bufs.soa.k[3].z[i]
                             + B5 * bufs.soa.k[4].z[i]
                             + B6 * bufs.soa.k[5].z[i]),
-                ])?;
-                bufs.soa.m_stage.x[i] = stage[0];
-                bufs.soa.m_stage.y[i] = stage[1];
-                bufs.soa.m_stage.z[i] = stage[2];
-            }
+                ])
+            })?;
 
             self.effective_field_into_soa_ws_at_time(
                 &bufs.soa.m_stage,
@@ -3321,22 +3283,19 @@ impl ExchangeLlgProblem {
         bufs.soa.k[2].scatter_from_aos(state.abm_history.f_n_minus_1().unwrap());
         bufs.soa.k[3].scatter_from_aos(state.abm_history.f_n_minus_2().unwrap());
 
-        for i in 0..n {
+        soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
             let pred_x = (23.0 / 12.0) * bufs.soa.k[1].x[i] - (16.0 / 12.0) * bufs.soa.k[2].x[i]
                 + (5.0 / 12.0) * bufs.soa.k[3].x[i];
             let pred_y = (23.0 / 12.0) * bufs.soa.k[1].y[i] - (16.0 / 12.0) * bufs.soa.k[2].y[i]
                 + (5.0 / 12.0) * bufs.soa.k[3].y[i];
             let pred_z = (23.0 / 12.0) * bufs.soa.k[1].z[i] - (16.0 / 12.0) * bufs.soa.k[2].z[i]
                 + (5.0 / 12.0) * bufs.soa.k[3].z[i];
-            let stage = self.project_stage([
+            self.project_stage([
                 bufs.soa.m0.x[i] + dt * pred_x,
                 bufs.soa.m0.y[i] + dt * pred_y,
                 bufs.soa.m0.z[i] + dt * pred_z,
-            ])?;
-            bufs.soa.m_stage.x[i] = stage[0];
-            bufs.soa.m_stage.y[i] = stage[1];
-            bufs.soa.m_stage.z[i] = stage[2];
-        }
+            ])
+        })?;
 
         self.effective_field_into_soa_ws_at_time(
             &bufs.soa.m_stage,
@@ -3346,22 +3305,19 @@ impl ExchangeLlgProblem {
         );
         self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
 
-        for i in 0..n {
+        soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
             let corr_x = (5.0 / 12.0) * bufs.soa.k[0].x[i] + (8.0 / 12.0) * bufs.soa.k[1].x[i]
                 - (1.0 / 12.0) * bufs.soa.k[2].x[i];
             let corr_y = (5.0 / 12.0) * bufs.soa.k[0].y[i] + (8.0 / 12.0) * bufs.soa.k[1].y[i]
                 - (1.0 / 12.0) * bufs.soa.k[2].y[i];
             let corr_z = (5.0 / 12.0) * bufs.soa.k[0].z[i] + (8.0 / 12.0) * bufs.soa.k[1].z[i]
                 - (1.0 / 12.0) * bufs.soa.k[2].z[i];
-            let corrected = self.project_stage([
+            self.project_stage([
                 bufs.soa.m0.x[i] + dt * corr_x,
                 bufs.soa.m0.y[i] + dt * corr_y,
                 bufs.soa.m0.z[i] + dt * corr_z,
-            ])?;
-            bufs.soa.m_stage.x[i] = corrected[0];
-            bufs.soa.m_stage.y[i] = corrected[1];
-            bufs.soa.m_stage.z[i] = corrected[2];
-        }
+            ])
+        })?;
 
         let accepted_time = t0 + dt;
         let eval = {
@@ -3406,16 +3362,13 @@ impl ExchangeLlgProblem {
         self.effective_field_into_soa_ws_at_time(&bufs.soa.m0, ws, &mut bufs.soa.h_eff, t0);
         self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
 
-        for i in 0..n {
-            let predicted = self.project_stage([
+        soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
+            self.project_stage([
                 bufs.soa.m0.x[i] + dt * bufs.soa.k[0].x[i],
                 bufs.soa.m0.y[i] + dt * bufs.soa.k[0].y[i],
                 bufs.soa.m0.z[i] + dt * bufs.soa.k[0].z[i],
-            ])?;
-            bufs.soa.m_stage.x[i] = predicted[0];
-            bufs.soa.m_stage.y[i] = predicted[1];
-            bufs.soa.m_stage.z[i] = predicted[2];
-        }
+            ])
+        })?;
 
         self.effective_field_into_soa_ws_at_time(
             &bufs.soa.m_stage,
@@ -3425,16 +3378,13 @@ impl ExchangeLlgProblem {
         );
         self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
 
-        for i in 0..n {
-            let corrected = self.project_stage([
+        soa_try_fill(&mut state.magnetization, n, |i| {
+            self.project_stage([
                 bufs.soa.m0.x[i] + 0.5 * dt * (bufs.soa.k[0].x[i] + bufs.soa.k[1].x[i]),
                 bufs.soa.m0.y[i] + 0.5 * dt * (bufs.soa.k[0].y[i] + bufs.soa.k[1].y[i]),
                 bufs.soa.m0.z[i] + 0.5 * dt * (bufs.soa.k[0].z[i] + bufs.soa.k[1].z[i]),
-            ])?;
-            state.magnetization.x[i] = corrected[0];
-            state.magnetization.y[i] = corrected[1];
-            state.magnetization.z[i] = corrected[2];
-        }
+            ])
+        })?;
         state.time_seconds += dt;
 
         let eval = self.compute_step_observables_soa(
@@ -3462,16 +3412,13 @@ impl ExchangeLlgProblem {
         self.effective_field_into_soa_ws_at_time(&bufs.soa.m0, ws, &mut bufs.soa.h_eff, t0);
         self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
 
-        for i in 0..n {
-            let stage = self.project_stage([
+        soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
+            self.project_stage([
                 bufs.soa.m0.x[i] + 0.5 * dt * bufs.soa.k[0].x[i],
                 bufs.soa.m0.y[i] + 0.5 * dt * bufs.soa.k[0].y[i],
                 bufs.soa.m0.z[i] + 0.5 * dt * bufs.soa.k[0].z[i],
-            ])?;
-            bufs.soa.m_stage.x[i] = stage[0];
-            bufs.soa.m_stage.y[i] = stage[1];
-            bufs.soa.m_stage.z[i] = stage[2];
-        }
+            ])
+        })?;
         self.effective_field_into_soa_ws_at_time(
             &bufs.soa.m_stage,
             ws,
@@ -3480,16 +3427,13 @@ impl ExchangeLlgProblem {
         );
         self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
 
-        for i in 0..n {
-            let stage = self.project_stage([
+        soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
+            self.project_stage([
                 bufs.soa.m0.x[i] + 0.5 * dt * bufs.soa.k[1].x[i],
                 bufs.soa.m0.y[i] + 0.5 * dt * bufs.soa.k[1].y[i],
                 bufs.soa.m0.z[i] + 0.5 * dt * bufs.soa.k[1].z[i],
-            ])?;
-            bufs.soa.m_stage.x[i] = stage[0];
-            bufs.soa.m_stage.y[i] = stage[1];
-            bufs.soa.m_stage.z[i] = stage[2];
-        }
+            ])
+        })?;
         self.effective_field_into_soa_ws_at_time(
             &bufs.soa.m_stage,
             ws,
@@ -3498,16 +3442,13 @@ impl ExchangeLlgProblem {
         );
         self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[2]);
 
-        for i in 0..n {
-            let stage = self.project_stage([
+        soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
+            self.project_stage([
                 bufs.soa.m0.x[i] + dt * bufs.soa.k[2].x[i],
                 bufs.soa.m0.y[i] + dt * bufs.soa.k[2].y[i],
                 bufs.soa.m0.z[i] + dt * bufs.soa.k[2].z[i],
-            ])?;
-            bufs.soa.m_stage.x[i] = stage[0];
-            bufs.soa.m_stage.y[i] = stage[1];
-            bufs.soa.m_stage.z[i] = stage[2];
-        }
+            ])
+        })?;
         self.effective_field_into_soa_ws_at_time(
             &bufs.soa.m_stage,
             ws,
@@ -3517,22 +3458,19 @@ impl ExchangeLlgProblem {
         self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[3]);
 
         let dt6 = dt / 6.0;
-        for i in 0..n {
+        soa_try_fill(&mut state.magnetization, n, |i| {
             let weighted_x = (bufs.soa.k[0].x[i] + 2.0 * bufs.soa.k[1].x[i])
                 + (2.0 * bufs.soa.k[2].x[i] + bufs.soa.k[3].x[i]);
             let weighted_y = (bufs.soa.k[0].y[i] + 2.0 * bufs.soa.k[1].y[i])
                 + (2.0 * bufs.soa.k[2].y[i] + bufs.soa.k[3].y[i]);
             let weighted_z = (bufs.soa.k[0].z[i] + 2.0 * bufs.soa.k[1].z[i])
                 + (2.0 * bufs.soa.k[2].z[i] + bufs.soa.k[3].z[i]);
-            let updated = self.project_stage([
+            self.project_stage([
                 bufs.soa.m0.x[i] + dt6 * weighted_x,
                 bufs.soa.m0.y[i] + dt6 * weighted_y,
                 bufs.soa.m0.z[i] + dt6 * weighted_z,
-            ])?;
-            state.magnetization.x[i] = updated[0];
-            state.magnetization.y[i] = updated[1];
-            state.magnetization.z[i] = updated[2];
-        }
+            ])
+        })?;
         state.time_seconds += dt;
 
         let eval = self.compute_step_observables_soa(
@@ -3578,16 +3516,13 @@ impl ExchangeLlgProblem {
                 rhs_evals.record();
             }
 
-            for i in 0..n {
-                let stage = self.project_stage([
+            soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
+                self.project_stage([
                     bufs.soa.m0.x[i] + 0.5 * dt * bufs.soa.k[0].x[i],
                     bufs.soa.m0.y[i] + 0.5 * dt * bufs.soa.k[0].y[i],
                     bufs.soa.m0.z[i] + 0.5 * dt * bufs.soa.k[0].z[i],
-                ])?;
-                bufs.soa.m_stage.x[i] = stage[0];
-                bufs.soa.m_stage.y[i] = stage[1];
-                bufs.soa.m_stage.z[i] = stage[2];
-            }
+                ])
+            })?;
             self.effective_field_into_soa_ws_at_time(
                 &bufs.soa.m_stage,
                 ws,
@@ -3597,16 +3532,13 @@ impl ExchangeLlgProblem {
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
             rhs_evals.record();
 
-            for i in 0..n {
-                let stage = self.project_stage([
+            soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
+                self.project_stage([
                     bufs.soa.m0.x[i] + 0.75 * dt * bufs.soa.k[1].x[i],
                     bufs.soa.m0.y[i] + 0.75 * dt * bufs.soa.k[1].y[i],
                     bufs.soa.m0.z[i] + 0.75 * dt * bufs.soa.k[1].z[i],
-                ])?;
-                bufs.soa.m_stage.x[i] = stage[0];
-                bufs.soa.m_stage.y[i] = stage[1];
-                bufs.soa.m_stage.z[i] = stage[2];
-            }
+                ])
+            })?;
             self.effective_field_into_soa_ws_at_time(
                 &bufs.soa.m_stage,
                 ws,
@@ -3616,7 +3548,7 @@ impl ExchangeLlgProblem {
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[2]);
             rhs_evals.record();
 
-            for i in 0..n {
+            soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
                 let weighted_x = (2.0 / 9.0) * bufs.soa.k[0].x[i]
                     + (1.0 / 3.0) * bufs.soa.k[1].x[i]
                     + (4.0 / 9.0) * bufs.soa.k[2].x[i];
@@ -3626,15 +3558,12 @@ impl ExchangeLlgProblem {
                 let weighted_z = (2.0 / 9.0) * bufs.soa.k[0].z[i]
                     + (1.0 / 3.0) * bufs.soa.k[1].z[i]
                     + (4.0 / 9.0) * bufs.soa.k[2].z[i];
-                let stage = self.project_stage([
+                self.project_stage([
                     bufs.soa.m0.x[i] + dt * weighted_x,
                     bufs.soa.m0.y[i] + dt * weighted_y,
                     bufs.soa.m0.z[i] + dt * weighted_z,
-                ])?;
-                bufs.soa.m_stage.x[i] = stage[0];
-                bufs.soa.m_stage.y[i] = stage[1];
-                bufs.soa.m_stage.z[i] = stage[2];
-            }
+                ])
+            })?;
 
             self.effective_field_into_soa_ws_at_time(
                 &bufs.soa.m_stage,
@@ -3782,16 +3711,13 @@ impl ExchangeLlgProblem {
                 rhs_evals.record();
             }
 
-            for i in 0..n {
-                let stage = self.project_stage([
+            soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
+                self.project_stage([
                     bufs.soa.m0.x[i] + dt * A21 * bufs.soa.k[0].x[i],
                     bufs.soa.m0.y[i] + dt * A21 * bufs.soa.k[0].y[i],
                     bufs.soa.m0.z[i] + dt * A21 * bufs.soa.k[0].z[i],
-                ])?;
-                bufs.soa.m_stage.x[i] = stage[0];
-                bufs.soa.m_stage.y[i] = stage[1];
-                bufs.soa.m_stage.z[i] = stage[2];
-            }
+                ])
+            })?;
             self.effective_field_into_soa_ws_at_time(
                 &bufs.soa.m_stage,
                 ws,
@@ -3801,16 +3727,13 @@ impl ExchangeLlgProblem {
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
             rhs_evals.record();
 
-            for i in 0..n {
-                let stage = self.project_stage([
+            soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
+                self.project_stage([
                     bufs.soa.m0.x[i] + dt * (A31 * bufs.soa.k[0].x[i] + A32 * bufs.soa.k[1].x[i]),
                     bufs.soa.m0.y[i] + dt * (A31 * bufs.soa.k[0].y[i] + A32 * bufs.soa.k[1].y[i]),
                     bufs.soa.m0.z[i] + dt * (A31 * bufs.soa.k[0].z[i] + A32 * bufs.soa.k[1].z[i]),
-                ])?;
-                bufs.soa.m_stage.x[i] = stage[0];
-                bufs.soa.m_stage.y[i] = stage[1];
-                bufs.soa.m_stage.z[i] = stage[2];
-            }
+                ])
+            })?;
             self.effective_field_into_soa_ws_at_time(
                 &bufs.soa.m_stage,
                 ws,
@@ -3820,8 +3743,8 @@ impl ExchangeLlgProblem {
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[2]);
             rhs_evals.record();
 
-            for i in 0..n {
-                let stage = self.project_stage([
+            soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
+                self.project_stage([
                     bufs.soa.m0.x[i]
                         + dt * (A41 * bufs.soa.k[0].x[i]
                             + A42 * bufs.soa.k[1].x[i]
@@ -3834,11 +3757,8 @@ impl ExchangeLlgProblem {
                         + dt * (A41 * bufs.soa.k[0].z[i]
                             + A42 * bufs.soa.k[1].z[i]
                             + A43 * bufs.soa.k[2].z[i]),
-                ])?;
-                bufs.soa.m_stage.x[i] = stage[0];
-                bufs.soa.m_stage.y[i] = stage[1];
-                bufs.soa.m_stage.z[i] = stage[2];
-            }
+                ])
+            })?;
             self.effective_field_into_soa_ws_at_time(
                 &bufs.soa.m_stage,
                 ws,
@@ -3848,8 +3768,8 @@ impl ExchangeLlgProblem {
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[3]);
             rhs_evals.record();
 
-            for i in 0..n {
-                let stage = self.project_stage([
+            soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
+                self.project_stage([
                     bufs.soa.m0.x[i]
                         + dt * (A51 * bufs.soa.k[0].x[i]
                             + A52 * bufs.soa.k[1].x[i]
@@ -3865,11 +3785,8 @@ impl ExchangeLlgProblem {
                             + A52 * bufs.soa.k[1].z[i]
                             + A53 * bufs.soa.k[2].z[i]
                             + A54 * bufs.soa.k[3].z[i]),
-                ])?;
-                bufs.soa.m_stage.x[i] = stage[0];
-                bufs.soa.m_stage.y[i] = stage[1];
-                bufs.soa.m_stage.z[i] = stage[2];
-            }
+                ])
+            })?;
             self.effective_field_into_soa_ws_at_time(
                 &bufs.soa.m_stage,
                 ws,
@@ -3879,8 +3796,8 @@ impl ExchangeLlgProblem {
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[4]);
             rhs_evals.record();
 
-            for i in 0..n {
-                let stage = self.project_stage([
+            soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
+                self.project_stage([
                     bufs.soa.m0.x[i]
                         + dt * (A61 * bufs.soa.k[0].x[i]
                             + A62 * bufs.soa.k[1].x[i]
@@ -3899,11 +3816,8 @@ impl ExchangeLlgProblem {
                             + A63 * bufs.soa.k[2].z[i]
                             + A64 * bufs.soa.k[3].z[i]
                             + A65 * bufs.soa.k[4].z[i]),
-                ])?;
-                bufs.soa.m_stage.x[i] = stage[0];
-                bufs.soa.m_stage.y[i] = stage[1];
-                bufs.soa.m_stage.z[i] = stage[2];
-            }
+                ])
+            })?;
             self.effective_field_into_soa_ws_at_time(
                 &bufs.soa.m_stage,
                 ws,
@@ -3913,8 +3827,8 @@ impl ExchangeLlgProblem {
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[5]);
             rhs_evals.record();
 
-            for i in 0..n {
-                let stage = self.project_stage([
+            soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
+                self.project_stage([
                     bufs.soa.m0.x[i]
                         + dt * (B1 * bufs.soa.k[0].x[i]
                             + B3 * bufs.soa.k[2].x[i]
@@ -3933,11 +3847,8 @@ impl ExchangeLlgProblem {
                             + B4 * bufs.soa.k[3].z[i]
                             + B5 * bufs.soa.k[4].z[i]
                             + B6 * bufs.soa.k[5].z[i]),
-                ])?;
-                bufs.soa.m_stage.x[i] = stage[0];
-                bufs.soa.m_stage.y[i] = stage[1];
-                bufs.soa.m_stage.z[i] = stage[2];
-            }
+                ])
+            })?;
 
             self.effective_field_into_soa_ws_at_time(
                 &bufs.soa.m_stage,
@@ -4067,22 +3978,19 @@ impl ExchangeLlgProblem {
                 .expect("ABM SoA f_n_minus_2 missing"),
         );
 
-        for i in 0..n {
+        soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
             let pred_x = (23.0 / 12.0) * bufs.soa.k[1].x[i] - (16.0 / 12.0) * bufs.soa.k[2].x[i]
                 + (5.0 / 12.0) * bufs.soa.k[3].x[i];
             let pred_y = (23.0 / 12.0) * bufs.soa.k[1].y[i] - (16.0 / 12.0) * bufs.soa.k[2].y[i]
                 + (5.0 / 12.0) * bufs.soa.k[3].y[i];
             let pred_z = (23.0 / 12.0) * bufs.soa.k[1].z[i] - (16.0 / 12.0) * bufs.soa.k[2].z[i]
                 + (5.0 / 12.0) * bufs.soa.k[3].z[i];
-            let stage = self.project_stage([
+            self.project_stage([
                 bufs.soa.m0.x[i] + dt * pred_x,
                 bufs.soa.m0.y[i] + dt * pred_y,
                 bufs.soa.m0.z[i] + dt * pred_z,
-            ])?;
-            bufs.soa.m_stage.x[i] = stage[0];
-            bufs.soa.m_stage.y[i] = stage[1];
-            bufs.soa.m_stage.z[i] = stage[2];
-        }
+            ])
+        })?;
 
         self.effective_field_into_soa_ws_at_time(
             &bufs.soa.m_stage,
@@ -4092,22 +4000,19 @@ impl ExchangeLlgProblem {
         );
         self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
 
-        for i in 0..n {
+        soa_try_fill(&mut bufs.soa.m_stage, n, |i| {
             let corr_x = (5.0 / 12.0) * bufs.soa.k[0].x[i] + (8.0 / 12.0) * bufs.soa.k[1].x[i]
                 - (1.0 / 12.0) * bufs.soa.k[2].x[i];
             let corr_y = (5.0 / 12.0) * bufs.soa.k[0].y[i] + (8.0 / 12.0) * bufs.soa.k[1].y[i]
                 - (1.0 / 12.0) * bufs.soa.k[2].y[i];
             let corr_z = (5.0 / 12.0) * bufs.soa.k[0].z[i] + (8.0 / 12.0) * bufs.soa.k[1].z[i]
                 - (1.0 / 12.0) * bufs.soa.k[2].z[i];
-            let updated = self.project_stage([
+            self.project_stage([
                 bufs.soa.m0.x[i] + dt * corr_x,
                 bufs.soa.m0.y[i] + dt * corr_y,
                 bufs.soa.m0.z[i] + dt * corr_z,
-            ])?;
-            bufs.soa.m_stage.x[i] = updated[0];
-            bufs.soa.m_stage.y[i] = updated[1];
-            bufs.soa.m_stage.z[i] = updated[2];
-        }
+            ])
+        })?;
         let accepted_time = t0 + dt;
         let eval = {
             let soa = &mut bufs.soa;
@@ -4519,33 +4424,47 @@ where
     })
 }
 
-fn max_norm_soa(field: &VectorFieldSoA) -> f64 {
-    let mut max_value = 0.0f64;
-    for i in 0..field.len() {
-        max_value = max_value.max(norm([field.x[i], field.y[i], field.z[i]]));
+/// Maximum of `f(i)` over `0..n`.  `f64::max` is commutative and
+/// associative (it skips NaN either way), so the parallel reduction returns
+/// exactly the serial value.
+fn max_over_cells<F>(n: usize, f: F) -> f64
+where
+    F: Fn(usize) -> f64 + Sync + Send,
+{
+    #[cfg(feature = "parallel")]
+    {
+        (0..n)
+            .into_par_iter()
+            .with_min_len(4096)
+            .map(f)
+            .reduce(|| 0.0f64, f64::max)
     }
-    max_value
+    #[cfg(not(feature = "parallel"))]
+    {
+        (0..n).map(f).fold(0.0f64, f64::max)
+    }
+}
+
+fn max_norm_soa(field: &VectorFieldSoA) -> f64 {
+    max_over_cells(field.len(), |i| norm([field.x[i], field.y[i], field.z[i]]))
 }
 
 fn max_cross_norm_soa(a: &VectorFieldSoA, b: &VectorFieldSoA) -> f64 {
     debug_assert_eq!(a.len(), b.len());
-    let mut max_value = 0.0f64;
-    for i in 0..a.len() {
-        let cross = [
+    max_over_cells(a.len(), |i| {
+        norm([
             a.y[i] * b.z[i] - a.z[i] * b.y[i],
             a.z[i] * b.x[i] - a.x[i] * b.z[i],
             a.x[i] * b.y[i] - a.y[i] * b.x[i],
-        ];
-        max_value = max_value.max(norm(cross));
-    }
-    max_value
+        ])
+    })
 }
 
 fn add_soa_into(dst: &mut VectorFieldSoA, src: &VectorFieldSoA) {
     debug_assert!(dst.len() >= src.len());
-    for i in 0..src.len() {
-        dst.x[i] += src.x[i];
-        dst.y[i] += src.y[i];
-        dst.z[i] += src.z[i];
-    }
+    soa_for_each_mut(dst, src.len(), |i, x, y, z| {
+        *x += src.x[i];
+        *y += src.y[i];
+        *z += src.z[i];
+    });
 }

@@ -5,6 +5,7 @@
 
 use crate::fdm::cpu::fft::{combine_fields_4, zero_vectors};
 use crate::fdm::cpu::fft_backend::FdmFftBackend;
+use crate::fdm::cpu::soa_par::soa_fill;
 #[cfg(test)]
 use crate::fdm::shared::types::AxisBoundary;
 use crate::telemetry::{sections, StepTelemetry};
@@ -379,6 +380,9 @@ impl ExchangeLlgProblem {
         if self.alpha_field.is_some() {
             return Some("spatial_damping");
         }
+        if self.exchange_faces.is_some() {
+            return Some("exchange_faces");
+        }
         None
     }
 
@@ -606,16 +610,13 @@ impl ExchangeLlgProblem {
         let n = magnetization.len();
         debug_assert!(h_eff.len() >= n);
         debug_assert!(out.len() >= n);
-        for i in 0..n {
-            let rhs = self.llg_rhs_from_field_at(
+        soa_fill(out, n, |i| {
+            self.llg_rhs_from_field_at(
                 i,
                 [magnetization.x[i], magnetization.y[i], magnetization.z[i]],
                 [h_eff.x[i], h_eff.y[i], h_eff.z[i]],
-            );
-            out.x[i] = rhs[0];
-            out.y[i] = rhs[1];
-            out.z[i] = rhs[2];
-        }
+            )
+        });
         self.direct_torques_add_into_soa(magnetization, out);
         if let Some(frozen) = &self.frozen_spins {
             frozen.mask_final_rhs_soa(out);

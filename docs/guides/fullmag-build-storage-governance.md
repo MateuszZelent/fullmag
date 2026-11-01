@@ -456,11 +456,18 @@ ext4/mount guard oraz różnicę inventory przed i po ręcznie uruchomionej rece
 
 ## Wspólne zasoby grup Docker DEV
 
-Nowe rendery launchera współdzielą named volumes projektu dla Cargo registry/git,
-store pnpm i niezmiennych pakietów backendu. Zasady zgodności, blokady, recovery,
-retencję i migrację opisuje [shared build storage](shared-build-storage.md).
-Control, ledger, user storage i mutowalne katalogi kompilacji pozostają w swoich
-poprzednich granicach. Przy domykaniu zadania nie usuwaj wolumenu `fullmag-shared-*`;
-prywatny pakiet nowej grupy jest katalogiem `groups/<unit_key>`, a nie całym wolumenem.
-Wykonaj kwalifikowaną retencję przed zakończeniem etapu. Samo usunięcie worktree
-nie jest dowodem zwolnienia danych Docker.
+Wolumeny `fullmag-shared-*` nadal współdzielą Cargo registry/git, store pnpm i
+niezmienne pakiety backendu; zasady zgodności, blokady, recovery i retencji
+opisuje [shared build storage](shared-build-storage.md). Daily DEV ma
+równocześnie dokładnie jeden prywatny `BuildControl.volume` na worktree/grupę
+Compose: dotychczasowy root zachowuje control/lock/namespace, a cache backendu,
+frontend i ledger używają subpaths `private/backend`, `private/frontend` i
+`private/ledger`. Szczegóły, migracja oraz granica wdrożenia:
+[ADR 0076](../adr/0076-single-private-volume-per-dev-group.md). Control, ledger,
+user storage i źródła nie należą do rebuild wipe. Przy domykaniu zadania nie
+usuwaj wolumenu `fullmag-shared-*`; namespace pakietu `groups/<unit_key>` jest
+dokładnym subpathem. Implementacja i runtime nowej topologii pozostają
+**NOT VERIFIED** do czasu proof mountów i receiptów.
+Szczegółowy moment usunięcia compiler outputs `.fullmag-build`, cache-hit i
+failed-generation retention określa ADR 0076; zachowanie treści tego kontraktu
+nie potwierdza automatyki w runtime.

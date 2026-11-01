@@ -30,3 +30,6 @@
 !backend_compiler_cache.py
 !docker/all-in-one/backend_group_retirement.py
 !backend_group_retirement.py
+
+!docker/all-in-one/backend_group_cache_cleanup.py
+!backend_group_cache_cleanup.py

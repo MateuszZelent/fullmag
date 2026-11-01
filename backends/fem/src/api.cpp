@@ -5390,6 +5390,49 @@ int fullmag_fem_backend_average_m_for_nodes_f64(
     double weight_sum = 0.0;
     const uint64_t available_nodes =
         static_cast<uint64_t>(handle->context.state.m_xyz.size() / 3u);
+
+    // Element DG0 Ms has no nodal value. Use the same exact P1/DG0 moment
+    // reduction as the global average, restricted to the active elements
+    // whose four vertices all belong to the requested node set.
+    const auto &material_runtime = handle->context.material_fields.runtime;
+    if (material_runtime.has_value() && material_runtime->has_elementwise_ms()) {
+        std::vector<std::uint8_t> node_member_mask(
+            static_cast<size_t>(available_nodes), 0u);
+        for (uint64_t i = 0; i < node_count; ++i) {
+            const uint64_t node = static_cast<uint64_t>(node_indices[i]);
+            if (node >= available_nodes) {
+                fullmag_fem_set_handle_error(
+                    handle,
+                    "fullmag_fem_backend_average_m_for_nodes_f64 received node index out of range");
+                return FULLMAG_FEM_ERR_INVALID;
+            }
+            node_member_mask[static_cast<size_t>(node)] = 1u;
+        }
+        fullmag::fem::MsWeightedAos3AverageReduction reduction;
+        try {
+            reduction = material_runtime->ms_weighted_aos3_average_reduction_for_node_set(
+                handle->context.state.m_xyz,
+                node_member_mask);
+        } catch (const std::exception &exception) {
+            fullmag_fem_set_handle_error(
+                handle,
+                std::string("fullmag_fem_backend_average_m_for_nodes_f64 element-Ms reduction failed: ") +
+                    exception.what());
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+        if (!(std::isfinite(reduction.denominator) && reduction.denominator > 0.0)) {
+            out_xyz[0] = 0.0;
+            out_xyz[1] = 0.0;
+            out_xyz[2] = 0.0;
+        } else {
+            const double inv = 1.0 / reduction.denominator;
+            out_xyz[0] = reduction.weighted_component_integrals[0] * inv;
+            out_xyz[1] = reduction.weighted_component_integrals[1] * inv;
+            out_xyz[2] = reduction.weighted_component_integrals[2] * inv;
+        }
+        return FULLMAG_FEM_OK;
+    }
+
     const auto &lumped_volume = !handle->context.integration_weights.mfem_lumped_mass.empty()
         ? handle->context.integration_weights.mfem_lumped_mass
         : handle->context.mesh.node_volumes;

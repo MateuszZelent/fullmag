@@ -435,7 +435,6 @@ impl FdmGridCertificateIR {
         active_mask: Option<&[bool]>,
         region_mask: &[u32],
     ) -> Result<Self, String> {
-        crate::validate_fdm_region_lut_indices(region_mask, &[])?;
         Self::new_with_payload(
             origin_m,
             counts,
@@ -587,7 +586,6 @@ impl FdmGridCertificateIR {
         active_mask: Option<&[bool]>,
         region_mask: &[u32],
     ) -> Result<(), String> {
-        crate::validate_fdm_region_lut_indices(region_mask, &[])?;
         self.validate_region_legend(region_mask)?;
         self.validate_against_payload(active_mask, region_mask)
     }
@@ -607,6 +605,7 @@ impl FdmGridCertificateIR {
                     .to_string(),
             );
         }
+        let mut authored_regions = std::collections::HashSet::new();
         for (index, entry) in self.region_legend.iter().enumerate() {
             let expected_id = u32::try_from(index + 1)
                 .map_err(|_| "FDM region legend exceeds u32 numeric ID space".to_string())?;
@@ -622,9 +621,7 @@ impl FdmGridCertificateIR {
                     entry.numeric_id
                 ));
             }
-            if self.region_legend[..index].iter().any(|previous| {
-                previous.object_id == entry.object_id && previous.region_id == entry.region_id
-            }) {
+            if !authored_regions.insert((entry.object_id.as_str(), entry.region_id.as_str())) {
                 return Err(format!(
                     "FDM region legend contains duplicate authored region {}:{}",
                     entry.object_id, entry.region_id
@@ -819,15 +816,19 @@ pub struct FdmPlanIR {
     pub solved_antenna_drive_bases: Vec<ResolvedSolvedAntennaDriveBasisIR>,
     #[serde(default)]
     pub time_stage: TimeStageContextIR,
-    /// Explicit inter-region exchange coupling overrides.
-    /// Each entry `(region_i, region_j, A_ij)` sets the exchange stiffness [J/m]
-    /// between regions i and j (symmetric: A_ij = A_ji). When a region mask is
-    /// present and this list is empty, native FDM uses the backend default
-    /// exchange-pair mode. Current region-owned semantics require harmonic mean
-    /// by default; free surfaces must be explicit disabled/zero-scale pair
-    /// semantics in the resolved runtime contract.
+    /// Sparse exchange rules between named regions (physics note 0104,
+    /// `material-fdm-connection-coefficient`). Region pairs without a rule
+    /// use the guarded harmonic mean of the realized cell stiffnesses when
+    /// both regions belong to the same owner object and are decoupled
+    /// otherwise. Legacy `(region_i, region_j, A)` triples read as `explicit`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub inter_region_exchange: Vec<(u32, u32, f64)>,
+    pub inter_region_exchange: Vec<crate::FdmExchangePairRuleIR>,
+    /// Owner object index of each region index (`region_owner[r]`), used when
+    /// several objects share one grid. Regions of different owners are
+    /// decoupled unless a pair rule says otherwise. Empty means every region
+    /// belongs to one object.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub region_owner: Vec<u32>,
     pub gyromagnetic_ratio: f64,
     pub precision: ExecutionPrecision,
     /// Planner-resolved storage/compute/FFT/reduction precision contract.
@@ -1033,6 +1034,52 @@ pub struct FdmPlanIR {
     /// Uniform prescribed strain tensor in Voigt order [ε₁₁, ε₂₂, ε₃₃, 2ε₂₃, 2ε₁₃, 2ε₁₂].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mel_uniform_strain: Option<[f64; 6]>,
+}
+
+impl FdmPlanIR {
+    /// Reason the native CUDA lane cannot yet realize this plan's
+    /// heterogeneous material (note 0104, `material-regions-fdm-lane-realization`).
+    ///
+    /// Face coefficients only change exchange (including T0/T1); the terms
+    /// checked here read the scalar Ms/alpha or a local A. The planner and the
+    /// runner share this predicate so forced CUDA fails before execution and
+    /// never falls back to the CPU reference.
+    pub fn cuda_heterogeneous_material_error(&self) -> Option<String> {
+        let variable_ms = self.material.ms_field.is_some();
+        let cellwise_ms_or_alpha = variable_ms || self.material.alpha_field.is_some();
+        let variable_exchange = self.material.a_field.is_some();
+        let has_dmi = self.interfacial_dmi.is_some()
+            || self.bulk_dmi.is_some()
+            || self.rotated_interfacial_dmi.is_some();
+        let owner = if !cellwise_ms_or_alpha {
+            (has_dmi && variable_exchange).then_some("dmi_variable_exchange")
+        } else if self
+            .boundary_correction
+            .as_deref()
+            .is_some_and(|tier| tier != "none")
+        {
+            Some("boundary_correction")
+        } else if self.temperature.unwrap_or(0.0) > 0.0 {
+            Some("thermal")
+        } else if self.current_density.is_some()
+            || self.sot_current_density.is_some()
+            || !self.spin_transport_plans.is_empty()
+            || !self.fdm_gpu_charge_transports.is_empty()
+        {
+            Some("spin_torque")
+        } else if has_dmi && variable_exchange {
+            Some("dmi_variable_exchange")
+        } else if self.rotated_interfacial_dmi.is_some() && variable_ms {
+            Some("rotated_dmi_variable_ms")
+        } else {
+            None
+        };
+        owner.map(|owner| {
+            format!(
+                "fdm_cuda_heterogeneous_material_unsupported:{owner}: heterogeneous Ms/Aex/alpha does not yet combine with this term on native FDM CUDA; use device='cpu' or a uniform material"
+            )
+        })
+    }
 }
 
 /// Sub-cell boundary geometry arrays computed from SDF during planning.
@@ -2413,7 +2460,8 @@ mod tests {
         assert!(error.to_string().contains("resolved_frozen_spins_invalid"));
     }
     use crate::{
-        validate_fdm_region_lut_indices, ExecutionDevice, ExecutionPrecision, MAX_FDM_REGION_IDS,
+        validate_fdm_exchange_pair_rules, ExecutionDevice, ExecutionPrecision,
+        FdmExchangePairModeIR, FdmExchangePairRuleIR,
     };
 
     #[test]
@@ -2735,21 +2783,145 @@ mod tests {
     }
 
     #[test]
-    fn fdm_region_lut_accepts_boundary_id_and_rejects_256() {
-        validate_fdm_region_lut_indices(&[0, MAX_FDM_REGION_IDS], &[])
-            .expect("id 255 is the last addressable non-background region");
-        let error = validate_fdm_region_lut_indices(&[0, MAX_FDM_REGION_IDS + 1], &[])
-            .expect_err("id 256 would index past the 256-entry LUT");
-        assert!(error.contains("fdm_region_lut_capacity_exceeded"));
-        assert!(error.contains("requested_region_id=256"));
+    fn region_mask_accepts_ids_above_255() {
+        let region_mask = [0u32, 256, 1000];
+        let legend = (1..=1000)
+            .map(|numeric_id| FdmRegionLegendEntryIR {
+                numeric_id,
+                object_id: "body".to_string(),
+                region_id: format!("grain_{numeric_id}"),
+                priority: 0,
+            })
+            .collect();
+        let certificate = FdmGridCertificateIR::new_with_masks(
+            [0.0; 3],
+            [3, 1, 1],
+            [1e-9; 3],
+            3,
+            1_024,
+            None,
+            &region_mask,
+        )
+        .expect("region ids above 255 are valid u32 indices")
+        .with_region_legend(legend);
+        certificate
+            .validate_region_legend(&region_mask)
+            .expect("a 1000-entry legend decodes ids 256 and 1000");
     }
 
     #[test]
-    fn fdm_region_lut_rejects_out_of_range_exchange_pair() {
-        let error = validate_fdm_region_lut_indices(&[1, 2], &[(1, MAX_FDM_REGION_IDS + 1, 1.0)])
-            .expect_err("exchange pair ids must use the same LUT bound");
-        assert!(error.contains("exchange_pair_index=0"));
-        assert!(error.contains("supported_region_ids=255"));
+    fn cuda_heterogeneous_gate_accepts_uniform_and_core_heterogeneous_material() {
+        let mut plan = FdmPlanIR::default();
+        assert_eq!(plan.cuda_heterogeneous_material_error(), None);
+        plan.material.ms_field = Some(vec![7.5e5; 4]);
+        plan.material.alpha_field = Some(vec![0.05; 4]);
+        plan.material.a_field = Some(vec![13e-12; 4]);
+        assert_eq!(plan.cuda_heterogeneous_material_error(), None);
+    }
+
+    #[test]
+    fn cuda_heterogeneous_gate_names_each_blocking_owner() {
+        let cellwise_ms = || {
+            let mut plan = FdmPlanIR::default();
+            plan.material.ms_field = Some(vec![7.5e5; 4]);
+            plan
+        };
+        let owner = |plan: &FdmPlanIR| {
+            plan.cuda_heterogeneous_material_error()
+                .expect("combination must be rejected")
+        };
+
+        let mut plan = cellwise_ms();
+        plan.boundary_correction = Some("volume".to_string());
+        assert!(owner(&plan).starts_with("fdm_cuda_heterogeneous_material_unsupported:boundary_correction"));
+
+        let mut plan = cellwise_ms();
+        plan.boundary_correction = Some("none".to_string());
+        assert_eq!(plan.cuda_heterogeneous_material_error(), None);
+
+        let mut plan = cellwise_ms();
+        plan.temperature = Some(300.0);
+        assert!(owner(&plan).starts_with("fdm_cuda_heterogeneous_material_unsupported:thermal"));
+
+        let mut plan = cellwise_ms();
+        plan.sot_current_density = Some(1e10);
+        assert!(owner(&plan).starts_with("fdm_cuda_heterogeneous_material_unsupported:spin_torque"));
+
+        let mut plan = cellwise_ms();
+        plan.rotated_interfacial_dmi = Some(1e-3);
+        assert!(owner(&plan).starts_with("fdm_cuda_heterogeneous_material_unsupported:rotated_dmi_variable_ms"));
+
+        let mut plan = FdmPlanIR::default();
+        plan.material.a_field = Some(vec![13e-12; 4]);
+        plan.interfacial_dmi = Some(1e-3);
+        assert!(owner(&plan).starts_with("fdm_cuda_heterogeneous_material_unsupported:dmi_variable_exchange"));
+    }
+
+    #[test]
+    fn legacy_tuple_pairs_deserialize_as_explicit() {
+        let rules: Vec<FdmExchangePairRuleIR> =
+            serde_json::from_value(serde_json::json!([[1, 2, 4e-12]])).expect("legacy triple");
+        assert_eq!(
+            rules,
+            vec![FdmExchangePairRuleIR {
+                region_i: 1,
+                region_j: 2,
+                mode: FdmExchangePairModeIR::Explicit {
+                    exchange_stiffness: 4e-12
+                },
+            }]
+        );
+        let typed = serde_json::to_value(&rules[0]).expect("typed rule serializes");
+        assert_eq!(typed["mode"]["mode"], "explicit");
+        let round_trip: FdmExchangePairRuleIR =
+            serde_json::from_value(typed).expect("typed rule deserializes");
+        assert_eq!(round_trip, rules[0]);
+    }
+
+    #[test]
+    fn pair_rules_reject_self_pair_negative_and_nonfinite() {
+        let rule = |region_i, region_j, mode| FdmExchangePairRuleIR {
+            region_i,
+            region_j,
+            mode,
+        };
+        for invalid in [
+            rule(3, 3, FdmExchangePairModeIR::Disabled),
+            rule(0, 3, FdmExchangePairModeIR::Disabled),
+            rule(1, 2, FdmExchangePairModeIR::HarmonicScale { scale: -0.5 }),
+            rule(1, 2, FdmExchangePairModeIR::Explicit { exchange_stiffness: f64::NAN }),
+        ] {
+            assert!(validate_fdm_exchange_pair_rules(&[invalid]).is_err());
+        }
+        validate_fdm_exchange_pair_rules(&[rule(
+            700,
+            1000,
+            FdmExchangePairModeIR::HarmonicScale { scale: 0.5 },
+        )])
+        .expect("large region ids are valid rule endpoints");
+    }
+
+    #[test]
+    fn pair_rules_reject_conflicting_duplicates() {
+        let disabled = FdmExchangePairRuleIR {
+            region_i: 1,
+            region_j: 2,
+            mode: FdmExchangePairModeIR::Disabled,
+        };
+        let mirrored = FdmExchangePairRuleIR {
+            region_i: 2,
+            region_j: 1,
+            ..disabled
+        };
+        validate_fdm_exchange_pair_rules(&[disabled, mirrored])
+            .expect("identical duplicates are consistent");
+        let conflicting = FdmExchangePairRuleIR {
+            mode: FdmExchangePairModeIR::HarmonicScale { scale: 0.5 },
+            ..mirrored
+        };
+        let error = validate_fdm_exchange_pair_rules(&[disabled, conflicting])
+            .expect_err("conflicting rules for one pair must fail");
+        assert!(error.contains("fdm_exchange_pair_rule_conflict"));
     }
 }
 

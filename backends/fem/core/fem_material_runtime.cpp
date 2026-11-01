@@ -88,6 +88,15 @@ FemMaterialRuntimeAdapter::ms_weighted_aos3_average_reduction(
     return realization_.ms_weighted_aos3_average_reduction(aos3_nodal_values);
 }
 
+MsWeightedAos3AverageReduction
+FemMaterialRuntimeAdapter::ms_weighted_aos3_average_reduction_for_node_set(
+    const std::vector<double> &aos3_nodal_values,
+    const std::vector<std::uint8_t> &node_member_mask) const
+{
+    return realization_.ms_weighted_aos3_average_reduction_for_node_set(
+        aos3_nodal_values, node_member_mask);
+}
+
 bool initialize_material_runtime(Context &ctx, std::string &error) {
     if (ctx.material_fields.runtime.has_value()) {
         return true;

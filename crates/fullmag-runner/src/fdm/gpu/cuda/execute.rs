@@ -34,7 +34,9 @@ use crate::quantities::{
 use crate::relaxation::direct_minimizer::direct_minimizer_control;
 #[cfg(feature = "cuda")]
 use crate::relaxation::{
-    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
+    apply_energy_minimizer_provenance, llg_overdamped_uses_pure_damping,
+    RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
+    CUDA_FDM_HOST_DIRECT_MINIMIZER_REALIZATION,
 };
 #[cfg(feature = "cuda")]
 use crate::scalar_metrics::{
@@ -349,6 +351,13 @@ fn apply_regional_drive_energy(
     magnetization: &[[f64; 3]],
 ) {
     let cell_volume = plan.cell_size[0] * plan.cell_size[1] * plan.cell_size[2];
+    // A cellwise Ms field weights each cell like the device energy reductions do.
+    let saturation_magnetisation = |index: usize| {
+        plan.material
+            .ms_field
+            .as_ref()
+            .map_or(plan.material.saturation_magnetisation, |ms| ms[index])
+    };
     let mut magnetization_dot_field = 0.0;
     for resolved in &plan.regional_field_drive_bases {
         if !resolved.drive.enabled {
@@ -365,7 +374,7 @@ fn apply_regional_drive_energy(
                 continue;
             }
             magnetization_dot_field += multiplier
-                * plan.material.saturation_magnetisation
+                * saturation_magnetisation(index)
                 * (m[0] * field[0] + m[1] * field[1] + m[2] * field[2]);
         }
     }
@@ -392,7 +401,7 @@ fn apply_regional_drive_energy(
             }
             magnetization_dot_field += multiplier
                 * resolved.drive.peak_current_a
-                * plan.material.saturation_magnetisation
+                * saturation_magnetisation(index)
                 * (m[0] * field[0] + m[1] * field[1] + m[2] * field[2]);
         }
     }
@@ -823,6 +832,11 @@ pub(crate) fn execute_cuda_fdm(
         },
         ..Default::default()
     };
+    apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
+    if direct_minimizer_control(plan.relaxation.as_ref()).is_some() {
+        provenance.energy_minimizer_realization =
+            Some(CUDA_FDM_HOST_DIRECT_MINIMIZER_REALIZATION.to_string());
+    }
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)
     } else {
@@ -934,6 +948,7 @@ pub(crate) fn execute_cuda_fdm(
                     &mut sampled_stats,
                     &magnetization,
                     plan.active_mask.as_deref(),
+                    plan.material.ms_field.as_deref(),
                 );
                 apply_regional_drive_energy(plan, &mut sampled_stats, &magnetization);
                 record_cuda_due_outputs(
@@ -1017,6 +1032,11 @@ pub(crate) fn execute_cuda_fdm(
             let Some(mut stats) = backend.step_interruptible(dt_step, interrupt_requested)? else {
                 continue;
             };
+            // Adaptive integrators return the controller's next step size with
+            // the accepted step; snapshots below replace `stats` and drop it.
+            if let Some(next_dt) = stats.dt_suggested {
+                dt = next_dt;
+            }
             let due_scalar_row = scalar_row_due(&scalar_schedules, stats.time);
             let native_relaxation_full = plan.relaxation.is_some()
                 && observation_policy.native.mode == NativeStatsMode::Full;
@@ -1084,6 +1104,7 @@ pub(crate) fn execute_cuda_fdm(
                         .as_deref()
                         .expect("magnetization cache initialized"),
                     plan.active_mask.as_deref(),
+                    plan.material.ms_field.as_deref(),
                 );
                 apply_regional_drive_energy(
                     plan,
@@ -1106,6 +1127,7 @@ pub(crate) fn execute_cuda_fdm(
                             .as_deref()
                             .expect("magnetization cache initialized"),
                         plan.active_mask.as_deref(),
+                        plan.material.ms_field.as_deref(),
                     );
                     apply_regional_drive_energy(
                         plan,
@@ -1144,6 +1166,7 @@ pub(crate) fn execute_cuda_fdm(
                             .as_deref()
                             .expect("magnetization cache initialized"),
                         plan.active_mask.as_deref(),
+                        plan.material.ms_field.as_deref(),
                     );
                     apply_regional_drive_energy(
                         plan,
@@ -1321,6 +1344,7 @@ pub(crate) fn execute_cuda_fdm(
             final_stats,
             &final_magnetization,
             plan.active_mask.as_deref(),
+            plan.material.ms_field.as_deref(),
         );
         apply_regional_drive_energy(plan, final_stats, &final_magnetization);
     }

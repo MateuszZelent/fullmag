@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <type_traits>
 #include <vector>
 
@@ -393,6 +394,58 @@ void verify_no_binding_preserves_rhs() {
     fullmag_fdm_backend_destroy(handle);
 }
 
+void verify_cellwise_material_rejects_late_transport_binding() {
+    // Create succeeds with cellwise alpha (or Ms) and no transport; a binding
+    // attached afterwards through the C ABI must hit the same material gate.
+    fullmag_fdm_gpu_transport_llg_binding_v1 binding{};
+    binding.abi_version = FULLMAG_FDM_GPU_TRANSPORT_ABI_V1;
+    binding.struct_version = 1;
+    binding.struct_size = sizeof(binding);
+    const std::string owner =
+        "fdm_cuda_heterogeneous_material_unsupported:gpu_transport";
+    for (int cellwise_ms = 0; cellwise_ms <= 1; ++cellwise_ms) {
+        std::vector<double> m0(3 * kCells, 0.0);
+        for (uint64_t cell = 0; cell < kCells; ++cell) m0[3 * cell] = 1.0;
+        std::vector<double> alpha_field(kCells, 0.1);
+        alpha_field[1] = 0.3;
+        std::vector<double> ms_field(kCells, 8.0e5);
+        ms_field[1] = 4.0e5;
+        fullmag_fdm_plan_desc plan{};
+        plan.grid = {static_cast<uint32_t>(kCells), 1, 1, 1.0, 1.0, 1.0};
+        plan.material = {8.0e5, 0.0, 0.1, 2.211e5};
+        plan.precision = FULLMAG_FDM_PRECISION_DOUBLE;
+        plan.integrator = FULLMAG_FDM_INTEGRATOR_HEUN;
+        plan.initial_magnetization_xyz = m0.data();
+        plan.initial_magnetization_len = m0.size();
+        if (cellwise_ms) {
+            plan.ms_field = ms_field.data();
+            plan.ms_field_len = ms_field.size();
+        } else {
+            plan.alpha_field = alpha_field.data();
+            plan.alpha_field_len = alpha_field.size();
+        }
+        fullmag_fdm_backend *handle = fullmag_fdm_backend_create(&plan);
+        check(handle != nullptr && fullmag_fdm_backend_last_error(handle) == nullptr,
+              "cellwise material backend without transport must be created");
+        check(fullmag_fdm_context_bind_gpu_transport_v1(handle, &binding) ==
+                  FULLMAG_FDM_ERR_INVALID,
+              "late transport binding with cellwise material must fail");
+        const char *error = fullmag_fdm_backend_last_error(handle);
+        check(error != nullptr && std::string(error).find(owner) != std::string::npos,
+              "late transport binding must name the heterogeneous material gate");
+        fullmag_fdm_backend_destroy(handle);
+    }
+    // The same binding on a uniform backend fails for its own reason, not the gate.
+    fullmag_fdm_backend *uniform = create_backend(FULLMAG_FDM_INTEGRATOR_HEUN, 0.1);
+    check(fullmag_fdm_context_bind_gpu_transport_v1(uniform, &binding) ==
+              FULLMAG_FDM_ERR_INVALID,
+          "incomplete binding must still fail on a uniform backend");
+    const char *uniform_error = fullmag_fdm_backend_last_error(uniform);
+    check(uniform_error == nullptr || std::string(uniform_error).find(owner) == std::string::npos,
+          "uniform backend must not report the heterogeneous material gate");
+    fullmag_fdm_backend_destroy(uniform);
+}
+
 void verify_late_stage_failure_rolls_back(
     fullmag_fdm_integrator integrator, uint64_t fail_stage)
 {
@@ -628,6 +681,7 @@ int main() {
     verify_checkpoint_restart_is_bitwise_continuous(FULLMAG_FDM_INTEGRATOR_DP45);
     verify_checkpoint_restart_is_bitwise_continuous(FULLMAG_FDM_INTEGRATOR_ABM3);
     verify_no_binding_preserves_rhs();
+    verify_cellwise_material_rejects_late_transport_binding();
     std::puts("PASS: GPU M1 transport LLG stage contract");
     return 0;
 }

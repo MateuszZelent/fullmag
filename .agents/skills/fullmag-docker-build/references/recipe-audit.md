@@ -2,6 +2,11 @@
 
 Data audytu: 2026-10-18. Zakres: tylko odczyt worktree wybranego worktree zadania; nie uruchamiano recept, buildów, testów, cleanup ani operacji Git. Raport obejmuje deklaracje `justfile`, globalny wrapper, resolver oraz bezpośrednio wywoływane launchery. Efekty narzędzi zewnętrznych oznaczam jako nieznane, gdy nie wynikają ze źródła.
 
+Bieżącą topologię prywatnego storage daily DEV określa [ADR 0076](../../../../docs/adr/0076-single-private-volume-per-dev-group.md).
+Poniższe inventory i delty zachowują historię odczytów; nie są instrukcją tworzenia
+osobnych wolumenów ani dowodem obecnego runtime. Budowanie samych obrazów nie
+wymaga hostowego storage; dane użytkownika API pozostają osobną granicą.
+
 ## Dowód kompletności
 
 Hashe w tym rozdziale zapisują wejścia odczytu bazowego z 18.10.2026; nie są hashami bieżącego HEAD.

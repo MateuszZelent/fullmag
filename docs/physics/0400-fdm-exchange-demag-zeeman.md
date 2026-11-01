@@ -376,6 +376,17 @@ $$
 because that mishandles material jumps.
 The face-based form is the correct architectural foundation.
 
+When every face coefficient equals the same $A$, the face-based sum
+$\sum_f A_f(\mathbf{m}_j-\mathbf{m}_i)/h_f^2$ equals $A\,\nabla_h^2\mathbf{m}_i$
+exactly in real arithmetic. The CUDA fp64 field kernel
+(`backends/fdm/gpu/cuda/interactions/exchange_fp64.cu`,
+`launch_exchange_field_fp64`) therefore evaluates the uniform Laplacian when
+the whole region-pair table equals $A$ (`Context::exchange_lut_uniform`, set
+where `fullmag_fdm_backend_create_impl` in `backends/fdm/api/c_api.cpp` builds the table). The two evaluation orders
+differ only by floating-point roundoff, measured at a relative
+$4\times10^{-16}$ of $\max|\mathbf{H}_{\mathrm{ex}}|$ on a random state. The
+energy reduction still uses the table.
+
 ##### Energy density and scalar output
 
 A compatible per-cell exchange energy density is obtained by splitting face contributions between
@@ -958,6 +969,8 @@ For this topic, `Exchange + Demag + Zeeman` are now executable in the public FDM
 | Airbox visualization field | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `reconstruct_inactive_fdm_visual_effective_field` | Reconstructs full-domain visualization fields outside magnetic support. | FDM CPU | target-only observation contract |
 | Full-grid materialization | `crates/fullmag-runner/src/interactive_runtime.rs` | `build_cached_grid_preview_fields` | Selectively builds live fields from one observable state. | FDM CPU | part of current path, not proof of an atomic terminal generation/batch |
 | CUDA external-energy reduction | `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` | `reduce_external_energy_fp64` | Reduces uniform, sampled, and regional external fields with partial-cell volume weighting. | FDM GPU | source-level contract; runtime parity `NOT VERIFIED` |
+| CUDA exchange field (uniform-table branch) | `backends/fdm/gpu/cuda/interactions/exchange_fp64.cu` | `exchange_field_fp64_kernel` | fp64 exchange field; the standard launch takes the uniform-Laplacian branch when every region-pair entry equals A. | FDM GPU | kernel timing and field difference measured by `scripts/benchmarks/cuda_exchange_region_bench.cu` |
+| CUDA uniform exchange-table flag | `backends/fdm/api/c_api.cpp` | `fullmag_fdm_backend_create_impl` | Builds the region-pair table and sets `Context::exchange_lut_uniform`. | FDM GPU | source-visible; exercised by the FDM GPU hot-loop benchmark runs |
 | CUDA energy-density materialization | `backends/fdm/gpu/cuda/interactions/energy_density_fp64.cu` | `launch_energy_density_observable` | Materializes external and total density using the resolved field sources and current volume measure. | FDM GPU | source-level contract; runtime parity `NOT VERIFIED` |
 | CPU terminal outcome | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `execute_reference_fdm` | Returns CPU run outcome and scheduled fields. | FDM CPU | part of current path, not proof of an atomic terminal generation/batch |
 | Preview-disable switch | `crates/fullmag-cli/src/live_workspace.rs` | `feature_flags` | Reads the benchmark/display preview configuration. | CLI control plane | does not qualify or replace terminal field finalization |
