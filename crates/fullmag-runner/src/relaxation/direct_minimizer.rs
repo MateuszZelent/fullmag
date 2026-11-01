@@ -1608,6 +1608,7 @@ mod tests {
             &[[1.0, 0.0, 0.0]],
             &[[0.0, 4.0, 3.0]],
             None,
+            None,
         );
 
         assert_eq!(torque, 5.0);
