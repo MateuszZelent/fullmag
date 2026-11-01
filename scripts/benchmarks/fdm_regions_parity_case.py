@@ -17,6 +17,7 @@ FDM_REGIONS_PRECISION  double | single                           (default double
 FDM_REGIONS_STEPS      fixed-dt step count                       (default 2000)
 FDM_REGIONS_GRAINS     grains per axis for the grains case        (default 32,32)
 FDM_REGIONS_DEMAG      1 = demag on                              (default 1)
+FDM_REGIONS_SAVE_FIELDS 1 = also save H_ex and H_eff at the end  (default 0)
 """
 
 import os
@@ -35,6 +36,7 @@ PRECISION = _env("FDM_REGIONS_PRECISION", "double").lower()
 STEPS = int(_env("FDM_REGIONS_STEPS", "2000"))
 GRAINS_X, GRAINS_Y = (int(v) for v in _env("FDM_REGIONS_GRAINS", "32,32").split(","))
 DEMAG = _env("FDM_REGIONS_DEMAG", "1") == "1"
+SAVE_FIELDS = _env("FDM_REGIONS_SAVE_FIELDS", "0") == "1"
 CELL = 2e-9
 DT = 1e-14
 
@@ -105,5 +107,8 @@ elif CASE != "uniform":
 
 study.demag(enabled=DEMAG)
 study.b_ext(0.0, 0.0, 50e-3)
+if SAVE_FIELDS:
+    for quantity in ("H_ex", "H_eff"):
+        study.save(quantity, every=STEPS * DT)
 study.solver(fix_dt=DT, integrator="rk4")
 study.run(STEPS * DT)

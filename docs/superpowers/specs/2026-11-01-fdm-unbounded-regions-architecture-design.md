@@ -487,12 +487,22 @@ Fp32 wymaga własnej kwalifikacji; wynik fp64 nie promuje go automatycznie.
 Bitową zgodność można wymagać tylko dla **niezmienionej** ścieżki uniform,
 identycznego toolchaina/urządzenia i warunków; zgodność współczynnika H(A,A)=A
 sama nie gwarantuje identycznej kolejności działań ani hashy końcowej trajektorii.
-Zakres przyjęty w implementacji (2026-11-01): fp64 CPU i CUDA są bitowo zgodne z
-bazą także dla jednorodnego materiału z maską regionów; fp32 CUDA jest bitowo
-zgodne tylko bez maski regionów. Na bazie fp32 z maską regionów szło przez kernel
-LUT (suma ważonych składników sąsiadów), teraz idzie przez laplasjan z
-prefaktorem, więc różnica jest na poziomie zaokrągleń (1 ULP po 10 krokach). Nie
-odtwarzamy kolejności sumowania LUT, bo wymagałoby to drugiej gorącej pętli.
+Zakres przyjęty w implementacji (2026-11-01, decyzja użytkownika „Narrow it +
+tolerance”): kontrakt bitowy obejmuje tylko fp64. Na torze U fp64 CPU i CUDA są
+bitowo zgodne z bazą, także dla jednorodnego materiału z maską regionów. fp32 CUDA
+nie ma kontraktu bitowego. Na bazie fp32 z maską regionów szło przez kernel LUT
+(suma ważonych składników sąsiadów), teraz idzie przez laplasjan z prefaktorem;
+różnica względem bazy jest na poziomie zaokrągleń (1 ULP po 10 krokach). Nie
+odtwarzamy kolejności sumowania LUT i nie dodajemy drugiej gorącej pętli fp32.
+Zamiast tego fp32 ma kwalifikację tolerancyjną względem referencji fp64 (CPU)
+na wszystkich przypadkach parytetu, w krótkim horyzoncie (10 kroków RK4), bo
+losowa tekstura jest chaotyczna i po 2000 krokach każda różnica zaokrągleń
+rośnie do O(1). Bramki `run_fdm_regions_parity.py --with-fp32`: max |Δm| ≤ 1e-5,
+względna różnica każdego składnika energii ≤ 1e-5, max |ΔH| / max |H_ref| ≤ 1e-5
+dla `H_ex` i `H_eff` w kroku końcowym. Wartości NaN/inf to błąd. Zmierzone
+maksima (2026-11-01): |Δm| 2.3e-7, energia 5.0e-7 (`E_ext` ziaren, gdzie ⟨m_z⟩
+jest małe), pola 2.3e-7, czyli zapas co najmniej 20×. Szczegóły w raporcie
+`docs/audits/2026-11-01-fdm-unbounded-regions-benchmark.md`.
 
 FEM: >256 konformalnych markerów, wiele regionów z dwoma materiałami, air,
 wysokie rzadkie markery i poprawne remapowanie. Sprawdzamy import/assembly,

@@ -81,13 +81,48 @@ energii z ostatniego wiersza `scalars.csv`.
   został poprawnie odrzucony przez planer (konflikt nakładających się regionów).
 - Przypadek z regionami bez reguł daje **bitowo ten sam** `m_final` co przypadek bez
   regionów, na CPU i na CUDA (operator `uniform`).
-- fp32 (informacyjnie): CUDA fp32 rozjeżdża się z CPU do |Δm| ≈ 2 także w przypadku
-  jednorodnym; losowa tekstura jest chaotyczna, a fp32 nie jest kwalifikowane.
+- fp32 po 2000 krokach rozjeżdża się z CPU do |Δm| ≈ 2 także w przypadku
+  jednorodnym, bo losowa tekstura jest chaotyczna. Dlatego fp32 kwalifikujemy w
+  krótkim horyzoncie (sekcja 2a), a nie na tej trajektorii.
 
 Powtórzenie na buildzie `9c56c1a04` (po poprawkach z przeglądu, utwardzony skrypt
 parytetu kończy się kodem 0): wszystkie pięć przypadków fp64 daje te same max |Δm|,
 różnice energii i hashe `m_final` co powyżej (dwa materiały `630cb7bddf06`, ziarna
 `f454815bf28b`, jednorodny `18f2bc6e4437`).
+
+## 2a. Kwalifikacja tolerancyjna CUDA fp32
+
+Decyzja użytkownika („Narrow it + tolerance”): kontrakt bitowy obejmuje tylko fp64,
+a fp32 ma kwalifikację tolerancyjną względem referencji fp64. Polecenie:
+`run_fdm_regions_parity.py --with-fp32`. Dla każdego przypadku CPU fp64 i CUDA fp32
+liczą 10 kroków RK4 (dt = 10 fs) z zapisem `H_ex` i `H_eff`. Porównanie: max |Δm|,
+względna różnica każdego składnika energii z ostatniego wiersza `scalars.csv` oraz
+max |ΔH| / max |H_ref| po komórkach i składowych. Pola porównujemy w kroku 10, bo
+tory zapisują pierwszą próbkę w różnych krokach (CPU w kroku 1, CUDA w kroku 0).
+NaN/inf w dowolnej porównywanej wartości kończy skrypt kodem 1.
+
+Tolerancje (domyślne w skrypcie): max |Δm| ≤ 1e-5, energia ≤ 1e-5 na składnik,
+pola ≤ 1e-5. To ok. 84 ULP float (ε = 1.19e-7), co najmniej 20× powyżej
+zmierzonych maksimów.
+
+| Przypadek | max abs Δm | maks. wzgl. Δ energii (składnik) | wzgl. Δ `H_ex` | wzgl. Δ `H_eff` |
+|---|---:|---:|---:|---:|
+| dwa materiały, `explicit` | 1.84e-7 | 1.38e-7 (`E_ext`) | 1.65e-7 | 1.60e-7 |
+| dwa materiały, `harmonic_mean` × 0.5 | 1.84e-7 | 1.10e-7 (`E_demag`) | 1.65e-7 | 1.58e-7 |
+| 1024 ziarna | 2.26e-7 | 5.02e-7 (`E_ext`) | 2.34e-7 | 2.16e-7 |
+| jednorodny | 1.89e-7 | 1.93e-7 (`E_ext`) | 1.56e-7 | 1.58e-7 |
+| jednorodny z 2 regionami bez reguł | 1.89e-7 | 1.93e-7 (`E_ext`) | 1.56e-7 | 1.58e-7 |
+
+- Błąd `E_ex`, `E_demag` i `E_total` to 7–12e-8, czyli rząd ε float. Większy błąd
+  `E_ext` wynika z małego ⟨m_z⟩ losowej tekstury (ok. 4e-3): energia Zeemana jest
+  różnicą dużych składników.
+- Przypadek z regionami bez reguł daje te same błędy co jednorodny; operator
+  `uniform` nie zależy od etykiet regionów.
+- Wspólny magazyn `results.zarr/stages/*/fields/<pole>` zapisuje wartości w kolejności
+  AoS na CPU i SoA na CUDA, bez etykiety układu. Skrypt czyta więc samoopisujące
+  się magazyny torów (`fields/<pole>/step_*.json` na CPU, `fields/<pole>.zarr` z
+  osiami `sample/component/cell` na CUDA). Rozjazd układu jest istniejącym
+  problemem artefaktów, poza zakresem tego brancha (follow-up).
 
 ## 3. Niezmienność względem `master`
 
@@ -103,10 +138,11 @@ Te same przypadki jednorodne w grupie bazowej (`c416e1b70` + `5f87465ad`):
 
 fp64 jest bitowo zgodne. W fp32 `master` kierował plany z maską regionów (każdy plan
 CUDA ją ma) przez kernel LUT, bo skrót z PR #374 obejmował tylko fp64; teraz przypadek
-jednorodny idzie przez laplasjan. Przyjęty zakres zgodności (zapisany w projekcie):
-bitowo w fp64 na CPU i CUDA, także z maską regionów; w fp32 CUDA bitowo tylko bez
-maski regionów, a z maską na poziomie zaokrągleń. Kolejności sumowania LUT nie
-odtwarzamy. Po 10 krokach różnica fp32 między branchem a
+jednorodny idzie przez laplasjan. Przyjęty kontrakt (decyzja użytkownika, zapisana
+w projekcie i w nocie 0104): zgodność bitowa tylko w fp64 na CPU i CUDA, także z
+maską regionów; fp32 CUDA nie ma kontraktu bitowego i jest kwalifikowane tolerancją
+względem fp64 (sekcja 2a). Kolejności sumowania LUT nie odtwarzamy i nie dodajemy
+drugiej gorącej pętli fp32. Po 10 krokach różnica fp32 między branchem a
 `master` wynosi 1.19e-7 = 1 ULP float; po 2000 krokach chaotyczna tekstura wzmacnia
 ją tak samo jak różnicę CPU–GPU.
 
@@ -155,4 +191,7 @@ Mediana [ms/krok] (w nawiasie minimum):
   predykat bramki CUDA) CI uruchamia w całości. Testy runnera CUDA
   (`cfg(feature = "cuda")`) i natywne testy kontraktowe C++ nadal nie mają
   przebiegu w CI.
-- fp32 nie jest kwalifikowane.
+- Kwalifikacja fp32 obejmuje krótki horyzont (10 kroków) na przypadkach parytetu,
+  nie długie trajektorie ani inne integratory. Na chaotycznej teksturze nie da się
+  jej rozszerzyć na 2000 kroków; do tego potrzebny byłby przypadek niechaotyczny
+  (np. relaksacja do stanu równowagi).

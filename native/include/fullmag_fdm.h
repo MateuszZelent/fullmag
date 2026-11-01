@@ -785,6 +785,10 @@ typedef struct {
      * struct_size is 1384 or 1400 bytes. FACES carries the exchange stiffness
      * [J/m] of every +x/+y/+z connection (0 where no connection exists); the
      * -x coefficient of cell i is exchange_face_x_plus of its -x neighbour.
+     * UNIFORM runs the scalar-A Laplacian with or without region_mask. In
+     * fp64 it is bit-identical to the pre-v2 uniform path; in fp32 with a
+     * region_mask (formerly the region-pair table kernel) it is held to the
+     * documented tolerance against the fp64 reference, not to bit identity.
      */
     uint32_t exchange_operator_mode;   /* fullmag_fdm_exchange_operator_mode */
     uint32_t reserved_exchange_operator;

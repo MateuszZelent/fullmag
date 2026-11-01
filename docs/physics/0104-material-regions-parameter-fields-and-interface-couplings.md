@@ -429,6 +429,20 @@ region legend, without generating pair rules for every object pair.
   the scalar on an active cell but arrives without face coefficients
   (`a_field_requires_exchange_faces`), because CUDA exchange reads $A$ only from
   the faces.
+- **Precision contract.** Bit identity is promised only in fp64: for a uniform
+  material the `uniform` operator reproduces the pre-change CPU and CUDA fp64
+  trajectories bit for bit, with or without region labels. CUDA fp32 has no
+  bit-identity contract. With region labels it used to run the retired pair-table
+  kernel and now runs the scalar Laplacian, so it differs from the old fp32 path
+  at rounding level; the old summation order is not reproduced. Instead, fp32 is
+  qualified by tolerance against the CPU fp64 reference on every parity case,
+  over a short horizon (10 RK4 steps of 10 fs), because the random parity
+  texture is chaotic and any rounding difference grows to O(1) over 2000 steps.
+  Bounds: max $|\Delta\mathbf m| \le 10^{-5}$, relative difference of each
+  energy term $\le 10^{-5}$, and $\max|\Delta\mathbf H| / \max|\mathbf H_\mathrm{ref}|
+  \le 10^{-5}$ for $\mathbf H_\mathrm{ex}$ and $\mathbf H_\mathrm{eff}$ at the
+  final step. Non-finite values fail. Measured maxima are $2.3\times10^{-7}$,
+  $5.0\times10^{-7}$ and $2.3\times10^{-7}$.
 
 Multilayer FDM with region-owned material/coupling is out of scope for v1 and
 must be capability-gated. It cannot silently fall through to a partially
@@ -1130,7 +1144,9 @@ must include:
 - `legacy_tuple_pairs_deserialize_as_explicit`,
 - `cuda_rejects_heterogeneous_material_with_thermal_noise`,
 - CPU versus CUDA headless parity for two materials with an interface rule and
-  for 1000 grains, plus an unchanged uniform case.
+  for 1000 grains, plus an unchanged uniform case,
+- the CUDA fp32 tolerance qualification against the CPU fp64 reference on the
+  same cases (`run_fdm_regions_parity.py --with-fp32`).
 
 ## 6. Completeness checklist
 
@@ -1218,3 +1234,5 @@ must include:
 | Plan → operator | `crates/fullmag-runner/src/fdm/exchange_operator.rs` | `build_plan_exchange_operator` | Obniżenie planu FDM do wspólnego operatora wymiany. |
 | Wymiana CUDA | `backends/fdm/gpu/cuda/interactions/exchange_fp64.cu` | `exchange_field_fp64_kernel` | Pole wymiany z współczynników na połączeniach i lokalnego $M_s$. |
 | Bramka CUDA | `crates/fullmag-ir/src/plan.rs` | `cuda_heterogeneous_material_error` | Wspólny predykat planera i runnera CUDA: jawna odmowa niewspieranych kombinacji z komórkowym $M_s$/$\alpha$ i zmiennym $A$. |
+| Wymiana CUDA fp32 | `backends/fdm/gpu/cuda/interactions/exchange_fp32.cu` | `exchange_field_fp32_kernel` | Te same współczynniki na połączeniach w fp32; kwalifikacja tolerancją względem referencji fp64, bez zgodności bitowej. |
+| Parytet torów | `scripts/benchmarks/run_fdm_regions_parity.py` | `compare_lane` | CUDA fp64 vs CPU fp64 (2000 kroków) i krótka kwalifikacja tolerancyjna CUDA fp32 dla $\mathbf m$, energii, $\mathbf H_\mathrm{ex}$, $\mathbf H_\mathrm{eff}$; NaN/inf to błąd. |
