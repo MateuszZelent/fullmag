@@ -1001,11 +1001,10 @@ fn materialize_object_region_mask(
     regions.sort_by_key(|region| (region.priority, region.region_id.as_str()));
 
     let mut region_ids = BTreeMap::new();
-    if regions.len() > fullmag_ir::MAX_FDM_REGION_IDS as usize {
+    if u32::try_from(regions.len()).map_or(true, |count| count >= u32::MAX) {
         errors.push(format!(
-            "fdm_region_lut_capacity_exceeded: requested_region_count={} supported_region_ids={}",
-            regions.len(),
-            fullmag_ir::MAX_FDM_REGION_IDS
+            "fdm_region_index_space_exhausted: requested_region_count={}",
+            regions.len()
         ));
         return (mask, region_ids);
     }
@@ -1037,7 +1036,6 @@ fn materialize_object_region_mask(
         .collect::<Vec<_>>();
     for (index, region) in regions.iter().enumerate() {
         let region_index = (index + 1) as u32;
-        debug_assert!(region_index <= fullmag_ir::MAX_FDM_REGION_IDS);
         region_ids.insert(region.region_id.clone(), region_index);
     }
     for (flat_index, point) in points.iter().enumerate() {
@@ -1629,11 +1627,12 @@ fn build_fdm_region_legend(
 
 fn materialize_region_exchange_couplings(
     problem: &ProblemIR,
-    material_exchange: f64,
     region_index_by_id: &BTreeMap<String, u32>,
     errors: &mut Vec<String>,
-) -> Vec<(u32, u32, f64)> {
-    let mut overrides = Vec::new();
+) -> Vec<fullmag_ir::FdmExchangePairRuleIR> {
+    use fullmag_ir::FdmExchangePairModeIR;
+
+    let mut rules = Vec::new();
     for coupling in problem.couplings.iter().filter(|coupling| coupling.enabled) {
         let (
             fullmag_ir::CouplingEndpointIR::Region {
@@ -1667,7 +1666,7 @@ fn materialize_region_exchange_couplings(
             ));
             continue;
         };
-        let exchange = match mode {
+        let mode = match mode {
             ExchangeCouplingModeIR::Explicit => {
                 let Some(value) = inter_exchange else {
                     errors.push(format!(
@@ -1676,20 +1675,30 @@ fn materialize_region_exchange_couplings(
                     ));
                     continue;
                 };
-                *value
+                FdmExchangePairModeIR::Explicit {
+                    exchange_stiffness: *value,
+                }
             }
-            ExchangeCouplingModeIR::Disabled => 0.0,
+            ExchangeCouplingModeIR::Disabled => FdmExchangePairModeIR::Disabled,
             ExchangeCouplingModeIR::HarmonicMean => {
                 let scale = scale.unwrap_or(1.0);
-                if (scale - 1.0).abs() <= f64::EPSILON {
+                // The unscaled harmonic mean is already the default rule.
+                if scale == 1.0 {
                     continue;
                 }
-                material_exchange * scale
+                FdmExchangePairModeIR::HarmonicScale { scale }
             }
         };
-        overrides.push((source_index, target_index, exchange));
+        rules.push(fullmag_ir::FdmExchangePairRuleIR {
+            region_i: source_index,
+            region_j: target_index,
+            mode,
+        });
     }
-    overrides
+    if let Err(error) = fullmag_ir::validate_fdm_exchange_pair_rules(&rules) {
+        errors.push(error);
+    }
+    rules
 }
 
 fn apply_region_texture_overrides(
@@ -3145,12 +3154,8 @@ pub(crate) fn plan_fdm(
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });
     }
-    let inter_region_exchange = materialize_region_exchange_couplings(
-        problem,
-        material.exchange_stiffness,
-        &region_index_by_id,
-        &mut errors,
-    );
+    let inter_region_exchange =
+        materialize_region_exchange_couplings(problem, &region_index_by_id, &mut errors);
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });
     }
@@ -3446,6 +3451,7 @@ pub(crate) fn plan_fdm(
         solved_antenna_drive_bases: Vec::new(),
         time_stage: crate::util::time_stage_context(problem),
         inter_region_exchange,
+        region_owner: Vec::new(),
         gyromagnetic_ratio,
         precision: problem.backend_policy.execution_precision,
         precision_policy: resolve_precision_policy(problem)?,
@@ -3678,6 +3684,14 @@ pub(crate) fn plan_fdm(
         }
     }
 
+    if runtime_requests_cuda(problem) {
+        if let Some(reason) = fdm_plan.cuda_heterogeneous_material_error() {
+            return Err(PlanError {
+                reasons: vec![reason],
+            });
+        }
+    }
+
     let study_note = if let Some(control) = fdm_plan.relaxation.as_ref() {
         format!(
             "study: relaxation algorithm={} torque_tolerance={} energy_tolerance={} max_steps={}",
@@ -3767,11 +3781,9 @@ mod tests {
     }
 
     #[test]
-    fn fdm_region_mask_accepts_255_active_regions() {
+    fn fdm_region_mask_accepts_1000_regions() {
         let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
-        problem.object_regions = (0..fullmag_ir::MAX_FDM_REGION_IDS as usize)
-            .map(region)
-            .collect();
+        problem.object_regions = (0..1000).map(region).collect();
         let mut errors = Vec::new();
         let active_mask = vec![true];
         let (mask, ids) = materialize_object_region_mask(
@@ -3785,34 +3797,8 @@ mod tests {
             &mut errors,
         );
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
-        assert_eq!(ids.len(), fullmag_ir::MAX_FDM_REGION_IDS as usize);
-        assert_eq!(mask, vec![fullmag_ir::MAX_FDM_REGION_IDS]);
-    }
-
-    #[test]
-    fn fdm_region_mask_rejects_256_active_regions_before_sampling() {
-        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
-        problem.object_regions = (0..=fullmag_ir::MAX_FDM_REGION_IDS as usize)
-            .map(region)
-            .collect();
-        let mut errors = Vec::new();
-        let active_mask = vec![true];
-        let (mask, ids) = materialize_object_region_mask(
-            &problem,
-            &["strip"],
-            [1, 1, 1],
-            [1.0e-9; 3],
-            [0.0; 3],
-            [0.0; 3],
-            Some(&active_mask),
-            &mut errors,
-        );
-        assert!(ids.is_empty());
-        assert_eq!(mask, vec![0]);
-        assert!(errors.iter().any(|error| {
-            error.contains("fdm_region_lut_capacity_exceeded")
-                && error.contains("requested_region_count=256")
-        }));
+        assert_eq!(ids.len(), 1000);
+        assert_eq!(mask, vec![1000]);
     }
 
     #[test]

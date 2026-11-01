@@ -73,13 +73,46 @@ pub(crate) fn apply_average_m_to_step_stats(stats: &mut StepStats, magnetization
     stats.mz = mz;
 }
 
+/// Global `mx`/`my`/`mz` over active cells, weighted by the magnetic moment
+/// `Ms_i V` (note 0910). A uniform cell volume cancels; without a cellwise
+/// `ms_field` the weights are equal and the arithmetic mean is used unchanged.
+pub(crate) fn moment_weighted_average_magnetization(
+    values: &[[f64; 3]],
+    active_mask: Option<&[bool]>,
+    ms_field: Option<&[f64]>,
+) -> [f64; 3] {
+    let Some(ms_field) = ms_field else {
+        return average_magnetization_components_with_active_mask(values, active_mask);
+    };
+    let mut sum = [0.0; 3];
+    let mut moment = 0.0;
+    for (index, value) in values.iter().enumerate() {
+        if active_mask.is_some_and(|mask| mask.get(index) != Some(&true)) {
+            continue;
+        }
+        let ms = ms_field.get(index).copied().unwrap_or(0.0);
+        if !ms.is_finite() || ms <= 0.0 || value.iter().any(|component| !component.is_finite()) {
+            continue;
+        }
+        sum[0] += ms * value[0];
+        sum[1] += ms * value[1];
+        sum[2] += ms * value[2];
+        moment += ms;
+    }
+    if moment <= 0.0 {
+        return [0.0, 0.0, 0.0];
+    }
+    [sum[0] / moment, sum[1] / moment, sum[2] / moment]
+}
+
 pub(crate) fn apply_average_m_to_step_stats_with_active_mask(
     stats: &mut StepStats,
     magnetization: &[[f64; 3]],
     active_mask: Option<&[bool]>,
+    ms_field: Option<&[f64]>,
 ) {
     let [mx, my, mz] =
-        average_magnetization_components_with_active_mask(magnetization, active_mask);
+        moment_weighted_average_magnetization(magnetization, active_mask, ms_field);
     stats.mx = mx;
     stats.my = my;
     stats.mz = mz;
@@ -236,11 +269,46 @@ pub(crate) fn scalar_outputs_request_average_m(schedules: &[OutputSchedule]) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_average_m_to_step_stats, apply_weighted_average_m_to_step_stats,
+        apply_average_m_to_step_stats, apply_average_m_to_step_stats_with_active_mask,
+        apply_weighted_average_m_to_step_stats, moment_weighted_average_magnetization,
         scalar_snapshot_from_step, weighted_average_magnetization_components,
         weighted_object_scalars,
     };
     use crate::types::StepStats;
+
+    #[test]
+    fn fdm_average_m_is_weighted_by_regional_moment() {
+        // Ms = 400 / 800 kA/m with m = +x / -x: <mx> = (400 - 800) / 1200 = -1/3.
+        let values = [[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]];
+        let ms_field = [400e3, 800e3];
+        let mut stats = StepStats::default();
+        apply_average_m_to_step_stats_with_active_mask(&mut stats, &values, None, Some(&ms_field));
+        assert!((stats.mx + 1.0 / 3.0).abs() < 1e-15, "mx = {}", stats.mx);
+        assert_eq!((stats.my, stats.mz), (0.0, 0.0));
+    }
+
+    #[test]
+    fn fdm_average_m_excludes_inactive_cells_and_keeps_zero_moments_in_denominator() {
+        let values = [[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [-1.0, 0.0, 0.0]];
+        let ms_field = [400e3, 400e3, 800e3];
+        let mask = [true, true, false];
+        let [mx, _, _] =
+            moment_weighted_average_magnetization(&values, Some(&mask), Some(&ms_field));
+        assert!((mx - 0.5).abs() < 1e-15, "mx = {mx}");
+    }
+
+    #[test]
+    fn fdm_average_m_without_ms_field_is_the_unchanged_arithmetic_mean() {
+        let values = [[0.3, 0.1, 0.0], [0.7, -0.4, 0.2], [0.1, 0.9, -0.3]];
+        let mut weighted = StepStats::default();
+        apply_average_m_to_step_stats_with_active_mask(&mut weighted, &values, None, None);
+        let mut arithmetic = StepStats::default();
+        apply_average_m_to_step_stats(&mut arithmetic, &values);
+        assert_eq!(
+            (weighted.mx, weighted.my, weighted.mz),
+            (arithmetic.mx, arithmetic.my, arithmetic.mz)
+        );
+    }
 
     #[test]
     fn weighted_average_magnetization_uses_fem_volume_weights() {

@@ -141,9 +141,10 @@
       "id": "material-fdm-harmonic-exchange",
       "symbols": [
         "Aij",
+        "scale_ij",
+        "H_mean",
         "A_i",
-        "A_j",
-        "scale_ij"
+        "A_j"
       ],
       "sources": [
         "fdm-exchange-field",
@@ -183,6 +184,56 @@
       "sources": [
         "fem-exchange-assembly",
         "fem-exchange-field"
+      ]
+    },
+    {
+      "id": "material-fdm-connection-coefficient",
+      "symbols": [
+        "Aij",
+        "A_explicit",
+        "scale_ij",
+        "H_mean",
+        "A_i",
+        "A_j"
+      ],
+      "sources": [
+        "fdm-exchange-operator-builder",
+        "fdm-pair-rule-validation",
+        "fdm-plan-exchange-operator"
+      ]
+    },
+    {
+      "id": "material-fdm-guarded-harmonic-mean",
+      "symbols": [
+        "H_mean",
+        "a_arg",
+        "b_arg"
+      ],
+      "sources": [
+        "fdm-guarded-harmonic"
+      ]
+    },
+    {
+      "id": "material-fdm-exchange-energy-discrete",
+      "symbols": [
+        "Eex",
+        "F_plus",
+        "Aij",
+        "S_ij",
+        "d_ij",
+        "m_i",
+        "m_j",
+        "norm_squared_operator"
+      ],
+      "sources": [
+        "fdm-exchange-energy",
+        "fdm-cuda-face-exchange",
+        "fdm-cuda-face-exchange-fp32",
+        "fdm-regions-lane-parity",
+        "fdm-mel-local-ms-field",
+        "fdm-cuda-mel-energy",
+        "fdm-moment-weighted-average-m",
+        "fdm-cuda-late-transport-gate"
       ]
     }
   ],
@@ -528,6 +579,36 @@
       "latex": "\\int_\\Gamma(\\cdot)\\,\\mathrm dS",
       "meaning": "surface-integration operator",
       "si_unit": "\\mathrm{m^2}"
+    },
+    {
+      "id": "H_mean",
+      "latex": "H",
+      "meaning": "guarded harmonic mean of two exchange stiffnesses",
+      "si_unit": "\\mathrm{J/m}"
+    },
+    {
+      "id": "a_arg",
+      "latex": "a",
+      "meaning": "first harmonic-mean argument",
+      "si_unit": "\\mathrm{J/m}"
+    },
+    {
+      "id": "b_arg",
+      "latex": "b",
+      "meaning": "second harmonic-mean argument",
+      "si_unit": "\\mathrm{J/m}"
+    },
+    {
+      "id": "A_explicit",
+      "latex": "A^{\\mathrm{explicit}}_{ij}",
+      "meaning": "authored explicit connection exchange stiffness",
+      "si_unit": "\\mathrm{J/m}"
+    },
+    {
+      "id": "F_plus",
+      "latex": "F_+",
+      "meaning": "set of grid connections, each counted once",
+      "si_unit": "1"
     }
   ],
   "sources": [
@@ -732,6 +813,90 @@
       "path": "crates/fullmag-runner/src/artifacts.rs",
       "symbol": "fem_element_material_artifact_preserves_location_and_values",
       "responsibility": "Zapis współczynnika elementowego bez pominięcia ani projekcji węzłowej.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-exchange-operator-builder",
+      "path": "crates/fullmag-engine/src/fdm/shared/exchange_operator.rs",
+      "symbol": "build_exchange_operator",
+      "responsibility": "Resolves grid connections, owners and typed pair rules into uniform or per-connection exchange coefficients shared by FDM CPU and CUDA.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-guarded-harmonic",
+      "path": "crates/fullmag-engine/src/fdm/shared/exchange_operator.rs",
+      "symbol": "harmonic_exchange",
+      "responsibility": "Guarded harmonic mean H(a,b) with the exact a=b branch.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-pair-rule-validation",
+      "path": "crates/fullmag-ir/src/execution.rs",
+      "symbol": "validate_fdm_exchange_pair_rules",
+      "responsibility": "Validates typed FDM pair rules on unbounded u32 region indices.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-plan-exchange-operator",
+      "path": "crates/fullmag-runner/src/fdm/exchange_operator.rs",
+      "symbol": "build_plan_exchange_operator",
+      "responsibility": "Lowers an FDM plan into the shared exchange operator for both lanes.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-cuda-face-exchange",
+      "path": "backends/fdm/gpu/cuda/interactions/exchange_fp64.cu",
+      "symbol": "exchange_field_fp64_kernel",
+      "responsibility": "CUDA fp64 exchange field from per-connection coefficients and cellwise Ms.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-cuda-face-exchange-fp32",
+      "path": "backends/fdm/gpu/cuda/interactions/exchange_fp32.cu",
+      "symbol": "exchange_field_fp32_kernel",
+      "responsibility": "CUDA fp32 exchange field from the same per-connection coefficients; qualified by tolerance against the fp64 reference, not by bit identity.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-mel-local-ms-field",
+      "path": "crates/fullmag-engine/src/magnetoelastic.rs",
+      "symbol": "h_mel_single_with_ms",
+      "responsibility": "Magnetoelastic field divided by the local Ms of each cell; the energy density does not depend on Ms.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-cuda-mel-energy",
+      "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu",
+      "symbol": "reduce_magnetoelastic_energy_fp64",
+      "responsibility": "CUDA magnetoelastic energy reduction included in the total energy of every integrator and in eden_total.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-moment-weighted-average-m",
+      "path": "crates/fullmag-runner/src/scalar_metrics.rs",
+      "symbol": "moment_weighted_average_magnetization",
+      "responsibility": "Global mx/my/mz weighted by Ms_i V over active cells on FDM CPU and CUDA, per note 0910.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-cuda-late-transport-gate",
+      "path": "backends/fdm/api/c_api.cpp",
+      "symbol": "fullmag_fdm_context_bind_gpu_transport_v1",
+      "responsibility": "Rejects a GPU transport binding attached after creation when the backend holds cellwise Ms or alpha.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-regions-lane-parity",
+      "path": "scripts/benchmarks/run_fdm_regions_parity.py",
+      "symbol": "compare_lane",
+      "responsibility": "Managed headless parity: CUDA fp64 against the CPU fp64 reference over 2000 steps, and the short-horizon CUDA fp32 tolerance qualification of m, energies, H_ex and H_eff; non-finite values fail.",
+      "evidence_status": "actual_device_contract"
+    },
+    {
+      "id": "fdm-cuda-heterogeneous-gate",
+      "path": "crates/fullmag-ir/src/plan.rs",
+      "symbol": "cuda_heterogeneous_material_error",
+      "responsibility": "Fail-closed CUDA capability predicate for cellwise Ms/alpha and variable-A combinations, shared by the planner and the CUDA runner.",
       "evidence_status": "implemented"
     }
   ],

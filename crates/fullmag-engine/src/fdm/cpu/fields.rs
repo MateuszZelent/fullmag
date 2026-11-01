@@ -381,6 +381,9 @@ impl ExchangeLlgProblem {
         if self.alpha_field.is_some() {
             return Some("spatial_damping");
         }
+        if self.exchange_faces.is_some() {
+            return Some("exchange_faces");
+        }
         None
     }
 

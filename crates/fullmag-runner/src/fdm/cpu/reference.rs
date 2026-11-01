@@ -1169,12 +1169,14 @@ fn materialize_reference_problem(
     if let Some(dt) = plan.fixed_timestep {
         problem.thermal_dt = dt;
     }
+    let exchange_operator = crate::fdm::exchange_operator::build_plan_exchange_operator(plan)?;
     problem
         .with_spatial_fields(
             plan.material.ms_field.clone(),
             plan.material.a_field.clone(),
             plan.material.alpha_field.clone(),
         )
+        .and_then(|problem| problem.with_exchange_operator(exchange_operator))
         .map_err(|e| RunError {
             message: format!("Spatial fields: {}", e),
         })
@@ -2838,6 +2840,7 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                         &mut update_stats,
                         state.magnetization(),
                         problem.active_mask.as_deref(),
+                        problem.ms_field.as_deref(),
                     );
                 }
                 let mut live_copy_metrics = FieldCopyMetrics::default();
@@ -4282,6 +4285,7 @@ fn make_step_stats_from_report(
         &mut stats,
         magnetization,
         problem.active_mask.as_deref(),
+        problem.ms_field.as_deref(),
     );
     apply_frozen_spin_step_telemetry(&mut stats, problem, magnetization);
     stats.per_object_scalars = single_object_scalars("free", &stats);
@@ -4380,6 +4384,7 @@ fn make_step_stats(
         &mut stats,
         &observables.magnetization,
         problem.active_mask.as_deref(),
+        problem.ms_field.as_deref(),
     );
     apply_frozen_spin_step_telemetry(&mut stats, problem, &observables.magnetization);
     stats.per_object_scalars = if observables.per_object_scalars.is_empty() {
@@ -4547,6 +4552,12 @@ impl<'a> DirectFieldSnapshotCache<'a> {
                     for (accum, value) in total.iter_mut().zip(values) {
                         *accum += value;
                     }
+                }
+                let mel = self
+                    .problem
+                    .magnetoelastic_energy_density_from_vectors(self.state.magnetization());
+                for (accum, value) in total.iter_mut().zip(mel) {
+                    *accum += value;
                 }
                 Ok(total)
             }
@@ -4843,6 +4854,7 @@ mod tests {
             boundary_correction: None,
             boundary_geometry: None,
             inter_region_exchange: vec![],
+            region_owner: Vec::new(),
             enable_exchange: true,
             enable_demag: false,
             external_field: None,
@@ -5994,6 +6006,7 @@ mod tests {
             boundary_correction: None,
             boundary_geometry: None,
             inter_region_exchange: vec![],
+            region_owner: Vec::new(),
             current_density: None,
             stt_degree: None,
             stt_beta: None,

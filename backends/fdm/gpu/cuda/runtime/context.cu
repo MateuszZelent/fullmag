@@ -235,13 +235,6 @@ bool context_preflight_single_grid_workspace(
         !add_product(ctx.cell_count, sizeof(uint32_t))) {
         return false;
     }
-    if (ctx.has_exchange_lut &&
-        !add_product(
-            uint64_t{FULLMAG_FDM_MAX_EXCHANGE_REGIONS} *
-                FULLMAG_FDM_MAX_EXCHANGE_REGIONS,
-            sizeof(double))) {
-        return false;
-    }
 
     if (ctx.enable_demag) {
         uint64_t fft_nx = ctx.fft_nx;
@@ -296,6 +289,9 @@ bool context_preflight_single_grid_workspace(
     }
 
     uint64_t optional_f64_fields = 0;
+    if (ctx.has_exchange_faces) optional_f64_fields += 3;
+    if (plan.ms_field != nullptr) ++optional_f64_fields;
+    if (plan.alpha_field != nullptr) ++optional_f64_fields;
     if (ctx.has_uniaxial_anisotropy) {
         if (plan.ku1_field != nullptr) ++optional_f64_fields;
         if (plan.ku2_field != nullptr) ++optional_f64_fields;
@@ -2296,24 +2292,13 @@ static void free_region_mask(Context &ctx) {
     }
 }
 
-static bool alloc_exchange_lut(Context &ctx) {
-    if (!ctx.has_exchange_lut) {
-        return true;
-    }
-    constexpr uint64_t N = FULLMAG_FDM_MAX_EXCHANGE_REGIONS;
-    size_t bytes = N * N * sizeof(double);
-    cudaError_t err = cudaMalloc(reinterpret_cast<void **>(&ctx.exchange_lut), bytes);
-    if (err != cudaSuccess) {
-        set_cuda_error(ctx, "cudaMalloc(exchange_lut)", err);
-        return false;
-    }
-    return true;
-}
-
-static void free_exchange_lut(Context &ctx) {
-    if (ctx.exchange_lut) {
-        cudaFree(ctx.exchange_lut);
-        ctx.exchange_lut = nullptr;
+static void free_exchange_faces_and_material_fields(Context &ctx) {
+    for (double **ptr : {&ctx.exchange_face_xp, &ctx.exchange_face_yp,
+                         &ctx.exchange_face_zp, &ctx.ms_field, &ctx.alpha_field}) {
+        if (*ptr) {
+            cudaFree(*ptr);
+            *ptr = nullptr;
+        }
     }
 }
 
@@ -3052,7 +3037,6 @@ bool context_alloc_device(Context &ctx) {
     if (!alloc_sot_active_mask(ctx)) return false;
     if (!alloc_slonczewski_active_mask(ctx)) return false;
     if (!alloc_region_mask(ctx)) return false;
-    if (!alloc_exchange_lut(ctx)) return false;
     if (!alloc_reduction_scratch(ctx)) return false;
     if (!alloc_vector_field(ctx, ctx.m))    return false;
     if (!alloc_vector_field(ctx, ctx.h_ex)) return false;
@@ -3529,7 +3513,7 @@ void context_free_device(Context &ctx) {
     free_sot_active_mask(ctx);
     free_slonczewski_active_mask(ctx);
     free_region_mask(ctx);
-    free_exchange_lut(ctx);
+    free_exchange_faces_and_material_fields(ctx);
     free_boundary_correction(ctx);
     free_reduction_scratch(ctx);
     free_preview_download_scratch(ctx);
@@ -3676,23 +3660,49 @@ bool context_upload_region_mask(Context &ctx, const uint32_t *mask, uint64_t len
     return true;
 }
 
-bool context_upload_exchange_lut(Context &ctx, const double *lut, uint64_t len) {
-    if (!ctx.has_exchange_lut) {
+bool context_upload_exchange_faces(
+    Context &ctx,
+    const double *x_plus,
+    const double *y_plus,
+    const double *z_plus,
+    uint64_t len)
+{
+    if (!ctx.has_exchange_faces) {
         return true;
     }
-    constexpr uint64_t N = FULLMAG_FDM_MAX_EXCHANGE_REGIONS;
-    if (!lut || len != N * N) {
-        ctx.last_error = "exchange_lut length mismatch: expected "
-            + std::to_string(N * N) + ", got " + std::to_string(len);
+    if (!x_plus || !y_plus || !z_plus || len != ctx.cell_count) {
+        ctx.last_error = "exchange face coefficients must provide three arrays of cell_count="
+            + std::to_string(ctx.cell_count) + " values, got len=" + std::to_string(len);
         return false;
     }
-    cudaError_t err = cudaMemcpy(
-        ctx.exchange_lut,
-        lut,
-        N * N * sizeof(double),
-        cudaMemcpyHostToDevice);
-    if (err != cudaSuccess) {
-        set_cuda_error(ctx, "cudaMemcpy(exchange_lut)", err);
+    if (!upload_f64_array(ctx, ctx.exchange_face_xp, x_plus, len, "cudaMalloc(exchange_face_xp)") ||
+        !upload_f64_array(ctx, ctx.exchange_face_yp, y_plus, len, "cudaMalloc(exchange_face_yp)") ||
+        !upload_f64_array(ctx, ctx.exchange_face_zp, z_plus, len, "cudaMalloc(exchange_face_zp)")) {
+        return false;
+    }
+    ctx.exchange_faces_host.assign(x_plus, x_plus + len);
+    ctx.exchange_faces_host.insert(ctx.exchange_faces_host.end(), y_plus, y_plus + len);
+    ctx.exchange_faces_host.insert(ctx.exchange_faces_host.end(), z_plus, z_plus + len);
+    return true;
+}
+
+bool context_upload_material_fields(
+    Context &ctx,
+    const double *ms_field,
+    const double *alpha_field,
+    uint64_t len)
+{
+    if (len != ctx.cell_count) {
+        ctx.last_error = "cellwise material fields must have cell_count="
+            + std::to_string(ctx.cell_count) + " values, got " + std::to_string(len);
+        return false;
+    }
+    if (ms_field &&
+        !upload_f64_array(ctx, ctx.ms_field, ms_field, len, "cudaMalloc(ms_field)")) {
+        return false;
+    }
+    if (alpha_field &&
+        !upload_f64_array(ctx, ctx.alpha_field, alpha_field, len, "cudaMalloc(alpha_field)")) {
         return false;
     }
     return true;

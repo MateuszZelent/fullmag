@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <string>
 #include <type_traits>
 
 namespace {
@@ -16,7 +17,7 @@ namespace {
 static_assert(alignof(fullmag_fdm_plan_desc) == 8);
 static_assert(sizeof(fullmag_fdm_plan_desc) == 1280);
 static_assert(alignof(fullmag_fdm_plan_desc_v2) == 8);
-static_assert(sizeof(fullmag_fdm_plan_desc_v2) == 1400);
+static_assert(sizeof(fullmag_fdm_plan_desc_v2) == 1440);
 static_assert(alignof(fullmag_fdm_multilayer_plan_desc_v2) == 8);
 static_assert(sizeof(fullmag_fdm_multilayer_plan_desc_v2) == 160);
 static_assert(alignof(fullmag_fdm_rotated_interfacial_dmi_desc_v1) == 8);
@@ -117,7 +118,7 @@ static_assert(kBaseFieldCount == 140);
 static_assert(kGridFieldCount == 6);
 static_assert(kMaterialFieldCount == 4);
 static_assert(kTimeFieldCount == 13);
-static_assert(kExtensionFieldCount == 2);
+static_assert(kExtensionFieldCount == 8);
 
 void check(bool condition, const char *message) {
     if (!condition) {
@@ -253,6 +254,14 @@ void populate_distinct_semantic_sentinels(fullmag_fdm_plan_desc_v2 &plan) {
     plan.struct_size = sizeof(plan);
 }
 
+// The sentinel pass writes counters into the exchange-operator tail as well.
+// Keep the pointer and length sentinels, so the receipt check still covers
+// them, but give the tail a well-formed FACES discriminant.
+void make_exchange_operator_tail_well_formed(fullmag_fdm_plan_desc_v2 &plan) {
+    plan.exchange_operator_mode = FULLMAG_FDM_EXCHANGE_OPERATOR_FACES;
+    plan.reserved_exchange_operator = 0;
+}
+
 void check_semantic_receipt(
     const fullmag_fdm_plan_desc_v2 &plan,
     const fullmag_fdm_plan_desc_v2 &receipt)
@@ -291,6 +300,7 @@ void owner_ingestion_receipt_preserves_every_semantic_field() {
     plan.base.has_interfacial_dmi = 0;
     plan.base.has_bulk_dmi = 0;
     plan.has_rotated_interfacial_dmi = 1;
+    make_exchange_operator_tail_well_formed(plan);
 
     fullmag_fdm_plan_ingestion_v2 *ingestion = nullptr;
     int status = fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
@@ -318,6 +328,7 @@ void receipt_respects_legacy_output_capacity() {
     plan.base.has_interfacial_dmi = 0;
     plan.base.has_bulk_dmi = 0;
     plan.has_rotated_interfacial_dmi = 1;
+    make_exchange_operator_tail_well_formed(plan);
 
     fullmag_fdm_plan_ingestion_v2 *ingestion = nullptr;
     int status = fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
@@ -543,6 +554,46 @@ void rotated_dmi_flag_constant_and_composition_are_validated() {
     expect_rejected("rDMI cannot be combined with bulk DMI");
 }
 
+void exchange_operator_tail_is_validated_at_ingestion() {
+    fullmag_fdm_plan_desc_v2 plan{};
+    plan.abi_version = FULLMAG_FDM_PLAN_DESC_ABI_V2;
+    plan.struct_size = sizeof(plan);
+    std::array<double, 2> faces{1.3e-11, 1.3e-11};
+
+    const auto expect_status = [&plan](int expected, const char *message) {
+        fullmag_fdm_plan_ingestion_v2 *ingestion = nullptr;
+        const int status =
+            fullmag_fdm_plan_ingestion_v2_create_checked(&plan, &ingestion);
+        check(status == expected, message);
+        check((ingestion != nullptr) == (expected == FULLMAG_FDM_OK),
+              "only an accepted exchange-operator tail may allocate an owner");
+        fullmag_fdm_plan_ingestion_v2_destroy(ingestion);
+    };
+
+    expect_status(FULLMAG_FDM_OK, "zeroed tail is the uniform operator");
+
+    plan.exchange_operator_mode = FULLMAG_FDM_EXCHANGE_OPERATOR_FACES;
+    plan.exchange_face_x_plus = faces.data();
+    plan.exchange_face_y_plus = faces.data();
+    plan.exchange_face_z_plus = faces.data();
+    plan.exchange_face_len = faces.size();
+    expect_status(FULLMAG_FDM_OK, "FACES with three arrays is accepted");
+
+    plan.reserved_exchange_operator = 1;
+    expect_status(FULLMAG_FDM_ERR_INVALID, "reserved exchange-operator word must be zero");
+    plan.reserved_exchange_operator = 0;
+
+    plan.exchange_operator_mode = 2;
+    expect_status(FULLMAG_FDM_ERR_INVALID, "unknown exchange-operator mode must be rejected");
+
+    plan.exchange_operator_mode = FULLMAG_FDM_EXCHANGE_OPERATOR_UNIFORM;
+    expect_status(FULLMAG_FDM_ERR_INVALID, "UNIFORM must not carry face arrays");
+
+    plan.exchange_operator_mode = FULLMAG_FDM_EXCHANGE_OPERATOR_FACES;
+    plan.exchange_face_z_plus = nullptr;
+    expect_status(FULLMAG_FDM_ERR_INVALID, "FACES requires all three face arrays");
+}
+
 void legacy_v2_size_preserves_layout_and_defaults_the_extension() {
     fullmag_fdm_plan_desc_v2 plan{};
     plan.abi_version = FULLMAG_FDM_PLAN_DESC_ABI_V2;
@@ -610,6 +661,49 @@ void incompatible_version_and_size_fail_before_backend_allocation() {
 }
 
 #if FULLMAG_FDM_CONTRACT_HAS_CUDA
+void legacy_unspecified_region_mask_is_rejected_only_with_active_exchange() {
+    double magnetization[6] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
+    uint32_t region_mask[2] = {1, 2};
+    fullmag_fdm_plan_desc_v2 plan{};
+    plan.abi_version = FULLMAG_FDM_PLAN_DESC_ABI_V2;
+    plan.struct_size = sizeof(plan);
+    plan.base.grid = {2, 1, 1, 1e-9, 1e-9, 1e-9};
+    plan.base.material = {8e5, 1.3e-11, 0.1, 2.211e5};
+    plan.base.precision = FULLMAG_FDM_PRECISION_DOUBLE;
+    plan.base.integrator = FULLMAG_FDM_INTEGRATOR_HEUN;
+    plan.base.initial_magnetization_xyz = magnetization;
+    plan.base.initial_magnetization_len = 6;
+    plan.base.region_mask = region_mask;
+    plan.base.region_mask_len = 2;
+    plan.base.exchange_pair_default = FULLMAG_FDM_EXCHANGE_PAIR_UNSPECIFIED;
+    plan.time_policy.adaptive_tolerance_mode = FULLMAG_FDM_ADAPTIVE_MAX_ERROR;
+    plan.time_policy.adaptive_atol = 1e-6;
+    plan.time_policy.adaptive_dt_min = 1e-16;
+    plan.time_policy.adaptive_dt_max = 1e-14;
+    plan.time_policy.adaptive_safety = 0.9;
+    plan.time_policy.adaptive_growth_limit = 2.0;
+    plan.time_policy.adaptive_shrink_limit = 0.2;
+
+    const auto create_error = [&plan]() {
+        fullmag_fdm_backend *handle = nullptr;
+        const int status = fullmag_fdm_backend_create_time_policy_v2_checked(&plan, &handle);
+        check(status == FULLMAG_FDM_OK && handle != nullptr,
+              "legacy UNSPECIFIED descriptor must reach backend ingestion");
+        const char *error = fullmag_fdm_backend_last_error(handle);
+        const std::string message = error == nullptr ? std::string() : std::string(error);
+        fullmag_fdm_backend_destroy(handle);
+        return message;
+    };
+
+    plan.base.enable_exchange = 0;
+    check(create_error().empty(),
+          "a region mask kept for observables without exchange must stay accepted");
+
+    plan.base.enable_exchange = 1;
+    check(create_error().find("fdm_exchange_pair_unspecified_retired") != std::string::npos,
+          "UNSPECIFIED with a region mask and active exchange must not re-couple regions");
+}
+
 void checked_backend_constructor_accepts_a_runtime_valid_plan() {
     constexpr double dt = 5.0e-13;
     constexpr double alpha = 0.1;
@@ -688,9 +782,11 @@ int main() {
     rotated_dmi_fully_periodic_boundary_may_omit_exchange();
     rotated_dmi_boundary_exchange_distinguishes_periodic_seams_from_mask_edges();
     rotated_dmi_flag_constant_and_composition_are_validated();
+    exchange_operator_tail_is_validated_at_ingestion();
     incompatible_version_and_size_fail_before_backend_allocation();
 #if FULLMAG_FDM_CONTRACT_HAS_CUDA
     checked_backend_constructor_accepts_a_runtime_valid_plan();
+    legacy_unspecified_region_mask_is_rejected_only_with_active_exchange();
 #endif
     std::printf("semantic versioned FDM plan descriptor contract OK\n");
     return 0;

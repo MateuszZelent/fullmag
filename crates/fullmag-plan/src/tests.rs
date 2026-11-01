@@ -3647,7 +3647,7 @@ fn fdm_object_region_material_overrides_materialize_to_cell_fields() {
 }
 
 #[test]
-fn fdm_cuda_region_material_fields_fail_in_planner_before_native_start() {
+fn fdm_cuda_region_material_fields_plan_cellwise_ms() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.problem_meta.runtime_metadata.insert(
         "runtime_selection".to_string(),
@@ -3665,19 +3665,42 @@ fn fdm_cuda_region_material_fields_fail_in_planner_before_native_start() {
     }];
     ir.object_regions.push(region);
 
-    let error = plan(&ir).expect_err("CUDA region material fields must fail before native start");
-    assert!(
-        error.reasons.iter().any(|reason| {
-            reason.contains("fdm_cuda_region_material_fields_unsupported")
-                && reason.contains("cellwise material fields")
-        }),
-        "unexpected planner errors: {:?}",
-        error.reasons
-    );
+    let plan = plan(&ir).expect("single-grid CUDA consumes cellwise Ms");
+    let fullmag_ir::BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    assert!(fdm.material.ms_field.is_some());
 }
 
 #[test]
-fn fdm_cuda_absorbing_boundary_fails_in_planner_before_native_start() {
+fn fdm_cuda_region_material_fields_with_thermal_noise_fail_at_planning() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
+    let mut region = default_test_object_region();
+    region.material_overrides = vec![fullmag_ir::RegionMaterialOverrideIR {
+        parameter: fullmag_ir::MaterialParameterNameIR::Ms,
+        value: fullmag_ir::MaterialParameterFieldIR::Constant {
+            value: serde_json::json!(750e3),
+            unit: Some("A/m".to_string()),
+        },
+        priority: 10,
+        conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+    }];
+    ir.object_regions.push(region);
+    ir.temperature = Some(300.0);
+
+    let err = plan(&ir).expect_err("forced CUDA must reject cellwise Ms with thermal noise");
+    assert!(err
+        .reasons
+        .iter()
+        .any(|reason| reason.starts_with("fdm_cuda_heterogeneous_material_unsupported:thermal")));
+}
+
+#[test]
+fn fdm_cuda_absorbing_boundary_plans_cellwise_damping() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.problem_meta.runtime_metadata.insert(
         "runtime_selection".to_string(),
@@ -3692,11 +3715,11 @@ fn fdm_cuda_absorbing_boundary_fails_in_planner_before_native_start() {
         frame: fullmag_ir::AbsorbingBoundaryFrameIR::Object,
     });
 
-    let error = plan(&ir).expect_err("CUDA absorbing boundary must fail before native start");
-    assert!(error.reasons.iter().any(|reason| {
-        reason.contains("fdm_cuda_absorbing_boundary_unsupported")
-            && reason.contains("cellwise damping fields")
-    }));
+    let plan = plan(&ir).expect("single-grid CUDA consumes cellwise damping");
+    let fullmag_ir::BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    assert!(fdm.material.alpha_field.is_some());
 }
 
 #[test]
@@ -3927,11 +3950,20 @@ fn fdm_region_region_explicit_exchange_lowers_to_region_mask_and_pair_override()
     };
     assert!(fdm.region_mask.iter().any(|region| *region == 1));
     assert!(fdm.region_mask.iter().any(|region| *region == 2));
-    assert_eq!(fdm.inter_region_exchange, vec![(1, 2, 4.0e-12)]);
+    assert_eq!(
+        fdm.inter_region_exchange,
+        vec![fullmag_ir::FdmExchangePairRuleIR {
+            region_i: 1,
+            region_j: 2,
+            mode: fullmag_ir::FdmExchangePairModeIR::Explicit {
+                exchange_stiffness: 4.0e-12
+            },
+        }]
+    );
 }
 
 #[test]
-fn fdm_region_region_explicit_exchange_blocks_on_cpu_reference() {
+fn fdm_region_region_explicit_exchange_executes_on_cpu_reference() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.object_regions
         .push(test_box_region("strip:left", "left", [-50e-9, 0.0, 0.0], 1));
@@ -3961,16 +3993,11 @@ fn fdm_region_region_explicit_exchange_blocks_on_cpu_reference() {
         capability_policy: CouplingCapabilityPolicyIR::RequireRuntime,
     });
 
-    let err = plan(&ir).expect_err("CPU reference must not ignore explicit region exchange");
-    assert!(
-        err.reasons.iter().any(|reason| {
-            reason.contains("left_right_exchange")
-                && reason.contains("requires runtime support")
-                && reason.contains("must not silently drop authored coupling intent")
-        }),
-        "unexpected planner errors: {:?}",
-        err.reasons
-    );
+    let plan = plan(&ir).expect("CPU reference resolves region rules through the shared operator");
+    let fullmag_ir::BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    assert_eq!(fdm.inter_region_exchange.len(), 1);
 }
 
 #[test]
@@ -4024,7 +4051,7 @@ fn intra_object_region_exchange_defaults_harmonic_mean() {
     assert!(fdm.region_mask.iter().any(|region| *region == 2));
     assert!(
         fdm.inter_region_exchange.is_empty(),
-        "FDM plan should carry no zero/free-surface override; native runtime resolves empty overrides with exchange_pair_default=HARMONIC_MEAN"
+        "FDM plan should carry no zero/free-surface override; regions of one owner default to the guarded harmonic mean"
     );
 }
 
@@ -4043,7 +4070,7 @@ fn pure_inherited_region_preserves_parent_material_and_continuous_exchange() {
     );
     assert_eq!(
         fdm.inter_region_exchange,
-        Vec::<(u32, u32, f64)>::new(),
+        Vec::<fullmag_ir::FdmExchangePairRuleIR>::new(),
         "a region that only inherits parent properties must not create an explicit free-surface or material-interface exchange override"
     );
     assert_eq!(
@@ -4095,7 +4122,14 @@ fn exchange_scale_zero_disables_interface_exchange() {
     let fullmag_ir::BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
         panic!("expected FDM plan");
     };
-    assert_eq!(fdm.inter_region_exchange, vec![(1, 2, 0.0)]);
+    assert_eq!(
+        fdm.inter_region_exchange,
+        vec![fullmag_ir::FdmExchangePairRuleIR {
+            region_i: 1,
+            region_j: 2,
+            mode: fullmag_ir::FdmExchangePairModeIR::Disabled,
+        }]
+    );
 }
 
 #[test]

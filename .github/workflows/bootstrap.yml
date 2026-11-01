@@ -244,6 +244,19 @@ jobs:
           cargo test --locked -p fullmag-plan --lib fem_aex_field_uniformity_uses_relative_si_tolerance
           cargo test --locked -p fullmag-runner --lib fdm::cpu::reference::tests::torque_
 
+      - name: Run FDM region exchange operator contracts
+        run: |
+          cargo test --locked -p fullmag-engine --lib fdm::shared::exchange_operator::tests
+          cargo test --locked -p fullmag-engine --lib exchange_face_tests
+          cargo test --locked -p fullmag-plan --lib fdm_region_
+          cargo test --locked -p fullmag-plan --lib fdm_cuda_region_material_fields
+          cargo test --locked -p fullmag-plan --lib fdm_cuda_absorbing_boundary_plans_cellwise_damping
+          cargo test --locked -p fullmag-plan --lib intra_object_region_exchange_defaults_harmonic_mean
+          cargo test --locked -p fullmag-plan --lib exchange_scale_zero_disables_interface_exchange
+          cargo test --locked -p fullmag-plan --lib pure_inherited_region_preserves_parent_material_and_continuous_exchange
+          cargo test --locked -p fullmag-engine --lib magnetoelastic::tests
+          cargo test --locked -p fullmag-runner --lib scalar_metrics::tests::fdm_average_m_
+
       - name: Run typed active eigen Stop and Pause contracts
         run: |
           cargo test -p fullmag-engine fem_sparse::tests::lobpcg_control_ --lib

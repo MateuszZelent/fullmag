@@ -6607,6 +6607,7 @@ mod tests {
                 boundary_correction: None,
                 boundary_geometry: None,
                 inter_region_exchange: vec![],
+                region_owner: Vec::new(),
                 current_density: None,
                 stt_degree: None,
                 stt_beta: None,
