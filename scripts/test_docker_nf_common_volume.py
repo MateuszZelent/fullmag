@@ -98,6 +98,32 @@ class QualificationContract(unittest.TestCase):
         v=observed(s);v["Mounts"].append(dict(Destination="/socket",Type="bind",RW=True,Source="/var/run/docker.sock"))
         with self.assertRaises(q.BuildControlError):q.attest(v,s,RUN,0)
 
+    def test_wsl_export_alias_requires_exact_inode_identity(self):
+        s=spec();selected=Path("/registered/scientific/output")
+        s["mounts"][-1]["source"]=str(selected)
+        v=observed(s);token="4"*64
+        alias="/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu/"+token
+        next(m for m in v["Mounts"] if m["Destination"]=="/export")["Source"]=alias
+        with patch.object(Path,"is_dir",return_value=True),patch.object(Path,"samefile",autospec=True,return_value=True) as samefile:
+            q.attest(v,s,RUN,0)
+            samefile.assert_called_once_with(Path("/mnt/wsl/docker-desktop-bind-mounts/Ubuntu")/token,selected)
+        with patch.object(Path,"is_dir",return_value=True),patch.object(Path,"samefile",return_value=False):
+            with self.assertRaises(q.BuildControlError):q.attest(v,s,RUN,0)
+        with patch.object(Path,"is_dir",return_value=False),patch.object(Path,"samefile") as samefile:
+            with self.assertRaises(q.BuildControlError):q.attest(v,s,RUN,0)
+            samefile.assert_not_called()
+
+    def test_wsl_export_alias_rejects_prefix_and_traversal_without_inode_access(self):
+        s=spec();s["mounts"][-1]["source"]="/registered/scientific/output"
+        prefix="/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu/"
+        for alias in (prefix,prefix+"g"*64,prefix+"../"+"4"*64,"/foreign/"+"4"*64):
+            with self.subTest(alias=alias):
+                v=observed(s)
+                next(m for m in v["Mounts"] if m["Destination"]=="/export")["Source"]=alias
+                with patch.object(Path,"is_dir",return_value=True),patch.object(Path,"samefile") as samefile:
+                    with self.assertRaises(q.BuildControlError):q.attest(v,s,RUN,0)
+                    samefile.assert_not_called()
+
     def test_closed_role_and_mount_inputs_refused(self):
         for role in ("build","backend-build","anything"):
             with self.assertRaises(q.BuildControlError):spec(role,None)
@@ -221,7 +247,8 @@ class CopyHelperLeaseRegression(unittest.TestCase):
         def write(path,value):writes.append((path,deepcopy(value)))
         control=SimpleNamespace(project="selected",volume="selected-control",namespace=None,path=q.BuildControl.path,
             helper_args=lambda *a,**kw:["not-executed"],space=lambda:dict(available_bytes=64<<30),
-            write=write,_line=Mock(side_effect=["READY","LOGGED"]))
+            write=write,_line=Mock(side_effect=["READY","LOGGED"]),
+            _pin_operation_helper=Mock(return_value=CID),_active_operation=None)
         control.operation_script=MethodType(q.BuildControl.operation_script,control)
         logger=SimpleNamespace(stdin=BytesIO(),wait=Mock(return_value=0))
         return control,logger,writes

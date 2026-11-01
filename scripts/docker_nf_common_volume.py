@@ -232,7 +232,8 @@ def attest(value, spec, run_id, ordinal):
             alias = re.fullmatch(r"/(?:run/desktop/mnt/host|host_mnt)/([A-Za-z])/(.*)", raw)
             if alias:
                 raw = alias.group(1) + ":/" + alias.group(2)
-            require(str(Path(raw).resolve()).casefold() == str(Path(expected["source"]).resolve()).casefold(), "scientific export path differs")
+            from docker_dev_codegen import _source_mount_matches_selected
+            require(_source_mount_matches_selected(raw, Path(expected["source"])), "scientific export path differs")
     return value
 
 
