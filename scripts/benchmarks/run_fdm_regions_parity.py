@@ -6,7 +6,10 @@ CUDA (fp64, optionally fp32). The final magnetization of every lane is
 compared with the CPU reference (max |dm| over cells and components), and the
 final-row scalars of ``artifacts/scalars.csv`` are compared where both lanes
 report them. Results go to ``<output>/parity.jsonl`` and a Markdown table to
-stdout.
+stdout. The script exits non-zero when a lane fails, its ``m_final`` is missing,
+has the wrong shape or is non-finite, or an fp64 lane exceeds ``--max-dm`` or
+``--max-energy-rel`` against the CPU reference. fp32 lanes are reported but not
+held to the fp64 tolerances.
 
 Usage (inside the backend container, from the source root)::
 
@@ -19,7 +22,9 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -37,7 +42,10 @@ PREVIEW_OFF_ENV = {
 
 def run(case: str, device: str, precision: str, steps: int, output: Path, fullmag_bin: str) -> dict:
     run_dir = output / f"{case}-{device}-{precision}"
-    run_dir.mkdir(parents=True, exist_ok=True)
+    # A stale run directory could supply artifacts from an earlier build.
+    if run_dir.exists():
+        shutil.rmtree(run_dir)
+    run_dir.mkdir(parents=True)
     env = dict(os.environ, **PREVIEW_OFF_ENV,
                FDM_REGIONS_CASE=case, FDM_REGIONS_DEVICE=device,
                FDM_REGIONS_PRECISION=precision, FDM_REGIONS_STEPS=str(steps))
@@ -79,7 +87,19 @@ def _is_float(value: str) -> bool:
     return True
 
 
+def magnetization_problem(values: list | None) -> str | None:
+    if values is None:
+        return "m_final missing"
+    if not values or any(len(cell) != 3 for cell in values):
+        return "m_final is not a non-empty list of 3-vectors"
+    if not all(math.isfinite(component) for cell in values for component in cell):
+        return "m_final contains non-finite values"
+    return None
+
+
 def max_dm(reference: list, other: list) -> float:
+    if len(reference) != len(other):
+        raise ValueError(f"cell count differs: {len(reference)} vs {len(other)}")
     return max(abs(a - b) for ra, rb in zip(reference, other) for a, b in zip(ra, rb))
 
 
@@ -101,20 +121,45 @@ def main() -> int:
     parser.add_argument("--steps", type=int, default=2000)
     parser.add_argument("--with-fp32", action="store_true")
     parser.add_argument("--fullmag-bin", default="fullmag-bin")
+    parser.add_argument("--max-dm", type=float, default=1e-6,
+                        help="fp64 tolerance on max |dm| against the CPU reference")
+    parser.add_argument("--max-energy-rel", type=float, default=1e-8,
+                        help="fp64 tolerance on the relative final energy difference")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     lanes = [("cpu", "double"), ("gpu", "double")] + ([("gpu", "single")] if args.with_fp32 else [])
     rows = []
-    with (args.output / "parity.jsonl").open("a") as log:
+    failures: list[str] = []
+    with (args.output / "parity.jsonl").open("w") as log:
         for case in args.case or CASES:
             records = {lane: run(case, *lane, args.steps, args.output, args.fullmag_bin)
                        for lane in lanes}
             reference = records[("cpu", "double")]
+            reference_problem = magnetization_problem(reference["m_final"])
             for lane, record in records.items():
                 entry = {key: value for key, value in record.items() if key != "m_final"}
-                if lane != ("cpu", "double") and reference["m_final"] and record["m_final"]:
-                    entry["max_dm_vs_cpu"] = max_dm(reference["m_final"], record["m_final"])
+                label = f"{case} {lane[0]}/{lane[1]}"
+                problem = magnetization_problem(record["m_final"])
+                if record["returncode"] != 0:
+                    failures.append(f"{label}: exit code {record['returncode']}")
+                elif problem:
+                    failures.append(f"{label}: {problem}")
+                elif lane != ("cpu", "double") and reference_problem is None:
+                    try:
+                        entry["max_dm_vs_cpu"] = max_dm(reference["m_final"], record["m_final"])
+                    except ValueError as error:
+                        failures.append(f"{label}: {error}")
                     entry["scalar_rel_vs_cpu"] = scalar_rel(reference["scalars"], record["scalars"])
+                    if lane[1] == "double":
+                        dm = entry.get("max_dm_vs_cpu")
+                        if dm is not None and not dm <= args.max_dm:
+                            failures.append(f"{label}: max |dm| {dm:.3e} > {args.max_dm:.1e}")
+                        rel = entry["scalar_rel_vs_cpu"]
+                        if not rel:
+                            failures.append(f"{label}: no comparable energy scalars")
+                        elif not max(rel.values()) <= args.max_energy_rel:
+                            failures.append(f"{label}: energy rel {max(rel.values()):.3e} > "
+                                            f"{args.max_energy_rel:.1e}")
                 log.write(json.dumps(entry) + "\n")
                 rows.append(entry)
                 print(f"{case} {lane}: rc={record['returncode']} wall={record['wall_s']:.1f}s "
@@ -127,7 +172,9 @@ def main() -> int:
         print(f"| {row['case']} | {row['device']}/{row['precision']} | {row['returncode']} | "
               f"{row['wall_s']:.1f} | {row.get('max_dm_vs_cpu', '-')} | "
               f"{'-' if worst is None else f'{worst:.2e}'} | {(row['m_final_sha256'] or '-')[:12]} |")
-    return 0
+    for failure in failures:
+        print(f"PARITY FAILURE: {failure}", file=sys.stderr)
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

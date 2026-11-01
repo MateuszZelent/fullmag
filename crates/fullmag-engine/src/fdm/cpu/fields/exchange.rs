@@ -344,6 +344,51 @@ mod exchange_face_tests {
     }
 
     #[test]
+    fn explicit_rule_equal_to_scalar_overrides_variable_a_field() {
+        // Two cells, regions [1, 2], a_field = [13, 20] pJ/m, scalar A = 13 pJ/m
+        // and explicit A12 = 13 pJ/m: the field must use 13 pJ/m, not H(13, 20).
+        let grid = GridShape::new(2, 1, 1).unwrap();
+        let a_field = vec![13.0e-12, 20.0e-12];
+        let mask = [1u32, 2];
+        let rules = [crate::ExchangePairRule {
+            region_i: 1,
+            region_j: 2,
+            mode: crate::ExchangePairMode::Explicit(13.0e-12),
+        }];
+        let operator = build_exchange_operator(&ExchangeOperatorInputs {
+            grid,
+            periodic: [false; 3],
+            active: None,
+            region_mask: Some(&mask),
+            region_owner: None,
+            exchange_stiffness: 13.0e-12,
+            a_field: Some(&a_field),
+            rules: &rules,
+        })
+        .unwrap();
+        let problem = ExchangeLlgProblem::with_terms(
+            grid,
+            CellSize::new(2.0e-9, 3.0e-9, 4.0e-9).unwrap(),
+            MaterialParameters::new(800.0e3, 13.0e-12, 0.1).unwrap(),
+            LlgConfig::default(),
+            EffectiveFieldTerms {
+                exchange: true,
+                demag: false,
+                ..Default::default()
+            },
+        )
+        .with_spatial_fields(None, Some(a_field), None)
+        .unwrap()
+        .with_exchange_operator(operator)
+        .unwrap();
+        let m: Vec<Vector3> = vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let field = problem.exchange_field_from_vectors(&m);
+        let expected = 2.0 * 13.0e-12 / (MU0 * 800.0e3 * 4.0e-18);
+        assert!((field[0][1] - expected).abs() <= 1e-12 * expected);
+        assert!((field[0][0] + expected).abs() <= 1e-12 * expected);
+    }
+
+    #[test]
     fn faces_field_matches_harmonic_aos_without_rules() {
         let grid = GridShape::new(5, 4, 3).unwrap();
         let (ms, a, m) = sample(grid);

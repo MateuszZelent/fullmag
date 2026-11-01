@@ -169,7 +169,10 @@ jednakowy współczynnik i zgodną politykę geometrii. Sama obecność wielu re
 nie wyłącza tej ścieżki. `ExchangeFaces=None` nie może znaczyć jednocześnie
 „jednorodne”, „wymiana wyłączona” i „jeszcze nie przygotowano”; tryb jest jawny.
 Identyczne wartości można zwinąć do skalaru; tolerancja nie może usuwać zamierzonej
-małej niejednorodności.
+małej niejednorodności. Zwinięcie do `uniform` wymaga też, żeby lokalne `A_i`
+(`a_field`) na aktywnych komórkach było równe skalarowi: CPU w trybie `uniform`
+wraca do własnego szablonu z `a_field`, a CUDA do skalarnego `A`, więc reguły
+dające skalar na każdym połączeniu przy zmiennym `a_field` muszą zostać `faces`.
 
 ### Builder i cykl życia
 
@@ -484,6 +487,12 @@ Fp32 wymaga własnej kwalifikacji; wynik fp64 nie promuje go automatycznie.
 Bitową zgodność można wymagać tylko dla **niezmienionej** ścieżki uniform,
 identycznego toolchaina/urządzenia i warunków; zgodność współczynnika H(A,A)=A
 sama nie gwarantuje identycznej kolejności działań ani hashy końcowej trajektorii.
+Zakres przyjęty w implementacji (2026-11-01): fp64 CPU i CUDA są bitowo zgodne z
+bazą także dla jednorodnego materiału z maską regionów; fp32 CUDA jest bitowo
+zgodne tylko bez maski regionów. Na bazie fp32 z maską regionów szło przez kernel
+LUT (suma ważonych składników sąsiadów), teraz idzie przez laplasjan z
+prefaktorem, więc różnica jest na poziomie zaokrągleń (1 ULP po 10 krokach). Nie
+odtwarzamy kolejności sumowania LUT, bo wymagałoby to drugiej gorącej pętli.
 
 FEM: >256 konformalnych markerów, wiele regionów z dwoma materiałami, air,
 wysokie rzadkie markery i poprawne remapowanie. Sprawdzamy import/assembly,

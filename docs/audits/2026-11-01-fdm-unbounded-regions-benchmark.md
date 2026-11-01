@@ -11,6 +11,13 @@
   `docs/superpowers/specs/2026-11-01-fdm-unbounded-regions-architecture-design.md`.
 - Wszystkie liczby to pomiary jednej maszyny; nie są kwalifikacją naukową ani
   wydajnościową innych GPU.
+- Pochodzenie pomiarów: mikrobenchmark, czas kroku i pierwszy parytet zmierzono na
+  buildzie z `ed7e61f65`/`78586bc89`. Późniejsze commity (`1773c96a2` i poprawki po
+  przeglądzie) nie zmieniają żadnego kernela CUDA (`git diff ed7e61f65 HEAD --
+  backends/fdm/gpu` jest pusty); zmieniają walidację przy tworzeniu backendu,
+  energię napędu po stronie hosta, bramki planera i warunek zwinięcia operatora do
+  `uniform`, który nie dotyczy mierzonych przypadków. Parytet z sekcji 2 powtórzono
+  na buildzie HEAD (sekcja 2, ostatni akapit).
 
 ## 1. Mikrobenchmark reprezentacji współczynników wymiany
 
@@ -18,7 +25,11 @@ Skrypt: `scripts/benchmarks/cuda_exchange_faces_bench.cu` (zdarzenia CUDA, 20
 rozgrzewek, mediana z 5 serii po 100–200 uruchomień). Jeden kernel pola wymiany na
 zmienną; ziarna 8×8 komórek, 8 materiałów rozłożonych mieszanie (hash), o ile nie
 podano inaczej. Uwaga: wariant `uniform` liczy w benchmarku prefaktor z dzieleniem na
-komórkę, więc jest nieco wolniejszy niż produkcyjna ścieżka jednorodna.
+komórkę, więc jest nieco wolniejszy niż produkcyjna ścieżka jednorodna. Warianty nie
+rozwiązują tego samego problemu fizycznego: LUT 256² czyta współczynnik pary
+materiałów z tablicy, a ściany i warianty z harmoniczną liczą średnią harmoniczną
+lokalnych `A`, więc wartości `A_ij` się różnią. Tabela porównuje koszt dostępu do
+współczynników i arytmetyki, nie wyniki fizyczne.
 
 Czas jednego uruchomienia [µs]:
 
@@ -87,7 +98,10 @@ Te same przypadki jednorodne w grupie bazowej (`c416e1b70` + `5f87465ad`):
 
 fp64 jest bitowo zgodne. W fp32 `master` kierował plany z maską regionów (każdy plan
 CUDA ją ma) przez kernel LUT, bo skrót z PR #374 obejmował tylko fp64; teraz przypadek
-jednorodny idzie przez laplasjan. Po 10 krokach różnica fp32 między branchem a
+jednorodny idzie przez laplasjan. Przyjęty zakres zgodności (zapisany w projekcie):
+bitowo w fp64 na CPU i CUDA, także z maską regionów; w fp32 CUDA bitowo tylko bez
+maski regionów, a z maską na poziomie zaokrągleń. Kolejności sumowania LUT nie
+odtwarzamy. Po 10 krokach różnica fp32 między branchem a
 `master` wynosi 1.19e-7 = 1 ULP float; po 2000 krokach chaotyczna tekstura wzmacnia
 ją tak samo jak różnicę CPU–GPU.
 
@@ -125,7 +139,15 @@ Mediana [ms/krok] (w nawiasie minimum):
 
 - Jedna karta konsumencka; na kartach z pełnym fp64 (np. A100/H100) proporcje fp64
   będą inne (ograniczenie pamięcią zamiast obliczeń).
-- Parytet to zgodność torów na tym samym planie, nie kwalifikacja fizyczna; testy
-  wyrocznie (pochodna energii, dwie komórki, PBC) są testami jednostkowymi uruchamianymi
-  w CI, lokalnie nie kompilowanymi (zakaz z AGENTS.md).
+- Parytet to zgodność torów na tym samym planie, nie kwalifikacja fizyczna. Testy
+  wyrocznie (pochodna energii, dwie komórki, PBC, reguła zgodna ze skalarem przy
+  zmiennym `a_field`) są testami jednostkowymi, lokalnie nie kompilowanymi (zakaz z
+  AGENTS.md). Do 2026-11-01 nie uruchamiało ich żadne CI: zadanie `rust-contracts`
+  w `.github/workflows/bootstrap.yml` uruchamia dla `fullmag-engine` i
+  `fullmag-plan` tylko testy wybrane filtrem nazw. Ten branch dodaje krok „Run FDM
+  region exchange operator contracts” z filtrami `exchange_operator::tests`,
+  `exchange_face_tests` i testami planera regionów; testy `fullmag-ir` (w tym
+  predykat bramki CUDA) CI uruchamia w całości. Testy runnera CUDA
+  (`cfg(feature = "cuda")`) i natywne testy kontraktowe C++ nadal nie mają
+  przebiegu w CI.
 - fp32 nie jest kwalifikowane.

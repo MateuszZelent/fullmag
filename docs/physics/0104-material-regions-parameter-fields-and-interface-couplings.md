@@ -388,7 +388,9 @@ half of each connection energy to each side; the sum over a disjoint partition,
 including the unnamed base region 0, reproduces the total.
 
 Realized operator modes are explicit: `uniform` (every existing connection has
-the scalar material $A$; the classic Laplacian kernel is used) or `faces`
+the scalar material $A$ and no active cell carries a local $A_i$ different from
+it, so a lane that ignores the faces reproduces them; the classic Laplacian
+kernel is used) or `faces`
 (coefficients stored per cell on its $+x$, $+y$, $+z$ connection; the $-x$
 coefficient of cell $i$ is the $+x$ coefficient of its $-x$ neighbour, with
 periodic wrap). One shared builder produces the coefficients for the CPU
@@ -1122,6 +1124,7 @@ must include:
 - `multilayer_fdm_regions_are_capability_gated`,
 - `airbox_rejects_magnetic_material_and_m_quantity`,
 - `uniform_material_many_regions_collapses_to_uniform` (1000 regions),
+- `rules_matching_scalar_keep_faces_over_variable_a_field`,
 - `distinct_owners_are_decoupled_without_rules`,
 - `periodic_axis_lengths_one_and_two`,
 - `legacy_tuple_pairs_deserialize_as_explicit`,

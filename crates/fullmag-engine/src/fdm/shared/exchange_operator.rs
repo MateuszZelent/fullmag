@@ -212,10 +212,23 @@ fn plus_neighbor(
     Some(grid.index(next[0], next[1], next[2]))
 }
 
-/// Every existing connection carries exactly the scalar stiffness.
+/// Every existing connection carries exactly the scalar stiffness, and a
+/// consumer that ignores the faces reproduces them: `Uniform` leaves the CPU on
+/// its per-cell `a_field` stencil and CUDA on the scalar `A`, so a cellwise `A`
+/// that differs from the scalar on an active cell must stay `Faces` even when
+/// rules make every connection equal to the scalar.
 fn is_uniform(faces: &ExchangeFaces, grid: GridShape, inputs: &ExchangeOperatorInputs<'_>) -> bool {
     let a = inputs.exchange_stiffness;
     let is_active = |index: usize| inputs.active.map_or(true, |mask| mask[index]);
+    if let Some(a_field) = inputs.a_field {
+        if a_field
+            .iter()
+            .enumerate()
+            .any(|(index, value)| is_active(index) && *value != a)
+        {
+            return false;
+        }
+    }
     let dims = [grid.nx, grid.ny, grid.nz];
     for z in 0..grid.nz {
         for y in 0..grid.ny {
@@ -311,6 +324,40 @@ mod tests {
             );
             assert_eq!(faces.x_plus[1], 0.0, "open boundary has no connection");
         }
+    }
+
+    #[test]
+    fn rules_matching_scalar_keep_faces_over_variable_a_field() {
+        // Explicit A12 equal to the scalar makes every connection equal the
+        // scalar, but a consumer of `Uniform` would use H(13, 20) from a_field.
+        let a = [13e-12, 20e-12];
+        let mask = [1u32, 2];
+        let rules = [ExchangePairRule {
+            region_i: 1,
+            region_j: 2,
+            mode: ExchangePairMode::Explicit(13e-12),
+        }];
+        let operator = build_exchange_operator(&ExchangeOperatorInputs {
+            region_mask: Some(&mask),
+            exchange_stiffness: 13e-12,
+            a_field: Some(&a),
+            rules: &rules,
+            ..inputs(grid(2, 1, 1))
+        })
+        .expect("operator");
+        let faces = faces(operator);
+        assert_eq!(faces.x_plus[0], 13e-12);
+    }
+
+    #[test]
+    fn a_field_equal_to_scalar_collapses_to_uniform() {
+        let a = [1e-11; 4];
+        let operator = build_exchange_operator(&ExchangeOperatorInputs {
+            a_field: Some(&a),
+            ..inputs(grid(4, 1, 1))
+        })
+        .expect("operator");
+        assert_eq!(operator, ExchangeOperator::Uniform);
     }
 
     #[test]

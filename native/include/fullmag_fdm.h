@@ -138,7 +138,10 @@ typedef enum {
     /*
      * Retired region-pair table modes, kept for layout stability. Only
      * UNSPECIFIED (zero-initialized callers) and HARMONIC_MEAN are accepted as
-     * exchange_pair_default; both mean the uniform exchange operator.
+     * exchange_pair_default. HARMONIC_MEAN means the uniform exchange operator
+     * unless the v2 tail carries FACES. UNSPECIFIED with a region_mask
+     * historically decoupled regions (A_ij = 0); without FACES it is rejected
+     * (fdm_exchange_pair_unspecified_retired) instead of re-coupling them.
      */
     FULLMAG_FDM_EXCHANGE_PAIR_UNSPECIFIED   = 0,
     FULLMAG_FDM_EXCHANGE_PAIR_HARMONIC_MEAN = 1,

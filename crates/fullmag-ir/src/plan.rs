@@ -2810,6 +2810,54 @@ mod tests {
     }
 
     #[test]
+    fn cuda_heterogeneous_gate_accepts_uniform_and_core_heterogeneous_material() {
+        let mut plan = FdmPlanIR::default();
+        assert_eq!(plan.cuda_heterogeneous_material_error(), None);
+        plan.material.ms_field = Some(vec![7.5e5; 4]);
+        plan.material.alpha_field = Some(vec![0.05; 4]);
+        plan.material.a_field = Some(vec![13e-12; 4]);
+        assert_eq!(plan.cuda_heterogeneous_material_error(), None);
+    }
+
+    #[test]
+    fn cuda_heterogeneous_gate_names_each_blocking_owner() {
+        let cellwise_ms = || {
+            let mut plan = FdmPlanIR::default();
+            plan.material.ms_field = Some(vec![7.5e5; 4]);
+            plan
+        };
+        let owner = |plan: &FdmPlanIR| {
+            plan.cuda_heterogeneous_material_error()
+                .expect("combination must be rejected")
+        };
+
+        let mut plan = cellwise_ms();
+        plan.boundary_correction = Some("volume".to_string());
+        assert!(owner(&plan).starts_with("fdm_cuda_heterogeneous_material_unsupported:boundary_correction"));
+
+        let mut plan = cellwise_ms();
+        plan.boundary_correction = Some("none".to_string());
+        assert_eq!(plan.cuda_heterogeneous_material_error(), None);
+
+        let mut plan = cellwise_ms();
+        plan.temperature = Some(300.0);
+        assert!(owner(&plan).starts_with("fdm_cuda_heterogeneous_material_unsupported:thermal"));
+
+        let mut plan = cellwise_ms();
+        plan.sot_current_density = Some(1e10);
+        assert!(owner(&plan).starts_with("fdm_cuda_heterogeneous_material_unsupported:spin_torque"));
+
+        let mut plan = cellwise_ms();
+        plan.rotated_interfacial_dmi = Some(1e-3);
+        assert!(owner(&plan).starts_with("fdm_cuda_heterogeneous_material_unsupported:rotated_dmi_variable_ms"));
+
+        let mut plan = FdmPlanIR::default();
+        plan.material.a_field = Some(vec![13e-12; 4]);
+        plan.interfacial_dmi = Some(1e-3);
+        assert!(owner(&plan).starts_with("fdm_cuda_heterogeneous_material_unsupported:dmi_variable_exchange"));
+    }
+
+    #[test]
     fn legacy_tuple_pairs_deserialize_as_explicit() {
         let rules: Vec<FdmExchangePairRuleIR> =
             serde_json::from_value(serde_json::json!([[1, 2, 4e-12]])).expect("legacy triple");
