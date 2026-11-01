@@ -229,7 +229,11 @@
         "fdm-exchange-energy",
         "fdm-cuda-face-exchange",
         "fdm-cuda-face-exchange-fp32",
-        "fdm-regions-lane-parity"
+        "fdm-regions-lane-parity",
+        "fdm-mel-local-ms-field",
+        "fdm-cuda-mel-energy",
+        "fdm-moment-weighted-average-m",
+        "fdm-cuda-late-transport-gate"
       ]
     }
   ],
@@ -851,6 +855,34 @@
       "path": "backends/fdm/gpu/cuda/interactions/exchange_fp32.cu",
       "symbol": "exchange_field_fp32_kernel",
       "responsibility": "CUDA fp32 exchange field from the same per-connection coefficients; qualified by tolerance against the fp64 reference, not by bit identity.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-mel-local-ms-field",
+      "path": "crates/fullmag-engine/src/magnetoelastic.rs",
+      "symbol": "h_mel_single_with_ms",
+      "responsibility": "Magnetoelastic field divided by the local Ms of each cell; the energy density does not depend on Ms.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-cuda-mel-energy",
+      "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu",
+      "symbol": "reduce_magnetoelastic_energy_fp64",
+      "responsibility": "CUDA magnetoelastic energy reduction included in the total energy of every integrator and in eden_total.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-moment-weighted-average-m",
+      "path": "crates/fullmag-runner/src/scalar_metrics.rs",
+      "symbol": "moment_weighted_average_magnetization",
+      "responsibility": "Global mx/my/mz weighted by Ms_i V over active cells on FDM CPU and CUDA, per note 0910.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-cuda-late-transport-gate",
+      "path": "backends/fdm/api/c_api.cpp",
+      "symbol": "fullmag_fdm_context_bind_gpu_transport_v1",
+      "responsibility": "Rejects a GPU transport binding attached after creation when the backend holds cellwise Ms or alpha.",
       "evidence_status": "implemented"
     },
     {

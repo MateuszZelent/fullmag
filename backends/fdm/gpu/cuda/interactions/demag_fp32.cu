@@ -477,9 +477,9 @@ __global__ void combine_effective_field_fp32_kernel(
     if (has_magnetoelastic && ms > 0.0f) {
         const float mu0 = 4.0f * 3.14159265358979323846f * 1e-7f;
         const float inv_mu0_ms = -1.0f / (mu0 * ms);
-        hx += inv_mu0_ms * (2.0f * mel_b1 * mx * mel_e11 + mel_b2 * (my * mel_e12 + mz * mel_e13));
-        hy += inv_mu0_ms * (2.0f * mel_b1 * my * mel_e22 + mel_b2 * (mx * mel_e12 + mz * mel_e23));
-        hz += inv_mu0_ms * (2.0f * mel_b1 * mz * mel_e33 + mel_b2 * (mx * mel_e13 + my * mel_e23));
+        hx += inv_mu0_ms * (2.0f * mel_b1 * mx * mel_e11 + 2.0f * mel_b2 * (my * mel_e12 + mz * mel_e13));
+        hy += inv_mu0_ms * (2.0f * mel_b1 * my * mel_e22 + 2.0f * mel_b2 * (mx * mel_e12 + mz * mel_e23));
+        hz += inv_mu0_ms * (2.0f * mel_b1 * mz * mel_e33 + 2.0f * mel_b2 * (mx * mel_e13 + my * mel_e23));
     }
 
     if (enable_exchange) {

@@ -842,6 +842,8 @@ pub(crate) struct NativeFdmBackend {
     handle: *mut ffi::fullmag_fdm_backend,
     cell_count: usize,
     active_mask: Option<Vec<bool>>,
+    /// Cellwise Ms for moment-weighted average m; `None` when uniform.
+    ms_field: Option<Vec<f64>>,
     frozen_mask: Option<Vec<bool>>,
     precision: fullmag_ir::ExecutionPrecision,
     precision_policy: fullmag_ir::FdmPrecisionPolicyIR,
@@ -1367,6 +1369,8 @@ impl NativeFdmBackend {
             handle,
             cell_count,
             active_mask,
+            // Multilayer handles reject cellwise Ms (see the layer check above).
+            ms_field: None,
             frozen_mask: None,
             precision: plan.precision,
             precision_policy: plan.precision_policy.clone(),
@@ -2094,6 +2098,7 @@ impl NativeFdmBackend {
             handle,
             cell_count: m_flat.len() / 3,
             active_mask: plan.active_mask.clone(),
+            ms_field: plan.material.ms_field.clone(),
             frozen_mask: plan
                 .frozen_spins
                 .as_ref()
@@ -2440,6 +2445,7 @@ impl NativeFdmBackend {
             stats,
             &magnetization,
             self.active_mask.as_deref(),
+            self.ms_field.as_deref(),
         );
         // Keep the object-scoped telemetry synchronized with the sampled
         // magnetization. This path is also used when a scalar output is due,
@@ -3573,6 +3579,7 @@ impl NativeFdmBackend {
             &mut step_stats,
             &magnetization,
             self.active_mask.as_deref(),
+            self.ms_field.as_deref(),
         );
         step_stats.per_object_scalars = single_object_scalars("free", &step_stats);
         Ok(step_stats)
@@ -4365,6 +4372,7 @@ mod tests {
             handle: std::ptr::null_mut(),
             cell_count: 4,
             active_mask: None,
+            ms_field: None,
             frozen_mask: Some(vec![true, false, false, true]),
             precision: ExecutionPrecision::Double,
             precision_policy: fullmag_ir::FdmPrecisionPolicyIR::default(),

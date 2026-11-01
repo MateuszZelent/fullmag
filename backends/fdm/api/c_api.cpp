@@ -2418,6 +2418,14 @@ int fullmag_fdm_context_bind_gpu_transport_v1(
             "spin transport is unsupported for v2 multilayer handles";
         return FULLMAG_FDM_ERR_INVALID;
     }
+    // The transport torque term uses the scalar alpha (and Ms). The create-time
+    // gate cannot see a binding attached later, so reject it here as well.
+    if (ctx->ms_field != nullptr || ctx->alpha_field != nullptr) {
+        ctx->last_error =
+            "fdm_cuda_heterogeneous_material_unsupported:gpu_transport: heterogeneous "
+            "Ms/alpha does not yet combine with GPU transport torque on native FDM CUDA";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
     if (!context_bind_gpu_transport_rhs(*ctx, *binding)) {
         return FULLMAG_FDM_ERR_INVALID;
     }

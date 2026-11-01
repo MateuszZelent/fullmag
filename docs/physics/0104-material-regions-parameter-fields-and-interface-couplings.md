@@ -425,10 +425,31 @@ region legend, without generating pair rules for every object pair.
   predicate on the FDM plan rejects each combination with an explicit
   `fdm_cuda_heterogeneous_material_unsupported:<owner>` error: at planning time
   for an explicit CUDA request, and again at backend construction. There is no
-  CPU fallback. The native backend also rejects a cellwise $A$ that differs from
+  CPU fallback. A GPU transport binding attached after construction through the
+  public C ABI (`fullmag_fdm_context_bind_gpu_transport_v1`) is rejected with
+  `fdm_cuda_heterogeneous_material_unsupported:gpu_transport` when the backend
+  holds cellwise $M_s$ or $\alpha$, because the transport torque term uses the
+  scalar $\alpha$. The native backend also rejects a cellwise $A$ that differs from
   the scalar on an active cell but arrives without face coefficients
   (`a_field_requires_exchange_faces`), because CUDA exchange reads $A$ only from
   the faces.
+- **Magnetoelastic coupling** (prescribed strain, note 0700). The energy density
+  $e_\mathrm{mel}(\mathbf m_i,\boldsymbol\varepsilon_i)$ does not depend on
+  $M_s$, so the field divides by the local moment:
+  $\mathbf H_{\mathrm{mel},i} = -\frac{1}{\mu_0 M_{s,i}}\,
+  \partial e_\mathrm{mel}/\partial\mathbf m_i$ on CPU and CUDA. With tensor
+  strain the shear part of the derivative carries $2B_2\varepsilon_{jk}$ on both
+  lanes. $E_\mathrm{mel}=\sum_i e_{\mathrm{mel},i}V_i$ is part of the total
+  energy and of the total energy density (`eden_total`) on both lanes; as on the
+  CPU reference, $e_\mathrm{mel}$ omits the $m$-independent $-B_1\operatorname{tr}
+  \boldsymbol\varepsilon/3$ offset of note 0700, which does not change fields or
+  energy differences.
+- **Global average magnetization.** The table columns `mx`, `my`, `mz` follow
+  note 0910: they are weighted by the magnetic moment,
+  $\langle\mathbf m\rangle=\sum_i M_{s,i}V\mathbf m_i/\sum_i M_{s,i}V$ over active
+  cells, on FDM CPU and CUDA. Without a cellwise $M_s$ this is the arithmetic
+  mean, computed exactly as before. For example $M_s=(400,800)$ kA/m with
+  $\mathbf m=(+\hat x,-\hat x)$ gives $\langle m_x\rangle=-1/3$.
 - **Precision contract.** Bit identity is promised only in fp64: for a uniform
   material the `uniform` operator reproduces the pre-change CPU and CUDA fp64
   trajectories bit for bit, with or without region labels. CUDA fp32 has no
@@ -1236,3 +1257,7 @@ must include:
 | Bramka CUDA | `crates/fullmag-ir/src/plan.rs` | `cuda_heterogeneous_material_error` | Wspólny predykat planera i runnera CUDA: jawna odmowa niewspieranych kombinacji z komórkowym $M_s$/$\alpha$ i zmiennym $A$. |
 | Wymiana CUDA fp32 | `backends/fdm/gpu/cuda/interactions/exchange_fp32.cu` | `exchange_field_fp32_kernel` | Te same współczynniki na połączeniach w fp32; kwalifikacja tolerancją względem referencji fp64, bez zgodności bitowej. |
 | Parytet torów | `scripts/benchmarks/run_fdm_regions_parity.py` | `compare_lane` | CUDA fp64 vs CPU fp64 (2000 kroków) i krótka kwalifikacja tolerancyjna CUDA fp32 dla $\mathbf m$, energii, $\mathbf H_\mathrm{ex}$, $\mathbf H_\mathrm{eff}$; NaN/inf to błąd. |
+| Magnetosprężystość FDM | `crates/fullmag-engine/src/magnetoelastic.rs` | `h_mel_single_with_ms` | Pole $\mathbf H_\mathrm{mel}$ z lokalnym $M_{s,i}$; gęstość $e_\mathrm{mel}$ niezależna od $M_s$. |
+| Magnetosprężystość CUDA | `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` | `reduce_magnetoelastic_energy_fp64` | $E_\mathrm{mel}$ w energii całkowitej toru CUDA. |
+| Średnie $\mathbf m$ | `crates/fullmag-runner/src/scalar_metrics.rs` | `apply_average_m_to_step_stats_with_active_mask` | Średnia ważona momentem $M_{s,i}V$ dla kolumn `mx`/`my`/`mz` na FDM CPU i CUDA. |
+| Bramka transportu GPU | `backends/fdm/api/c_api.cpp` | `fullmag_fdm_context_bind_gpu_transport_v1` | Odmowa późnego wiązania transportu przy komórkowym $M_s$/$\alpha$. |

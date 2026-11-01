@@ -48,6 +48,7 @@ extern double launch_external_energy_fp64(Context &ctx);
 extern double reduce_uniaxial_anisotropy_energy_fp64(Context &ctx);
 extern double reduce_cubic_anisotropy_energy_fp64(Context &ctx);
 extern double reduce_dmi_energy_fp64(Context &ctx);
+extern double reduce_magnetoelastic_energy_fp64(Context &ctx);
 
 // Forward declarations from reductions_fp64.cu
 extern double reduce_max_norm_fp64(Context &ctx, const void *vx, const void *vy, const void *vz, uint64_t n);
@@ -666,7 +667,8 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     double e_aniso = reduce_uniaxial_anisotropy_energy_fp64(ctx);
     double e_cubic = reduce_cubic_anisotropy_energy_fp64(ctx);
     double e_dmi = reduce_dmi_energy_fp64(ctx);
-    double e_total = e_ex + e_demag + e_ext + e_aniso + e_cubic + e_dmi;
+    double e_mel = reduce_magnetoelastic_energy_fp64(ctx);
+    double e_total = e_ex + e_demag + e_ext + e_aniso + e_cubic + e_dmi + e_mel;
 
     // Max |H_eff|
     double max_h_eff = reduce_max_norm_fp64(ctx, ctx.work.x, ctx.work.y, ctx.work.z, ctx.cell_count);

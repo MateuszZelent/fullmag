@@ -2837,6 +2837,7 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                         &mut update_stats,
                         state.magnetization(),
                         problem.active_mask.as_deref(),
+                        problem.ms_field.as_deref(),
                     );
                 }
                 let mut live_copy_metrics = FieldCopyMetrics::default();
@@ -4281,6 +4282,7 @@ fn make_step_stats_from_report(
         &mut stats,
         magnetization,
         problem.active_mask.as_deref(),
+        problem.ms_field.as_deref(),
     );
     apply_frozen_spin_step_telemetry(&mut stats, problem, magnetization);
     stats.per_object_scalars = single_object_scalars("free", &stats);
@@ -4379,6 +4381,7 @@ fn make_step_stats(
         &mut stats,
         &observables.magnetization,
         problem.active_mask.as_deref(),
+        problem.ms_field.as_deref(),
     );
     apply_frozen_spin_step_telemetry(&mut stats, problem, &observables.magnetization);
     stats.per_object_scalars = if observables.per_object_scalars.is_empty() {
@@ -4546,6 +4549,12 @@ impl<'a> DirectFieldSnapshotCache<'a> {
                     for (accum, value) in total.iter_mut().zip(values) {
                         *accum += value;
                     }
+                }
+                let mel = self
+                    .problem
+                    .magnetoelastic_energy_density_from_vectors(self.state.magnetization());
+                for (accum, value) in total.iter_mut().zip(mel) {
+                    *accum += value;
                 }
                 Ok(total)
             }

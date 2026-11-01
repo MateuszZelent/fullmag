@@ -1511,6 +1511,85 @@ double reduce_uniaxial_anisotropy_energy_fp32(Context &ctx) {
     return finalize_sum_reduction(ctx, ctx.reduction_scratch, blocks);
 }
 
+// --- Magnetoelastic energy (prescribed uniform strain, B1/B2) ---
+// e_mel = B1 (mx^2 e11 + my^2 e22 + mz^2 e33) + 2 B2 (mx my e12 + mx mz e13 + my mz e23)
+// with tensor shear strain e_jk = (Voigt 2e_jk) / 2. The density does not
+// depend on Ms; it matches the CPU reference (no m-independent offset).
+template <typename Scalar>
+__global__ void magnetoelastic_energy_blocks_kernel(
+    const Scalar *mx, const Scalar *my, const Scalar *mz,
+    const uint8_t *active_mask, const double *volume_fraction, double *block_out,
+    uint64_t n, int has_active_mask, int has_volume_fraction, double cell_volume,
+    double b1, double b2,
+    double e11, double e22, double e33, double e23, double e13, double e12)
+{
+    __shared__ double shared[REDUCTION_BLOCK_SIZE];
+    uint64_t idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    uint64_t stride = static_cast<uint64_t>(gridDim.x) * blockDim.x;
+
+    double energy = 0.0;
+    for (; idx < n; idx += stride) {
+        if (has_active_mask && active_mask[idx] == 0) continue;
+        const double phi_i = has_volume_fraction ? volume_fraction[idx] : 1.0;
+        const double m1 = to_f64(mx[idx]);
+        const double m2 = to_f64(my[idx]);
+        const double m3 = to_f64(mz[idx]);
+        const double density =
+            b1 * (m1 * m1 * e11 + m2 * m2 * e22 + m3 * m3 * e33) +
+            2.0 * b2 * (m1 * m2 * e12 + m1 * m3 * e13 + m2 * m3 * e23);
+        energy += cell_volume * phi_i * density;
+    }
+
+    shared[threadIdx.x] = energy;
+    __syncthreads();
+
+    for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) {
+        if (threadIdx.x < offset) {
+            shared[threadIdx.x] += shared[threadIdx.x + offset];
+        }
+        __syncthreads();
+    }
+
+    if (threadIdx.x == 0) {
+        block_out[blockIdx.x] = shared[0];
+    }
+}
+
+template <typename Scalar>
+static double reduce_magnetoelastic_energy(Context &ctx) {
+    // Count only real reductions so runs without MEL keep their counters.
+    if (!ctx.has_magnetoelastic) {
+        return 0.0;
+    }
+    ++ctx.endpoint_field_cache.energy_reduction_count;
+    uint64_t blocks = launch_grid_for(ctx.cell_count);
+    int has_vf = (ctx.boundary_tier > 0 && ctx.volume_fraction != nullptr) ? 1 : 0;
+    magnetoelastic_energy_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE>>>(
+        static_cast<const Scalar *>(ctx.m.x),
+        static_cast<const Scalar *>(ctx.m.y),
+        static_cast<const Scalar *>(ctx.m.z),
+        ctx.active_mask,
+        ctx.volume_fraction,
+        ctx.reduction_scratch,
+        ctx.cell_count,
+        ctx.has_active_mask ? 1 : 0,
+        has_vf,
+        ctx.dx * ctx.dy * ctx.dz,
+        ctx.mel_b1,
+        ctx.mel_b2,
+        ctx.mel_strain[0], ctx.mel_strain[1], ctx.mel_strain[2],
+        0.5 * ctx.mel_strain[3], 0.5 * ctx.mel_strain[4], 0.5 * ctx.mel_strain[5]);
+    return finalize_sum_reduction(ctx, ctx.reduction_scratch, blocks);
+}
+
+double reduce_magnetoelastic_energy_fp64(Context &ctx) {
+    return reduce_magnetoelastic_energy<double>(ctx);
+}
+
+double reduce_magnetoelastic_energy_fp32(Context &ctx) {
+    return reduce_magnetoelastic_energy<float>(ctx);
+}
+
 // --- Cubic anisotropy energy kernel ---
 template <typename Scalar>
 __global__ void cubic_anisotropy_energy_blocks_kernel(

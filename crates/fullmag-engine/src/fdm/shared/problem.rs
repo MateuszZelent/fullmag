@@ -493,6 +493,7 @@ impl ExchangeLlgProblem {
             self.external_energy_density(state)?,
             self.anisotropy_energy_density(state)?,
             self.dmi_energy_density(state)?,
+            self.magnetoelastic_energy_density_from_vectors(state.magnetization()),
         ] {
             for (accum, value) in total.iter_mut().zip(density) {
                 *accum += value;

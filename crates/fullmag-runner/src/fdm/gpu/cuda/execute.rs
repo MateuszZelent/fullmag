@@ -923,6 +923,7 @@ pub(crate) fn execute_cuda_fdm(
                     &mut sampled_stats,
                     &magnetization,
                     plan.active_mask.as_deref(),
+                    plan.material.ms_field.as_deref(),
                 );
                 apply_regional_drive_energy(plan, &mut sampled_stats, &magnetization);
                 record_cuda_due_outputs(
@@ -1073,6 +1074,7 @@ pub(crate) fn execute_cuda_fdm(
                         .as_deref()
                         .expect("magnetization cache initialized"),
                     plan.active_mask.as_deref(),
+                    plan.material.ms_field.as_deref(),
                 );
                 apply_regional_drive_energy(
                     plan,
@@ -1095,6 +1097,7 @@ pub(crate) fn execute_cuda_fdm(
                             .as_deref()
                             .expect("magnetization cache initialized"),
                         plan.active_mask.as_deref(),
+                        plan.material.ms_field.as_deref(),
                     );
                     apply_regional_drive_energy(
                         plan,
@@ -1133,6 +1136,7 @@ pub(crate) fn execute_cuda_fdm(
                             .as_deref()
                             .expect("magnetization cache initialized"),
                         plan.active_mask.as_deref(),
+                        plan.material.ms_field.as_deref(),
                     );
                     apply_regional_drive_energy(
                         plan,
@@ -1310,6 +1314,7 @@ pub(crate) fn execute_cuda_fdm(
             final_stats,
             &final_magnetization,
             plan.active_mask.as_deref(),
+            plan.material.ms_field.as_deref(),
         );
         apply_regional_drive_energy(plan, final_stats, &final_magnetization);
     }

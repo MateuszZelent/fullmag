@@ -487,15 +487,16 @@ __global__ void combine_effective_field_fp64_kernel(
     }
 
     // --- Magnetoelastic field (prescribed strain B1/B2) ---
-    // H_mel,x = −(2 B1 mx ε11 + B2 (my ε12 + mz ε13)) / (μ0 Ms)
-    // H_mel,y = −(2 B1 my ε22 + B2 (mx ε12 + mz ε23)) / (μ0 Ms)
-    // H_mel,z = −(2 B1 mz ε33 + B2 (mx ε13 + my ε23)) / (μ0 Ms)
+    // Tensor shear strain ε_jk (half the Voigt engineering value), note 0700:
+    // H_mel,x = −(2 B1 mx ε11 + 2 B2 (my ε12 + mz ε13)) / (μ0 Ms_i)
+    // H_mel,y = −(2 B1 my ε22 + 2 B2 (mx ε12 + mz ε23)) / (μ0 Ms_i)
+    // H_mel,z = −(2 B1 mz ε33 + 2 B2 (mx ε13 + my ε23)) / (μ0 Ms_i)
     if (has_magnetoelastic && ms > 0.0) {
         double mu0 = 4.0 * kFullmagPi * 1e-7;
         double inv_mu0_ms = -1.0 / (mu0 * ms);
-        hx += inv_mu0_ms * (2.0 * mel_b1 * mx * mel_e11 + mel_b2 * (my * mel_e12 + mz * mel_e13));
-        hy += inv_mu0_ms * (2.0 * mel_b1 * my * mel_e22 + mel_b2 * (mx * mel_e12 + mz * mel_e23));
-        hz += inv_mu0_ms * (2.0 * mel_b1 * mz * mel_e33 + mel_b2 * (mx * mel_e13 + my * mel_e23));
+        hx += inv_mu0_ms * (2.0 * mel_b1 * mx * mel_e11 + 2.0 * mel_b2 * (my * mel_e12 + mz * mel_e13));
+        hy += inv_mu0_ms * (2.0 * mel_b1 * my * mel_e22 + 2.0 * mel_b2 * (mx * mel_e12 + mz * mel_e23));
+        hz += inv_mu0_ms * (2.0 * mel_b1 * mz * mel_e33 + 2.0 * mel_b2 * (mx * mel_e13 + my * mel_e23));
     }
 
     if (enable_exchange) {
