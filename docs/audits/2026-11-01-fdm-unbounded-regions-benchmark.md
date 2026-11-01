@@ -1,0 +1,131 @@
+# FDM bez limitu 256 regionów: pomiary i parytet (2026-11-01)
+
+- Branch: `codex/fdm-unbounded-regions-20261101`; kod CUDA w commicie `ed7e61f65`,
+  skrypty w `78586bc89`. Baza porównania: `master` `c416e1b70` (PR #374) z poprawką
+  launchera `5f87465ad`, zbudowana w osobnej grupie
+  `fullmag-worktree-fdm-unbounded-regions-baseline-2-d08c988e293d5c74`.
+- Sprzęt: NVIDIA GeForce RTX 4080 SUPER (sterownik 617.42, `sm_89`), Docker DEV na
+  Windows (WSL2). Build `backend-dev` w kontenerze `backend` grupy tego worktree.
+- Kontrakt: nota 0104, sekcje `material-regions-fdm-connection-operator` i
+  `material-regions-fdm-lane-realization`; projekt w
+  `docs/superpowers/specs/2026-11-01-fdm-unbounded-regions-architecture-design.md`.
+- Wszystkie liczby to pomiary jednej maszyny; nie są kwalifikacją naukową ani
+  wydajnościową innych GPU.
+
+## 1. Mikrobenchmark reprezentacji współczynników wymiany
+
+Skrypt: `scripts/benchmarks/cuda_exchange_faces_bench.cu` (zdarzenia CUDA, 20
+rozgrzewek, mediana z 5 serii po 100–200 uruchomień). Jeden kernel pola wymiany na
+zmienną; ziarna 8×8 komórek, 8 materiałów rozłożonych mieszanie (hash), o ile nie
+podano inaczej. Uwaga: wariant `uniform` liczy w benchmarku prefaktor z dzieleniem na
+komórkę, więc jest nieco wolniejszy niż produkcyjna ścieżka jednorodna.
+
+Czas jednego uruchomienia [µs]:
+
+| Wariant | 1024²×1 fp64 | 1024²×1 fp32 | 256²×64 fp64 | 256²×64 fp32 | 128³ fp64 | 128³ fp32 |
+|---|---:|---:|---:|---:|---:|---:|
+| uniform | 163.9 | 35.7 | 601.0 | 155.9 | 284.1 | 68.4 |
+| uniform + komórkowe Ms | 156.3 | 37.6 | 601.1 | 222.9 | 283.7 | 69.0 |
+| LUT 256² (stara ścieżka) | 145.2 | 48.9 | 571.8 | 189.3 | 273.1 | 94.6 |
+| **ściany fp64 + Ms (produkcja)** | 149.1 | 50.8 | 571.9 | 369.3 | 271.1 | 177.1 |
+| ściany fp32 + Ms | 164.5 | 33.3 | 642.5 | 291.1 | 323.5 | 137.4 |
+| A na komórkę, harmoniczna w kernelu | 238.4 | 151.7 | 955.1 | 563.5 | 470.6 | 282.1 |
+| id materiału u16 + tablica | 246.8 | 151.7 | 955.0 | 558.8 | 472.0 | 299.2 |
+
+Dodatkowe przebiegi 256²×64: rozkład skupiony 8 materiałów i 1024 materiały dają te
+same wnioski (ściany fp64: 554 / 573 µs w fp64; 367 / 367 µs w fp32).
+
+Wnioski:
+
+1. fp64 na tej karcie jest ograniczone obliczeniowo (fp64 1/64). Ściany kosztują tyle
+   co ścieżka jednorodna i stara LUT. Warianty z harmoniczną liczoną w kernelu są
+   1.6–1.7× wolniejsze przez dzielenia fp64, także dla tablicy materiałów u16.
+2. fp32 3D jest ograniczone przepustowością pamięci. Ściany z współczynnikami fp64
+   kosztują 2.4× ścieżki jednorodnej (369 vs 156 µs), z współczynnikami fp32 1.9×.
+   Stara LUT kosztowała 1.2×.
+3. Poziom P (id materiału + tablica) nie daje zysku ani w fp64, ani w fp32 przy
+   harmonicznej w kernelu. Zostaje odłożony zgodnie z kryterium ze specyfikacji.
+4. Wybór produkcyjny: ściany fp64. Follow-up: przechowywanie ścian w fp32 dla toru
+   fp32 (oszczędność ok. 20% kernela wymiany w 3D).
+
+## 2. Parytet CPU vs CUDA (headless)
+
+Skrypty: `scripts/benchmarks/fdm_regions_parity_case.py`,
+`scripts/benchmarks/run_fdm_regions_parity.py`. RK4, dt = 10 fs, 2000 kroków, demag
+włączony, pole 50 mT wzdłuż z, losowa tekstura początkowa, komórka 2 nm, podgląd
+wyłączony. Porównanie: max |Δm| po komórkach i składowych oraz maks. względna różnica
+energii z ostatniego wiersza `scalars.csv`.
+
+| Przypadek | Siatka | max abs Δm CUDA fp64 vs CPU | max rel. Δ energii | CPU / CUDA [s] |
+|---|---|---:|---:|---:|
+| dwa materiały, reguła `explicit` A = 4e-12 J/m | 128×32×1 | 3.4e-8 | 5.3e-11 | 40.0 / 11.0 |
+| dwa materiały, `harmonic_mean` × 0.5 | 128×32×1 | 6.1e-8 | 6.6e-11 | 42.4 / 12.0 |
+| 1024 ziarna (Ms/A/α ±10%, kilka reguł × 0.3) | 256×256×1 | 3.0e-7 | 3.6e-10 | 286.6 / 54.6 |
+| jednorodny (odniesienie) | 128×32×1 | 7.8e-8 | 6.0e-9 | 42.2 / 10.2 |
+| jednorodny z 2 regionami bez reguł | 128×32×1 | 7.8e-8 | 6.0e-9 | 37.2 / 9.0 |
+
+- Dwa materiały: Ms 800/1200 kA/m, A 13/20 pJ/m, α 0.02/0.1; przejście domyślne
+  `mesh_relative(cells=3)`.
+- Ziarna wymagają rozłącznych priorytetów: pierwszy przebieg z równymi priorytetami
+  został poprawnie odrzucony przez planer (konflikt nakładających się regionów).
+- Przypadek z regionami bez reguł daje **bitowo ten sam** `m_final` co przypadek bez
+  regionów, na CPU i na CUDA (operator `uniform`).
+- fp32 (informacyjnie): CUDA fp32 rozjeżdża się z CPU do |Δm| ≈ 2 także w przypadku
+  jednorodnym; losowa tekstura jest chaotyczna, a fp32 nie jest kwalifikowane.
+
+## 3. Niezmienność względem `master`
+
+Te same przypadki jednorodne w grupie bazowej (`c416e1b70` + `5f87465ad`):
+
+| Przypadek | Tor | `m_final` sha256 branch | `m_final` sha256 master |
+|---|---|---|---|
+| jednorodny | CPU fp64 | `08df81f1c633` | `08df81f1c633` |
+| jednorodny | CUDA fp64 | `18f2bc6e4437` | `18f2bc6e4437` |
+| jednorodny z regionami | CPU fp64 | `08df81f1c633` | `08df81f1c633` |
+| jednorodny z regionami | CUDA fp64 | `18f2bc6e4437` | `18f2bc6e4437` |
+| jednorodny | CUDA fp32 | `d4cdf9ececee` | `7268e110677f` |
+
+fp64 jest bitowo zgodne. W fp32 `master` kierował plany z maską regionów (każdy plan
+CUDA ją ma) przez kernel LUT, bo skrót z PR #374 obejmował tylko fp64; teraz przypadek
+jednorodny idzie przez laplasjan. Po 10 krokach różnica fp32 między branchem a
+`master` wynosi 1.19e-7 = 1 ULP float; po 2000 krokach chaotyczna tekstura wzmacnia
+ją tak samo jak różnicę CPU–GPU.
+
+## 4. Czas kroku (CUDA)
+
+Skrypty: `scripts/benchmarks/run_fdm_hot_loop_bench.py` (zestaw `gpu_hetero` na
+branchu, zestaw `gpu` na `master`), `scripts/benchmarks/fdm_hot_loop_case.py`. Heun
+fp64, 3 powtórzenia; czas kroku = (wall długiego przebiegu − mediana wall krótkiego
+przebiegu) / różnica kroków, co odejmuje start, planowanie i zapis artefaktów.
+Warianty: `uniform` (jeden materiał: Ms 800 kA/m, A 13 pJ/m, α 0.02), `ms`
+(`HETERO=1`: prawa połowa jako region z Ms 600 kA/m), `faces` (`HETERO=2`: prawa
+połowa z Ms 600 kA/m, A 20 pJ/m i α 0.05, więc operator ścian, komórkowe Ms i
+komórkowe tłumienie). Losowa tekstura początkowa, pole 10 mT wzdłuż z. `ex` = sama wymiana,
+`full` = wymiana + demag + pole zewnętrzne.
+
+Mediana [ms/krok] (w nawiasie minimum):
+
+| Przypadek | master uniform | branch uniform | branch ms | branch faces | faces vs uniform (mediana) |
+|---|---:|---:|---:|---:|---:|
+| `ex` 256×256×8 | 0.577 (0.522) | 0.552 (0.506) | 0.577 (0.570) | 0.716 (0.584) | +30% (min +15%) |
+| `full` 256×256×8 | 15.981 (15.175) | 16.029 (15.917) | 16.183 (15.709) | 17.074 (15.590) | +7% (min −2%) |
+| `full` 256×256×1 | 1.203 (1.196) | 1.111 (1.039) | — | 1.161 (1.009) | +5% (min −3%) |
+
+- Przypadek jednorodny: `m_final` branchu i `master` ma ten sam sha256 we wszystkich
+  trzech przypadkach (`661a71e2d996`, `eab033348bef`, `ef01da7e4987`); różnica czasu
+  (−8%…+0.3%) mieści się w rozrzucie powtórzeń. Narzut dla modeli bez zmiany
+  materiału: brak mierzalnego.
+- Komórkowe Ms bez ścian: +0–5% (dodatkowy odczyt `ms_field` w wymianie, demagu i
+  energii).
+- Pełna heterogeniczność (ściany + Ms + α): w samej wymianie do +30% mediany, w
+  realistycznym kroku z demagiem +5–7%, bo FFT demagu dominuje. Rozrzut minimum i
+  mediany pokazuje, że pomiar na Windows/WSL2 jest zaszumiony na poziomie ±10%.
+
+## 5. Ograniczenia pomiarów
+
+- Jedna karta konsumencka; na kartach z pełnym fp64 (np. A100/H100) proporcje fp64
+  będą inne (ograniczenie pamięcią zamiast obliczeń).
+- Parytet to zgodność torów na tym samym planie, nie kwalifikacja fizyczna; testy
+  wyrocznie (pochodna energii, dwie komórki, PBC) są testami jednostkowymi uruchamianymi
+  w CI, lokalnie nie kompilowanymi (zakaz z AGENTS.md).
+- fp32 nie jest kwalifikowane.
