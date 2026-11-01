@@ -77,11 +77,13 @@ BASE_CONTEXT_FILES = (
 )
 RUNTIME_IMAGE_CONTEXT_FILES = (
     ("Dockerfile.backend", "docker/all-in-one/Dockerfile.backend"),
+    ("Dockerfile.backend.dockerignore", "docker/all-in-one/Dockerfile.backend.dockerignore"),
     ("backend_dev.py", "docker/all-in-one/backend_dev.py"),
     ("backend_source.py", "docker/all-in-one/backend_source.py"),
     ("backend_shared_store.py", "docker/all-in-one/backend_shared_store.py"),
     ("backend_shared_recovery.py", "docker/all-in-one/backend_shared_recovery.py"),
     ("backend_compiler_cache.py", "docker/all-in-one/backend_compiler_cache.py"),
+    ("backend_group_cache_cleanup.py", "docker/all-in-one/backend_group_cache_cleanup.py"),
     ("backend_group_retirement.py", "docker/all-in-one/backend_group_retirement.py"),
     ("backend_candidate_retirement.py", "docker/all-in-one/backend_candidate_retirement.py"),
     ("worker_cgroup_gate.py", "docker/all-in-one/worker_cgroup_gate.py"),
@@ -2566,7 +2568,7 @@ def _parser() -> argparse.ArgumentParser:
     script_parser = subparsers.add_parser(
         "script",
         help=(
-            "activate one script in the exactly validated running DEV group; "
+            "run one script in the foreground in the exactly validated DEV group; "
             "attempt and configuration pins are discovered from control receipts"
         ),
     )
@@ -2595,6 +2597,8 @@ def _parser() -> argparse.ArgumentParser:
     run_script_parser.add_argument("--source-root", type=Path)
     run_script_parser.add_argument("--port", type=int)
     run_script_parser.add_argument("--request-id")
+    run_script_parser.add_argument("--attempt")
+    run_script_parser.add_argument("--config-sha256")
     run_script_parser.add_argument(
         "--timeout-seconds", type=float, default=None,
         help="optional observation deadline; expiration does not cancel or replay the script",
@@ -3096,15 +3100,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.action == "activate-script":
             from docker_volume_activate import activate
             activate(args)
-        elif args.action == "script":
-            from docker_dev_defaults import activate_discovered
-            activate_discovered(args)
-        elif args.action == "run-script":
+        elif args.action in {"script", "run-script"}:
             from docker_dev_run_script import run_script
             result = run_script(
                 args.repo_root, args.script, source_root=args.source_root,
                 port=args.port, request_id=args.request_id,
-                timeout_seconds=args.timeout_seconds,
+                timeout_seconds=getattr(args, "timeout_seconds", None),
+                attempt=getattr(args, "attempt", None),
+                config_sha256=getattr(args, "config_sha256", None),
             )
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
             return int(result["exit_code"])

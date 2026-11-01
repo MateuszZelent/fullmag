@@ -151,7 +151,7 @@ function statusResource(
 }
 
 describe("SimulationStartupOverlay", () => {
-  it("shows while the session status resource is loading", () => {
+  it("holds the startup gate without a window while the session status loads", () => {
     const state = resolveSimulationStartupOverlayState({
       data: null,
       error: null,
@@ -163,8 +163,13 @@ describe("SimulationStartupOverlay", () => {
     expect(state).toMatchObject({
       detail: "Connecting to the local simulation backend.",
       isVisible: true,
+      kind: "syncing",
       title: "Preparing simulation",
     });
+    expect(shouldRefreshSimulationStartupStatus(state)).toBe(true);
+    expect(
+      renderToStaticMarkup(<SimulationStartupOverlayView state={state} />),
+    ).toBe("");
   });
 
   it("shows explicit startup phases from the backend status", () => {

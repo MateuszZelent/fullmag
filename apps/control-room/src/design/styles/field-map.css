@@ -17,7 +17,64 @@
 }
 
 .fm-field-map--error {
-  color: var(--fm-danger);
+  color: var(--fm-danger-text);
+}
+
+.fm-field-map__status-card {
+  display: grid;
+  justify-items: center;
+  gap: var(--fm-space-2);
+  max-width: 44ch;
+  text-align: center;
+}
+
+.fm-field-map__status-message {
+  margin: 0;
+  font-size: var(--fm-font-size-sm);
+  line-height: 1.5;
+}
+
+.fm-field-map__spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--fm-border-subtle);
+  border-top-color: var(--fm-accent);
+  border-radius: 50%;
+  animation: fm-field-map-spin 0.8s linear infinite;
+}
+
+@keyframes fm-field-map-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fm-field-map__spinner {
+    animation: none;
+  }
+}
+
+.fm-field-map__status-details {
+  max-width: 100%;
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  text-align: left;
+}
+
+.fm-field-map__status-details summary {
+  cursor: pointer;
+  text-align: center;
+}
+
+.fm-field-map__status-details code {
+  display: block;
+  margin-top: var(--fm-space-1);
+  padding: var(--fm-space-2);
+  overflow-wrap: anywhere;
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-elevated);
+  font-family: var(--fm-font-mono);
 }
 
 .fm-field-map__toolbar {

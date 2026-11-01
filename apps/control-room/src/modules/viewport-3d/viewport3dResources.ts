@@ -494,26 +494,28 @@ export function resolveViewport3DFieldVectorCollectionLastGood({
   tracker?: Viewport3DResourceTracker;
 }): Map<string, Viewport3DFieldVectorEnvelope> {
   const retained = new Map<string, Viewport3DFieldVectorEnvelope>();
+  if (
+    status !== "ready" &&
+    status !== "error" &&
+    status !== "loading" &&
+    status !== "stale"
+  ) {
+    return retained;
+  }
   for (const [requestId, request] of requests) {
     const currentEnvelope = current?.get(requestId);
     const previousEnvelope = previous.get(requestId);
-    if (status === "ready" && currentEnvelope) {
+    // While a live refresh revalidates the same key, the store still holds
+    // the last good member; showing it avoids a blank or older frame.
+    if (currentEnvelope) {
       const currentMatch = resolveViewport3DFieldVectorIdentityMatch(
         currentEnvelope,
         request,
       );
       if (currentMatch.matches) {
-        retained.set(requestId, { ...currentEnvelope, retained: false });
+        retained.set(requestId, { ...currentEnvelope, retained: status !== "ready" });
         continue;
       }
-    }
-    if (
-      status !== "ready" &&
-      status !== "error" &&
-      status !== "loading" &&
-      status !== "stale"
-    ) {
-      continue;
     }
     if (previousEnvelope) {
       const previousMatch = resolveViewport3DFieldVectorIdentityMatch(

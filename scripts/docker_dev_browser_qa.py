@@ -14,12 +14,14 @@ import hashlib
 from collections.abc import Mapping
 from copy import deepcopy
 import json
+import math
 import os
+from decimal import Decimal, ROUND_HALF_UP, localcontext
 from pathlib import Path
 import re
 import time
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 from urllib.request import Request, urlopen
 
 import fullmag_storage as storage
@@ -80,6 +82,9 @@ LIVE_FIELD_OBSERVATION_NOTE = (
     "they do not prove field payload presence or values."
 )
 FEM_AIRBOX_VECTOR_OBSERVATION_SCHEMA = "fullmag.fem-airbox-vector-observation.v1"
+TERMINAL_TELEMETRY_RESULT_SCHEMA = "fullmag.docker-dev-terminal-telemetry.v1"
+TERMINAL_TELEMETRY_ENERGY_FORMAT = "en-US:maxFractionDigits=6;scientific:toExponential(6)"
+MAX_SAFE_JSON_INTEGER = 9_007_199_254_740_991
 
 DESKTOP_WSL_BIND_ALIAS_RE = re.compile(
     r"^/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/"
@@ -199,6 +204,18 @@ def _saved_playback_harness_sha256(selected: Path) -> str:
         raise BuildControlError("Selected checkout is missing the Saved Playback browser harness") from error
     if len(payload) > 2 * 1024 * 1024:
         raise BuildControlError("Saved Playback browser harness exceeds its source pin bound")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _terminal_telemetry_helper_sha256(selected: Path) -> str:
+    harness = selected / "apps/control-room/scripts/docker-dev-terminal-telemetry.mjs"
+    try:
+        with harness.open("rb") as source:
+            payload = source.read(2 * 1024 * 1024 + 1)
+    except OSError as error:
+        raise BuildControlError("Selected checkout is missing the terminal telemetry browser helper") from error
+    if len(payload) > 2 * 1024 * 1024:
+        raise BuildControlError("Terminal telemetry browser helper exceeds its source pin bound")
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -733,6 +750,7 @@ def _compose_document(
     saved_playback_item_id: str | None = None,
     source_script_sha256: str | None = None,
     expect_fem_airbox_vectors: bool | None = None,
+    expect_terminal_telemetry: bool | None = None,
 ) -> dict[str, object]:
     if saved_playback_item_id is not None:
         if not re.fullmatch(r"[0-9]{1,20}", saved_playback_item_id):
@@ -745,6 +763,7 @@ def _compose_document(
             or expect_live_field is not None
             or expect_airbox_vectors is not None
             or expect_fem_airbox_vectors is True
+            or expect_terminal_telemetry is True
             or expect_ambiguous_compute_fields is not None
             or airbox_inspector
         ):
@@ -763,18 +782,31 @@ def _compose_document(
         or expect_airbox_vectors is True
         or expect_ambiguous_compute_fields is True
         or prepare_viewport_fixture
+        or expect_terminal_telemetry is True
     ):
         raise BuildControlError(
             "FEM Airbox-vector QA requires canvas-only m readiness and excludes other scenarios"
         )
     if expect_ambiguous_compute_fields is True and canvas_only is not True:
         raise BuildControlError("Ambiguous Compute Fields QA requires --canvas-only")
+    if expect_terminal_telemetry is True and (
+        canvas_only is not True
+        or expect_live_field != "m"
+        or expect_airbox_vectors is True
+        or expect_fem_airbox_vectors is True
+        or expect_ambiguous_compute_fields is True
+        or prepare_viewport_fixture
+    ):
+        raise BuildControlError(
+            "Terminal telemetry QA requires canvas-only primary m observation and excludes mutation scenarios"
+        )
     if airbox_inspector and (
         prepare_viewport_fixture
         or canvas_only is not None
         or expect_live_field is not None
         or expect_airbox_vectors is not None
         or expect_fem_airbox_vectors is not None
+        or expect_terminal_telemetry is True
         or expect_ambiguous_compute_fields is not None
         or saved_playback_item_id is not None
     ):
@@ -814,6 +846,8 @@ def _compose_document(
     if expect_fem_airbox_vectors is True:
         environment["CONTROL_ROOM_BROWSER_QA_SCENARIO"] = "fem-airbox-vectors"
         environment["CONTROL_ROOM_BROWSER_QA_EXPECT_FEM_AIRBOX_VECTORS"] = "1"
+    if expect_terminal_telemetry is True:
+        environment["CONTROL_ROOM_BROWSER_QA_EXPECT_TERMINAL_TELEMETRY"] = "1"
     if expect_ambiguous_compute_fields is not None:
         environment["CONTROL_ROOM_BROWSER_QA_EXPECT_AMBIGUOUS_COMPUTE_FIELDS"] = (
             "1" if expect_ambiguous_compute_fields else "0"
@@ -898,6 +932,7 @@ def _validate_browser_helper(
     saved_playback_item_id: str | None = None,
     source_script_sha256: str | None = None,
     expect_fem_airbox_vectors: bool | None = None,
+    expect_terminal_telemetry: bool | None = None,
 ) -> None:
     try:
         validate_source_labels(document, identity)
@@ -977,6 +1012,17 @@ def _validate_browser_helper(
             raise ControlOutcomeUnknown("Browser helper FEM Airbox expectation is duplicated or malformed")
     elif fem_observation_environment or fem_scenario_environment:
         raise ControlOutcomeUnknown("Browser helper reported an unrequested FEM Airbox scenario")
+    terminal_telemetry_environment = [
+        entry for entry in raw_environment
+        if entry.startswith("CONTROL_ROOM_BROWSER_QA_EXPECT_TERMINAL_TELEMETRY=")
+    ]
+    if expect_terminal_telemetry is True:
+        if (canvas_only is not True or expect_live_field != "m" or expect_airbox_vectors is not False):
+            raise ControlOutcomeUnknown("Terminal telemetry helper expectations differ from the admitted canvas/m scenario")
+        if terminal_telemetry_environment != ["CONTROL_ROOM_BROWSER_QA_EXPECT_TERMINAL_TELEMETRY=1"]:
+            raise ControlOutcomeUnknown("Browser helper terminal telemetry expectation is duplicated or malformed")
+    elif terminal_telemetry_environment:
+        raise ControlOutcomeUnknown("Browser helper reported an unrequested terminal telemetry scenario")
     if canvas_only is not None:
         mode_environment = [
             entry for entry in environment
@@ -1186,6 +1232,220 @@ def _validate_live_field_observation(
             if (dataset["fdm_airbox_vectors_visible"] is not True
                     or dataset["fdm_airbox_vector_segment_count"] <= 0):
                 raise BuildControlError(f"Browser helper did not observe visible FDM airbox vectors: {key}")
+
+
+def _format_terminal_footer_energy(value: int | float) -> str:
+    number = float(value)
+    magnitude = abs(number)
+    with localcontext() as context:
+        context.prec = 1200
+        decimal_value = Decimal.from_float(number)
+        if 1e-2 <= magnitude < 1e4:
+            rounded = decimal_value.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+            formatted = format(rounded, ",f")
+            if "." in formatted:
+                formatted = formatted.rstrip("0").rstrip(".")
+            return formatted
+        sign = "-" if number < 0 else ""
+        absolute = abs(decimal_value)
+        exponent = absolute.adjusted() if absolute else 0
+        mantissa = absolute.scaleb(-exponent).quantize(
+            Decimal("0.000001"), rounding=ROUND_HALF_UP
+        ) if absolute else Decimal("0.000000")
+        if mantissa >= Decimal(10):
+            mantissa = mantissa / Decimal(10)
+            exponent += 1
+        exponent_text = f"{exponent:+d}"
+        return f"{sign}{format(mantissa, '.6f')}e{exponent_text}"
+
+
+def _terminal_exact_keys(value: object, expected: set[str], label: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping) or set(value) != expected:
+        raise BuildControlError(f"Terminal telemetry {label} schema differs")
+    return value
+
+
+def _terminal_finite_number(value: object, label: str) -> int | float:
+    if type(value) not in (int, float) or not math.isfinite(float(value)):
+        raise BuildControlError(f"Terminal telemetry {label} is not a finite number")
+    return value
+
+
+def _terminal_session_scope_header(session: Mapping[str, object]) -> str:
+    safe = "-_.!~*'()"
+    session_id = quote(str(session["session_id"]), safe=safe)
+    session_epoch = quote(str(session["session_epoch"]), safe=safe)
+    request_scope_epoch = quote(str(session["request_scope_epoch"]), safe=safe)
+    return (
+        f"session={session_id}&epoch={session_epoch}"
+        f"&request_scope_epoch={request_scope_epoch}"
+    )
+
+
+def _validate_terminal_telemetry_snapshot(
+    value: object,
+    session: Mapping[str, object],
+    *,
+    after_reload: bool,
+) -> Mapping[str, object]:
+    snapshot = _terminal_exact_keys(value, {"api", "api_requests", "canvas", "field", "footer"}, "snapshot")
+    api = _terminal_exact_keys(
+        snapshot["api"],
+        {
+            "api_instance_id", "session_id", "session_epoch", "request_scope_epoch", "run_id",
+            "run_status", "status_solver_steps", "current_run_id", "current_run_session_id",
+            "observation_session_id", "observation_run_id", "observation_request_scope_epoch",
+            "source_step", "scalar_row_step", "scalar_revision", "scalar_window_revision",
+            "scalar_energy_j", "current_run_energy_j", "session_summary_energy_j",
+        },
+        "API source",
+    )
+    if (not isinstance(api.get("api_instance_id"), str)
+            or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", api["api_instance_id"])):
+        raise BuildControlError("Terminal telemetry API instance identity is malformed")
+    for key in ("session_id", "session_epoch", "request_scope_epoch", "run_id"):
+        if not isinstance(api.get(key), str) or not api[key].strip() or len(api[key]) > 512:
+            raise BuildControlError(f"Terminal telemetry API identity field is malformed: {key}")
+    if any(api.get(key) != session.get(key) for key in ("session_id", "session_epoch", "request_scope_epoch")):
+        raise BuildControlError("Terminal telemetry API identity differs from the active browser session")
+    if api.get("run_status") != "completed":
+        raise BuildControlError("Terminal telemetry source is not a completed run")
+    if (api.get("current_run_id") != api.get("run_id")
+            or api.get("current_run_session_id") != api.get("session_id")
+            or api.get("observation_session_id") != api.get("session_id")
+            or api.get("observation_run_id") != api.get("run_id")
+            or api.get("observation_request_scope_epoch") != api.get("request_scope_epoch")):
+        raise BuildControlError("Terminal telemetry current run/current observation scope differs")
+    for key in (
+        "source_step", "status_solver_steps", "scalar_row_step", "scalar_revision", "scalar_window_revision"
+    ):
+        number = api.get(key)
+        if type(number) is not int or not 0 <= number <= MAX_SAFE_JSON_INTEGER:
+            raise BuildControlError(f"Terminal telemetry {key} is not a safe non-negative integer")
+    if (api["source_step"] != api["status_solver_steps"]
+            or api["source_step"] != api["scalar_row_step"]
+            or api["scalar_revision"] != api["scalar_window_revision"]):
+        raise BuildControlError("Terminal telemetry source_step/revision differs from the current run or scalar row")
+    energy_values = [
+        _terminal_finite_number(api.get(key), key)
+        for key in ("scalar_energy_j", "current_run_energy_j", "session_summary_energy_j")
+    ]
+    if not (energy_values[0] == energy_values[1] == energy_values[2]
+            and (energy_values[0] != 0 or all(math.copysign(1.0, float(item)) == math.copysign(1.0, float(energy_values[0])) for item in energy_values[1:]))):
+        raise BuildControlError("Terminal telemetry scalar/current-run/session energies differ")
+
+    requests = snapshot["api_requests"]
+    expected_paths = [
+        "/v2/sessions/current/status",
+        "/v2/sessions/current/simulation/runs/current",
+        "/v2/sessions/current/data/scalars?columns=step,e_total&limit=1&tail=true",
+    ]
+    if not isinstance(requests, list) or len(requests) != len(expected_paths):
+        raise BuildControlError("Terminal telemetry GET request evidence is malformed")
+    expected_session_scope = _terminal_session_scope_header(api)
+    for index, (request, path) in enumerate(zip(requests, expected_paths, strict=True)):
+        item = _terminal_exact_keys(
+            request,
+            {"method", "path", "status", "api_instance_header_sent", "session_scope_header_sent"},
+            "GET request",
+        )
+        expected_pin = api["api_instance_id"] if after_reload or index > 0 else None
+        if (item.get("method") != "GET" or item.get("path") != path or item.get("status") != 200
+                or item.get("api_instance_header_sent") != expected_pin
+                or item.get("session_scope_header_sent") != expected_session_scope):
+            raise BuildControlError("Terminal telemetry API request identity/method differs")
+
+    canvas = _terminal_exact_keys(
+        snapshot["canvas"],
+        {"visible", "context_type", "context_lost", "drawing_buffer_width", "drawing_buffer_height", "css_width", "css_height"},
+        "canvas",
+    )
+    if (canvas.get("visible") is not True or canvas.get("context_lost") is not False
+            or canvas.get("context_type") not in {"WebGLRenderingContext", "WebGL2RenderingContext"}):
+        raise BuildControlError("Terminal telemetry did not preserve a visible, live WebGL canvas")
+    for key in ("drawing_buffer_width", "drawing_buffer_height"):
+        if type(canvas.get(key)) is not int or canvas[key] <= 0:
+            raise BuildControlError(f"Terminal telemetry canvas {key} is invalid")
+    for key in ("css_width", "css_height"):
+        if type(canvas.get(key)) not in (int, float) or not math.isfinite(float(canvas[key])) or canvas[key] <= 0:
+            raise BuildControlError(f"Terminal telemetry canvas {key} is invalid")
+
+    field = _terminal_exact_keys(
+        snapshot["field"], {"quantity_id", "label_visible", "field_state", "solver_family"}, "field readiness"
+    )
+    if (field.get("quantity_id") != "m" or field.get("label_visible") is not True
+            or field.get("field_state") != "data-ready" or field.get("solver_family") not in {"fem", "fdm"}):
+        raise BuildControlError("Terminal telemetry did not preserve primary m field readiness")
+
+    footer = _terminal_exact_keys(snapshot["footer"], {"step", "energy"}, "footer")
+    step = _terminal_exact_keys(
+        footer["step"], {"visible", "label", "detail", "value", "unit", "title"}, "Step metric"
+    )
+    energy = _terminal_exact_keys(
+        footer["energy"], {"visible", "label", "detail", "subdetail", "value", "unit", "title"}, "Total energy metric"
+    )
+    expected_step = f"{api['source_step']:,}"
+    expected_energy = _format_terminal_footer_energy(energy_values[0])
+    if (step.get("visible") is not True or step.get("label") != "Step"
+            or step.get("detail") != "Latest step" or step.get("value") != expected_step
+            or step.get("unit") != "steps" or not isinstance(step.get("title"), str)
+            or not step["title"].startswith(f"Step: {expected_step} steps\nLatest step\n")):
+        raise BuildControlError("Visible Footer Step does not match authoritative source_step")
+    expected_energy_title = f"Energy: {expected_energy} J\nTotal\nSession summary"
+    if (energy.get("visible") is not True or energy.get("label") != "Energy"
+            or energy.get("detail") != "Total" or energy.get("subdetail") != "Session summary"
+            or energy.get("value") != expected_energy or energy.get("unit") != "J"
+            or energy.get("title") != expected_energy_title):
+        raise BuildControlError("Visible Footer Total energy does not match current-run scalar energy formatting")
+    return api
+
+
+def _validate_terminal_telemetry(
+    value: object,
+    session: Mapping[str, object],
+    *,
+    public_url: str,
+    document_url: object,
+) -> None:
+    proof = _terminal_exact_keys(
+        value,
+        {
+            "schema", "state", "reload", "before_reload", "after_reload", "api_identity_preserved",
+            "prohibited_mutations", "non_mutating_client_ack_requests", "api_observation_methods", "energy_format",
+        },
+        "proof",
+    )
+    if proof.get("schema") != TERMINAL_TELEMETRY_RESULT_SCHEMA or proof.get("state") != "passed":
+        raise BuildControlError("Terminal telemetry result schema/state differs")
+    reload_evidence = _terminal_exact_keys(
+        proof["reload"], {"method", "response_status", "path", "count"}, "reload"
+    )
+    if not isinstance(document_url, str) or len(document_url) > 2048:
+        raise BuildControlError("Terminal telemetry document URL is malformed")
+    document, public = urlsplit(document_url), urlsplit(public_url)
+    # The workspace canonicalizes an active simulation to /session/<slug>.
+    # Bind the reload to that actual same-origin document, not its entry alias.
+    if (document.scheme != public.scheme or document.netloc != public.netloc
+            or document.query or document.fragment
+            or not (document.path in {"/", "/workspace"}
+                    or re.fullmatch(r"/session/[^/?#\x00-\x20\x7f]{1,512}", document.path))):
+        raise BuildControlError("Terminal telemetry did not retain the selected workspace document")
+    if (reload_evidence.get("method") != "page.reload" or reload_evidence.get("response_status") != 200
+            or reload_evidence.get("path") != document.path or reload_evidence.get("count") != 1):
+        raise BuildControlError("Terminal telemetry did not prove one real workspace page reload")
+    if proof.get("api_identity_preserved") is not True or proof.get("prohibited_mutations") != []:
+        raise BuildControlError("Terminal telemetry API continuity or read-only boundary is unproven")
+    acknowledgements = proof.get("non_mutating_client_ack_requests")
+    if type(acknowledgements) is not int or not 0 <= acknowledgements <= 64:
+        raise BuildControlError("Terminal telemetry client-ack count is outside its bound")
+    if proof.get("api_observation_methods") != ["GET"] * 6:
+        raise BuildControlError("Terminal telemetry used a non-GET API observation method")
+    if proof.get("energy_format") != TERMINAL_TELEMETRY_ENERGY_FORMAT:
+        raise BuildControlError("Terminal telemetry energy format declaration differs")
+    before = _validate_terminal_telemetry_snapshot(proof["before_reload"], session, after_reload=False)
+    after = _validate_terminal_telemetry_snapshot(proof["after_reload"], session, after_reload=True)
+    if dict(before) != dict(after):
+        raise BuildControlError("Terminal telemetry API instance/run/session/source changed across reload")
 
 
 def _validate_fem_airbox_vector_observation(
@@ -1885,6 +2145,8 @@ def _parse_result(
     expect_airbox_vectors: bool = False,
     expect_ambiguous_compute_fields: bool = False,
     expect_fem_airbox_vectors: bool = False,
+    expect_terminal_telemetry: bool = False,
+    terminal_telemetry_helper_sha256: str | None = None,
 ) -> dict[str, object]:
     text = output.decode("utf-8", "replace")
     payload = None
@@ -1933,9 +2195,14 @@ def _parse_result(
         raise BuildControlError("Airbox-vector result omitted its expected live field")
     if expect_fem_airbox_vectors and (
         not canvas_only or expect_live_field != "m" or expect_airbox_vectors
-        or expect_ambiguous_compute_fields
+        or expect_ambiguous_compute_fields or expect_terminal_telemetry
     ):
         raise BuildControlError("FEM Airbox result is outside its canvas-only primary-m scenario")
+    if expect_terminal_telemetry and (
+        not canvas_only or expect_live_field != "m" or expect_airbox_vectors
+        or expect_fem_airbox_vectors or expect_ambiguous_compute_fields
+    ):
+        raise BuildControlError("Terminal telemetry result is outside its canvas-only primary-m scenario")
     if expect_ambiguous_compute_fields and not canvas_only:
         raise BuildControlError("Ambiguous Compute Fields result is outside canvas-only QA scope")
     expected_scope = (
@@ -1974,6 +2241,26 @@ def _parse_result(
         )
     elif payload.get("fem_airbox_observation") is not None:
         raise BuildControlError("Browser helper reported unrequested FEM Airbox vector evidence")
+    if expect_terminal_telemetry:
+        if payload.get("expect_terminal_telemetry") is not True:
+            raise BuildControlError("Browser helper omitted the enabled terminal telemetry flag")
+        if (not isinstance(terminal_telemetry_helper_sha256, str)
+                or not SHA256_RE.fullmatch(terminal_telemetry_helper_sha256)):
+            raise BuildControlError("Terminal telemetry selected-source helper hash is missing")
+        harness_hashes = payload.get("harness_source_sha256")
+        if (not isinstance(harness_hashes, Mapping)
+                or harness_hashes.get("algorithm") != "sha256"
+                or harness_hashes.get("unchanged") is not True
+                or harness_hashes.get("terminal_telemetry_helper_before") != terminal_telemetry_helper_sha256
+                or harness_hashes.get("terminal_telemetry_helper_after") != terminal_telemetry_helper_sha256):
+            raise BuildControlError("Terminal telemetry helper source hash differs or changed during browser QA")
+        _validate_terminal_telemetry(
+            payload.get("terminal_telemetry"), payload["session"],
+            public_url=public_url, document_url=payload.get("final_url"),
+        )
+    elif ("expect_terminal_telemetry" in payload or "terminal_telemetry" in payload
+            or terminal_telemetry_helper_sha256 is not None):
+        raise BuildControlError("Browser helper reported an unrequested terminal telemetry proof")
     ambiguous_submission = payload.get("ambiguous_command_submission")
     if expect_ambiguous_compute_fields:
         _validate_ambiguous_command_submission(ambiguous_submission, payload.get("session"))
@@ -2055,6 +2342,8 @@ def _run(
     saved_playback_item_id: str | None = None,
     source_script_sha256: str | None = None,
     expect_fem_airbox_vectors: bool = False,
+    expect_terminal_telemetry: bool = False,
+    terminal_telemetry_helper_sha256: str | None = None,
 ) -> None:
     root = operation["root"]
     helper_name = "fullmag-browser-qa-" + operation["receipt"]["attempt"][:12]
@@ -2106,6 +2395,7 @@ def _run(
         expect_live_field=expect_live_field if expect_live_field is not None else None,
         expect_airbox_vectors=expect_airbox_vectors if expect_live_field is not None else None,
         expect_fem_airbox_vectors=(True if expect_fem_airbox_vectors else None),
+        expect_terminal_telemetry=(True if expect_terminal_telemetry else None),
         expect_ambiguous_compute_fields=(
             expect_ambiguous_compute_fields
             if not airbox_inspector and saved_playback_item_id is None
@@ -2143,7 +2433,9 @@ def _run(
             payload = _parse_result(raw, public_url, browser_url, canvas_only=canvas_only,
                 expect_live_field=expect_live_field, expect_airbox_vectors=expect_airbox_vectors,
                 expect_ambiguous_compute_fields=expect_ambiguous_compute_fields,
-                expect_fem_airbox_vectors=expect_fem_airbox_vectors)
+                expect_fem_airbox_vectors=expect_fem_airbox_vectors,
+                expect_terminal_telemetry=expect_terminal_telemetry,
+                terminal_telemetry_helper_sha256=terminal_telemetry_helper_sha256)
     except BuildControlError as error:
         control.write(root + "/result.json", {
             "schema": RESULT_SCHEMA,
@@ -2211,6 +2503,18 @@ def reconcile_browser_qa(control, selected, identity, args):
     expect_fem_airbox_vectors_input = inputs.get("expect_fem_airbox_vectors", False)
     if type(expect_fem_airbox_vectors_input) is not bool:
         raise BuildControlError("QA reconciliation FEM Airbox-vector expectation must be boolean")
+    expect_terminal_telemetry_input = inputs.get("expect_terminal_telemetry", False)
+    if type(expect_terminal_telemetry_input) is not bool:
+        raise BuildControlError("QA reconciliation terminal telemetry expectation must be boolean")
+    terminal_telemetry_helper_sha256 = None
+    if expect_terminal_telemetry_input:
+        terminal_telemetry_helper_sha256 = inputs.get("terminal_telemetry_helper_sha256")
+        if (not isinstance(terminal_telemetry_helper_sha256, str)
+                or not SHA256_RE.fullmatch(terminal_telemetry_helper_sha256)
+                or _terminal_telemetry_helper_sha256(selected) != terminal_telemetry_helper_sha256):
+            raise BuildControlError("QA reconciliation terminal telemetry helper source pin differs")
+    elif "terminal_telemetry_helper_sha256" in inputs:
+        raise BuildControlError("QA reconciliation unrequested terminal telemetry helper source pin")
     if expect_fem_airbox_vectors_input and scenario != "standard":
         raise BuildControlError("QA reconciliation FEM Airbox-vector expectation has another scenario identity")
     saved_playback_item_id = None
@@ -2294,8 +2598,19 @@ def reconcile_browser_qa(control, selected, identity, args):
         or expect_live_field_input != "m"
         or expect_airbox_vectors_input
         or expect_ambiguous_command_input
+        or expect_terminal_telemetry_input
     ):
         raise BuildControlError("QA reconciliation FEM Airbox scenario does not match the primary-m canvas contract")
+    if expect_terminal_telemetry_input and (
+        scenario != "standard"
+        or not canvas_only_input
+        or prepare_viewport_fixture
+        or expect_live_field_input != "m"
+        or expect_airbox_vectors_input
+        or expect_fem_airbox_vectors_input
+        or expect_ambiguous_command_input
+    ):
+        raise BuildControlError("QA reconciliation terminal telemetry scenario does not match the primary-m canvas contract")
     if canvas_only_input and prepare_viewport_fixture:
         raise BuildControlError("Canvas-only browser QA receipt cannot prepare a viewport fixture")
     expected_document = _compose_document(selected, identity, inputs["browser_image"],
@@ -2307,6 +2622,7 @@ def reconcile_browser_qa(control, selected, identity, args):
         expect_fem_airbox_vectors=(
             None if scenario != "standard" else expect_fem_airbox_compose_pin
         ),
+        expect_terminal_telemetry=(True if expect_terminal_telemetry_input else None),
         expect_ambiguous_compute_fields=(
             None if scenario == "saved-playback" or airbox_inspector
             else expect_ambiguous_command_compose_pin
@@ -2368,6 +2684,7 @@ def reconcile_browser_qa(control, selected, identity, args):
         expect_fem_airbox_vectors=(
             None if scenario != "standard" else expect_fem_airbox_compose_pin
         ),
+        expect_terminal_telemetry=(True if expect_terminal_telemetry_input else None),
         expect_ambiguous_compute_fields=(
             None if scenario == "saved-playback" or airbox_inspector
             else expect_ambiguous_command_compose_pin
@@ -2468,6 +2785,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Select FEM Airbox H_demag vectors and require live render-adoption evidence (canvas-only, --expect-live-field m)",
     )
     parser.add_argument(
+        "--expect-terminal-telemetry",
+        action="store_true",
+        help="Prove visible terminal Step and total energy against scoped API provenance before and after page reload (canvas-only, --expect-live-field m)",
+    )
+    parser.add_argument(
         "--expect-ambiguous-compute-fields",
         action="store_true",
         help="Exercise one real Compute Fields command with its accepted response dropped (canvas-only)",
@@ -2522,12 +2844,24 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.expect_ambiguous_compute_fields and not args.canvas_only:
         raise BuildControlError("--expect-ambiguous-compute-fields requires --canvas-only")
+    if args.expect_terminal_telemetry and (
+        not args.canvas_only
+        or args.expect_live_field != "m"
+        or args.expect_airbox_vectors
+        or args.expect_fem_airbox_vectors
+        or args.expect_ambiguous_compute_fields
+        or args.prepare_viewport_fixture
+    ):
+        raise BuildControlError(
+            "--expect-terminal-telemetry requires --canvas-only --expect-live-field m and excludes other scenarios"
+        )
     if args.airbox_inspector and (
         args.prepare_viewport_fixture
         or args.canvas_only
         or args.expect_live_field is not None
         or args.expect_airbox_vectors
         or args.expect_fem_airbox_vectors
+        or args.expect_terminal_telemetry
         or args.expect_ambiguous_compute_fields
     ):
         raise BuildControlError("--airbox-inspector cannot be combined with other browser QA scenarios")
@@ -2540,6 +2874,7 @@ def main(argv: list[str] | None = None) -> int:
             or args.expect_live_field is not None
             or args.expect_airbox_vectors
             or args.expect_fem_airbox_vectors
+            or args.expect_terminal_telemetry
             or args.expect_ambiguous_compute_fields
             or args.airbox_inspector
         ):
@@ -2578,6 +2913,9 @@ def main(argv: list[str] | None = None) -> int:
         airbox_inspector_script_sha256 = hashlib.sha256(harness.read_bytes()).hexdigest()
     if args.saved_playback_item_id is not None:
         source_script_sha256 = _saved_playback_harness_sha256(selected)
+    terminal_telemetry_helper_sha256 = (
+        _terminal_telemetry_helper_sha256(selected) if args.expect_terminal_telemetry else None
+    )
     document = _compose_document(
         selected,
         identity,
@@ -2590,6 +2928,7 @@ def main(argv: list[str] | None = None) -> int:
         expect_live_field=args.expect_live_field,
         expect_airbox_vectors=(args.expect_airbox_vectors if args.expect_live_field is not None else None),
         expect_fem_airbox_vectors=(True if args.expect_fem_airbox_vectors else None),
+        expect_terminal_telemetry=(True if args.expect_terminal_telemetry else None),
         expect_ambiguous_compute_fields=(
             None if args.airbox_inspector or args.saved_playback_item_id is not None
             else args.expect_ambiguous_compute_fields
@@ -2625,6 +2964,7 @@ def main(argv: list[str] | None = None) -> int:
         "canvas_only": args.canvas_only,
         "expect_live_field": args.expect_live_field,
         "expect_airbox_vectors": args.expect_airbox_vectors,
+        "expect_terminal_telemetry": args.expect_terminal_telemetry,
         "expect_ambiguous_compute_fields": args.expect_ambiguous_compute_fields,
         "scenario": (
             "saved-playback" if args.saved_playback_item_id is not None
@@ -2638,6 +2978,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.saved_playback_item_id is not None:
         inputs["saved_playback_item_id"] = args.saved_playback_item_id
         inputs["source_script_sha256"] = source_script_sha256
+    if args.expect_terminal_telemetry:
+        inputs["terminal_telemetry_helper_sha256"] = terminal_telemetry_helper_sha256
     with control.operation("browser-qa", inputs) as operation:
         live_fence = control.read("development/current.json")
         if hashlib.sha256(canonical(live_fence)).hexdigest() != current["development_fence_sha256"]:
@@ -2665,6 +3007,8 @@ def main(argv: list[str] | None = None) -> int:
             args.saved_playback_item_id,
             source_script_sha256,
             args.expect_fem_airbox_vectors,
+            args.expect_terminal_telemetry,
+            terminal_telemetry_helper_sha256,
         )
     return 0
 

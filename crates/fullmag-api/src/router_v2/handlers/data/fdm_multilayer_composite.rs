@@ -6,7 +6,7 @@
 //! into a bounding grid (docs/physics/0970, eq-planar-multilayer-embedding):
 //! every covered cell carries one native value and uncovered cells carry none.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use sha2::{Digest, Sha256};
 
@@ -185,37 +185,61 @@ fn compose(mut layers: Vec<NativeLayer>) -> Result<FdmMultilayerComposite, ApiEr
     }
     let total = cell_count(cells)
         .ok_or_else(|| ApiError::conflict("multilayer FDM composite grid overflowed"))?;
-    let mut coverage = vec![false; total];
-    let mut cell_membership = vec![u32::MAX; total];
-    for (layer, placement) in layers.iter().zip(&composite_layers) {
-        let mut overlap = false;
-        for_each_embedded_cell(cells, placement, |native, composite| {
-            overlap |= coverage[composite];
-            coverage[composite] = true;
-            cell_membership[composite] = layer.membership.cell_membership[native];
-        });
-        if overlap {
-            return Err(unsupported("multilayer native grids overlap"));
-        }
-    }
+    // The planner numbers regions per magnet, so every layer may use id 1.
+    // Give each layer its own range of composite ids; 0 (magnetic, no region)
+    // and u32::MAX (inactive) keep their meaning.
     let mut object_ids = Vec::new();
-    let mut legend = BTreeMap::<u32, FdmRegionLegendEntryResource>::new();
+    let mut legend = Vec::<FdmRegionLegendEntryResource>::new();
+    let mut identities = BTreeSet::<(String, String)>::new();
+    let mut layer_id_maps = Vec::with_capacity(layers.len());
     for layer in &layers {
         for object_id in &layer.membership.object_ids {
             if !object_ids.contains(object_id) {
                 object_ids.push(object_id.clone());
             }
         }
-        for entry in &layer.membership.region_legend {
-            match legend.get(&entry.numeric_id) {
-                Some(existing) if existing != entry => {
-                    return Err(unsupported("multilayer native region legends disagree"));
-                }
-                Some(_) => {}
-                None => {
-                    legend.insert(entry.numeric_id, entry.clone());
-                }
+        let mut entries = layer.membership.region_legend.iter().collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.numeric_id);
+        let mut id_map = BTreeMap::<u32, u32>::new();
+        for entry in entries {
+            if !identities.insert((entry.object_id.clone(), entry.region_id.clone())) {
+                return Err(unsupported("multilayer native region legends disagree"));
             }
+            let composite_id = u32::try_from(legend.len() + 1)
+                .ok()
+                .filter(|id| *id != u32::MAX)
+                .ok_or_else(|| ApiError::conflict("multilayer FDM region ids overflowed"))?;
+            id_map.insert(entry.numeric_id, composite_id);
+            legend.push(FdmRegionLegendEntryResource {
+                numeric_id: composite_id,
+                ..entry.clone()
+            });
+        }
+        layer_id_maps.push(id_map);
+    }
+    let mut coverage = vec![false; total];
+    let mut cell_membership = vec![u32::MAX; total];
+    for ((layer, placement), id_map) in layers.iter().zip(&composite_layers).zip(&layer_id_maps) {
+        let mut overlap = false;
+        let mut unknown_region = false;
+        for_each_embedded_cell(cells, placement, |native, composite| {
+            overlap |= coverage[composite];
+            coverage[composite] = true;
+            cell_membership[composite] = match layer.membership.cell_membership[native] {
+                id @ (0 | u32::MAX) => id,
+                id => id_map.get(&id).copied().unwrap_or_else(|| {
+                    unknown_region = true;
+                    u32::MAX
+                }),
+            };
+        });
+        if overlap {
+            return Err(unsupported("multilayer native grids overlap"));
+        }
+        if unknown_region {
+            return Err(ApiError::conflict(
+                "multilayer FDM region mask references an unknown legend id",
+            ));
         }
     }
     let mut digest = Sha256::new();
@@ -234,7 +258,7 @@ fn compose(mut layers: Vec<NativeLayer>) -> Result<FdmMultilayerComposite, ApiEr
         coverage,
         membership: FdmCellMembership {
             object_ids,
-            region_legend: legend.into_values().collect(),
+            region_legend: legend,
             cell_membership,
         },
         native_value_count,
@@ -347,15 +371,31 @@ mod tests {
             membership_fingerprint: format!("membership-{name}"),
             membership: FdmCellMembership {
                 object_ids: vec![name.to_string()],
-                region_legend: vec![FdmRegionLegendEntryResource {
-                    numeric_id: 0,
-                    object_id: "shared".to_string(),
-                    region_id: "default".to_string(),
-                    priority: 0,
-                }],
+                region_legend: Vec::new(),
                 cell_membership: vec![0; count],
             },
         }
+    }
+
+    /// A native layer whose object owns region `region_id` as numeric id 1,
+    /// the way the planner numbers regions per magnet.
+    fn layer_with_region(
+        name: &str,
+        offset: usize,
+        cells: [u32; 3],
+        origin: [f64; 3],
+        region_id: &str,
+        cell_membership: Vec<u32>,
+    ) -> NativeLayer {
+        let mut native = layer(name, offset, cells, origin);
+        native.membership.region_legend = vec![FdmRegionLegendEntryResource {
+            numeric_id: 1,
+            object_id: name.to_string(),
+            region_id: region_id.to_string(),
+            priority: 0,
+        }];
+        native.membership.cell_membership = cell_membership;
+        native
     }
 
     #[test]
@@ -374,6 +414,26 @@ mod tests {
         assert_eq!(values, vec![0.0, 1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 4.0, 0.0, 5.0]);
         assert_eq!(composite.membership.object_ids, vec!["film", "cylinder"]);
         assert_eq!(composite.membership.cell_membership[4], u32::MAX);
+    }
+
+    #[test]
+    fn layers_that_each_number_a_region_one_keep_distinct_regions() {
+        // Both magnets call their first region 1; the composite must not
+        // treat that as a legend conflict or merge the two regions.
+        let film = layer_with_region("film", 0, [2, 1, 1], [0.0, 0.0, 0.0], "core", vec![1, 0]);
+        let cap = layer_with_region("cap", 2, [2, 1, 1], [0.0, 0.0, 2.0 * H], "core", vec![0, 1]);
+        let composite = compose(vec![film, cap]).expect("per-layer regions compose");
+        let legend = &composite.membership.region_legend;
+        assert_eq!(legend.len(), 2);
+        let film_id = legend.iter().find(|entry| entry.object_id == "film").unwrap().numeric_id;
+        let cap_id = legend.iter().find(|entry| entry.object_id == "cap").unwrap().numeric_id;
+        assert_ne!(film_id, cap_id);
+        assert!(legend.iter().all(|entry| entry.region_id == "core" && entry.numeric_id != 0));
+        // z=0: film [core, none]; z=1: uncovered gap; z=2: cap [none, core].
+        assert_eq!(
+            composite.membership.cell_membership,
+            vec![film_id, 0, u32::MAX, u32::MAX, 0, cap_id]
+        );
     }
 
     #[test]

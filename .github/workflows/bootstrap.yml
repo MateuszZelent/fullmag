@@ -914,6 +914,9 @@ jobs:
           python -B scripts/test_docker_script_output_source.py -v
           python -B scripts/test_docker_volume_idle_stop.py -v
           python -B scripts/test_docker_dev_defaults.py -v
+          python -B scripts/test_docker_dev_run_script.py -v
+          python -B scripts/test_docker_dev_run_observer.py -v
+          python -B scripts/test_just_foreground_script_shell.py -v
           python -B scripts/test_docker_dev_recreate.py -v
           python -B scripts/test_docker_volume_pre_admission_recreate.py -v
           python -B scripts/test_docker_volume_pre_admission_selector.py -v

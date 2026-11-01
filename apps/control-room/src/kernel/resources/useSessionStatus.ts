@@ -84,6 +84,24 @@ export function useSessionStatusSelector<TSelected>(
   });
 }
 
+/**
+ * Preparation revisions only grow within one session scope, so a positive
+ * revision from a refreshing (stale) status is still a valid minimum. Keeping
+ * it stops a realtime resync from pausing, and so aborting, the preparation
+ * load until the throttled status refetch. A stale zero proves nothing: the
+ * preparation may have been published since, so it stays unknown.
+ */
+function preparationRevisionFromStatus(
+  status: ResourceResult<LiveStatusResource>,
+): number | null | undefined {
+  const revision = status.data?.resources.simulation_preparation_revision;
+  if (status.status === "ready") return revision;
+  if (status.status === "stale" && typeof revision === "number" && revision > 0) {
+    return revision;
+  }
+  return undefined;
+}
+
 function useConfirmedSessionIdentity(
   identity: SessionResourceIdentity | null,
   collection: SessionListResource | null,
@@ -165,9 +183,7 @@ export function useSimulationPreparationSessionScope() {
   const scope = useSessionStatusSelector(
     (status) => ({
       sessionIdentity: sessionResourceIdentityFromStatus(status.data),
-      preparationRevision: status.status === "ready"
-        ? status.data?.resources.simulation_preparation_revision
-        : undefined,
+      preparationRevision: preparationRevisionFromStatus(status),
     }),
     {
       enabled: sessions.state === "ready",

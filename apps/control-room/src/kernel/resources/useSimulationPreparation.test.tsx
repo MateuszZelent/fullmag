@@ -3,7 +3,11 @@ import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { SESSIONS_PATH, SIMULATION_PREPARATION_PATH } from "../api/apiPaths";
+import {
+  SESSION_CURRENT_PATH,
+  SESSIONS_PATH,
+  SIMULATION_PREPARATION_PATH,
+} from "../api/apiPaths";
 import type {
   LiveStatusResource,
   SessionListResource,
@@ -638,6 +642,53 @@ describe("useSimulationPreparation", () => {
         status: null,
       },
     ]);
+  });
+
+  it("keeps an in-flight published preparation through a realtime session resync", async () => {
+    // Production throttles the status refetch, so after a realtime `hello`
+    // the status stays stale; the published revision must keep the load going.
+    updateRealtimeCommunicationPolicy({ status_refresh_ms: 60_000 });
+    const statusLoad = vi.fn()
+      .mockResolvedValueOnce({
+        ...statusFixture(), resources: { simulation_preparation_revision: 7 },
+      })
+      .mockImplementation(() => new Promise<LiveStatusResource>(() => undefined));
+    const pending = deferred<SimulationPreparationResource>();
+    const signals: AbortSignal[] = [];
+    const load = vi.fn((options?: { signal?: AbortSignal }) => {
+      if (options?.signal) signals.push(options.signal);
+      return pending.promise;
+    });
+    const { kernel, resources } = makeKernel(load, statusLoad);
+    const observations: PreparationResult[] = [];
+    const dom = installTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+    try {
+      await act(async () => {
+        root.render(<KernelContext.Provider value={kernel}>
+          <Probe observations={observations} />
+        </KernelContext.Provider>);
+      });
+      await waitFor(() => load.mock.calls.length === 1, "published preparation did not start loading");
+      await act(async () => {
+        resources.invalidate(SESSIONS_PATH, "session:session-1:2");
+        resources.invalidate(SESSION_STATUS_RESOURCE_KEY, "session:session-1:2");
+        resources.invalidatePrefix(SESSION_CURRENT_PATH, "session:session-1:2");
+      });
+      expect(signals[0]?.aborted).toBe(false);
+      await act(async () => {
+        pending.resolve(preparationFixture(7));
+        await pending.promise;
+      });
+      await waitFor(
+        () => observations.at(-1)?.data?.revision === 7,
+        "the resync discarded the loaded preparation",
+      );
+      expect(signals[0]?.aborted).toBe(false);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
   });
 
   it("keeps disabled hooks idle without issuing a request", async () => {

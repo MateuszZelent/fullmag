@@ -107,8 +107,10 @@ describe("field-map data plan", () => {
     expect(source).toContain("canonicalSample?.ok ? canonicalSample.query : null");
     expect(source).toContain("const canonicalSampleReady = canonicalQuery !== null");
     expect(source).toContain("canonicalSampleError");
-    expect(source).toContain("canonicalSampleError !== null");
-    expect(source).toContain("canonicalSampleError?.message");
+    // A canonical-sample parse error joins the sample error chain and is shown
+    // through the user-facing planar error copy (PR 350), not raw text.
+    expect(source).toContain("canonicalSampleError ??");
+    expect(source).toContain("describePlanarError(sampleError)");
     // Scalar, mask, vectors, mesh overlay, probe and line profile all wait
     // for the canonical sample.
     expect(source.match(/canonicalSampleReady/g)).toHaveLength(7);

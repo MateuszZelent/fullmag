@@ -95,6 +95,9 @@ kodem mogą jednocześnie mieć działające API. Globalny `host-ledger-v1` słu
 tylko release, kwalifikacji i managed runtime; migracja jego polityki zatrzymuje
 wyłącznie jego konsumentów, nie grupy DEV.
 
+Topologię prywatnego storage Docker DEV określa [ADR 0076](docs/adr/0076-single-private-volume-per-dev-group.md): dokładnie jeden prywatny named volume na worktree/grupę Compose, używający istniejącej stabilnej nazwy `BuildControl.volume`. Nazwa zależy od tożsamości grupy, nie od toolchaina, profilu, dependency hash ani próby. Dotychczasowy root volume pozostaje rootem control/lock/namespace; nie wprowadzaj wymaganego `control/`. Backend/cache, frontend i group-ledger używają odpowiednio `private/backend`, `private/frontend` i `private/ledger`. Frontend dostaje tylko potrzebny subpath i nie montuje rootu control, backendu ani ledgeru. Shared Cargo/pnpm/package volumes i obrazy/BuildKit pozostają odrębnymi zasobami współdzielonymi. To jest aktualny kontrakt, nie dowód wdrożenia: zgodność Compose, launchera i runtime pozostaje **NOT VERIFIED** do czasu sprawdzenia źródeł, mountów i receiptów.
+Retencję `.fullmag-build`, zachowanie cache-hit i nieudanego builda określa ADR 0076; historyczne limity prywatnego incremental nie są aktualną regułą zachowania compiler outputs.
+
 Rozróżniaj dwa etapy: `just docker-dev-toolchain` buduje **obraz zależności**
 przez `docker compose build` / BuildKit, przypięty do projektu tego checkoutu.
 Nie kompiluje aplikacji i nie uruchamia trzeciej stałej usługi. Jego postęp jest
@@ -116,29 +119,30 @@ wynikową nazwę projektu Compose i zapisuje ją w receipcie.
 
 Grupa ma dokładnie dwie stałe usługi aplikacji:
 
-- `backend` — sprawdzenie wejść, przyrostowy build, walidacja pakietu, następnie
-  API i native runtime FDM/FEM CPU/GPU w tym samym kontenerze;
+- `backend` — sprawdzenie wejść i pakietu, kompilacja do publikacji zgodnie z
+  ADR 0076 (może wymagać pełnego buildu), następnie API i native runtime FDM/FEM
+  CPU/GPU w tym samym kontenerze;
 - `frontend` — Next.js dev z HMR z tego samego checkoutu.
 
 Kompilacja i start backendu są widoczne w jego logu Docker Desktop. Nie twórz
 osobnego `backend-build` i nie przenoś dużego pakietu między kontenerami przez
-storage hosta. Kontrakt: [ADR 0061](docs/adr/0061-docker-development-build-and-runtime-container.md).
+storage hosta. Rola stałego backendu z buildem i runtime pozostaje zgodna z
+ADR 0061; bieżącą topologię storage określa [ADR 0076](docs/adr/0076-single-private-volume-per-dev-group.md).
 
 Na nowym hoście uruchom `python -B scripts/setup_docker.py` w PowerShell albo `python3 -B scripts/setup_docker.py` w Linux/WSL.
 Kreator zapisuje wybrany `FULLMAG_PROJECT_STORAGE_ROOT`, checkout źródeł i port
 frontendu do lokalnego `.env` głównego checkoutu; nie buduje, nie uruchamia i nie
 usuwa kontenerów. Sprawdzenie bez zapisu: `python -B scripts/setup_docker.py --check`.
 
-Zarejestrowany checkout jest readonly bind mountem obu usług. Backend buduje
-zweryfikowany cień źródeł i zachowuje cache Cargo/CMake w nazwanych wolumenach
-Docker/BuildKit; frontend reaguje przez HMR na zapis źródeł wybranego checkoutu. Przy KAŻDYM
-starcie, również po zwykłym
-restarcie w Docker Desktop, backend sam sprawdza aktualne zamontowane źródła,
-przygotowuje ich spójne wejście do kompilacji i przebudowuje tylko zmienione elementy
-oraz wymaganych konsumentów. Bez zmian używa istniejącego wyniku i startuje API.
-Nie wymagaj od użytkownika osobnego odświeżania manifestu ani hostowego polecenia
-builda. W trybie dev nie pakuj źródeł do ZIP/TAR i nie wysyłaj archiwum do
-kontenera: oba serwisy korzystają z live bind mountu wybranego checkoutu. Cache pozostaje trwały. Przed restartem zapisz projekt i zakończ symulację;
+Zarejestrowany checkout jest readonly bind mountem obu usług. Backend sprawdza
+zamontowane źródła i pakiet: przy zgodnym pakiecie używa go bez kompilacji,
+w przeciwnym razie buduje pakiet do publikacji zgodnie z ADR 0076; zmiana źródeł
+może wymagać pełnej kompilacji. Frontend reaguje przez HMR na zapis źródeł
+wybranego checkoutu. Nie wymagaj od użytkownika osobnego odświeżania manifestu
+ani hostowego polecenia builda. W trybie dev nie pakuj źródeł do ZIP/TAR i nie
+wysyłaj archiwum do kontenera: oba serwisy korzystają z live bind mountu
+wybranego checkoutu. Współdzielone cache zależności i pakiet current/rollback
+zachowują własną retencję. Przed restartem zapisz projekt i zakończ symulację;
 zatrzymanie zachowuje native drain, a niepotwierdzony owner wymaga recovery.
 Przy zgodnym obrazie i mountach restart zachowuje container ID backendu oraz
 działający frontend. Zmiana obrazu lub mountów może wymagać odtworzenia usługi.
@@ -176,26 +180,31 @@ Szczegóły: [Docker development architecture](docs/guides/docker-development-ar
 ## Sprzątanie danych po etapie deweloperskim
 
 - Po zakończeniu etapu (także błędem lub anulowaniem) i przed kolejnym ciężkim buildem oceń dane wygenerowane przez ten etap. Użyj skilla `fullmag-build-stage-cleanup`; jeżeli nie jest dostępny, zastosuj reguły retencji z build-storage governance i zgłoś brak skilla.
-- Najpierw kwalifikuj zakończone `execution`, następnie zbędny staging i kopie źródeł, a potem zastąpione pakiety runtime. Przestarzałość oznacza wykazaną zbędność: sam wiek, rozmiar lub nowszy commit nie wystarczają. Zachowaj używany cache przyrostowy, ostatni zweryfikowany pakiet i dane referencjonowane przez wyniki, projekty, sesje lub rollback.
+- Najpierw kwalifikuj zakończone `execution`, następnie zbędny staging i kopie źródeł, a potem zastąpione pakiety runtime. Przestarzałość oznacza wykazaną zbędność: sam wiek, rozmiar lub nowszy commit nie wystarczają. Zachowaj current + jeden zweryfikowany rollback, cache współdzielonych zależności i dane referencjonowane przez wyniki, projekty lub sesje; prywatne compiler outputs podlegają ADR 0076.
 - Przed wykonaniem autoryzowanego planu ponownie sprawdź stan jobów, aktywne procesy, kontenery, mounty, lease oraz dokładne cele w rozwiązanym storage. Zachowaj wyniki, logi, receipty, manifesty i provenance. Nie rozszerzaj zgody na inne katalogi ani nie używaj globalnego prune.
 - W checkpointcie etapu zapisz decyzję dla każdego kandydata, dowód zbędności, zachowywane dane, plan/receipt i pomiar wolnego miejsca. Dla pozostawionych danych podaj warunek ponownej oceny. Preview ani zapis skilla nie dowodzą wykonania lub wdrożenia automatycznego sprzątania.
 
 ### Współdzielony cache DEV
 
-Nowy launcher używa project-scoped wolumenów `fullmag-shared-*` dla pakietów,
-Cargo i pnpm. Zasady oraz utrzymanie: [shared build storage](docs/guides/shared-build-storage.md).
-Retencję po gotowości API uruchamia nowy obraz również przy zwykłym restarcie
-kontenera. Starsze worktree migruj aktualnym launcherem przez przypiętą parę
-`--helper-source-root`/`--helper-source-commit`; nie nadpisuj ich źródeł aplikacji.
+Współdzielone, project-scoped wolumeny `fullmag-shared-*` nadal przechowują
+pakiety, Cargo registry/git i store pnpm. Zasady oraz utrzymanie:
+[shared build storage](docs/guides/shared-build-storage.md). Prywatne cache,
+control i ledger podlegają jednemu stabilnemu volume z ADR 0076. Automatyczną
+retencję po gotowości API potwierdzaj dla konkretnej wersji launchera i receiptu;
+sam kontrakt nie dowodzi jej działania. Starsze worktree migruj aktualnym
+launcherem przez przypiętą parę `--helper-source-root`/`--helper-source-commit`;
+nie nadpisuj ich źródeł aplikacji. Migracja jest pojedyncza dla zatrzymanej i
+drained grupy; stare wolumeny zostają do archiwizacji i kontroli referencji.
 Przed każdym recreate ponów kontrolę aktywności i receipts. Działające grupy
 innych wątków odłóż do ich naturalnego zatrzymania; brak drain lub osierocony
 lease wymaga właściwego recovery, bez kasowania markerów i powtarzania Solve.
-Kompilacja nadal należy do grupy wybranego checkoutu; Cargo target/CMake,
-node_modules i `.next` pozostają prywatne. Przy cleanupie pojedynczego zadania
-nie usuwaj całego `fullmag-shared-*`; prywatny package jest subpath
-`groups/<unit_key>`. Przed zamknięciem etapu wykonaj przypięte
-`just docker-dev-maintain-cache <attempt> <config_sha256> <source_root>`;
-nieznani konsumenci lub aktywna publikacja wymagają zachowania danych.
+Cargo target/CMake, node_modules i `.next` pozostają prywatne w subpaths tej
+grupy. Przy cleanupie pojedynczego zadania nie usuwaj całego `fullmag-shared-*`;
+prywatny package jest subpath `groups/<unit_key>`. `just docker-dev-maintain-cache
+<attempt> <config_sha256> <source_root>` wykonuj wyłącznie z aktualnymi pinami
+i kontrolą odbiorców; nieznany konsument lub aktywna publikacja wymaga
+zachowania danych. Runtime nowej topologii pozostaje **NOT VERIFIED**.
+Prywatne compiler outputs i postpublication cleanup podlegają ADR 0076; ten kontrakt nie potwierdza jeszcze ich działania w runtime.
 
 ## Szczegółowe reguły — ładuj według zakresu
 
