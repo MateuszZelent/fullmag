@@ -2798,7 +2798,7 @@ mod tests {
             [3, 1, 1],
             [1e-9; 3],
             3,
-            0,
+            1_024,
             None,
             &region_mask,
         )
