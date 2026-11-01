@@ -46,9 +46,9 @@ use crate::quantities::{
     QuantityId,
 };
 use crate::relaxation::{
-    apply_energy_minimizer_provenance, execute_nonlinear_cg, execute_projected_gradient_bb,
-    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
-    CPU_SOA_DIRECT_MINIMIZER_REALIZATION, NATIVE_LLG_TIME_INTEGRATOR_REALIZATION,
+    apply_energy_minimizer_provenance, cpu_direct_minimizer_realization, execute_nonlinear_cg,
+    execute_projected_gradient_bb, llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow,
+    RelaxationTorqueConfirmation, NATIVE_LLG_TIME_INTEGRATOR_REALIZATION,
 };
 use crate::scalar_metrics::{
     apply_average_m_to_step_stats_with_active_mask, scalar_outputs_request_average_m,
@@ -1954,9 +1954,12 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
     state_layout.projection_realization = Some(projection_policy.realization_version().to_string());
     provenance.fdm_cpu_state_layout = Some(state_layout);
     apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
-    if is_direct_minimization && problem.soa_fast_path_supported() {
-        provenance.energy_minimizer_realization =
-            Some(CPU_SOA_DIRECT_MINIMIZER_REALIZATION.to_string());
+    if is_direct_minimization {
+        // Same predicate as the BB/NCG kernel dispatch: Frozen Spins and
+        // spatial material fields run the AoS kernels.
+        provenance.energy_minimizer_realization = Some(
+            cpu_direct_minimizer_realization(problem.soa_fast_path_supported()).to_string(),
+        );
     } else if pure_damping_relax {
         provenance.energy_minimizer_realization =
             Some(NATIVE_LLG_TIME_INTEGRATOR_REALIZATION.to_string());
