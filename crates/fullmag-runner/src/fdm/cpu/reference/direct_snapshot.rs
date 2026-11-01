@@ -155,6 +155,12 @@ impl<'a> DirectFieldSnapshotCache<'a> {
                         *accum += value;
                     }
                 }
+                let mel = self
+                    .problem
+                    .magnetoelastic_energy_density_from_vectors(self.state.magnetization());
+                for (accum, value) in total.iter_mut().zip(mel) {
+                    *accum += value;
+                }
                 Ok(total)
             }
             _ => Err(RunError {

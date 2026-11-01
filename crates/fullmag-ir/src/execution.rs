@@ -174,36 +174,104 @@ pub enum ExchangeBoundaryCondition {
 
 // ── Periodic Boundary Conditions (FDM) ───────────────────────────────────────
 
-/// Maximum non-background region id addressable by the fixed-size FDM
-/// exchange lookup table. Region id `0` is reserved for the background, while
-/// the native table has 256 rows/columns.
-pub const MAX_FDM_REGION_IDS: u32 = 255;
+/// Resolved exchange rule for one pair of FDM regions (physics note 0104,
+/// `material-fdm-connection-coefficient`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum FdmExchangePairModeIR {
+    /// `A_ij = scale * H(A_i, A_j)` with the realized cell stiffnesses.
+    HarmonicScale { scale: f64 },
+    /// `A_ij` replaced by an authored stiffness [J/m].
+    Explicit { exchange_stiffness: f64 },
+    /// No direct exchange across the interface.
+    Disabled,
+}
 
-/// Validate resolved FDM region ids before a runner or native lane can
-/// allocate/copy the exchange lookup table.
-pub fn validate_fdm_region_lut_indices(
-    region_mask: &[u32],
-    exchange_pairs: &[(u32, u32, f64)],
-) -> Result<(), String> {
-    if let Some(maximum) = region_mask
-        .iter()
-        .copied()
-        .filter(|region_id| *region_id != u32::MAX)
-        .max()
-    {
-        if maximum > MAX_FDM_REGION_IDS {
+/// Sparse, symmetric exchange rule between two named FDM regions.
+///
+/// Stored plans written before typed rules used `(region_i, region_j, A)`
+/// triples; those deserialize as [`FdmExchangePairModeIR::Explicit`].
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+pub struct FdmExchangePairRuleIR {
+    pub region_i: u32,
+    pub region_j: u32,
+    pub mode: FdmExchangePairModeIR,
+}
+
+impl<'de> Deserialize<'de> for FdmExchangePairRuleIR {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Typed {
+            region_i: u32,
+            region_j: u32,
+            mode: FdmExchangePairModeIR,
+        }
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Wire {
+            Typed(Typed),
+            LegacyTriple(u32, u32, f64),
+        }
+        Ok(match Wire::deserialize(deserializer)? {
+            Wire::Typed(rule) => Self {
+                region_i: rule.region_i,
+                region_j: rule.region_j,
+                mode: rule.mode,
+            },
+            Wire::LegacyTriple(region_i, region_j, exchange_stiffness) => Self {
+                region_i,
+                region_j,
+                mode: FdmExchangePairModeIR::Explicit { exchange_stiffness },
+            },
+        })
+    }
+}
+
+impl FdmExchangePairRuleIR {
+    /// Region pair with the smaller index first.
+    pub fn normalized_pair(&self) -> (u32, u32) {
+        (
+            self.region_i.min(self.region_j),
+            self.region_i.max(self.region_j),
+        )
+    }
+}
+
+/// Validate resolved FDM exchange pair rules. Region indices are unbounded
+/// `u32` values; `0` (unnamed base region) and `u32::MAX` (inactive sentinel)
+/// cannot be rule endpoints.
+pub fn validate_fdm_exchange_pair_rules(rules: &[FdmExchangePairRuleIR]) -> Result<(), String> {
+    let mut seen = std::collections::BTreeMap::new();
+    for (index, rule) in rules.iter().enumerate() {
+        let (low, high) = rule.normalized_pair();
+        if low == high {
             return Err(format!(
-                "fdm_region_lut_capacity_exceeded: requested_region_id={} supported_region_ids={}",
-                maximum, MAX_FDM_REGION_IDS
+                "fdm_exchange_pair_rule_invalid: rule_index={index} connects region {low} to itself"
             ));
         }
-    }
-    for (index, &(region_i, region_j, _)) in exchange_pairs.iter().enumerate() {
-        if region_i > MAX_FDM_REGION_IDS || region_j > MAX_FDM_REGION_IDS {
+        if low == 0 || high == u32::MAX {
             return Err(format!(
-                "fdm_region_lut_capacity_exceeded: exchange_pair_index={} requested_region_ids=({}, {}) supported_region_ids={}",
-                index, region_i, region_j, MAX_FDM_REGION_IDS
+                "fdm_exchange_pair_rule_invalid: rule_index={index} regions=({low}, {high}) must name two realized regions"
             ));
+        }
+        let valid_value = match rule.mode {
+            FdmExchangePairModeIR::HarmonicScale { scale } => scale.is_finite() && scale >= 0.0,
+            FdmExchangePairModeIR::Explicit { exchange_stiffness } => {
+                exchange_stiffness.is_finite() && exchange_stiffness >= 0.0
+            }
+            FdmExchangePairModeIR::Disabled => true,
+        };
+        if !valid_value {
+            return Err(format!(
+                "fdm_exchange_pair_rule_invalid: rule_index={index} regions=({low}, {high}) value must be finite and >= 0"
+            ));
+        }
+        if let Some(previous) = seen.insert((low, high), rule.mode) {
+            if previous != rule.mode {
+                return Err(format!(
+                    "fdm_exchange_pair_rule_conflict: regions=({low}, {high}) have conflicting rules"
+                ));
+            }
         }
     }
     Ok(())

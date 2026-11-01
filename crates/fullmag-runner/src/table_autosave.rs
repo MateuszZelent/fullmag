@@ -655,6 +655,7 @@ mod tests {
             &[[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
             &[[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
             None,
+            None,
         );
         let mut store = TableStore::new(config(1e-12));
 

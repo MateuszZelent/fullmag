@@ -60,6 +60,18 @@ SUITES: dict[str, list[tuple[str, dict[str, str]]]] = {
         ("gpu_adaptive_rk45_256x256x1",
          _case("gpu", "256,256,1", 10000, integrator="rk45", adaptive="1")),
     ],
+    # Heterogeneous material on CUDA: cellwise Ms only (uniform exchange
+    # operator) and cellwise Ms, Aex, alpha (face coefficients).
+    "gpu_hetero": [
+        ("gpu_ex_256x256x8", _case("gpu", "256,256,8", 20000, demag="0")),
+        ("gpu_ex_256x256x8_ms", _case("gpu", "256,256,8", 20000, demag="0", hetero="1")),
+        ("gpu_ex_256x256x8_faces", _case("gpu", "256,256,8", 20000, demag="0", hetero="2")),
+        ("gpu_full_256x256x8", _case("gpu", "256,256,8", 4000)),
+        ("gpu_full_256x256x8_ms", _case("gpu", "256,256,8", 4000, hetero="1")),
+        ("gpu_full_256x256x8_faces", _case("gpu", "256,256,8", 4000, hetero="2")),
+        ("gpu_full_256x256x1", _case("gpu", "256,256,1", 20000)),
+        ("gpu_full_256x256x1_faces", _case("gpu", "256,256,1", 20000, hetero="2")),
+    ],
 }
 
 # A headless CLI run still publishes live previews.  On the CUDA lane those
