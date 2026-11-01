@@ -24,19 +24,25 @@ Rules:
 
 Build/cache/browser storage podlega [ADR
 0030](../../docs/adr/0030-project-storage-and-build-concurrency.md) oraz
-root `AGENTS.md`. `apps/control-room` pozostaje repozytoryjnym źródłem kodu,
-ale nie jest magazynem dużych artefaktów:
+root `AGENTS.md`. W codziennym Docker DEV cache frontendu i `node_modules`
+mieszczą się w `private/frontend` stabilnego `BuildControl.volume` zgodnie z
+[ADR 0076](../../docs/adr/0076-single-private-volume-per-dev-group.md); frontend
+nie dostaje rootu control ani danych backendu. Store pnpm pozostaje
+project-scoped i współdzielony. Poza tą trasą `apps/control-room` pozostaje
+repozytoryjnym źródłem kodu, ale nie jest magazynem dużych artefaktów:
 
 - `FULLMAG_PROJECT_STORAGE_ROOT` jest jedynym override’em project storage po
   walidacji; lokalizację hosta określa `FULLMAG_PROJECT_STORAGE_ROOT` w `.env`
   głównego checkoutu;
-- pnpm store/home, npm/pip/uv cache, Playwright browsers, Vite/TypeScript
-  cache i duże test outputs muszą być potomkami zaakceptowanego
-  `storage/cache`, `storage/builds/<worktree-id>/<profile-id>` albo jawnego
-  `storage/runs/<task-id>/<run-id>`;
-- `node_modules` jest zależne od worktree. Nie kopiuj go pomiędzy checkoutami;
-  kontrolowany link może być użyty wyłącznie, gdy narzędzie i rejestr storage
-  zachowują jego własność oraz izolację;
+- poza codziennym Docker DEV pnpm store/home, npm/pip/uv cache, Playwright
+  browsers, Vite/TypeScript cache i duże test outputs muszą być potomkami
+  zaakceptowanego `storage/cache`, `storage/builds/<worktree-id>/<profile-id>`
+  albo jawnego `storage/runs/<task-id>/<run-id>`; w Docker DEV obowiązuje
+  podział shared pnpm store oraz prywatnego `private/frontend` z ADR 0076;
+- `node_modules` jest zależne od worktree. W Docker DEV zapisuj je wyłącznie w
+  `private/frontend`; poza nim nie kopiuj między checkoutami. Kontrolowany link
+  jest dozwolony tylko, gdy narzędzie i rejestr storage zachowują własność oraz
+  izolację;
 - każdy test lub build, który generuje duży output, wybiera profil przypisany
   do worktree i zapisuje manifest/status. Zgodne kolejne uruchomienia mogą
   reuse’ować profil pod blokadą; równoczesny zapis do mutable outputu czeka albo

@@ -1,7 +1,10 @@
 # Współdzielenie zasobów builda pomiędzy grupami DEV
 
-Status: implementacja projektu `shared-build-storage-20261027`. Dowody odbioru
-są zapisywane oddzielnie od kontraktu; testy Python nie kwalifikują aplikacji GPU.
+Globalne shared volumes dla Cargo/pnpm/packages nadal podlegają temu przewodnikowi.
+Topologię prywatnego storage daily DEV zastępuje [ADR 0076](../adr/0076-single-private-volume-per-dev-group.md):
+jeden stabilny `BuildControl.volume` na worktree/grupę. To zmiana kontraktu,
+nie potwierdzenie implementacji; Compose, mounty i runtime są **NOT VERIFIED**
+dopóki nie istnieje receipt z docelowego hosta.
 
 ## Granice
 
@@ -12,14 +15,19 @@ są zapisywane oddzielnie od kontraktu; testy Python nie kwalifikują aplikacji 
 | Store pnpm | projekt, `fullmag-shared-pnpm-v1-*` | flock tylko podczas instalacji; import `copy` |
 | Gotowy pakiet backendu | dokładny klucz wejść, `fullmag-shared-packages-v1-*` | jeden publisher na klucz; atomowa publikacja i walidacja SHA-256 |
 | Bieżący pakiet / rollback | `groups/<unit_key>` w wolumenie pakietów | regularne, zapieczętowane hardlinki do payloadu; prywatne receipty |
-| Workspace, Cargo target, CMake, log kompilacji | grupa / worktree | prywatny `/build`; blokada buildu grupy |
-| node_modules, `.next`, frontend workspace | grupa / dependency seed | prywatny wolumen frontendu |
-| Control, ledger, sesje, wyniki | dotychczasowi właściciele | bez współdzielenia przez mechanizm cache |
+| Workspace, CMake, compiler outputs | grupa / worktree | `private/backend` w stabilnym `BuildControl.volume`, montowany jako `/build`; lifecycle `.fullmag-build` określa ADR 0076; Cargo registry/git pozostają shared |
+| node_modules, `.next`, frontend workspace | grupa / dependency seed | `private/frontend` w tym samym prywatnym volume |
+| Control i lock/namespace | grupa | dotychczasowy root `BuildControl.volume`, bez wymaganego `control/` |
+| Ledger grupy | grupa | `private/ledger` w tym samym prywatnym volume; mount `/host-ledger` |
+| Sesje, wyniki | użytkownik | skonfigurowany storage hosta; poza cache |
 
-Nowe rendery zarządzanego launchera włączają ten układ. Starsze obrazy i zachowane
-konfiguracje bez zmiennych `FULLMAG_SHARED_*` zachowują dotychczasowe zachowanie.
-Nie kopiujemy ani nie usuwamy automatycznie starych wolumenów przy migracji.
-Recreate nadal wymaga istniejącego protokołu drain i przypiętej konfiguracji.
+Globalne shared volumes nie zmieniają tożsamości prywatnego volume grupy:
+`BuildControl.volume` jest stabilny względem toolchaina, profilu, dependency
+hash i próby. Starsze obrazy oraz zachowane konfiguracje mogą nadal wymagać
+starego układu do odczytu i recovery. Nie kopiuj ani nie usuwaj automatycznie
+starych wolumenów. Migruj pojedynczą, zatrzymaną i drained grupę z przypiętą
+konfiguracją; zachowaj stare cele do archiwizacji, nowego proof mountu i osobnej
+kontroli referencji. Wdrożenie nowej topologii pozostaje **NOT VERIFIED**.
 
 Grupy należą do jednego zaufanego użytkownika/zespołu lokalnego. Cały mount
 magazynu pakietów jest zapisywalny dla publishera; to protokół współpracy, a nie
@@ -61,6 +69,18 @@ Blokada pnpm pozostaje zajęta przy niepewnym zakończeniu procesu aż do dowodu
 że jego grupa procesów jest pusta. Next działa już bez tej blokady.
 
 ## Retencja i zakończenie pracy
+
+Historyczny helper ograniczał prywatny Cargo incremental. Ta reguła nie uzasadnia już
+zachowywania `.fullmag-build` po udanej publikacji; bieżącą retencję compiler
+outputs, cache-hit i jednej nieudanej generacji określa [ADR 0076](../adr/0076-single-private-volume-per-dev-group.md).
+Zachowanie pakietu current plus jednego rollbacku oraz globalnych shared volumes
+pozostaje częścią tego przewodnika. Nowa automatyka jest **NOT VERIFIED** bez
+receiptu i dowodu z docelowego runtime.
+
+Poniższy opis automatycznego `FULLMAG_AUTO_CACHE_MAINTENANCE` i limitu 8 GiB
+dokumentuje starszy helper. Jego prywatna retencja Cargo incremental nie jest
+obecnym kontraktem `.fullmag-build`; retencja pakietu current/rollback i shared
+packages opisana niżej pozostaje odrębną regułą.
 
 Kontener backendu z `FULLMAG_AUTO_CACHE_MAINTENANCE=1` automatycznie uruchamia
 retencję po zapisaniu gotowości API/runtime. Obejmuje to również zwykły Start lub
@@ -106,15 +126,16 @@ kontenery. Następnie, jeszcze z istniejącego worktree, uruchom:
 just worktree-finish <task_id> <owner> <powód_i_dowód_integracji> completed
 ```
 
-`finish` wymaga dokładnego właściciela z rejestru i wykonuje kwalifikowaną
-retencję Docker pod lease grupy. Obejmuje wszystkie zweryfikowane prywatne
-wolumeny backend build/package i frontend tej grupy, także wcześniejszych
-konfiguracji, oraz odpowiadające im `groups/<unit_key>` we wspólnym magazynie.
-Aktywny lub zachowany kontener, obcy konsument, nieznana tożsamość albo błąd
-Dockera blokuje oznaczenie `completed`. Najpierw zapisuje trwały plan i znacznik
-zamykania; blokuje to nowe zarządzane starty tej grupy. Przerwaną operację należy
-wznowić tym samym poleceniem. Kontrolny receipt potwierdza usunięte zasoby.
-Dopiero potem usuń worktree i zintegrowany branch, a wynik zapisz w jego rekordzie.
+`finish` wymaga dokładnego właściciela z rejestru i działa pod lease grupy.
+Może usunąć wyłącznie zakwalifikowane cache `private/backend` i
+`private/frontend` oraz dokładny namespace `groups/<unit_key>` po kontroli
+odbiorców. Nie usuwa całego `BuildControl.volume`: zachowuje root control,
+`private/ledger`, receipts i provenance, dopóki osobna archiwizacja nie
+potwierdzi ich retencji. Aktywny/zachowany kontener, obcy konsument, nieznana
+tożsamość albo błąd Dockera blokują `completed`. Trwały plan i znacznik
+zamykania blokują nowe zarządzane starty; przerwaną operację wznawiaj tym samym
+poleceniem. Receipt ma potwierdzić dokładnie usunięte subpaths/namespace. Dopiero
+potem usuń worktree i zintegrowany branch, a wynik zapisz w rekordzie.
 
 **Nigdy nie usuwaj całego `fullmag-shared-*` razem z pojedynczym worktree.**
 Wspólne pakiety, Cargo/pnpm, control, ledger, sesje i wyniki pozostają.
@@ -129,6 +150,11 @@ inwentarza i jawnej kwalifikacji. Wiek wolumenu lub brak uruchomionego kontenera
 nie dowodzą, że dane nie są potrzebne.
 
 ## Aktualizacja istniejącej grupy ze starszego worktree
+
+Opisane dalej recepty mogą odtwarzać historyczny układ wielu wolumenów.
+Zachowaj je do odczytu/recovery; nowa migracja do ADR 0076 odbywa się wyłącznie
+dla jednej zatrzymanej/drained grupy, po archiwizacji receipts i kontroli
+wszystkich mountów. Nie twórz ani nie usuwaj starych volume’ów automatycznie.
 
 Kod aplikacji i wersja narzędzi operacyjnych mają osobne tożsamości. Przy
 zarządzanym `recreate-volume` można wskazać `--helper-source-root` oraz

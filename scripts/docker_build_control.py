@@ -813,11 +813,10 @@ def build_volume_toolchain(repo):
     """Build the canonical dependency Dockerfile without host staging/receipts."""
     import fullmag_storage as storage
     from bootstrap_docker_toolchain import tracked_input_files, read_input, DEPENDENCY_MANIFEST
-    from docker_compose_identity import compose_project_identity
     require_host()
     repo = validate_host_path(Path(repo).absolute(), "source checkout").resolve(strict=True)
-    layout = storage.resolve_layout(repo, "docker-all-gpu")
-    identity = compose_project_identity(layout)
+    from docker_compose_identity import compose_source_identity
+    identity = compose_source_identity(repo)
     local_volume(repo)
     configured = toolchain_configuration(repo, identity)
     service = configured["services"]["fem-gpu-toolchain"]

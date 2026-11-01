@@ -18,7 +18,7 @@ import docker_dev_defaults as defaults
 class DockerDevDefaultsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
-        root = Path(self.temp.name)
+        root = Path(self.temp.name).resolve(strict=True)
         self.main = root / "fullmag"
         self.worktree = root / "worktrees" / "demo"
         self.main.mkdir(parents=True)
@@ -111,13 +111,13 @@ class DockerDevDefaultsTests(unittest.TestCase):
             )
 
     def test_bounded_host_defaults_reader_rejects_links_and_large_files(self) -> None:
-        path = Path(self.temp.name) / "settings.json"
+        path = Path(self.temp.name).resolve(strict=True) / "settings.json"
         path.write_bytes(b"1234")
         self.assertEqual(defaults._bounded_regular(path, 4, "settings"), b"1234")
         path.write_bytes(b"12345")
         with self.assertRaisesRegex(defaults.DiscoveryError, "exceeds"):
             defaults._bounded_regular(path, 4, "settings")
-        hardlink = Path(self.temp.name) / "settings-hardlink.json"
+        hardlink = path.with_name("settings-hardlink.json")
         try:
             os.link(path, hardlink)
         except OSError:
@@ -125,7 +125,7 @@ class DockerDevDefaultsTests(unittest.TestCase):
         else:
             with self.assertRaisesRegex(defaults.DiscoveryError, "private regular"):
                 defaults._bounded_regular(hardlink, 64, "settings")
-        symlink = Path(self.temp.name) / "settings-symlink.json"
+        symlink = path.with_name("settings-symlink.json")
         try:
             symlink.symlink_to(path)
         except (OSError, NotImplementedError):
@@ -241,6 +241,21 @@ class DockerDevDefaultsTests(unittest.TestCase):
         self.assertIn("activate-script --attempt", shell)
 
 
+    def test_image_bootstrap_keeps_source_defaults_without_reading_host_storage(self):
+        import bootstrap_docker_toolchain as bootstrap
+        with patch.object(defaults, "_known_checkouts", return_value=self.known), \
+                patch.object(defaults, "_read_dotenv", return_value={
+                    "FULLMAG_SOURCE_ROOT": str(self.worktree),
+                    "FULLMAG_PROJECT_STORAGE_ROOT": str(self.main / "missing-storage"),
+                }), \
+                patch.object(defaults, "_read_host_settings", side_effect=AssertionError("host storage read")) as host_settings, \
+                patch.dict(os.environ, {}, clear=True), \
+                patch("docker_dev_host.require_host"), \
+                patch.object(bootstrap, "build", return_value={}) as build:
+            self.assertEqual(bootstrap.main(["--repo-root", str(self.main), "--direct-development"]), 0)
+        host_settings.assert_not_called()
+        self.assertEqual(build.call_args.args[0], self.worktree)
+
     def test_up_and_toolchain_choose_the_same_configured_checkout(self):
         import docker_dev
         import bootstrap_docker_toolchain as bootstrap
@@ -251,11 +266,12 @@ class DockerDevDefaultsTests(unittest.TestCase):
             self.assertEqual(docker_dev.main(["--repo-root", str(self.main), "up"]), 0)
         args = up.call_args.args[0]
         self.assertEqual((args.source_root, args.port), (self.worktree, 32900))
-        with patch.object(defaults, "resolve_defaults", return_value=selected), \
+        with patch.object(defaults, "resolve_defaults", return_value=selected) as source_defaults, \
                 patch.object(docker_dev, "_require_native_windows"), \
                 patch.object(bootstrap, "build", return_value={}) as build:
             self.assertEqual(bootstrap.main(["--repo-root", str(self.main), "--direct-development"]), 0)
         self.assertEqual(build.call_args.args[0], self.worktree)
+        source_defaults.assert_called_once_with(self.main, include_host_settings=False)
 
     @unittest.skipUnless(os.name == "posix", "POSIX executable shell fixture")
     def test_shell_forwards_default_and_explicit_arguments_without_storage_writer(self):

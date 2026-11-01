@@ -24,7 +24,7 @@ Points that trip new sessions most often:
 - **Do not compile unit tests** (`cargo test`, `just test`) until the user revokes that ban.
   Application code is compiled inside the Docker `backend` service; never on the host.
 - Physics/numerics changes need the scientific note in `docs/physics/` first.
-- Keep source files under ~1000 lines (`.github/copilot-instructions.md`).
+- Review complexity and contracts using `.agents/skills/google-eng-review-practices/SKILL.md`; file size is a review signal, not an automatic reason to split.
 
 ## Commands
 
@@ -46,7 +46,7 @@ just docker-dev-codegen "$PWD"               # OpenAPI + TypeScript client codeg
 ```
 
 After a backend source edit, restart the group's `backend` container (`docker restart <backend>`);
-it rebuilds incrementally and restarts the API. Frontend edits use HMR. Find a group's containers
+it reuses a verified package or builds a new one and restarts the API. In the single-volume layout, changed sources may require a full build. Frontend edits use HMR. Find a group's containers
 with `docker ps -a --filter label=com.docker.compose.project=<project>`; the main checkout is
 `fullmag-master`, a worktree is `fullmag-worktree-<worktree_id>`.
 
@@ -112,9 +112,9 @@ binary data plane. The OpenAPI spec and generated TS types under
 
 Each checkout is one Compose group with exactly two services:
 
-- `backend`: on every start it captures the read-only source bind into a shadow tree, builds
-  incrementally (`make install-cli-dev`, Cargo/CMake caches in named volumes), validates the
-  package, passes host gates, then runs API and native runtime in the same container
+- `backend`: on every start it checks the read-only source bind and verified package,
+  reuses that package or builds and validates a new one, passes host gates, then runs API
+  and native runtime in the same container
   (`docker/all-in-one/backend_dev.py`, `backend_source.py`, `runtime_service.py`).
 - `frontend`: Next.js dev with HMR (`docker/all-in-one/frontend_dev.py`); it watches natively on
   ext4/xfs/btrfs and polls on other mounts.
@@ -127,8 +127,18 @@ release, qualification and managed runtime. User sessions, results and projects 
 configured host storage (`FULLMAG_PROJECT_STORAGE_ROOT` in the main checkout's `.env`); build data
 lives only in Docker volumes and BuildKit.
 
+New renders use one stable private `BuildControl.volume` per group (ADR 0076), with
+`private/backend`, `private/frontend` and `private/ledger` subpaths. Frontend never mounts
+the control root. Shared Cargo/pnpm/packages remain separate project resources. Toolchain,
+profile and dependency changes invalidate compatibility, not the volume name. Only managed
+compiler outputs `.fullmag-build` are cleaned before actual compilation and after verified
+atomic package publication. Preserve current plus one rollback, source, logs, control,
+ledger and user data. Cache hits do not compile or clean. Old groups need separate managed
+migration; runtime compliance is NOT VERIFIED without their receipts and mount proof.
+Image-only builds use Git/source identity without host storage; API user-data mounts remain.
+
 Key decision records: ADR 0061 (same-container build and runtime), ADR 0064 (Linux/WSL host),
-ADR 0067 (independent DEV groups); guides in `docs/guides/docker-development-architecture.md` and
+ADR 0067 (independent DEV groups), ADR 0076 (one private volume per group); guides in `docs/guides/docker-development-architecture.md` and
 `docs/guides/docker-build-storage-lifecycle.md`; current state and measurements in
 `docs/audits/2026-10-21-docker-dev-workflow-audit.md`.
 

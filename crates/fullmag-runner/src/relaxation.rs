@@ -23,4 +23,5 @@ pub(crate) use provenance::NATIVE_LLG_TIME_INTEGRATOR_REALIZATION;
 pub(crate) use provenance::{
     apply_energy_minimizer_provenance, cpu_direct_minimizer_realization,
     expected_cpu_direct_minimizer_realization, native_direct_minimizer_realization,
+    CUDA_FDM_HOST_DIRECT_MINIMIZER_REALIZATION,
 };

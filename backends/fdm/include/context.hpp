@@ -732,6 +732,9 @@ struct Context {
     uint32_t *region_mask = nullptr;
     double *exchange_lut = nullptr;  // device-side, MAX_EXCHANGE_REGIONS × MAX_EXCHANGE_REGIONS
     bool has_exchange_lut = false;
+    // Every LUT entry equals A, so the region-mask exchange field equals the
+    // uniform Laplacian up to roundoff and the field kernel may skip the LUT.
+    bool exchange_lut_uniform = false;
 
     // Periodicity: per-axis PBC flags for exchange wrapping
     bool periodic_x = false;

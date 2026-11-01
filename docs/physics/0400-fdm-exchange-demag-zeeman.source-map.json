@@ -116,6 +116,20 @@
   ],
   "sources": [
     {
+      "id": "cudaExchangeUniformLutLaunch",
+      "path": "backends/fdm/gpu/cuda/interactions/exchange_fp64.cu",
+      "symbol": "exchange_field_fp64_kernel",
+      "responsibility": "fp64 exchange field kernel; its standard launch selects the uniform-Laplacian branch when the region-pair table is uniform",
+      "evidence_status": "runtime: CUDA-event microbenchmark scripts/benchmarks/cuda_exchange_region_bench.cu, relative field difference 4e-16"
+    },
+    {
+      "id": "cudaExchangeUniformLutFlag",
+      "path": "backends/fdm/api/c_api.cpp",
+      "symbol": "fullmag_fdm_backend_create_impl",
+      "responsibility": "Set Context::exchange_lut_uniform when every built region-pair table entry equals A",
+      "evidence_status": "source-visible; exercised by the FDM GPU hot-loop benchmark runs"
+    },
+    {
       "id": "terminalBinarySpool",
       "path": "crates/fullmag-api/src/accepted_observation_spool.rs",
       "symbol": "write_fragment",

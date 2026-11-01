@@ -664,6 +664,7 @@ impl ExchangeLlgProblem {
         Ok(())
     }
 
+    #[inline]
     pub(crate) fn is_active(&self, flat_index: usize) -> bool {
         self.active_mask
             .as_ref()
