@@ -82,7 +82,8 @@ __global__ void pack_magnetization_fft_fp64_kernel(
     int px, int py, int pz,
     int has_active_mask,
     int has_volume_fraction,
-    double ms)
+    double ms_scalar,
+    const double * __restrict__ ms_field)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int total = px * py * pz;
@@ -95,6 +96,7 @@ __global__ void pack_magnetization_fft_fp64_kernel(
 
     if (x < nx && y < ny && z < nz) {
         int src = z * ny * nx + y * nx + x;
+        const double ms = ms_field ? ms_field[src] : ms_scalar;
         if (has_volume_fraction) {
             // T0/T1: φ-weighted packing — M_i = φ_i × Ms × m_i
             double phi = volume_fraction[src];
@@ -267,7 +269,8 @@ __global__ void combine_effective_field_fp64_kernel(
     double uz,
     const double * __restrict__ ku1_field,
     const double * __restrict__ ku2_field,
-    double ms,
+    double ms_scalar,
+    const double * __restrict__ ms_field,
     double exchange_stiffness,
     int has_cubic_anisotropy,
     double Kc1,
@@ -314,8 +317,10 @@ __global__ void combine_effective_field_fp64_kernel(
     double * __restrict__ rhs_x,
     double * __restrict__ rhs_y,
     double * __restrict__ rhs_z,
-    double gamma_bar,
-    double alpha,
+    double gamma_bar_scalar,
+    double alpha_scalar,
+    double gamma,
+    const double * __restrict__ alpha_field,
     int disable_precession,
     int write_rhs)
 {
@@ -337,6 +342,11 @@ __global__ void combine_effective_field_fp64_kernel(
     double mx = m_x[idx];
     double my = m_y[idx];
     double mz = m_z[idx];
+    // Cellwise material (null pointer keeps the scalar arithmetic unchanged).
+    const double ms = ms_field ? ms_field[idx] : ms_scalar;
+    const double alpha = alpha_field ? alpha_field[idx] : alpha_scalar;
+    const double gamma_bar =
+        alpha_field ? gamma / (1.0 + alpha * alpha) : gamma_bar_scalar;
 
     double hx = hx_ext;
     double hy = hy_ext;
@@ -566,7 +576,8 @@ __global__ void anisotropy_field_fp64_kernel(
     double uz,
     const double * __restrict__ ku1_field,
     const double * __restrict__ ku2_field,
-    double ms,
+    double ms_scalar,
+    const double * __restrict__ ms_field,
     int has_cubic_anisotropy,
     double Kc1,
     double Kc2,
@@ -588,6 +599,7 @@ __global__ void anisotropy_field_fp64_kernel(
         double mx = m_x[idx];
         double my = m_y[idx];
         double mz = m_z[idx];
+        const double ms = ms_field ? ms_field[idx] : ms_scalar;
 
         if (has_uniaxial_anisotropy && ms > 0.0) {
             double mu0 = 4.0 * kFullmagPi * 1e-7;
@@ -682,7 +694,8 @@ void launch_demag_field_fp64(Context &ctx) {
         static_cast<int>(ctx.fft_nz),
         ctx.has_active_mask ? 1 : 0,
         (ctx.boundary_tier > 0 && ctx.volume_fraction != nullptr) ? 1 : 0,
-        ctx.Ms);
+        ctx.Ms,
+        ctx.ms_field);
 
     cufftResult err = cufftExecZ2Z(
         ctx.fft_plan,
@@ -861,6 +874,7 @@ static void launch_effective_field_fp64_impl(
         ctx.ku1_field,
         ctx.ku2_field,
         ctx.Ms,
+        ctx.ms_field,
         ctx.A,
         ctx.has_cubic_anisotropy ? 1 : 0,
         ctx.Kc1,
@@ -909,6 +923,8 @@ static void launch_effective_field_fp64_impl(
         write_rhs ? static_cast<double*>(rhs_out->z) : nullptr,
         gamma_bar,
         ctx.alpha,
+        ctx.gamma,
+        ctx.alpha_field,
         ctx.disable_precession ? 1 : 0,
         write_rhs ? 1 : 0);
     const cudaError_t launch_error = cudaGetLastError();
@@ -1046,6 +1062,7 @@ void launch_anisotropy_field_fp64(Context &ctx) {
         ctx.ku1_field,
         ctx.ku2_field,
         ctx.Ms,
+        ctx.ms_field,
         ctx.has_cubic_anisotropy ? 1 : 0,
         ctx.Kc1,
         ctx.Kc2,

@@ -335,17 +335,17 @@ __global__ void exchange_energy_blocks_kernel(
     const Scalar *my,
     const Scalar *mz,
     const uint8_t *active_mask,
-    const uint32_t *region_mask,
-    const double *exchange_lut,
+    const double *face_xp,
+    const double *face_yp,
+    const double *face_zp,
     const double *volume_fraction,
     double *block_out,
     int nx,
     int ny,
     int nz,
     int has_active_mask,
-    int has_region_mask,
+    int has_faces,
     int has_volume_fraction,
-    int max_regions,
     double a_times_v,
     double cell_volume,
     double inv_dx2,
@@ -370,7 +370,6 @@ __global__ void exchange_energy_blocks_kernel(
         if (phi_i <= 0.0) continue;
         const double v_i = phi_i * cell_volume;
 
-        uint32_t center_region = has_region_mask ? region_mask[idx] : 0u;
         int z = static_cast<int>(idx / (static_cast<uint64_t>(ny) * nx));
         int rem = static_cast<int>(idx - static_cast<uint64_t>(z) * ny * nx);
         int y = rem / nx;
@@ -387,8 +386,8 @@ __global__ void exchange_energy_blocks_kernel(
             if (!has_active_mask || active_mask[ni] != 0) {
                 const double phi_j = has_volume_fraction ? volume_fraction[ni] : 1.0;
                 if (phi_j > 0.0) {
-                    double coeff = has_region_mask
-                        ? exchange_lut[center_region * max_regions + region_mask[ni]] * v_i
+                    double coeff = has_faces
+                        ? face_xp[idx] * v_i
                         : a_times_v * phi_i;
                     double dx_ = to_f64(mx[ni]) - cx;
                     double dy_ = to_f64(my[ni]) - cy;
@@ -404,8 +403,8 @@ __global__ void exchange_energy_blocks_kernel(
             if (!has_active_mask || active_mask[ni] != 0) {
                 const double phi_j = has_volume_fraction ? volume_fraction[ni] : 1.0;
                 if (phi_j > 0.0) {
-                    double coeff = has_region_mask
-                        ? exchange_lut[center_region * max_regions + region_mask[ni]] * v_i
+                    double coeff = has_faces
+                        ? face_yp[idx] * v_i
                         : a_times_v * phi_i;
                     double dx_ = to_f64(mx[ni]) - cx;
                     double dy_ = to_f64(my[ni]) - cy;
@@ -422,8 +421,8 @@ __global__ void exchange_energy_blocks_kernel(
             if (!has_active_mask || active_mask[ni] != 0) {
                 const double phi_j = has_volume_fraction ? volume_fraction[ni] : 1.0;
                 if (phi_j > 0.0) {
-                    double coeff = has_region_mask
-                        ? exchange_lut[center_region * max_regions + region_mask[ni]] * v_i
+                    double coeff = has_faces
+                        ? face_zp[idx] * v_i
                         : a_times_v * phi_i;
                     double dx_ = to_f64(mx[ni]) - cx;
                     double dy_ = to_f64(my[ni]) - cy;
@@ -463,8 +462,6 @@ __global__ void exchange_energy_t0_blocks_kernel(
     const Scalar *my,
     const Scalar *mz,
     const uint8_t *active_mask,
-    const uint32_t *region_mask,
-    const double *exchange_lut,
     const double *volume_fraction,
     const double *face_xp,
     const double *face_xm,
@@ -472,13 +469,14 @@ __global__ void exchange_energy_t0_blocks_kernel(
     const double *face_ym,
     const double *face_zp,
     const double *face_zm,
+    const double *exch_xp,
+    const double *exch_yp,
+    const double *exch_zp,
     double *block_out,
     int nx,
     int ny,
     int nz,
     int has_active_mask,
-    int has_region_mask,
-    int max_regions,
     double A_uniform,
     double cell_volume,
     double phi_floor,
@@ -500,7 +498,6 @@ __global__ void exchange_energy_t0_blocks_kernel(
         const double phi_eff = (phi_i > phi_floor) ? phi_i : phi_floor;
         const double v_eff = phi_eff * cell_volume;
 
-        uint32_t center_region = has_region_mask ? region_mask[idx] : 0u;
         int z = static_cast<int>(idx / (static_cast<uint64_t>(ny) * nx));
         int rem = static_cast<int>(idx - static_cast<uint64_t>(z) * ny * nx);
         int y = rem / nx;
@@ -516,9 +513,7 @@ __global__ void exchange_energy_t0_blocks_kernel(
             if (f > 0.0) {
                 uint64_t ni = idx + 1;
                 if (!has_active_mask || active_mask[ni] != 0) {
-                    double A_ij = has_region_mask
-                        ? exchange_lut[center_region * max_regions + region_mask[ni]]
-                        : A_uniform;
+                    double A_ij = exch_xp ? exch_xp[idx] : A_uniform;
                     double dmx = to_f64(mx[ni]) - cx;
                     double dmy = to_f64(my[ni]) - cy;
                     double dmz = to_f64(mz[ni]) - cz;
@@ -532,9 +527,7 @@ __global__ void exchange_energy_t0_blocks_kernel(
             if (f > 0.0) {
                 uint64_t ni = idx + nx;
                 if (!has_active_mask || active_mask[ni] != 0) {
-                    double A_ij = has_region_mask
-                        ? exchange_lut[center_region * max_regions + region_mask[ni]]
-                        : A_uniform;
+                    double A_ij = exch_yp ? exch_yp[idx] : A_uniform;
                     double dmx = to_f64(mx[ni]) - cx;
                     double dmy = to_f64(my[ni]) - cy;
                     double dmz = to_f64(mz[ni]) - cz;
@@ -548,9 +541,7 @@ __global__ void exchange_energy_t0_blocks_kernel(
             if (f > 0.0) {
                 uint64_t ni = idx + static_cast<uint64_t>(nx) * ny;
                 if (!has_active_mask || active_mask[ni] != 0) {
-                    double A_ij = has_region_mask
-                        ? exchange_lut[center_region * max_regions + region_mask[ni]]
-                        : A_uniform;
+                    double A_ij = exch_zp ? exch_zp[idx] : A_uniform;
                     double dmx = to_f64(mx[ni]) - cx;
                     double dmy = to_f64(my[ni]) - cy;
                     double dmz = to_f64(mz[ni]) - cz;
@@ -582,8 +573,6 @@ __global__ void exchange_energy_t1_blocks_kernel(
     const Scalar *my,
     const Scalar *mz,
     const uint8_t *active_mask,
-    const uint32_t *region_mask,
-    const double *exchange_lut,
     const double *volume_fraction,
     const double *d_delta_xp,
     const double *d_delta_xm,
@@ -591,13 +580,14 @@ __global__ void exchange_energy_t1_blocks_kernel(
     const double *d_delta_ym,
     const double *d_delta_zp,
     const double *d_delta_zm,
+    const double *exch_xp,
+    const double *exch_yp,
+    const double *exch_zp,
     double *block_out,
     int nx,
     int ny,
     int nz,
     int has_active_mask,
-    int has_region_mask,
-    int max_regions,
     double A_uniform,
     double cell_volume,
     double dx,
@@ -620,7 +610,6 @@ __global__ void exchange_energy_t1_blocks_kernel(
         const double phi_eff = (phi_i > phi_floor) ? phi_i : phi_floor;
         const double v_eff = phi_eff * cell_volume;
 
-        uint32_t center_region = has_region_mask ? region_mask[idx] : 0u;
         int z = static_cast<int>(idx / (static_cast<uint64_t>(ny) * nx));
         int rem = static_cast<int>(idx - static_cast<uint64_t>(z) * ny * nx);
         int y = rem / nx;
@@ -640,9 +629,7 @@ __global__ void exchange_energy_t1_blocks_kernel(
             const double mn_x = to_f64(mx[ni]), mn_y = to_f64(my[ni]), mn_z = to_f64(mz[ni]);
             if (mn_x != 0.0 || mn_y != 0.0 || mn_z != 0.0) {
                 if (!has_active_mask || active_mask[ni] != 0) {
-                    double A_ij = has_region_mask
-                        ? exchange_lut[center_region * max_regions + region_mask[ni]]
-                        : A_uniform;
+                    double A_ij = exch_xp ? exch_xp[idx] : A_uniform;
                     double denom = dx * (dx + dxm);
                     double dmx = mn_x - cx, dmy = mn_y - cy, dmz = mn_z - cz;
                     energy += A_ij * v_eff * 2.0 / denom * (dmx*dmx + dmy*dmy + dmz*dmz);
@@ -659,9 +646,7 @@ __global__ void exchange_energy_t1_blocks_kernel(
             const double mn_x = to_f64(mx[ni]), mn_y = to_f64(my[ni]), mn_z = to_f64(mz[ni]);
             if (mn_x != 0.0 || mn_y != 0.0 || mn_z != 0.0) {
                 if (!has_active_mask || active_mask[ni] != 0) {
-                    double A_ij = has_region_mask
-                        ? exchange_lut[center_region * max_regions + region_mask[ni]]
-                        : A_uniform;
+                    double A_ij = exch_yp ? exch_yp[idx] : A_uniform;
                     double denom = dy * (dy + dym);
                     double dmx = mn_x - cx, dmy = mn_y - cy, dmz = mn_z - cz;
                     energy += A_ij * v_eff * 2.0 / denom * (dmx*dmx + dmy*dmy + dmz*dmz);
@@ -679,9 +664,7 @@ __global__ void exchange_energy_t1_blocks_kernel(
                 const double mn_x = to_f64(mx[ni]), mn_y = to_f64(my[ni]), mn_z = to_f64(mz[ni]);
                 if (mn_x != 0.0 || mn_y != 0.0 || mn_z != 0.0) {
                     if (!has_active_mask || active_mask[ni] != 0) {
-                        double A_ij = has_region_mask
-                            ? exchange_lut[center_region * max_regions + region_mask[ni]]
-                            : A_uniform;
+                        double A_ij = exch_zp ? exch_zp[idx] : A_uniform;
                         double denom = dz * (dz + dzm);
                         double dmx = mn_x - cx, dmy = mn_y - cy, dmz = mn_z - cz;
                         energy += A_ij * v_eff * 2.0 / denom * (dmx*dmx + dmy*dmy + dmz*dmz);
@@ -709,6 +692,7 @@ __global__ void demag_energy_blocks_kernel(
     const Scalar *hy,
     const Scalar *hz,
     const double *volume_fraction,
+    const double *ms_field,
     double *block_out,
     uint64_t n,
     int has_volume_fraction,
@@ -725,7 +709,9 @@ __global__ void demag_energy_blocks_kernel(
         double mdoth = to_f64(mx[idx]) * to_f64(hx[idx])
             + to_f64(my[idx]) * to_f64(hy[idx])
             + to_f64(mz[idx]) * to_f64(hz[idx]);
-        energy += coeff * phi_i * mdoth;
+        // With a cellwise Ms the launcher leaves Ms out of coeff.
+        const double ms_i = ms_field ? ms_field[idx] : 1.0;
+        energy += coeff * ms_i * phi_i * mdoth;
     }
 
     shared[threadIdx.x] = energy;
@@ -749,6 +735,7 @@ __global__ void external_energy_blocks_kernel(
     const Scalar *my,
     const Scalar *mz,
     const double *volume_fraction,
+    const double *ms_field,
     double *block_out,
     uint64_t n,
     int has_volume_fraction,
@@ -795,7 +782,9 @@ __global__ void external_energy_blocks_kernel(
             regional_drive_count, regional_drive_cell_count, idx, evaluation_time_s);
         double mdoth =
             to_f64(mx[idx]) * field_x + to_f64(my[idx]) * field_y + to_f64(mz[idx]) * field_z;
-        energy += coeff * phi_i * mdoth;
+        // With a cellwise Ms the launcher leaves Ms out of coeff.
+        const double ms_i = ms_field ? ms_field[idx] : 1.0;
+        energy += coeff * ms_i * phi_i * mdoth;
     }
 
     shared[threadIdx.x] = energy;
@@ -1263,19 +1252,16 @@ static double reduce_exchange_energy_dispatch(Context &ctx) {
             static_cast<const Scalar *>(ctx.m.y),
             static_cast<const Scalar *>(ctx.m.z),
             ctx.active_mask,
-            ctx.region_mask,
-            ctx.exchange_lut,
             ctx.volume_fraction,
             ctx.delta_xp, ctx.delta_xm,
             ctx.delta_yp, ctx.delta_ym,
             ctx.delta_zp, ctx.delta_zm,
+            ctx.exchange_face_xp, ctx.exchange_face_yp, ctx.exchange_face_zp,
             ctx.reduction_scratch,
             static_cast<int>(ctx.nx),
             static_cast<int>(ctx.ny),
             static_cast<int>(ctx.nz),
             ctx.has_active_mask ? 1 : 0,
-            ctx.has_region_mask ? 1 : 0,
-            FULLMAG_FDM_MAX_EXCHANGE_REGIONS,
             ctx.A,
             cell_volume,
             ctx.dx, ctx.dy, ctx.dz,
@@ -1288,19 +1274,16 @@ static double reduce_exchange_energy_dispatch(Context &ctx) {
             static_cast<const Scalar *>(ctx.m.y),
             static_cast<const Scalar *>(ctx.m.z),
             ctx.active_mask,
-            ctx.region_mask,
-            ctx.exchange_lut,
             ctx.volume_fraction,
             ctx.face_link_xp, ctx.face_link_xm,
             ctx.face_link_yp, ctx.face_link_ym,
             ctx.face_link_zp, ctx.face_link_zm,
+            ctx.exchange_face_xp, ctx.exchange_face_yp, ctx.exchange_face_zp,
             ctx.reduction_scratch,
             static_cast<int>(ctx.nx),
             static_cast<int>(ctx.ny),
             static_cast<int>(ctx.nz),
             ctx.has_active_mask ? 1 : 0,
-            ctx.has_region_mask ? 1 : 0,
-            FULLMAG_FDM_MAX_EXCHANGE_REGIONS,
             ctx.A,
             cell_volume,
             ctx.phi_floor,
@@ -1315,17 +1298,17 @@ static double reduce_exchange_energy_dispatch(Context &ctx) {
             static_cast<const Scalar *>(ctx.m.y),
             static_cast<const Scalar *>(ctx.m.z),
             ctx.active_mask,
-            ctx.region_mask,
-            ctx.exchange_lut,
+            ctx.exchange_face_xp,
+            ctx.exchange_face_yp,
+            ctx.exchange_face_zp,
             ctx.volume_fraction,
             ctx.reduction_scratch,
             static_cast<int>(ctx.nx),
             static_cast<int>(ctx.ny),
             static_cast<int>(ctx.nz),
             ctx.has_active_mask ? 1 : 0,
-            ctx.has_region_mask ? 1 : 0,
+            ctx.has_exchange_faces ? 1 : 0,
             has_vf,
-            FULLMAG_FDM_MAX_EXCHANGE_REGIONS,
             ctx.A * cell_volume,
             cell_volume,
             1.0 / (ctx.dx * ctx.dx),
@@ -1351,7 +1334,7 @@ double reduce_demag_energy_fp64(Context &ctx) {
         return 0.0;
     }
     uint64_t blocks = launch_grid_for(ctx.cell_count);
-    double coeff = -0.5 * MU0 * ctx.Ms * ctx.dx * ctx.dy * ctx.dz;
+    double coeff = -0.5 * MU0 * (ctx.ms_field ? 1.0 : ctx.Ms) * ctx.dx * ctx.dy * ctx.dz;
     int has_vf = (ctx.boundary_tier > 0 && ctx.volume_fraction != nullptr) ? 1 : 0;
     demag_energy_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE>>>(
         static_cast<const double *>(ctx.m.x),
@@ -1361,6 +1344,7 @@ double reduce_demag_energy_fp64(Context &ctx) {
         static_cast<const double *>(ctx.h_demag.y),
         static_cast<const double *>(ctx.h_demag.z),
         ctx.volume_fraction,
+        ctx.ms_field,
         ctx.reduction_scratch,
         ctx.cell_count,
         has_vf,
@@ -1373,7 +1357,7 @@ double reduce_demag_energy_fp32(Context &ctx) {
         return 0.0;
     }
     uint64_t blocks = launch_grid_for(ctx.cell_count);
-    double coeff = -0.5 * MU0 * ctx.Ms * ctx.dx * ctx.dy * ctx.dz;
+    double coeff = -0.5 * MU0 * (ctx.ms_field ? 1.0 : ctx.Ms) * ctx.dx * ctx.dy * ctx.dz;
     int has_vf = (ctx.boundary_tier > 0 && ctx.volume_fraction != nullptr) ? 1 : 0;
     demag_energy_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE>>>(
         static_cast<const float *>(ctx.m.x),
@@ -1383,6 +1367,7 @@ double reduce_demag_energy_fp32(Context &ctx) {
         static_cast<const float *>(ctx.h_demag.y),
         static_cast<const float *>(ctx.h_demag.z),
         ctx.volume_fraction,
+        ctx.ms_field,
         ctx.reduction_scratch,
         ctx.cell_count,
         has_vf,
@@ -1399,7 +1384,7 @@ double reduce_external_energy_fp64(Context &ctx) {
     }
     uint64_t blocks = launch_grid_for(ctx.cell_count);
     int has_vf = (ctx.boundary_tier > 0 && ctx.volume_fraction != nullptr) ? 1 : 0;
-    double coeff = -MU0 * ctx.Ms * ctx.dx * ctx.dy * ctx.dz;
+    double coeff = -MU0 * (ctx.ms_field ? 1.0 : ctx.Ms) * ctx.dx * ctx.dy * ctx.dz;
     const auto *oe_x = has_external_profile ? static_cast<const double *>(ctx.h_oe_static.x) : nullptr;
     const auto *oe_y = has_external_profile ? static_cast<const double *>(ctx.h_oe_static.y) : nullptr;
     const auto *oe_z = has_external_profile ? static_cast<const double *>(ctx.h_oe_static.z) : nullptr;
@@ -1408,6 +1393,7 @@ double reduce_external_energy_fp64(Context &ctx) {
         static_cast<const double *>(ctx.m.y),
         static_cast<const double *>(ctx.m.z),
         ctx.volume_fraction,
+        ctx.ms_field,
         ctx.reduction_scratch,
         ctx.cell_count,
         has_vf,
@@ -1439,7 +1425,7 @@ double reduce_external_energy_fp32(Context &ctx) {
     }
     uint64_t blocks = launch_grid_for(ctx.cell_count);
     int has_vf = (ctx.boundary_tier > 0 && ctx.volume_fraction != nullptr) ? 1 : 0;
-    double coeff = -MU0 * ctx.Ms * ctx.dx * ctx.dy * ctx.dz;
+    double coeff = -MU0 * (ctx.ms_field ? 1.0 : ctx.Ms) * ctx.dx * ctx.dy * ctx.dz;
     const auto *oe_x = has_external_profile ? static_cast<const float *>(ctx.h_oe_static.x) : nullptr;
     const auto *oe_y = has_external_profile ? static_cast<const float *>(ctx.h_oe_static.y) : nullptr;
     const auto *oe_z = has_external_profile ? static_cast<const float *>(ctx.h_oe_static.z) : nullptr;
@@ -1448,6 +1434,7 @@ double reduce_external_energy_fp32(Context &ctx) {
         static_cast<const float *>(ctx.m.y),
         static_cast<const float *>(ctx.m.z),
         ctx.volume_fraction,
+        ctx.ms_field,
         ctx.reduction_scratch,
         ctx.cell_count,
         has_vf,

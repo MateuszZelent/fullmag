@@ -51,7 +51,8 @@ extern __global__ void llg_rhs_fp32_kernel(
     const float * __restrict__ mx, const float * __restrict__ my, const float * __restrict__ mz,
     const float * __restrict__ hx, const float * __restrict__ hy, const float * __restrict__ hz,
     float * __restrict__ out_x, float * __restrict__ out_y, float * __restrict__ out_z,
-    int n, float gamma_bar, float alpha, int disable_precession, SttParams stt, SotParams sot);
+    int n, float gamma_bar, float alpha, int disable_precession, SttParams stt, SotParams sot,
+    const double * __restrict__ alpha_field, double gamma);
 
 /* ── Stage kernels (fp32) ── */
 
@@ -197,7 +198,8 @@ static bool compute_rhs_into_fp32(Context &ctx, DeviceVectorField &rhs_out,
             static_cast<const float*>(ctx.work.x), static_cast<const float*>(ctx.work.y), static_cast<const float*>(ctx.work.z),
             static_cast<float*>(rhs_out.x), static_cast<float*>(rhs_out.y), static_cast<float*>(rhs_out.z),
             n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
-            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx),
+            ctx.alpha_field, ctx.gamma);
         context_note_local_pipeline_unfused_rhs(ctx);
         fullmag_fdm_note_llg_rhs_torque_device_launch(
             ctx, "RK23 fp32 LLG RHS launch");

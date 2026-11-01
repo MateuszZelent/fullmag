@@ -51,6 +51,8 @@ void copy_plan_desc_v2_fields(
 
 constexpr uint32_t legacy_plan_desc_v2_size = static_cast<uint32_t>(
     offsetof(fullmag_fdm_plan_desc_v2, has_rotated_interfacial_dmi));
+constexpr uint32_t rotated_dmi_plan_desc_v2_size = static_cast<uint32_t>(
+    offsetof(fullmag_fdm_plan_desc_v2, exchange_operator_mode));
 constexpr uint32_t complete_plan_desc_v2_size =
     static_cast<uint32_t>(sizeof(fullmag_fdm_plan_desc_v2));
 
@@ -212,6 +214,25 @@ bool rotated_dmi_has_valid_abi_and_composition(
         (plan.base.has_interfacial_dmi == 0 && plan.base.has_bulk_dmi == 0);
 }
 
+bool exchange_operator_tail_is_well_formed(const fullmag_fdm_plan_desc_v2 &plan)
+{
+    if (plan.reserved_exchange_operator != 0) return false;
+    switch (plan.exchange_operator_mode) {
+    case FULLMAG_FDM_EXCHANGE_OPERATOR_UNIFORM:
+        return plan.exchange_face_x_plus == nullptr &&
+            plan.exchange_face_y_plus == nullptr &&
+            plan.exchange_face_z_plus == nullptr &&
+            plan.exchange_face_len == 0;
+    case FULLMAG_FDM_EXCHANGE_OPERATOR_FACES:
+        return plan.exchange_face_x_plus != nullptr &&
+            plan.exchange_face_y_plus != nullptr &&
+            plan.exchange_face_z_plus != nullptr &&
+            plan.exchange_face_len != 0;
+    default:
+        return false;
+    }
+}
+
 } // namespace
 
 namespace fullmag::fdm {
@@ -238,6 +259,7 @@ int fullmag_fdm_plan_ingestion_v2_create_checked(
     constexpr uint32_t legacy_struct_size = legacy_plan_desc_v2_size;
     if (header.abi_version != FULLMAG_FDM_PLAN_DESC_ABI_V2 ||
         (header.struct_size != legacy_struct_size &&
+         header.struct_size != rotated_dmi_plan_desc_v2_size &&
          header.struct_size != sizeof(fullmag_fdm_plan_desc_v2)))
     {
         return FULLMAG_FDM_ERR_ABI;
@@ -252,6 +274,9 @@ int fullmag_fdm_plan_ingestion_v2_create_checked(
         return FULLMAG_FDM_ERR_INVALID;
     }
     if (!rotated_dmi_has_valid_open_boundary_exchange(normalized)) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (!exchange_operator_tail_is_well_formed(normalized)) {
         return FULLMAG_FDM_ERR_INVALID;
     }
 
@@ -278,6 +303,7 @@ int fullmag_fdm_plan_ingestion_v2_receipt_sized(
 {
     if (!ingestion || !out_receipt) return FULLMAG_FDM_ERR_INVALID;
     if (out_receipt_size != legacy_plan_desc_v2_size &&
+        out_receipt_size != rotated_dmi_plan_desc_v2_size &&
         out_receipt_size != complete_plan_desc_v2_size) {
         return FULLMAG_FDM_ERR_ABI;
     }

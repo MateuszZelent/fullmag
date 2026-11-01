@@ -3647,7 +3647,7 @@ fn fdm_object_region_material_overrides_materialize_to_cell_fields() {
 }
 
 #[test]
-fn fdm_cuda_region_material_fields_fail_in_planner_before_native_start() {
+fn fdm_cuda_region_material_fields_plan_cellwise_ms() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.problem_meta.runtime_metadata.insert(
         "runtime_selection".to_string(),
@@ -3665,19 +3665,15 @@ fn fdm_cuda_region_material_fields_fail_in_planner_before_native_start() {
     }];
     ir.object_regions.push(region);
 
-    let error = plan(&ir).expect_err("CUDA region material fields must fail before native start");
-    assert!(
-        error.reasons.iter().any(|reason| {
-            reason.contains("fdm_cuda_region_material_fields_unsupported")
-                && reason.contains("cellwise material fields")
-        }),
-        "unexpected planner errors: {:?}",
-        error.reasons
-    );
+    let plan = plan(&ir).expect("single-grid CUDA consumes cellwise Ms");
+    let fullmag_ir::BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    assert!(fdm.material.ms_field.is_some());
 }
 
 #[test]
-fn fdm_cuda_absorbing_boundary_fails_in_planner_before_native_start() {
+fn fdm_cuda_absorbing_boundary_plans_cellwise_damping() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.problem_meta.runtime_metadata.insert(
         "runtime_selection".to_string(),
@@ -3692,11 +3688,11 @@ fn fdm_cuda_absorbing_boundary_fails_in_planner_before_native_start() {
         frame: fullmag_ir::AbsorbingBoundaryFrameIR::Object,
     });
 
-    let error = plan(&ir).expect_err("CUDA absorbing boundary must fail before native start");
-    assert!(error.reasons.iter().any(|reason| {
-        reason.contains("fdm_cuda_absorbing_boundary_unsupported")
-            && reason.contains("cellwise damping fields")
-    }));
+    let plan = plan(&ir).expect("single-grid CUDA consumes cellwise damping");
+    let fullmag_ir::BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    assert!(fdm.material.alpha_field.is_some());
 }
 
 #[test]

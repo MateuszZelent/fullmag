@@ -16,7 +16,7 @@ namespace {
 static_assert(alignof(fullmag_fdm_plan_desc) == 8);
 static_assert(sizeof(fullmag_fdm_plan_desc) == 1280);
 static_assert(alignof(fullmag_fdm_plan_desc_v2) == 8);
-static_assert(sizeof(fullmag_fdm_plan_desc_v2) == 1400);
+static_assert(sizeof(fullmag_fdm_plan_desc_v2) == 1440);
 static_assert(alignof(fullmag_fdm_multilayer_plan_desc_v2) == 8);
 static_assert(sizeof(fullmag_fdm_multilayer_plan_desc_v2) == 160);
 static_assert(alignof(fullmag_fdm_rotated_interfacial_dmi_desc_v1) == 8);
@@ -117,7 +117,7 @@ static_assert(kBaseFieldCount == 140);
 static_assert(kGridFieldCount == 6);
 static_assert(kMaterialFieldCount == 4);
 static_assert(kTimeFieldCount == 13);
-static_assert(kExtensionFieldCount == 2);
+static_assert(kExtensionFieldCount == 8);
 
 void check(bool condition, const char *message) {
     if (!condition) {

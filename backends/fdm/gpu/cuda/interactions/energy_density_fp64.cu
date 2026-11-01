@@ -93,7 +93,8 @@ __global__ void energy_density_kernel(
     int include_rotated_interfacial_dmi,
     int include_bulk_dmi,
     int kind,
-    double ms,
+    double ms_scalar,
+    const double *ms_field,
     double external_x,
     double external_y,
     double external_z,
@@ -128,6 +129,7 @@ __global__ void energy_density_kernel(
     const double mmy = static_cast<double>(my[index]);
     const double mmz = static_cast<double>(mz[index]);
     const double phi_i = has_volume_fraction ? volume_fraction[index] : 1.0;
+    const double ms = ms_field ? ms_field[index] : ms_scalar;
     double density = 0.0;
     double dmi_density = 0.0;
 
@@ -376,6 +378,7 @@ bool launch_energy_density_observable(
             ctx.has_bulk_dmi ? 1 : 0,
             static_cast<int>(observable),
             ctx.Ms,
+            ctx.ms_field,
             ctx.has_external_field ? ctx.external_field[0] : 0.0,
             ctx.has_external_field ? ctx.external_field[1] : 0.0,
             ctx.has_external_field ? ctx.external_field[2] : 0.0,
@@ -442,6 +445,7 @@ bool launch_energy_density_observable(
             ctx.has_bulk_dmi ? 1 : 0,
             static_cast<int>(observable),
             ctx.Ms,
+            ctx.ms_field,
             ctx.has_external_field ? ctx.external_field[0] : 0.0,
             ctx.has_external_field ? ctx.external_field[1] : 0.0,
             ctx.has_external_field ? ctx.external_field[2] : 0.0,

@@ -137,16 +137,8 @@ pub(crate) fn validate_region_owned_planning(
         ));
     }
     if resolved_backend == BackendTarget::Fdm && runtime_requests_cuda(problem) {
-        if problem
-            .magnets
-            .iter()
-            .any(|magnet| magnet.absorbing_boundary.is_some())
-        {
-            errors.push(
-                "fdm_cuda_absorbing_boundary_unsupported: CUDA native does not yet support cellwise damping fields; use FDM CPU reference or FEM"
-                    .to_string(),
-            );
-        }
+        // Single-grid CUDA consumes cellwise Ms/Aex/alpha (including the
+        // absorbing-boundary damping); only the multilayer lane still rejects.
         let has_cuda_region_fields = problem.material_parameter_fields.iter().any(|assignment| {
             let active = assignment.region_id.as_deref().is_none_or(|region_id| {
                 problem
@@ -219,11 +211,6 @@ pub(crate) fn validate_region_owned_planning(
                         }
                     }
                 }
-            } else {
-                errors.push(
-                    "fdm_cuda_region_material_fields_unsupported: CUDA native does not yet support cellwise material fields (Ms/Aex/alpha); use FDM CPU reference or disable region material overrides"
-                        .to_string(),
-                );
             }
         }
     }

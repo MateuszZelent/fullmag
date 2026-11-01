@@ -39,7 +39,8 @@ extern __global__ void llg_rhs_fp64_kernel(
     const double * __restrict__ mx, const double * __restrict__ my, const double * __restrict__ mz,
     const double * __restrict__ hx, const double * __restrict__ hy, const double * __restrict__ hz,
     double * __restrict__ out_x, double * __restrict__ out_y, double * __restrict__ out_z,
-    int n, double gamma_bar, double alpha, int disable_precession, SttParams stt, SotParams sot);
+    int n, double gamma_bar, double alpha, int disable_precession, SttParams stt, SotParams sot,
+    const double * __restrict__ alpha_field, double gamma);
 
 // From llg_fp64.cu — Heun kernels
 extern __global__ void heun_predictor_fp64_kernel(
@@ -160,7 +161,8 @@ static bool compute_abm3_rhs_fp64(
             static_cast<double*>(rhs_out.y),
             static_cast<double*>(rhs_out.z),
             n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
-            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx),
+            ctx.alpha_field, ctx.gamma);
         context_note_local_pipeline_unfused_rhs(ctx);
         fullmag_fdm_note_llg_rhs_torque_device_launch(
             ctx, "ABM3 fp64 LLG RHS launch");

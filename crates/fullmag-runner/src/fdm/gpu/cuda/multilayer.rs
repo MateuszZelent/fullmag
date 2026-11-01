@@ -326,18 +326,13 @@ struct NativeStackedCudaPlan {
     global_grid: [u32; 3],
 }
 
-fn disabled_inter_body_exchange_pairs(layer_count: usize) -> Vec<fullmag_ir::FdmExchangePairRuleIR> {
-    let mut pairs = Vec::new();
-    for left in 0..layer_count {
-        for right in (left + 1)..layer_count {
-            pairs.push(fullmag_ir::FdmExchangePairRuleIR {
-                region_i: (left + 1) as u32,
-                region_j: (right + 1) as u32,
-                mode: fullmag_ir::FdmExchangePairModeIR::Disabled,
-            });
-        }
-    }
-    pairs
+/// Owner index of every region in the combined single-grid plan: region
+/// `layer + 1` belongs to body `layer`. Distinct owners are decoupled by the
+/// exchange operator without materializing a rule for every body pair.
+fn body_region_owners(layer_count: usize) -> Vec<u32> {
+    std::iter::once(0)
+        .chain((0..layer_count).map(|layer| layer as u32))
+        .collect()
 }
 
 fn plan_has_nonzero_body_local_dmi(plan: &FdmMultilayerPlanIR) -> bool {
@@ -3598,8 +3593,8 @@ fn build_native_stacked_cuda_plan(
             zhang_li_operator_version: None,
             zhang_li_target: None,
             zhang_li_lande_g: None,
-            inter_region_exchange: disabled_inter_body_exchange_pairs(plan.layers.len()),
-            region_owner: Vec::new(),
+            inter_region_exchange: Vec::new(),
+            region_owner: body_region_owners(plan.layers.len()),
             current_density: None,
             stt_degree: None,
             stt_beta: None,
@@ -6839,7 +6834,7 @@ mod tests {
     }
 
     #[test]
-    fn native_stacked_cuda_plan_disables_inter_body_exchange_pairs() {
+    fn native_stacked_cuda_plan_decouples_bodies_by_owner() {
         let mut plan = make_touching_plan(ExecutionPrecision::Double);
         plan.planner_summary.requested_strategy = "auto".to_string();
 
@@ -6847,13 +6842,10 @@ mod tests {
             .expect("native stacked plan should build")
             .expect("touching plan should be eligible for native stacked fast path");
 
+        assert!(native.combined_plan.inter_region_exchange.is_empty());
         assert_eq!(
-            native.combined_plan.inter_region_exchange,
-            vec![fullmag_ir::FdmExchangePairRuleIR {
-                region_i: 1,
-                region_j: 2,
-                mode: fullmag_ir::FdmExchangePairModeIR::Disabled,
-            }],
+            native.combined_plan.region_owner,
+            vec![0, 0, 1],
             "combined single-grid plan must preserve object-object free surfaces explicitly because the native FDM region default is harmonic mean"
         );
     }
