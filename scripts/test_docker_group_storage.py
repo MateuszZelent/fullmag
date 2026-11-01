@@ -11,12 +11,17 @@ import docker_group_storage as group_storage
 from bootstrap_docker_toolchain import control_volume_name
 
 
+CUDA_BASE_IMAGE = "nvidia/cuda:12.6.3-devel-ubuntu22.04@sha256:" + "a" * 64
+BACKEND_IMAGE = "sha256:" + "b" * 64
+
+
 class FakeControl:
     def __init__(self, source: Path, *, project="fullmag-worktree-alpha", worktree="alpha",
                  namespace="", extra_identity=None):
         self.project = project
         self.namespace = namespace
         self.volume = control_volume_name(project)
+        self.image = CUDA_BASE_IMAGE
         self.identity = {
             "project_name": project,
             "project_id": "source-project-alpha",
@@ -43,7 +48,7 @@ class FakeControl:
             mount += f",volume-subpath={self.namespace}"
         return ["docker", "run", "--network", "none", "--cap-drop", "ALL",
                 "--cap-add", "CHOWN", "--user", "0:0" if initialize else "65532:65532",
-                "--mount", mount, "--entrypoint", "/bin/bash", "image@sha256:" + "a" * 64,
+                "--mount", mount, "--entrypoint", "/bin/bash", self.image,
                 "-euo", "pipefail", "-c", script]
 
 
@@ -90,11 +95,13 @@ class DockerGroupStorageTests(unittest.TestCase):
         self.helper_calls.append((command, kwargs))
         return subprocess.CompletedProcess(command, 0, b"", b"")
 
-    def prepare(self, *, control=None, operation=None, source=None, docker=None, bounded=None):
+    def prepare(self, *, control=None, operation=None, source=None, docker=None, bounded=None,
+                helper_image=BACKEND_IMAGE):
         return group_storage.prepare(
             control or self.control,
             self.operation if operation is None else operation,
             self.source if source is None else source,
+            helper_image=helper_image,
             docker=self.docker_ok if docker is None else docker,
             bounded=self.bounded_ok if bounded is None else bounded,
         )
@@ -164,6 +171,7 @@ class DockerGroupStorageTests(unittest.TestCase):
         second_operation = self.operation_for(other, self.source)
         other._active_operation = second_operation
         second = group_storage.prepare(other, second_operation, self.source,
+                                       helper_image=BACKEND_IMAGE,
                                        docker=self.docker_ok, bounded=self.bounded_ok)
         self.assertEqual(first["control_volume"], second["control_volume"])
         self.assertEqual(first, second)
@@ -258,6 +266,51 @@ class DockerGroupStorageTests(unittest.TestCase):
         with self.assertRaises(group_storage.GroupStorageError):
             self.prepare(operation=bad_source)
         self.assertEqual(self.inspect_calls, [])
+
+    def test_root_helper_runs_in_backend_image_not_python_less_cuda_base(self):
+        self.prepare()
+        command = self.helper_calls[0][0]
+        operand = command.index("--entrypoint") + 2
+        self.assertEqual(command[operand - 1], "/bin/bash")
+        self.assertEqual(command[operand], BACKEND_IMAGE)
+        self.assertNotIn(CUDA_BASE_IMAGE, command)
+        self.assertEqual(command[command.index("--user") + 1], "0:0")
+        self.assertEqual(command[command.index("--network") + 1], "none")
+        self.assertTrue(command[-1].startswith("python3 - <<'PY'\n"))
+
+    def test_unpinned_helper_image_refuses_before_helper(self):
+        for image in ("", "fullmag-backend:latest", "sha256:" + "b" * 63, "x@sha256:" + "B" * 64,
+                      "img @sha256:" + "b" * 64, None):
+            with self.subTest(image=image), self.assertRaises(group_storage.GroupStorageError):
+                self.prepare(helper_image=image)
+        self.assertEqual(self.control.helper_calls, [])
+        self.assertEqual(self.helper_calls, [])
+
+    def test_helper_command_without_exact_image_operand_refuses(self):
+        original = self.control.helper_args
+
+        def foreign_image(script, *, initialize=False):
+            command = original(script, initialize=initialize)
+            command[command.index(CUDA_BASE_IMAGE)] = "other@sha256:" + "c" * 64
+            return command
+        self.control.helper_args = foreign_image
+        with self.assertRaises(group_storage.GroupStorageError):
+            self.prepare()
+        self.assertEqual(self.helper_calls, [])
+
+    def test_launcher_passes_backend_image_shared_with_storage_initializer(self):
+        source = (Path(__file__).resolve().parent / "docker_volume_dev.py").read_text(encoding="utf-8")
+        function = next(node for node in ast.walk(ast.parse(source))
+                        if isinstance(node, ast.FunctionDef) and node.name == "_backend_cache")
+        self.assertIn("image", [argument.arg for argument in function.args.args])
+        calls = [node for node in ast.walk(function) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Attribute) and node.func.attr == "prepare"
+                 and isinstance(node.func.value, ast.Name) and node.func.value.id == "group_storage"]
+        self.assertEqual(len(calls), 1)
+        keywords = {keyword.arg: keyword.value for keyword in calls[0].keywords}
+        self.assertIsInstance(keywords.get("helper_image"), ast.Name)
+        self.assertEqual(keywords["helper_image"].id, "image")
+        self.assertIn("helper[helper.index(control.image)] = image", source)
 
     def test_guest_initializer_is_valid_python_and_only_chowns_role_leaves(self):
         self.prepare()

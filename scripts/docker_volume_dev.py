@@ -771,7 +771,7 @@ def _backend_cache(control, operation, layout, selected, image, toolchain):
     grouped = _uses_private_group_storage(control, operation)
     if grouped:
         import docker_group_storage as group_storage
-        prepared_group = group_storage.prepare(control, operation, selected)
+        prepared_group = group_storage.prepare(control, operation, selected, helper_image=image)
         control.write(operation["root"] + "/private-group-storage.json", prepared_group)
     group_options = ({"group_volume": True, "group_helper_id": control._assert_live_operation_helper(operation)}
                      if grouped else {})
