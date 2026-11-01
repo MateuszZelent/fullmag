@@ -733,6 +733,69 @@
       "symbol": "fem_element_material_artifact_preserves_location_and_values",
       "responsibility": "Zapis współczynnika elementowego bez pominięcia ani projekcji węzłowej.",
       "evidence_status": "implemented"
+    },
+    {
+      "id": "fem-dg0-ms-owner-order",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "first_unsupported_elementwise_ms_cpu_owner",
+      "responsibility": "Planner order of DG0 Ms owners; prescribed SOT is rejected with Ms_element_field.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fem-dg0-ms-native-owner-gate",
+      "path": "backends/fem/core/fem_material_fields.cpp",
+      "symbol": "validate_elementwise_ms_runtime_support",
+      "responsibility": "Native create-time rejection of DG0 Ms with an unsupported owner, including prescribed SOT.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fem-transport-ms-planner-gate",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "fem_spin_transport_ms_realization_error",
+      "responsibility": "Planner rejection of DG0 Ms or nodal Ms that differs from the scalar transport-descriptor Ms.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fem-transport-ms-runner-gate",
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport/descriptor.rs",
+      "symbol": "validate_transport_ms_realization",
+      "responsibility": "Runner preflight of the transport Ms rule before any native transport call.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fem-transport-ms-native-gate",
+      "path": "backends/fem/cpu/mfem/interactions/transport_stage.cpp",
+      "symbol": "validate_transport_stage_ms_realization",
+      "responsibility": "Native rejection before the reciprocal stage-transport torque is installed.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fem-per-object-average-m",
+      "path": "backends/fem/src/api.cpp",
+      "symbol": "fullmag_fem_backend_average_m_for_nodes_f64",
+      "responsibility": "Per-object average m; with DG0 Ms it uses the element moment-weighted reduction.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fem-dg0-node-set-reduction",
+      "path": "backends/fem/core/fem_element_quadrature_material.cpp",
+      "symbol": "ms_weighted_aos3_average_reduction_for_node_set",
+      "responsibility": "Exact P1/DG0 moment reduction over the active elements whose four vertices lie in a node set.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fem-transport-ms-planner-regression",
+      "path": "crates/fullmag-plan/src/tests.rs",
+      "symbol": "fem_spin_transport_ms_realization_admits_only_the_scalar_torque_coefficient",
+      "responsibility": "Planner regression for the transport Ms rejection table.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fem-transport-ms-runner-regression",
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport/descriptor.rs",
+      "symbol": "transport_plan_rejects_spatial_ms_before_native_call",
+      "responsibility": "Runner regression for the transport Ms preflight.",
+      "evidence_status": "implemented"
     }
   ],
   "public_api": {

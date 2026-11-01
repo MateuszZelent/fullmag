@@ -412,7 +412,8 @@ the standard runtime rejects every elementwise `Ms_e` request on CPU and GPU
 before backend construction. The diagnostic names `Ms_element_field`, the
 resolved device, and the first active CPU owner in this fixed order: Zeeman,
 demag, uniaxial or cubic anisotropy, interfacial or bulk DMI, thermal Brown,
-Zhang-Li or Slonczewski STT, Oersted, then magnetoelastic. GPU reports its
+Zhang-Li or Slonczewski STT, prescribed SOT, Oersted, then magnetoelastic.
+Section 3.2.3 gives the prescribed-SOT reason. GPU reports its
 first unavailable owner as `GPU material-state upload`. With no active CPU
 owner, the explicit `native FEM handle lifecycle fallback` records that later
 LLG, relaxation, field, energy, or observable calls could still select an
@@ -648,6 +649,76 @@ the required comparability. Evidence still deferred beyond this pure contract:
 two-tetra field/energy oracle, per-owner directional derivatives, and CPU/GPU
 parity on the same map. This section does not lift the current fail-closed
 policy.
+
+#### 3.2.3 Ms consumers outside the element adapter
+
+Three FEM consumers read `Ms` outside the exchange, demag and Zeeman element
+adapter. Each one either uses the resolved realization or is rejected before
+it can run.
+
+**Prescribed SOT.** The `prescribed_sot.fullmag.v1` RHS is evaluated at
+every magnetic node `i` with the local coefficient
+
+```text
+omega_i = gamma_e hbar J_c f(t) / (2 e Ms_i t_F)                  [1/s]
+```
+
+where `gamma_e = gamma_mu0/mu0 [1/(T s)]`, `hbar [J s]`, `J_c [A/m^2]`, the
+dimensionless envelope `f(t)`, `e [C]`, `Ms_i [A/m]` and `t_F [m]`. The
+damping-like and field-like terms are `xi_DL omega_i` and `xi_FL omega_i`.
+`Ms_i` is the nodal P1 value or the scalar. A node shared by two DG0 elements
+has no single `Ms_i`, and the mass projection does not compensate. A plan with
+`Ms_element_field` and prescribed SOT is therefore rejected. The planner
+(`first_unsupported_elementwise_ms_cpu_owner`) and the native context builder
+(`validate_elementwise_ms_runtime_support`) both name the owner
+`prescribed SOT`, between Slonczewski STT and Oersted in the fixed order of
+section 3.2.1. Nodal P1 and scalar `Ms` with prescribed SOT stay legal. An
+element-quadrature SOT owner is deferred.
+
+**Coupled spin transport.** The bounded FEM M1/M2 transport descriptor carries
+one scalar `M_s`. Its torque, as in
+[spin-Hall drift-diffusion transport](0970-spin-hall-drift-diffusion-transport.md),
+
+```text
+T_tr,G = -(gamma_e / M_s) (hbar / 2e) (R_J + R_phi)               [1/s]
+```
+
+with `R_J + R_phi [A/m^3]`, divides by that scalar everywhere. With nodal values
+`Ms_i != M_s` the torque at node `i` would be wrong by the factor `M_s / Ms_i`.
+For example, halving `Ms_i` must double the torque there, and the scalar
+coefficient does not. Spatial `Ms` in the descriptor and the native transport
+ABI is deferred. Until then, the planner
+(`fem_spin_transport_ms_realization_error`) rejects spin transport with
+`ms_element_field`, and also with a nodal `material.ms_field` that differs from
+the scalar. A value differs when
+`|Ms_i - M_s| > 64 epsilon_double max(|Ms_i|, |M_s|)`, the same tolerance that
+decides whether the planner emits a nodal field at all. The runner preflight
+(`validate_transport_ms_realization`) applies the same rule to each descriptor
+before any native call. The native stage-transport callback
+(`validate_transport_stage_ms_realization`) applies it on magnetic nodes before
+it installs the reciprocal torque. A uniform nodal field equal to the scalar is
+the same coefficient and stays legal.
+
+**Per-object average magnetization.** With `Ms_element_field`, the global
+average is the exact P1/DG0 moment-weighted mean:
+
+```text
+<m>_E = sum_{e in E} Ms_e V_e (m_{n0}+m_{n1}+m_{n2}+m_{n3})/4
+        / sum_{e in E} Ms_e V_e                                    [1]
+```
+
+Here `E` is the set of active magnetic elements, `V_e [m^3]` is the element
+volume, and `m` is the dimensionless P1 reduced magnetization. The per-object
+reduction (`fullmag_fem_backend_average_m_for_nodes_f64`) uses the same
+formula. Its `E_O` contains the active elements whose four vertices all belong
+to the object node set `N_O`. It does not use a lumped nodal `Ms` weight, which
+is undefined for DG0. For two equal-volume tetrahedra with
+`Ms = 400 kA/m` and `m = +x`, and `Ms = 800 kA/m` and `m = -x`, the object that
+contains both has `<m_x> = (400 - 800)/1200 = -1/3`. Each one-tetrahedron object
+has `<m_x> = +1` or `-1`. Limitation: when objects share interface nodes, a
+foreign tetrahedron whose four vertices all lie on that interface also enters
+`E_O`. An element-indexed per-object reduction ABI would remove this case and is
+deferred. Nodal and scalar `Ms` keep the existing lumped-mass weighting.
 
 Contact/interface discovery is a realization step, not an authoring shortcut.
 FDM resolves contact from object/region masks and cell adjacency on one grid.
@@ -1026,7 +1097,10 @@ must include:
 - `rkky_unsupported_blocks_runtime_plan`,
 - `surface_top_selector_resolves_to_runtime_faces`,
 - `multilayer_fdm_regions_are_capability_gated`,
-- `airbox_rejects_magnetic_material_and_m_quantity`.
+- `airbox_rejects_magnetic_material_and_m_quantity`,
+- `fem_planner_elementwise_material_legality_distinguishes_a_from_ms` (prescribed-SOT case),
+- `fem_spin_transport_ms_realization_admits_only_the_scalar_torque_coefficient`,
+- `transport_plan_rejects_spatial_ms_before_native_call`.
 
 ## 6. Completeness checklist
 
@@ -1101,3 +1175,11 @@ must include:
 | Metadane FEM | `crates/fullmag-plan/src/fem.rs` | `gather_fem_material_field_plans` | Lokalizacja i statystyki zgodne z rozwiązaną reprezentacją współczynnika. |
 | Metadane FEM | `crates/fullmag-plan/src/tests/material_audit_fem.rs` | `fem_material_field_metadata_tracks_resolved_element_coefficients` | Regresja lokalizacji i statystyk DG0 niezależnie od kolejności regionów. |
 | Metadane FEM | `crates/fullmag-runner/src/artifacts.rs` | `fem_element_material_artifact_preserves_location_and_values` | Zapis współczynnika elementowego bez pominięcia ani projekcji węzłowej. |
+| FEM Ms owners | `crates/fullmag-plan/src/fem.rs` | `first_unsupported_elementwise_ms_cpu_owner` | Planner order of DG0 `Ms` owners, including the prescribed-SOT rejection. |
+| FEM Ms owners | `backends/fem/core/fem_material_fields.cpp` | `validate_elementwise_ms_runtime_support` | Native create-time rejection of DG0 `Ms` with an unsupported owner, including prescribed SOT. |
+| FEM transport Ms | `crates/fullmag-plan/src/fem.rs` | `fem_spin_transport_ms_realization_error` | Planner rejection of DG0 or heterogeneous nodal `Ms` with the scalar-`M_s` transport descriptor. |
+| FEM transport Ms | `crates/fullmag-runner/src/native_fem/steady_transport/descriptor.rs` | `validate_transport_ms_realization` | Runner preflight of the same rule before any native transport call. |
+| FEM transport Ms | `backends/fem/cpu/mfem/interactions/transport_stage.cpp` | `validate_transport_stage_ms_realization` | Native rejection before the reciprocal stage-transport torque is installed. |
+| FEM observables | `backends/fem/src/api.cpp` | `fullmag_fem_backend_average_m_for_nodes_f64` | Per-object average `m`; with DG0 `Ms` it uses the element moment-weighted reduction. |
+| FEM observables | `backends/fem/core/fem_element_quadrature_material.cpp` | `ms_weighted_aos3_average_reduction_for_node_set` | Exact P1/DG0 moment reduction over the elements whose vertices all lie in a node set. |
+| FEM Ms regressions | `crates/fullmag-plan/src/tests.rs` | `fem_spin_transport_ms_realization_admits_only_the_scalar_torque_coefficient` | Planner rejection table for transport with spatial `Ms`. |

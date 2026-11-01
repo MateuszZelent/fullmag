@@ -350,6 +350,28 @@ MsWeightedAos3AverageReduction
 P1TetrahedralMaterialRealization::ms_weighted_aos3_average_reduction(
     const std::vector<double> &aos3_nodal_values) const
 {
+    return reduce_ms_weighted_aos3_average(aos3_nodal_values, nullptr);
+}
+
+MsWeightedAos3AverageReduction
+P1TetrahedralMaterialRealization::ms_weighted_aos3_average_reduction_for_node_set(
+    const std::vector<double> &aos3_nodal_values,
+    const std::vector<std::uint8_t> &node_member_mask) const
+{
+    if (node_member_mask.size() != node_count_) {
+        throw std::invalid_argument(
+            "node-set membership mask has length " +
+            std::to_string(node_member_mask.size()) +
+            " but expected node_count=" + std::to_string(node_count_));
+    }
+    return reduce_ms_weighted_aos3_average(aos3_nodal_values, &node_member_mask);
+}
+
+MsWeightedAos3AverageReduction
+P1TetrahedralMaterialRealization::reduce_ms_weighted_aos3_average(
+    const std::vector<double> &aos3_nodal_values,
+    const std::vector<std::uint8_t> *node_member_mask) const
+{
     if (ms_.location != MaterialCoefficientLocation::element_dg0) {
         throw std::logic_error(
             "Ms-weighted average reduction is available only for element_dg0 Ms");
@@ -364,6 +386,16 @@ P1TetrahedralMaterialRealization::ms_weighted_aos3_average_reduction(
 
     MsWeightedAos3AverageReduction result;
     for (const std::size_t element : active_element_ordinals_) {
+        if (node_member_mask != nullptr) {
+            bool inside = true;
+            for (const std::uint64_t node : elements_[element].node_ids) {
+                inside = inside &&
+                    (*node_member_mask)[static_cast<std::size_t>(node)] != 0u;
+            }
+            if (!inside) {
+                continue;
+            }
+        }
         const double element_weight =
             ms_.values[element] * elements_[element].volume_m3;
         result.denominator += element_weight;

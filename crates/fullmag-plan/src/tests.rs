@@ -17806,6 +17806,59 @@ fn fem_planner_elementwise_material_legality_distinguishes_a_from_ms() {
             expected: Some(("Ms_element_field", "Slonczewski STT", "cpu")),
         },
         Case {
+            name: "CPU Ms prescribed SOT",
+            include_ms: true,
+            include_a: false,
+            gpu: false,
+            configure: |fem| {
+                fem.spin_torque_contract = Some(fullmag_ir::FemSpinTorquePlanIR {
+                    formula_version: "prescribed_sot.fullmag.v1".to_string(),
+                    operator_version: None,
+                    realization_version: None,
+                    target: None,
+                    stack_normal: None,
+                    lande_g: None,
+                    active_node_mask: None,
+                    active_element_mask: None,
+                    sot_current_density: Some(1.0e11),
+                    sot_xi_dl: Some(0.12),
+                    sot_xi_fl: Some(-0.02),
+                    sot_sigma: Some([0.0, 1.0, 0.0]),
+                    sot_thickness: Some(1.5e-9),
+                    sot_envelope: None,
+                    sot_drive: None,
+                });
+            },
+            expected: Some(("Ms_element_field", "prescribed SOT", "cpu")),
+        },
+        Case {
+            name: "CPU nodal Ms prescribed SOT",
+            include_ms: false,
+            include_a: false,
+            gpu: false,
+            configure: |fem| {
+                fem.material.ms_field = Some(vec![400e3, 800e3]);
+                fem.spin_torque_contract = Some(fullmag_ir::FemSpinTorquePlanIR {
+                    formula_version: "prescribed_sot.fullmag.v1".to_string(),
+                    operator_version: None,
+                    realization_version: None,
+                    target: None,
+                    stack_normal: None,
+                    lande_g: None,
+                    active_node_mask: None,
+                    active_element_mask: None,
+                    sot_current_density: Some(1.0e11),
+                    sot_xi_dl: Some(0.12),
+                    sot_xi_fl: Some(-0.02),
+                    sot_sigma: Some([0.0, 1.0, 0.0]),
+                    sot_thickness: Some(1.5e-9),
+                    sot_envelope: None,
+                    sot_drive: None,
+                });
+            },
+            expected: None,
+        },
+        Case {
             name: "CPU Ms Oersted",
             include_ms: true,
             include_a: false,
@@ -17939,6 +17992,65 @@ fn fem_planner_elementwise_material_legality_distinguishes_a_from_ms() {
             ),
         }
     }
+}
+
+#[test]
+fn fem_spin_transport_ms_realization_admits_only_the_scalar_torque_coefficient() {
+    let planned = plan(&fem_minimal_test_ir()).expect("baseline FEM plan must be legal");
+    let BackendPlanIR::Fem(base) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    let mut material = base.material.clone();
+    material.saturation_magnetisation = 800e3;
+    material.ms_field = None;
+
+    assert_eq!(
+        crate::fem::fem_spin_transport_ms_realization_error(true, &material, None),
+        None,
+        "scalar Ms is the coefficient the transport descriptor carries"
+    );
+
+    material.ms_field = Some(vec![400e3, 800e3, 800e3, 400e3]);
+    assert_eq!(
+        crate::fem::fem_spin_transport_ms_realization_error(false, &material, None),
+        None,
+        "spatial Ms stays legal when no spin transport module is planned"
+    );
+
+    // T_tr = -(gamma_e / Ms) (hbar / 2e) (R_J + R_phi): at the 400 kA/m nodes
+    // the scalar 800 kA/m coefficient would halve the torque instead of
+    // doubling it, so the plan must fail closed.
+    let reason = crate::fem::fem_spin_transport_ms_realization_error(true, &material, None)
+        .expect("heterogeneous nodal Ms must be rejected with spin transport");
+    assert!(
+        reason.contains("spin transport")
+            && reason.contains("material.ms_field")
+            && reason.contains("scalar saturation magnetization"),
+        "unexpected transport Ms reason: {reason}"
+    );
+
+    material.ms_field = Some(vec![800e3; 4]);
+    assert_eq!(
+        crate::fem::fem_spin_transport_ms_realization_error(true, &material, None),
+        None,
+        "a uniform nodal field equal to the scalar is the same coefficient"
+    );
+
+    material.ms_field = Some(vec![400e3; 4]);
+    assert!(
+        crate::fem::fem_spin_transport_ms_realization_error(true, &material, None).is_some(),
+        "a uniform nodal field that differs from the scalar must be rejected"
+    );
+
+    material.ms_field = None;
+    let element_ms = [400e3, 800e3];
+    let reason = crate::fem::fem_spin_transport_ms_realization_error(
+        true,
+        &material,
+        Some(&element_ms[..]),
+    )
+    .expect("element DG0 Ms must stay rejected with spin transport");
+    assert!(reason.contains("per-element Ms"), "unexpected DG0 reason: {reason}");
 }
 
 #[test]
