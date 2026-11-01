@@ -151,5 +151,10 @@ i 3 × `st.global.f32` (read-modify-write B).
   (`backends/fdm/gpu/cuda/interactions/exchange_fp32.cu:39`).
 - CUDA odrzuca `ms/a/alpha_field` (`crates/fullmag-runner/src/fdm/gpu/cuda/native.rs:1441`,
   `backends/fdm/api/c_api.cpp:1394`).
-- CPU ignoruje `region_mask` i `inter_region_exchange`
-  (`crates/fullmag-engine/src/fdm/cpu/fields/exchange.rs:42`).
+- Kernel CPU nie konsumuje `region_mask` ani `inter_region_exchange`
+  (`crates/fullmag-engine/src/fdm/cpu/fields/exchange.rs:42`). Publiczny planer
+  dopuszcza sprzężenia region–region tylko dla FDM z żądaniem CUDA
+  (`crates/fullmag-plan/src/validate.rs::region_coupling_is_executable_for_backend`;
+  test `fdm_region_region_explicit_exchange_blocks_on_cpu_reference`), więc pary
+  są pomijane po cichu tylko przy bezpośrednio odtwarzanym planie, nie na ścieżce
+  publicznej.
