@@ -197,8 +197,9 @@
         "A_j"
       ],
       "sources": [
-        "fdm-exchange-field",
-        "fdm-coupling-materialization"
+        "fdm-exchange-operator-builder",
+        "fdm-pair-rule-validation",
+        "fdm-plan-exchange-operator"
       ]
     },
     {
@@ -209,7 +210,7 @@
         "b_arg"
       ],
       "sources": [
-        "fdm-exchange-field"
+        "fdm-guarded-harmonic"
       ]
     },
     {
@@ -225,7 +226,8 @@
         "norm_squared_operator"
       ],
       "sources": [
-        "fdm-exchange-energy"
+        "fdm-exchange-energy",
+        "fdm-cuda-face-exchange"
       ]
     }
   ],
@@ -805,6 +807,48 @@
       "path": "crates/fullmag-runner/src/artifacts.rs",
       "symbol": "fem_element_material_artifact_preserves_location_and_values",
       "responsibility": "Zapis współczynnika elementowego bez pominięcia ani projekcji węzłowej.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-exchange-operator-builder",
+      "path": "crates/fullmag-engine/src/fdm/shared/exchange_operator.rs",
+      "symbol": "build_exchange_operator",
+      "responsibility": "Resolves grid connections, owners and typed pair rules into uniform or per-connection exchange coefficients shared by FDM CPU and CUDA.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-guarded-harmonic",
+      "path": "crates/fullmag-engine/src/fdm/shared/exchange_operator.rs",
+      "symbol": "harmonic_exchange",
+      "responsibility": "Guarded harmonic mean H(a,b) with the exact a=b branch.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-pair-rule-validation",
+      "path": "crates/fullmag-ir/src/execution.rs",
+      "symbol": "validate_fdm_exchange_pair_rules",
+      "responsibility": "Validates typed FDM pair rules on unbounded u32 region indices.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-plan-exchange-operator",
+      "path": "crates/fullmag-runner/src/fdm/exchange_operator.rs",
+      "symbol": "build_plan_exchange_operator",
+      "responsibility": "Lowers an FDM plan into the shared exchange operator for both lanes.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-cuda-face-exchange",
+      "path": "backends/fdm/gpu/cuda/interactions/exchange_fp64.cu",
+      "symbol": "exchange_field_fp64_kernel",
+      "responsibility": "CUDA fp64 exchange field from per-connection coefficients and cellwise Ms.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-cuda-heterogeneous-gate",
+      "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs",
+      "symbol": "ensure_cuda_heterogeneous_material_supported",
+      "responsibility": "Fail-closed CUDA capability gate for cellwise Ms/alpha and variable-A combinations.",
       "evidence_status": "implemented"
     }
   ],

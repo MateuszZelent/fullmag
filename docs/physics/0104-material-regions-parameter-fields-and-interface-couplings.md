@@ -410,14 +410,19 @@ region legend, without generating pair rules for every object pair.
   $\mathbf M=M_{s,i}\mathbf m_i$, the local field prefactors
   $2/(\mu_0M_{s,i})$, the demagnetization/Zeeman energies and every LLG
   right-hand side through $\alpha_i$ and $\gamma/(1+\alpha_i^2)$.
-- **CUDA combinations that stay blocked** while the heterogeneous material path
-  is active (non-uniform $M_s$, $A$ or $\alpha$, or `faces` mode): boundary
-  correction T0/T1, Brown thermal noise, Zhang-Li/Slonczewski/SOT and GPU
-  transport torques, DMI with non-uniform $A$ (its natural boundary condition
-  depends on local $A$), rotated interfacial DMI with non-uniform $M_s$, and
-  cellwise DMI fields. Each blocks planning or backend construction with an
-  explicit `fdm_cuda_heterogeneous_material_unsupported:<owner>` error; there is
-  no CPU fallback.
+- **Face coefficients alone** change only exchange. The binary-mask, T0 and T1
+  exchange kernels and their energy reductions all read the same per-connection
+  coefficients, so region rules and the multi-object owner decoupling combine
+  with every other term.
+- **CUDA combinations that stay blocked** with cellwise $M_s$ or $\alpha$:
+  boundary correction T0/T1 (its demagnetization correction and field scale use
+  the scalar $M_s$), Brown thermal noise, Zhang-Li/Slonczewski/SOT and GPU
+  transport torques, and rotated interfacial DMI with non-uniform $M_s$. DMI
+  with non-uniform $A$ is blocked as well (its natural boundary condition
+  depends on local $A$), and cellwise DMI fields remain unsupported. Each
+  blocks backend construction with an explicit
+  `fdm_cuda_heterogeneous_material_unsupported:<owner>` error; there is no CPU
+  fallback.
 
 Multilayer FDM with region-owned material/coupling is out of scope for v1 and
 must be capability-gated. It cannot silently fall through to a partially
@@ -1154,9 +1159,10 @@ must include:
   marker metadata alone is invalid.
 - Multilayer FDM plus region-owned material/coupling is deferred behind a
   capability gate.
-- FDM CUDA heterogeneous materials do not yet combine with boundary correction
-  T0/T1, thermal noise, spin torques, DMI with non-uniform $A$ or rotated DMI
-  with non-uniform $M_s$ (see {ref}`material-regions-fdm-lane-realization`).
+- FDM CUDA cellwise $M_s$/$\alpha$ do not yet combine with boundary correction
+  T0/T1, thermal noise, spin torques or rotated DMI with non-uniform $M_s$, and
+  DMI does not combine with non-uniform $A$ (see
+  {ref}`material-regions-fdm-lane-realization`).
 - The production choice between per-face coefficient arrays and a compact
   material-index representation is decided by the measurements recorded in
   `docs/audits/2026-11-01-fdm-unbounded-regions-benchmark.md`.
@@ -1199,3 +1205,9 @@ must include:
 | Metadane FEM | `crates/fullmag-plan/src/fem.rs` | `gather_fem_material_field_plans` | Lokalizacja i statystyki zgodne z rozwiązaną reprezentacją współczynnika. |
 | Metadane FEM | `crates/fullmag-plan/src/tests/material_audit_fem.rs` | `fem_material_field_metadata_tracks_resolved_element_coefficients` | Regresja lokalizacji i statystyk DG0 niezależnie od kolejności regionów. |
 | Metadane FEM | `crates/fullmag-runner/src/artifacts.rs` | `fem_element_material_artifact_preserves_location_and_values` | Zapis współczynnika elementowego bez pominięcia ani projekcji węzłowej. |
+| Operator wymiany FDM | `crates/fullmag-engine/src/fdm/shared/exchange_operator.rs` | `build_exchange_operator` | Połączenia siatki, właściciele i typowane reguły par → `uniform` albo współczynniki na połączeniach, wspólne dla CPU i CUDA. |
+| Operator wymiany FDM | `crates/fullmag-engine/src/fdm/shared/exchange_operator.rs` | `harmonic_exchange` | Strzeżona średnia harmoniczna $H(a,b)$ z dokładną gałęzią $a=b$. |
+| Reguły par FDM | `crates/fullmag-ir/src/execution.rs` | `validate_fdm_exchange_pair_rules` | Walidacja reguł `harmonic_scale`/`explicit`/`disabled` na indeksach `u32` bez limitu. |
+| Plan → operator | `crates/fullmag-runner/src/fdm/exchange_operator.rs` | `build_plan_exchange_operator` | Obniżenie planu FDM do wspólnego operatora wymiany. |
+| Wymiana CUDA | `backends/fdm/gpu/cuda/interactions/exchange_fp64.cu` | `exchange_field_fp64_kernel` | Pole wymiany z współczynników na połączeniach i lokalnego $M_s$. |
+| Bramka CUDA | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `ensure_cuda_heterogeneous_material_supported` | Jawna odmowa niewspieranych kombinacji z komórkowym $M_s$/$\alpha$ i zmiennym $A$. |
