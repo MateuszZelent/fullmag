@@ -42,6 +42,9 @@ right = body.add_region(
     fm.Box(size=(SIZE[0] / 2.0, SIZE[1], SIZE[2])).translate((SIZE[0] / 4.0, 0.0, 0.0)),
 )
 right.material.Ms = 800e3
+# The default smooth Ms transition blends cells near the interface; the
+# analytic value needs exactly 400 / 800 kA/m on the two halves.
+right.material_transition(kind="sharp")
 
 study.demag(enabled=False)
 study.solver(fix_dt=DT, integrator="rk4")

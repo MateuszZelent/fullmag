@@ -124,6 +124,33 @@ zmierzonych maksimów.
   osiami `sample/component/cell` na CUDA). Rozjazd układu jest istniejącym
   problemem artefaktów, poza zakresem tego brancha (follow-up).
 
+## 2b. Trzecia recenzja: kontrole analityczne (build `bb3b71cdc`)
+
+Poprawki FDM z trzeciej recenzji (punkty 1, 2, 5, 7). Każda ma niezależny przypadek
+analityczny, nie tylko parytet CPU–GPU.
+
+| Punkt | Przypadek | Oczekiwane | Zmierzone przed poprawką | Zmierzone po poprawce |
+|---|---|---|---|---|
+| 2 (CUDA E_mel) | 1 komórka 2 nm, tylko MEL, B1 = −3.4e6 Pa, ε11 = 1e-3; m: x → y | ΔE = B1·ε11·V = −2.72e-23 J; `eden_total` = −3400 J/m³ | ΔE = 0, `eden_total` = 0 (fp64 i fp32) | ΔE = −2.72e-23 J, `eden_total` = −3400 J/m³, błąd wzgl. 0 (fp64 i fp32) |
+| 2 (CUDA pole B2) | 2 komórki, Ms = 800 / 400 kA/m, B2 = 7.8e6 Pa, 2ε12 = 2e-4, m = x | H_y = −2·B2·ε12/(μ0·Ms_i) = −1551.76 / −3103.52 A/m | −775.88 / −1551.76 A/m (połowa) | −1551.76 / −3103.52 A/m, błąd wzgl. 0, iloraz 2.0 |
+| 7 (wiązanie transportu) | create z `alpha_field` albo `ms_field`, potem `fullmag_fdm_context_bind_gpu_transport_v1` | odmowa `fdm_cuda_heterogeneous_material_unsupported:gpu_transport` | brak bramki materiałowej | odmowa z tą nazwą; backend jednorodny bez tej nazwy |
+| 5 (średnie m) | 16×4×1, Ms = 400 / 800 kA/m (przejście `sharp`), m = +x / −x | ⟨m_x⟩ = −1/3 | 0 (średnia arytmetyczna, z testu jednostkowego) | CPU: −0.3333333333333333, CUDA: −0.3333333333333333 |
+
+- Punkty 2 i 7: `scripts/benchmarks/fdm_cuda_analytic_abi_checks.py` (ctypes do zbudowanej
+  `libfullmag_fdm.so`, bez kompilacji testów). Kolumnę „przed” zmierzono tym samym skryptem
+  na buildzie `47191181c`.
+- Punkt 5: `scripts/benchmarks/fdm_moment_weighted_mean_case.py`, wiersz z `scalars.csv`.
+  Z domyślnym gładkim przejściem `mesh_relative(cells=3)` wynik to −0.2554, bo Ms jest
+  mieszane przy granicy regionów; to poprawna średnia ważona dla takiego pola Ms.
+- Punkt 1 (CPU MEL z lokalnym Ms): planer nie ustawia dziś MEL dla FDM (`mel_b1` zawsze
+  `None`), więc nie da się go uruchomić z DSL. Dowodem są testy jednostkowe
+  `magnetoelastic::tests` (Ms 800/400 → pole 2×, gradient energii różnicami centralnymi,
+  ΔE = B1·ε11·V), dodane do kroku CI.
+- Pełny parytet z `--with-fp32` na buildzie `bb3b71cdc` kończy się kodem 0; wszystkie hashe
+  `m_final` i błędy są identyczne jak w sekcjach 2 i 2a.
+- Błąd znaleziony przy okazji: pole MEL na CUDA miało B2 zamiast 2·B2 dla tensorowego
+  odkształcenia ścinającego (nota 0700); poprawione w fp64 i fp32.
+
 ## 3. Niezmienność względem `master`
 
 Te same przypadki jednorodne w grupie bazowej (`c416e1b70` + `5f87465ad`):

@@ -448,8 +448,9 @@ region legend, without generating pair rules for every object pair.
   note 0910: they are weighted by the magnetic moment,
   $\langle\mathbf m\rangle=\sum_i M_{s,i}V\mathbf m_i/\sum_i M_{s,i}V$ over active
   cells, on FDM CPU and CUDA. Without a cellwise $M_s$ this is the arithmetic
-  mean, computed exactly as before. For example $M_s=(400,800)$ kA/m with
-  $\mathbf m=(+\hat x,-\hat x)$ gives $\langle m_x\rangle=-1/3$.
+  mean, computed exactly as before. For example two equal halves with a sharp
+  transition, $M_s=(400,800)$ kA/m and $\mathbf m=(+\hat x,-\hat x)$, give
+  $\langle m_x\rangle=-1/3$.
 - **Precision contract.** Bit identity is promised only in fp64: for a uniform
   material the `uniform` operator reproduces the pre-change CPU and CUDA fp64
   trajectories bit for bit, with or without region labels. CUDA fp32 has no
