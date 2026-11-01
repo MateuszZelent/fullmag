@@ -601,16 +601,44 @@ def _frontend(control, operation, selected, state, port, image):
                 ("source_root", "worktree_id", "dependency_seed_sha256", "toolpins_sha256", "host_port", "files", "live_directories"))):
         inputs = previous_inputs
     key = metadata_cache_key(inputs, control.project)
-    volume = _owned_volume(control, "frontend", key)
+    grouped = _uses_private_group_storage(control, operation)
+    if grouped:
+        import docker_group_storage as group_storage
+        volume = control.volume
+    else:
+        volume = _owned_volume(control, "frontend", key)
     operation["receipt"]["frontend_volume"] = volume
-    request = canonical({"files": files, "inputs": inputs})
+    request = canonical({"files": files, "inputs": inputs, "previous_inputs": previous_inputs, "group_storage": grouped})
     if len(request) > 8 * 1024 * 1024:
         raise BuildControlError("Frontend metadata exceeds transfer budget")
     # Metadata only: the four application directories stay live readonly binds.
     script = r'''
-import base64, hashlib, json, os, pathlib, stat, sys
+import base64, hashlib, json, os, pathlib, stat, sys, fcntl
 root=pathlib.Path('/data/workspace')
 request=json.load(sys.stdin)
+if root.is_symlink(): raise RuntimeError('Frontend workspace root is a link')
+grouped=request.get('group_storage') is True
+previous=request.get('previous_inputs')
+if grouped:
+    cache=pathlib.Path('/data/cache')
+    if cache.is_symlink(): raise RuntimeError('Frontend cache is a link')
+    cache.mkdir(exist_ok=True)
+    descriptor=os.open(cache/'.fullmag-frontend-runtime.lock',os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600)
+    fcntl.flock(descriptor,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    if isinstance(previous,dict):
+        allowed={item['relative']:item['sha256'] for item in previous.get('files',[])}
+        for record in request['files']:
+            relative=pathlib.PurePosixPath(record['relative'])
+            if relative.is_absolute() or '..' in relative.parts: raise RuntimeError('Unsafe frontend metadata path')
+            node=root
+            for part in relative.parts:
+                node=node/part
+                if node.is_symlink(): raise RuntimeError('Frontend metadata ancestry is a link')
+            if node.exists() and record['relative'] not in ('apps/control-room/tsconfig.json','apps/control-room/next-env.d.ts'):
+                actual=hashlib.sha256(node.read_bytes()).hexdigest()
+                requested=hashlib.sha256(base64.b64decode(record['data'],validate=True)).hexdigest()
+                if actual not in (requested,allowed.get(record['relative'])):
+                    raise RuntimeError('Frontend metadata has unknown changes; all state retained')
 freeze=pathlib.Path('/data/inputs-freeze.json')
 if freeze.exists() or freeze.is_symlink():
     descriptor=os.open(freeze, os.O_RDONLY | os.O_NOFOLLOW)
@@ -626,10 +654,32 @@ if freeze.exists() or freeze.is_symlink():
     if (frozen.get('schema')!='fullmag.docker-development-inputs-freeze.v1'
             or frozen.get('frozen_root')!='/state/development/frozen-inputs'
             or frozen.get('manifest_digest')!=digest
-            or frozen.get('files')!=original.get('files')
-            or without_commit(original)!=without_commit(request['inputs'])):
-        raise RuntimeError('Frozen frontend configuration changed; cache retained')
-    request['inputs']=original
+            or frozen.get('files')!=original.get('files')):
+        raise RuntimeError('Frozen frontend ownership manifest changed; retained')
+    if without_commit(original)!=without_commit(request['inputs']):
+        if not grouped or not isinstance(previous,dict) or without_commit(original)!=without_commit(previous):
+            raise RuntimeError('Frozen frontend configuration differs from its saved group inputs')
+        frozen_root=pathlib.Path('/data/frozen-inputs')
+        if frozen_root.is_symlink() or not frozen_root.is_dir(): raise RuntimeError('Frozen input root is not a real directory')
+        allowed={item['relative']:item['sha256'] for item in original['files']}
+        observed=[]
+        for directory,dirs,names in os.walk(frozen_root,followlinks=False):
+            for name in dirs+names:
+                node=pathlib.Path(directory)/name
+                if node.is_symlink(): raise RuntimeError('Frozen input tree contains a link')
+            for name in names:
+                node=pathlib.Path(directory)/name
+                rel=node.relative_to(frozen_root).as_posix()
+                if rel not in allowed or hashlib.sha256(node.read_bytes()).hexdigest()!=allowed[rel]:
+                    raise RuntimeError('Frozen input tree contains unknown or changed data')
+                observed.append(node)
+        if {node.relative_to(frozen_root).as_posix() for node in observed}!=set(allowed):
+            raise RuntimeError('Frozen input tree inventory differs')
+        for node in observed: node.unlink()
+        for directory,dirs,names in os.walk(frozen_root,topdown=False): pathlib.Path(directory).rmdir()
+        freeze.unlink()
+    else:
+        request['inputs']=original
 root.mkdir(parents=True,exist_ok=True)
 cache=pathlib.Path('/data/cache')
 if cache.is_symlink(): raise RuntimeError('Frontend cache is a link')
@@ -651,7 +701,20 @@ for record in request['files']:
     if target.is_symlink(): raise RuntimeError('Frontend seed is a link')
     if target.exists():
         if target.read_bytes()!=data and record['relative'] not in ('apps/control-room/tsconfig.json','apps/control-room/next-env.d.ts'):
-            raise RuntimeError('Frontend metadata changed; cache retained')
+            if not grouped or not isinstance(previous,dict):
+                raise RuntimeError('Frontend metadata changed; cache retained')
+            allowed={item['relative']:item['sha256'] for item in previous.get('files',[])}
+            if hashlib.sha256(target.read_bytes()).hexdigest()!=allowed.get(record['relative']):
+                raise RuntimeError('Frontend metadata contains unknown changes; retained')
+            temporary=target.with_name(target.name+'.group-seed.tmp')
+            if temporary.is_symlink(): raise RuntimeError('Frontend metadata staging is a link')
+            if temporary.exists():
+                if not temporary.is_file() or temporary.read_bytes()!=data:
+                    raise RuntimeError('Frontend metadata staging contains unknown data')
+            else:
+                with temporary.open('xb') as stream:
+                    stream.write(data);stream.flush();os.fsync(stream.fileno())
+            os.replace(temporary,target)
     else:
         with target.open('xb') as stream:
             stream.write(data); stream.flush(); os.fsync(stream.fileno())
@@ -662,7 +725,9 @@ for name in ('app','src','public','scripts'):
 print(json.dumps({'state':'seeded','files':len(request['files']),'inputs':request['inputs']}))
 '''
     args = control.helper_args("exec /usr/local/bin/python3 -I -c " + __import__('shlex').quote(script))
-    args[args.index("--entrypoint"):args.index("--entrypoint")] = ["--mount", "type=volume,src=" + volume + ",dst=/data,volume-nocopy"]
+    extra = (group_storage.cli_mount_args(control, "frontend", "/data") if grouped else
+             ["--mount", "type=volume,src=" + volume + ",dst=/data,volume-nocopy"])
+    args[args.index("--entrypoint"):args.index("--entrypoint")] = extra
     args[args.index(control.image)] = image
     result = bounded_capture(args, data=request, timeout=120)
     if result.returncode:
@@ -674,8 +739,42 @@ print(json.dumps({'state':'seeded','files':len(request['files']),'inputs':reques
     return inputs, volume
 
 
+def _uses_private_group_storage(control, operation):
+    mode = operation["receipt"].get("private_group_storage")
+    if mode not in (None, "group-volume-v1"):
+        raise BuildControlError("Unknown private group storage layout")
+    if mode is not None:
+        return True
+    reader = getattr(control, "read", None)
+    marker = reader("private/.owner.json", optional=True) if callable(reader) else None
+    if isinstance(marker, Mapping) and marker.get("schema") == "fullmag.docker-group-storage-owner.v1":
+        raise BuildControlError("Single-volume group cannot fall back to legacy volume allocation; resume its pinned layout")
+    return False
+
+
+def _pin_private_group_storage(control, operation, *, new_render, previous=None):
+    """Persist layout selection before allocation so interrupted resume is stable."""
+    recorded = operation["receipt"].get("private_group_storage")
+    if recorded not in (None, "group-volume-v1"):
+        raise BuildControlError("Unknown retained private group storage layout")
+    inherited = previous.get("private_group_storage") if isinstance(previous, Mapping) else None
+    if inherited not in (None, "group-volume-v1"):
+        raise BuildControlError("Unknown previous private group storage layout")
+    if new_render or inherited is not None:
+        operation["receipt"]["private_group_storage"] = "group-volume-v1"
+        control.write(operation["root"] + "/receipt.json", operation["receipt"])
+    return _uses_private_group_storage(control, operation)
+
+
 def _backend_cache(control, operation, layout, selected, image, toolchain):
     import docker_backend_volume_cache as cache
+    grouped = _uses_private_group_storage(control, operation)
+    if grouped:
+        import docker_group_storage as group_storage
+        prepared_group = group_storage.prepare(control, operation, selected)
+        control.write(operation["root"] + "/private-group-storage.json", prepared_group)
+    group_options = ({"group_volume": True, "group_helper_id": control._assert_live_operation_helper(operation)}
+                     if grouped else {})
     def volume_docker(*args):
         result = docker_capture(*args, allow_failure=True)
         if result.returncode:
@@ -686,10 +785,10 @@ def _backend_cache(control, operation, layout, selected, image, toolchain):
     relative = operation["root"] + "/backend-cache.json"
     layout = {**layout, "compose_project": control.project}
     import docker_shared_build_storage as shared
-    planned = cache.prepare(layout, selected, image, layout["storage_root"],
+    planned = cache.prepare(layout, selected, image, (None if grouped else layout["storage_root"]),
         source_root=selected, toolchain_image=toolchain,
         control_volume_name=control.volume, control_namespace=control.namespace,
-        shared_packages=True)
+        shared_packages=True, **group_options)
     def shared_docker(*args):
         try:
             return volume_docker(*args)
@@ -713,10 +812,10 @@ def _backend_cache(control, operation, layout, selected, image, toolchain):
     control.write(operation["root"] + "/shared-storage.json", {
         "schema": shared.SCHEMA, "project_id": planned["project_id"],
         "volumes": shared.volume_descriptors(planned["project_id"]), "initialization": proof})
-    profile = cache.prepare(layout, selected, image, layout["storage_root"], volume_docker,
+    profile = cache.prepare(layout, selected, image, (None if grouped else layout["storage_root"]), volume_docker,
         source_root=selected, toolchain_image=toolchain, active_consumers=consumers,
         control_volume_name=control.volume, control_namespace=control.namespace,
-        shared_packages=True)
+        shared_packages=True, **group_options)
     snapshot = _active_isolated_snapshot(control)
     if snapshot is not None:
         from docker_isolated_control_prepare import prepare_snapshot_control
@@ -728,6 +827,9 @@ def _backend_cache(control, operation, layout, selected, image, toolchain):
     receipt = cache._read_json_output(output.decode())
     result = cache.validate(profile, profile["volume_documents"], receipt, consumers)
     control.write(relative, result)
+    if grouped:
+        control.write("backend/group-storage.json", {
+            "schema": "fullmag.private-group-cache-registry.v1", "state": "ready", "profile": result})
     return result
 
 
@@ -867,7 +969,14 @@ def _group_ledger(control, operation, image, *, new_render=False):
         generation = generation_record["generation"]
     generation = _select_group_ledger_generation(empty_generation, generation_record)
     key = group_ledger.volume_key(daemon["id_sha256"], control.project, generation)
-    volume = _owned_volume(control, group_ledger.VOLUME_ROLE, key)
+    grouped = _uses_private_group_storage(control, operation)
+    if grouped:
+        import docker_group_storage as group_storage
+        volume = control.volume
+        ledger_options = {"ledger_subpath": group_storage.role_subpath(control, "ledger")}
+    else:
+        volume = _owned_volume(control, group_ledger.VOLUME_ROLE, key)
+        ledger_options = {}
     _validate_empty_quarantine_ledger_volume(control, empty_generation, volume)
     # Create the ledger leaf before admission: the backend is attested
     # before its native initializer would otherwise create it.
@@ -875,13 +984,14 @@ def _group_ledger(control, operation, image, *, new_render=False):
               "mkdir -m 0750 /data/ledger; fi; test -d /data/ledger; "
               "test $(stat -c %u /data/ledger) = 65532")
     args = control.helper_args(script)
-    args[args.index("--entrypoint"):args.index("--entrypoint")] = [
-        "--mount", "type=volume,src=" + volume + ",dst=/data,volume-nocopy"]
+    extra = (group_storage.cli_mount_args(control, "ledger", "/data") if grouped else
+             ["--mount", "type=volume,src=" + volume + ",dst=/data,volume-nocopy"])
+    args[args.index("--entrypoint"):args.index("--entrypoint")] = extra
     result = bounded_capture(args, data=b"", timeout=90)
     if result.returncode:
         raise BuildControlError("Group ledger initialization failed: "
                                 + result.stderr.decode("utf-8", "replace"))
-    profile = group_ledger.profile(daemon["id_sha256"], control.project, volume, image)
+    profile = group_ledger.profile(daemon["id_sha256"], control.project, volume, image, **ledger_options)
     record = {"schema": "fullmag.docker-group-ledger.v1", "profile": group_ledger.PROFILE,
               "daemon_id_sha256": daemon["id_sha256"], "compose_project": control.project,
               "volume_name": volume, "host_id": profile["environment"][group_ledger.HOST_ID_ENV]}
@@ -2158,6 +2268,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
                     "Post-build continuation changed under the new development lease: " + str(error)
                 ) from error
         local_volume(state)
+        _pin_private_group_storage(control, operation, new_render=provided_operation is None)
         cache = _backend_cache(control, operation, layout, selected, image, toolchain["image_id"])
         operation["receipt"]["backend_volumes"] = cache["volume_names"]
         frontend_inputs, frontend_volume = _frontend(control, operation, selected, state, args.port, image)
@@ -2359,6 +2470,12 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             {"type": "volume", "source": "frontend-build", "target": "/state/development", "volume": {"nocopy": True}},
             {"type": "volume", "source": "build-control", "target": "/opt/fullmag/control", "read_only": True,
              "volume": {"nocopy": True, "subpath": _resolved_control_subpath(control, "frontend")}}]
+        if operation["receipt"].get("private_group_storage") == "group-volume-v1":
+            import docker_group_storage as group_storage
+            for mount in frontend["volumes"]:
+                if mount.get("target") == "/state/development":
+                    mount["volume"]["subpath"] = group_storage.role_subpath(control, "frontend")
+            frontend["environment"]["FULLMAG_PRIVATE_GROUP_STORAGE"] = "group-volume-v1"
         owner_tmpfs = "/run/fullmag/frontend-owner:rw,nosuid,nodev,noexec,size=1m,uid=65532,gid=65532,mode=0700"
         existing_tmpfs = [
             value for value in frontend.get("tmpfs", [])
@@ -6331,6 +6448,7 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
     inputs.pop('attempt', None)
     inputs.pop('config_sha256', None)
     with control.operation('development', inputs) as operation:
+        _pin_private_group_storage(control, operation, new_render=False, previous=previous)
         operation['receipt'].update(operator_probe_record)
         operation['receipt'].update(state='validating-frontend-refresh', state_root=str(state),
             backend_volumes=previous['backend_volumes'], previous_frontend_volume=previous['frontend_volume'])
@@ -6356,8 +6474,12 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
         control.write(operation['root'] + '/rollback-compose.json', document)
         control.write(operation['root'] + '/rollback-development-inputs.json',
                       control.read('frontend/development-inputs.json'))
-        for name in ('backend-cache.json', 'host-ledger.json', 'ledger-maintenance-compose.json'):
-            control.write(operation['root'] + '/' + name, control.read(previous_root + '/' + name))
+        for name in ('backend-cache.json', 'group-ledger.json', 'host-ledger.json', 'ledger-maintenance-compose.json'):
+            record = control.read(previous_root + '/' + name, optional=True)
+            if record is not None:
+                control.write(operation['root'] + '/' + name, record)
+            elif name == 'backend-cache.json':
+                raise BuildControlError('Frontend refresh has no retained backend cache proof')
         # Quiesce the sole browser admission route before the final empty-API
         # fence. Unknown stop/seed outcomes retain this exact control lease.
         operation['daemon_pending'] = True

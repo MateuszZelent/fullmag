@@ -854,14 +854,16 @@ every FDM operator evaluated on $G$ equals the same operator on the native
 grids; no value is interpolated. Cells outside $\mathcal C$ carry no value:
 they are excluded from every target, `domain` included, and are not air with a
 zero field. Membership on $\mathcal C$ is the native region mask of the
-covering layer (inactive native cells stay non-magnetic); the native region
-legends merge by numeric identity and must agree. The `Default` section and
+covering layer (inactive native cells stay non-magnetic). The planner numbers
+regions per magnet, so each layer's legend is renumbered into its own range of
+composite ids before merging; 0 (magnetic, no region) and the inactive marker
+keep their meaning. The `Default` section and
 its bounds use $G$ instead of the common transform layout.
 
 The carrier fails closed with `planar_scope_unsupported` when spacings differ,
 when a shift is not integral, when two native grids cover the same composite
-cell, or when the legends disagree; `layer` scope remains available in each
-case.
+cell, or when two layers claim the same object region; `layer` scope remains
+available in each case.
 
 (planar-monitor-default-section)=
 ### Default-section publication
@@ -1131,7 +1133,7 @@ silent clamp. New HTTP and OpenAPI payloads expose only `range` and
 | PM-N28 | batched point location through the element AABB hierarchy (structured Tet4 with unselected elements; interior, face, edge and outside points; runtime profile on a mixed FEM carrier) | located element, value and occupancy identical to the direct scan for every point; candidate count bounded by the elements around a node |
 | PM-N26 | in-plane streamlines on a uniform field, a vortex raster and a masked raster | uniform field gives straight parallel lines along $\mathbf w$ within $10^{-9}$ of the pixel pitch; vortex lines close or stay within the disk; no point lies in a non-renderable cell; repeated runs are identical; budget overflow is reported as truncated |
 | PM-N27 | multislice of an FDM stack at $\phi\in\{0.25,0.5,0.75\}$ and of an FEM film | each panel equals the single default section at the same $\phi$ (same resolved coordinate and bitwise-equal raster); the panels' sample tokens differ; the auto range is the union of the panels' renderable extrema; a monitor source with `position_fraction` is rejected |
-| PM-N29 | FDM multilayer composite of two native grids with equal spacing, integral shifts and a gap between them; fixtures with unequal spacing, a half-cell shift and overlapping grids | composite plane samples equal the native cell values of the covering layer bitwise; gap cells are empty under the `domain` target; the default section spans the composite lattice of {eq}`eq-planar-multilayer-shift`; the three invalid fixtures fail with `planar_scope_unsupported` |
+| PM-N29 | FDM multilayer composite of two native grids with equal spacing, integral shifts and a gap between them; fixtures with unequal spacing, a half-cell shift and overlapping grids | composite plane samples equal the native cell values of the covering layer bitwise; gap cells are empty under the `domain` target; the default section spans the composite lattice of {eq}`eq-planar-multilayer-shift`; two layers that both number a region 1 keep distinct composite regions; the three invalid fixtures fail with `planar_scope_unsupported` |
 | PM-D01 | default source identity | `Default` resolves from session state and domain metadata without creating a monitor, changing `ProblemIR`, or changing canonical Python |
 | PM-D02 | default position validation | `position_fraction` is finite and in $[0,1]$; resolved `position_m` is finite and inside the selected normal bounds |
 | PM-D03 | default/authored sampler parity | after source resolution, both source identities use the same interpolation and measure-weighted reduction; source provenance remains distinct |

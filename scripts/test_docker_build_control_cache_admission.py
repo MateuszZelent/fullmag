@@ -178,8 +178,8 @@ class BuildSpaceAdmissionTests(unittest.TestCase):
              mock.patch.object(control, "bounded_capture", return_value=subprocess.CompletedProcess(
                  [], 0, json.dumps(MANIFEST).encode(), b"")), \
              mock.patch.object(control, "BuildControl", new=build_control_factory), \
-             mock.patch.object(storage, "resolve_layout", return_value={"worktree_id": "test"}), \
-             mock.patch.object(compose_identity, "compose_project_identity", return_value={
+             mock.patch.object(storage, "resolve_layout", side_effect=AssertionError("Image-only build must not resolve host storage")), \
+             mock.patch.object(compose_identity, "compose_source_identity", return_value={
                  "project_name": "fullmag-cache-test"}), \
              mock.patch.object(storage, "git", return_value=COMMIT), \
              mock.patch.object(bootstrap, "tracked_input_files", return_value=tracked), \

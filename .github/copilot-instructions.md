@@ -20,12 +20,9 @@
 - Treat `docs/specs/fullmag-application-architecture-v2.md`, `docs/specs/resource-first-control-room-api-v1.md`, `docs/specs/control-room-api-endpoint-reference-v1.md`, `docs/specs/session-run-api-v1.md`, `docs/specs/runtime-distribution-and-managed-backends-v1.md`, `docs/physics/`, and ADRs as canonical architecture references.
 - Assume container-first verification and prefer canonical `just` workflows over ad-hoc commands.
 - For code review, PR descriptions, review comments, and reviewer-feedback handling, follow `.agents/skills/google-eng-review-practices/SKILL.md` together with the relevant Fullmag domain instructions.
-- Prefer `justfile` as the primary build/run task layer:
-  - `just build fullmag`
-  - `just build fem-gpu-runtime-host`
-  - `just package fullmag`
-  - `just run ...`
-  - `just run-py-layer-hole`
-  - `just control-room`
-  Use raw `cargo`, `make`, or `docker compose` only when the relevant `just` recipe does not exist or when debugging lower-level issues.
-- **Keep source files under ~1000 lines.** Split growing modules into focused submodules rather than creating monolithic files.
+- Daily development uses the selected checkout's managed Compose group: `python -B scripts/setup_docker.py`, `just docker-dev-toolchain`, then `just docker-dev`. Application compilation and API run in the same `backend`; frontend uses HMR. Release/scientific/CI routes keep their separately documented recipes. Do not use host Cargo/CMake, the old runner or raw Docker as a daily DEV fallback.
+- New DEV renders use exactly one stable private `BuildControl.volume` per worktree/group with `private/backend`, `private/frontend` and `private/ledger` subpaths (ADR 0076). The frontend never mounts the control root. Shared Cargo/pnpm/packages remain project resources. Fingerprints validate compatibility without creating new private volume names.
+- Clean only managed `.fullmag-build` compiler outputs before actual compilation and after verified atomic package publication. Preserve current plus one verified rollback, sources, logs, control, ledger and user data. Cache hits do not compile or clean. Existing groups need separate managed migration; runtime remains NOT VERIFIED without receipt/mount evidence.
+- Image-only builds need Git/source and Docker, without host build storage. Host sessions, projects, results and settings used by the API remain protected user data.
+- Do not compile unit tests (`cargo test`, `just test`) until the user revokes the temporary ban in AGENTS.md.
+- Review complexity and contracts using the review skill; file size is a signal for review, not an automatic split threshold.

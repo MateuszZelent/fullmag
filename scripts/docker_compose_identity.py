@@ -83,6 +83,38 @@ def compose_project_identity(layout: Mapping[str, object]) -> dict[str, str]:
     }
 
 
+def compose_source_identity(repo_root: str | os.PathLike[str]) -> dict[str, str]:
+    """Resolve a registered checkout identity using Git only, without host storage.
+
+    Build-only callers need the same project/worktree identity as the storage
+    layout but do not need to read or initialize FULLMAG_PROJECT_STORAGE_ROOT.
+    """
+    repo = Path(storage.git(repo_root, "rev-parse", "--show-toplevel")).resolve()
+    if storage.git(repo, "rev-parse", "--show-superproject-working-tree"):
+        raise ValueError("Resolve Compose identity from the Fullmag checkout, not a Git submodule")
+
+    records = storage.worktree_records(repo)
+    if not records or not isinstance(records[0].get("worktree"), str):
+        raise ValueError("Git returned no registered main checkout")
+    main = Path(records[0]["worktree"]).resolve()
+
+    repo_key = os.path.normcase(str(repo))
+    registered = any(
+        isinstance(record.get("worktree"), str)
+        and os.path.normcase(str(Path(record["worktree"]).resolve())) == repo_key
+        for record in records
+    )
+    if not registered:
+        raise ValueError("Compose source must be a registered Git worktree")
+
+    # Reuse the canonical formatter so labels and names cannot diverge from
+    # the established storage-backed identity.
+    return compose_project_identity({
+        "repo_root": str(repo),
+        "worktree_id": storage.identifier(repo),
+        "env": {"FULLMAG_PROJECT_ID": storage.identifier(main)},
+    })
+
 def source_labels(identity: Mapping[str, object]) -> dict[str, str]:
     """Return stable, non-path source labels for Compose services/networks."""
 
