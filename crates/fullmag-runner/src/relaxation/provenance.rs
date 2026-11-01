@@ -23,6 +23,12 @@ fn direct_energy_minimizer_name(algorithm: RelaxationAlgorithmIR) -> Option<&'st
 }
 
 pub(crate) const CPU_SOA_DIRECT_MINIMIZER_REALIZATION: &str = "cpu_soa_tangent_gradient";
+/// CUDA FDM BB/NCG: the optimizer state, tangent gradient, and Armijo line
+/// search run on the host over device field and energy evaluation
+/// (`fdm/gpu/cuda/direct_minimizer.rs`); there is no native CUDA minimizer
+/// kernel on this lane, unlike FEM GPU's `native_cuda_*` realizations.
+pub(crate) const CUDA_FDM_HOST_DIRECT_MINIMIZER_REALIZATION: &str =
+    "cuda_fdm_host_tangent_gradient";
 pub(crate) const NATIVE_LLG_TIME_INTEGRATOR_REALIZATION: &str = "native_llg_time_integrator";
 
 pub(crate) fn native_direct_minimizer_realization(
