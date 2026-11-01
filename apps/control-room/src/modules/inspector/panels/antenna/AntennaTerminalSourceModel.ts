@@ -71,7 +71,7 @@ export function antennaTerminalSourceState(scene: SceneResource | null, objectId
       for (const cut of cuts) {
         const plane = terminalSourceRecord(cut.plane), drive = terminalSourceRecord(cut.drive), region = terminalSourceRecord(cut.region);
         if (!text(cut.source_cut_id) || !text(cut.circuit_id) || region?.object_id !== objectId || !text(region.region_id)) issues.push("Source cut requires explicit IDs and a conductor part of this object.");
-        if (plane?.coordinate_frame !== "object" || plane.axis !== "z" || !finite(plane.offset_m) || !["positive_axis", "negative_axis"].includes(String(plane.normal))) issues.push("Authored v2 cut requires an explicit object-frame z plane and oriented normal; an omitted frame is legacy world, not object.");
+        if (plane?.coordinate_frame !== "object" || (plane.axis !== "x" && plane.axis !== "z") || !finite(plane.offset_m) || !["positive_axis", "negative_axis"].includes(String(plane.normal))) issues.push("Authored v2 cut requires an explicit object-frame x or z plane and oriented normal; an omitted frame is legacy world, not object.");
         if (drive?.schema_version !== "impressed_potential_jump.v1" || drive.kind !== "impressed_potential_jump" || !text(drive.drive_id) || !finite(drive.potential_jump_V) || drive.potential_jump_V === 0) issues.push("A finite nonzero impressed potential jump in V and an explicit drive ID are required.");
       }
     }
