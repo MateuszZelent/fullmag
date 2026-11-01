@@ -1538,11 +1538,12 @@ static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
             "fdm_exchange_lut_retired: region-pair exchange tables are retired; pass per-connection face coefficients through the fullmag_fdm_plan_desc_v2 exchange-operator tail";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
-    if (ctx->has_region_mask && !exchange_operator.faces &&
+    if (plan->enable_exchange != 0 && ctx->has_region_mask && !exchange_operator.faces &&
         plan->exchange_pair_default == FULLMAG_FDM_EXCHANGE_PAIR_UNSPECIFIED) {
         // Historically UNSPECIFIED with a region mask and no LUT decoupled
         // regions (A_ij = 0). The uniform operator would re-couple them, so
-        // such a descriptor must state its coupling explicitly.
+        // such a descriptor must state its coupling explicitly. Without
+        // exchange the mask only serves observables and stays accepted.
         ctx->last_error =
             "fdm_exchange_pair_unspecified_retired: a region mask with exchange_pair_default=UNSPECIFIED historically decoupled regions; pass HARMONIC_MEAN for the uniform operator or FACES coefficients for any other coupling";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);

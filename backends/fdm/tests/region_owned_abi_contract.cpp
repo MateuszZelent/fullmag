@@ -109,6 +109,9 @@ void region_ids_are_unbounded_and_lut_is_retired() {
           "native FDM must reject the retired region-pair table instead of ignoring it");
     check(source.find("fdm_exchange_pair_unspecified_retired") != std::string::npos,
           "legacy UNSPECIFIED with a region mask must not silently re-couple regions");
+    check(source.find("plan->enable_exchange != 0 && ctx->has_region_mask && !exchange_operator.faces") !=
+              std::string::npos,
+          "the legacy UNSPECIFIED gate must apply only while exchange runs");
     check(source.find("fdm_region_lut_capacity_exceeded") == std::string::npos,
           "native FDM must not cap region ids");
 }

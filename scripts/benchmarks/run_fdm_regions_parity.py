@@ -149,15 +149,25 @@ def main() -> int:
                         entry["max_dm_vs_cpu"] = max_dm(reference["m_final"], record["m_final"])
                     except ValueError as error:
                         failures.append(f"{label}: {error}")
-                    entry["scalar_rel_vs_cpu"] = scalar_rel(reference["scalars"], record["scalars"])
+                    rel = scalar_rel(reference["scalars"], record["scalars"])
+                    entry["scalar_rel_vs_cpu"] = rel
+                    # Python's max() skips NaN after a finite value, so every
+                    # compared energy and difference is checked before aggregating.
+                    non_finite = [
+                        key for key in rel
+                        if not (math.isfinite(reference["scalars"][key])
+                                and math.isfinite(record["scalars"][key])
+                                and math.isfinite(rel[key]))
+                    ]
+                    if non_finite:
+                        failures.append(f"{label}: non-finite energy {', '.join(non_finite)}")
                     if lane[1] == "double":
                         dm = entry.get("max_dm_vs_cpu")
                         if dm is not None and not dm <= args.max_dm:
                             failures.append(f"{label}: max |dm| {dm:.3e} > {args.max_dm:.1e}")
-                        rel = entry["scalar_rel_vs_cpu"]
                         if not rel:
                             failures.append(f"{label}: no comparable energy scalars")
-                        elif not max(rel.values()) <= args.max_energy_rel:
+                        elif not non_finite and not max(rel.values()) <= args.max_energy_rel:
                             failures.append(f"{label}: energy rel {max(rel.values()):.3e} > "
                                             f"{args.max_energy_rel:.1e}")
                 log.write(json.dumps(entry) + "\n")

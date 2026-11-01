@@ -140,8 +140,9 @@ typedef enum {
      * UNSPECIFIED (zero-initialized callers) and HARMONIC_MEAN are accepted as
      * exchange_pair_default. HARMONIC_MEAN means the uniform exchange operator
      * unless the v2 tail carries FACES. UNSPECIFIED with a region_mask
-     * historically decoupled regions (A_ij = 0); without FACES it is rejected
-     * (fdm_exchange_pair_unspecified_retired) instead of re-coupling them.
+     * historically decoupled regions (A_ij = 0); with active exchange and
+     * without FACES it is rejected (fdm_exchange_pair_unspecified_retired)
+     * instead of re-coupling them.
      */
     FULLMAG_FDM_EXCHANGE_PAIR_UNSPECIFIED   = 0,
     FULLMAG_FDM_EXCHANGE_PAIR_HARMONIC_MEAN = 1,
@@ -642,9 +643,12 @@ typedef struct {
     /*
      * Retired region-pair exchange table. Kept for layout stability only:
      * exchange_lut/exchange_pairs must be NULL/0, and exchange_pair_default
-     * must be UNSPECIFIED or HARMONIC_MEAN (both mean: every connection uses
-     * material.exchange_stiffness unless the v2 face tail says otherwise).
-     * Other values fail with fdm_exchange_lut_retired.
+     * must be UNSPECIFIED or HARMONIC_MEAN. HARMONIC_MEAN means every
+     * connection uses material.exchange_stiffness unless the v2 face tail says
+     * otherwise. UNSPECIFIED with a region_mask and active exchange requires
+     * the FACES tail (fdm_exchange_pair_unspecified_retired), because it
+     * historically decoupled regions. Other values fail with
+     * fdm_exchange_lut_retired.
      */
     const double              *exchange_lut;
     uint64_t                   exchange_lut_len;

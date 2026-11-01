@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <string>
 #include <type_traits>
 
 namespace {
@@ -660,6 +661,49 @@ void incompatible_version_and_size_fail_before_backend_allocation() {
 }
 
 #if FULLMAG_FDM_CONTRACT_HAS_CUDA
+void legacy_unspecified_region_mask_is_rejected_only_with_active_exchange() {
+    double magnetization[6] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
+    uint32_t region_mask[2] = {1, 2};
+    fullmag_fdm_plan_desc_v2 plan{};
+    plan.abi_version = FULLMAG_FDM_PLAN_DESC_ABI_V2;
+    plan.struct_size = sizeof(plan);
+    plan.base.grid = {2, 1, 1, 1e-9, 1e-9, 1e-9};
+    plan.base.material = {8e5, 1.3e-11, 0.1, 2.211e5};
+    plan.base.precision = FULLMAG_FDM_PRECISION_DOUBLE;
+    plan.base.integrator = FULLMAG_FDM_INTEGRATOR_HEUN;
+    plan.base.initial_magnetization_xyz = magnetization;
+    plan.base.initial_magnetization_len = 6;
+    plan.base.region_mask = region_mask;
+    plan.base.region_mask_len = 2;
+    plan.base.exchange_pair_default = FULLMAG_FDM_EXCHANGE_PAIR_UNSPECIFIED;
+    plan.time_policy.adaptive_tolerance_mode = FULLMAG_FDM_ADAPTIVE_MAX_ERROR;
+    plan.time_policy.adaptive_atol = 1e-6;
+    plan.time_policy.adaptive_dt_min = 1e-16;
+    plan.time_policy.adaptive_dt_max = 1e-14;
+    plan.time_policy.adaptive_safety = 0.9;
+    plan.time_policy.adaptive_growth_limit = 2.0;
+    plan.time_policy.adaptive_shrink_limit = 0.2;
+
+    const auto create_error = [&plan]() {
+        fullmag_fdm_backend *handle = nullptr;
+        const int status = fullmag_fdm_backend_create_time_policy_v2_checked(&plan, &handle);
+        check(status == FULLMAG_FDM_OK && handle != nullptr,
+              "legacy UNSPECIFIED descriptor must reach backend ingestion");
+        const char *error = fullmag_fdm_backend_last_error(handle);
+        const std::string message = error == nullptr ? std::string() : std::string(error);
+        fullmag_fdm_backend_destroy(handle);
+        return message;
+    };
+
+    plan.base.enable_exchange = 0;
+    check(create_error().empty(),
+          "a region mask kept for observables without exchange must stay accepted");
+
+    plan.base.enable_exchange = 1;
+    check(create_error().find("fdm_exchange_pair_unspecified_retired") != std::string::npos,
+          "UNSPECIFIED with a region mask and active exchange must not re-couple regions");
+}
+
 void checked_backend_constructor_accepts_a_runtime_valid_plan() {
     constexpr double dt = 5.0e-13;
     constexpr double alpha = 0.1;
@@ -742,6 +786,7 @@ int main() {
     incompatible_version_and_size_fail_before_backend_allocation();
 #if FULLMAG_FDM_CONTRACT_HAS_CUDA
     checked_backend_constructor_accepts_a_runtime_valid_plan();
+    legacy_unspecified_region_mask_is_rejected_only_with_active_exchange();
 #endif
     std::printf("semantic versioned FDM plan descriptor contract OK\n");
     return 0;

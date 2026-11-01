@@ -84,6 +84,11 @@ energii z ostatniego wiersza `scalars.csv`.
 - fp32 (informacyjnie): CUDA fp32 rozjeżdża się z CPU do |Δm| ≈ 2 także w przypadku
   jednorodnym; losowa tekstura jest chaotyczna, a fp32 nie jest kwalifikowane.
 
+Powtórzenie na buildzie `9c56c1a04` (po poprawkach z przeglądu, utwardzony skrypt
+parytetu kończy się kodem 0): wszystkie pięć przypadków fp64 daje te same max |Δm|,
+różnice energii i hashe `m_final` co powyżej (dwa materiały `630cb7bddf06`, ziarna
+`f454815bf28b`, jednorodny `18f2bc6e4437`).
+
 ## 3. Niezmienność względem `master`
 
 Te same przypadki jednorodne w grupie bazowej (`c416e1b70` + `5f87465ad`):
