@@ -2,7 +2,7 @@
 
 - Status: accepted implementation contract
 - Owners: Fullmag core
-- Last updated: 2026-08-27
+- Last updated: 2026-11-01
 - Related ADRs: `docs/adr/0011-resource-first-api.md`, `docs/adr/0013-frontend-v2-module-kernel.md`, `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md`
 - Related specs: `docs/specs/resource-first-control-room-api-v2.md`
 - Related plans:
@@ -122,7 +122,7 @@ The corresponding discrete FDM and FEM exchange contracts are
 ```{math}
 :label: material-fdm-harmonic-exchange
 
-A_{ij}=\frac{2A_iA_j}{A_i+A_j}\,s_{ij}.
+A_{ij}=s_{ij}\,H(A_i,A_j).
 ```
 
 ```{math}
@@ -201,6 +201,11 @@ fizyki ani nie może ominąć dolnego ograniczenia.
 | $\max$ | algebraic maximum operator | $1$ |
 | $\min$ | algebraic minimum operator | $1$ |
 | $\sum_j$ | finite sum over neighbor index j | $1$ |
+| $H$ | guarded harmonic mean of two exchange stiffnesses | $\mathrm{J/m}$ |
+| $a$ | first harmonic-mean argument | $\mathrm{J/m}$ |
+| $b$ | second harmonic-mean argument | $\mathrm{J/m}$ |
+| $A^{\mathrm{explicit}}_{ij}$ | authored explicit connection exchange stiffness | $\mathrm{J/m}$ |
+| $F_+$ | set of grid connections, each counted once | $1$ |
 | $\cdot$ | Euclidean dot-product operator | $1$ |
 | $|\cdot|^2$ | squared Euclidean-norm operator | $1$ |
 | $\nabla\!\cdot$ | divergence differential operator | $\mathrm{m^{-1}}$ |
@@ -288,23 +293,18 @@ materializes authored fields into cellwise arrays:
 - exchange pair descriptors.
 
 Two material objects in one FDM grid are one backend plan, not two hidden
-backend instances. The plan contains a shared `active_mask`, per-cell object or
-region indices, cellwise material fields, and an explicit exchange pair table.
+backend instances. The plan contains a shared `active_mask`, per-cell region
+indices with a region legend that names each region's owner object, cellwise
+material fields, and a sparse list of typed exchange pair rules
+(`harmonic_scale`, `explicit`, `disabled`). There is no dense table of all
+region pairs and no architectural region-count limit: region indices are `u32`,
+and the cost of the rules is proportional to their number.
 
-Intra-object region-region exchange default:
-
-```text
-A_ij = harmonic_mean(A_i, A_j) * scale(region_i, region_j)
-```
-
-with
-
-```text
-harmonic_mean(A_i, A_j) = 2 A_i A_j / (A_i + A_j)
-```
-
-unless an explicit `inter_exchange` is provided. `scale=0` or `mode=disabled`
-means no direct exchange across that interface.
+Intra-object region-region exchange default (labelled equations
+`material-fdm-harmonic-exchange` and `material-fdm-guarded-harmonic-mean`):
+$A_{ij}=s_{ij}H(A_i,A_j)$ with $s_{ij}=1$ when no rule is authored. An
+`explicit` rule replaces the harmonic value by $A^{\mathrm{explicit}}_{ij}$;
+`scale=0` or `mode=disabled` means no direct exchange across that interface.
 
 An authored region with no local material override, no coefficient field, and
 no explicit exchange override is only a selector/authoring subobject. It must
@@ -334,6 +334,90 @@ H_ex,i = 2 / (mu0 Ms_i V_i) sum_j A_ij (S_ij / d_ij) (m_j - m_i)
 
 The exchange energy reduction must use the same `A_ij` as the field kernel.
 This is a required validation target, not an implementation detail.
+
+(material-regions-fdm-connection-operator)=
+#### 3.1.1 FDM connection operator without a region limit
+
+Every pair of face-adjacent cells $(i,j)$ of the regular grid is one
+connection. A connection exists only when both cells are active and the grid
+provides the neighbour (open boundaries have none; a periodic axis of length 1
+has no self-connection; a periodic axis of length 2 has two distinct
+connections between the same two cells). The coefficient of an existing
+connection is
+
+```{math}
+:label: material-fdm-connection-coefficient
+
+A_{ij}=\begin{cases}
+0 & \text{owners differ and no rule is authored, or rule }\texttt{disabled},\\
+A^{\mathrm{explicit}}_{ij} & \text{rule }\texttt{explicit},\\
+s_{ij}\,H(A_i,A_j) & \text{rule }\texttt{harmonic\_scale}\text{ or no rule}.
+\end{cases}
+```
+
+The guarded harmonic mean is
+
+```{math}
+:label: material-fdm-guarded-harmonic-mean
+
+H(a,b)=\begin{cases}
+0 & a=0\ \text{or}\ b=0,\\
+a & a=b,\\
+\dfrac{2ab}{a+b} & \text{otherwise}.
+\end{cases}
+```
+
+The branch $a=b$ returns $a$ exactly, so a uniform material divided into any
+number of regions reproduces the uniform operator. Realizations evaluate the
+last branch as $2a\,\bigl(b/(a+b)\bigr)$ to avoid overflow of $ab$. Rules use
+the realized cell values $A_i$, $A_j$ (after transitions), not the nominal
+material table. Each connection is counted once in the energy
+
+```{math}
+:label: material-fdm-exchange-energy-discrete
+
+E_\mathrm{ex}=\sum_{(i,j)\in F_+}A_{ij}\,\frac{S_{ij}}{d_{ij}}
+\,|\mathbf m_j-\mathbf m_i|^2,
+```
+
+and both cells of a connection use the same $A_{ij}$; then
+{eq}`material-fdm-exchange-field` equals
+$-\partial E_\mathrm{ex}/\partial\mathbf m_i/(\mu_0M_{s,i}V_i)$. On the regular
+grid $S_{ij}/d_{ij}=V_i/h^2$ along the connection axis. Region energy assigns
+half of each connection energy to each side; the sum over a disjoint partition,
+including the unnamed base region 0, reproduces the total.
+
+Realized operator modes are explicit: `uniform` (every existing connection has
+the scalar material $A$; the classic Laplacian kernel is used) or `faces`
+(coefficients stored per cell on its $+x$, $+y$, $+z$ connection; the $-x$
+coefficient of cell $i$ is the $+x$ coefficient of its $-x$ neighbour, with
+periodic wrap). One shared builder produces the coefficients for the CPU
+reference and for CUDA, so both lanes consume identical $A_{ij}$. Different
+objects packed into one grid are decoupled through the owner recorded in the
+region legend, without generating pair rules for every object pair.
+
+(material-regions-fdm-lane-realization)=
+#### 3.1.2 FDM CPU and CUDA realization of heterogeneous materials
+
+- **FDM CPU reference.** The `faces` mode replaces the per-cell harmonic
+  stencil; the field divides by local $M_{s,i}$ and the energy follows
+  {eq}`material-fdm-exchange-energy-discrete` including periodic connections.
+  The `uniform` mode keeps the existing structure-of-arrays fast path.
+- **FDM CUDA.** The 256×256 pair table and its region-index limit are retired.
+  The plan descriptor carries the operator mode and, for `faces`, three
+  coefficient arrays; optional per-cell `ms_field` and `alpha_field` arrays
+  (null means the scalar value) enter the demagnetization source
+  $\mathbf M=M_{s,i}\mathbf m_i$, the local field prefactors
+  $2/(\mu_0M_{s,i})$, the demagnetization/Zeeman energies and every LLG
+  right-hand side through $\alpha_i$ and $\gamma/(1+\alpha_i^2)$.
+- **CUDA combinations that stay blocked** while the heterogeneous material path
+  is active (non-uniform $M_s$, $A$ or $\alpha$, or `faces` mode): boundary
+  correction T0/T1, Brown thermal noise, Zhang-Li/Slonczewski/SOT and GPU
+  transport torques, DMI with non-uniform $A$ (its natural boundary condition
+  depends on local $A$), rotated interfacial DMI with non-uniform $M_s$, and
+  cellwise DMI fields. Each blocks planning or backend construction with an
+  explicit `fdm_cuda_heterogeneous_material_unsupported:<owner>` error; there is
+  no CPU fallback.
 
 Multilayer FDM with region-owned material/coupling is out of scope for v1 and
 must be capability-gated. It cannot silently fall through to a partially
@@ -928,8 +1012,8 @@ Surface selector v1:
 
 | Lane | Region mesh policy | Material/interface physics |
 |---|---|---|
-| FDM CPU | regular-grid realization | canonical reference where capability exists |
-| FDM GPU | regular-grid realization | capability-gated parity, no silent CPU fallback |
+| FDM CPU | regular-grid realization; `u32` region indices without a count limit | reference connection operator {eq}`material-fdm-connection-coefficient`, typed pair rules |
+| FDM GPU | regular-grid realization; `u32` region indices without a count limit | same connection coefficients, cellwise $M_s$/$\alpha$; combinations listed in {ref}`material-regions-fdm-lane-realization` blocked; no silent CPU fallback |
 | FEM CPU | conformal or explicit projection | shared-domain coefficients and markers |
 | FEM GPU | ta sama canonical mesh intent | osobna realizacja runtime, wspólna semantyka |
 
@@ -977,7 +1061,8 @@ They are part of the physics contract, not implementation preferences.
 |---|---|
 | Do two regions inside one object exchange-couple by default? | Yes. They are one continuum field `m`; default exchange uses harmonic mean `A_ij` unless explicitly overridden. |
 | Do two separate objects exchange-couple by default? | No. Separate objects have free surfaces unless `study.couplings.exchange(...)` or another explicit coupling is authored. |
-| Can FDM keep the old cross-region zero default? | Only for legacy plan versions. Current region-owned semantics require explicit `exchange_pair_default=harmonic_mean` and pair descriptors; `exchange_pair_default=unspecified` is a zero-initialized legacy compatibility value, not current region-owned semantics. |
+| Can FDM keep the old cross-region zero default? | No. The realized operator follows {eq}`material-fdm-connection-coefficient`: regions of one object couple through $H$, different owners are decoupled. The retired native pair table and its `exchange_pair_default` are rejected; legacy stored `(i, j, A)` triples are read as `explicit` rules. |
+| Is there a region-count limit? | No architectural limit. Region indices are `u32`; memory, cell count and explicit backend capabilities remain the only bounds. |
 | Can unsupported RKKY be a warning? | No. Authored RKKY can remain in the model, but solver start is blocked until the selected backend supports the operator. |
 | Is `Ms=0` a valid way to make a void? | No. Active magnetic cells/nodes/elements require `Ms > 0`; voids are geometry or masks. |
 | How is field/energy consistency validated? | Exchange field and energy must share one `A_ij` definition and pass a directional-derivative/Taylor test. |
@@ -1026,7 +1111,14 @@ must include:
 - `rkky_unsupported_blocks_runtime_plan`,
 - `surface_top_selector_resolves_to_runtime_faces`,
 - `multilayer_fdm_regions_are_capability_gated`,
-- `airbox_rejects_magnetic_material_and_m_quantity`.
+- `airbox_rejects_magnetic_material_and_m_quantity`,
+- `uniform_material_many_regions_collapses_to_uniform` (1000 regions),
+- `distinct_owners_are_decoupled_without_rules`,
+- `periodic_axis_lengths_one_and_two`,
+- `legacy_tuple_pairs_deserialize_as_explicit`,
+- `cuda_rejects_heterogeneous_material_with_thermal_noise`,
+- CPU versus CUDA headless parity for two materials with an interface rule and
+  for 1000 grains, plus an unchanged uniform case.
 
 ## 6. Completeness checklist
 
@@ -1062,6 +1154,12 @@ must include:
   marker metadata alone is invalid.
 - Multilayer FDM plus region-owned material/coupling is deferred behind a
   capability gate.
+- FDM CUDA heterogeneous materials do not yet combine with boundary correction
+  T0/T1, thermal noise, spin torques, DMI with non-uniform $A$ or rotated DMI
+  with non-uniform $M_s$ (see {ref}`material-regions-fdm-lane-realization`).
+- The production choice between per-face coefficient arrays and a compact
+  material-index representation is decided by the measurements recorded in
+  `docs/audits/2026-11-01-fdm-unbounded-regions-benchmark.md`.
 - Runtime texture authoring is deferred; region texture override in v1 is an
   initial-condition feature.
 

@@ -141,9 +141,10 @@
       "id": "material-fdm-harmonic-exchange",
       "symbols": [
         "Aij",
+        "scale_ij",
+        "H_mean",
         "A_i",
-        "A_j",
-        "scale_ij"
+        "A_j"
       ],
       "sources": [
         "fdm-exchange-field",
@@ -183,6 +184,48 @@
       "sources": [
         "fem-exchange-assembly",
         "fem-exchange-field"
+      ]
+    },
+    {
+      "id": "material-fdm-connection-coefficient",
+      "symbols": [
+        "Aij",
+        "A_explicit",
+        "scale_ij",
+        "H_mean",
+        "A_i",
+        "A_j"
+      ],
+      "sources": [
+        "fdm-exchange-field",
+        "fdm-coupling-materialization"
+      ]
+    },
+    {
+      "id": "material-fdm-guarded-harmonic-mean",
+      "symbols": [
+        "H_mean",
+        "a_arg",
+        "b_arg"
+      ],
+      "sources": [
+        "fdm-exchange-field"
+      ]
+    },
+    {
+      "id": "material-fdm-exchange-energy-discrete",
+      "symbols": [
+        "Eex",
+        "F_plus",
+        "Aij",
+        "S_ij",
+        "d_ij",
+        "m_i",
+        "m_j",
+        "norm_squared_operator"
+      ],
+      "sources": [
+        "fdm-exchange-energy"
       ]
     }
   ],
@@ -528,6 +571,36 @@
       "latex": "\\int_\\Gamma(\\cdot)\\,\\mathrm dS",
       "meaning": "surface-integration operator",
       "si_unit": "\\mathrm{m^2}"
+    },
+    {
+      "id": "H_mean",
+      "latex": "H",
+      "meaning": "guarded harmonic mean of two exchange stiffnesses",
+      "si_unit": "\\mathrm{J/m}"
+    },
+    {
+      "id": "a_arg",
+      "latex": "a",
+      "meaning": "first harmonic-mean argument",
+      "si_unit": "\\mathrm{J/m}"
+    },
+    {
+      "id": "b_arg",
+      "latex": "b",
+      "meaning": "second harmonic-mean argument",
+      "si_unit": "\\mathrm{J/m}"
+    },
+    {
+      "id": "A_explicit",
+      "latex": "A^{\\mathrm{explicit}}_{ij}",
+      "meaning": "authored explicit connection exchange stiffness",
+      "si_unit": "\\mathrm{J/m}"
+    },
+    {
+      "id": "F_plus",
+      "latex": "F_+",
+      "meaning": "set of grid connections, each counted once",
+      "si_unit": "1"
     }
   ],
   "sources": [

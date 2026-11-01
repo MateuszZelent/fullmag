@@ -254,6 +254,26 @@ The long-term FDM execution plan should evolve toward a shape conceptually close
 
 This is the correct place for backend-specific realized data.
 
+### FDM realization status (2026-11-01)
+
+The FDM lanes realize rule 1 and the exchange-specific rule as follows (physics owner:
+`docs/physics/0104-material-regions-parameter-fields-and-interface-couplings.md`,
+section "FDM connection operator without a region limit"):
+
+- region indices are `u32` with no architectural count limit; the former 255/256 gate in
+  `fullmag-ir`, the planner and the native CUDA ABI is removed;
+- inter-region exchange overrides are typed sparse rules (`harmonic_scale`, `explicit`,
+  `disabled`), resolved per grid connection by one shared builder into either the
+  `uniform` operator or per-connection face coefficients consumed by both FDM CPU and FDM
+  CUDA;
+- FDM CUDA consumes cellwise `Ms` and `alpha` arrays; combinations that remain blocked are
+  listed in the physics note and in `docs/specs/capability-matrix-v0.md`;
+- a compact `cell_material_id` + `material_table` realization is a measured optimization
+  candidate (`docs/audits/2026-11-01-fdm-unbounded-regions-benchmark.md`), not a semantic
+  requirement.
+
+Runtime qualification of these statements is recorded in the capability matrix, not here.
+
 ## Validation policy
 
 Validation should eventually distinguish:
