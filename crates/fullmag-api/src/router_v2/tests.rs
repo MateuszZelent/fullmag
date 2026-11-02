@@ -66,6 +66,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         parallel_execution: None,
         pbc: None,
         fem_demag_solver_policy: None,
+        fem_demag_accuracy_contract: None,
         exchange_enabled: true,
         demag_enabled: true,
         demag_realization: None,

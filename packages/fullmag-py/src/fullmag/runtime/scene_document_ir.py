@@ -17,6 +17,7 @@ from fullmag.runtime.output_storage_lowering import (
 )
 from fullmag.model.constraints import FrozenSpins
 from fullmag.model.selection import SelectionDefinition
+from fullmag.runtime.fem_demag_accuracy import validate_fem_demag_accuracy_contract
 from fullmag.runtime.loader import LoadedProblem, load_problem_from_script
 from fullmag.runtime.run_config_export import RunConfigExportOptions, export_run_config
 from fullmag.runtime.script_builder import render_scene_document_as_script
@@ -68,6 +69,7 @@ _STUDY_FIELDS = frozenset(
         "execution_layers",
         "compute_resources",
         "fem_demag_solver_policy",
+        "fem_demag_accuracy_contract",
         "exchange_enabled",
         "demag_enabled",
         "demag_realization",
@@ -172,12 +174,22 @@ def _capture_scene_document(
         raise ValueError("SceneDocument.magnetization_constraints must be a list")
     typed_selections = tuple(SelectionDefinition.from_ir(item) for item in selections)
     typed_constraints = tuple(FrozenSpins.from_ir(item) for item in constraints)
+    accuracy_contract = validate_fem_demag_accuracy_contract(
+        study.get("fem_demag_accuracy_contract"),
+        context="SceneDocument.study.fem_demag_accuracy_contract",
+    )
     study_pipeline = study.get("study_pipeline")
     if study_pipeline is not None and not isinstance(study_pipeline, Mapping):
         raise ValueError("SceneDocument.study.study_pipeline must be an object")
 
     def attach_scene_semantics(problem):
         runtime_metadata = dict(problem.runtime_metadata)
+        if accuracy_contract is None:
+            runtime_metadata.pop("fem_demag_accuracy_contract", None)
+        else:
+            runtime_metadata["fem_demag_accuracy_contract"] = copy.deepcopy(
+                accuracy_contract
+            )
         if output_storage is not None:
             runtime_metadata["output_storage"] = copy.deepcopy(output_storage)
         if isinstance(study_pipeline, Mapping):
@@ -476,6 +488,10 @@ def _reject_unlowered_scene_fields(scene: Mapping[str, object]) -> None:
     if study is not None and not isinstance(study, Mapping):
         raise ValueError("SceneDocument.study must be an object")
     if isinstance(study, Mapping):
+        validate_fem_demag_accuracy_contract(
+            study.get("fem_demag_accuracy_contract"),
+            context="SceneDocument.study.fem_demag_accuracy_contract",
+        )
         unknown_study_fields = set(study) - _STUDY_FIELDS
         if unknown_study_fields:
             names = ", ".join(sorted(str(name) for name in unknown_study_fields))

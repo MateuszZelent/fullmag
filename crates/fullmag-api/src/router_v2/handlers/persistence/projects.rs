@@ -2886,7 +2886,8 @@ fn known_omitted_scene_default(path: &[&str], value: &Value) -> bool {
                 | "allocated_region_ids" | "material_parameter_fields" | "tags"))
             || (empty_object && matches!(*field, "region_overrides" | "visualization_hint")),
         ["study"] => (value.is_null() && matches!(*field,
-            "backend" | "requested_cpu_threads" | "fem_demag_solver_policy" | "demag_realization"
+            "backend" | "requested_cpu_threads" | "fem_demag_solver_policy"
+            | "fem_demag_accuracy_contract" | "demag_realization"
             | "fdm" | "external_field" | "rotated_interfacial_dmi" | "universe_mesh"
             | "study_pipeline" | "table_autosave" | "output_storage" | "execution_profile"
             | "initial_state")) || (empty_array && matches!(*field,

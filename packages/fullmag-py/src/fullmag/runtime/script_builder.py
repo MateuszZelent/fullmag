@@ -105,6 +105,10 @@ from fullmag.model.study import (
     TableAutosave,
     TimeEvolution,
 )
+from fullmag.runtime.fem_demag_accuracy import (
+    validate_authored_fem_demag_accuracy_contract,
+    validate_fem_demag_accuracy_contract,
+)
 from fullmag.runtime.loader import LoadedProblem, LoadedStage, load_problem_from_script
 
 
@@ -275,6 +279,10 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "parallel_execution": base_problem.runtime.parallel_execution.to_ir(),
         "pbc": pbc_ir,
         "fem_demag_solver_policy": _export_fem_demag_solver_policy(base_problem),
+        "fem_demag_accuracy_contract": validate_authored_fem_demag_accuracy_contract(
+            base_problem.runtime_metadata,
+            context="runtime_metadata.fem_demag_accuracy_contract",
+        ),
         "exchange_enabled": _problem_has_exchange(base_problem),
         "demag_enabled": _problem_has_demag(base_problem),
         "demag_realization": _export_demag_realization(base_problem),
@@ -3497,6 +3505,17 @@ def _render_runtime(
     if demag_policy is not None:
         lines.append(_render_fem_demag_solver_call(demag_policy, surface=surface))
 
+    demag_accuracy_contract = _fem_demag_accuracy_contract_with_overrides(
+        problem,
+        overrides=overrides,
+        runtime_override=runtime_override,
+    )
+    if demag_accuracy_contract is not None:
+        lines.append(
+            "fm.runtime_metadata('fem_demag_accuracy_contract', "
+            f"{_py_literal(demag_accuracy_contract)})"
+        )
+
     fdm = _fdm_from_overrides(problem, overrides)
     if isinstance(fdm, FDM):
         # ``study.objects.mesh.defaults(cell_size=...)`` cannot be combined with
@@ -3753,6 +3772,28 @@ def _fem_demag_solver_policy_with_overrides(
     if isinstance(fem, FEM):
         return fem.demag_solver_policy
     return None
+
+
+def _fem_demag_accuracy_contract_with_overrides(
+    problem: Problem,
+    *,
+    overrides: Mapping[str, object],
+    runtime_override: Mapping[str, object],
+) -> dict[str, object] | None:
+    """Return the explicit Scene override, else the loaded runtime contract."""
+
+    if "fem_demag_accuracy_contract" in runtime_override:
+        value = runtime_override["fem_demag_accuracy_contract"]
+        context = "overrides.runtime_selection.fem_demag_accuracy_contract"
+    elif "fem_demag_accuracy_contract" in overrides:
+        value = overrides["fem_demag_accuracy_contract"]
+        context = "overrides.fem_demag_accuracy_contract"
+    else:
+        return validate_authored_fem_demag_accuracy_contract(
+            problem.runtime_metadata,
+            context="runtime_metadata.fem_demag_accuracy_contract",
+        )
+    return validate_fem_demag_accuracy_contract(value, context=context)
 
 
 def _render_fem_demag_solver_call(policy: FemLinearSolverPolicy, *, surface: str) -> str:

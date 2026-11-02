@@ -891,6 +891,8 @@ pub struct ScriptBuilderState {
     pub pbc: Option<fullmag_ir::FdmPeriodicityIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_demag_solver_policy: Option<fullmag_ir::FemLinearSolverPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_demag_accuracy_contract: Option<fullmag_ir::FemDemagAccuracyContractIR>,
     #[serde(default = "default_true")]
     pub exchange_enabled: bool,
     #[serde(default = "default_true")]

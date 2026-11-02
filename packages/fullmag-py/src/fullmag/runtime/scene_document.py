@@ -10,6 +10,7 @@ from fullmag.model.study import _MAX_FEM_EIGEN_SOLVER_ITERATIONS
 from fullmag.model.compute_resources import ComputeResources
 from fullmag.model.output_storage import OutputStorage
 from fullmag.model.execution_profile import ExecutionProfile, ExecutionRequestLayer, _parallel_execution_lane
+from fullmag.runtime.fem_demag_accuracy import validate_fem_demag_accuracy_contract
 from fullmag.runtime.output_storage_lowering import (
     configure_scene_stage_autosaves,
     configure_study_pipeline_autosaves,
@@ -1771,6 +1772,10 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "requested_cpu_threads": builder.get("cpu_threads"),
             "parallel_execution": copy.deepcopy(parallel_execution),
             "fem_demag_solver_policy": builder.get("fem_demag_solver_policy"),
+            "fem_demag_accuracy_contract": validate_fem_demag_accuracy_contract(
+                builder.get("fem_demag_accuracy_contract"),
+                context="builder.fem_demag_accuracy_contract",
+            ),
             "exchange_enabled": bool(builder.get("exchange_enabled", True)),
             "demag_enabled": bool(builder.get("demag_enabled", True)),
             "demag_realization": builder.get("demag_realization"),
@@ -2125,6 +2130,10 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         **_execution_profile_fields(study, "SceneDocument.study"),
         **_compute_resources_fields(study, "SceneDocument.study"),
         "fem_demag_solver_policy": study.get("fem_demag_solver_policy"),
+        "fem_demag_accuracy_contract": validate_fem_demag_accuracy_contract(
+            study.get("fem_demag_accuracy_contract"),
+            context="SceneDocument.study.fem_demag_accuracy_contract",
+        ),
         "exchange_enabled": bool(study.get("exchange_enabled", True)),
         "demag_enabled": bool(study.get("demag_enabled", True)),
         "demag_realization": study.get("demag_realization"),
@@ -2359,6 +2368,10 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
             dict(builder.get("fem_demag_solver_policy"))
             if isinstance(builder.get("fem_demag_solver_policy"), dict)
             else None
+        ),
+        "fem_demag_accuracy_contract": validate_fem_demag_accuracy_contract(
+            builder.get("fem_demag_accuracy_contract"),
+            context="builder.fem_demag_accuracy_contract",
         ),
         "exchange_enabled": bool(builder.get("exchange_enabled", True)),
         "demag_enabled": bool(builder.get("demag_enabled", True)),

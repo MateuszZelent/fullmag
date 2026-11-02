@@ -108,6 +108,7 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
             parallel_execution: builder.parallel_execution.clone().unwrap_or_default(),
             pbc: Some(builder.pbc.clone()),
             fem_demag_solver_policy: builder.fem_demag_solver_policy.clone(),
+            fem_demag_accuracy_contract: builder.fem_demag_accuracy_contract.clone(),
             exchange_enabled: builder.exchange_enabled,
             demag_enabled: builder.demag_enabled,
             demag_realization: builder.demag_realization.clone(),
@@ -251,6 +252,7 @@ pub fn scene_document_to_script_builder(
         parallel_execution: Some(normalized_scene.study.parallel_execution.clone()),
         pbc: normalized_scene.study.pbc.clone().flatten(),
         fem_demag_solver_policy: normalized_scene.study.fem_demag_solver_policy.clone(),
+        fem_demag_accuracy_contract: normalized_scene.study.fem_demag_accuracy_contract.clone(),
         exchange_enabled: normalized_scene.study.exchange_enabled,
         demag_enabled: normalized_scene.study.demag_enabled,
         demag_realization: normalized_scene.study.demag_realization.clone(),
@@ -509,6 +511,7 @@ pub fn scene_document_to_script_builder_overrides(
             "cpu_threads": scene.study.requested_cpu_threads,
             "parallel_execution": scene.study.parallel_execution,
             "fem_demag_solver_policy": scene.study.fem_demag_solver_policy,
+            "fem_demag_accuracy_contract": scene.study.fem_demag_accuracy_contract,
             "explicit_selection": scene.study.requested_backend != "auto"
                 || scene.study.requested_device != "auto"
                 || scene.study.requested_precision != "double"
@@ -2623,6 +2626,7 @@ mod tests {
             parallel_execution: None,
             pbc: None,
             fem_demag_solver_policy: Some(fullmag_ir::FemLinearSolverPolicy::default()),
+            fem_demag_accuracy_contract: None,
             exchange_enabled: true,
             demag_enabled: true,
             demag_realization: Some("airbox_robin".to_string()),
@@ -3523,6 +3527,23 @@ mod tests {
                 .message
                 .contains("study.study_pipeline.nodes[0].children[0]")
         );
+    }
+
+    #[test]
+    fn fem_accuracy_contract_survives_builder_scene_and_overrides() {
+        let raw = serde_json::json!({
+            "schema_version": "fullmag.fem.demag_accuracy.v1",
+            "profile": "mumax3_sp4_v1",
+            "required_potential_order": 2,
+            "required_topology": "all_tet",
+        });
+        let mut builder = sample_builder();
+        builder.fem_demag_accuracy_contract = Some(serde_json::from_value(raw.clone()).unwrap());
+        let scene = scene_document_from_script_builder(&builder);
+        let restored = scene_document_to_script_builder(&scene).unwrap();
+        assert_eq!(restored.fem_demag_accuracy_contract, builder.fem_demag_accuracy_contract);
+        let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+        assert_eq!(overrides["runtime_selection"]["fem_demag_accuracy_contract"], raw);
     }
 
     #[test]
