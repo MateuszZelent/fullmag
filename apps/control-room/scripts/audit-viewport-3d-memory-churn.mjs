@@ -1247,8 +1247,10 @@ async function assertColdFdmMultilayerVectorOnlyRendered(
 
   // Hold the layout carrier until the target-specific vector-only state has
   // reached the browser. The viewport cannot schedule a cell model first.
-  const gpuBefore = await readBrowserAuditCounters(page);
-  const drawHistogramBefore = await readColdGlyphInstancedDrawHistogram(page);
+  const [gpuBefore, drawHistogramBefore] = await Promise.all([
+    readBrowserAuditCounters(page),
+    readColdGlyphInstancedDrawHistogram(page),
+  ]);
   fixture.multilayerLayoutGate.resolve();
   fixture.multilayerLayoutGate = null;
   await openThreeDimensionalViewport(page);
@@ -1324,8 +1326,10 @@ async function assertColdFdmMultilayerVectorOnlyRendered(
     glyphBuild.transformsCount,
     targetKind,
   );
-  const gpuAfter = await readBrowserAuditCounters(page);
-  const targetSettings = await readColdVectorOnlyTargetSettings(page, target);
+  const [gpuAfter, targetSettings] = await Promise.all([
+    readBrowserAuditCounters(page),
+    readColdVectorOnlyTargetSettings(page, target),
+  ]);
   assertColdVectorOnlySettings(targetSettings, targetKind);
 
   const viewportState = await viewport.evaluate((element) => ({
