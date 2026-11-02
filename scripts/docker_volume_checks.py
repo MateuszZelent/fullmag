@@ -316,6 +316,14 @@ TELEMETRY_FILES = (
     'src/modules/footer/FooterTelemetry.test.ts',
     'src/modules/footer/FooterTelemetry.refresh.test.tsx',
 )
+# Source checks remain available when compiling unit tests is disabled.
+TELEMETRY_SOURCE_COMMANDS = (
+    *FRONTEND_COMMANDS[:2],
+    ('eslint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'eslint',
+                *TELEMETRY_FILES, '--max-warnings=0')),
+    ('architecture', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'check:architecture-hygiene')),
+    ('api-hygiene', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'check:api-hygiene')),
+)
 TELEMETRY_COMMANDS = (
     *FRONTEND_COMMANDS[:2],
     ('vitest-focused', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'vitest', 'run',
@@ -332,13 +340,14 @@ def frontend_import_checks(control, selected, identity, *, scope='frontend-impor
     import hashlib
     import time
     import docker_dev_codegen as codegen
-    if scope not in ('frontend-import', 'frontend-antenna', 'frontend-visualization', 'frontend-telemetry', 'frontend-telemetry-focused'):
+    if scope not in ('frontend-import', 'frontend-antenna', 'frontend-visualization', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source'):
         raise BuildControlError('Unknown frontend verification scope')
     source_files, commands = {
         'frontend-import': (IMPORT_FILES, FRONTEND_COMMANDS),
         'frontend-antenna': (ANTENNA_FILES, ANTENNA_COMMANDS),
         'frontend-visualization': (VISUALIZATION_FILES, VISUALIZATION_COMMANDS),
         'frontend-telemetry': (TELEMETRY_FILES, TELEMETRY_COMMANDS),
+        'frontend-telemetry-source': (TELEMETRY_FILES, TELEMETRY_SOURCE_COMMANDS),
         'frontend-telemetry-focused': (TELEMETRY_FILES, (*TELEMETRY_COMMANDS[:3],
             ('eslint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'eslint',
                         *TELEMETRY_FILES, '--max-warnings=0')))),
@@ -441,7 +450,7 @@ def main():
     parser.add_argument('--offline', action='store_true', help='Run interpreted checks in a private group helper when backend is stopped')
     parser.add_argument('--initial-attempt', help='Pinned pre-service development attempt for offline checks')
     parser.add_argument('--modules', nargs='+', help='Explicit unittest modules (offline mode only)')
-    parser.add_argument('--scope', choices=('all', 'source-capture', 'frontend-import', 'frontend-antenna', 'frontend-visualization', 'frontend-tools', 'field-only', 'network-failure', 'empty-authoring', 'frontend-telemetry', 'frontend-telemetry-focused'), default='all')
+    parser.add_argument('--scope', choices=('all', 'source-capture', 'frontend-import', 'frontend-antenna', 'frontend-visualization', 'frontend-tools', 'field-only', 'network-failure', 'empty-authoring', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source'), default='all')
     args = parser.parse_args()
     if args.initial_attempt is not None and not args.offline:
         raise BuildControlError('--initial-attempt requires --offline')
@@ -463,7 +472,7 @@ def main():
     helper = configured["services"]["fem-gpu-toolchain"]["build"]["args"]["FULLMAG_CUDA_BASE_IMAGE"]
     control = BuildControl(identity, helper)
     control.prepare()
-    if args.scope in ('frontend-import', 'frontend-antenna', 'frontend-visualization', 'frontend-telemetry', 'frontend-telemetry-focused'):
+    if args.scope in ('frontend-import', 'frontend-antenna', 'frontend-visualization', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source'):
         return frontend_import_checks(control, selected, identity, scope=args.scope)
     if args.initial_attempt is not None:
         return _offline_checks(control, selected, None, args.modules, initial_attempt=args.initial_attempt)

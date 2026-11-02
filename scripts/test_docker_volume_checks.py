@@ -118,7 +118,7 @@ class FrontendImportCheckTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        paths = (*checks.IMPORT_FILES, *checks.ANTENNA_FILES, *checks.VISUALIZATION_FILES, 'scripts/typecheck-control-room.mjs', 'tsconfig.typecheck.json',
+        paths = (*checks.IMPORT_FILES, *checks.ANTENNA_FILES, *checks.VISUALIZATION_FILES, *checks.TELEMETRY_FILES, 'scripts/typecheck-control-room.mjs', 'tsconfig.typecheck.json',
                  'tsconfig.json', 'next.config.ts', 'next.config.test.ts', 'vitest.config.ts', 'eslint.config.mjs', 'package.json',
                  'src/kernel/api/generated/openapi-v2.json', 'src/kernel/api/generated/openapi-v2-types.ts',
                  'src/kernel/api/generated/openapi-v2-client.ts', 'src/kernel/api/generated/openapi-v2-paths.ts')
@@ -172,6 +172,31 @@ class FrontendImportCheckTests(unittest.TestCase):
         logs = dict(call.args for call in self.control.write_bytes.call_args_list)
         self.assertEqual(logs['verification/frontend-import-checks/typecheck.stdout.log'], b'compiler diagnostic')
         self.assertEqual(logs['verification/frontend-import-checks/typecheck.stderr.log'], b'wrapper failure')
+
+    def test_telemetry_source_scope_runs_gates_without_unit_builds(self):
+        result, receipt = self.run_checks('frontend-telemetry-source')
+        self.assertEqual(result, 0)
+        self.assertEqual([entry['name'] for entry in receipt['commands']],
+                         ['prepare', 'typecheck', 'eslint', 'architecture', 'api-hygiene'])
+        self.assertEqual(self.control.write.call_args.args[0],
+                         'verification/frontend-telemetry-source-checks/receipt.json')
+        for call in self.execute.call_args_list:
+            self.assertEqual(call.args[0], 'frontend-exact-id')
+            self.assertNotIn('vitest', call.args[1])
+            self.assertNotIn('install', call.args[1])
+        eslint = self.execute.call_args_list[2].args[1]
+        for name in checks.TELEMETRY_FILES:
+            self.assertIn(name, eslint)
+        self.assertIn('--max-warnings=0', eslint)
+
+    def test_telemetry_source_scope_rejects_changed_inputs(self):
+        def change(*args, **kwargs):
+            (self.root / 'apps/control-room' / checks.TELEMETRY_FILES[0]).write_text('changed')
+            return b'pass', b''
+        self.execute.side_effect = change
+        result, receipt = self.run_checks('frontend-telemetry-source')
+        self.assertEqual(result, 1)
+        self.assertIn('changed during checks', receipt['error'])
 
     def test_unknown_exec_stops_followups_and_is_not_downgraded_by_later_probe_failure(self):
         self.execute.side_effect = [(b'',b''),codegen.CodegenError('observation timeout',reconciliation_required=True)]
@@ -325,6 +350,19 @@ class FrontendAntennaShellBoundaryTests(unittest.TestCase):
         result = self.dispatch(recipe)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), ['--source-root', source_root, '--scope', 'frontend-antenna'])
+
+    def test_dispatches_only_exact_telemetry_source_scope(self):
+        recipe = ('python "/ignored/scripts/docker_volume_checks.py" '
+                  "--source-root '/selected' --scope 'frontend-telemetry-source'")
+        result = self.dispatch(recipe)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout),
+                         ['--source-root', '/selected', '--scope', 'frontend-telemetry-source'])
+        for invalid in (recipe + '; printf injected',
+                        recipe.replace('frontend-telemetry-source', 'frontend-telemetry-source-extra')):
+            rejected = self.dispatch(invalid)
+            self.assertEqual(rejected.returncode, 2)
+            self.assertFalse(rejected.stdout.strip())
 
     def test_rejects_scope_suffix_extra_files_and_composite_commands(self):
         recipe = 'python "/ignored/scripts/docker_volume_checks.py" --source-root \'/selected\' --scope \'frontend-antenna\''
