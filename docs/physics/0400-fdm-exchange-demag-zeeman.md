@@ -418,8 +418,14 @@ energy is a diagnostic.
   cell volume $V$. The T0 field carries $1/\varphi_i^{\mathrm{eff}}$ and the cell
   energy weight carries $\varphi_i^{\mathrm{eff}}V$, so $\varphi_i^{\mathrm{eff}}$
   cancels and this energy is the exact variational partner of the T0 field.
-  Links to a neighbour with $\varphi_j = 0$ are skipped, as in the field.
-- **T1 (boundary-corrected):** the corrected field operator is not symmetric,
+  Links to a neighbour with $\varphi_j = 0$ are skipped, as in the field. The
+  per-cell density `eden_ex` (and its share of `eden_total`) uses the same
+  weight: $e_{\mathrm{ex},i}=-\tfrac12\mu_0M_s\,\varphi_i^{\mathrm{eff}}\,
+  \mathbf m_i\cdot\mathbf H_{\mathrm{ex},i}$, so $\sum_i e_{\mathrm{ex},i}V=E_\mathrm{ex}$
+  even when $0<\varphi_i<\varphi_\mathrm{floor}$; the other terms keep $\varphi_i$.
+- **T1 (boundary-corrected):** not qualified and rejected at runtime (note
+  0550 §3.2.1a); the reduction is kept for a later rederivation. The corrected
+  field operator is not symmetric,
   because the denominator at cell $i$ uses the boundary distance on the
   opposite side of $i$, so no exact discrete energy exists. The reported energy
   uses the symmetric link weight

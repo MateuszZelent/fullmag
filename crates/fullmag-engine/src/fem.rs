@@ -1718,7 +1718,7 @@ impl FemLlgProblem {
 
     pub fn observe(&self, state: &FemLlgState) -> Result<EffectiveFieldObservables> {
         self.ensure_state_matches_topology(state)?;
-        self.observe_vectors(state.magnetization())
+        self.observe_vectors(state.magnetization(), state.time_seconds)
     }
 
     /// Reconstruct the scalar Poisson potential used by the FEM demag solve.
@@ -2617,7 +2617,11 @@ impl FemLlgProblem {
     }
 
     #[allow(non_snake_case)]
-    fn observe_vectors(&self, magnetization: &[Vector3]) -> Result<EffectiveFieldObservables> {
+    fn observe_vectors(
+        &self,
+        magnetization: &[Vector3],
+        time_seconds: f64,
+    ) -> Result<EffectiveFieldObservables> {
         let n = self.topology.n_nodes;
         let exchange_field = if self.terms.exchange {
             self.exchange_field_from_vectors(magnetization)
@@ -2629,7 +2633,8 @@ impl FemLlgProblem {
         } else {
             (vec![[0.0, 0.0, 0.0]; n], 0.0)
         };
-        let external_field = self.external_field_vectors();
+        // Drives are observed at the state time, as the RHS uses them (note 0870).
+        let external_field = self.external_field_vectors_at_time(time_seconds);
 
         // FND-011: compute anisotropy + DMI fields for FEM CPU reference.
         let anisotropy_field = self.anisotropy_field_from_vectors(magnetization)?;
@@ -2713,12 +2718,14 @@ impl FemLlgProblem {
         } else {
             0.0
         };
-        let external_energy_joules =
-            if self.terms.external_field.is_some() || self.terms.per_node_field.is_some() {
-                self.external_energy_from_fields(magnetization, &external_field)
-            } else {
-                0.0
-            };
+        let external_energy_joules = if self.terms.external_field.is_some()
+            || self.terms.per_node_field.is_some()
+            || self.dynamic_field_drives.iter().any(|drive| drive.enabled)
+        {
+            self.external_energy_from_fields(magnetization, &external_field)
+        } else {
+            0.0
+        };
         let uniaxial_anisotropy_energy_joules =
             self.uniaxial_anisotropy_energy_from_vectors(magnetization);
         let cubic_anisotropy_energy_joules =
@@ -3641,36 +3648,24 @@ impl FemLlgProblem {
             }
         }
 
-        for node in 0..n_nodes {
-            let lumped_mass = self.topology.magnetic_node_volumes[node];
-            if lumped_mass > ZERO_THRESHOLD {
-                let inv_projection_mass = -(MU0 * ms * lumped_mass).recip();
-                if interfacial_d.is_some() || rotated_d.is_some() {
-                    interfacial_field[node] = scale(interfacial_field[node], inv_projection_mass);
-                }
-                if bulk_d.is_some() {
-                    bulk_field[node] = scale(bulk_field[node], inv_projection_mass);
-                }
-            }
-        }
-
-        // Project fields onto periodic equivalence classes so that all nodes
-        // in the same class carry the same (class-averaged) DMI field.
-        if let Some(dof_map) = &self.static_periodic_dof_map {
-            let full_to_red: Vec<usize> = (0..dof_map.full_node_count)
+        // Periodic classes use the reduced system P^T M P: class residual over
+        // class mass, like the reference exchange and native DMI (fem_dmi.md).
+        let classes = self.static_periodic_dof_map.as_ref().map(|dof_map| {
+            let full_to_reduced: Vec<usize> = (0..dof_map.full_node_count)
                 .map(|i| dof_map.reduced_node(i))
                 .collect();
-            let reduced_n = dof_map.reduced_node_count;
-            if interfacial_d.is_some() || rotated_d.is_some() {
-                project_vector_field_by_periodic_classes(
-                    interfacial_field,
-                    &full_to_red,
-                    reduced_n,
-                );
-            }
-            if bulk_d.is_some() {
-                project_vector_field_by_periodic_classes(bulk_field, &full_to_red, reduced_n);
-            }
+            (full_to_reduced, dof_map.reduced_node_count)
+        });
+        let classes = classes
+            .as_ref()
+            .map(|(full_to_reduced, reduced_n)| (full_to_reduced.as_slice(), *reduced_n));
+        let field_scale = -(MU0 * ms).recip();
+        let masses = &self.topology.magnetic_node_volumes;
+        if interfacial_d.is_some() || rotated_d.is_some() {
+            project_residual_by_lumped_mass(interfacial_field, masses, field_scale, classes);
+        }
+        if bulk_d.is_some() {
+            project_residual_by_lumped_mass(bulk_field, masses, field_scale, classes);
         }
     }
 
@@ -4172,6 +4167,44 @@ fn max_norm(values: &[Vector3]) -> f64 {
     values.iter().map(|value| norm(*value)).fold(0.0, f64::max)
 }
 
+/// Turn assembled nodal residuals into a field `scale * r / M` with the lumped
+/// mass `M`. With periodic classes `(full_to_reduced, reduced_count)` every
+/// member gets `scale * sum(r) / sum(M)` over its class and a class without
+/// magnetic mass gets zero; without classes a node without magnetic mass keeps
+/// its (zero) residual, as before.
+fn project_residual_by_lumped_mass(
+    field: &mut [Vector3],
+    masses: &[f64],
+    field_scale: f64,
+    classes: Option<(&[usize], usize)>,
+) {
+    match classes {
+        None => {
+            for (value, mass) in field.iter_mut().zip(masses) {
+                if *mass > ZERO_THRESHOLD {
+                    *value = scale(*value, field_scale / mass);
+                }
+            }
+        }
+        Some((full_to_reduced, reduced_count)) => {
+            let mut class_residual = vec![[0.0, 0.0, 0.0]; reduced_count];
+            let mut class_mass = vec![0.0; reduced_count];
+            for ((value, mass), class) in field.iter().zip(masses).zip(full_to_reduced) {
+                class_residual[*class] = add(class_residual[*class], *value);
+                class_mass[*class] += mass;
+            }
+            for (value, class) in field.iter_mut().zip(full_to_reduced) {
+                let mass = class_mass[*class];
+                *value = if mass > ZERO_THRESHOLD {
+                    scale(class_residual[*class], field_scale / mass)
+                } else {
+                    [0.0, 0.0, 0.0]
+                };
+            }
+        }
+    }
+}
+
 fn normalized_dmi_interface_normal(normal: Vector3) -> Vector3 {
     let n = norm(normal);
     if n > ZERO_THRESHOLD && n.is_finite() && normal.iter().all(|component| component.is_finite()) {
@@ -4186,6 +4219,31 @@ mod tests {
     use super::*;
     use crate::{CubicAnisotropyConfig, EffectiveFieldTerms, DEFAULT_GYROMAGNETIC_RATIO};
     use fullmag_ir::TimeDependenceIR;
+
+    #[test]
+    fn periodic_dmi_class_field_divides_class_residual_by_class_mass() {
+        // One periodic class {0, 1} with masses 1 and 3, plus a lone node 2.
+        let masses = [1.0, 3.0, 2.0];
+        let field_scale = -(MU0 * 8e5).recip();
+        let close = |actual: f64, expected: f64| {
+            (actual - expected).abs() <= 1e-14 * expected.abs()
+        };
+        let mut field = vec![[2.0, 0.0, 0.0], [3.0, 0.0, 0.0], [4.0, 0.0, 0.0]];
+        project_residual_by_lumped_mass(&mut field, &masses, field_scale, Some((&[0, 0, 1], 2)));
+        // Class: (2 + 3) / (1 + 3) = 1.25. A per-node average would give
+        // (2/1 + 3/3) / 2 = 1.5.
+        assert!(close(field[0][0], 1.25 * field_scale), "{:?}", field);
+        assert!(close(field[1][0], 1.25 * field_scale), "{:?}", field);
+        assert!(close(field[2][0], 2.0 * field_scale), "{:?}", field);
+        assert!(field.iter().all(|value| value[1] == 0.0 && value[2] == 0.0));
+
+        let mut open = vec![[2.0, 0.0, 0.0], [3.0, 0.0, 0.0], [5.0, 0.0, 0.0]];
+        project_residual_by_lumped_mass(&mut open, &[1.0, 3.0, 0.0], field_scale, None);
+        assert!(close(open[0][0], 2.0 * field_scale), "{:?}", open);
+        assert!(close(open[1][0], field_scale), "{:?}", open);
+        // Without magnetic mass the residual is left untouched, as before.
+        assert_eq!(open[2], [5.0, 0.0, 0.0]);
+    }
 
     #[test]
     fn mesh_topology_rejects_inverted_tetra_before_native_assembly() {
@@ -4710,6 +4768,42 @@ mod tests {
             state.magnetization()[0][1].abs() > 1.0e-4,
             "a start-of-step-only field evaluation would see sin(0)=0 and produce no motion"
         );
+    }
+
+    #[test]
+    fn observe_evaluates_time_dependent_external_field_at_state_time() {
+        let mut problem = unit_tet_problem();
+        problem.terms.exchange = false;
+        let frequency_hz = 1.0e9;
+        let amplitude = 1.0e4;
+        problem
+            .set_dynamic_field_drives(vec![RegionalFieldDriveTerm {
+                basis_field: vec![[0.0, 0.0, amplitude]; problem.topology.n_nodes],
+                waveform: TimeDependenceIR::Sinusoidal {
+                    frequency_hz,
+                    phase_rad: 0.0,
+                    offset: 0.0,
+                },
+                time_offset_s: 0.0,
+                enabled: true,
+            }])
+            .expect("valid dynamic basis");
+        let mut state = problem
+            .new_state(vec![[0.0, 0.0, 1.0]; problem.topology.n_nodes])
+            .expect("state");
+        // A quarter period: sin(pi/2) = 1, so the drive is at its peak.
+        state.time_seconds = 0.25 / frequency_hz;
+
+        let observed = problem.observe(&state).expect("observables");
+
+        let peak = observed.external_field[0][2];
+        assert!((peak - amplitude).abs() <= 1e-9 * amplitude, "H_ext_z = {peak}");
+        assert!(observed.external_energy_joules < 0.0, "E_ext must see the drive");
+        let at_start = problem
+            .new_state(vec![[0.0, 0.0, 1.0]; problem.topology.n_nodes])
+            .and_then(|start| problem.observe(&start))
+            .expect("observables at t = 0");
+        assert_eq!(at_start.external_field[0][2], 0.0);
     }
 
     #[test]

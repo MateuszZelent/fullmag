@@ -13,11 +13,20 @@ Loads the built ``libfullmag_fdm.so`` (no compilation) and mirrors the
 3. A GPU transport binding attached after creation is rejected with the
    heterogeneous-material gate when the backend holds cellwise alpha or Ms,
    and not on a uniform backend.
+4. T1 boundary-corrected exchange (note 0550): a three-cell chain whose free
+   ends lie on the outer cell faces (delta = dx/2). The exact Neumann field of
+   the end cell equals the clamped stencil (T0 and the uncorrected kernel);
+   T1 is not qualified and must be rejected at backend creation.
+5. T0 exchange energy density (note 0400): with a cell at 0 < phi < phi_floor,
+   sum(eden_ex) * V must equal the scalar exchange energy.
 
 Prints measured values as JSON and exits non-zero on a failed check. Run inside
 the Docker DEV backend container from the source root::
 
     python3 scripts/benchmarks/fdm_cuda_analytic_abi_checks.py
+
+``FULLMAG_FDM_HEADER`` overrides the header path when the script runs from a
+copy outside the source tree.
 """
 
 from __future__ import annotations
@@ -32,7 +41,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-HEADER = Path(__file__).resolve().parents[2] / "native" / "include" / "fullmag_fdm.h"
+HEADER = Path(os.environ.get("FULLMAG_FDM_HEADER") or
+              Path(__file__).resolve().parents[2] / "native" / "include" / "fullmag_fdm.h")
 MU0 = 4.0e-7 * math.pi
 GATE = "fdm_cuda_heterogeneous_material_unsupported:gpu_transport"
 SCALARS = {
@@ -223,6 +233,82 @@ def main() -> int:
         elif status != err_invalid or not named:
             failures.append(f"{label}: status {status}, error {error!r}")
     results["late_transport_binding"] = gate_results
+
+    # Boundary-correction backends: a three-cell x chain, exchange only.
+    tiers = {name: enum_value(text, f"FULLMAG_FDM_BOUNDARY_{name.upper()}")
+             for name in ("none", "volume", "full")}
+    obs_h_ex = enum_value(text, "FULLMAG_FDM_OBSERVABLE_H_EX")
+    obs_eden_ex = enum_value(text, "FULLMAG_FDM_OBSERVABLE_EDEN_EX")
+    exchange, ms = 13e-12, 800e3
+
+    def create_boundary(tier, m_xyz, phi):
+        plan = plan_t()
+        plan.grid.nx, plan.grid.ny, plan.grid.nz = 3, 1, 1
+        plan.grid.dx = plan.grid.dy = plan.grid.dz = dx
+        plan.material.saturation_magnetisation = ms
+        plan.material.exchange_stiffness = exchange
+        plan.material.damping = 0.1
+        plan.material.gyromagnetic_ratio = 2.211e5
+        plan.precision = precisions["double"]
+        plan.enable_exchange = 1
+        plan.initial_magnetization_xyz = array(m_xyz)
+        plan.initial_magnetization_len = len(m_xyz)
+        plan.boundary_correction = tiers[tier]
+        if tier != "none":
+            plan.volume_fraction, plan.volume_fraction_len = array(phi), 3
+            plan.face_link_xp, plan.face_link_xm = array([1.0, 1.0, 0.0]), array([0.0, 1.0, 1.0])
+            for name in ("face_link_yp", "face_link_ym", "face_link_zp", "face_link_zm"):
+                setattr(plan, name, array([0.0] * 3))
+            # Free ends on the outer cell faces: delta = dx/2; dx means no crossing.
+            plan.delta_xp, plan.delta_xm = array([dx, dx, dx / 2]), array([dx / 2, dx, dx])
+            for name in ("delta_yp", "delta_ym", "delta_zp", "delta_zm"):
+                setattr(plan, name, array([dx / 2] * 3))
+        handle = lib.fullmag_fdm_backend_create(ctypes.byref(plan))
+        error = (lib.fullmag_fdm_backend_last_error(handle) or b"").decode() if handle \
+            else "null handle"
+        if handle and error:
+            lib.fullmag_fdm_backend_destroy(handle)
+            handle = None
+        return handle, error
+
+    # 4. T1 at a grid-aligned free face. m = (+x, -x, +x): the end-cell field is
+    #    c (m_1 - m_0) 2A/(mu0 Ms) with c = 1/dx^2 for the exact Neumann problem.
+    m_flip = [1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+    exact_end = 2.0 * exchange / (MU0 * ms) * (-2.0) / dx ** 2
+    t1 = {"exact_end_cell_Hx_A_per_m": exact_end}
+    for tier in ("none", "volume", "full"):
+        handle, error = create_boundary(tier, m_flip, [1.0] * 3)
+        if handle is None:
+            t1[tier] = {"created": False, "error": error}
+            continue
+        h_x = field(handle, obs_h_ex, 9)[0]
+        lib.fullmag_fdm_backend_destroy(handle)
+        t1[tier] = {"created": True, "end_cell_Hx_A_per_m": h_x, "ratio_to_exact": h_x / exact_end}
+    results["t1_aligned_free_face"] = t1
+    for tier in ("none", "volume"):
+        entry = t1[tier]
+        if not entry["created"] or abs(entry["ratio_to_exact"] - 1.0) > 1e-12:
+            failures.append(f"{tier} end-cell exchange field: {entry}")
+    if t1["full"]["created"] or "fdm_boundary_correction_t1_unqualified" not in t1["full"]["error"]:
+        failures.append(f"T1 must be rejected at creation: {t1['full']}")
+
+    # 5. T0 energy density with phi_2 = 0.02 < phi_floor = 0.05.
+    phi = [1.0, 1.0, 0.02]
+    handle, error = create_boundary("volume", [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, 0.0, 0.0], phi)
+    if handle is None:
+        raise SystemExit(f"T0 backend create failed: {error!r}")
+    eden = field(handle, obs_eden_ex, 3, scalar=True)
+    stats = stats_t()
+    if lib.fullmag_fdm_backend_snapshot_stats(handle, ctypes.byref(stats)) != 0:
+        raise SystemExit(f"snapshot_stats failed: {lib.fullmag_fdm_backend_last_error(handle)!r}")
+    lib.fullmag_fdm_backend_destroy(handle)
+    summed = sum(eden) * volume
+    rel = abs(summed - stats.exchange_energy_joules) / abs(stats.exchange_energy_joules)
+    results["t0_partial_cell_energy_density"] = {
+        "phi": phi, "eden_ex_J_per_m3": eden, "sum_eden_V_J": summed,
+        "E_ex_J": stats.exchange_energy_joules, "rel_error": rel}
+    if rel > 1e-12:
+        failures.append(f"T0 sum(eden_ex) V vs E_ex rel {rel:.3e}")
 
     print(json.dumps(results, indent=2))
     for failure in failures:

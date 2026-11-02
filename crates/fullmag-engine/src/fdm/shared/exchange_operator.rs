@@ -178,6 +178,44 @@ pub fn build_exchange_operator(
     }
 }
 
+/// First `+x/+y/+z` connection with a zero coefficient between two distinct
+/// active cells, as `(cell, neighbour)`. Such a connection is a free surface
+/// for exchange; the FDM DMI stencils do not read the faces and would couple
+/// across it (note 0104, DMI across decoupled connections).
+pub fn first_decoupled_connection(
+    faces: &ExchangeFaces,
+    grid: GridShape,
+    periodic: [bool; 3],
+    active: Option<&[bool]>,
+) -> Option<(usize, usize)> {
+    let is_active = |index: usize| active.map_or(true, |mask| mask[index]);
+    let dims = [grid.nx, grid.ny, grid.nz];
+    for z in 0..grid.nz {
+        for y in 0..grid.ny {
+            for x in 0..grid.nx {
+                let index = grid.index(x, y, z);
+                if !is_active(index) {
+                    continue;
+                }
+                for (axis, values) in [&faces.x_plus, &faces.y_plus, &faces.z_plus]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let Some(neighbor) =
+                        plus_neighbor(grid, [x, y, z], axis, dims[axis], periodic[axis])
+                    else {
+                        continue;
+                    };
+                    if neighbor != index && is_active(neighbor) && values[index] == 0.0 {
+                        return Some((index, neighbor));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 fn check_len(name: &str, len: Option<usize>, cells: usize) -> Result<(), String> {
     match len {
         Some(len) if len != cells => Err(format!(
@@ -383,6 +421,66 @@ mod tests {
         })
         .expect("operator");
         assert_eq!(faces(operator).x_plus[0], 0.0);
+    }
+
+    #[test]
+    fn decoupled_connection_between_active_cells_is_found() {
+        let mask = [1u32, 2, 2];
+        let owners = [0u32, 0, 1];
+        let decoupled = faces(
+            build_exchange_operator(&ExchangeOperatorInputs {
+                region_mask: Some(&mask),
+                region_owner: Some(&owners),
+                ..inputs(grid(3, 1, 1))
+            })
+            .expect("operator"),
+        );
+        assert_eq!(
+            first_decoupled_connection(&decoupled, grid(3, 1, 1), [false; 3], None),
+            Some((0, 1))
+        );
+
+        // A positive scaled interface keeps the connection.
+        let rules = [ExchangePairRule {
+            region_i: 1,
+            region_j: 2,
+            mode: ExchangePairMode::HarmonicScale(0.5),
+        }];
+        let scaled = faces(
+            build_exchange_operator(&ExchangeOperatorInputs {
+                region_mask: Some(&mask),
+                rules: &rules,
+                ..inputs(grid(3, 1, 1))
+            })
+            .expect("operator"),
+        );
+        assert_eq!(first_decoupled_connection(&scaled, grid(3, 1, 1), [false; 3], None), None);
+    }
+
+    #[test]
+    fn decoupled_connection_ignores_inactive_cells_and_checks_periodic_wrap() {
+        let shape = grid(3, 1, 1);
+        let zero_next_to_inactive = ExchangeFaces {
+            x_plus: vec![1e-11, 0.0, 0.0],
+            y_plus: vec![0.0; 3],
+            z_plus: vec![0.0; 3],
+        };
+        let active = [true, true, false];
+        assert_eq!(
+            first_decoupled_connection(&zero_next_to_inactive, shape, [false; 3], Some(&active)),
+            None
+        );
+        // The +x wrap of the last cell joins it to cell 0.
+        let open_wrap = ExchangeFaces {
+            x_plus: vec![1e-11, 1e-11, 0.0],
+            y_plus: vec![0.0; 3],
+            z_plus: vec![0.0; 3],
+        };
+        assert_eq!(first_decoupled_connection(&open_wrap, shape, [false; 3], None), None);
+        assert_eq!(
+            first_decoupled_connection(&open_wrap, shape, [true, false, false], None),
+            Some((2, 0))
+        );
     }
 
     #[test]

@@ -1096,6 +1096,13 @@ static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
             "FDM FP32 sub-cell boundary correction is unavailable until field/energy parity is qualified; use double precision or boundary_correction=none";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
+    if (plan->boundary_correction == FULLMAG_FDM_BOUNDARY_FULL) {
+        // Note 0550 §3.2.1a: the T1 stencil over-couples grid-aligned free faces
+        // by 4/3 and counts the cut volume twice.
+        ctx->last_error =
+            "fdm_boundary_correction_t1_unqualified: T1 boundary-corrected exchange is not consistent with the planner's boundary distances (note 0550); use boundary_correction=volume or none";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
     if (plan->enable_demag != 0 && plan->demag_kernel_spectrum_len == 0) {
         ctx->last_error =
             "FDM CUDA demag requires validated Newell tensor spectra; automatic native spectrum construction is unavailable";
@@ -1478,6 +1485,38 @@ static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
             ctx->last_error =
                 "exchange face coefficients must be three finite, non-negative arrays of cell_count values";
             return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+        }
+        if (plan->has_interfacial_dmi != 0 || plan->has_bulk_dmi != 0 || reserve_rotated_dmi) {
+            // Note 0104: a zero connection between two active cells is a free
+            // surface for exchange, but the DMI stencils would couple across it.
+            const uint64_t nx = plan->grid.nx, ny = plan->grid.ny, nz = plan->grid.nz;
+            const uint64_t dims[3] = {nx, ny, nz};
+            const uint64_t strides[3] = {1u, nx, nx * ny};
+            const int periodic[3] = {plan->periodic_x, plan->periodic_y, plan->periodic_z};
+            const double *coefficients[3] = {
+                exchange_operator.x_plus, exchange_operator.y_plus, exchange_operator.z_plus};
+            const auto active = [&](uint64_t index) {
+                return plan->active_mask == nullptr || plan->active_mask[index] != 0;
+            };
+            for (uint64_t index = 0; index < ctx->cell_count; ++index) {
+                if (!active(index)) continue;
+                const uint64_t coords[3] = {index % nx, (index / nx) % ny, index / (nx * ny)};
+                for (int axis = 0; axis < 3; ++axis) {
+                    uint64_t neighbor = 0;
+                    if (coords[axis] + 1 < dims[axis]) {
+                        neighbor = index + strides[axis];
+                    } else if (periodic[axis] != 0 && dims[axis] > 1) {
+                        neighbor = index - coords[axis] * strides[axis];
+                    } else {
+                        continue;
+                    }
+                    if (active(neighbor) && coefficients[axis][index] == 0.0) {
+                        ctx->last_error =
+                            "fdm_dmi_decoupled_exchange_connection: DMI is not supported with a zero exchange connection between two active cells (note 0104)";
+                        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+                    }
+                }
+            }
         }
     }
     if (plan->enable_exchange != 0 && !exchange_operator.faces && plan->a_field != nullptr &&

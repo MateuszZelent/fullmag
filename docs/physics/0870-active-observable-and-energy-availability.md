@@ -72,6 +72,15 @@ Runtime capability remains backend-level potential support. Session quantity ava
 
 For an exchange-only problem, only `m`, `H_ex`, `H_eff`, `E_ex`, and `E_total` are active among standard micromagnetic observables.
 
+Time-dependent Zeeman drives are evaluated at the time of the observed state.
+In the Rust reference FEM, `FemLlgProblem::observe(state)` evaluates `H_ext`,
+and through it `H_eff`, `E_ext`, `E_total` and the torque metrics, at
+`state.time_seconds`, the same time the integrator right-hand side uses.
+Before 2026-11-02 it used $t=0$, so a pulsed or sinusoidal drive was reported
+at its initial value. Analytic check:
+`observe_evaluates_time_dependent_external_field_at_state_time` (a sinusoidal
+per-node drive observed at a quarter period must report its peak amplitude).
+
 ### 5.2 Cross-backend checks
 
 Compare FDM and FEM filtering against equivalent active terms. Backend-specific unsupported separate observables must be absent even when the physical term is folded into `H_eff`.

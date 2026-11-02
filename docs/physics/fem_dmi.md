@@ -87,6 +87,29 @@ scratch lifetime and per-element MFEM buffers are isolated in
 `dmi_workspace.*`; interfacial residual and energy assembly live in
 `dmi_interfacial.*`.
 
+### Periodic classes in the Rust reference FEM
+
+The Rust reference (`crates/fullmag-engine/src/fem.rs`,
+`dmi_fields_compute_into_selected`) recovers the field of a periodic node
+class $c$ from the reduced system $M_\mathrm{red}=P^\top M P$
+(note 0600-periodic-boundary-conditions):
+
+```text
+H_DMI(c) = - sum_{i in c} r_i / (mu0 Ms sum_{i in c} M_i)
+```
+
+where `r_i` is the assembled residual of node `i` and `M_i` its lumped magnetic
+mass, as in the reference exchange path and the native CPU/GPU DMI
+(`dmi_interfacial.cpp`, `dmi_kernels.cu`). Dividing each node by its own mass
+and then averaging the class (`mean(r_i/M_i)`) agrees only when all members
+carry equal mass, which seam and corner nodes generally do not.
+Analytic check: `periodic_dmi_class_field_divides_class_residual_by_class_mass`
+builds a two-member class with masses 1 and 3 and residuals 2 and 3 and
+expects `-(2+3)/(mu0 Ms (1+3)) = -1.25/(mu0 Ms)` on both members (the per-node
+average would give `-1.5/(mu0 Ms)`). The reference is not selectable from the DSL for periodic
+DMI (the runner rejects periodic pairs with DMI on the reference lane), so this
+fixes the reference probe API, not a production path.
+
 ## Ograniczenia capability i status runtime
 
 - Active DMI requires `FULLMAG_HAS_MFEM_STACK`.
