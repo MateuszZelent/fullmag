@@ -461,6 +461,14 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
     stage_id: Option<&str>,
     on_step: &mut (dyn FnMut(StepUpdate) -> StepAction + Send),
 ) -> Result<RunResult, RunError> {
+        let mut performance = crate::run_performance_integration::start(problem, plan, output_dir, "live_callback");
+        let result = (|| {
+        let mut consumer = on_step;
+        let mut profiled_on_step = |update: StepUpdate| {
+            if !update.terminal_field_snapshot { performance.observe(&update.stats); }
+            consumer(update)
+        };
+        let on_step: &mut (dyn FnMut(StepUpdate) -> StepAction + Send) = &mut profiled_on_step;
     let (
         field_min_mT,
         field_max_mT,
@@ -1059,6 +1067,9 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
         final_magnetization: current_m,
         completion: None,
     })
+        })();
+        crate::run_performance_integration::finish(&mut performance, &result);
+        result
 }
 
 fn build_hysteresis_angular_family_artifact(
