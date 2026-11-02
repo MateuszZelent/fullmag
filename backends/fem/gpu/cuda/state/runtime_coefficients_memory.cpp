@@ -41,6 +41,16 @@ bool gpu_runtime_coefficients_allocate(
             mesh_regions.periodic_reduced_representative_nodes,
             node_count,
             device_bytes,
+            error) ||
+        !gpu_device_allocate_u32(
+            mesh_regions.periodic_class_member_offsets,
+            node_count + 1u,
+            device_bytes,
+            error) ||
+        !gpu_device_allocate_u32(
+            mesh_regions.periodic_class_members,
+            node_count,
+            device_bytes,
             error)) {
         return false;
     }
@@ -84,6 +94,8 @@ void gpu_runtime_coefficients_free(
     gpu_device_free_u32(mesh_regions.periodic_reduced_node);
     gpu_device_free_u32(mesh_regions.periodic_representative_nodes);
     gpu_device_free_u32(mesh_regions.periodic_reduced_representative_nodes);
+    gpu_device_free_u32(mesh_regions.periodic_class_member_offsets);
+    gpu_device_free_u32(mesh_regions.periodic_class_members);
     mesh_regions.periodic_reduced_node_count = 0;
 }
 

@@ -203,6 +203,8 @@ trasy. Nowa próba przechowuje konfigurację i wynik w wolumenie kontrolnym.
 
 Prywatne compiler outputs, cleanup `.fullmag-build`, cache-hit i retencja nieudanego builda podlegają [ADR 0076](../../../../docs/adr/0076-single-private-volume-per-dev-group.md); starsze reguły retencji prywatnego incremental są historyczne. Retencja pakietu current/rollback i globalnych shared volumes pozostaje opisana w [shared build storage](../../../../docs/guides/shared-build-storage.md).
 
+Po publikacji, błędzie/anulowaniu etapu, zatrzymaniu po drain i ukończeniu zadania uzgodnij receipt oraz zastosuj kwalifikowaną retencję. `docker-dev-maintain-cache` służy do jawnego zastosowania lub ponowienia w obsługiwanym stanie. Po scaleniu, drain i kontroli braku konsumentów użyj `worktree-finish ... completed` do wycofania dokładnych prywatnych cache i namespace pakietów, zachowując root control i ledger. Stare grupy nie dziedziczą nowego obrazu ani konfiguracji. Brak obsługi lub niejasny owner oznacza `blocked` z dokładnymi celami.
+
 
 Stosuj [kontrakt danych builda](artifact-policy.md): mapa writerów, ograniczenie
 duplikacji, cache, Docker logs/BuildKit i rozdzielone operacje restart/recreate/GC.
@@ -224,7 +226,7 @@ egzekwuje. Nie sumuj współdzielonych warstw obrazów jako niezależnych kopii.
 Retencja ma odróżniać:
 
 - **pakiety:** bieżący + jeden zweryfikowany rollback; starsze binaria dopiero
-  po trwałej publikacji i pod blokadą. Retired zachowuje receipt i rotację, bez
+  po trwałej publikacji, walidacji łańcucha receipt/rotation i referencji oraz pod blokadą. Wpis `.development/backups` jest kopią techniczną pakietu, nie wynikiem naukowym tylko z powodu nazwy. Retired zachowuje receipt i rotację, bez
   pełnych kopii logów; limit wynosi 8 archiwów i 64 MiB plików. Legacy logi
   są hashowane tylko dla wpisów, które pozostaną w budżecie;
 - **prywatne compiler outputs:** `.fullmag-build`, cache-hit i retencja jednej
@@ -240,11 +242,22 @@ Retencja ma odróżniać:
   Cargo/CMake/BuildKit i stare wolumeny nadal nie mają ogólnego GC;
 - **sesje/wyniki/settings/ledger:** poza cleanupem builda.
 
-Nie wykonuj globalnego `docker system prune`, `volume prune` ani usuwania
-wszystkich starych grup. Zachowaj shared dependency cache i nieznane dane, jeżeli
-nie można dowieść ich zbędności; `.fullmag-build` podlega ADR 0076. Przed autoryzowanym cleanupem ponów kontrolę
-konsumentów; zachowaj plan, receipt i pomiar faktycznie odzyskanych bajtów.
-Nie wolno zastąpić tej procedury wyłączaniem blokad ani usuwaniem provenance.
+Po każdym zdarzeniu retencji wymaganym wyżej odróżniaj kwalifikację od apply:
+preview/dry-run nie zamyka etapu. Po udanym cleanupie zachowaj plan, receipt,
+inventory po zmianie oraz pomiar fizycznych bajtów przed/po na backing
+filesystemie Docker i na C: osobno. `docker system df` raportuj oddzielnie jako
+wartość logiczną. Inwentaryzuj source/storage root i worktree wraz ze wszystkimi
+znanymi historycznymi Compose project IDs i etykietami; receipt bez kandydatów
+nie wystarcza, jeżeli niezależny inventory nadal wykazuje należące do grupy
+bajty. Gdy owner, receipt chain, blokada albo brak konsumentów nie są
+potwierdzone, pozostaw dane i oznacz `blocked` z dokładnymi celami.
+
+Prywatne compiler outputs `.fullmag-build` podlegają ADR 0076.
+
+Nie wykonuj globalnego `docker system prune`, `volume prune`, kasowania targetu
+ani usuwania wszystkich starych grup. Zachowaj shared dependency cache, wyniki, sesje,
+control, provenance, current/rollback w zachowywanej grupie i piny. Nie wolno
+zastąpić tej procedury wyłączaniem blokad ani usuwaniem provenance.
 
 ## 5. Minimalny odbiór
 

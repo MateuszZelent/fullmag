@@ -22,6 +22,7 @@ import bootstrap_docker_toolchain as bootstrap  # noqa: E402
 
 RUNTIME_IMAGE = "sha256:" + "a" * 64
 TOOLCHAIN_IMAGE = "sha256:" + "b" * 64
+CUDA_BASE_IMAGE = "nvidia/cuda:12.6.3-devel-ubuntu22.04@sha256:" + "c" * 64
 HELPER_ID = "f" * 64
 PROJECT_ID = "fullmag"
 WORKTREE_ID = "retire-wt"
@@ -91,6 +92,7 @@ class FakeControl:
         self.project = f"fullmag-worktree-{WORKTREE_ID}"
         self.volume = bootstrap.control_volume_name(self.project)
         self.namespace = ""
+        self.image = CUDA_BASE_IMAGE
         self.identity = {
             "checkout_kind": "worktree", "worktree_id": WORKTREE_ID,
             "project_id": PROJECT_ID, "source_root": str(source_root),
@@ -537,14 +539,25 @@ class RetirementTests(unittest.TestCase):
         self.assertIn("unknown frontend cache/next entries", script)
         self.assertNotIn("/private-ledger", script)
 
+    def _helper_args(self, script, *, initialize=False):
+        return ["docker", "run", "--rm", "-i", "--pull", "never", "--network", "none",
+                "--read-only", "--cap-drop", "ALL",
+                "--mount", "type=volume,src=" + self.control.volume + ",dst=/control,volume-nocopy",
+                "--user", "0:0" if initialize else "65532:65532",
+                *(["--cap-add", "CHOWN", "--cap-add", "FOWNER", "--cap-add", "DAC_OVERRIDE"]
+                  if initialize else []),
+                "--entrypoint", "/bin/bash", self.control.image, "-euo", "pipefail", "-c", script]
+
     def test_private_cleanup_helper_uses_readonly_control_and_only_backend_frontend_subpaths(self):
         self._group_cache_profile()
         identity = retirement._identity(self.control, self.layout)
         group = retirement._private_group_registry(self.control, self.layout, identity, self.docker)
         operation = {}
-        base_args = ["docker", "run", "--mount",
-                     "type=volume,src=" + self.control.volume + ",dst=/control,volume-nocopy",
-                     "--entrypoint", "/bin/bash", "image", "-c", "script"]
+        helper_calls = []
+
+        def helper_args(script, *, initialize=False):
+            helper_calls.append(initialize)
+            return self._helper_args(script, initialize=initialize)
         captured = {}
 
         def fake_capture(args, **kwargs):
@@ -570,14 +583,23 @@ class RetirementTests(unittest.TestCase):
             }
             return Completed(stdout=json.dumps(report).encode("utf-8"))
 
-        with mock.patch.object(self.control, "helper_args", return_value=base_args, create=True):
+        with mock.patch.object(self.control, "helper_args", side_effect=helper_args, create=True):
             with mock.patch.object(self.control, "subpath", side_effect=lambda value: value, create=True):
                 with mock.patch.object(retirement, "bounded_capture", side_effect=fake_capture):
                     receipt = retirement._clear_private_group_cache(
                         self.control, identity, group, operation, "a" * 64,
                     )
-        mounts = [captured["args"][index + 1] for index, arg in enumerate(captured["args"][:-1])
-                  if arg == "--mount"]
+        args = captured["args"]
+        self.assertEqual(helper_calls, [True])
+        operand = args.index("--entrypoint") + 2
+        self.assertEqual(args[operand - 1], "/bin/bash")
+        self.assertEqual(args[operand], RUNTIME_IMAGE)
+        self.assertNotIn(CUDA_BASE_IMAGE, args)
+        self.assertEqual(args[args.index("--user") + 1], "0:0")
+        self.assertEqual(args[args.index("--network") + 1], "none")
+        self.assertEqual(args[args.index("--pull") + 1], "never")
+        self.assertTrue(args[-1].startswith("python3 - <<'PY'\n"))
+        mounts = [args[index + 1] for index, arg in enumerate(args[:-1]) if arg == "--mount"]
         self.assertTrue(any(item.startswith("type=volume,src=" + self.control.volume
                              + ",dst=/control,") and item.endswith(",readonly") for item in mounts))
         self.assertTrue(any("dst=/private-backend" in item and "volume-subpath=private/backend" in item
@@ -586,6 +608,52 @@ class RetirementTests(unittest.TestCase):
                             for item in mounts))
         self.assertFalse(any("volume-subpath=private/ledger" in item for item in mounts))
         self.assertEqual(receipt["state"], "succeeded")
+
+    def _refused_private_cleanup(self, group, message):
+        identity = retirement._identity(self.control, self.layout)
+        with mock.patch.object(self.control, "subpath", side_effect=lambda value: value, create=True):
+            with mock.patch.object(retirement, "bounded_capture") as capture:
+                with self.assertRaisesRegex(retirement.CacheRetirementError, message):
+                    retirement._clear_private_group_cache(self.control, identity, group, {}, "a" * 64)
+        capture.assert_not_called()
+        self.assertNotIn(retirement.PRIVATE_GROUP_RESULT_PATH, self.control.records)
+
+    def test_private_cleanup_helper_with_foreign_image_operand_refuses_before_daemon(self):
+        self._group_cache_profile()
+        identity = retirement._identity(self.control, self.layout)
+        group = retirement._private_group_registry(self.control, self.layout, identity, self.docker)
+
+        def foreign_image(script, *, initialize=False):
+            args = self._helper_args(script, initialize=initialize)
+            args[args.index(CUDA_BASE_IMAGE)] = "other@sha256:" + "d" * 64
+            return args
+        with mock.patch.object(self.control, "helper_args", side_effect=foreign_image, create=True):
+            self._refused_private_cleanup(group, "image operand differs")
+
+    def test_private_cleanup_refuses_registry_changed_after_plan(self):
+        self._group_cache_profile()
+        identity = retirement._identity(self.control, self.layout)
+        group = retirement._private_group_registry(self.control, self.layout, identity, self.docker)
+        registry = self.control.records[retirement.GROUP_STORAGE_REGISTRY_PATH]
+        registry["profile"]["runtime_image_id"] = "sha256:" + "e" * 64
+        with mock.patch.object(self.control, "helper_args", side_effect=self._helper_args, create=True):
+            self._refused_private_cleanup(group, "registry changed before cache cleanup")
+
+    def test_private_cleanup_refuses_unpinned_backend_image(self):
+        self._group_cache_profile()
+        identity = retirement._identity(self.control, self.layout)
+        group = dict(retirement._private_group_registry(self.control, self.layout, identity, self.docker))
+        registry = self.control.records[retirement.GROUP_STORAGE_REGISTRY_PATH]
+        for image in ("fullmag-backend:latest", "sha256:" + "a" * 63, CUDA_BASE_IMAGE, None):
+            with self.subTest(image=image):
+                registry["profile"]["runtime_image_id"] = image
+                group["registry_sha256"] = retirement.hashlib.sha256(
+                    retirement._canonical(registry)).hexdigest()
+                group["profile_sha256"] = retirement.hashlib.sha256(
+                    retirement._canonical(registry["profile"])).hexdigest()
+                with mock.patch.object(self.control, "helper_args", side_effect=self._helper_args,
+                                       create=True):
+                    self._refused_private_cleanup(group, "no immutable backend image")
 
     def test_unverified_private_cleanup_receipt_blocks_retry(self):
         self._group_cache_profile()

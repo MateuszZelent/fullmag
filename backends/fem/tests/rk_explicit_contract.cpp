@@ -1232,6 +1232,58 @@ void cpu_stage_transport_callback_rolls_back_native_failure()
         "failed stage transport callback attempt must close");
 }
 
+void stage_transport_callback_rejects_ms_the_scalar_torque_cannot_represent()
+{
+    fullmag::fem::Context ctx;
+    configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_RK4);
+    ctx.oersted = {};
+    ctx.mesh.n_nodes = 2;
+    ctx.mesh.magnetic_node_mask = {1u, 0u};
+    ctx.mesh.node_volumes = {1.0, 1.0};
+    ctx.state.m_xyz = {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
+    ctx.material_fields.material.saturation_magnetisation = 800e3;
+    StageTransportCallbackProbe probe;
+    const auto callback = make_stage_transport_probe_callback(probe);
+    std::string error;
+
+    // A uniform nodal field equal to the scalar is the coefficient the
+    // transport descriptor uses; an inactive node does not matter.
+    ctx.material_fields.Ms_field = {800e3, 400e3};
+    check(
+        fullmag::fem::configure_transport_stage_callback(ctx, &callback, error),
+        "stage transport must accept nodal Ms equal to the transport scalar on magnetic nodes");
+    check(
+        fullmag::fem::configure_transport_stage_callback(ctx, nullptr, error),
+        "stage transport callback must uninstall");
+
+    // T_tr = -(gamma_e / Ms) (hbar / 2e) (R_J + R_phi): halving Ms on a
+    // magnetic node must double the torque, which the scalar cannot do.
+    ctx.mesh.magnetic_node_mask = {1u, 1u};
+    error.clear();
+    check(
+        !fullmag::fem::configure_transport_stage_callback(ctx, &callback, error),
+        "stage transport must reject heterogeneous nodal Ms on magnetic nodes");
+    check(
+        error.find("Ms_field") != std::string::npos &&
+            error.find("scalar") != std::string::npos,
+        "heterogeneous-Ms stage transport rejection must name the field and the scalar coefficient");
+    check(
+        !ctx.stage_transport.has_stage_callback,
+        "rejected stage transport callback must not be installed");
+
+    ctx.material_fields.Ms_field.clear();
+    ctx.material_fields.Ms_element_field = {400e3};
+    error.clear();
+    check(
+        !fullmag::fem::configure_transport_stage_callback(ctx, &callback, error),
+        "stage transport must reject element DG0 Ms");
+    check(
+        error.find("Ms_element_field") != std::string::npos,
+        "DG0 stage transport rejection must name Ms_element_field");
+    check(probe.begin_count == 0u && probe.evaluation_times.empty(),
+        "Ms realization rejection must happen before any stage invocation");
+}
+
 void gpu_requested_stage_transport_callback_fails_closed()
 {
     fullmag::fem::Context ctx;
@@ -2289,6 +2341,7 @@ int main() {
     cpu_stage_transport_callback_rolls_back_adaptive_retries();
     cpu_stage_transport_callback_rolls_back_native_failure();
     gpu_requested_stage_transport_callback_fails_closed();
+    stage_transport_callback_rejects_ms_the_scalar_torque_cannot_represent();
     gpu_requested_oersted_only_step_rejects_host_rk_fallback();
     adaptive_cpu_rk_requires_preallocated_attempt_checkpoint();
     rejected_cpu_retry_rolls_back_and_reports_only_accepted_attempt_fsal();

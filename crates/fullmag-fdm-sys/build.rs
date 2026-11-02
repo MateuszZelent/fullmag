@@ -419,7 +419,7 @@ fn generate_plan_desc_layout_assertions() {
     assert_eq!(grid_fields, 6, "grid descriptor field count drift");
     assert_eq!(material_fields, 4, "material descriptor field count drift");
     assert_eq!(time_fields, 13, "time policy descriptor field count drift");
-    assert_eq!(extension_fields, 2, "v2 extension field count drift");
+    assert_eq!(extension_fields, 8, "v2 extension field count drift");
 
     let generated = format!("{{\n{assertions}}}\n");
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());

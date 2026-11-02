@@ -37,6 +37,7 @@ PRIVATE_GROUP_REGISTRY_SCHEMA = "fullmag.private-group-cache-registry.v1"
 PRIVATE_GROUP_CLEANUP_SCHEMA = "fullmag.private-group-cache-retirement.v1"
 _ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 _SHA = re.compile(r"^[0-9a-f]{64}$")
+_IMAGE_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
 _CONTAINER_ID = re.compile(r"^[0-9a-f]{64}$")
 _VOLUME_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,199}$")
 _V1_FRONTEND = re.compile(r"^fullmag-dev-frontend-v1-([0-9a-f]{24})$")
@@ -496,6 +497,44 @@ def _valid_private_group_cleanup_receipt(value: Any, group: Mapping[str, Any],
     )
 
 
+def _private_group_helper_image(control: Any, group: Mapping[str, Any]) -> str:
+    """Return the planned group's backend image, which provides python3.
+
+    The durable plan binds the whole registry and profile by hash, so the image
+    is re-read here instead of widening the plan record.
+    """
+    try:
+        registry = control.read(GROUP_STORAGE_REGISTRY_PATH, optional=True)
+    except Exception as error:
+        raise CacheRetirementError("Private group cache registry could not be re-read") from error
+    profile = registry.get("profile") if isinstance(registry, Mapping) else None
+    if (not isinstance(profile, Mapping)
+            or hashlib.sha256(_canonical(dict(registry))).hexdigest() != group["registry_sha256"]
+            or hashlib.sha256(_canonical(dict(profile))).hexdigest() != group["profile_sha256"]):
+        raise CacheRetirementError("Private group cache registry changed before cache cleanup")
+    image = profile.get("runtime_image_id")
+    if not isinstance(image, str) or _IMAGE_ID.fullmatch(image) is None:
+        raise CacheRetirementError("Private group cache profile has no immutable backend image")
+    return image
+
+
+def _private_group_cleanup_command(control: Any, script: str, helper_image: str) -> list[str]:
+    """Run the root cleanup helper in the backend image, not the CUDA base.
+
+    BuildControl helpers default to the CUDA base image, which ships bash but
+    not python3. Keep every helper flag and swap only the image operand.
+    """
+    args = control.helper_args(script, initialize=True)
+    if not isinstance(args, list) or args.count("--entrypoint") != 1:
+        raise CacheRetirementError("Private cache cleanup helper has no unique entrypoint")
+    operand = args.index("--entrypoint") + 2
+    if (operand >= len(args) or args[operand - 1] != "/bin/bash"
+            or args[operand] != getattr(control, "image", None)):
+        raise CacheRetirementError("Private cache cleanup helper image operand differs from its pinned image")
+    args[operand] = helper_image
+    return args
+
+
 def _clear_private_group_cache(control: Any, identity: Mapping[str, str],
                                group: Mapping[str, Any], operation: dict[str, Any],
                                plan_sha256: str) -> dict[str, Any]:
@@ -520,9 +559,10 @@ def _clear_private_group_cache(control: Any, identity: Mapping[str, str],
         owner = group_storage.owner_manifest(control, identity["source_root"])
         if hashlib.sha256(_canonical(owner)).hexdigest() != group["owner_sha256"]:
             raise CacheRetirementError("Private group owner changed before cache cleanup")
-        control.write(PRIVATE_GROUP_RESULT_PATH, {**expected_receipt, "state": "started"})
         script = _private_group_cleanup_script(owner, group, plan_sha256=plan_sha256)
-        args = control.helper_args(script, initialize=True)
+        args = _private_group_cleanup_command(
+            control, script, _private_group_helper_image(control, group))
+        control.write(PRIVATE_GROUP_RESULT_PATH, {**expected_receipt, "state": "started"})
         entrypoint = args.index("--entrypoint")
         mounts = [*group_storage.cli_mount_args(control, "backend", "/private-backend"),
                   *group_storage.cli_mount_args(control, "frontend", "/private-frontend")]

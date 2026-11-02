@@ -689,6 +689,14 @@ fn fem_plan_has_zhang_li_stt(plan: &FemPlanIR) -> bool {
         && !fem_plan_has_slonczewski_stt(plan)
 }
 
+const PRESCRIBED_SOT_FORMULA_VERSION: &str = "prescribed_sot.fullmag.v1";
+
+fn fem_plan_has_prescribed_sot(plan: &FemPlanIR) -> bool {
+    plan.spin_torque_contract
+        .as_ref()
+        .is_some_and(|contract| contract.formula_version == PRESCRIBED_SOT_FORMULA_VERSION)
+}
+
 fn first_unsupported_elementwise_ms_cpu_owner(plan: &FemPlanIR) -> Option<&'static str> {
     // This is intentionally the same precedence as the native Context
     // diagnostic. Consistent-mass exchange is the required CPU owner;
@@ -730,6 +738,11 @@ fn first_unsupported_elementwise_ms_cpu_owner(plan: &FemPlanIR) -> Option<&'stat
     }
     if fem_plan_has_slonczewski_stt(plan) {
         return Some("Slonczewski STT");
+    }
+    // The prescribed-SOT RHS divides by a nodal Ms (or the scalar); a node
+    // shared by two DG0 elements has no single Ms value.
+    if fem_plan_has_prescribed_sot(plan) {
+        return Some("prescribed SOT");
     }
     if plan.has_oersted_cylinder
         || plan
@@ -778,6 +791,34 @@ pub(crate) fn elementwise_material_legality_error(
     if fem_plan.a_element_field.is_some() && !fem_plan.enable_exchange {
         return Some(format!(
             "A_element_field is unsupported for exchange-disabled plan on resolved device '{device}': this runtime has no exchange weak form to consume the sharp coefficient"
+        ));
+    }
+    None
+}
+
+/// Reject Ms realizations that the bounded FEM spin-transport descriptor cannot
+/// represent. Its torque coefficient `-gamma_e hbar / (2 e Ms)` uses the one
+/// scalar `material.saturation_magnetisation`, so DG0 Ms and a nodal field that
+/// differs from that scalar would silently produce a wrong torque.
+pub(crate) fn fem_spin_transport_ms_realization_error(
+    has_spin_transport: bool,
+    material: &fullmag_ir::MaterialIR,
+    ms_element_field: Option<&[f64]>,
+) -> Option<String> {
+    if !has_spin_transport {
+        return None;
+    }
+    if ms_element_field.is_some() {
+        return Some("bounded FEM steady spin transport requires uniform saturation magnetization; per-element Ms is not supported by the native descriptor".to_string());
+    }
+    let scalar = material.saturation_magnetisation;
+    if material
+        .ms_field
+        .as_deref()
+        .is_some_and(|values| values_differ(values, scalar))
+    {
+        return Some(format!(
+            "bounded FEM steady spin transport uses one scalar saturation magnetization (Ms={scalar:e} A/m) in its torque coefficient; a spatially varying nodal 'material.ms_field' is not supported by the native descriptor"
         ));
     }
     None
@@ -4581,9 +4622,13 @@ pub(crate) fn plan_fem(
             })
     });
 
-    if !problem.spin_transport_modules.is_empty() && ms_element_field.is_some() {
+    if let Some(reason) = fem_spin_transport_ms_realization_error(
+        !problem.spin_transport_modules.is_empty(),
+        &material,
+        ms_element_field.as_deref(),
+    ) {
         return Err(PlanError {
-            reasons: vec!["bounded FEM steady spin transport requires uniform saturation magnetization; per-element Ms is not supported by the native descriptor".to_string()],
+            reasons: vec![reason],
         });
     }
     let charge_transport_plans = resolve_fem_charge_only_transport(

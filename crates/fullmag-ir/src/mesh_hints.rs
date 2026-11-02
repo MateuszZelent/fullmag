@@ -995,11 +995,10 @@ impl FdmMultilayerPlanIR {
             let mut legend_ids = BTreeSet::new();
             if let Some(legend) = layer.native_region_legend.as_deref() {
                 for entry in legend {
-                    if entry.numeric_id == 0 || entry.numeric_id > crate::MAX_FDM_REGION_IDS {
+                    if entry.numeric_id == 0 || entry.numeric_id == u32::MAX {
                         errors.push(format!(
-                            "fdm multilayer layer[{index}] native_region_legend numeric_id {} is outside 1..={}",
-                            entry.numeric_id,
-                            crate::MAX_FDM_REGION_IDS
+                            "fdm multilayer layer[{index}] native_region_legend numeric_id {} is reserved (0 = unnamed base region, u32::MAX = inactive)",
+                            entry.numeric_id
                         ));
                     }
                     if !legend_ids.insert(entry.numeric_id) {

@@ -36,6 +36,7 @@ _ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*\Z")
 _NAMESPACE_RE = re.compile(r"namespaces/[0-9a-f]{32}\Z")
 _ATTEMPT_RE = re.compile(r"[0-9a-f]{32}\Z")
 _TARGET_PART_RE = re.compile(r"[A-Za-z0-9._-]+\Z")
+_IMAGE_RE = re.compile(r"(?:[^\s]+@sha256:[0-9a-f]{64}|sha256:[0-9a-f]{64})\Z")
 
 
 class GroupStorageError(BuildControlError):
@@ -362,18 +363,38 @@ def _initializer_script(manifest: Mapping[str, object]) -> str:
     ''')
 
 
+def _initializer_command(control, script: str, helper_image: str) -> list[str]:
+    """Run the bounded root helper in the group's pinned Python-capable image.
+
+    BuildControl helpers default to the CUDA base image, which ships bash but
+    not python3. Keep every helper flag and swap only the image operand.
+    """
+    if not isinstance(helper_image, str) or _IMAGE_RE.fullmatch(helper_image) is None:
+        _fail("Private group storage helper image must be digest-pinned")
+    command = control.helper_args(script, initialize=True)
+    if not isinstance(command, list) or command.count("--entrypoint") != 1:
+        _fail("BuildControl root helper command has no unique entrypoint")
+    operand = command.index("--entrypoint") + 2
+    if (operand >= len(command) or command[operand - 1] != "/bin/bash"
+            or command[operand] != getattr(control, "image", None)):
+        _fail("BuildControl root helper image operand differs from its pinned image")
+    command[operand] = helper_image
+    return command
+
+
 def prepare(control, operation, source_root: str | os.PathLike[str], *,
-            docker=None, bounded=None) -> dict[str, object]:
+            helper_image: str, docker=None, bounded=None) -> dict[str, object]:
     """Initialize exact role leaves in an already-created group volume.
 
     The caller must hold the same BuildControl operation for all related cache
-    actions. This function never creates a Docker volume.
+    actions and pass a digest-pinned image that provides python3 (the group's
+    backend image). This function never creates a Docker volume.
     """
     try:
         manifest = owner_manifest(control, source_root)
         _validate_operation(control, operation, str(manifest["source_root"]))
         _inspect_existing_volume(control, docker or docker_capture)
-        command = control.helper_args(_initializer_script(manifest), initialize=True)
+        command = _initializer_command(control, _initializer_script(manifest), helper_image)
         result = (bounded or bounded_capture)(command, data=b"", timeout=120)
     except GroupStorageError:
         raise

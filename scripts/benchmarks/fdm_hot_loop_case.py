@@ -16,7 +16,8 @@ FDM_BENCH_STEPS        fixed-dt step count               (default 200)
 FDM_BENCH_INTEGRATOR   heun | rk4 | rk23 | rk45          (default heun)
 FDM_BENCH_ADAPTIVE     1 = adaptive dt (rk23/rk45 only)  (default 0)
 FDM_BENCH_DEMAG        1 = demag on                      (default 1)
-FDM_BENCH_HETERO       1 = region with its own Ms (spatial Ms, forces CPU AoS)
+FDM_BENCH_HETERO       1 = region with its own Ms (spatial Ms, forces CPU AoS);
+                       2 = region with its own Ms, Aex and alpha (face coefficients)
 FDM_BENCH_REGIONS      N >= 2 = N object regions as x stripes (CUDA LUT path)
 FDM_BENCH_THREADS      CPU thread count (default: runtime default)
 
@@ -40,7 +41,8 @@ STEPS = int(_env("FDM_BENCH_STEPS", "200"))
 INTEGRATOR = _env("FDM_BENCH_INTEGRATOR", "heun").lower()
 ADAPTIVE = _env("FDM_BENCH_ADAPTIVE", "0") == "1"
 DEMAG = _env("FDM_BENCH_DEMAG", "1") == "1"
-HETERO = _env("FDM_BENCH_HETERO", "0") == "1"
+HETERO_LEVEL = int(_env("FDM_BENCH_HETERO", "0"))
+HETERO = HETERO_LEVEL >= 1
 REGIONS = int(_env("FDM_BENCH_REGIONS", "0"))
 THREADS = _env("FDM_BENCH_THREADS", "")
 DT = 1e-13
@@ -74,6 +76,9 @@ if HETERO:
         fm.Box(size=(SIZE[0] / 2.0, SIZE[1], SIZE[2])).translate((SIZE[0] / 4.0, 0.0, 0.0)),
     )
     half.material.Ms = 600e3
+    if HETERO_LEVEL >= 2:
+        half.material.Aex = 20e-12
+        half.material.alpha = 0.05
 elif REGIONS >= 2:
     width = SIZE[0] / REGIONS
     for index in range(REGIONS):

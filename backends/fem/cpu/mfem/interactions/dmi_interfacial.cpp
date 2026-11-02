@@ -265,9 +265,17 @@ bool compute_interfacial_dmi_field(
         error = "MFEM lumped mass is unavailable for interfacial DMI weak-residual projection";
         return false;
     }
+    const double *lumped_mass_ptr = ctx.integration_weights.mfem_lumped_mass.data();
+    if (!ctx.mesh.periodic_reduced_node.empty()) {
+        if (!accumulate_dmi_periodic_residual_and_mass(
+                ctx, residual_xyz, *dmi_workspace, error)) {
+            return false;
+        }
+        lumped_mass_ptr = dmi_workspace->periodic_lumped_mass.data();
+    }
     if (!dmi_project_lumped_field(
             residual_xyz.data(),
-            ctx.integration_weights.mfem_lumped_mass.data(),
+            lumped_mass_ptr,
             ctx.material_fields.Ms_field.empty() ? nullptr : ctx.material_fields.Ms_field.data(),
             static_cast<uint64_t>(n),
             uniform_Ms,

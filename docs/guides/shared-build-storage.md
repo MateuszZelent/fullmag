@@ -137,17 +137,79 @@ zamykania blokują nowe zarządzane starty; przerwaną operację wznawiaj tym sa
 poleceniem. Receipt ma potwierdzić dokładnie usunięte subpaths/namespace. Dopiero
 potem usuń worktree i zintegrowany branch, a wynik zapisz w rekordzie.
 
+Przed usunięciem worktree wykonaj niezależny inventory z użyciem
+zarejestrowanego source/worktree, storage root oraz bieżących i dawnych Compose
+project IDs/etykiet. Receipt potwierdza wyłącznie zasoby objęte planem. Jeśli
+inventory znajdzie należące do grupy bajty wymagające wycofania, cleanup nie
+jest zakończony: zachowaj checkout, zapisz `blocked` z dokładnymi celami i
+dokończ kwalifikowaną retencję przed usunięciem worktree i zamknięciem zadania.
+
 **Nigdy nie usuwaj całego `fullmag-shared-*` razem z pojedynczym worktree.**
 Wspólne pakiety, Cargo/pnpm, control, ledger, sesje i wyniki pozostają.
 Nie ma automatycznej migracji ani zbiorczego kasowania dawnych, nieznanych grup.
+Zidentyfikowane i kwalifikowane stare namespace'y nadal wymagają usunięcia;
+nierozpoznana tożsamość blokuje closeout zamiast pozostawiać je po cichu.
 Cargo registry/git i pnpm store są współdzielone, ale ta zmiana nie ustanawia
-ich wspólnego limitu bajtowego. Prywatny pełny target zostaje usunięty przy
-kwalifikowanym zakończeniu worktree; długotrwały master nadal wymaga obserwacji
+ich wspólnego limitu bajtowego. Kwalifikowane zakończenie worktree usuwa jego
+prywatny pełny target; niezależny inventory potwierdza, że żaden starszy
+namespace nie został pominięty. Długotrwały master nadal wymaga obserwacji
 pozostałych części target i BuildKit.
 
-Dalsze migracje starych pakietów lub cleanup nieznanego stagingu wymagają
-inwentarza i jawnej kwalifikacji. Wiek wolumenu lub brak uruchomionego kontenera
-nie dowodzą, że dane nie są potrzebne.
+### Wymagane zastosowanie retencji i kontrola historycznych grup
+
+Po każdej publikacji pakietu, zakończeniu etapu builda (również błędem lub
+anulowaniem), zwykłym zatrzymaniu po drain oraz domknięciu zadania uzgodnij
+receipt dokładnej próby i zastosuj kwalifikowaną retencję. Automatyczny worker
+po gotowości API może już wykonać część pracy: przyjmij go tylko na podstawie
+receiptu z właściwym attempt, image/config i source identity. Jeśli receipt nie
+potwierdza pełnego zakresu albo zdarzenie nie ma wspieranej ścieżki apply,
+użyj istniejącej kwalifikowanej procedury. Preview/dry-run nie zamyka etapu.
+Brak obsługi lub nierozstrzygnięty owner oznacza `blocked` z dokładnymi
+pozostałymi celami i następnym krokiem; nie omijaj blokad i nie kończ zadania
+z przemilczanym cleanupem.
+
+Dla grupy pozostającej w użyciu zachowaj tylko zweryfikowany pakiet `current`
+i jeden bezpośredni `rollback`. Starsze pakiety i kopie rotacji usuń po
+sprawdzeniu pełnego, niecyklicznego łańcucha receipt/rotation oraz braku
+aktywnych referencji, lease i pinów. `.development/backups` w pakiecie jest
+technicznym materiałem do rollbacku; sama nazwa nie czyni go wynikiem
+naukowym. Nie usuwaj bieżącego pakietu, bezpośredniego rollbacku, aktywnego
+kandydata ani artefaktu wskazywanego przez uruchomionego konsumenta.
+
+Scaloną i nieużywaną grupę wycofaj po potwierdzonym drain, braku kontenerów i
+braku innych konsumentów przez `worktree-finish ... completed`. Oczekiwany
+zakres obejmuje jej prywatne backend build/package i frontend namespace, także
+pozostałe po wcześniejszej konfiguracji, oraz tylko jej wpisy `groups/<unit_key>`.
+Zachowaj współdzielone Cargo/pnpm i payloady innych grup, control, ledger,
+receipty/provenance, wyniki, sesje, ustawienia i aktywne piny/referencje.
+Kwalifikowane prywatne pakiety starszej generacji nie mają pozostawać tylko
+dlatego, że pochodzą ze starego worktree.
+
+Inwentarz musi łączyć zarejestrowany worktree/source root i rozwiązany storage
+root z bieżącym oraz historycznym Compose project ID i etykietami wolumenów.
+Stare i nowe schematy należy uzgodnić przed kwalifikacją; filtr wyłącznie po
+aktualnym project ID nie wykrywa namespace'ów z poprzedniej tożsamości.
+Zestaw kandydatów w planie/receipcie porównaj z niezależnym inventory po
+identity i nazwach namespace. Receipt `succeeded` z pustą listą kandydatów nie
+zamyka cleanupu, gdy niezależny inventory nadal znajduje należące do grupy
+bajty. Obecność polecenia lub receipt nie dowodzi, że wdrożona implementacja
+obejmuje każdą historyczną tożsamość. Zweryfikuj zakres apply po pełnej
+inwentaryzacji; jeśli pozostają kwalifikowane bajty, cleanup nie jest zakończony.
+
+Każdy checkpoint cleanupu zapisuje fizyczny pomiar przed i po na filesystemie
+backing Docker oraz na C: oddzielnie; jeżeli backing image leży na innym dysku,
+zmierz i ten wolumen. Zapisz użyte/zajęte bajty, wolne bajty i źródło pomiaru.
+`docker system df` pozostaje oddzielną księgowością logiczną — nie sumuj
+obrazów i BuildKit jako niezależnych fizycznych bajtów. Bez pomiaru po apply
+odzyskane miejsce jest `NOT VERIFIED`.
+
+Stare grupy nie dziedziczą nowego obrazu ani konfiguracji; `docker restart` ich
+nie migruje. Wykonaj kwalifikację przez aktualną, przypiętą procedurę i ponów
+niezależny inventory. Jeżeli tożsamości lub odbiór starej grupy nie są
+rozstrzygalne, pozostaw ją nietkniętą i zapisz `blocked` z dokładnymi nazwami
+celów, etykietami/ID oraz warunkiem bezpiecznego wznowienia. Wiek, rozmiar, nazwa,
+zakończenie procesu lub brak uruchomionego kontenera same w sobie nie dowodzą
+zbędności. Nie używaj globalnego prune ani `compose down -v`.
 
 ## Aktualizacja istniejącej grupy ze starszego worktree
 

@@ -98,6 +98,13 @@ automatycznej retencji i jednego volume pozostaje **NOT VERIFIED**. Szczegóły:
 [kontrakt retencji](../../../docs/guides/shared-build-storage.md) i
 [ADR 0076](../../../docs/adr/0076-single-private-volume-per-dev-group.md).
 
+Po publikacji, błędzie/anulowaniu etapu, zatrzymaniu po drain i zakończeniu
+zadania uzgodnij receipt oraz wykonaj dostępną kwalifikowaną retencję; preview
+nie zamyka cleanupu. Potwierdź pokrycie historycznych tożsamości i brak
+konsumentów; zachowaj aktywne piny i referencje, control/provenance oraz sesje
+i wyniki użytkownika. Starszy obraz lub konfiguracja nie dziedziczą automatyki
+nowego launchera; dowodem pozostaje receipt konkretnej próby.
+
 Buildowe zależności, cache Cargo/CMake/pnpm/Next, pakiety, logi i techniczne
 receipty aktywnej trasy są przypięte do named volumes grupy lub magazynu
 BuildKit. Nie zapisuj ich do storage Windows. Hostowe storage zachowuje
@@ -140,9 +147,13 @@ wyników release/CI/nauki na DEV ani odwrotnie.
 4. Zapisz dowód poprawnego buildu i startu API. Sprawdź restart bez zmian,
    małą zmianę backendu oraz frontend HMR, mierząc rzeczywistą pracę i zajętość.
    Nie obiecuj stałego czasu ani kompilacji tylko jednego crate.
-5. Po etapie wykonaj kwalifikację retencji opisaną w procedurze. Zapisz wynik
-   w wolumenie; raportuj pozostawione generacje i powód. Nie stosuj globalnego
-   prune ani automatycznego usuwania wolumenów czy danych użytkownika.
+5. Po każdym zdarzeniu retencji wymienionym wyżej uzgodnij receipt dokładnej
+   próby i zastosuj kwalifikowaną retencję; zapisz receipt oraz inventory po
+   zmianie. Przed/po zmierz fizyczne użycie backing filesystemu Docker i C:
+   oddzielnie. Jeżeli helper nie obsługuje stanu albo historyczne namespace'y
+   pozostają nierozstrzygnięte, oznacz cleanup jako `blocked` i wypisz dokładne
+   cele. Nie zastępuj apply preview, globalnym prune, `compose down -v` ani
+   usuwaniem danych użytkownika.
 
 Odróżniaj: plan, audyt źródeł, strukturalny test mountów, build, API, HMR,
 wykonanie symulacji i pomiar odzyskanych bajtów. Brak dowodu oznacza
