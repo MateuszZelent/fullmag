@@ -33,6 +33,7 @@ pub(crate) struct AcceptedFemExecution {
     pub(crate) attempt_output_dir: std::path::PathBuf,
     pub(crate) accepted_state_ref: fullmag_quantities::AcceptedStateRef,
     pub(crate) terminal_stats: Option<fullmag_runner::StepStats>,
+    pub(crate) completion: Option<fullmag_ir::StageCompletionIR>,
 }
 
 /// The solver may acknowledge an interrupt after producing a prefix of steps.
@@ -266,6 +267,7 @@ pub(crate) fn execute_accepted_fem_attempt(
             attempt_output_dir: attempt_output_dir.to_path_buf(),
             accepted_state_ref,
             terminal_stats,
+            completion: result.completion,
         },
     ))
 }

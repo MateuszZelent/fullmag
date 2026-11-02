@@ -168,6 +168,7 @@ struct VerifiedOutput {
     data_kind: String,
     accepted_state_ref: Option<fullmag_quantities::AcceptedStateRef>,
     decoded: fullmag_application::DecodedStudyArtifact,
+    completion: Option<fullmag_ir::StageCompletionIR>,
 }
 
 #[derive(Debug, Clone)]
@@ -1269,6 +1270,16 @@ fn build_stage_execution(
             .max_by(|left, right| compare_magnetization_outputs(left, right))
         {
             if let fullmag_application::DecodedStudyArtifact::MagnetizationState(state) = &output.decoded {
+                if stage_status == crate::types::StageLifecycleState::Completed {
+                    if let Some(completion) = &output.completion {
+                        record.reason = completion.reason;
+                        record.converged = completion.converged;
+                        record.metric = completion.metric;
+                        record.metric_name = completion.metric_name.clone();
+                        record.metric_value = completion.metric_value;
+                        record.threshold = completion.threshold;
+                    }
+                }
                 record.completed_step = Some(state.step);
                 record.applied_step = Some(state.step);
                 if state.time_s.is_finite() && state.time_s >= 0.0 {
@@ -1926,8 +1937,15 @@ fn load_verified_outputs(
                 data_kind: output.data_kind,
                 accepted_state_ref: accepted_state_ref.clone(),
                 decoded,
+                completion: None,
             });
         }
+    }
+    for output in &mut outputs {
+        let fullmag_application::DecodedStudyArtifact::MagnetizationState(final_state) =
+            &output.decoded else { continue; };
+        output.completion = terminal_completion_from_pinned_artifact(
+            store, run_catalog, artifact_catalog, &task_order, output, final_state);
     }
     Ok(outputs)
 }
@@ -1998,6 +2016,77 @@ fn terminal_stats_from_pinned_artifact(
         return None;
     }
     Some(stats.stats)
+}
+
+fn terminal_completion_from_pinned_artifact(
+    store: &fullmag_session::SessionStore,
+    run_catalog: &fullmag_session::FmsRunCatalog,
+    artifact_catalog: &fullmag_session::FmsArtifactCatalog,
+    task_order: &std::collections::BTreeMap<String, usize>,
+    output: &VerifiedOutput,
+    final_state: &fullmag_application::MagnetizationStateArtifact,
+) -> Option<fullmag_ir::StageCompletionIR> {
+    if artifact_catalog.run_id != run_catalog.run_id { return None; }
+    let accepted_state_ref = output.accepted_state_ref.as_ref()?;
+    let task = run_catalog.tasks.iter().find(|task| {
+        task.lifecycle == fullmag_session::FmsTaskLifecycle::Succeeded
+            && task_order.get(&task.task_id) == Some(&output.task_order)
+    })?;
+    let attempt_id = task.attempt_id.as_deref()?;
+    let ownership_epoch = task.ownership_epoch?;
+    if accepted_state_ref.id.run_id != run_catalog.run_id
+        || accepted_state_ref.id.stage_id.as_deref() != Some(output.step_id.as_str())
+        || accepted_state_ref.generation.runtime_epoch != ownership_epoch
+        || accepted_state_ref.id.accepted_step != final_state.step
+    {
+        tracing::warn!(task_id = %task.task_id,
+            "terminal completion artifact source does not match the final accepted state identity");
+        return None;
+    }
+    let mut matches = artifact_catalog.entries.iter().filter(|entry| {
+        task.artifact_ids.contains(&entry.artifact_id)
+            && entry.task_id == task.task_id
+            && entry.attempt_id == attempt_id
+            && entry.ownership_epoch == ownership_epoch
+            && entry.artifact_type == crate::accepted_field_materialization_worker::TERMINAL_COMPLETION_ARTIFACT_TYPE
+            && entry.status == fullmag_session::FmsArtifactStatus::Published
+    });
+    let Some(entry) = matches.next() else { return None; };
+    if matches.next().is_some() {
+        tracing::warn!(task_id = %task.task_id,
+            "terminal completion artifact pin is ambiguous; stage completion remains unknown");
+        return None;
+    }
+    let stats = match crate::accepted_field_materialization_worker::read_terminal_completion(store, entry) {
+        Ok(record) => record,
+        Err(error) => {
+            tracing::warn!(task_id = %task.task_id, error = %error,
+                "terminal completion artifact is invalid; stage completion remains unknown");
+            return None;
+        }
+    };
+    if stats.source != *accepted_state_ref
+        || stats.source.id.run_id != run_catalog.run_id
+        || stats.source.id.stage_id.as_deref() != Some(output.step_id.as_str())
+        || stats.source.generation.runtime_epoch != ownership_epoch
+        || stats.state_object_ref != output.object_ref
+        || stats.input_fingerprint != task.input_fingerprint
+        || stats.resolved_input_fingerprint != task.resolved_input_fingerprint
+        || stats.run_id != run_catalog.run_id
+        || stats.task_id != task.task_id
+        || stats.step_id != output.step_id
+        || stats.attempt_id != attempt_id
+        || stats.ownership_epoch != ownership_epoch
+        || stats.clock.accepted_step != final_state.step
+        || stats.clock.time_seconds.to_bits() != final_state.time_s.to_bits()
+        || stats.solver_dt_s.to_bits() != final_state.solver_dt_s.to_bits()
+        || crate::accepted_field_materialization_worker::validate_completion(&stats.completion).is_err()
+    {
+        tracing::warn!(task_id = %task.task_id,
+            "terminal completion artifact does not match the pinned final state; stage completion remains unknown");
+        return None;
+    }
+    Some(stats.completion)
 }
 
 #[derive(Debug, Clone)]
@@ -3294,6 +3383,63 @@ mod tests {
     }
 
     #[test]
+    fn terminal_completion_requires_one_exact_successful_attempt_and_state() {
+        use crate::accepted_field_materialization_worker::completion_tests::fixture;
+        let directory = tempfile::tempdir().unwrap();
+        let store = fullmag_session::SessionStore::open(directory.path().join("store")).unwrap();
+        for (reason, converged) in [(fullmag_ir::StageStopReason::Torque, true),
+            (fullmag_ir::StageStopReason::Energy, true), (fullmag_ir::StageStopReason::MaxSteps, false)] {
+            let (record, entry) = fixture(reason, converged);
+            store.cas().put(&serde_json::to_vec(&record).unwrap()).unwrap();
+            let mut producer = task(fullmag_session::FmsTaskLifecycle::Succeeded);
+            producer.attempt_id = Some(record.attempt_id.clone());
+            producer.ownership_epoch = Some(record.ownership_epoch);
+            producer.resolved_input_fingerprint = record.resolved_input_fingerprint.clone();
+            producer.artifact_ids = vec![entry.artifact_id.clone()];
+            let run = fullmag_session::FmsRunCatalog {
+                schema_version: "fms.run_catalog.v1".into(), run_id: record.run_id.clone(),
+                revision: 1, updated_at: chrono::Utc::now(), tasks: vec![producer],
+            };
+            let catalog = fullmag_session::FmsArtifactCatalog {
+                schema_version: "fms.artifact_catalog.v1".into(), run_id: record.run_id.clone(),
+                revision: 1, updated_at: chrono::Utc::now(), entries: vec![entry],
+            };
+            let final_state = fullmag_application::MagnetizationStateArtifact {
+                step: 7, time_s: 0.0, solver_dt_s: 0.0, space_fingerprint: "layout".into(),
+                layout: json!({"grid_cells": [1,1,1]}), provenance: json!({}),
+                values: vec![[0.0,0.0,1.0]], native_state_snapshot: None, native_node_map: None,
+            };
+            let output = VerifiedOutput {
+                task_order: 0, step_id: record.step_id.clone(), object_ref: record.state_object_ref.clone(),
+                data_kind: "state".into(), accepted_state_ref: Some(record.source.clone()),
+                decoded: fullmag_application::DecodedStudyArtifact::MagnetizationState(final_state.clone()), completion: None,
+            };
+            let order = std::collections::BTreeMap::from([("task".into(), 0)]);
+            assert_eq!(terminal_completion_from_pinned_artifact(&store, &run, &catalog, &order,
+                &output, &final_state), Some(record.completion));
+            for change in 0..10 {
+                let mut run = run.clone();
+                let mut catalog = catalog.clone();
+                let mut output = output.clone();
+                match change {
+                    0 => catalog.entries.clear(), // legacy absence
+                    1 => catalog.entries.push(catalog.entries[0].clone()), // ambiguous
+                    2 => run.tasks[0].attempt_id = Some("foreign".into()),
+                    3 => run.tasks[0].ownership_epoch = Some(2),
+                    4 => output.object_ref = "f".repeat(64),
+                    5 => run.tasks[0].lifecycle = fullmag_session::FmsTaskLifecycle::Running,
+                    6 => run.tasks[0].lifecycle = fullmag_session::FmsTaskLifecycle::Cancelled,
+                    7 => run.tasks[0].lifecycle = fullmag_session::FmsTaskLifecycle::Failed,
+                    8 => run.tasks[0].resolved_input_fingerprint = Some("f".repeat(64)),
+                    _ => output.accepted_state_ref.as_mut().unwrap().id.clock_digest = format!("sha256:{}", "f".repeat(64)),
+                }
+                assert!(terminal_completion_from_pinned_artifact(&store, &run, &catalog, &order,
+                    &output, &final_state).is_none(), "change {change} must fail closed");
+            }
+        }
+    }
+
+    #[test]
     fn finished_interactive_commands_return_the_session_to_awaiting_command() {
         for status in ["completed", "failed", "cancelled"] {
             assert_eq!(session_status_after_projection(status, true), "awaiting_command");
@@ -4288,6 +4434,7 @@ mod tests {
                 object_ref: object_ref.into(),
                 data_kind: "state".into(),
                 accepted_state_ref: None,
+                completion: None,
                 decoded: fullmag_application::DecodedStudyArtifact::MagnetizationState(
                     fullmag_application::MagnetizationStateArtifact {
                         step,

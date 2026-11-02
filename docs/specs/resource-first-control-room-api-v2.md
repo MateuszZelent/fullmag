@@ -752,6 +752,14 @@ The simulation resources expose one algorithm-specific relaxation contract:
   threshold, and diagnostics. Budget exhaustion is completed/non-converged;
   numerical stagnation is failed/non-converged. Table rows and artifacts do
   not infer completion.
+  Ścieżka accepted przenosi oryginalny `RunResult.completion` przez receipt
+  `fullmag.accepted_worker_execution.v4` i osobny, wersjonowany dowód CAS
+  `accepted_terminal_completion.v1`. Projekcja przyjmuje go wyłącznie dla
+  zakończonego zadania `Succeeded`, po weryfikacji run/task/step/attempt/epoch,
+  referencji accepted state, digestu końcowego stanu oraz jego zegara.
+  Ten jawny dowód przenosi istniejący wynik solvera; nie wyprowadza zbieżności
+  ze statusu zadania, tabeli ani ostatniego torque. Odczyt starszych receiptów
+  V1–V3 pozostaje dozwolony, ale brak dowodu nie promuje `converged=true`.
 - `time_to_tolerance_seconds` uses stage start/completion timestamps only
   when `status=completed`, `converged=true`, the reason and canonical metric
   kind/name form a coherent torque or energy tolerance, both value and
