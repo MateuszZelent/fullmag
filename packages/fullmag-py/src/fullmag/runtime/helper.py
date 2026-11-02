@@ -213,6 +213,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Export a lightweight IR without materializing geometry assets.",
     )
+    export_run_config.add_argument(
+        "--runtime-flags-only",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
 
     rewrite_script = subparsers.add_parser(
         "rewrite-script",
@@ -408,6 +413,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         _write_executed_problem_ir_identity(_benchmark_problem_ir_identity(ir))
         if args.command == "export-ir":
             _write_json(ir)
+            return 0
+        if args.runtime_flags_only:
+            problem_meta = ir.get("problem_meta")
+            runtime_metadata = (
+                problem_meta.get("runtime_metadata")
+                if isinstance(problem_meta, dict)
+                else None
+            )
+            runtime_flags: object = runtime_metadata
+            if isinstance(runtime_metadata, dict):
+                runtime_flags = {
+                    key: runtime_metadata[key]
+                    for key in ("interactive_session_requested", "wait_for_solve")
+                    if key in runtime_metadata
+                }
+            _write_json(
+                {"ir": {"problem_meta": {"runtime_metadata": runtime_flags}}}
+            )
+            emit_progress("Runtime flags exported")
             return 0
         _write_json(
             export_run_config(

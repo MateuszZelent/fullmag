@@ -719,6 +719,7 @@ async fn load_startup_scene(
             "--source-snapshot".to_string(),
             source_snapshot_path.display().to_string(),
             "--skip-geometry-assets".to_string(),
+            "--runtime-flags-only".to_string(),
         ];
         let output =
             crate::script::run_python_helper_bounded(&repo_root, &workspace_root, &helper_args)
