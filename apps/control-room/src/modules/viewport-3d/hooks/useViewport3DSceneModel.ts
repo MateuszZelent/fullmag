@@ -250,6 +250,7 @@ import {
   resolveFdmMultilayerAirboxFieldVector,
   shouldRequestFdmMultilayerAirboxField,
 } from "../model/viewport3DFdmMultilayerAirbox";
+import { resolveFdmVectorOnlyRenderBuffers } from "../model/fdmVectorOnlyRenderBuffers";
 import { buildViewport3DFdmCuboidJobKey } from "../build-engine/viewport3dBuildJobKeys";
 import { modeCompositionTargetIdForMeshPart } from "../model/modeCompositionViewportProjection";
 import { Viewport3DScene } from "../layers/Viewport3DScene";
@@ -6485,13 +6486,14 @@ export function useViewport3DSceneModel({
           colorKey: surfaceColorKey,
           owner: domain,
         });
-        const vectorsVisible =
-          Boolean(model && fieldVector) &&
-          settings.visible &&
-          settings.vectorsVisible;
-        const vectorCellIndices = vectorsVisible
-          ? buildResult?.vectorCellIndices ?? null
-          : null;
+        const vectorBuffers = resolveFdmVectorOnlyRenderBuffers({
+          buildResult,
+          fieldAvailable: Boolean(fieldVector),
+          layerVisible: settings.visible,
+          vectorsEnabled: settings.vectorsVisible,
+        });
+        const vectorsVisible = vectorBuffers.vectorsVisible;
+        const vectorCellIndices = vectorBuffers.vectorCellIndices;
         const vectorGlyphColors =
           vectorsVisible && vectorCellIndices
             ? buildFdmSampledScalarColors(
@@ -6502,9 +6504,7 @@ export function useViewport3DSceneModel({
                 settings.scalarColorPalette,
               )
             : null;
-        const vectorSegments = vectorsVisible
-          ? buildResult?.vectorSegments ?? null
-          : null;
+        const vectorSegments = vectorBuffers.vectorSegments;
 
         return {
           domain,
@@ -6623,12 +6623,14 @@ export function useViewport3DSceneModel({
       colorKey: surfaceColorKey,
       owner: fdmMultilayerAirboxDomain,
     });
-    const vectorsVisible = Boolean(
-      model && fieldBuffer && fieldVector && airboxSettings.vectorsVisible,
-    );
-    const vectorCellIndices = vectorsVisible
-      ? buildResult?.vectorCellIndices ?? null
-      : null;
+    const vectorBuffers = resolveFdmVectorOnlyRenderBuffers({
+      buildResult,
+      fieldAvailable: Boolean(fieldBuffer && fieldVector),
+      layerVisible: airboxSettings.visible,
+      vectorsEnabled: airboxSettings.vectorsVisible,
+    });
+    const vectorsVisible = vectorBuffers.vectorsVisible;
+    const vectorCellIndices = vectorBuffers.vectorCellIndices;
     const vectorGlyphColors =
       vectorsVisible && vectorCellIndices && fieldVector
         ? buildFdmSampledScalarColors(
@@ -6639,9 +6641,7 @@ export function useViewport3DSceneModel({
             airboxSettings.scalarColorPalette,
           )
         : null;
-    const vectorSegments = vectorsVisible
-      ? buildResult?.vectorSegments ?? null
-      : null;
+    const vectorSegments = vectorBuffers.vectorSegments;
     const vectorBuildReference: Viewport3DVectorBuildReference | null =
       fieldBuffer &&
       vectorSegments &&
