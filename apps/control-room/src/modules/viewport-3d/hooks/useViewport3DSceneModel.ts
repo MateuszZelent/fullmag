@@ -6264,7 +6264,9 @@ export function useViewport3DSceneModel({
         });
         return {
           buildKey,
-          cellSelection: "dense",
+          // Vector-only membership filters use active/inactive semantics, not dense geometry.
+          cellSelection:
+            nativeVectorsOnlyEnabled && activeMask ? "active" : "dense",
           domain: { ...domain, kind: "fdm-grid" as const },
           enabled:
             settings.visible &&
@@ -6284,7 +6286,7 @@ export function useViewport3DSceneModel({
           vectorLengthScale: settings.vectorLengthScale,
           vectorOnly: nativeVectorsOnlyEnabled
             ? createFdmVectorOnlyBuildInput({
-                cellSelection: "all",
+                cellSelection: "active",
                 domain: { ...domain, kind: "fdm-grid" as const },
                 fieldVector,
                 maxSamples: maxVectors,
