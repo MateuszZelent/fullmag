@@ -123,6 +123,7 @@ jobs:
           cargo test -p fullmag-session --lib read_transaction
           cargo test -p fullmag-runtime-control --lib accepted_task_stop_is_durable_idempotent_and_terminal_after_stopped_event
           cargo test -p fullmag-runtime-control --lib failed_no_spawn_stop_without_start_preserves_public_stop_fence_and_replays
+          cargo test --locked -p fullmag-runtime-control --lib tests::accepted_task_stop_waits_for_writer_before_recovery_without_duplicating_stop -- --exact
           cargo test -p fullmag-runtime-control --lib study_inspection_integrity
           cargo test -p fullmag-api --bin fullmag-api router_v2::handlers::data::antenna_inspection::tests
 
@@ -157,6 +158,7 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api development_accepted_restore::tests
           cargo test -p fullmag-runtime-control --lib scheduler::accepted_start_tests
           cargo test -p fullmag-api --bin fullmag-api live_accepted_projection::tests
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_run_performance::tests
           cargo test -p fullmag-api --bin fullmag-api accepted_fem_study_worker::source_contract_tests
           cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_fem_study_worker::source_contract_tests
           cargo test -p fullmag-api --bin fullmag-api live_scene_preparation::tests
