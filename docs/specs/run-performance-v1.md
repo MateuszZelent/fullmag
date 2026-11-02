@@ -26,6 +26,9 @@ Surowe `StepStats.wall_time_ns` ma semantykę zależną od realizacji; tylko
 jawnie wskazana ścieżka BB korzysta z delty licznika kumulatywnego.
 Fazy hostowe, device elapsed i fazy inkluzywne
 są rozdzielone; nakładających się faz nie sumuje się jako rozłącznych kosztów.
+Pole transportowe `latest_evaluate_host_wall_ns` prezentowane jako „Line search
+wall” oznacza inkluzywny czas hostowy line search, obejmujący jego próby ewaluacji;
+nie jest odrębnym pomiarem pojedynczego kernela ani samego evaluate.
 Starsze niewypełnione pola zerowe pozostają oznaczone jako potencjalnie
 niezainstrumentowane. Jedno zero nie stanowi dowodu zerowego kosztu.
 

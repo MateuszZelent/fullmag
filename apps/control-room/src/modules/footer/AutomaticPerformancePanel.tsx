@@ -64,7 +64,7 @@ export function AutomaticPerformancePanel() {
   ];
   const detailMetrics = [
     { label: "Wall / step", value: model.latestStepWall },
-    { label: "Evaluate wall", value: model.latestEvaluateWall },
+    { label: "Line search wall", value: model.latestEvaluateWall },
     { label: "Process RSS", value: model.residentMemory },
     { label: "GPU memory", value: model.gpuMemory },
     { label: "GPU power", value: model.gpuPower },
