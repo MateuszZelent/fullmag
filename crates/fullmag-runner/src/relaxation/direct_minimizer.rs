@@ -653,6 +653,14 @@ pub(crate) fn projected_gradient_step_size_update(
     let s_dot_y = energy_metric_dot(&s, &y, ms_apm, volumes_m3);
     let y_dot_y = energy_metric_dot(&y, &y, ms_apm, volumes_m3);
 
+    projected_gradient_step_size_from_products(s_dot_s, s_dot_y, y_dot_y, use_bb1, reset_consecutive)
+}
+
+/// Shared scalar policy for CPU vectors and native device reductions.
+pub(crate) fn projected_gradient_step_size_from_products(
+    s_dot_s: f64, s_dot_y: f64, y_dot_y: f64,
+    use_bb1: bool, reset_consecutive: u64,
+) -> ProjectedGradientStepSizeUpdate {
     let (step_size, bb_ok) = if use_bb1 {
         if s_dot_y.is_finite() && s_dot_y > 0.0 {
             (

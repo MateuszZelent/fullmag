@@ -2205,6 +2205,11 @@ extern "C" {
         len: u64,
     ) -> i32;
 
+    pub fn fullmag_fdm_backend_multilayer_bb(
+        handle: *mut fullmag_fdm_backend, op: u32, lambda: f64,
+        layer_scalars: *mut f64, scalar_count: u64,
+    ) -> ::std::os::raw::c_int;
+
     pub fn fullmag_fdm_backend_refresh_multilayer_demag(handle: *mut fullmag_fdm_backend) -> i32;
 
     pub fn fullmag_fdm_backend_refresh_observables(handle: *mut fullmag_fdm_backend) -> i32;

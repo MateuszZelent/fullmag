@@ -210,7 +210,7 @@ struct DeviceResidentMultilayerTransferCounters {
     scalar_bytes: u64,
     setup: CudaTransferCounters,
     observed_snapshots: CudaTransferCounters,
-    bb_trial_roundtrips: CudaTransferCounters,
+    bb_control_scalars: CudaTransferCounters,
     warm_steps: CudaTransferCounters,
 }
 
@@ -233,13 +233,6 @@ impl DeviceResidentMultilayerTransferCounters {
 
     fn record_observed_snapshot_d2h_vector(&mut self, cell_count: usize) {
         self.observed_snapshots.record_d2h_vector(
-            cell_count,
-            usize::try_from(self.scalar_bytes).expect("CUDA scalar byte width does not fit usize"),
-        );
-    }
-
-    fn record_bb_trial_h2d_vector(&mut self, cell_count: usize) {
-        self.bb_trial_roundtrips.record_h2d_vector(
             cell_count,
             usize::try_from(self.scalar_bytes).expect("CUDA scalar byte width does not fit usize"),
         );
@@ -285,15 +278,14 @@ impl DeviceResidentMultilayerTransferCounters {
         let mut telemetry = self.telemetry(precision);
         let mut totals = self.setup;
         totals.merge(self.observed_snapshots);
-        totals.merge(self.bb_trial_roundtrips);
+        totals.merge(self.bb_control_scalars);
         totals.merge(self.warm_steps);
         telemetry.execution_shape =
             "cuda_native_multilayer_projected_gradient_bb_host_controller".to_string();
         telemetry.data_residency =
-            "native_cuda_operators_with_host_bb_trial_roundtrips".to_string();
-        // BB trial uploads contribute only to exact totals.  They are not
-        // startup uploads or fixed-step solver transfers, so keep both named
-        // subcategories unchanged (and warm-step counters at zero).
+            "device_resident_bb_vectors_with_observed_host_snapshots".to_string();
+        // Control-scalar D2H contributes to totals, not observed vector
+        // snapshots or LLG warm-step counters. BB trials stay on the device.
         telemetry.h2d_transfer_count = totals.h2d_transfer_count;
         telemetry.d2h_transfer_count = totals.d2h_transfer_count;
         telemetry.h2d_bytes = totals.h2d_bytes;
@@ -2183,27 +2175,17 @@ fn snapshot_native_multilayer_observables(
             .zip(h_ext.iter())
             .map(|(m, h)| -MU0 * ms * cell_volume * dot(*m, *h))
             .sum::<f64>();
-        let local_state =
-            ExchangeLlgState::new(context.problem.grid, m.clone()).map_err(|error| RunError {
-                message: format!(
-                    "native multilayer snapshot state for '{}': {error}",
-                    context.magnet_name
-                ),
-            })?;
-        let local_reference = context
-            .problem
-            .observe(&local_state)
-            .map_err(|error| RunError {
-                message: format!(
-                    "native multilayer snapshot observables for '{}': {error}",
-                    context.magnet_name
-                ),
-            })?;
-        let local_anisotropy_energy = local_reference.anisotropy_energy_joules;
-        let local_dmi_energy = local_reference.dmi_energy_joules;
-        let local_rotated_dmi_energy = context
-            .problem
-            .rotated_interfacial_dmi_energy_from_vectors(local_state.magnetization());
+        // Local energies must not call problem.observe(): that convenience
+        // method constructs a CPU FFT/Newell workspace even with demag off.
+        // Use the canonical local energy functionals without recomputing fields.
+        let local_anisotropy_energy = context.problem
+            .anisotropy_energy_density_from_vectors(&m)
+            .into_iter().sum::<f64>() * cell_volume;
+        let local_dmi_energy = context.problem
+            .dmi_energy_density_from_vectors(&m)
+            .into_iter().sum::<f64>() * cell_volume;
+        let local_rotated_dmi_energy = context.problem
+            .rotated_interfacial_dmi_energy_from_vectors(&m);
         let rhs = llg_rhs_for_layer(context, &m, &h_eff);
         let local_torque = compute_torque_field(
             &m,

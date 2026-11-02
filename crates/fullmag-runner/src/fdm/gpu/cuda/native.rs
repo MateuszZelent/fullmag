@@ -3466,6 +3466,15 @@ impl NativeFdmBackend {
         Ok(())
     }
 
+    /// Resident FP64 BB operation; only the packed layer scalars cross D2H.
+    pub(crate) fn multilayer_bb_op(&mut self, op: u32, lambda: f64, scalars: &mut [[f64; 20]]) -> Result<(), RunError> {
+        let rc = unsafe { ffi::fullmag_fdm_backend_multilayer_bb(
+            self.handle, op, lambda, scalars.as_mut_ptr().cast(), (scalars.len() * 20) as u64,
+        ) };
+        if rc != ffi::FULLMAG_FDM_OK { return Err(self.last_error_or("resident multilayer BB failed")); }
+        Ok(())
+    }
+
     pub fn refresh_multilayer_demag(&mut self) -> Result<(), RunError> {
         let rc = unsafe { ffi::fullmag_fdm_backend_refresh_multilayer_demag(self.handle) };
         if rc != ffi::FULLMAG_FDM_OK {

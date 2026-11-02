@@ -11,7 +11,7 @@
     {
       "solver": "FDM",
       "device": "GPU",
-      "status": "bounded_runtime_verified_fp64"
+      "status": "resident_fp64_runtime_not_verified"
     },
     {
       "solver": "FEM",
@@ -40,7 +40,9 @@
       ],
       "sources": [
         "gradient",
-        "metric"
+        "metric",
+        "resident-vectors",
+        "resident-controller"
       ]
     },
     {
@@ -51,7 +53,9 @@
         "w"
       ],
       "sources": [
-        "metric"
+        "metric",
+        "resident-vectors",
+        "resident-controller"
       ]
     },
     {
@@ -68,7 +72,9 @@
       ],
       "sources": [
         "trial",
-        "bb"
+        "bb",
+        "resident-vectors",
+        "resident-controller"
       ]
     },
     {
@@ -81,7 +87,9 @@
         "y"
       ],
       "sources": [
-        "bb"
+        "bb",
+        "resident-vectors",
+        "resident-controller"
       ]
     },
     {
@@ -97,7 +105,9 @@
         "c1"
       ],
       "sources": [
-        "armijo"
+        "armijo",
+        "resident-vectors",
+        "resident-controller"
       ]
     },
     {
@@ -110,7 +120,9 @@
         "mu0"
       ],
       "sources": [
-        "torque"
+        "torque",
+        "resident-vectors",
+        "resident-controller"
       ]
     }
   ],
@@ -332,6 +344,36 @@
       "path": "crates/fullmag-runner/src/fdm/mod.rs",
       "symbol": "reject_adaptive_multilayer_plan",
       "responsibility": "Kwalifikacja BB bez interpretowania globalnej polityki LLG jako kroku fizycznego."
+    },
+    {
+      "id": "resident-vectors",
+      "path": "backends/fdm/gpu/cuda/runtime/multilayer_bb.cu",
+      "symbol": "context_multilayer_bb",
+      "responsibility": "FDM GPU resident FP64 vector algebra and layer-local reductions; runtime NOT VERIFIED."
+    },
+    {
+      "id": "resident-controller",
+      "path": "crates/fullmag-runner/src/fdm/gpu/cuda/multilayer_bb_resident.rs",
+      "symbol": "execute_resident_bb",
+      "responsibility": "FDM GPU scalar Armijo and stop controller; runtime NOT VERIFIED."
+    },
+    {
+      "id": "bb-scalar-policy",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer.rs",
+      "symbol": "projected_gradient_step_size_from_products",
+      "responsibility": "Shared scalar BB1/BB2 restart policy."
+    },
+    {
+      "id": "resident-m-publication",
+      "path": "crates/fullmag-runner/src/fdm/gpu/cuda/multilayer_bb.rs",
+      "symbol": "snapshot_native_multilayer_bb_m",
+      "responsibility": "Demanded accepted M-only D2H publication preserving GPU scalar observables; runtime NOT VERIFIED."
+    },
+    {
+      "id": "autosave-payload-index",
+      "path": "crates/fullmag-runner/src/autosave_storage.rs",
+      "symbol": "append",
+      "responsibility": "Per-quantity payload references; preserved global logical ordinals; managed writer verification pending."
     }
   ],
   "public_api": {

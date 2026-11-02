@@ -1870,6 +1870,16 @@ int fullmag_fdm_backend_upload_layer_magnetization_f32(
     const float           *m_xyz,
     uint64_t               len);
 
+/** FP64 resident multilayer PG-BB scalar/vector operation. 20 doubles/layer.
+ * op: 0 refresh/evaluate, 1 capture accepted, 2 normalized trial, 3 restore.
+ * op 2 returns changed/invalid cell counts in slots 18/19 (others zero);
+ * invalid normalization is a backtrack request and never reaches field evaluation.
+ * No operation advances physical time or publishes an accepted solver step.
+ */
+int fullmag_fdm_backend_multilayer_bb(
+    fullmag_fdm_backend *handle, uint32_t op, double lambda,
+    double *layer_scalars, uint64_t scalar_count);
+
 /**
  * Recompute staged v2 multilayer H_DEMAG without taking a time step.
  *

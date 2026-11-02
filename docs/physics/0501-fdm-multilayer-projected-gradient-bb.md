@@ -17,15 +17,16 @@ Nie zmienia Hamiltonianu ani nie wprowadza nowego publicznego algorytmu.
 | Solver | Urządzenie | Realizacja i status |
 |---|---|---|
 | FDM | CPU | Adapter referencyjny wspólnego sterownika BB; wykonano pięć przyjętych kroków przypadku parytetu FP64. |
-| FDM | GPU | Natywne operatory CUDA multilayer z hostowym sterownikiem BB/Armijo i transferami prób; wykonano pięć przyjętych kroków oraz ograniczone porównanie z CPU FP64. |
+| FDM | GPU | Rezydentne wektory i redukcje CUDA z hostowym sterownikiem skalarnym BB/Armijo: NOT VERIFIED. Historycznie wykonano pięć kroków parytetu poprzedniego adaptera z transferami prób. |
 | FEM | CPU | Istniejąca realizacja MFEM pozostaje opisana w `0510-fem-relaxation-algorithms-mfem-gpu.md`. Ta zmiana jej nie kwalifikuje. |
 | FEM | GPU | Istniejąca realizacja MFEM/CUDA pozostaje opisana w `0510-fem-relaxation-algorithms-mfem-gpu.md`. Ta zmiana jej nie kwalifikuje. |
 
 Wymuszone GPU nie korzysta z CPU do zastąpienia brakującego operatora pola.
 Sterowanie minimizatorem na hoście odpowiada istniejącej realizacji single-grid
 `crates/fullmag-runner/src/fdm/gpu/cuda/direct_minimizer.rs:execute_direct_minimizer`.
-Provenance musi ujawniać natywny operator CUDA, hostowy sterownik BB i transfery prób;
-nie wolno nazywać tej ścieżki minimizatorem bez transferów ani podmieniać jej na LLG.
+Provenance ujawnia natywny operator CUDA, hostowy sterownik skalarny BB
+i rezydentne wektory z publikacyjnymi snapshotami hosta. Transfery skalarów
+pozostają jawne; nie wolno podmieniać tej ścieżki na LLG.
 
 (governing-equations)=
 ## Model i równania
@@ -281,12 +282,54 @@ relax.autosave(
 
 ```
 
+## Realizacja FDM GPU: rezydentność numeryczna (02.11.2026)
+
+Optymalizacja zachowuje powyższy Hamiltonian, FP64, ważoną metrykę,
+representable chord i niezmienioną politykę BB/Armijo. Stan przyjęty,
+gradient oraz próby są rezydentne na GPU; host odczytuje wyłącznie skalarne
+redukcje dla decyzji i pobiera wektory dopiero na żądanie publikacji lub
+artefaktu. Materiał, maska i rDMI pozostają własnością każdej warstwy, więc
+parametry filmu nie przechodzą do walca. Rollback odtwarza dokładnie przyjęte m
+przez D2D i odświeża pełne sprzężone pole przed potwierdzaniem momentu.
+
+Snapshot publikacyjny nie może wywoływać CPU `ExchangeLlgProblem::observe`,
+które tworzy workspace Newella/FFT mimo wyłączonej demagnetyzacji CPU.
+Energie lokalne snapshotu są pobierane z tych samych kanonicznych funkcjonałów
+anisotropii i DMI bez obliczania pól CPU. Wprowadzenie nowej ścieżki resident
+wymaga ponownego parytetu dla różnych Ms, siatek i masek oraz rDMI przypisanego
+tylko do jednej warstwy. Historyczny pięciokrokowy parytet powyżej dotyczy
+poprzedniej realizacji; nowa realizacja pozostaje **NOT VERIFIED** do czasu
+zarządzanego wykonania, w tym odrzuconej próby i odtworzenia stanu.
+
 (implementation-mapping)=
 ## Mapa realizacji
 
 Wspólna polityka istnieje w `relaxation/direct_minimizer.rs`, a nowe sterowanie
-w `relaxation/multilayer_bb.rs:execute_multilayer_bb`. Adaptery zachowują własność
-operatorów CPU i CUDA oraz jawne granice transferu stanów.
+w `relaxation/multilayer_bb.rs:execute_multilayer_bb`. Adaptery zachowują własność operatorów CPU i CUDA. Rezydentny kontroler GPU
+`fdm/gpu/cuda/multilayer_bb_resident.rs:execute_resident_bb` korzysta z tej
+samej skalarnej polityki `direct_minimizer.rs:projected_gradient_step_size_from_products`.
+`backends/fdm/gpu/cuda/runtime/multilayer_bb.cu:context_multilayer_bb` posiada
+retraction/capture/restore i redukcje: energie lokalne, moment, gradient,
+ważony chord oraz iloczyny po transporcie. Redukcja DMI używa tożsamości
+Eulera dla jednorodnego funkcjonału kwadratowego (pole zawiera kanoniczną
+korektę brzegową); rDMI jest sumowane raz i tylko z pola własnej warstwy.
+Bufory `pre_step_m`, `k1`, `k2`, `k3` są ponownie użyte wyłącznie w ścieżce BB,
+bez równoległego użycia integratora LLG. Ewaluacja oraz osobna walidacja retraction przesyłają po 20 skalarów FP64
+na warstwę jednym D2H i jedną synchronizacją na operację. Walidacja próby
+sprawdza skończoność wektora oraz kwadratu normy i odrzuca normę nie większą
+od najmniejszej dodatniej normalnej liczby FP64, tak jak kanoniczna
+`vector_math.rs:normalized_vec3`. Niepoprawna próba wraca do backtrackingu
+bez obliczania pola. Błąd enqueue próby wymusza odtworzenie stanu
+przyjętego i świeże pole; raport zachowuje błąd pierwotny oraz ewentualny
+błąd odtworzenia. Pełny snapshot powstaje na początku i na końcu.
+Dla przyjętej iteracji adapter najpierw zbiera sumę wymagań live oraz
+należnych pól harmonogramu/autosave. Gdy wymagają jedynie `m` lub jego
+komponentów, `multilayer_bb.rs:snapshot_native_multilayer_bb_m` pobiera tylko
+natywne M (jeden wektor na warstwę) i zachowuje już zredukowane energie,
+moment oraz skalary obiektów GPU; nie oblicza ponownie energii CPU. Każde
+inne pole, pochodna lub gęstość energii wymaga pełnego snapshotu.
+Żądanie live jest przechwytywane raz dla wyboru snapshotu i publikacji;
+nie ogranicza harmonogramu artefaktów ani terminalnego katalogu pól.
 
 (validation)=
 ## Weryfikacja przed uruchomieniem właściwego przypadku
@@ -316,18 +359,24 @@ nie jest oznaczone jako zbieżność. Wykonywalne sprawdzenie zachowano w
 `examples/bimeron-cylinder-relax/compare_bb_results.py`; manifesty i położenie
 raportów podaje [checkpoint zadania](../audits/2026-10-29-bb-restart-checkpoint.json).
 
-Raport zachowuje osiem diagnostyk formatu artefaktów: indeks pól numeruje próbki
-wspólnie dla etapu, podczas gdy tablice Zarr mają wiersze lokalne dla każdej
-wielkości. Porównanie łączy lokalne wiersze według przyjętego kroku; nie zmienia
-indeksu źródłowego. Ten problem wymaga osobnej poprawki przed kwalifikacją
-odczytu wielu wielkości według `payload_ref`.
+Historyczny raport zachowuje osiem diagnostyk formatu artefaktów: indeks pól
+używał wspólnego numeru próbki etapu również w `payload_ref`, mimo że tablice
+Zarr mają wiersze lokalne dla każdej wielkości. Poprawka producenta z 02.11.2026
+w `crates/fullmag-runner/src/autosave_storage.rs:AutosaveTargetState::append`
+zachowuje `stage_sample_index` jako istniejący porządek pól etapu oraz globalny
+`target_sample_index`, lecz wyznacza wiersz `payload_ref` oddzielnie dla każdej
+wielkości. Liczniki rosną dopiero po pomyślnym zapisie. Zarr oraz HDF5 korzystają
+z tej samej mapy; wznowienie rozpoczyna nowy etap z lokalnymi indeksami od zera.
+Historyczne wyniki i indeksy nie są przepisywane. Comparator traktuje błędny
+wiersz `payload_ref` jako błąd, natomiast różnica globalnego `stage_sample_index`
+i wiersza tablicy konkretnego pola jest poprawna. Zarządzane potwierdzenie zapisu
+co najmniej dwóch pól po tej poprawce pozostaje **NOT VERIFIED**.
 
 (limitations)=
 ## Ograniczenia
 
 Bieżący zakres obejmuje statyczny układ open 3D FP64 bez frozen spins i bez
-przestrzennego zróżnicowania Ms wewnątrz obiektu. Koszt transferów prób i odczytu
-energii pozostaje jawny. Ograniczony przypadek parytetu nie kwalifikuje całej
+przestrzennego zróżnicowania Ms wewnątrz obiektu. Koszt odczytu skalarów i publikacji pól pozostaje jawny. Ograniczony przypadek parytetu nie kwalifikuje całej
 macierzy materiałów, geometrii, obsługi przerwań ani wydania produkcyjnego.
 
 (scientific-bibliography)=
@@ -356,3 +405,9 @@ macierzy materiałów, geometrii, obsługi przerwań ani wydania produkcyjnego.
 | crates/fullmag-api/src/live_accepted_execution.rs | bounded_fdm_gpu_bb_plan | Kwalifikacja planu GPU przed publikacją RunIntent. |
 | packages/fullmag-py/src/fullmag/runtime/script_builder.py | _scene_relax_stage_kwargs | Round-trip BB bez dziedziczenia czasowych kontroli LLG. |
 | crates/fullmag-runner/src/fdm/mod.rs | reject_adaptive_multilayer_plan | Kwalifikacja BB bez interpretowania globalnej polityki LLG jako kroku fizycznego. |
+
+| backends/fdm/gpu/cuda/runtime/multilayer_bb.cu | context_multilayer_bb | FDM GPU resident FP64 vector algebra and layer-local reductions; runtime NOT VERIFIED. |
+| crates/fullmag-runner/src/fdm/gpu/cuda/multilayer_bb_resident.rs | execute_resident_bb | FDM GPU scalar Armijo and stop controller; runtime NOT VERIFIED. |
+| crates/fullmag-runner/src/relaxation/direct_minimizer.rs | projected_gradient_step_size_from_products | Shared scalar BB1/BB2 restart policy. |
+| crates/fullmag-runner/src/fdm/gpu/cuda/multilayer_bb.rs | snapshot_native_multilayer_bb_m | FDM GPU M-only accepted publication preserving resident scalar reductions. |
+| crates/fullmag-runner/src/autosave_storage.rs | append | Per-quantity payload rows with preserved logical stage and target ordinals. |

@@ -1,10 +1,9 @@
-//! Host-controlled projected-gradient BB over native CUDA multilayer operators.
+//! Scalar-controlled projected-gradient BB over resident CUDA multilayer vectors.
 //!
-//! The optimizer owns only layer-major trial vectors. The native CUDA context
-//! evaluates the coupled fields and energies for every trial; publication is
-//! limited to the initial state and accepted iterates.
+//! The native CUDA context owns trial/history algebra and physical reductions.
+//! Full fields cross D2H only at initial, demanded accepted, and terminal snapshots.
 
-use std::cell::Cell;
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
@@ -16,17 +15,19 @@ use crate::fdm::gpu::cuda::native::{
 };
 use crate::fdm::schedules::record_due_fields;
 use crate::fdm::validate_multilayer_grid_budget;
-use crate::relaxation::multilayer_bb::{execute_multilayer_bb, MultilayerBbEvent};
+use crate::relaxation::multilayer_bb::MultilayerBbEvent;
+#[path = "multilayer_bb_resident.rs"]
+mod resident;
 use crate::types::{
     ExecutedRun, ExecutionProvenance, FieldSnapshot, RunError, RunResult, RunStatus,
     StateObservables, StepAction, StepStats, StepUpdate,
 };
 
 use super::{
-    advance_due_schedules, build_contexts_and_states, cuda_multilayer_kernel_admission_model,
-    emit_multilayer_terminal_step_updates, make_multilayer_live_step_update, same_time,
-    snapshot_native_multilayer_observables, validate_cuda_multilayer_execution_contract,
-    DeviceResidentMultilayerTransferCounters,
+    advance_due_schedules, build_contexts_and_states, copy_native_multilayer_m,
+    cuda_multilayer_kernel_admission_model, emit_multilayer_terminal_step_updates,
+    make_multilayer_live_step_update, same_time, snapshot_native_multilayer_observables,
+    validate_cuda_multilayer_execution_contract, DeviceResidentMultilayerTransferCounters,
 };
 
 const LIVE_FIELD_MIN_INTERVAL: Duration = Duration::from_secs(2);
@@ -102,42 +103,7 @@ pub(super) fn execute_cuda_fdm_multilayer_projected_bb(
     let mut scalar_schedules = crate::schedules::collect_scalar_schedules(outputs)?;
     let mut field_schedules = crate::schedules::collect_field_schedules(outputs)?;
     let default_scalar_trace = scalar_schedules.is_empty();
-    let total_cells = plan
-        .layers
-        .iter()
-        .try_fold(0usize, |sum, layer| {
-            sum.checked_add(layer.initial_magnetization.len())
-        })
-        .ok_or_else(|| RunError {
-            message: "native CUDA multilayer cell count overflow".into(),
-        })?;
-
-    let has_active_masks = contexts
-        .iter()
-        .any(|context| context.problem.active_mask.is_some());
-    let mut active_mask = has_active_masks.then(|| Vec::with_capacity(total_cells));
-    let mut ms_apm = Vec::with_capacity(total_cells);
-    let mut volumes_m3 = Vec::with_capacity(total_cells);
-    for (layer, context) in plan.layers.iter().zip(&contexts) {
-        let cell_count = layer.initial_magnetization.len();
-        let ms = context.problem.material.saturation_magnetisation;
-        let cell_volume = context.problem.cell_size.volume();
-        for cell in 0..cell_count {
-            let active = context
-                .problem
-                .active_mask
-                .as_ref()
-                .is_none_or(|mask| mask[cell]);
-            ms_apm.push(ms);
-            volumes_m3.push(if active { cell_volume } else { 0.0 });
-            if let Some(active_mask) = active_mask.as_mut() {
-                active_mask.push(active);
-            }
-        }
-    }
-
-    let evaluation_count = Cell::new(1u64);
-    let started = Instant::now();
+    let backend = RefCell::new(backend);
     let mut last_live_field_update = Instant::now();
     let mut last_accepted_step = None;
     let mut steps = Vec::<StepStats>::new();
@@ -146,57 +112,7 @@ pub(super) fn execute_cuda_fdm_multilayer_projected_bb(
     // below rather than by the repeated physical time.
     let mut scheduled_field_steps = BTreeMap::<String, u64>::new();
 
-    let outcome = {
-        let mut evaluate = |trial: &[[f64; 3]]| -> Result<StateObservables, RunError> {
-            if trial.len() != total_cells {
-                return Err(RunError {
-                    message: "native CUDA multilayer BB trial has the wrong layer-major cell count"
-                        .into(),
-                });
-            }
-            let mut offset = 0usize;
-            for (layer_index, layer) in plan.layers.iter().enumerate() {
-                let end = offset
-                    .checked_add(layer.initial_magnetization.len())
-                    .filter(|end| *end <= trial.len())
-                    .ok_or_else(|| RunError {
-                        message: "native CUDA multilayer BB trial layer range overflow".into(),
-                    })?;
-                let native_layer_index = u32::try_from(layer_index).map_err(|_| RunError {
-                    message: "native CUDA multilayer layer index exceeds the ABI range".into(),
-                })?;
-                backend.upload_layer_magnetization(native_layer_index, &trial[offset..end])?;
-                transfer_counters.record_bb_trial_h2d_vector(layer.initial_magnetization.len());
-                offset = end;
-            }
-            if offset != trial.len() {
-                return Err(RunError {
-                    message: "native CUDA multilayer BB trial was not fully split into layers"
-                        .into(),
-                });
-            }
-            backend.refresh_multilayer_demag()?;
-            if plan.enable_demag {
-                stage_telemetry = Some(backend.snapshot_multilayer_demag_stage_telemetry(
-                    u64::try_from(plan.layers.len()).map_err(|_| RunError {
-                        message: "CUDA multilayer layer count does not fit telemetry range".into(),
-                    })?,
-                )?);
-            }
-            let observables = snapshot_native_multilayer_observables(
-                plan,
-                &contexts,
-                &backend,
-                &mut transfer_counters,
-            )?;
-            evaluation_count.set(evaluation_count.get().checked_add(1).ok_or_else(|| {
-                RunError {
-                    message: "native CUDA multilayer BB evaluation count overflow".into(),
-                }
-            })?);
-            Ok(observables)
-        };
-
+    let mut outcome = {
         let mut observe = |event: MultilayerBbEvent<'_>| -> Result<StepAction, RunError> {
             match event {
                 MultilayerBbEvent::Accepted { observables, stats } => {
@@ -221,6 +137,62 @@ pub(super) fn execute_cuda_fdm_multilayer_projected_bb(
                     }
                     last_accepted_step = Some(stats.step);
 
+                    let mut published_stats = stats.clone();
+                    let stats = &mut published_stats;
+                    let scheduled_now = field_schedules
+                        .iter()
+                        .filter(|schedule| crate::schedules::is_due(stats.time, schedule.next_time))
+                        .map(|schedule| schedule.name.clone())
+                        .collect::<Vec<_>>();
+                    let autosave_fields = artifacts.due_accepted_step_fields(stats.step, false);
+                    let live_fields_due =
+                        live.is_some() && live_field_cadence_due(last_live_field_update.elapsed());
+                    // Capture demand once for both the native copy and publication.
+                    // Artifact schedules stay independent of the live-demand filter.
+                    let live_quantities = if live_fields_due {
+                        crate::quantities::active_fdm_multilayer_preview_quantities(
+                            plan,
+                            &crate::live_demand::retain_demanded_live_quantities(
+                                crate::quantities::field_materialization_quantity_ids(),
+                            ),
+                        )
+                    } else {
+                        Vec::new()
+                    };
+                    let full_snapshot = bb_snapshot_needs_full_fields(
+                        scheduled_now
+                            .iter()
+                            .chain(&autosave_fields)
+                            .map(String::as_str)
+                            .chain(live_quantities.iter().copied()),
+                    );
+                    let snapshot_started = Instant::now();
+                    let snapshot = if !scheduled_now.is_empty()
+                        || !autosave_fields.is_empty()
+                        || live_fields_due
+                    {
+                        Some(if full_snapshot {
+                            snapshot_native_multilayer_observables(
+                                plan,
+                                &contexts,
+                                &backend.borrow(),
+                                &mut transfer_counters,
+                            )?
+                        } else {
+                            snapshot_native_multilayer_bb_m(
+                                plan,
+                                &backend.borrow(),
+                                observables,
+                                &mut transfer_counters,
+                            )?
+                        })
+                    } else {
+                        None
+                    };
+                    if snapshot.is_some() {
+                        stats.snapshot_wall_time_ns =
+                            snapshot_started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+                    }
                     let scalar_due = default_scalar_trace
                         || scalar_schedules.iter().any(|schedule| {
                             crate::schedules::is_due(stats.time, schedule.next_time)
@@ -231,11 +203,7 @@ pub(super) fn execute_cuda_fdm_multilayer_projected_bb(
                         advance_due_schedules(&mut scalar_schedules, stats.time);
                     }
 
-                    let scheduled_now = field_schedules
-                        .iter()
-                        .filter(|schedule| crate::schedules::is_due(stats.time, schedule.next_time))
-                        .map(|schedule| schedule.name.clone())
-                        .collect::<Vec<_>>();
+                    let observables = snapshot.as_ref().unwrap_or(observables);
                     record_due_fields(
                         observables,
                         stats.step,
@@ -247,7 +215,6 @@ pub(super) fn execute_cuda_fdm_multilayer_projected_bb(
                     for name in scheduled_now {
                         scheduled_field_steps.insert(name, stats.step);
                     }
-                    let autosave_fields = artifacts.due_accepted_step_fields(stats.step, false);
                     record_bb_accepted_step_autosave_fields(
                         &autosave_fields,
                         observables,
@@ -258,8 +225,6 @@ pub(super) fn execute_cuda_fdm_multilayer_projected_bb(
                         &mut artifacts,
                     )?;
 
-                    let live_fields_due =
-                        live.is_some() && live_field_cadence_due(last_live_field_update.elapsed());
                     if let Some((grid, field_every_n, layout, on_step)) = live.as_mut() {
                         if live_fields_due {
                             last_live_field_update = Instant::now();
@@ -271,7 +236,7 @@ pub(super) fn execute_cuda_fdm_multilayer_projected_bb(
                                 [grid[0], grid[1], grid[2]],
                                 *layout,
                                 *field_every_n,
-                                &crate::quantities::field_materialization_quantity_ids(),
+                                &live_quantities,
                                 true,
                                 false,
                                 None,
@@ -323,19 +288,43 @@ pub(super) fn execute_cuda_fdm_multilayer_projected_bb(
             }
         };
 
-        execute_multilayer_bb(
+        resident::execute_resident_bb(
+            &backend,
+            plan,
+            &contexts,
             initial_observables,
             control,
-            &ms_apm,
-            &volumes_m3,
-            active_mask.as_deref(),
-            &mut evaluate,
             &mut observe,
         )?
     };
-
-    for _ in 0..evaluation_count.get() {
+    let evaluation_count = outcome
+        .final_stats
+        .per_object_scalars
+        .values()
+        .next()
+        .and_then(|values| values.get("energy_evaluations"))
+        .copied()
+        .unwrap_or(0.0) as u64;
+    for _ in 0..evaluation_count {
         artifacts.observe_energy_evaluation();
+    }
+    transfer_counters.bb_control_scalars.d2h_transfer_count =
+        outcome.final_stats.hot_loop_control_scalar_host_sync_count;
+    transfer_counters.bb_control_scalars.d2h_bytes =
+        outcome.final_stats.hot_loop_control_scalar_d2h_bytes;
+    // Terminal artifacts/live fields always use an exact accepted GPU snapshot.
+    outcome.final_observables = snapshot_native_multilayer_observables(
+        plan,
+        &contexts,
+        &backend.borrow(),
+        &mut transfer_counters,
+    )?;
+    if plan.enable_demag {
+        stage_telemetry = Some(
+            backend
+                .borrow_mut()
+                .snapshot_multilayer_demag_stage_telemetry(plan.layers.len() as u64)?,
+        );
     }
 
     let final_stats = outcome.final_stats.clone();
@@ -422,6 +411,33 @@ pub(super) fn execute_cuda_fdm_multilayer_projected_bb(
         auxiliary_artifacts: Vec::new(),
         provenance,
     })
+}
+
+/// Only M and its exact vector components are covered by an M-only carrier.
+/// Unknown, derived, torque, and energy-density quantities conservatively need
+/// the complete snapshot, as do any due non-M artifact fields.
+fn bb_snapshot_needs_full_fields<'a>(quantities: impl Iterator<Item = &'a str>) -> bool {
+    quantities
+        .into_iter()
+        .any(|quantity| !matches!(quantity, "m" | "m.x" | "m.y" | "m.z"))
+}
+
+fn snapshot_native_multilayer_bb_m(
+    plan: &FdmMultilayerPlanIR,
+    backend: &NativeFdmBackend,
+    resident_scalars: &StateObservables,
+    transfer_counters: &mut DeviceResidentMultilayerTransferCounters,
+) -> Result<StateObservables, RunError> {
+    let magnetization = copy_native_multilayer_m(backend, plan)?;
+    for layer in &plan.layers {
+        transfer_counters.record_observed_snapshot_d2h_vector(layer.initial_magnetization.len());
+    }
+    transfer_counters.finish_host_snapshot();
+    // Energies, torque and per-object scalar weights remain the resident GPU
+    // reductions; copying M does not rerun any CPU field/energy functional.
+    let mut snapshot = resident_scalars.clone();
+    snapshot.magnetization = magnetization;
+    Ok(snapshot)
 }
 
 fn live_field_cadence_due(elapsed: Duration) -> bool {
@@ -588,16 +604,28 @@ mod tests {
     }
 
     #[test]
+    fn m_only_capture_requires_union_of_live_and_artifact_demands() {
+        assert!(!bb_snapshot_needs_full_fields(
+            ["m", "m.x", "m.y", "m.z"].into_iter()
+        ));
+        assert!(bb_snapshot_needs_full_fields(["m", "H_eff"].into_iter()));
+        assert!(bb_snapshot_needs_full_fields(["m", "torque"].into_iter()));
+        assert!(bb_snapshot_needs_full_fields(["m", "e_total"].into_iter()));
+        assert!(bb_snapshot_needs_full_fields(["m", "unknown"].into_iter()));
+    }
+
+    #[test]
     fn live_heavy_field_cadence_is_wall_clock_bounded() {
         assert!(!live_field_cadence_due(Duration::from_millis(1_999)));
         assert!(live_field_cadence_due(Duration::from_secs(2)));
     }
 
     #[test]
-    fn trial_uploads_are_in_transfer_totals_without_becoming_warm_steps() {
+    fn resident_scalar_receipts_are_in_totals_without_becoming_vector_snapshots() {
         let mut counters = super::super::DeviceResidentMultilayerTransferCounters::new(2, 8);
         counters.record_setup_h2d_vector(2);
-        counters.record_bb_trial_h2d_vector(2);
+        counters.bb_control_scalars.d2h_transfer_count = 1;
+        counters.bb_control_scalars.d2h_bytes = 320;
         for _ in 0..6 {
             counters.record_observed_snapshot_d2h_vector(2);
         }
@@ -611,14 +639,14 @@ mod tests {
         assert_eq!(telemetry.observed_snapshot_d2h_bytes, 288);
         assert_eq!(telemetry.warm_step_h2d_transfer_count, 0);
         assert_eq!(telemetry.warm_step_d2h_transfer_count, 0);
-        assert_eq!(telemetry.h2d_transfer_count, 2);
-        assert_eq!(telemetry.h2d_bytes, 96);
-        assert_eq!(telemetry.d2h_transfer_count, 6);
-        assert_eq!(telemetry.d2h_bytes, 288);
+        assert_eq!(telemetry.h2d_transfer_count, 1);
+        assert_eq!(telemetry.h2d_bytes, 48);
+        assert_eq!(telemetry.d2h_transfer_count, 7);
+        assert_eq!(telemetry.d2h_bytes, 608);
         assert!(telemetry.execution_shape.contains("projected_gradient_bb"));
         assert!(telemetry
             .data_residency
-            .contains("host_bb_trial_roundtrips"));
+            .contains("device_resident_bb_vectors"));
     }
 
     #[test]

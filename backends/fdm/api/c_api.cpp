@@ -3370,6 +3370,27 @@ int fullmag_fdm_backend_upload_layer_magnetization_f32(
 #endif
 }
 
+int fullmag_fdm_backend_multilayer_bb(
+    fullmag_fdm_backend *handle, uint32_t op, double lambda,
+    double *layer_scalars, uint64_t scalar_count)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle) return FULLMAG_FDM_ERR_INVALID;
+    auto &ctx = *reinterpret_cast<Context *>(handle);
+    if (!ctx.has_multilayer_plan_v2 || ctx.precision != FULLMAG_FDM_PRECISION_DOUBLE || op > 3) {
+        ctx.last_error = "resident multilayer BB requires a staged FP64 plan and valid operation";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (op == 0 && !refresh_multilayer_transaction_observables(ctx, true))
+        return FULLMAG_FDM_ERR_CUDA;
+    return context_multilayer_bb(ctx, op, lambda, layer_scalars, scalar_count)
+        ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_CUDA;
+#else
+    (void)handle; (void)op; (void)lambda; (void)layer_scalars; (void)scalar_count;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
 int fullmag_fdm_backend_refresh_multilayer_demag(
     fullmag_fdm_backend *handle)
 {
