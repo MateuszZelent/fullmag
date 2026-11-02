@@ -1,7 +1,7 @@
-"""Single joint relaxation: a bimeron film and an antiparallel cylinder.
+"""Joint BB relaxation of a bimeron film and an antiparallel R50/H30 nm cylinder.
 
-Requires object-scoped RotatedInterfacialDMI; legacy runtimes reject the term
-rather than running a different Hamiltonian. No radius sweep or frozen spins.
+Object-scoped rotated DMI is active only in the film. Both objects relax
+together with exchange and demagnetization; no sweep or frozen spins are used.
 The 2.5 nm grid is a preliminary discretization, not a convergence claim.
 """
 
@@ -52,10 +52,10 @@ film.m = fm.texture.bimeron(
     plane="xy",
 )
 
-# Cylinder spans z=10..60 nm: a 5 nm surface-to-surface gap. Its initial
-# magnetization is opposite to the film BACKGROUND, not its central core.
+# The cylinder spans z=10..40 nm, leaving a 5 nm surface-to-surface gap.
+# Its initial -x magnetization opposes the film background.
 cylinder = study.geometry(
-    fm.Cylinder(radius=50 * NM, height=50 * NM).translate((0, 0, 35 * NM)),
+    fm.Cylinder(radius=50 * NM, height=30 * NM).translate((0, 0, 25 * NM)),
     name="upper_cylinder", object_id="upper-cylinder",
 )
 cylinder.Ms = 1000000.0
