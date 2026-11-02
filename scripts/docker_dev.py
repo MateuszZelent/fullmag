@@ -2718,6 +2718,12 @@ def _parser() -> argparse.ArgumentParser:
     cancelled_activation.add_argument("--config-sha256", required=True)
     cancelled_activation.add_argument("--source-root", type=Path, required=True)
     cancelled_activation.add_argument("--port", type=int, required=True)
+    cancelled_activation.add_argument(
+        "--preparation-kind",
+        choices=("failed-external", "in-process-fdm"),
+        default="failed-external",
+        help="select the exact preparation evidence contract; defaults to the legacy failed-external path",
+    )
     cancelled_activation.add_argument("--apply", action="store_true")
     cancelled_activation.add_argument("--expected-plan-sha256")
     preowner_policy = subparsers.add_parser(
