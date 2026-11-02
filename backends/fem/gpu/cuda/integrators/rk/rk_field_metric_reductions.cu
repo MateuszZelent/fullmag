@@ -47,6 +47,10 @@ bool gpu_rk_reduce_final_field_metric_terms(
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
+    const uint8_t *torque_node_mask =
+        (ctx.frozen_spins.enabled() && gpu.mesh_regions.free_node_mask != nullptr)
+            ? gpu.mesh_regions.free_node_mask
+            : gpu.mesh_regions.magnetic_node_mask;
 
     fullmag_cuda_field_metric_blocks(
         gpu.magnetization.m.x,
@@ -59,7 +63,8 @@ bool gpu_rk_reduce_final_field_metric_terms(
         gpu.reductions.scalar_workspace,
         gpu.rk.error.x,
         n,
-        stream);
+        stream,
+        torque_node_mask);
     if (!cuda_launch_ok("launch GPU RK field metric blocks", reason)) {
         return false;
     }

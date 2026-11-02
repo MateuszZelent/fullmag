@@ -854,6 +854,8 @@ pub(crate) struct NativeFdmBackend {
     handle: *mut ffi::fullmag_fdm_backend,
     cell_count: usize,
     active_mask: Option<Vec<bool>>,
+    /// Cellwise Ms for moment-weighted average m; `None` when uniform.
+    ms_field: Option<Vec<f64>>,
     frozen_mask: Option<Vec<bool>>,
     precision: fullmag_ir::ExecutionPrecision,
     precision_policy: fullmag_ir::FdmPrecisionPolicyIR,
@@ -1447,6 +1449,8 @@ impl NativeFdmBackend {
             handle,
             cell_count,
             active_mask,
+            // Multilayer handles reject cellwise Ms (see the layer check above).
+            ms_field: None,
             frozen_mask: None,
             precision: plan.precision,
             precision_policy: plan.precision_policy.clone(),
@@ -1520,14 +1524,12 @@ impl NativeFdmBackend {
         let sot_formula = ffi_prescribed_sot_formula(plan)?;
         let zhang_li_formula = ffi_zhang_li_formula(plan)?;
         let resolved_demag_boundary = crate::fdm::resolve_fdm_demag_boundary(plan)?;
-        if plan.material.ms_field.is_some()
-            || plan.material.a_field.is_some()
-            || plan.material.alpha_field.is_some()
-        {
-            return Err(RunError {
-                message: "FDM CUDA native does not yet support cellwise material fields (Ms/Aex/alpha); use FDM CPU reference or disable region material overrides".to_string(),
-            });
-        }
+        let exchange_operator = crate::fdm::exchange_operator::build_plan_exchange_operator(plan)?;
+        ensure_cuda_heterogeneous_material_supported(plan)?;
+        let exchange_faces = match &exchange_operator {
+            fullmag_engine::ExchangeOperator::Faces(faces) => Some(faces),
+            fullmag_engine::ExchangeOperator::Uniform => None,
+        };
         let grid = ffi::fullmag_fdm_grid_desc {
             nx: plan.grid.cells[0],
             ny: plan.grid.cells[1],
@@ -1663,11 +1665,6 @@ impl NativeFdmBackend {
         // static H_ext profile is uploaded through its separate role setter
         // after creation, so it must never be advertised as H_OE here.
         let uploaded_profile_flat = oersted_field_flat.as_ref();
-
-        // Current region-owned semantics keep exchange continuous by default.
-        // Explicit triples are compact pair descriptors; the native backend
-        // expands them into the low-level LUT after applying the default.
-        let exchange_pairs = build_region_exchange_pairs(plan, region_mask_flat.is_some())?;
 
         let current_sign: f64 = if has_slonczewski_stt(plan) {
             match plan.stt_fixed_layer_position.as_deref() {
@@ -1913,12 +1910,10 @@ impl NativeFdmBackend {
             exchange_lut_len: 0,
             exchange_pair_default:
                 ffi::fullmag_fdm_exchange_pair_mode::FULLMAG_FDM_EXCHANGE_PAIR_HARMONIC_MEAN,
-            exchange_pairs: exchange_pairs
-                .as_ref()
-                .map_or(std::ptr::null(), |pairs| pairs.as_ptr()),
-            exchange_pair_count: exchange_pairs
-                .as_ref()
-                .map_or(0, |pairs| pairs.len() as u64),
+            // Region exchange arrives as per-connection face coefficients in
+            // the v2 tail; the retired pair table stays empty.
+            exchange_pairs: std::ptr::null(),
+            exchange_pair_count: 0,
             // Boundary correction — wire geometry data from planner when available.
             boundary_correction: match plan.boundary_correction.as_deref() {
                 Some("volume") => ffi::fullmag_fdm_boundary_correction::FULLMAG_FDM_BOUNDARY_VOLUME,
@@ -2064,6 +2059,19 @@ impl NativeFdmBackend {
                 0
             },
             dmi_D_rotated_interfacial: plan.rotated_interfacial_dmi.unwrap_or(0.0),
+            exchange_operator_mode: if exchange_faces.is_some() {
+                ffi::FULLMAG_FDM_EXCHANGE_OPERATOR_FACES
+            } else {
+                ffi::FULLMAG_FDM_EXCHANGE_OPERATOR_UNIFORM
+            },
+            reserved_exchange_operator: 0,
+            exchange_face_x_plus: exchange_faces
+                .map_or(std::ptr::null(), |faces| faces.x_plus.as_ptr()),
+            exchange_face_y_plus: exchange_faces
+                .map_or(std::ptr::null(), |faces| faces.y_plus.as_ptr()),
+            exchange_face_z_plus: exchange_faces
+                .map_or(std::ptr::null(), |faces| faces.z_plus.as_ptr()),
+            exchange_face_len: exchange_faces.map_or(0, |faces| faces.x_plus.len() as u64),
         };
 
         let mut handle = std::ptr::null_mut();
@@ -2174,6 +2182,7 @@ impl NativeFdmBackend {
             handle,
             cell_count: m_flat.len() / 3,
             active_mask: plan.active_mask.clone(),
+            ms_field: plan.material.ms_field.clone(),
             frozen_mask: plan
                 .frozen_spins
                 .as_ref()
@@ -2521,6 +2530,7 @@ impl NativeFdmBackend {
             stats,
             &magnetization,
             self.active_mask.as_deref(),
+            self.ms_field.as_deref(),
         );
         // Keep the object-scoped telemetry synchronized with the sampled
         // magnetization. This path is also used when a scalar output is due,
@@ -3655,6 +3665,7 @@ impl NativeFdmBackend {
             &mut step_stats,
             &magnetization,
             self.active_mask.as_deref(),
+            self.ms_field.as_deref(),
         );
         step_stats.per_object_scalars = single_object_scalars("free", &step_stats);
         Ok(step_stats)
@@ -4167,41 +4178,16 @@ fn validate_native_snapshot_payload(
 }
 
 #[cfg(feature = "cuda")]
-fn build_region_exchange_pairs(
+/// Combinations that the CUDA lane does not yet realize with a heterogeneous
+/// material (note 0104, `material-regions-fdm-lane-realization`). Forced GPU
+/// fails here instead of falling back to the CPU reference.
+fn ensure_cuda_heterogeneous_material_supported(
     plan: &fullmag_ir::FdmPlanIR,
-    has_region_mask: bool,
-) -> Result<Option<Vec<ffi::fullmag_fdm_exchange_pair_desc>>, RunError> {
-    if !has_region_mask {
-        if plan.inter_region_exchange.is_empty() {
-            return Ok(None);
-        }
-        return Err(RunError {
-            message:
-                "inter_region_exchange overrides require a region_mask; refusing to drop exchange pair intent"
-                    .to_string(),
-        });
+) -> Result<(), RunError> {
+    match plan.cuda_heterogeneous_material_error() {
+        Some(message) => Err(RunError { message }),
+        None => Ok(()),
     }
-    Ok(Some(
-        plan.inter_region_exchange
-            .iter()
-            .map(|&(region_i, region_j, inter_exchange)| {
-                if !inter_exchange.is_finite() || inter_exchange < 0.0 {
-                    return Err(RunError {
-                        message: format!(
-                            "inter_region_exchange ({region_i}, {region_j}) must be finite and >= 0"
-                        ),
-                    });
-                }
-                Ok(ffi::fullmag_fdm_exchange_pair_desc {
-                    region_i,
-                    region_j,
-                    mode: ffi::fullmag_fdm_exchange_pair_mode::FULLMAG_FDM_EXCHANGE_PAIR_EXPLICIT,
-                    scale: 1.0,
-                    inter_exchange,
-                })
-            })
-            .collect::<Result<Vec<_>, RunError>>()?,
-    ))
 }
 
 #[cfg(test)]
@@ -4472,6 +4458,7 @@ mod tests {
             handle: std::ptr::null_mut(),
             cell_count: 4,
             active_mask: None,
+            ms_field: None,
             frozen_mask: Some(vec![true, false, false, true]),
             precision: ExecutionPrecision::Double,
             precision_policy: fullmag_ir::FdmPrecisionPolicyIR::default(),
@@ -4680,61 +4667,34 @@ mod tests {
     }
 
     #[test]
-    fn native_fdm_region_exchange_pairs_leave_default_to_backend() {
-        let mut plan = make_relaxation_precession_test_plan();
-        plan.region_mask = vec![1, 2];
-        plan.initial_magnetization = vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
-        plan.grid = GridDimensions { cells: [2, 1, 1] };
-        let pairs = build_region_exchange_pairs(&plan, true)
-            .expect("region exchange pairs")
-            .expect("region mask should produce pair list");
-        assert!(pairs.is_empty());
-    }
-
-    #[test]
-    fn native_fdm_region_exchange_pairs_carry_explicit_overrides() {
-        let mut plan = make_relaxation_precession_test_plan();
-        plan.region_mask = vec![1, 2];
-        plan.inter_region_exchange = vec![(1, 2, 4.0e-12)];
-        let pairs = build_region_exchange_pairs(&plan, true)
-            .expect("region exchange pairs")
-            .expect("region mask should produce pair list");
-        assert_eq!(pairs.len(), 1);
-        assert_eq!(pairs[0].region_i, 1);
-        assert_eq!(pairs[0].region_j, 2);
-        assert_eq!(
-            pairs[0].mode,
-            ffi::fullmag_fdm_exchange_pair_mode::FULLMAG_FDM_EXCHANGE_PAIR_EXPLICIT
-        );
-        assert_eq!(pairs[0].scale, 1.0);
-        assert_eq!(pairs[0].inter_exchange, 4.0e-12);
-    }
-
-    #[test]
-    fn native_fdm_region_exchange_pairs_require_region_mask() {
-        let mut plan = make_relaxation_precession_test_plan();
-        plan.region_mask = Vec::new();
-        plan.inter_region_exchange = vec![(1, 2, 4.0e-12)];
-
-        let err = build_region_exchange_pairs(&plan, false)
-            .expect_err("explicit exchange overrides must not be dropped without a region mask");
-        assert!(err.message.contains("require a region_mask"));
-    }
-
-    #[test]
-    fn native_fdm_cuda_rejects_heterogeneous_ms_before_ffi() {
+    fn cuda_accepts_heterogeneous_ms_alpha_core() {
         let mut plan = make_relaxation_precession_test_plan();
         plan.material.ms_field = Some(vec![7.5e5; plan.initial_magnetization.len()]);
+        plan.material.alpha_field = Some(vec![0.05; plan.initial_magnetization.len()]);
+        ensure_cuda_heterogeneous_material_supported(&plan)
+        .expect("exchange/demag/Zeeman/LLG core accepts cellwise Ms and alpha");
+    }
 
-        let error = match NativeFdmBackend::create(&plan) {
-            Ok(_) => panic!("cellwise Ms must remain fail-closed on native FDM CUDA"),
-            Err(error) => error,
-        };
-
+    #[test]
+    fn cuda_rejects_heterogeneous_material_with_thermal_noise() {
+        let mut plan = make_relaxation_precession_test_plan();
+        plan.material.ms_field = Some(vec![7.5e5; plan.initial_magnetization.len()]);
+        plan.temperature = Some(300.0);
+        let error = ensure_cuda_heterogeneous_material_supported(&plan)
+        .expect_err("thermal noise does not yet combine with cellwise Ms on CUDA");
         assert!(error
             .message
-            .contains("does not yet support cellwise material fields"));
-        assert!(error.message.contains("FDM CPU reference"));
+            .contains("fdm_cuda_heterogeneous_material_unsupported:thermal"));
+    }
+
+    #[test]
+    fn cuda_rejects_heterogeneous_exchange_with_dmi() {
+        let mut plan = make_relaxation_precession_test_plan();
+        plan.material.a_field = Some(vec![13e-12; plan.initial_magnetization.len()]);
+        plan.interfacial_dmi = Some(1e-3);
+        let error = ensure_cuda_heterogeneous_material_supported(&plan)
+        .expect_err("DMI boundary conditions need a local A");
+        assert!(error.message.contains("dmi_variable_exchange"));
     }
 
     #[test]
@@ -4761,17 +4721,6 @@ mod tests {
         assert_eq!(policy.adaptive_safety, 0.9);
         assert_eq!(policy.adaptive_growth_limit, 2.0);
         assert_eq!(policy.adaptive_shrink_limit, 0.2);
-    }
-
-    #[test]
-    fn native_fdm_region_exchange_pairs_reject_invalid_exchange() {
-        let mut plan = make_relaxation_precession_test_plan();
-        plan.region_mask = vec![1, 2];
-        plan.inter_region_exchange = vec![(1, 2, -1.0e-12)];
-
-        let err = build_region_exchange_pairs(&plan, true)
-            .expect_err("invalid explicit exchange must be rejected before FFI");
-        assert!(err.message.contains("must be finite and >= 0"));
     }
 
     #[test]
@@ -4998,6 +4947,7 @@ mod tests {
             regional_field_drive_bases: Vec::new(),
             time_stage: Default::default(),
             inter_region_exchange: vec![],
+            region_owner: Vec::new(),
             periodicity: None,
             resolved_periodic_images: None,
             boundary_correction: None,
@@ -5095,6 +5045,7 @@ mod tests {
             regional_field_drive_bases: Vec::new(),
             time_stage: Default::default(),
             inter_region_exchange: vec![],
+            region_owner: Vec::new(),
             periodicity: None,
             resolved_periodic_images: None,
             boundary_correction: None,
@@ -5182,6 +5133,7 @@ mod tests {
             regional_field_drive_bases: Vec::new(),
             time_stage: Default::default(),
             inter_region_exchange: vec![],
+            region_owner: Vec::new(),
             periodicity: None,
             resolved_periodic_images: None,
             boundary_correction: None,

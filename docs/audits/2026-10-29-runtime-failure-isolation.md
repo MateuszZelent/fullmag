@@ -1,5 +1,12 @@
 # Izolacja błędów runtime — dalsza realizacja celu, 29.10.2026
 
+> Aktualizacja 30.10.2026: opisane niżej blokady startupu są historyczne.
+> Kontrolowany start `b17bb884f3a3428aa4b1ec14da234370` zakończył się
+> succeeded, backend ma 128 GiB/16 CPU i dostępne API. Trzy nowe zadania
+> GPU zakończyły po 10 kroków/iteracji bez replay; odświeżenie UI zachowało
+> API i ukończony run. Nie jest to odbiór wszystkich scenariuszy awarii.
+> [Aktualne dowody i ograniczenia](../superpowers/plans/2026-10-29-master-runtime-completion.md#odbiór-końcowy-3010-sześć-punktów-zamkniętych).
+
 ## Zakres i stan odbioru
 
 Celem pozostaje: błąd zadania kończy zadanie, konflikt writera odracza pracę,

@@ -37,7 +37,7 @@ docker-dev source_root="" port="" script="" gpu_access="auto":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" up {{if port == "" { "" } else { "--port " + quote(port) } }} --gpu-access {{quote(gpu_access)}} {{if source_root == "" { "" } else { "--source-root " + quote(source_root) } }} {{if script == "" { "" } else { "--script " + quote(script) } }}
 
 # Ensure the persistent DEV services, then execute exactly one explicit script.
-# Noninteractive execution waits for its outcome; API/frontend and caches stay up.
+# Execution stays attached until terminal; API/frontend and caches stay up.
 fullmag-dev-container script source_root="" port="" gpu_access="auto":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" up {{if port == "" { "" } else { "--port " + quote(port) } }} --gpu-access {{quote(gpu_access)}} {{if source_root == "" { "" } else { "--source-root " + quote(source_root) } }}
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" run-script --script {{quote(script)}} {{if port == "" { "" } else { "--port " + quote(port) } }} {{if source_root == "" { "" } else { "--source-root " + quote(source_root) } }}
@@ -140,10 +140,10 @@ docker-dev-reconcile-activation request request_sha256 source_root port="3197" p
 docker-dev-script script source_root="" port="" request_id="":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" script --script {{quote(script)}} {{if source_root == "" { "" } else { "--source-root " + quote(source_root) } }} {{if port == "" { "" } else { "--port " + quote(port) } }} {{if request_id == "" { "" } else { "--request-id " + quote(request_id) } }}
 
-# Pinned activation for recovery, audits, and callers that already hold the
-# exact attempt/config/source identity.
+# Run in the foreground with live progress and exact-run Ctrl+C cancellation.
+# Explicit attempt/config/source pins are verified before activation.
 docker-dev-script-pinned attempt config_sha256 source_root script request_id="":
-    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" activate-script --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --script {{quote(script)}} {{if request_id == "" { "" } else { "--request-id " + quote(request_id) } }}
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" run-script --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --script {{quote(script)}} {{if request_id == "" { "" } else { "--request-id " + quote(request_id) } }}
 
 # Restart a pinned healthy backend only when its API confirms no active session.
 # Replace only the frontend generation; backend/source correspondence is required.

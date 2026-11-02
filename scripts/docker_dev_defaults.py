@@ -247,14 +247,15 @@ def resolve_defaults(
     port: int | str | None = None,
     environ: Mapping[str, str] | None = None,
     cwd: Path | str | None = None,
+    include_host_settings: bool = True,
 ) -> ScriptDefaults:
-    """Resolve source and port with explicit, deterministic precedence."""
+    """Resolve defaults; image-only callers can omit host storage settings."""
     repo = Path(repo).resolve(strict=True)
     environ = os.environ if environ is None else environ
     known = _known_checkouts(repo)
     main = known[0]
     dotenv = _read_dotenv(main / ".env")
-    settings = _read_host_settings(repo, main, dotenv, environ)
+    settings = _read_host_settings(repo, main, dotenv, environ) if include_host_settings else {}
 
     if source_root is not None and str(source_root).strip():
         selected = _registered_source(source_root, known, "explicit source root")
@@ -446,6 +447,8 @@ def _discover_pins(
     defaults: ScriptDefaults,
     *,
     requested_port: int | None = None,
+    expected_attempt: str | None = None,
+    expected_config_sha256: str | None = None,
 ) -> ScriptPins:
     from docker_dev import _compose_identity, STORAGE_PROFILE
     from docker_development_inputs import select_checkout
@@ -477,11 +480,19 @@ def _discover_pins(
             or volume.get("Options") or not isinstance(labels, Mapping)
             or any(labels.get(key) != value for key, value in control.shared_labels.items())):
         raise DiscoveryError("existing DEV control volume belongs to another group")
-    current = control.read("development/current.json", optional=True)
-    if not isinstance(current, Mapping):
-        raise DiscoveryError("development/current.json is missing or is not an object")
+    if (expected_attempt is None) != (expected_config_sha256 is None):
+        raise DiscoveryError("explicit attempt and configuration pins must be paired")
+    if expected_attempt is not None:
+        if not ATTEMPT_RE.fullmatch(expected_attempt) or not SHA256_RE.fullmatch(expected_config_sha256):
+            raise DiscoveryError("explicit attempt or configuration pin is invalid")
+        attempts = [expected_attempt]
+    else:
+        current = control.read("development/current.json", optional=True)
+        if not isinstance(current, Mapping):
+            raise DiscoveryError("development/current.json is missing or is not an object")
+        attempts = _verified_original_attempts(control, current)
     candidates: dict[tuple[str, str, str, str], int] = {}
-    for attempt in _verified_original_attempts(control, current):
+    for attempt in attempts:
         root = "development/attempts/" + attempt
         terminal = control.read(root + "/terminal.json")
         document = control.read(root + "/compose.json")
@@ -490,6 +501,8 @@ def _discover_pins(
         if terminal.get("compose_project") != control.project or document.get("name") != control.project:
             continue
         config_sha256 = hashlib.sha256(canonical(document)).hexdigest()
+        if expected_config_sha256 is not None and config_sha256 != expected_config_sha256:
+            continue
         if terminal.get("config_sha256") not in (None, config_sha256):
             continue
         inputs = terminal.get("inputs")

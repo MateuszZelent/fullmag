@@ -438,6 +438,24 @@ void elementwise_material_runtime_support_distinguishes_a_from_ms() {
     check(
         error.find("interfacial DMI") != std::string::npos,
         "CPU DMI rejection must identify the first unsupported owner");
+
+    ctx.dmi.interfacial_enabled = false;
+    ctx.sot.enabled = true;
+    check(
+        !fullmag::fem::validate_elementwise_ms_runtime_support(ctx, error),
+        "CPU prescribed SOT must fail closed for elementwise Ms: its RHS reads nodal or scalar Ms");
+    check(
+        error.find("Ms_element_field") != std::string::npos &&
+            error.find("prescribed SOT") != std::string::npos &&
+            error.find("resolved device 'cpu'") != std::string::npos,
+        "CPU prescribed-SOT rejection must name field, owner, and device");
+
+    ctx.material_fields.Ms_element_field.clear();
+    ctx.material_fields.Ms_field = {700e3, 1.1e6};
+    check(
+        fullmag::fem::validate_elementwise_ms_runtime_support(ctx, error),
+        "CPU prescribed SOT must stay legal with nodal Ms, which its RHS reads directly");
+    ctx.sot.enabled = false;
 }
 
 fullmag_fem_plan_desc elementwise_material_context_plan(bool include_ms, bool include_a) {
@@ -589,6 +607,16 @@ void elementwise_material_context_builder_fails_closed_before_backend_initializa
              plan.stt_epsilon_prime = 0.0;
              plan.stt_free_layer_thickness = 1.0e-9;
              plan.stt_current_sign = 1.0;
+         }},
+        {"CPU Ms prescribed SOT", true, false, false, "Ms_element_field", "prescribed SOT", "cpu", [](fullmag_fem_plan_desc &plan) {
+             plan.has_prescribed_sot = 1;
+             plan.sot_formula_version = FULLMAG_FEM_SOT_FORMULA_PRESCRIBED_V1;
+             plan.sot_current_density_am2 = 1.0e11;
+             plan.sot_xi_dl = 0.12;
+             plan.sot_xi_fl = -0.02;
+             plan.sot_thickness = 1.5e-9;
+             plan.sot_envelope_value = 1.0;
+             plan.sot_sigma[1] = 1.0;
          }},
         {"CPU Ms Oersted", true, false, false, "Ms_element_field", "Oersted", "cpu", [](fullmag_fem_plan_desc &plan) {
              plan.oersted_field_xyz = oersted_field;

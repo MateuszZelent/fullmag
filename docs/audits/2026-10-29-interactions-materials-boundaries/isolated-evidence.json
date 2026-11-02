@@ -1,0 +1,64 @@
+{
+  "evidence_class": "ISOLATED_ALGEBRA_REPRODUCTION_NOT_APPLICATION_RUNTIME",
+  "source_fragments_confirmed": {
+    "ui_zero_fallback": "apps/control-room/src/modules/inspector/panels/ObjectRegionsPanelModel.ts",
+    "fdm_aex_threshold": "crates/fullmag-plan/src/fdm.rs",
+    "region_alias": "crates/fullmag-plan/src/fem.rs",
+    "spacing": "crates/fullmag-plan/src/material.rs"
+  },
+  "ui_zero": {
+    "alpha_input": 0.0,
+    "alpha_resolved_by_truthiness": 0.1,
+    "aex_input": 0.0,
+    "aex_resolved_by_truthiness": 1e-11
+  },
+  "fdm_aex": {
+    "base_Jpm": 1e-11,
+    "region_Jpm": 1.05e-11,
+    "relative_change": 0.05,
+    "treated_uniform": true
+  },
+  "spacing": {
+    "points_m": [
+      [
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        1e-08,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1e-08,
+        0.0
+      ],
+      [
+        1e-15,
+        0.0,
+        1e-08
+      ]
+    ],
+    "minimum_euclidean_distance_m": 1e-08,
+    "computed_coordinate_spacing_m": 1e-15,
+    "computed_transition_width_m": 3.0000000000000002e-15
+  },
+  "cubic_rotation": {
+    "Kc1_Jpm3": 100000.0,
+    "m": [
+      1,
+      0,
+      0
+    ],
+    "identity_axes_energy_Jpm3": 0.0,
+    "rotated_45_degree_axes_energy_Jpm3": 25000.0
+  },
+  "region_alias": {
+    "marker_key": "A:core",
+    "expected_region_id": "A:core",
+    "actual_region_id": "B:core",
+    "actual_Ms_Apm": 600000
+  }
+}

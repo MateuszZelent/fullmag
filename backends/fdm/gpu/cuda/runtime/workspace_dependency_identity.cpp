@@ -106,8 +106,10 @@ bool context_build_workspace_dependency_identity_v1(
         append_u32_array(
             material, plan.region_mask, plan.region_mask_len);
         append_double_array(
-            material, ctx.exchange_lut_host.data(),
-            static_cast<uint64_t>(ctx.exchange_lut_host.size()));
+            material, ctx.exchange_faces_host.data(),
+            static_cast<uint64_t>(ctx.exchange_faces_host.size()));
+        append_optional_double_field(material, plan.ms_field, ctx.cell_count);
+        append_optional_double_field(material, plan.alpha_field, ctx.cell_count);
         append_u32(material, ctx.has_uniaxial_anisotropy ? 1U : 0U);
         append_double(material, ctx.Ku1);
         append_double(material, ctx.Ku2);

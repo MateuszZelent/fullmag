@@ -277,13 +277,31 @@ is required. The persistent `frontend` service keeps Next.js HMR running. Preser
 native drain, recovery, user data, and receipts. The code/runtime compliance of
 this volume-only boundary is **NOT VERIFIED** until mounts and a live restart are
 observed.
-See [ADR 0061](../../docs/adr/0061-docker-development-build-and-runtime-container.md).
+Topologię prywatnego storage daily DEV określa [ADR 0076](../../docs/adr/0076-single-private-volume-per-dev-group.md): jeden stabilny `BuildControl.volume` per grupa, z backend/cache, frontend i ledger pod `private/backend`, `private/frontend` i `private/ledger`. Fingerprint ABI/toolchain nadal steruje walidacją oraz inwalidacją cache, lecz nie nazwą wolumenu. ADR 0061 zachowuje historyczną decyzję o osobnych wolumenach; jej topologia jest superseded. Kod i runtime nowego kontraktu są **NOT VERIFIED**.
+Postpublication cleanup `.fullmag-build`, cache-hit i retencja nieudanego builda podlegają sekcji 7 ADR 0076; ich działanie runtime pozostaje **NOT VERIFIED**.
 
 For managed/container build tasks outside that daily Docker workspace, the
 repository `justfile` is the first place to look. If a managed/container recipe
 exists, use that recipe as the default build path instead of assembling an
 equivalent-looking host-side `cargo`, `cmake`, Docker, or shell command.
 Host-only commands are diagnostics unless the user explicitly asks for them.
+
+After each Docker package publication, failed or cancelled build stage (once
+its process and publisher have stopped), normal stop after drain, and task
+completion, reconcile the exact attempt receipt and apply the supported
+qualified retention. For a retained group, keep its verified current package
+and one direct rollback and remove older unreferenced generations. A completed,
+merged group with no consumers is retired through `worktree-finish`, including
+its private backend build/package and frontend namespaces. Preserve active
+consumers, pins, control/provenance records, shared dependency volumes, and
+user sessions/results. Reconcile historical volume labels and Compose project
+IDs alongside the registered source/worktree and resolved storage root; an
+empty plan receipt does not prove completion when independent inventory still
+finds owned bytes. A missing supported apply path or ambiguous ownership is
+`blocked` with exact targets and a next step, never a bypass. Record measured
+physical bytes before and after on the Docker backing filesystem and C: drive
+separately; keep `docker system df` logical totals separate. See
+[the Docker retention contract](../../docs/guides/shared-build-storage.md).
 
 For FEM/MFEM/CUDA/hypre/libCEED work, the canonical build and runtime proof is
 container-backed `just`, not host-only build commands. Treat the container

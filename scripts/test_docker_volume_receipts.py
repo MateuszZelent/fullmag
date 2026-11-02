@@ -1210,7 +1210,8 @@ class FrontendRefreshCarryDocumentsTests(IsolatedReceiptTests):
         profile = group_ledger.profile('d' * 64, project, volume, image)
         document = {
             'name': project,
-            'services': {'backend': {'image': image, 'environment': dict(profile['environment'])}},
+            'services': {'backend': {'image': image, 'environment': dict(profile['environment']),
+                                     'volumes': copy.deepcopy(profile['backend']['volumes'])}},
             'volumes': {group_ledger.COMPOSE_VOLUME: {'name': volume, 'external': True}},
         }
         record = {'schema': 'fullmag.docker-group-ledger.v1', 'profile': group_ledger.PROFILE,

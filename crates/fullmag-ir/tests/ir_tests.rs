@@ -5042,6 +5042,7 @@ fn execution_plan_ir_serializes() {
             boundary_delta_min: None,
             boundary_geometry: None,
             inter_region_exchange: vec![],
+            region_owner: Vec::new(),
             current_density: None,
             stt_degree: None,
             stt_beta: None,

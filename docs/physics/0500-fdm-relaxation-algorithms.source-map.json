@@ -1,0 +1,1067 @@
+{
+  "document": {
+    "path": "docs/physics/0500-fdm-relaxation-algorithms.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FEM relaxation uses native MFEM realizations with a mass-weighted metric; it is owned by docs/physics/0510 and 0580, not by this FDM page."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FEM GPU relaxation uses native CUDA realizations (native_cuda_pgbb, native_cuda_nonlinear_cg) owned by docs/physics/0510 and 0580, not by this FDM page."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-fdm-relax-minimization",
+      "symbols": [
+        "E",
+        "m_i",
+        "N"
+      ],
+      "sources": [
+        "total_energy_from_soa_ws"
+      ]
+    },
+    {
+      "id": "eq-fdm-relax-tangent-gradient",
+      "symbols": [
+        "g_i",
+        "P_m",
+        "H_eff",
+        "m_i"
+      ],
+      "sources": [
+        "tangent_gradient_from_soa_field_into",
+        "tangent_gradient_from_field"
+      ]
+    },
+    {
+      "id": "eq-fdm-relax-max-torque",
+      "symbols": [
+        "tau_max",
+        "m_i",
+        "H_eff"
+      ],
+      "sources": [
+        "compute_max_torque_soa"
+      ]
+    },
+    {
+      "id": "eq-fdm-relax-energy-metric",
+      "symbols": [
+        "energy_metric",
+        "mu0",
+        "Ms",
+        "V"
+      ],
+      "sources": [
+        "energy_metric_dot"
+      ]
+    },
+    {
+      "id": "eq-fdm-relax-retraction",
+      "symbols": [
+        "retraction",
+        "m_i",
+        "v_i"
+      ],
+      "sources": [
+        "normalized_direct_spin"
+      ]
+    },
+    {
+      "id": "eq-fdm-relax-overdamped-llg",
+      "symbols": [
+        "m_i",
+        "t",
+        "gamma",
+        "alpha",
+        "H_eff"
+      ],
+      "sources": [
+        "llg_rhs_from_field",
+        "llg_overdamped_uses_pure_damping"
+      ]
+    },
+    {
+      "id": "eq-fdm-relax-armijo-chord",
+      "symbols": [
+        "s_fp",
+        "Delta_E_lin_chord",
+        "mu0",
+        "Ms",
+        "V",
+        "H_eff"
+      ],
+      "sources": [
+        "fdm_representable_chord_energy_linear_increment_soa"
+      ]
+    },
+    {
+      "id": "eq-fdm-relax-armijo-acceptance",
+      "symbols": [
+        "E_trial",
+        "E_previous",
+        "c_1",
+        "Delta_E_lin_chord",
+        "epsilon_E"
+      ],
+      "sources": [
+        "projected_gradient_armijo_accepts_with_tolerance",
+        "direct_minimizer_energy_tolerance_j"
+      ]
+    },
+    {
+      "id": "eq-fdm-relax-pgbb-update",
+      "symbols": [
+        "m_i",
+        "retraction",
+        "lambda",
+        "g_i",
+        "k"
+      ],
+      "sources": [
+        "execute_projected_gradient_bb_soa"
+      ]
+    },
+    {
+      "id": "eq-fdm-relax-bb-secant",
+      "symbols": [
+        "s_tilde",
+        "y_tilde",
+        "P_m",
+        "m_i",
+        "g_i",
+        "k"
+      ],
+      "sources": [
+        "execute_projected_gradient_bb_soa",
+        "projected_gradient_step_size_update"
+      ]
+    },
+    {
+      "id": "eq-fdm-relax-bb-steps",
+      "symbols": [
+        "lambda",
+        "s_tilde",
+        "y_tilde",
+        "energy_metric",
+        "lambda_min",
+        "lambda_max"
+      ],
+      "sources": [
+        "execute_projected_gradient_bb_soa",
+        "projected_gradient_step_size_update"
+      ]
+    },
+    {
+      "id": "eq-fdm-relax-bb-reset",
+      "symbols": [
+        "lambda",
+        "lambda_0",
+        "k_reset",
+        "lambda_min",
+        "lambda_max"
+      ],
+      "sources": [
+        "fallback_bb_reset_step_size"
+      ]
+    },
+    {
+      "id": "eq-fdm-relax-ncg-transport",
+      "symbols": [
+        "transport",
+        "P_m",
+        "m_i",
+        "k"
+      ],
+      "sources": [
+        "execute_nonlinear_cg_soa",
+        "nonlinear_cg_next_direction"
+      ]
+    },
+    {
+      "id": "eq-fdm-relax-ncg-beta",
+      "symbols": [
+        "beta",
+        "g_i",
+        "transport",
+        "energy_metric",
+        "n_restart",
+        "k"
+      ],
+      "sources": [
+        "execute_nonlinear_cg_soa",
+        "nonlinear_cg_next_direction"
+      ]
+    },
+    {
+      "id": "eq-fdm-relax-ncg-direction",
+      "symbols": [
+        "p_i",
+        "g_i",
+        "beta",
+        "transport"
+      ],
+      "sources": [
+        "execute_nonlinear_cg_soa",
+        "nonlinear_cg_next_direction"
+      ]
+    },
+    {
+      "id": "eq-fdm-relax-ncg-initial-step",
+      "symbols": [
+        "lambda",
+        "lambda_0",
+        "p_i"
+      ],
+      "sources": [
+        "nonlinear_cg_initial_step_size",
+        "execute_nonlinear_cg_soa"
+      ]
+    },
+    {
+      "id": "eq-fdm-relax-tolerance-lowering",
+      "symbols": [
+        "H_tol",
+        "B_tol",
+        "mu0"
+      ],
+      "sources": [
+        "DEFAULT_RELAXATION_TORQUE_TOLERANCE_T",
+        "_resolve_flat_relax_stop"
+      ]
+    },
+    {
+      "id": "eq-fdm-relax-stop",
+      "symbols": [
+        "tau_max",
+        "H_tol",
+        "E",
+        "epsilon_plateau",
+        "k",
+        "n_max"
+      ],
+      "sources": [
+        "RelaxationTorqueConfirmation"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "E",
+      "latex": "E",
+      "meaning": "total discrete conservative micromagnetic energy",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
+      "id": "m_i",
+      "latex": "\\boldsymbol{m}_i",
+      "meaning": "unit magnetization direction of active cell i",
+      "si_unit": "1"
+    },
+    {
+      "id": "N",
+      "latex": "N",
+      "meaning": "number of active magnetic cells",
+      "si_unit": "1"
+    },
+    {
+      "id": "H_eff",
+      "latex": "\\boldsymbol{H}_{\\mathrm{eff},i}",
+      "meaning": "conservative effective field of cell i",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "P_m",
+      "latex": "P_{\\boldsymbol{m}_i}",
+      "meaning": "tangent-plane projector at cell i",
+      "si_unit": "1"
+    },
+    {
+      "id": "g_i",
+      "latex": "\\boldsymbol{g}_i",
+      "meaning": "tangent field gradient of cell i",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "tau_max",
+      "latex": "\\tau_{\\max}",
+      "meaning": "maximum torque residual over active cells (max_torque_Apm)",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "mu0",
+      "latex": "\\mu_0",
+      "meaning": "vacuum permeability",
+      "si_unit": "\\mathrm{N\\,A^{-2}}"
+    },
+    {
+      "id": "Ms",
+      "latex": "M_{s,i}",
+      "meaning": "saturation magnetization of cell i",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "V",
+      "latex": "V",
+      "meaning": "uniform FDM cell volume",
+      "si_unit": "\\mathrm{m^{3}}"
+    },
+    {
+      "id": "energy_metric",
+      "latex": "\\langle\\boldsymbol{a},\\boldsymbol{b}\\rangle_E",
+      "meaning": "physical energy-metric product of two field-valued cell vectors",
+      "si_unit": "\\mathrm{J\\,A\\,m^{-1}}"
+    },
+    {
+      "id": "retraction",
+      "latex": "\\mathcal{R}_{\\boldsymbol{m}_i}",
+      "meaning": "cellwise normalization retraction",
+      "si_unit": "1"
+    },
+    {
+      "id": "v_i",
+      "latex": "\\boldsymbol{v}_i",
+      "meaning": "dimensionless increment passed to the retraction",
+      "si_unit": "1"
+    },
+    {
+      "id": "gamma",
+      "latex": "\\gamma",
+      "meaning": "gyromagnetic ratio used with H",
+      "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}"
+    },
+    {
+      "id": "alpha",
+      "latex": "\\alpha",
+      "meaning": "relaxation damping of the overdamped LLG stage",
+      "si_unit": "1"
+    },
+    {
+      "id": "t",
+      "latex": "t",
+      "meaning": "stage-local relaxation clock of llg_overdamped",
+      "si_unit": "\\mathrm{s}"
+    },
+    {
+      "id": "s_fp",
+      "latex": "\\boldsymbol{s}_i^{\\mathrm{fp}}",
+      "meaning": "representable floating-point trial chord of cell i",
+      "si_unit": "1"
+    },
+    {
+      "id": "Delta_E_lin_chord",
+      "latex": "\\Delta E_{\\mathrm{lin,chord}}",
+      "meaning": "first-order energy increment along the stored trial chord",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
+      "id": "E_trial",
+      "latex": "E_{\\mathrm{trial}}",
+      "meaning": "energy of the candidate trial state",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
+      "id": "E_previous",
+      "latex": "E_{\\mathrm{previous}}",
+      "meaning": "energy of the last accepted state",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
+      "id": "c_1",
+      "latex": "c_1",
+      "meaning": "Armijo sufficient-decrease coefficient",
+      "si_unit": "1"
+    },
+    {
+      "id": "epsilon_E",
+      "latex": "\\varepsilon_E",
+      "meaning": "precision-dependent Armijo energy budget",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
+      "id": "epsilon_f32",
+      "latex": "\\varepsilon_{\\mathrm{f32}}",
+      "meaning": "float32 machine epsilon",
+      "si_unit": "1"
+    },
+    {
+      "id": "lambda",
+      "latex": "\\lambda",
+      "meaning": "direct-minimizer line-search step",
+      "si_unit": "\\mathrm{m\\,A^{-1}}"
+    },
+    {
+      "id": "lambda_0",
+      "latex": "\\lambda_0",
+      "meaning": "default initial and reset base step",
+      "si_unit": "\\mathrm{m\\,A^{-1}}"
+    },
+    {
+      "id": "lambda_min",
+      "latex": "\\lambda_{\\min}",
+      "meaning": "lower clamp of the BB step",
+      "si_unit": "\\mathrm{m\\,A^{-1}}"
+    },
+    {
+      "id": "lambda_max",
+      "latex": "\\lambda_{\\max}",
+      "meaning": "upper clamp of the BB step",
+      "si_unit": "\\mathrm{m\\,A^{-1}}"
+    },
+    {
+      "id": "s_tilde",
+      "latex": "\\tilde{\\boldsymbol{s}}_k",
+      "meaning": "tangent-projected BB magnetization secant",
+      "si_unit": "1"
+    },
+    {
+      "id": "y_tilde",
+      "latex": "\\tilde{\\boldsymbol{y}}_k",
+      "meaning": "transported BB gradient difference",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "k_reset",
+      "latex": "k_{\\mathrm{reset}}",
+      "meaning": "consecutive rejected BB quotients",
+      "si_unit": "1"
+    },
+    {
+      "id": "k",
+      "latex": "k",
+      "meaning": "accepted direct-minimizer iteration index",
+      "si_unit": "1"
+    },
+    {
+      "id": "transport",
+      "latex": "\\mathcal{T}_{k\\to k+1}",
+      "meaning": "projection vector transport to the new tangent space",
+      "si_unit": "1"
+    },
+    {
+      "id": "beta",
+      "latex": "\\beta_{k+1}",
+      "meaning": "Polak-Ribiere+ conjugate-gradient coefficient",
+      "si_unit": "1"
+    },
+    {
+      "id": "p_i",
+      "latex": "\\boldsymbol{p}_i",
+      "meaning": "NCG search direction of cell i",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "n_restart",
+      "latex": "n_{\\mathrm{restart}}",
+      "meaning": "NCG restart interval in accepted steps",
+      "si_unit": "1"
+    },
+    {
+      "id": "H_tol",
+      "latex": "H_{\\mathrm{tol}}",
+      "meaning": "canonical torque stop threshold in field units",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "B_tol",
+      "latex": "B_{\\mathrm{tol}}",
+      "meaning": "public torque stop threshold in induction units (tolT)",
+      "si_unit": "\\mathrm{T}"
+    },
+    {
+      "id": "epsilon_plateau",
+      "latex": "\\varepsilon_{\\mathrm{plateau}}",
+      "meaning": "energy-plateau stop tolerance",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
+      "id": "n_max",
+      "latex": "n_{\\max}",
+      "meaning": "accepted-step budget (max_steps)",
+      "si_unit": "1"
+    }
+  ],
+  "sources": [
+    {
+      "id": "total_energy_from_soa_ws",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields/energy.rs",
+      "symbol": "total_energy_from_soa_ws",
+      "responsibility": "total conservative energy for line-search trials",
+      "lane": "FDM CPU",
+      "tests": "total_energy_helpers_include_local_conservative_terms",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "effective_field_into_soa_ws",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "symbol": "effective_field_into_soa_ws",
+      "responsibility": "accepted-state effective field",
+      "lane": "FDM CPU",
+      "tests": "bb_relaxation_stops_on_uniform_state",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "tangent_gradient_from_soa_field_into",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "symbol": "tangent_gradient_from_soa_field_into",
+      "responsibility": "tangent gradient",
+      "lane": "FDM CPU",
+      "tests": "bb_relaxation_decreases_energy_on_random_initial",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "soa_fast_path_rejection_reason",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "symbol": "soa_fast_path_rejection_reason",
+      "responsibility": "SoA admission and rejection reasons",
+      "lane": "FDM CPU",
+      "tests": "projected_gradient_bb_soa_matches_aos_reference_path",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "llg_rhs_from_field",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "symbol": "llg_rhs_from_field",
+      "responsibility": "LLG RHS with optional precession",
+      "lane": "FDM CPU",
+      "tests": "llg_overdamped_relaxation_stops_before_time_limit_on_uniform_state",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "execute_projected_gradient_bb",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs",
+      "symbol": "execute_projected_gradient_bb",
+      "responsibility": "SoA/AoS PG-BB dispatch",
+      "lane": "FDM CPU",
+      "tests": "projected_gradient_bb_soa_matches_aos_reference_path",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "execute_projected_gradient_bb_soa",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs",
+      "symbol": "execute_projected_gradient_bb_soa",
+      "responsibility": "PG-BB loop, transported secant, BB alternation",
+      "lane": "FDM CPU",
+      "tests": "bb_relaxation_decreases_energy_on_random_initial",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "execute_nonlinear_cg",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs",
+      "symbol": "execute_nonlinear_cg",
+      "responsibility": "SoA/AoS NCG dispatch",
+      "lane": "FDM CPU",
+      "tests": "nonlinear_cg_soa_matches_aos_reference_path",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "execute_nonlinear_cg_soa",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs",
+      "symbol": "execute_nonlinear_cg_soa",
+      "responsibility": "NCG loop, PR+ coefficient, restart",
+      "lane": "FDM CPU",
+      "tests": "ncg_relaxation_decreases_energy_on_random_initial",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "fallback_bb_reset_step_size",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs",
+      "symbol": "fallback_bb_reset_step_size",
+      "responsibility": "BB reset step",
+      "lane": "FDM CPU",
+      "tests": "bb_relaxation_decreases_energy_on_random_initial",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "normalized_direct_spin",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs",
+      "symbol": "normalized_direct_spin",
+      "responsibility": "retraction with Frozen Spins and inactive cells",
+      "lane": "FDM CPU",
+      "tests": "projected_gradient_bb_soa_matches_aos_reference_path",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "compute_max_torque_soa",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs",
+      "symbol": "compute_max_torque_soa",
+      "responsibility": "canonical torque residual",
+      "lane": "FDM CPU",
+      "tests": "bb_relaxation_stops_on_uniform_state",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "fdm_representable_chord_energy_linear_increment_soa",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs",
+      "symbol": "fdm_representable_chord_energy_linear_increment_soa",
+      "responsibility": "Armijo chord increment",
+      "lane": "FDM CPU",
+      "tests": "armijo_uses_representable_retraction_chord",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "energy_metric_dot",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer.rs",
+      "symbol": "energy_metric_dot",
+      "responsibility": "energy metric product",
+      "lane": "FDM GPU host loop",
+      "tests": "armijo_uses_representable_retraction_chord",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "projected_gradient_armijo_accepts_with_tolerance",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer.rs",
+      "symbol": "projected_gradient_armijo_accepts_with_tolerance",
+      "responsibility": "Armijo acceptance",
+      "lane": "FDM CPU/GPU",
+      "tests": "single_precision_armijo_uses_bounded_energy_roundoff_budget",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "direct_minimizer_energy_tolerance_j",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer.rs",
+      "symbol": "direct_minimizer_energy_tolerance_j",
+      "responsibility": "FP32 energy budget",
+      "lane": "FDM GPU",
+      "tests": "single_precision_armijo_uses_bounded_energy_roundoff_budget",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "projected_gradient_step_size_update",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer.rs",
+      "symbol": "projected_gradient_step_size_update",
+      "responsibility": "BB step update",
+      "lane": "FDM GPU host loop",
+      "tests": "none dedicated",
+      "evidence_status": "source-inspection"
+    },
+    {
+      "id": "nonlinear_cg_next_direction",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer.rs",
+      "symbol": "nonlinear_cg_next_direction",
+      "responsibility": "PR+ direction update",
+      "lane": "FDM GPU host loop",
+      "tests": "none dedicated",
+      "evidence_status": "source-inspection"
+    },
+    {
+      "id": "nonlinear_cg_initial_step_size",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer.rs",
+      "symbol": "nonlinear_cg_initial_step_size",
+      "responsibility": "NCG first trial step",
+      "lane": "FDM GPU host loop",
+      "tests": "none dedicated",
+      "evidence_status": "source-inspection"
+    },
+    {
+      "id": "tangent_gradient_from_field",
+      "path": "crates/fullmag-runner/src/relaxation/vector_math.rs",
+      "symbol": "tangent_gradient_from_field",
+      "responsibility": "tangent gradient from copied device field",
+      "lane": "FDM GPU host loop",
+      "tests": "none dedicated",
+      "evidence_status": "source-inspection"
+    },
+    {
+      "id": "RelaxationTorqueConfirmation",
+      "path": "crates/fullmag-runner/src/relaxation/convergence.rs",
+      "symbol": "RelaxationTorqueConfirmation",
+      "responsibility": "three-sample torque confirmation",
+      "lane": "FDM CPU/GPU",
+      "tests": "ncg_relaxation_stops_on_uniform_state",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "llg_overdamped_uses_pure_damping",
+      "path": "crates/fullmag-runner/src/relaxation/convergence.rs",
+      "symbol": "llg_overdamped_uses_pure_damping",
+      "responsibility": "disables precession for LLG relaxation",
+      "lane": "FDM CPU/GPU",
+      "tests": "llg_overdamped_relaxation_stops_before_time_limit_on_uniform_state",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "cpu_direct_minimizer_realization",
+      "path": "crates/fullmag-runner/src/relaxation/provenance.rs",
+      "symbol": "cpu_direct_minimizer_realization",
+      "responsibility": "CPU realization from the SoA predicate",
+      "lane": "FDM CPU",
+      "tests": "cpu_fdm_realization_follows_problem_soa_rejection",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "expected_cpu_direct_minimizer_realization",
+      "path": "crates/fullmag-runner/src/relaxation/provenance.rs",
+      "symbol": "expected_cpu_direct_minimizer_realization",
+      "responsibility": "expected realization from recorded layout",
+      "lane": "FDM CPU",
+      "tests": "cpu_fdm_realization_follows_problem_soa_rejection",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "apply_energy_minimizer_provenance",
+      "path": "crates/fullmag-runner/src/relaxation/provenance.rs",
+      "symbol": "apply_energy_minimizer_provenance",
+      "responsibility": "requested/resolved minimizer fields",
+      "lane": "FDM CPU",
+      "tests": "bb_relaxation_stops_on_uniform_state",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "execute_reference_fdm_with_terminal_context",
+      "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs",
+      "symbol": "execute_reference_fdm_with_terminal_context",
+      "responsibility": "CPU dispatch and provenance assembly",
+      "lane": "FDM CPU",
+      "tests": "all_algorithms_converge_to_similar_equilibrium",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "execute_direct_minimizer",
+      "path": "crates/fullmag-runner/src/fdm/gpu/cuda/direct_minimizer.rs",
+      "symbol": "execute_direct_minimizer",
+      "responsibility": "CUDA host-orchestrated BB/NCG loop",
+      "lane": "FDM GPU",
+      "tests": "none dedicated",
+      "evidence_status": "source-inspection"
+    },
+    {
+      "id": "validate_direct_minimizer_realization",
+      "path": "crates/fullmag-runner/src/artifacts.rs",
+      "symbol": "validate_direct_minimizer_realization",
+      "responsibility": "final-artifact realization check",
+      "lane": "FDM CPU/GPU",
+      "tests": "cpu_fdm_realization_follows_problem_soa_rejection",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "planned_study_controls",
+      "path": "crates/fullmag-plan/src/validate.rs",
+      "symbol": "planned_study_controls",
+      "responsibility": "FDM algorithm gate",
+      "lane": "FDM CPU/GPU",
+      "tests": "planner contract tests",
+      "evidence_status": "source-inspection"
+    },
+    {
+      "id": "plan_fdm_multilayer",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "plan_fdm_multilayer",
+      "responsibility": "multilayer llg_overdamped-only gate",
+      "lane": "FDM CPU/GPU multilayer",
+      "tests": "planner contract tests",
+      "evidence_status": "source-inspection"
+    },
+    {
+      "id": "RelaxationAlgorithmIR",
+      "path": "crates/fullmag-ir/src/execution.rs",
+      "symbol": "RelaxationAlgorithmIR",
+      "responsibility": "algorithm enum",
+      "lane": "all",
+      "tests": "IR contract tests",
+      "evidence_status": "source-inspection"
+    },
+    {
+      "id": "RelaxStopIR",
+      "path": "crates/fullmag-ir/src/study.rs",
+      "symbol": "RelaxStopIR",
+      "responsibility": "canonical stop fields",
+      "lane": "all",
+      "tests": "IR contract tests",
+      "evidence_status": "source-inspection"
+    },
+    {
+      "id": "RelaxationControlIR",
+      "path": "crates/fullmag-ir/src/plan.rs",
+      "symbol": "RelaxationControlIR",
+      "responsibility": "plan relaxation control",
+      "lane": "all",
+      "tests": "IR contract tests",
+      "evidence_status": "source-inspection"
+    },
+    {
+      "id": "validate_study_contracts",
+      "path": "crates/fullmag-ir/src/lib.rs",
+      "symbol": "validate_study_contracts",
+      "responsibility": "dynamics and stop validation",
+      "lane": "all",
+      "tests": "IR contract tests",
+      "evidence_status": "source-inspection"
+    },
+    {
+      "id": "add_relax",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "add_relax",
+      "responsibility": "stage-first relax builder",
+      "lane": "FDM CPU/GPU",
+      "tests": "Python API tests",
+      "evidence_status": "example lowering executed"
+    },
+    {
+      "id": "relax_stage",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "relax_stage",
+      "responsibility": "stage spec and validation",
+      "lane": "FDM CPU/GPU",
+      "tests": "Python API tests",
+      "evidence_status": "example lowering executed"
+    },
+    {
+      "id": "_build_relax_llg_dynamics",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "_build_relax_llg_dynamics",
+      "responsibility": "LLG-only controls and rejection",
+      "lane": "FDM CPU/GPU",
+      "tests": "Python API tests",
+      "evidence_status": "example lowering executed"
+    },
+    {
+      "id": "_resolve_flat_relax_stop",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "_resolve_flat_relax_stop",
+      "responsibility": "tolT/tolA/stop resolution",
+      "lane": "FDM CPU/GPU",
+      "tests": "Python API tests",
+      "evidence_status": "example lowering executed"
+    },
+    {
+      "id": "_relax_problem_from_spec",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "_relax_problem_from_spec",
+      "responsibility": "stage problem and relax_alpha damping",
+      "lane": "FDM CPU/GPU",
+      "tests": "Python API tests",
+      "evidence_status": "example lowering executed"
+    },
+    {
+      "id": "RelaxStop",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class RelaxStop",
+      "responsibility": "stop validation and IR lowering",
+      "lane": "FDM CPU/GPU",
+      "tests": "Python API tests",
+      "evidence_status": "example lowering executed"
+    },
+    {
+      "id": "DEFAULT_RELAXATION_TORQUE_TOLERANCE_T",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "DEFAULT_RELAXATION_TORQUE_TOLERANCE_T",
+      "responsibility": "default tolT",
+      "lane": "FDM CPU/GPU",
+      "tests": "Python API tests",
+      "evidence_status": "example lowering executed"
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "study.stages.add_relax(stage_id=...)",
+        "type": "str or None",
+        "default": "`None` (allocated `relax-1`, `relax-2`, ...)",
+        "si_unit": "1",
+        "validation": "unique stage identifier",
+        "meaning": "stage identity in the study pipeline",
+        "backend_support": "FDM CPU/GPU",
+        "problem_ir": "study_pipeline.nodes[].id"
+      },
+      {
+        "python": "study.stages.add_relax(algorithm=...)",
+        "type": "str",
+        "default": "\"llg_overdamped\"",
+        "si_unit": "1",
+        "validation": "one of llg_overdamped, projected_gradient_bb, nonlinear_cg, tangent_plane_implicit; FDM planner rejects tangent_plane_implicit",
+        "meaning": "relaxation algorithm",
+        "backend_support": "FDM CPU/GPU single-grid; multilayer llg_overdamped only",
+        "problem_ir": "study.algorithm"
+      },
+      {
+        "python": "study.stages.add_relax(tolT=...)",
+        "type": "float",
+        "default": "`1e-6` when neither tolT nor tolA is given",
+        "si_unit": "\\mathrm{T}",
+        "validation": "finite and positive; at most one of tolT and tolA",
+        "meaning": "torque threshold in induction units, lowered by equation eq-fdm-relax-tolerance-lowering",
+        "backend_support": "FDM CPU/GPU",
+        "problem_ir": "study.stop.torque_tolerance_apm"
+      },
+      {
+        "python": "study.stages.add_relax(tolA=...)",
+        "type": "float",
+        "default": "not set",
+        "si_unit": "\\mathrm{A\\,m^{-1}}",
+        "validation": "finite and positive; at most one of tolT and tolA",
+        "meaning": "torque threshold in field units",
+        "backend_support": "FDM CPU/GPU",
+        "problem_ir": "study.stop.torque_tolerance_apm"
+      },
+      {
+        "python": "study.stages.add_relax(tol=...)",
+        "type": "removed",
+        "default": "not accepted",
+        "si_unit": "1",
+        "validation": "always raises ValueError: tol has been removed; use tolT or tolA",
+        "meaning": "migration guard",
+        "backend_support": "FDM CPU/GPU",
+        "problem_ir": "not lowered"
+      },
+      {
+        "python": "study.stages.add_relax(energy_tolerance=...)",
+        "type": "float",
+        "default": "not set",
+        "si_unit": "\\mathrm{J}",
+        "validation": "finite and positive",
+        "meaning": "50-accepted-state energy-plateau threshold",
+        "backend_support": "FDM CPU/GPU",
+        "problem_ir": "study.stop.energy_tolerance_j"
+      },
+      {
+        "python": "study.stages.add_relax(max_steps=...)",
+        "type": "int or None",
+        "default": "50000",
+        "si_unit": "1",
+        "validation": "positive integer; None removes the step budget",
+        "meaning": "accepted-step budget",
+        "backend_support": "FDM CPU/GPU",
+        "problem_ir": "study.stop.max_steps"
+      },
+      {
+        "python": "study.stages.add_relax(max_relaxation_time_s=...)",
+        "type": "float or None",
+        "default": "not set",
+        "si_unit": "\\mathrm{s}",
+        "validation": "positive; llg_overdamped only, otherwise ValueError",
+        "meaning": "stage-local relaxation clock budget",
+        "backend_support": "FDM CPU/GPU, llg_overdamped",
+        "problem_ir": "study.stop.max_relaxation_time_s"
+      },
+      {
+        "python": "study.stages.add_relax(max_pseudotime_s=..., max_physical_time_s=...)",
+        "type": "float",
+        "default": "not set",
+        "si_unit": "\\mathrm{s}",
+        "validation": "deprecated aliases of max_relaxation_time_s; conflicting values raise ValueError",
+        "meaning": "migration aliases",
+        "backend_support": "FDM CPU/GPU, llg_overdamped",
+        "problem_ir": "study.stop.max_relaxation_time_s"
+      },
+      {
+        "python": "study.stages.add_relax(stop=...)",
+        "type": "fm.RelaxStop or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "conflicts with tolT, tolA, energy_tolerance, or max_steps raise ValueError",
+        "meaning": "complete stop contract; RelaxStop(torque_tolerance_apm=None) disables the torque criterion",
+        "backend_support": "FDM CPU/GPU",
+        "problem_ir": "study.stop"
+      },
+      {
+        "python": "study.stages.add_relax(relax_alpha=...)",
+        "type": "float or None",
+        "default": "`1.0` for llg_overdamped",
+        "si_unit": "1",
+        "validation": "llg_overdamped only, otherwise TypeError; None keeps the material damping",
+        "meaning": "relaxation damping override",
+        "backend_support": "FDM CPU/GPU, llg_overdamped",
+        "problem_ir": "`materials[].damping` of the stage problem"
+      },
+      {
+        "python": "study.stages.add_relax(solver=...)",
+        "type": "str or None",
+        "default": "`None` (auto, resolved to rk23)",
+        "si_unit": "1",
+        "validation": "one of abm3, auto, coupled_imex_ark2, heun, rk23, rk4, rk45; llg_overdamped only, otherwise TypeError",
+        "meaning": "LLG integrator",
+        "backend_support": "FDM CPU/GPU, llg_overdamped",
+        "problem_ir": "study.dynamics.integrator"
+      },
+      {
+        "python": "study.stages.add_relax(dt=...)",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "\\mathrm{s}",
+        "validation": "positive; llg_overdamped only; an explicit fixed or complete adaptive policy is required",
+        "meaning": "fixed LLG time step",
+        "backend_support": "FDM CPU/GPU, llg_overdamped",
+        "problem_ir": "study.dynamics.fixed_timestep"
+      },
+      {
+        "python": "study.stages.add_relax(max_err=..., dt_initial=..., dt_min=..., dt_max=...)",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "$1$ for max_err; $\\mathrm{s}$ for steps",
+        "validation": "llg_overdamped only; adaptive integrator rk23 or rk45; dt_min and dt_max required",
+        "meaning": "adaptive LLG policy",
+        "backend_support": "FDM CPU/GPU, llg_overdamped",
+        "problem_ir": "study.dynamics.adaptive_timestep"
+      },
+      {
+        "python": "study.stages.add_relax(adaptive_timestep=...)",
+        "type": "fm.AdaptiveTimestep or None",
+        "default": "None",
+        "si_unit": "\\mathrm{s}",
+        "validation": "llg_overdamped only; not mixable with dt, max_error, max_err, dt_initial, dt_min, dt_max",
+        "meaning": "complete adaptive LLG policy object",
+        "backend_support": "FDM CPU/GPU, llg_overdamped",
+        "problem_ir": "study.dynamics.adaptive_timestep"
+      },
+      {
+        "python": "study.stages.add_relax(max_error=...)",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "deprecated; llg_overdamped only; not mixable with max_err or dt_initial",
+        "meaning": "legacy adaptive error target",
+        "backend_support": "FDM CPU/GPU, llg_overdamped",
+        "problem_ir": "study.dynamics.adaptive_timestep.atol"
+      },
+      {
+        "python": "study.stages.add_relax(field_refresh=...)",
+        "type": "fm.FieldRefreshPolicy or None",
+        "default": "None",
+        "si_unit": "\\mathrm{s}",
+        "validation": "llg_overdamped only, otherwise TypeError",
+        "meaning": "demag refresh cadence during LLG relaxation (0530)",
+        "backend_support": "FDM CPU/GPU, llg_overdamped",
+        "problem_ir": "study.dynamics.field_refresh"
+      },
+      {
+        "python": "study.stages.add_relax(constraints=...)",
+        "type": "Sequence[fm.FrozenSpins]",
+        "default": "()",
+        "si_unit": "1",
+        "validation": "valid FrozenSpins selections; FDM CUDA rejects Frozen Spins with BB/NCG",
+        "meaning": "frozen magnetization constraints active in the stage",
+        "backend_support": "FDM CPU all algorithms; FDM GPU llg_overdamped",
+        "problem_ir": "magnetization_constraints[]"
+      },
+      {
+        "python": "study.stages.add_relax(...).autosave(...)",
+        "type": "fm.StageAutosave",
+        "default": "no autosave",
+        "si_unit": "1",
+        "validation": "valid table quantities and field names",
+        "meaning": "stage-local table and field autosave",
+        "backend_support": "FDM CPU/GPU",
+        "problem_ir": "study_pipeline.nodes[].payload.autosave"
+      }
+    ]
+  }
+}

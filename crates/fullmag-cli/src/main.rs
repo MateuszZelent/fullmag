@@ -1651,6 +1651,7 @@ mod tests {
             interfacial_dmi: None,
             bulk_dmi: None,
             inter_region_exchange: vec![],
+            region_owner: Vec::new(),
             ..Default::default()
         });
 
@@ -1889,6 +1890,7 @@ mod tests {
             interfacial_dmi: None,
             bulk_dmi: None,
             inter_region_exchange: vec![],
+            region_owner: Vec::new(),
             ..Default::default()
         };
 
@@ -1972,6 +1974,7 @@ mod tests {
             interfacial_dmi: None,
             bulk_dmi: None,
             inter_region_exchange: vec![],
+            region_owner: Vec::new(),
             ..Default::default()
         };
 

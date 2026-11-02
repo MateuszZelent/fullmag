@@ -150,6 +150,11 @@ const char *first_unsupported_elementwise_ms_cpu_owner(const Context &ctx)
     if (ctx.stt.slonczewski_enabled) {
         return "Slonczewski STT";
     }
+    // The prescribed-SOT RHS divides by a nodal Ms (or the scalar); a node
+    // shared by two DG0 elements has no single Ms value.
+    if (ctx.sot.enabled) {
+        return "prescribed SOT";
+    }
     if (ctx.oersted.has_cylinder || ctx.oersted.has_explicit_field) {
         return "Oersted interaction";
     }

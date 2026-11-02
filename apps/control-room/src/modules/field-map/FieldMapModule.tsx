@@ -80,6 +80,7 @@ import {
   planarRenderIdentity,
   planarRenderScalarIdentity,
   resolvePlanarEvidenceStatus,
+  samePlanarRenderEvidence,
   type PlanarEvidenceStatus,
   type PlanarRenderEvidence,
 } from "./model/fieldMapEvidence";
@@ -341,8 +342,12 @@ function useFieldMapModuleController() {
   );
   const component = clientComponents ? displayComponent : canonicalPlanar?.component ?? "";
   const quantityId = canonicalPlanar?.quantity_id ?? "";
+  // The renderer republishes evidence whenever an overlay input changes; keep
+  // the previous state when nothing observable changed so the publish cannot
+  // re-render this module into another publish (maximum update depth).
   const onRenderEvidence = useCallback(
-    (next: PlanarRenderEvidence) => setRenderEvidence(next),
+    (next: PlanarRenderEvidence) =>
+      setRenderEvidence((previous) => samePlanarRenderEvidence(previous, next) ? previous : next),
     [],
   );
   // P2-01: pointer gestures fire far more often than frames. Keep only the
@@ -492,6 +497,17 @@ function useFieldMapModuleController() {
       ? JSON.stringify(meta.data.source)
       : null,
   );
+  // The renderer decodes the mesh overlay when this descriptor changes, so keep
+  // its identity across presentation-only updates (pan, zoom, styles).
+  const sampleMeshDescriptor = sample?.meta.mesh_overlay_descriptor;
+  const meshOverlayDescriptor = useMemo(() => sampleMeshDescriptor
+    ? {
+        available: sampleMeshDescriptor.available,
+        boundaryClassification: sampleMeshDescriptor.boundary_classification,
+        codec: sampleMeshDescriptor.codec,
+        geometrySource: sampleMeshDescriptor.geometry_source,
+      }
+    : undefined, [sampleMeshDescriptor]);
   const renderModel = useMemo(() => {
     if (!sample || !presentationPlanar) return null;
     return buildFieldMapRenderModel({
@@ -518,12 +534,7 @@ function useFieldMapModuleController() {
         vectors: presentationPlanar.layers.vectors,
       },
       mask: sample.mask,
-      meshOverlayDescriptor: {
-        available: sample.meta.mesh_overlay_descriptor.available,
-        boundaryClassification: sample.meta.mesh_overlay_descriptor.boundary_classification,
-        codec: sample.meta.mesh_overlay_descriptor.codec,
-        geometrySource: sample.meta.mesh_overlay_descriptor.geometry_source,
-      },
+      meshOverlayDescriptor,
       meshOverlay: sample.meshOverlay,
       range: normalizePlanarColorRange(presentationPlanar.range),
       rasterOpacity: presentationPlanar.raster_opacity ?? 1,
@@ -545,7 +556,7 @@ function useFieldMapModuleController() {
       vectors: sample.vectors,
       worldVectors: sample.worldVectors,
     });
-  }, [canonicalPlanar?.resolution.vector_budget, effectiveWireframeStyle, presentationPlanar, sample]);
+  }, [canonicalPlanar?.resolution.vector_budget, effectiveWireframeStyle, meshOverlayDescriptor, presentationPlanar, sample]);
   // The pinned probe resamples with every revision; keep its last reading.
   const probeData = useRetainedPlanarFrame(
     activePinned ? `${planarViewIdentityKey}|${activePinned.join(",")}` : null,

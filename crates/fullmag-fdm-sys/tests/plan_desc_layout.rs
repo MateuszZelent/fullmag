@@ -11,7 +11,7 @@ fn plan_descriptor_has_versioned_complete_layout() {
     assert_eq!(std::mem::align_of::<fullmag_fdm_plan_desc>(), 8);
     assert_eq!(std::mem::size_of::<fullmag_fdm_plan_desc>(), 1280);
     assert_eq!(std::mem::align_of::<fullmag_fdm_plan_desc_v2>(), 8);
-    assert_eq!(std::mem::size_of::<fullmag_fdm_plan_desc_v2>(), 1400);
+    assert_eq!(std::mem::size_of::<fullmag_fdm_plan_desc_v2>(), 1440);
     assert_eq!(
         std::mem::align_of::<fullmag_fdm_multilayer_plan_desc_v2>(),
         8

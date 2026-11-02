@@ -152,7 +152,7 @@
     {
       "id": "PM-N29",
       "status": "unqualified",
-      "requirement": "An FDM multilayer composite reproduces the covering native cell values bitwise, leaves uncovered gap cells empty under the domain target, spans the composite lattice in the Default section, and rejects unequal spacing, half-cell shifts and overlapping native grids with planar_scope_unsupported."
+      "requirement": "An FDM multilayer composite reproduces the covering native cell values bitwise, leaves uncovered gap cells empty under the domain target, keeps distinct regions when two layers both number a region 1, spans the composite lattice in the Default section, and rejects unequal spacing, half-cell shifts and overlapping native grids with planar_scope_unsupported."
     }
   ],
   "equations": [
@@ -853,7 +853,7 @@
       "id": "fdm-multilayer-composite",
       "path": "crates/fullmag-api/src/router_v2/handlers/data/fdm_multilayer_composite.rs",
       "symbol": "resolve_fdm_multilayer_composite",
-      "responsibility": "Embeds equal-spacing, lattice-aligned FDM multilayer native grids into one composite carrier with coverage and merged membership for monitor_target/region planar scopes and the Default section bounds; fails closed on unequal spacing, misalignment, overlap or legend conflict.",
+      "responsibility": "Embeds equal-spacing, lattice-aligned FDM multilayer native grids into one composite carrier with coverage and membership (per-layer region ids renumbered into disjoint composite ranges) for monitor_target/region planar scopes and the Default section bounds; fails closed on unequal spacing, misalignment, overlap or a region claimed by two layers.",
       "evidence_status": "implemented-unit-tests-not-run"
     }
   ],

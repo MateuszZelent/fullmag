@@ -49,6 +49,7 @@ pub(super) fn record_due_outputs(
                 wall_time_ns,
                 state.magnetization(),
                 problem.active_mask.as_deref(),
+                problem.ms_field.as_deref(),
             );
             artifacts.record_scalar(&stats)?;
             steps.push(stats);
@@ -86,6 +87,7 @@ pub(super) fn record_due_outputs(
             wall_time_ns,
             &observables,
             problem.active_mask.as_deref(),
+            problem.ms_field.as_deref(),
         );
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
@@ -130,6 +132,7 @@ pub(super) fn record_scalar_snapshot(
         wall_time_ns,
         &observables,
         problem.active_mask.as_deref(),
+        problem.ms_field.as_deref(),
     );
     artifacts.record_scalar(&stats)?;
     steps.push(stats);
@@ -222,6 +225,7 @@ pub(super) fn record_final_outputs(
             0,
             state.magnetization(),
             problem.active_mask.as_deref(),
+            problem.ms_field.as_deref(),
         );
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
@@ -254,6 +258,7 @@ pub(super) fn record_final_outputs(
             0,
             &observables,
             problem.active_mask.as_deref(),
+            problem.ms_field.as_deref(),
         );
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
@@ -356,6 +361,7 @@ pub(super) fn make_step_stats_from_report(
     wall_time_ns: u64,
     magnetization: &[Vector3],
     active_mask: Option<&[bool]>,
+    ms_field: Option<&[f64]>,
 ) -> StepStats {
     let mut stats = StepStats {
         step,
@@ -375,7 +381,7 @@ pub(super) fn make_step_stats_from_report(
         wall_time_ns,
         ..StepStats::default()
     };
-    apply_average_m_to_step_stats_with_active_mask(&mut stats, magnetization, active_mask);
+    apply_average_m_to_step_stats_with_active_mask(&mut stats, magnetization, active_mask, ms_field);
     stats.per_object_scalars = single_object_scalars("free", &stats);
     stats
 }
@@ -387,6 +393,7 @@ pub(super) fn make_step_stats(
     wall_time_ns: u64,
     observables: &StateObservables,
     active_mask: Option<&[bool]>,
+    ms_field: Option<&[f64]>,
 ) -> StepStats {
     let mut stats = StepStats {
         step,
@@ -408,6 +415,7 @@ pub(super) fn make_step_stats(
         &mut stats,
         &observables.magnetization,
         active_mask,
+        ms_field,
     );
     stats.per_object_scalars = if observables.per_object_scalars.is_empty() {
         single_object_scalars("free", &stats)

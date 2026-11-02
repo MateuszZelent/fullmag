@@ -80,6 +80,11 @@ bool configure_demag_poisson_hypre_preconditioner(
     }
 }
 
+double certification_solver_tolerance(double requested)
+{
+    return requested > 0.0 ? requested * 0.1 : requested;
+}
+
 bool configure_demag_poisson_hypre_solver(
     const Context &ctx,
     GpuDemagPoissonWorkspace &workspace,
@@ -89,11 +94,13 @@ bool configure_demag_poisson_hypre_solver(
         error = "GPU Poisson demag Hypre solver requires initialized operator and preconditioner";
         return false;
     }
+    const double solver_tol =
+        certification_solver_tolerance(ctx.demag.solver.relative_tolerance);
     switch (ctx.demag.solver.solver) {
     case FULLMAG_FEM_LINEAR_SOLVER_CG: {
         auto pcg = std::make_unique<mfem::HyprePCG>(fullmag_serial_comm());
         pcg->iterative_mode = true;
-        pcg->SetTol(ctx.demag.solver.relative_tolerance);
+        pcg->SetTol(solver_tol);
         if (ctx.demag.solver.has_absolute_tolerance &&
             ctx.demag.solver.absolute_tolerance > 0.0) {
             pcg->SetAbsTol(ctx.demag.solver.absolute_tolerance);
@@ -108,7 +115,7 @@ bool configure_demag_poisson_hypre_solver(
     case FULLMAG_FEM_LINEAR_SOLVER_GMRES: {
         auto gmres = std::make_unique<mfem::HypreGMRES>(fullmag_serial_comm());
         gmres->iterative_mode = true;
-        gmres->SetTol(ctx.demag.solver.relative_tolerance);
+        gmres->SetTol(solver_tol);
         if (ctx.demag.solver.has_absolute_tolerance &&
             ctx.demag.solver.absolute_tolerance > 0.0) {
             gmres->SetAbsTol(ctx.demag.solver.absolute_tolerance);
@@ -246,10 +253,12 @@ bool set_demag_poisson_hypre_solver_iterative_mode(
         error = "GPU Poisson demag Hypre solver is not initialized";
         return false;
     }
+    const double solver_tol =
+        certification_solver_tolerance(ctx.demag.solver.relative_tolerance);
     switch (ctx.demag.solver.solver) {
     case FULLMAG_FEM_LINEAR_SOLVER_CG: {
         auto *solver = static_cast<mfem::HyprePCG *>(workspace.solver.get());
-        solver->SetTol(ctx.demag.solver.relative_tolerance);
+        solver->SetTol(solver_tol);
         solver->SetAbsTol(std::max(0.0, ctx.demag.solver.absolute_tolerance));
         solver->SetMaxIter(static_cast<int>(ctx.demag.solver.max_iterations));
         if (iterative_mode) {
@@ -261,7 +270,7 @@ bool set_demag_poisson_hypre_solver_iterative_mode(
     }
     case FULLMAG_FEM_LINEAR_SOLVER_GMRES: {
         auto *solver = static_cast<mfem::HypreGMRES *>(workspace.solver.get());
-        solver->SetTol(ctx.demag.solver.relative_tolerance);
+        solver->SetTol(solver_tol);
         solver->SetAbsTol(std::max(0.0, ctx.demag.solver.absolute_tolerance));
         solver->SetMaxIter(static_cast<int>(ctx.demag.solver.max_iterations));
         if (iterative_mode) {
