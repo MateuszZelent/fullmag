@@ -608,12 +608,21 @@ fn resolve_observation_policy(
         }
         _ => 1,
     };
-    // Relaxation control needs a fresh free-DOF torque on every accepted
-    // step.  Ask the native CUDA lane for scalar diagnostics directly so the
-    // host does not reconstruct them by copying the full vector field back
-    // after every step.
+    // Relaxation needs a fresh free-DOF torque on every accepted step (0580).
+    // Native CONTROL diagnostics support fixed steps only: adaptive RK paths
+    // return metadata-only zero values in that mode. Request full native
+    // scalar reductions for adaptive LLG so missing measurements cannot count
+    // as three zero-torque confirmations. No host field reconstruction is used.
     let native = if plan.relaxation.is_some() {
-        NativeStatsPolicy::control(1)
+        if plan.adaptive_timestep.is_some()
+            && plan.relaxation.as_ref().is_some_and(|control| {
+                control.algorithm == fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped
+            })
+        {
+            NativeStatsPolicy::full(1)
+        } else {
+            NativeStatsPolicy::control(1)
+        }
     } else if mask == 0 {
         NativeStatsPolicy::none(stride)
     } else {
@@ -1824,6 +1833,53 @@ mod adaptive_batch_tests {
         assert_eq!(resolved.native.mode, NativeStatsMode::Requested);
         assert_eq!(
             resolved.native.quantity_mask,
+            fullmag_fdm_sys::FULLMAG_FDM_STATS_QUANTITY_ALL
+        );
+    }
+
+    #[test]
+    fn adaptive_relaxation_requires_measured_torque_between_sparse_outputs() {
+        let mut plan = FdmPlanIR::default();
+        plan.integrator = Some(IntegratorChoice::Rk23);
+        plan.fixed_timestep = Some(1.0e-15);
+        plan.adaptive_timestep = None;
+        plan.relaxation = Some(fullmag_ir::RelaxationControlIR {
+            algorithm: fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
+            stop: fullmag_ir::RelaxStopIR {
+                torque_tolerance_apm: Some(0.795774715459),
+                energy_tolerance_j: None,
+                max_steps: Some(200_000),
+                max_relaxation_time_s: Some(2.0e-9),
+            },
+        });
+        let outputs = vec![OutputIR::Scalar {
+            name: "E_total".to_string(),
+            every_seconds: 1.0e-9,
+        }];
+
+        let fixed = resolve_observation_policy(&plan, &outputs, false);
+        assert_eq!(fixed.native.mode, NativeStatsMode::Control);
+        assert_eq!(fixed.native.stride, 1);
+
+        plan.fixed_timestep = None;
+        plan.adaptive_timestep = Some(AdaptiveTimeStepIR {
+            tolerance_mode: AdaptiveToleranceModeIR::MaxError,
+            atol: 1.0e-7,
+            rtol: 0.0,
+            dt_initial: Some(1.0e-15),
+            dt_min: 1.0e-17,
+            dt_max: Some(1.0e-14),
+            safety: 0.9,
+            growth_limit: 2.0,
+            shrink_limit: 0.2,
+            max_spin_rotation: None,
+            norm_tolerance: None,
+        });
+        let adaptive = resolve_observation_policy(&plan, &outputs, false);
+        assert_eq!(adaptive.native.mode, NativeStatsMode::Full);
+        assert_eq!(adaptive.native.stride, 1);
+        assert_eq!(
+            adaptive.native.quantity_mask,
             fullmag_fdm_sys::FULLMAG_FDM_STATS_QUANTITY_ALL
         );
     }
