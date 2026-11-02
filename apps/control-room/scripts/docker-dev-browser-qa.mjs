@@ -51,6 +51,8 @@ const expectAmbiguousComputeFieldsSetting =
 const expectAmbiguousComputeFields = expectAmbiguousComputeFieldsSetting === "1";
 const expectTerminalTelemetrySetting = process.env.CONTROL_ROOM_BROWSER_QA_EXPECT_TERMINAL_TELEMETRY;
 const expectTerminalTelemetry = expectTerminalTelemetrySetting === "1";
+const expectRunPerformanceSetting = process.env.CONTROL_ROOM_BROWSER_QA_EXPECT_RUN_PERFORMANCE;
+const expectRunPerformance = expectRunPerformanceSetting === "1";
 const maxCanvasScreenshotBytes = 512 * 1024;
 const canvasOnlySkippedAreas = [
   "viewport appearance and color-profile checks",
@@ -951,6 +953,290 @@ const observeAmbiguousComputeFieldsSubmission = async (page, expectedSession) =>
   }
 };
 
+const RUN_PERFORMANCE_PATH = "/v2/sessions/current/diagnostics/performance";
+
+const requireRunPerformanceText = (value, label) => {
+  if (typeof value !== "string" || value.trim() === "" || value.length > 512) {
+    throw new Error(`Run performance API omitted ${label}`);
+  }
+  return value;
+};
+
+const requireRunPerformanceInteger = (value, label) => {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Run performance API returned an invalid ${label}`);
+  }
+  return value;
+};
+
+const readRunPerformanceApiSnapshot = async (page, expectedSession) => {
+  const sessionScope = expectedSessionScopeHeader(expectedSession);
+  const statusPath = "/v2/sessions/current/status";
+  const statusResponse = await page.request.get(new URL(statusPath, page.url()).toString(), {
+    timeout,
+    headers: { "x-fullmag-session-scope": sessionScope },
+  });
+  if (statusResponse.status() !== 200) {
+    throw new Error(`GET ${statusPath} returned ${statusResponse.status()}`);
+  }
+  const statusApiInstanceId = statusResponse.headers()["x-fullmag-api-instance"] ?? "";
+  if (!isApiInstanceId(statusApiInstanceId)) {
+    throw new Error(`GET ${statusPath} omitted a valid API instance identity`);
+  }
+  const statusBody = await statusResponse.json();
+  const statusSession = statusBody?.session;
+  if (statusBody?.lifecycle?.session_resource !== "active" ||
+      statusSession?.session_id !== expectedSession.session_id ||
+      statusSession?.session_epoch !== expectedSession.session_epoch ||
+      statusSession?.request_scope_epoch !== expectedSession.request_scope_epoch) {
+    throw new Error("Run performance status probe changed or omitted the active session identity");
+  }
+  const statusRunId = requireRunPerformanceText(statusBody?.run?.run_id, "status.run.run_id");
+
+  const performanceResponse = await page.request.get(
+    new URL(RUN_PERFORMANCE_PATH, page.url()).toString(),
+    {
+      timeout,
+      headers: {
+        "x-fullmag-api-instance": statusApiInstanceId,
+        "x-fullmag-session-scope": sessionScope,
+      },
+    },
+  );
+  if (performanceResponse.status() !== 200) {
+    throw new Error(`GET ${RUN_PERFORMANCE_PATH} returned ${performanceResponse.status()}`);
+  }
+  const performanceApiInstanceId = performanceResponse.headers()["x-fullmag-api-instance"] ?? "";
+  if (performanceApiInstanceId !== statusApiInstanceId) {
+    throw new Error("Run performance resource changed the pinned API instance");
+  }
+  const resource = await performanceResponse.json();
+  if (!resource || typeof resource !== "object" || Array.isArray(resource)) {
+    throw new Error("Run performance API returned a non-object resource");
+  }
+  const runId = requireRunPerformanceText(resource.run_id, "run_id");
+  const taskId = requireRunPerformanceText(resource.task_id, "task_id");
+  const stepId = requireRunPerformanceText(resource.step_id, "step_id");
+  const attemptId = requireRunPerformanceText(resource.attempt_id, "attempt_id");
+  const ownershipEpoch = requireRunPerformanceInteger(resource.ownership_epoch, "ownership_epoch");
+  const firstStepIndex = requireRunPerformanceInteger(resource.first_step_index, "first_step_index");
+  const stepIndex = requireRunPerformanceInteger(resource.step_index, "step_index");
+  const elapsedMonotonicNs = requireRunPerformanceInteger(
+    resource.elapsed_monotonic_ns,
+    "elapsed_monotonic_ns",
+  );
+  if (resource.state === "unavailable" || runId !== statusRunId || elapsedMonotonicNs <= 0 ||
+      stepIndex < firstStepIndex || typeof resource.revision !== "string" || !resource.revision ||
+      !Array.isArray(resource.points) || resource.points.length < 1 || resource.points.length > 120) {
+    throw new Error("Run performance API resource is unavailable, incomplete, or outside the active run");
+  }
+  const latest = resource.points.at(-1);
+  if (!latest || (latest.step_index != null && latest.step_index !== stepIndex)) {
+    throw new Error("Run performance API latest sample does not match its step index");
+  }
+  const cpuPercent = latest.cpu_percent;
+  const gpuPercent = latest.gpu_percent;
+  for (const [label, value] of [["cpu_percent", cpuPercent], ["gpu_percent", gpuPercent]]) {
+    if (value !== null && value !== undefined &&
+        (typeof value !== "number" || !Number.isFinite(value) || value < 0)) {
+      throw new Error(`Run performance API returned an invalid ${label}`);
+    }
+  }
+  if (cpuPercent == null && gpuPercent == null) {
+    throw new Error("Run performance API did not publish a measured CPU or GPU value");
+  }
+  const stageRate = (stepIndex - firstStepIndex) / (elapsedMonotonicNs / 1_000_000_000);
+  const requestEvidence = (path, response, apiInstanceIdSent) => ({
+    api_instance_header_sent: apiInstanceIdSent,
+    api_instance_id: response.headers()["x-fullmag-api-instance"] ?? null,
+    method: "GET",
+    path,
+    session_scope_header_sent: sessionScope,
+    status: response.status(),
+  });
+  return {
+    api: {
+      api_instance_id: statusApiInstanceId,
+      attempt_id: attemptId,
+      cpu_percent: cpuPercent ?? null,
+      elapsed_monotonic_ns: elapsedMonotonicNs,
+      first_step_index: firstStepIndex,
+      gpu_percent: gpuPercent ?? null,
+      ownership_epoch: ownershipEpoch,
+      point_count: resource.points.length,
+      revision: resource.revision,
+      run_id: runId,
+      session_epoch: expectedSession.session_epoch,
+      session_id: expectedSession.session_id,
+      request_scope_epoch: expectedSession.request_scope_epoch,
+      state: resource.state,
+      status_run_id: statusRunId,
+      step_id: stepId,
+      step_index: stepIndex,
+      stage_rate_steps_per_s: stageRate,
+      task_id: taskId,
+    },
+    api_requests: [
+      requestEvidence(statusPath, statusResponse, null),
+      requestEvidence(RUN_PERFORMANCE_PATH, performanceResponse, statusApiInstanceId),
+    ],
+    latest,
+  };
+};
+
+const formatRunPerformanceDecimal = (value) =>
+  value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+
+const formatRunPerformancePercent = (value) =>
+  value == null ? "N/A" : `${formatRunPerformanceDecimal(value)}%`;
+
+const captureRunPerformanceScreenshot = async (panel) => {
+  const png = await panel.screenshot({ type: "png", timeout, animations: "disabled" });
+  if (png.length < 24 || !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+    throw new Error("Automatic performance panel screenshot was not a PNG");
+  }
+  if (png.length > maxCanvasScreenshotBytes) {
+    throw new Error("Automatic performance panel screenshot exceeds its bounded size");
+  }
+  return {
+    byte_length: png.length,
+    height: png.readUInt32BE(20),
+    image_proof: true,
+    media_type: "image/png",
+    png_base64: png.toString("base64"),
+    state: "captured",
+    width: png.readUInt32BE(16),
+  };
+};
+
+const runAutomaticPerformanceBrowserQa = async (page, expectedSession) => {
+  const engineTab = page.getByRole("tab", { name: "Engine", exact: true });
+  await engineTab.waitFor({ state: "visible", timeout });
+  if (await engineTab.getAttribute("aria-selected") !== "true") await engineTab.click();
+  const panel = page.getByRole("region", { name: "Automatic performance", exact: true });
+  await panel.waitFor({ state: "visible", timeout });
+  const apiSnapshot = await readRunPerformanceApiSnapshot(page, expectedSession);
+  const selectedMetric = apiSnapshot.api.cpu_percent == null
+    ? "GPU whole device (%)"
+    : "CPU per core (%)";
+  if (selectedMetric.startsWith("GPU")) {
+    const metricSelect = panel.getByRole("combobox");
+    await metricSelect.click();
+    await page.getByRole("option", { name: selectedMetric, exact: true }).click();
+  }
+  const expected = await page.evaluate(({ api, selectedMetric }) => {
+    const formatDecimal = (value) => value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    const formatPercent = (value) => value == null ? "N/A" : `${formatDecimal(value)}%`;
+    const elapsed = api.elapsed_monotonic_ns >= 1_000_000_000
+      ? `${formatDecimal(api.elapsed_monotonic_ns / 1_000_000_000)} s`
+      : api.elapsed_monotonic_ns >= 1_000_000
+        ? `${formatDecimal(api.elapsed_monotonic_ns / 1_000_000)} ms`
+        : `${Math.round(api.elapsed_monotonic_ns).toLocaleString()} ns`;
+    const identity = [
+      `Run ${api.run_id}`,
+      `Task ${api.task_id}`,
+      `Step ${api.step_id}`,
+      `Attempt ${api.attempt_id}`,
+      `Epoch ${api.ownership_epoch}`,
+    ].join(" · ");
+    return {
+      cpu: formatPercent(api.cpu_percent),
+      elapsed,
+      gpu: formatPercent(api.gpu_percent),
+      identity,
+      metric: selectedMetric.startsWith("GPU") ? api.gpu_percent : api.cpu_percent,
+      stageRate: `${formatDecimal(api.stage_rate_steps_per_s)} steps/s`,
+    };
+  }, { api: apiSnapshot.api, selectedMetric });
+  await page.waitForFunction(({ expectedView, selectedMetric }) => {
+    const panel = document.querySelector('[aria-label="Automatic performance"]');
+    if (!panel) return false;
+    const valueFor = (label) => {
+      const stat = [...panel.querySelectorAll(".fm-auto-performance__stat")]
+        .find((item) => item.querySelector("dt")?.textContent?.trim() === label);
+      return stat?.querySelector("dd")?.textContent?.trim() ?? null;
+    };
+    const identity = panel.querySelector(".fm-auto-performance__identity")?.textContent?.trim();
+    const chart = panel.querySelector(".fm-auto-performance__chart .fm-analysis-plots__echarts");
+    const canvases = chart ? [...chart.querySelectorAll("canvas")] : [];
+    const canvasReady = canvases.some((canvas) => canvas.width > 0 && canvas.height > 0);
+    return identity === expectedView.identity &&
+      valueFor("Elapsed") === expectedView.elapsed &&
+      valueFor("Stage rate") === expectedView.stageRate &&
+      valueFor("CPU/core") === expectedView.cpu &&
+      valueFor("GPU/device") === expectedView.gpu &&
+      canvasReady && selectedMetric.length > 0;
+  }, { expectedView: expected, selectedMetric }, { timeout });
+  const visiblePanel = await panel.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    const x = Math.max(0, Math.min(window.innerWidth - 1, rect.left + rect.width / 2));
+    const y = Math.max(0, Math.min(window.innerHeight - 1, rect.top + rect.height / 2));
+    const hit = document.elementFromPoint(x, y);
+    const style = getComputedStyle(node);
+    return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 &&
+      rect.height > 0 && rect.right > 0 && rect.left < window.innerWidth &&
+      rect.bottom > 0 && rect.top < window.innerHeight && hit && node.contains(hit);
+  });
+  if (!visiblePanel) throw new Error("Automatic performance panel is not visibly rendered in the Engine footer");
+  const panelObservation = await panel.evaluate((node) => {
+    const valueFor = (label) => {
+      const stat = [...node.querySelectorAll(".fm-auto-performance__stat")]
+        .find((item) => item.querySelector("dt")?.textContent?.trim() === label);
+      return stat?.querySelector("dd")?.textContent?.trim() ?? null;
+    };
+    const scopeNotes = [...node.querySelectorAll(".fm-auto-performance__scope-note")]
+      .map((note) => note.textContent?.trim() ?? "");
+    return {
+      cpu: valueFor("CPU/core"),
+      elapsed: valueFor("Elapsed"),
+      gpu: valueFor("GPU/device"),
+      identity: node.querySelector(".fm-auto-performance__identity")?.textContent?.trim() ?? "",
+      stage_rate: valueFor("Stage rate"),
+      gpu_scope_note: scopeNotes.at(-1) ?? "",
+      status: node.querySelector(".fm-footer-diagnostics__meta")?.textContent?.trim() ?? "",
+    };
+  });
+  const chartObservation = await panel.locator(".fm-auto-performance__chart .fm-analysis-plots__echarts")
+    .evaluate((chart) => {
+      const rect = chart.getBoundingClientRect();
+      const canvases = [...chart.querySelectorAll("canvas")];
+      const canvas = canvases.find((item) => item.width > 0 && item.height > 0);
+      const canvasRect = canvas?.getBoundingClientRect();
+      return {
+        canvas_count: canvases.length,
+        canvas_height: canvas?.height ?? 0,
+        canvas_width: canvas?.width ?? 0,
+        css_height: canvasRect?.height ?? 0,
+        css_width: canvasRect?.width ?? 0,
+        visible: Boolean(rect.width > 0 && rect.height > 0 && canvasRect?.width > 0 && canvasRect?.height > 0),
+      };
+    });
+  if (!chartObservation.visible || chartObservation.canvas_width <= 0 || chartObservation.canvas_height <= 0) {
+    throw new Error("Automatic performance chart did not render on a nonzero canvas");
+  }
+  if (blockedMutations.length > 0) {
+    throw new Error(`Run performance QA blocked unexpected non-read-only requests: ${JSON.stringify(blockedMutations)}`);
+  }
+  const screenshot = await captureRunPerformanceScreenshot(panel);
+  return {
+    api: apiSnapshot.api,
+    api_requests: apiSnapshot.api_requests,
+    blocked_mutation_count: blockedMutations.length,
+    chart: chartObservation,
+    engine_tab_clicked: true,
+    no_non_read_only_requests: true,
+    panel: {
+      ...panelObservation,
+      metric_label: selectedMetric.startsWith("GPU") ? "GPU whole device" : "CPU per core",
+      metric_value: expected.metric == null ? "N/A" : formatRunPerformancePercent(expected.metric),
+      visible: visiblePanel,
+    },
+    schema: "fullmag.docker-dev-run-performance-browser-proof.v1",
+    screenshot,
+    state: "passed",
+  };
+};
+
 const main = async () => {
   if (!["0", "1"].includes(canvasOnlySetting)) {
     throw new Error("CONTROL_ROOM_BROWSER_QA_CANVAS_ONLY must be exactly 0 or 1");
@@ -983,6 +1269,14 @@ const main = async () => {
   }
   if (expectTerminalTelemetrySetting !== undefined && expectTerminalTelemetrySetting !== "1") {
     throw new Error("CONTROL_ROOM_BROWSER_QA_EXPECT_TERMINAL_TELEMETRY must be absent or exactly 1");
+  }
+  if (expectRunPerformanceSetting !== undefined && expectRunPerformanceSetting !== "1") {
+    throw new Error("CONTROL_ROOM_BROWSER_QA_EXPECT_RUN_PERFORMANCE must be absent or exactly 1");
+  }
+  if (expectRunPerformance && (!canvasOnly || expectedLiveField || expectAirboxVectors ||
+      expectFemAirboxVectors || expectAmbiguousComputeFields || expectTerminalTelemetry ||
+      scenarioSetting !== "standard" || process.env.CONTROL_ROOM_PREPARE_VIEWPORT_FIXTURE === "1")) {
+    throw new Error("Run performance QA requires standalone canvas-only scope and excludes other scenarios");
   }
   if (expectTerminalTelemetry && (!canvasOnly || expectedLiveField !== "m" || expectAirboxVectors ||
       expectFemAirboxVectors || expectAmbiguousComputeFields || scenarioSetting !== "standard" ||
@@ -1053,6 +1347,22 @@ const main = async () => {
         if (new URL(request.url()).pathname === "/v2/sessions/current/visualization/state") {
           displayPatchRequestCount += 1;
         }
+      });
+    }
+    if (expectRunPerformance) {
+      await page.route("**/v2/**", async (route) => {
+        const request = route.request();
+        if (["GET", "HEAD", "OPTIONS"].includes(request.method())) return route.continue();
+        const url = new URL(request.url());
+        if (request.method() === "POST" && url.origin === loopbackProxy.origin &&
+            url.pathname === "/v2/sessions/current/visualization/client-acks") {
+          visualizationClientAckRequestCount += 1;
+          return route.continue();
+        }
+        if (blockedMutations.length < 16) {
+          blockedMutations.push({ method: request.method(), path: url.pathname });
+        }
+        return route.abort("blockedbyclient");
       });
     }
     if (!canvasOnly) await installViewportPerformanceProbe(page);
@@ -1361,6 +1671,16 @@ const main = async () => {
       femAirboxObservation = await proveFemAirboxVectors(page, femRunIdentityBefore, liveFieldAfter);
       partialProof.fem_airbox_observation = femAirboxObservation;
     }
+    let runPerformanceProof = null;
+    if (expectRunPerformance) {
+      try {
+        runPerformanceProof = await runAutomaticPerformanceBrowserQa(page, sessionBefore);
+        partialProof.run_performance = runPerformanceProof;
+      } catch (error) {
+        if (error?.partialProof) partialProof.run_performance = error.partialProof;
+        throw error;
+      }
+    }
     let terminalTelemetry = null;
     if (expectTerminalTelemetry) {
       try {
@@ -1386,7 +1706,8 @@ const main = async () => {
     const result = {
       schema: resultSchema,
       state: "passed",
-      qa_scope: expectAmbiguousComputeFields ? "canvas-home-ambiguous-compute-fields" :
+      qa_scope: expectRunPerformance ? "canvas-engine-run-performance" :
+        expectAmbiguousComputeFields ? "canvas-home-ambiguous-compute-fields" :
         expectFemAirboxVectors ? "canvas-home-fem-airbox-vectors" :
         expectAirboxVectors ? "canvas-home-live-field-airbox" :
         expectedLiveField ? "canvas-home-live-field" : canvasOnly ? "canvas-home-only" : "full-browser-qa",
@@ -1404,6 +1725,10 @@ const main = async () => {
       ...(expectTerminalTelemetry ? {
         expect_terminal_telemetry: true,
         terminal_telemetry: terminalTelemetry,
+      } : {}),
+      ...(expectRunPerformance ? {
+        expect_run_performance: true,
+        run_performance: runPerformanceProof,
       } : {}),
       home_round_trip: true,
       home: { section: "home", visible: true, session_label: homeText.match(/Simulation open:[^\n]*/)?.[0] ?? "Simulation open:" },
@@ -1428,7 +1753,7 @@ const main = async () => {
         ambiguous_command_submission: ambiguousCommandSubmission,
         canvas_after_compute_fields: canvasAfterComputeFields,
       } : { ambiguous_command_submission: null }),
-      ...(canvasOnly && expectedLiveField ? { partial_proof: partialProof } : {}),
+      ...(canvasOnly && (expectedLiveField || expectRunPerformance) ? { partial_proof: partialProof } : {}),
       page_errors: pageErrors.length,
       console_errors: consoleErrors.length,
       expected_console_errors: expectedConsoleErrors,
@@ -1532,7 +1857,9 @@ try {
     expect_ambiguous_compute_fields: expectAmbiguousComputeFields,
     ...(expectFemAirboxVectors ? { expect_fem_airbox_vectors: true } : {}),
     ...(expectTerminalTelemetry ? { expect_terminal_telemetry: true } : {}),
-    qa_scope: expectAmbiguousComputeFields ? "canvas-home-ambiguous-compute-fields" :
+    ...(expectRunPerformance ? { expect_run_performance: true } : {}),
+    qa_scope: expectRunPerformance ? "canvas-engine-run-performance" :
+      expectAmbiguousComputeFields ? "canvas-home-ambiguous-compute-fields" :
       expectFemAirboxVectors ? "canvas-home-fem-airbox-vectors" :
       expectAirboxVectors ? "canvas-home-live-field-airbox" :
       expectedLiveField ? "canvas-home-live-field" : canvasOnly ? "canvas-home-only" : "full-browser-qa",

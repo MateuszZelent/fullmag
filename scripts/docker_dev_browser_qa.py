@@ -84,6 +84,7 @@ LIVE_FIELD_OBSERVATION_NOTE = (
 )
 FEM_AIRBOX_VECTOR_OBSERVATION_SCHEMA = "fullmag.fem-airbox-vector-observation.v1"
 TERMINAL_TELEMETRY_RESULT_SCHEMA = "fullmag.docker-dev-terminal-telemetry.v1"
+RUN_PERFORMANCE_PROOF_SCHEMA = "fullmag.docker-dev-run-performance-browser-proof.v1"
 TERMINAL_TELEMETRY_ENERGY_FORMAT = "en-US:maxFractionDigits=6;scientific:toExponential(6)"
 MAX_SAFE_JSON_INTEGER = 9_007_199_254_740_991
 
@@ -352,6 +353,18 @@ def _terminal_telemetry_helper_sha256(selected: Path) -> str:
         raise BuildControlError("Selected checkout is missing the terminal telemetry browser helper") from error
     if len(payload) > 2 * 1024 * 1024:
         raise BuildControlError("Terminal telemetry browser helper exceeds its source pin bound")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _run_performance_harness_sha256(selected: Path) -> str:
+    harness = selected / "apps/control-room/scripts/docker-dev-browser-qa.mjs"
+    try:
+        with harness.open("rb") as source:
+            payload = source.read(2 * 1024 * 1024 + 1)
+    except OSError as error:
+        raise BuildControlError("Selected checkout is missing the run performance browser harness") from error
+    if len(payload) > 2 * 1024 * 1024:
+        raise BuildControlError("Run performance browser harness exceeds its source pin bound")
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -1045,6 +1058,7 @@ def _compose_document(
     source_script_sha256: str | None = None,
     expect_fem_airbox_vectors: bool | None = None,
     expect_terminal_telemetry: bool | None = None,
+    expect_run_performance: bool | None = None,
     control: BuildControl | None = None,
     private_group_storage: bool = False,
 ) -> dict[str, object]:
@@ -1080,6 +1094,7 @@ def _compose_document(
             or expect_airbox_vectors is not None
             or expect_fem_airbox_vectors is True
             or expect_terminal_telemetry is True
+            or expect_run_performance is True
             or expect_ambiguous_compute_fields is not None
             or airbox_inspector
         ):
@@ -1099,6 +1114,7 @@ def _compose_document(
         or expect_ambiguous_compute_fields is True
         or prepare_viewport_fixture
         or expect_terminal_telemetry is True
+        or expect_run_performance is True
     ):
         raise BuildControlError(
             "FEM Airbox-vector QA requires canvas-only m readiness and excludes other scenarios"
@@ -1116,6 +1132,20 @@ def _compose_document(
         raise BuildControlError(
             "Terminal telemetry QA requires canvas-only primary m observation and excludes mutation scenarios"
         )
+    if expect_run_performance is True and (
+        canvas_only is not True
+        or expect_live_field is not None
+        or expect_airbox_vectors is True
+        or expect_fem_airbox_vectors is True
+        or expect_ambiguous_compute_fields is True
+        or expect_terminal_telemetry is True
+        or prepare_viewport_fixture
+        or airbox_inspector
+        or saved_playback_item_id is not None
+    ):
+        raise BuildControlError(
+            "Run performance QA requires standalone canvas-only scope and excludes other browser scenarios"
+        )
     if airbox_inspector and (
         prepare_viewport_fixture
         or canvas_only is not None
@@ -1123,6 +1153,7 @@ def _compose_document(
         or expect_airbox_vectors is not None
         or expect_fem_airbox_vectors is not None
         or expect_terminal_telemetry is True
+        or expect_run_performance is True
         or expect_ambiguous_compute_fields is not None
         or saved_playback_item_id is not None
     ):
@@ -1166,6 +1197,8 @@ def _compose_document(
         environment["CONTROL_ROOM_BROWSER_QA_EXPECT_FEM_AIRBOX_VECTORS"] = "1"
     if expect_terminal_telemetry is True:
         environment["CONTROL_ROOM_BROWSER_QA_EXPECT_TERMINAL_TELEMETRY"] = "1"
+    if expect_run_performance is True:
+        environment["CONTROL_ROOM_BROWSER_QA_EXPECT_RUN_PERFORMANCE"] = "1"
     if expect_ambiguous_compute_fields is not None:
         environment["CONTROL_ROOM_BROWSER_QA_EXPECT_AMBIGUOUS_COMPUTE_FIELDS"] = (
             "1" if expect_ambiguous_compute_fields else "0"
@@ -1245,6 +1278,7 @@ def _validate_browser_helper(
     source_script_sha256: str | None = None,
     expect_fem_airbox_vectors: bool | None = None,
     expect_terminal_telemetry: bool | None = None,
+    expect_run_performance: bool | None = None,
     private_group_storage: bool = False,
 ) -> None:
     if type(private_group_storage) is not bool:
@@ -1351,6 +1385,17 @@ def _validate_browser_helper(
             raise ControlOutcomeUnknown("Browser helper terminal telemetry expectation is duplicated or malformed")
     elif terminal_telemetry_environment:
         raise ControlOutcomeUnknown("Browser helper reported an unrequested terminal telemetry scenario")
+    run_performance_environment = [
+        entry for entry in raw_environment
+        if entry.startswith("CONTROL_ROOM_BROWSER_QA_EXPECT_RUN_PERFORMANCE=")
+    ]
+    if expect_run_performance is True:
+        if canvas_only is not True or expect_live_field is not None:
+            raise ControlOutcomeUnknown("Run performance helper is outside standalone canvas-only scope")
+        if run_performance_environment != ["CONTROL_ROOM_BROWSER_QA_EXPECT_RUN_PERFORMANCE=1"]:
+            raise ControlOutcomeUnknown("Browser helper run performance expectation is duplicated or malformed")
+    elif run_performance_environment:
+        raise ControlOutcomeUnknown("Browser helper reported an unrequested run performance scenario")
     if canvas_only is not None:
         mode_environment = [
             entry for entry in environment
@@ -1947,6 +1992,162 @@ def _validate_canvas_screenshot(value: object) -> None:
         raise BuildControlError("Browser helper canvas screenshot state is unknown")
 
 
+def _validate_run_performance_browser_proof(
+    value: object,
+    session: object,
+    harness_sha256: str | None,
+) -> None:
+    if not isinstance(value, Mapping) or value.get("schema") != RUN_PERFORMANCE_PROOF_SCHEMA:
+        raise BuildControlError("Browser helper run performance proof is missing or malformed")
+    if value.get("state") != "passed" or value.get("engine_tab_clicked") is not True:
+        raise BuildControlError("Browser helper did not open Engine for run performance QA")
+    api = value.get("api")
+    if not isinstance(api, Mapping) or not isinstance(session, Mapping):
+        raise BuildControlError("Run performance proof omitted its API or active-session identity")
+    api_instance_id = api.get("api_instance_id")
+    if (not isinstance(api_instance_id, str)
+            or re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", api_instance_id) is None):
+        raise BuildControlError("Run performance API instance identity is malformed")
+    for key in ("session_id", "session_epoch", "request_scope_epoch"):
+        field = api.get(key)
+        if not isinstance(field, str) or not field or len(field) > 512 or field != session.get(key):
+            raise BuildControlError(f"Run performance API session identity differs at {key}")
+    identity_fields = ("run_id", "task_id", "step_id", "attempt_id")
+    for key in identity_fields:
+        field = api.get(key)
+        if not isinstance(field, str) or not field.strip() or len(field) > 512:
+            raise BuildControlError(f"Run performance API identity field is malformed: {key}")
+    if api.get("status_run_id") != api.get("run_id"):
+        raise BuildControlError("Run performance resource differs from the current session run")
+    if api.get("state") == "unavailable":
+        raise BuildControlError("Run performance proof has no verified attempt")
+    revision = api.get("revision")
+    if not isinstance(revision, str) or not revision or len(revision) > 512:
+        raise BuildControlError("Run performance resource revision is malformed")
+    integer_fields = (
+        "ownership_epoch", "first_step_index", "step_index", "elapsed_monotonic_ns", "point_count",
+    )
+    integers: dict[str, int] = {}
+    for key in integer_fields:
+        number = api.get(key)
+        if type(number) is not int or not 0 <= number <= MAX_SAFE_JSON_INTEGER:
+            raise BuildControlError(f"Run performance {key} is not a safe non-negative integer")
+        integers[key] = number
+    if (integers["elapsed_monotonic_ns"] <= 0
+            or integers["step_index"] < integers["first_step_index"]
+            or not 1 <= integers["point_count"] <= 120):
+        raise BuildControlError("Run performance step span, elapsed time, or bounded sample count is invalid")
+    measured: dict[str, int | float | None] = {}
+    for key in ("cpu_percent", "gpu_percent"):
+        number = api.get(key)
+        if number is not None and (type(number) not in (int, float) or not math.isfinite(number) or number < 0):
+            raise BuildControlError(f"Run performance {key} is not a finite non-negative measurement")
+        measured[key] = number
+    if measured["cpu_percent"] is None and measured["gpu_percent"] is None:
+        raise BuildControlError("Run performance has neither a measured CPU nor GPU value")
+    calculated_rate = (
+        integers["step_index"] - integers["first_step_index"]
+    ) / (integers["elapsed_monotonic_ns"] / 1_000_000_000)
+    reported_rate = api.get("stage_rate_steps_per_s")
+    if (type(reported_rate) not in (int, float) or not math.isfinite(reported_rate)
+            or not math.isclose(reported_rate, calculated_rate, rel_tol=1e-12, abs_tol=1e-12)):
+        raise BuildControlError("Run performance stage rate does not match the verified step span and elapsed time")
+
+    expected_scope = "session=" + quote(api["session_id"], safe="-_.!~*'()")
+    expected_scope += "&epoch=" + quote(api["session_epoch"], safe="-_.!~*'()")
+    expected_scope += "&request_scope_epoch=" + quote(api["request_scope_epoch"], safe="-_.!~*'()")
+    requests = value.get("api_requests")
+    expected_paths = [
+        "/v2/sessions/current/status",
+        "/v2/sessions/current/diagnostics/performance",
+    ]
+    if not isinstance(requests, list) or len(requests) != len(expected_paths):
+        raise BuildControlError("Run performance proof must include exactly the scoped status and performance GETs")
+    for index, (request, path) in enumerate(zip(requests, expected_paths)):
+        if (not isinstance(request, Mapping)
+                or request.get("method") != "GET"
+                or request.get("path") != path
+                or type(request.get("status")) is not int
+                or request["status"] != 200
+                or request.get("api_instance_id") != api_instance_id
+                or request.get("session_scope_header_sent") != expected_scope
+                or request.get("api_instance_header_sent") != (api_instance_id if index == 1 else None)):
+            raise BuildControlError(f"Run performance API request is not correctly scoped: {path}")
+
+    def parse_displayed_number(text: object, suffix: str, label: str) -> float | None:
+        if text == "N/A":
+            return None
+        if not isinstance(text, str) or not text.endswith(suffix):
+            raise BuildControlError(f"Run performance panel {label} display is malformed")
+        number_text = text[:-len(suffix)].strip().replace(",", "")
+        try:
+            number = float(number_text)
+        except ValueError as error:
+            raise BuildControlError(f"Run performance panel {label} is not numeric") from error
+        if not math.isfinite(number):
+            raise BuildControlError(f"Run performance panel {label} is not finite")
+        return number
+
+    def require_display_matches(text: object, raw: int | float | None, suffix: str, label: str) -> None:
+        displayed = parse_displayed_number(text, suffix, label)
+        if raw is None:
+            if displayed is not None:
+                raise BuildControlError(f"Run performance panel {label} must show N/A for an unavailable value")
+        elif displayed is None or not math.isclose(displayed, float(raw), rel_tol=1e-12, abs_tol=0.0051):
+            raise BuildControlError(f"Run performance panel {label} differs from its scoped API value")
+
+    panel = value.get("panel")
+    if not isinstance(panel, Mapping) or panel.get("visible") is not True:
+        raise BuildControlError("Automatic performance panel is not visibly rendered")
+    expected_identity = " · ".join((
+        f"Run {api['run_id']}", f"Task {api['task_id']}", f"Step {api['step_id']}",
+        f"Attempt {api['attempt_id']}", f"Epoch {integers['ownership_epoch']}",
+    ))
+    if panel.get("identity") != expected_identity:
+        raise BuildControlError("Automatic performance panel identity differs from the scoped API attempt")
+    elapsed_ns = integers["elapsed_monotonic_ns"]
+    if elapsed_ns >= 1_000_000_000:
+        elapsed_unit, elapsed_expected = " s", elapsed_ns / 1_000_000_000
+    elif elapsed_ns >= 1_000_000:
+        elapsed_unit, elapsed_expected = " ms", elapsed_ns / 1_000_000
+    else:
+        elapsed_unit, elapsed_expected = " ns", float(math.floor(elapsed_ns + 0.5))
+    elapsed_display = parse_displayed_number(panel.get("elapsed"), elapsed_unit, "elapsed")
+    elapsed_tolerance = 0.51 if elapsed_unit == " ns" else 0.0051
+    if elapsed_display is None or not math.isclose(elapsed_display, elapsed_expected, rel_tol=1e-12, abs_tol=elapsed_tolerance):
+        raise BuildControlError("Automatic performance panel elapsed value differs from the API resource")
+    require_display_matches(panel.get("stage_rate"), calculated_rate, " steps/s", "stage rate")
+    require_display_matches(panel.get("cpu"), measured["cpu_percent"], "%", "CPU")
+    require_display_matches(panel.get("gpu"), measured["gpu_percent"], "%", "GPU")
+    expected_metric_label = "CPU per core" if measured["cpu_percent"] is not None else "GPU whole device"
+    expected_metric = measured["cpu_percent"] if measured["cpu_percent"] is not None else measured["gpu_percent"]
+    if (panel.get("metric_label") != expected_metric_label
+            or panel.get("metric_value") != panel.get("cpu" if expected_metric_label.startswith("CPU") else "gpu")):
+        raise BuildControlError("Automatic performance chart metric differs from its measured API series")
+    gpu_scope_note = panel.get("gpu_scope_note")
+    if (not isinstance(gpu_scope_note, str)
+            or "whole_device" not in gpu_scope_note
+            or "not kernel occupancy" not in gpu_scope_note.lower()):
+        raise BuildControlError("Automatic performance panel omitted its whole-device GPU scope")
+    chart = value.get("chart")
+    if (not isinstance(chart, Mapping)
+            or chart.get("visible") is not True
+            or type(chart.get("canvas_count")) is not int
+            or not 1 <= chart["canvas_count"] <= 8
+            or type(chart.get("canvas_width")) is not int or chart["canvas_width"] <= 0
+            or type(chart.get("canvas_height")) is not int or chart["canvas_height"] <= 0
+            or type(chart.get("css_width")) not in (int, float) or chart["css_width"] <= 0
+            or type(chart.get("css_height")) not in (int, float) or chart["css_height"] <= 0):
+        raise BuildControlError("Automatic performance chart has no nonzero rendered canvas")
+    _validate_canvas_screenshot(value.get("screenshot"))
+    if (value.get("no_non_read_only_requests") is not True
+            or type(value.get("blocked_mutation_count")) is not int
+            or value["blocked_mutation_count"] != 0):
+        raise BuildControlError("Run performance browser proof did not preserve the read-only boundary")
+    if (not isinstance(harness_sha256, str) or not SHA256_RE.fullmatch(harness_sha256)):
+        raise BuildControlError("Run performance selected-source harness hash is missing")
+
+
 def _validate_ambiguous_command_submission(value: object, session: object) -> None:
     if not isinstance(value, Mapping) or value.get("state") != "passed":
         raise BuildControlError("Browser helper omitted accepted Compute Fields response-loss evidence")
@@ -2509,6 +2710,8 @@ def _parse_result(
     expect_fem_airbox_vectors: bool = False,
     expect_terminal_telemetry: bool = False,
     terminal_telemetry_helper_sha256: str | None = None,
+    expect_run_performance: bool = False,
+    run_performance_harness_sha256: str | None = None,
 ) -> dict[str, object]:
     text = output.decode("utf-8", "replace")
     payload = None
@@ -2538,6 +2741,10 @@ def _parse_result(
         raise BuildControlError("Browser helper did not report the pinned SwiftShader browser mode")
     if type(payload.get("canvas_only")) is not bool or payload["canvas_only"] is not canvas_only:
         raise BuildControlError("Browser helper canvas-only mode differs from the admitted operation")
+    run_performance_expectation = payload.get("expect_run_performance", False)
+    if (type(run_performance_expectation) is not bool
+            or run_performance_expectation is not expect_run_performance):
+        raise BuildControlError("Browser helper run performance expectation differs from the admitted operation")
     if (payload.get("expect_live_field") != expect_live_field
             or type(payload.get("expect_airbox_vectors")) is not bool
             or payload["expect_airbox_vectors"] is not expect_airbox_vectors):
@@ -2565,9 +2772,15 @@ def _parse_result(
         or expect_fem_airbox_vectors or expect_ambiguous_compute_fields
     ):
         raise BuildControlError("Terminal telemetry result is outside its canvas-only primary-m scenario")
+    if expect_run_performance and (
+        not canvas_only or expect_live_field is not None or expect_airbox_vectors
+        or expect_fem_airbox_vectors or expect_ambiguous_compute_fields or expect_terminal_telemetry
+    ):
+        raise BuildControlError("Run performance result is outside standalone canvas-only QA scope")
     if expect_ambiguous_compute_fields and not canvas_only:
         raise BuildControlError("Ambiguous Compute Fields result is outside canvas-only QA scope")
     expected_scope = (
+        "canvas-engine-run-performance" if expect_run_performance else
         "canvas-home-ambiguous-compute-fields" if expect_ambiguous_compute_fields else
         "canvas-home-fem-airbox-vectors" if expect_fem_airbox_vectors else
         "canvas-home-live-field-airbox" if expect_airbox_vectors else
@@ -2623,6 +2836,21 @@ def _parse_result(
     elif ("expect_terminal_telemetry" in payload or "terminal_telemetry" in payload
             or terminal_telemetry_helper_sha256 is not None):
         raise BuildControlError("Browser helper reported an unrequested terminal telemetry proof")
+    if expect_run_performance:
+        harness_hashes = payload.get("harness_source_sha256")
+        if (not isinstance(run_performance_harness_sha256, str)
+                or not SHA256_RE.fullmatch(run_performance_harness_sha256)
+                or not isinstance(harness_hashes, Mapping)
+                or harness_hashes.get("algorithm") != "sha256"
+                or harness_hashes.get("unchanged") is not True
+                or harness_hashes.get("runner_before") != run_performance_harness_sha256
+                or harness_hashes.get("runner_after") != run_performance_harness_sha256):
+            raise BuildControlError("Run performance browser harness source pin differs or changed during QA")
+        _validate_run_performance_browser_proof(
+            payload.get("run_performance"), payload.get("session"), run_performance_harness_sha256,
+        )
+    elif ("run_performance" in payload or run_performance_harness_sha256 is not None):
+        raise BuildControlError("Browser helper reported an unrequested run performance proof")
     ambiguous_submission = payload.get("ambiguous_command_submission")
     if expect_ambiguous_compute_fields:
         _validate_ambiguous_command_submission(ambiguous_submission, payload.get("session"))
@@ -2706,6 +2934,8 @@ def _run(
     expect_fem_airbox_vectors: bool = False,
     expect_terminal_telemetry: bool = False,
     terminal_telemetry_helper_sha256: str | None = None,
+    expect_run_performance: bool = False,
+    run_performance_harness_sha256: str | None = None,
     private_group_storage: bool = False,
 ) -> None:
     root = operation["root"]
@@ -2759,6 +2989,7 @@ def _run(
         expect_airbox_vectors=expect_airbox_vectors if expect_live_field is not None else None,
         expect_fem_airbox_vectors=(True if expect_fem_airbox_vectors else None),
         expect_terminal_telemetry=(True if expect_terminal_telemetry else None),
+        expect_run_performance=(True if expect_run_performance else None),
         expect_ambiguous_compute_fields=(
             expect_ambiguous_compute_fields
             if not airbox_inspector and saved_playback_item_id is None
@@ -2799,7 +3030,9 @@ def _run(
                 expect_ambiguous_compute_fields=expect_ambiguous_compute_fields,
                 expect_fem_airbox_vectors=expect_fem_airbox_vectors,
                 expect_terminal_telemetry=expect_terminal_telemetry,
-                terminal_telemetry_helper_sha256=terminal_telemetry_helper_sha256)
+                terminal_telemetry_helper_sha256=terminal_telemetry_helper_sha256,
+                expect_run_performance=expect_run_performance,
+                run_performance_harness_sha256=run_performance_harness_sha256)
     except BuildControlError as error:
         control.write(root + "/result.json", {
             "schema": RESULT_SCHEMA,
@@ -2876,6 +3109,9 @@ def reconcile_browser_qa(control, selected, identity, args):
     expect_terminal_telemetry_input = inputs.get("expect_terminal_telemetry", False)
     if type(expect_terminal_telemetry_input) is not bool:
         raise BuildControlError("QA reconciliation terminal telemetry expectation must be boolean")
+    expect_run_performance_input = inputs.get("expect_run_performance", False)
+    if type(expect_run_performance_input) is not bool:
+        raise BuildControlError("QA reconciliation run performance expectation must be boolean")
     terminal_telemetry_helper_sha256 = None
     if expect_terminal_telemetry_input:
         terminal_telemetry_helper_sha256 = inputs.get("terminal_telemetry_helper_sha256")
@@ -2885,6 +3121,15 @@ def reconcile_browser_qa(control, selected, identity, args):
             raise BuildControlError("QA reconciliation terminal telemetry helper source pin differs")
     elif "terminal_telemetry_helper_sha256" in inputs:
         raise BuildControlError("QA reconciliation unrequested terminal telemetry helper source pin")
+    run_performance_harness_sha256 = None
+    if expect_run_performance_input:
+        run_performance_harness_sha256 = inputs.get("run_performance_harness_sha256")
+        if (not isinstance(run_performance_harness_sha256, str)
+                or not SHA256_RE.fullmatch(run_performance_harness_sha256)
+                or _run_performance_harness_sha256(selected) != run_performance_harness_sha256):
+            raise BuildControlError("QA reconciliation run performance harness source pin differs")
+    elif "run_performance_harness_sha256" in inputs:
+        raise BuildControlError("QA reconciliation unrequested run performance harness source pin")
     if expect_fem_airbox_vectors_input and scenario != "standard":
         raise BuildControlError("QA reconciliation FEM Airbox-vector expectation has another scenario identity")
     saved_playback_item_id = None
@@ -2981,6 +3226,17 @@ def reconcile_browser_qa(control, selected, identity, args):
         or expect_ambiguous_command_input
     ):
         raise BuildControlError("QA reconciliation terminal telemetry scenario does not match the primary-m canvas contract")
+    if expect_run_performance_input and (
+        scenario != "standard"
+        or not canvas_only_input
+        or prepare_viewport_fixture
+        or expect_live_field_input is not None
+        or expect_airbox_vectors_input
+        or expect_fem_airbox_vectors_input
+        or expect_ambiguous_command_input
+        or expect_terminal_telemetry_input
+    ):
+        raise BuildControlError("QA reconciliation run performance scenario is outside standalone canvas-only scope")
     if canvas_only_input and prepare_viewport_fixture:
         raise BuildControlError("Canvas-only browser QA receipt cannot prepare a viewport fixture")
     expected_document = _compose_document(selected, identity, inputs["browser_image"],
@@ -2993,6 +3249,7 @@ def reconcile_browser_qa(control, selected, identity, args):
             None if scenario != "standard" else expect_fem_airbox_compose_pin
         ),
         expect_terminal_telemetry=(True if expect_terminal_telemetry_input else None),
+        expect_run_performance=(True if expect_run_performance_input else None),
         expect_ambiguous_compute_fields=(
             None if scenario == "saved-playback" or airbox_inspector
             else expect_ambiguous_command_compose_pin
@@ -3057,6 +3314,7 @@ def reconcile_browser_qa(control, selected, identity, args):
             None if scenario != "standard" else expect_fem_airbox_compose_pin
         ),
         expect_terminal_telemetry=(True if expect_terminal_telemetry_input else None),
+        expect_run_performance=(True if expect_run_performance_input else None),
         expect_ambiguous_compute_fields=(
             None if scenario == "saved-playback" or airbox_inspector
             else expect_ambiguous_command_compose_pin
@@ -3163,6 +3421,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Prove visible terminal Step and total energy against scoped API provenance before and after page reload (canvas-only, --expect-live-field m)",
     )
     parser.add_argument(
+        "--expect-run-performance",
+        action="store_true",
+        help="Prove the visible Automatic performance panel against scoped current-run diagnostics (canvas-only)",
+    )
+    parser.add_argument(
         "--expect-ambiguous-compute-fields",
         action="store_true",
         help="Exercise one real Compute Fields command with its accepted response dropped (canvas-only)",
@@ -3228,6 +3491,20 @@ def main(argv: list[str] | None = None) -> int:
         raise BuildControlError(
             "--expect-terminal-telemetry requires --canvas-only --expect-live-field m and excludes other scenarios"
         )
+    if args.expect_run_performance and (
+        not args.canvas_only
+        or args.prepare_viewport_fixture
+        or args.expect_live_field is not None
+        or args.expect_airbox_vectors
+        or args.expect_fem_airbox_vectors
+        or args.expect_terminal_telemetry
+        or args.expect_ambiguous_compute_fields
+        or args.airbox_inspector
+        or args.saved_playback_item_id is not None
+    ):
+        raise BuildControlError(
+            "--expect-run-performance requires standalone --canvas-only scope and excludes other scenarios"
+        )
     if args.airbox_inspector and (
         args.prepare_viewport_fixture
         or args.canvas_only
@@ -3290,6 +3567,9 @@ def main(argv: list[str] | None = None) -> int:
     terminal_telemetry_helper_sha256 = (
         _terminal_telemetry_helper_sha256(selected) if args.expect_terminal_telemetry else None
     )
+    run_performance_harness_sha256 = (
+        _run_performance_harness_sha256(selected) if args.expect_run_performance else None
+    )
     document = _compose_document(
         selected,
         identity,
@@ -3303,6 +3583,7 @@ def main(argv: list[str] | None = None) -> int:
         expect_airbox_vectors=(args.expect_airbox_vectors if args.expect_live_field is not None else None),
         expect_fem_airbox_vectors=(True if args.expect_fem_airbox_vectors else None),
         expect_terminal_telemetry=(True if args.expect_terminal_telemetry else None),
+        expect_run_performance=(True if args.expect_run_performance else None),
         expect_ambiguous_compute_fields=(
             None if args.airbox_inspector or args.saved_playback_item_id is not None
             else args.expect_ambiguous_compute_fields
@@ -3341,6 +3622,7 @@ def main(argv: list[str] | None = None) -> int:
         "expect_live_field": args.expect_live_field,
         "expect_airbox_vectors": args.expect_airbox_vectors,
         "expect_terminal_telemetry": args.expect_terminal_telemetry,
+        "expect_run_performance": args.expect_run_performance,
         "expect_ambiguous_compute_fields": args.expect_ambiguous_compute_fields,
         "scenario": (
             "saved-playback" if args.saved_playback_item_id is not None
@@ -3358,6 +3640,8 @@ def main(argv: list[str] | None = None) -> int:
         inputs["source_script_sha256"] = source_script_sha256
     if args.expect_terminal_telemetry:
         inputs["terminal_telemetry_helper_sha256"] = terminal_telemetry_helper_sha256
+    if args.expect_run_performance:
+        inputs["run_performance_harness_sha256"] = run_performance_harness_sha256
     with control.operation("browser-qa", inputs) as operation:
         live_fence = control.read("development/current.json")
         if hashlib.sha256(canonical(live_fence)).hexdigest() != current["development_fence_sha256"]:
@@ -3387,6 +3671,8 @@ def main(argv: list[str] | None = None) -> int:
             args.expect_fem_airbox_vectors,
             args.expect_terminal_telemetry,
             terminal_telemetry_helper_sha256,
+            args.expect_run_performance,
+            run_performance_harness_sha256,
             private_group_storage,
         )
     return 0
