@@ -512,7 +512,7 @@ describe("FooterTelemetry", () => {
     expect(byId.time?.detail).toContain("does not integrate physical time");
     expect(byId.dt?.value).toBe("—");
     expect(byId.dt?.unit).toBeUndefined();
-    expect(byId.dt?.subdetail).toContain("not applicable");
+    expect(byId.dt?.subdetail).toBe("Not applicable: no physical timestep is used");
     expect(byId.step?.subdetail).toBe("Physical time not applicable");
   });
 
@@ -566,10 +566,14 @@ describe("FooterTelemetry", () => {
     expect(byId.dt?.unit).toBe("s");
   });
 
-  it("does not infer a solver from a mismatched runtime stage or absent provenance", () => {
+  it.each([
+    { solverTime: 0, expectedTime: "0.000000e+0" },
+    { solverTime: 3601, expectedTime: "3,601" },
+  ])("preserves current-run time $solverTime without inferring a solver from foreign provenance", ({ solverTime, expectedTime }) => {
     const telemetryStatus = selectFooterTelemetryStatus({
       data: {
         ...status,
+        run: { ...status.run!, solver_time: solverTime },
         solver: {
           ...status.solver,
           algorithm: null,
@@ -602,21 +606,45 @@ describe("FooterTelemetry", () => {
         current_settle_step_method: "projected_gradient_bb",
       }],
     };
-    const model = buildFooterTelemetryModel(
-      telemetryStatus,
-      null,
-      null,
-      null,
-      mismatchedExecution,
-    );
-    const byId = Object.fromEntries(model.metrics.map((metric) => [metric.id, metric]));
+    const foreignSolverStatus = solverStatusFixture({
+      algorithm: "projected_gradient_bb",
+      can_accept_commands: false,
+      converged: false,
+      dt_seconds: 9e-6,
+      integrator: "rk23",
+      is_busy: true,
+      last_error: null,
+      max_torque_T: 0,
+      pseudo_time_seconds: 7e-6,
+      relaxation_algorithm: "projected_gradient_bb",
+      revision: 9,
+      run_id: "previous-run",
+      runtime_state: "running",
+      runtime_status_code: "running",
+      runtime_status_kind: "running",
+      session_status: "running",
+      sim_time_seconds: 8e-6,
+      stage_kind: "relax",
+      step_index: 99,
+      warnings: [],
+    });
+    for (const solverStatus of [null, foreignSolverStatus]) {
+      const model = buildFooterTelemetryModel(
+        telemetryStatus,
+        null,
+        solverStatus,
+        null,
+        mismatchedExecution,
+      );
+      const byId = Object.fromEntries(model.metrics.map((metric) => [metric.id, metric]));
 
-    expect(byId["active-solver"]?.value).toBe("Unknown");
-    expect(byId["active-solver"]?.detail).toContain("Runtime solver provenance unavailable");
-    expect(byId.time?.value).toBe("0.000000e+0");
-    expect(byId.time?.unit).toBe("s");
-    expect(byId.dt?.value).toBe("1.000000e-12");
-    expect(byId.dt?.unit).toBe("s");
+      expect(byId["active-solver"]?.value).toBe("Unknown");
+      expect(byId["active-solver"]?.detail).toContain("Runtime solver provenance unavailable");
+      expect(byId.time?.value).toBe(expectedTime);
+      expect(byId.time?.unit).toBe("s");
+      expect(byId.dt?.value).toBe("1.000000e-12");
+      expect(byId.dt?.unit).toBe("s");
+    }
   });
 
   it("prioritizes the matching active runtime stage method for the solver indicator", () => {

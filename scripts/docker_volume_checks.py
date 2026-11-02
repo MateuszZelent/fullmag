@@ -360,12 +360,32 @@ PERFORMANCE_SOURCE_COMMANDS = (
     ('api-hygiene', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'check:api-hygiene')),
 )
 
+PERFORMANCE_TEST_FILES = (
+    *PERFORMANCE_FILES,
+    'src/modules/footer/FooterTelemetry.tsx',
+    'src/modules/footer/FooterTelemetry.test.ts',
+    'src/kernel/realtime/RealtimeInvalidationBridge.ts',
+    'src/kernel/realtime/RealtimeInvalidationBridge.test.ts',
+)
+PERFORMANCE_COMMANDS = (
+    *FRONTEND_COMMANDS[:2],
+    ('vitest', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'vitest', 'run',
+                'src/modules/footer/automaticPerformanceModel.test.ts',
+                'src/modules/footer/FooterTelemetry.test.ts',
+                'src/kernel/resources/studyRuntimeResources.test.ts',
+                'src/kernel/realtime/RealtimeInvalidationBridge.test.ts',
+                '--pool=threads', '--maxWorkers=1')),
+    ('eslint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'eslint',
+                *PERFORMANCE_TEST_FILES, '--max-warnings=0')),
+    *PERFORMANCE_SOURCE_COMMANDS[-2:],
+)
+
 
 def frontend_import_checks(control, selected, identity, *, scope='frontend-import'):
     import hashlib
     import time
     import docker_dev_codegen as codegen
-    if scope not in ('frontend-import', 'frontend-antenna', 'frontend-visualization', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source'):
+    if scope not in ('frontend-import', 'frontend-antenna', 'frontend-visualization', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'):
         raise BuildControlError('Unknown frontend verification scope')
     source_files, commands = {
         'frontend-import': (IMPORT_FILES, FRONTEND_COMMANDS),
@@ -374,6 +394,7 @@ def frontend_import_checks(control, selected, identity, *, scope='frontend-impor
         'frontend-telemetry': (TELEMETRY_FILES, TELEMETRY_COMMANDS),
         'frontend-telemetry-source': (TELEMETRY_FILES, TELEMETRY_SOURCE_COMMANDS),
         'frontend-performance-source': (PERFORMANCE_FILES, PERFORMANCE_SOURCE_COMMANDS),
+        'frontend-performance': (PERFORMANCE_TEST_FILES, PERFORMANCE_COMMANDS),
         'frontend-telemetry-focused': (TELEMETRY_FILES, (*TELEMETRY_COMMANDS[:3],
             ('eslint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'eslint',
                         *TELEMETRY_FILES, '--max-warnings=0')))),
@@ -476,7 +497,7 @@ def main():
     parser.add_argument('--offline', action='store_true', help='Run interpreted checks in a private group helper when backend is stopped')
     parser.add_argument('--initial-attempt', help='Pinned pre-service development attempt for offline checks')
     parser.add_argument('--modules', nargs='+', help='Explicit unittest modules (offline mode only)')
-    parser.add_argument('--scope', choices=('all', 'source-capture', 'frontend-import', 'frontend-antenna', 'frontend-visualization', 'frontend-tools', 'field-only', 'network-failure', 'empty-authoring', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source'), default='all')
+    parser.add_argument('--scope', choices=('all', 'source-capture', 'frontend-import', 'frontend-antenna', 'frontend-visualization', 'frontend-tools', 'field-only', 'network-failure', 'empty-authoring', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'), default='all')
     args = parser.parse_args()
     if args.initial_attempt is not None and not args.offline:
         raise BuildControlError('--initial-attempt requires --offline')
@@ -498,7 +519,7 @@ def main():
     helper = configured["services"]["fem-gpu-toolchain"]["build"]["args"]["FULLMAG_CUDA_BASE_IMAGE"]
     control = BuildControl(identity, helper)
     control.prepare()
-    if args.scope in ('frontend-import', 'frontend-antenna', 'frontend-visualization', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source'):
+    if args.scope in ('frontend-import', 'frontend-antenna', 'frontend-visualization', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'):
         return frontend_import_checks(control, selected, identity, scope=args.scope)
     if args.initial_attempt is not None:
         return _offline_checks(control, selected, None, args.modules, initial_attempt=args.initial_attempt)
