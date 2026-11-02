@@ -172,3 +172,47 @@ describe("FooterTelemetry scene refresh stability", () => {
     }
   });
 });
+
+describe("FooterTelemetry authored antenna stage", () => {
+  it("shows the canonical queued definition before a run and preserves it during refresh", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const status = { ...telemetryStatus(), run: null };
+    const scene = {
+      revision: 1,
+      antenna_field_solve_stages: [{ id: "inspect_gsg", source_object_id: "antenna", current_transport_id: "gsg_charge" }],
+      study: {
+        stages: [{ kind: "antenna_field_solve", stage_id: "dormant" }],
+        study_pipeline: { version: "study_pipeline.v1", nodes: [{
+          id: "queue-1", label: "GSG inspection", node_kind: "primitive",
+          stage_kind: "antenna_field_solve", enabled: true,
+          payload: { kind: "antenna_field_solve", stage_id: "inspect_gsg" },
+        }] },
+      },
+    } as SceneResource;
+    hooks.scene = { data: scene, status: "ready" };
+    const root = createRoot(container as unknown as Element);
+    const render = () => act(async () => root.render(
+      <FooterTelemetry bus={new EventBus<KernelEventMap>()} status={status}
+        stageExecution={{ data: null, status: "ready" }} view="antenna" />,
+    ));
+    try {
+      await render();
+      expect(container.textContent).toContain("Antenna stage configured — not started");
+      expect(container.textContent).toContain("inspect_gsg");
+      expect(container.textContent).toContain("antenna");
+      expect(container.textContent).toContain("gsg_charge");
+      expect(container.textContent).not.toContain("dormant");
+      expect(container.querySelector('[role="progressbar"]')).toBeNull();
+      const panel = container.querySelector('[aria-label="Antenna telemetry"]');
+      hooks.scene = { data: scene, status: "stale" };
+      await render();
+      expect(container.querySelector('[aria-label="Antenna telemetry"]')).toBe(panel);
+      expect(container.textContent).toContain("not started");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+});

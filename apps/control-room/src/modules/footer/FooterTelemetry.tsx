@@ -47,6 +47,7 @@ import { Progress } from "@/shared/ui/Progress";
 import { formatTorqueT } from "@/shared/domain/physics/torqueUnits";
 import { hasEmptyObjectMagneticModel } from "@/shared/domain/physics/objectMagneticModel";
 
+import { AuthoredAntennaTelemetry } from "./AuthoredAntennaTelemetry";
 import {
   formatAntennaFieldEta,
   useAntennaFieldEta,
@@ -174,10 +175,11 @@ export function FooterTelemetry({
 
   if (view === "antenna" && !antennaStage) {
     return (
-      <div className="fm-footer-telemetry__empty" role="region" aria-label="Antenna telemetry">
-        <strong>No antenna stage in the current execution</strong>
-        <span>Antenna progress requires an explicitly authored stage matching the current session and run.</span>
-      </div>
+      <AuthoredAntennaTelemetry
+        scene={scene.data}
+        sceneStatus={scene.status}
+        hasRun={status ? Boolean(status.run?.run_id) : null}
+      />
     );
   }
   if (view === "overview" && antennaStage) {
