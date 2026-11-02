@@ -240,7 +240,11 @@ fn initialize_array(path: &Path, sample_count: usize, width: usize) -> Result<()
 pub(crate) fn write_json_atomic(path: &Path, value: &impl serde::Serialize) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
     // Each concurrent publication must own its temporary file.
-    let temporary = path.with_extension(format!("tmp.{}.{}", std::process::id(), uuid::Uuid::new_v4()));
+    let temporary = path.with_extension(format!(
+        "tmp.{}.{}",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
     let file = fs::File::create(&temporary).map_err(|error| error.to_string())?;
     let mut writer = BufWriter::new(file);
     writer
@@ -353,6 +357,67 @@ mod tests {
 
     fn temp_root() -> PathBuf {
         std::env::temp_dir().join(format!("fullmag-autosave-zarr-{}", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn interleaved_field_references_resolve_real_quantity_local_chunks() {
+        let root = temp_root();
+        let mut writer = ZarrAutosaveWriter::new(&root);
+        let mut state = AutosaveTargetState::new("main");
+        state
+            .begin_stage(
+                &mut writer,
+                "relax",
+                AutosaveLayoutIR::Continuous,
+                AutosaveFormatIR::Zarr,
+                vec![],
+                vec!["m".into(), "H_eff".into()],
+            )
+            .unwrap();
+        let samples = [
+            (0, "m", 10.0),
+            (0, "H_eff", 20.0),
+            (1, "m", 11.0),
+            (2, "m", 12.0),
+            (2, "H_eff", 22.0),
+        ];
+        for (step, quantity, value) in samples {
+            state
+                .append_field_sample(
+                    &mut writer,
+                    StageSampleCoordinate::AcceptedStep {
+                        accepted_step: step,
+                    },
+                    quantity,
+                    &[value],
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            state.finish_stage(&mut writer).unwrap().field_sample_count,
+            5
+        );
+        let store = root.join("main.zarr");
+        let index = read_logical_index(&store).unwrap();
+        for (entry, (_, _, value)) in index.iter().zip(samples) {
+            let bytes = fs::read(store.join(format!("{}.0", entry.payload_ref))).unwrap();
+            assert_eq!(bytes, value.to_le_bytes());
+        }
+        assert_eq!(
+            index
+                .iter()
+                .map(|e| e.stage_sample_index)
+                .collect::<Vec<_>>(),
+            [0, 1, 2, 3, 4]
+        );
+        assert_eq!(
+            index
+                .iter()
+                .map(|e| e.target_sample_index)
+                .collect::<Vec<_>>(),
+            [0, 1, 2, 3, 4]
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

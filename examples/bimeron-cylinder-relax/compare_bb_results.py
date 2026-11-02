@@ -375,7 +375,9 @@ def run_probe(input_path: Path, device: str) -> dict[str, Any]:
             suffix = re.search(r"/(\d+)$", payload)
             referenced_row = int(suffix.group(1)) if suffix else None
             stage_row = row.get("stage_sample_index")
-            if referenced_row != local_row or stage_row != local_row:
+            # stage_sample_index is the preserved stage-wide field ordinal;
+            # payload_ref must resolve the independent per-quantity array row.
+            if referenced_row != local_row:
                 mismatches.append({
                     "accepted_step": actual[local_row],
                     "local_zarr_row": local_row,
@@ -384,12 +386,10 @@ def run_probe(input_path: Path, device: str) -> dict[str, Any]:
                     "payload_ref_row": referenced_row,
                 })
         index_mapping[q] = mismatches
-        if mismatches:
-            check(checks, f"index.{q}_stage_index_vs_local_rows", None, {
-                "status": "index references use stage-wide indices while the quantity array rows are local",
-                "mismatches": mismatches,
-                "reader_policy": "read local row order 0..5 and join rows by accepted_step; do not rewrite source index",
-            })
+        check(checks, f"index.{q}_payload_rows", not mismatches, {
+            "status": "payload references resolve per-quantity rows; stage_sample_index remains stage-wide",
+            "mismatches": mismatches,
+        })
 
     table = zarr_rows(stage / "table")
     columns = table_quantities(stage)
@@ -581,6 +581,7 @@ def run_probe(input_path: Path, device: str) -> dict[str, Any]:
                 "fft_backend", "demag_operator_kind", "resolved_energy_minimizer",
                 "energy_minimizer_realization", "resolved_demag_realization",
                 "lossy_fallback_used", "fdm_fft_execution", "fdm_multilayer_stage_telemetry",
+                "fdm_multilayer_transfer_telemetry",
             ) if provenance.get(k) is not None
         },
         "common_cells": sig["common_cells"],
@@ -698,6 +699,8 @@ def main() -> int:
     parser.add_argument("--cpu", type=Path, help="optional CPU probe output for parity")
     parser.add_argument("--gpu", required=True, type=Path, help="GPU probe output")
     parser.add_argument("--report", required=True, type=Path)
+    parser.add_argument("--require-resident", action="store_true",
+                        help="require resident GPU BB provenance and exact scalar-only trial receipts")
     args = parser.parse_args()
 
     report: dict[str, Any] = {
@@ -731,6 +734,27 @@ def main() -> int:
             report["failures"].append(f"{label}:load:{exc}")
 
     global_checks: list[dict[str, Any]] = []
+    if args.require_resident and "gpu" in loaded:
+        provenance = loaded["gpu"]["summary"]["execution_provenance"]
+        telemetry = provenance.get("fdm_multilayer_transfer_telemetry", {})
+        check(global_checks, "gpu.resident_bb_vectors",
+              telemetry.get("data_residency") == "device_resident_bb_vectors_with_observed_host_snapshots",
+              telemetry)
+        check(global_checks, "gpu.no_trial_vector_h2d",
+              telemetry.get("h2d_bytes") == telemetry.get("setup_h2d_bytes")
+              and telemetry.get("h2d_transfer_count") == telemetry.get("setup_h2d_transfer_count")
+              and telemetry.get("setup_h2d_bytes", 0) > 0, telemetry)
+        check(global_checks, "gpu.no_warm_vector_transfers",
+              all(telemetry.get(name) == 0 for name in (
+                  "warm_step_h2d_bytes", "warm_step_d2h_bytes",
+                  "warm_step_h2d_transfer_count", "warm_step_d2h_transfer_count")), telemetry)
+        layer_count = int(telemetry.get("layer_count", 0))
+        scalar_count = int(telemetry.get("d2h_transfer_count", 0)) - int(telemetry.get("observed_snapshot_d2h_transfer_count", 0))
+        scalar_bytes = int(telemetry.get("d2h_bytes", 0)) - int(telemetry.get("observed_snapshot_d2h_bytes", 0))
+        check(global_checks, "gpu.exact_packed_scalar_receipts",
+              layer_count > 0 and scalar_count >= len(STEPS)
+              and scalar_bytes == scalar_count * layer_count * 20 * 8,
+              {"layer_count": layer_count, "evaluations": scalar_count, "scalar_bytes": scalar_bytes})
     lambda_report = {
         label: recover_lambda(run, label, global_checks)
         for label, run in loaded.items()
