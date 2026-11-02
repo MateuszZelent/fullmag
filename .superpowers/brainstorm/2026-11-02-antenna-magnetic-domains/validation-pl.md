@@ -23,3 +23,20 @@ Pełne logi są w prywatnym wolumenie kontrolnym grupy anten:
 Dokument i mapa nie zmieniają statusów inspection-only ani bramek kwalifikacji.
 Bramka changed-page i commit dokumentu zostaną odnotowane w końcowym receipcie
 w tym samym katalogu kontrolnym; samo istnienie tego raportu ich nie dowodzi.
+
+## Zatwierdzenie projektu i przygotowanie planu — 02.11.2026
+
+Użytkownik zatwierdził projekt i przygotowanie planu wdrożenia. Dokument
+`docs/superpowers/plans/2026-11-02-antenna-magnetic-domains-implementation.md`
+rozpisuje 10 zależnych zadań, interfejsy, testy i bramki publicznego wykonania.
+Plan pozostaje do przeglądu; nie zastosowano proponowanych nowych typów/API,
+wersji wire, migracji ani budowy nowych domen. Ponowny focused source-map po
+aktualizacji statusu projektu: exit 0. Self-review planu i kontrola źródeł są w
+`verification/antenna-magnetic-domains-plan-20261102/` w wolumenie kontrolnym.
+
+Niezależnie zakończono pełny zestaw testów wcześniejszych poprawek frontendu:
+899 plików PASS, exit 0, 517.27 s. Log:
+`verification/ui-integration-regressions-20261102/full-suite-after-fixes.log`,
+SHA256 `88b9d0324b9e64d6f5c948f1729fde20041ba2ab4ae9113c1a5dff4e8fe7f6a9`.
+To dowód regresji bieżącego frontendu, nie wdrożenia projektowanych dwóch ról
+Airboxa ani naukowej kwalifikacji nowego workflow.

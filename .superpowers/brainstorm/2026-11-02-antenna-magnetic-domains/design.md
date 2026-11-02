@@ -1,6 +1,7 @@
 # Domeny anteny i ferromagnetyka: wspólna siatka próbki, niezależne otoczenie
 
-Status: **projekt do przeglądu; nie jest opisem wdrożonego nowego API**. Data: 02.11.2026.
+Status: **projekt zatwierdzony przez użytkownika 02.11.2026; nie jest opisem wdrożonego nowego API**.
+Zgoda obejmuje projekt i przygotowanie planu wdrożenia; szczegółowy plan ma własny przegląd. Data: 02.11.2026.
 Baza odczytu kodu: `8088f0191b19dd456e2e8ba67723a4c7e80dbabc`, po integracji
 mastera `d037fd6b499cd074bf507b775e83f65a1d72c9ed`, wraz z lokalnymi zmianami anten.
 Metoda: Superpowers `using-superpowers` i `brainstorming`, uzupełnione
