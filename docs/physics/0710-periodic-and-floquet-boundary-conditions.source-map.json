@@ -27,26 +27,143 @@
   "equations": [
     {
       "id": "eq-0710-phase",
-      "symbols": ["p", "k", "delta_r"],
-      "sources": ["source-phase-ir", "source-python-floquet"]
+      "symbols": [
+        "p",
+        "k",
+        "delta_r"
+      ],
+      "sources": [
+        "source-phase-ir",
+        "source-python-floquet"
+      ]
     },
     {
       "id": "eq-0710-tangent-transport",
-      "symbols": ["q", "p", "tangent_transport"],
-      "sources": ["source-python-floquet"]
+      "symbols": [
+        "q",
+        "p",
+        "tangent_transport"
+      ],
+      "sources": [
+        "source-python-floquet"
+      ]
     },
     {
       "id": "eq-0710-gamma-classification",
-      "symbols": ["k"],
-      "sources": ["source-gamma-tolerance", "source-k-path"]
+      "symbols": [
+        "k"
+      ],
+      "sources": [
+        "source-gamma-tolerance",
+        "source-k-path"
+      ]
+    },
+    {
+      "id": "eq-0710-class-reduction",
+      "symbols": [
+        "class",
+        "R",
+        "M",
+        "mu0",
+        "M_s",
+        "H_dmi",
+        "G",
+        "W",
+        "H_d"
+      ],
+      "sources": [
+        "source-dmi-class-cpu",
+        "source-dmi-class-gpu",
+        "source-class-csr",
+        "source-demag-recovery-cpu"
+      ]
     }
   ],
   "symbols": [
-    {"id": "k", "latex": "$k$", "meaning": "Bloch wave vector", "si_unit": "$\\mathrm{rad\\,m^{-1}}$"},
-    {"id": "delta_r", "latex": "$\\Delta\\mathbf r$", "meaning": "source-to-destination translation", "si_unit": "$\\mathrm{m}$"},
-    {"id": "p", "latex": "$p$", "meaning": "Floquet phase", "si_unit": "$1$"},
-    {"id": "q", "latex": "$q$", "meaning": "tangent coefficients", "si_unit": "$1$"},
-    {"id": "tangent_transport", "latex": "$T_{\\mathrm{dst}}^\\mathsf{T}T_{\\mathrm{src}}$", "meaning": "tangent transport", "si_unit": "$1$"}
+    {
+      "id": "k",
+      "latex": "$k$",
+      "meaning": "Bloch wave vector",
+      "si_unit": "$\\mathrm{rad\\,m^{-1}}$"
+    },
+    {
+      "id": "delta_r",
+      "latex": "$\\Delta\\mathbf r$",
+      "meaning": "source-to-destination translation",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "p",
+      "latex": "$p$",
+      "meaning": "Floquet phase",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "q",
+      "latex": "$q$",
+      "meaning": "tangent coefficients",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "tangent_transport",
+      "latex": "$T_{\\mathrm{dst}}^\\mathsf{T}T_{\\mathrm{src}}$",
+      "meaning": "tangent transport",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "class",
+      "latex": "$c(i)$",
+      "meaning": "static periodic node class of node $i$",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "R",
+      "latex": "$\\mathbf R_j$",
+      "meaning": "DMI weak residual at node $j$",
+      "si_unit": "$\\mathrm{J\\,m^{-3}}\\cdot\\mathrm{m^{3}}$"
+    },
+    {
+      "id": "M",
+      "latex": "$M_j$",
+      "meaning": "lumped nodal mass at node $j$",
+      "si_unit": "$\\mathrm{m^{3}}$"
+    },
+    {
+      "id": "mu0",
+      "latex": "$\\mu_0$",
+      "meaning": "vacuum permeability",
+      "si_unit": "$\\mathrm{N\\,A^{-2}}$"
+    },
+    {
+      "id": "M_s",
+      "latex": "$M_s$",
+      "meaning": "saturation magnetization",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "H_dmi",
+      "latex": "$\\mathbf H_{\\mathrm{DMI},i}$",
+      "meaning": "nodal DMI field",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "G",
+      "latex": "$\\mathbf G_j$",
+      "meaning": "weighted demag-gradient sum at node $j$",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}\\cdot\\mathrm{m^{3}}$"
+    },
+    {
+      "id": "W",
+      "latex": "$W_j$",
+      "meaning": "demag recovery weight at node $j$",
+      "si_unit": "$\\mathrm{m^{3}}$"
+    },
+    {
+      "id": "H_d",
+      "latex": "$\\mathbf H_{\\mathrm{d},i}$",
+      "meaning": "recovered nodal demag field",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    }
   ],
   "sources": [
     {
@@ -78,6 +195,30 @@
       "path": "crates/fullmag-runner/src/fem/eigen_constants.rs",
       "symbol": "GAMMA_K_TOLERANCE_RAD_PER_M",
       "responsibility": "Define the numerical Gamma routing threshold."
+    },
+    {
+      "id": "source-dmi-class-cpu",
+      "path": "backends/fem/cpu/mfem/interactions/dmi_workspace.cpp",
+      "symbol": "accumulate_dmi_periodic_residual_and_mass",
+      "responsibility": "Sum DMI residual and lumped mass per static periodic class on FEM CPU."
+    },
+    {
+      "id": "source-dmi-class-gpu",
+      "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu",
+      "symbol": "dmi_project_field_kernel",
+      "responsibility": "Project the class-reduced DMI field on FEM GPU over the class-member CSR."
+    },
+    {
+      "id": "source-class-csr",
+      "path": "backends/fem/gpu/cuda/state/runtime_coefficients_upload.cpp",
+      "symbol": "gpu_runtime_coefficients_upload",
+      "responsibility": "Build and upload the periodic class-member CSR in ascending node order."
+    },
+    {
+      "id": "source-demag-recovery-cpu",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp",
+      "symbol": "recover_demag_poisson_field",
+      "responsibility": "Reduce the demag recovery gradient and weight per static periodic class on FEM CPU."
     }
   ],
   "public_api": {

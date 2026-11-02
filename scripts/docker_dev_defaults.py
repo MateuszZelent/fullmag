@@ -247,14 +247,15 @@ def resolve_defaults(
     port: int | str | None = None,
     environ: Mapping[str, str] | None = None,
     cwd: Path | str | None = None,
+    include_host_settings: bool = True,
 ) -> ScriptDefaults:
-    """Resolve source and port with explicit, deterministic precedence."""
+    """Resolve defaults; image-only callers can omit host storage settings."""
     repo = Path(repo).resolve(strict=True)
     environ = os.environ if environ is None else environ
     known = _known_checkouts(repo)
     main = known[0]
     dotenv = _read_dotenv(main / ".env")
-    settings = _read_host_settings(repo, main, dotenv, environ)
+    settings = _read_host_settings(repo, main, dotenv, environ) if include_host_settings else {}
 
     if source_root is not None and str(source_root).strip():
         selected = _registered_source(source_root, known, "explicit source root")

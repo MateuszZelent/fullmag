@@ -627,8 +627,6 @@ impl ExchangeLlgProblem {
             Some(d) if d.abs() > 0.0 => d,
             _ => return,
         };
-        let ms = self.material.saturation_magnetisation.max(1e-30);
-        let pf = 2.0 * d / (MU0 * ms);
         let nx = self.grid.nx;
         let ny = self.grid.ny;
         let dx = self.cell_size.dx;
@@ -641,6 +639,8 @@ impl ExchangeLlgProblem {
             if !self.is_active(flat) {
                 continue;
             }
+            let ms = self.ms_at(flat).max(1e-30);
+            let pf = 2.0 * d / (MU0 * ms);
             let x = flat % nx;
             let y = (flat / nx) % ny;
             let z = flat / (nx * ny);
@@ -690,8 +690,6 @@ impl ExchangeLlgProblem {
             Some(d) if d.abs() > 0.0 => d,
             _ => return,
         };
-        let ms = self.material.saturation_magnetisation.max(1e-30);
-        let pf = -2.0 * d / (MU0 * ms);
         let nx = self.grid.nx;
         let ny = self.grid.ny;
         let nz = self.grid.nz;
@@ -707,6 +705,8 @@ impl ExchangeLlgProblem {
             if !self.is_active(flat) {
                 continue;
             }
+            let ms = self.ms_at(flat).max(1e-30);
+            let pf = -2.0 * d / (MU0 * ms);
             let x = flat % nx;
             let y = (flat / nx) % ny;
             let z = flat / (nx * ny);

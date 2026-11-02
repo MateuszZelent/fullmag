@@ -18,6 +18,7 @@
 #include "gpu/cuda/integrators/rk/rk_effective_field.hpp"
 #include "gpu/cuda/integrators/rk/rk_exchange_dispatch.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
+#include "gpu/cuda/integrators/llg/llg_rhs_kernels.hpp"
 #include "gpu/cuda/integrators/rk/rk_llg_rhs_dispatch.hpp"
 #include "gpu/cuda/integrators/rk/rk_local_fields.hpp"
 #include "gpu/cuda/relaxation/pgbb_kernels.hpp"
@@ -236,7 +237,11 @@ bool gpu_rk_compute_rhs_for_magnetization(
     }
     // The default compatibility call remains metric-free:
     // gpu_rk_compute_llg_rhs(ctx, m, rhs, stream, n, reason)
-    if (!gpu_rk_compute_llg_rhs(ctx, m, rhs, stream, n, reason, compute_metric)) {
+    const bool has_post_llg_rhs_mutations =
+        (gpu_rk_required_operator_mask(ctx) & FEM_GPU_OPERATOR_DIRECT_TORQUES) != 0 ||
+        ctx.frozen_spins.enabled();
+    const bool fuse_llg_metric = compute_metric && !has_post_llg_rhs_mutations;
+    if (!gpu_rk_compute_llg_rhs(ctx, m, rhs, stream, n, reason, fuse_llg_metric)) {
         return false;
     }
     if (gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
@@ -253,6 +258,22 @@ bool gpu_rk_compute_rhs_for_magnetization(
     }
     if (ctx.frozen_spins.enabled()) {
         gpu_zero_frozen_rhs(rhs, ctx.gpu_state.device.mesh_regions.frozen_mask, n, stream);
+    }
+    if (compute_metric && has_post_llg_rhs_mutations) {
+        auto &gpu = ctx.gpu_state.device;
+        const uint8_t *active_mask =
+            (ctx.frozen_spins.enabled() && gpu.mesh_regions.free_node_mask != nullptr)
+                ? gpu.mesh_regions.free_node_mask
+                : gpu.mesh_regions.magnetic_node_mask;
+        fullmag_cuda_rhs_norm_blocks(
+            rhs.x, rhs.y, rhs.z,
+            active_mask,
+            gpu.reductions.scalar_workspace,
+            n,
+            stream);
+        if (!cuda_ok(cudaPeekAtLastError(), "launch GPU RK post-mutation RHS metric blocks", reason)) {
+            return false;
+        }
     }
     if (!rhs_timer.finish(reason)) {
         return false;

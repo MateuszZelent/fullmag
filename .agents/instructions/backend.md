@@ -277,7 +277,8 @@ is required. The persistent `frontend` service keeps Next.js HMR running. Preser
 native drain, recovery, user data, and receipts. The code/runtime compliance of
 this volume-only boundary is **NOT VERIFIED** until mounts and a live restart are
 observed.
-See [ADR 0061](../../docs/adr/0061-docker-development-build-and-runtime-container.md).
+Topologię prywatnego storage daily DEV określa [ADR 0076](../../docs/adr/0076-single-private-volume-per-dev-group.md): jeden stabilny `BuildControl.volume` per grupa, z backend/cache, frontend i ledger pod `private/backend`, `private/frontend` i `private/ledger`. Fingerprint ABI/toolchain nadal steruje walidacją oraz inwalidacją cache, lecz nie nazwą wolumenu. ADR 0061 zachowuje historyczną decyzję o osobnych wolumenach; jej topologia jest superseded. Kod i runtime nowego kontraktu są **NOT VERIFIED**.
+Postpublication cleanup `.fullmag-build`, cache-hit i retencja nieudanego builda podlegają sekcji 7 ADR 0076; ich działanie runtime pozostaje **NOT VERIFIED**.
 
 For managed/container build tasks outside that daily Docker workspace, the
 repository `justfile` is the first place to look. If a managed/container recipe

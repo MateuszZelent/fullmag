@@ -99,4 +99,43 @@ void fullmag_cuda_llg_rhs_fused(
         block_max_rhs, magnetic_node_mask, alpha_field, gamma, alpha, use_alpha_field, precession_enabled, N);
 }
 
+__global__ void rhs_norm_blocks_kernel(
+    const double *__restrict__ rx,
+    const double *__restrict__ ry,
+    const double *__restrict__ rz,
+    const uint8_t *__restrict__ active_node_mask,
+    double *__restrict__ block_max_rhs,
+    int N)
+{
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    double local_norm = 0.0;
+    if (i < N && (active_node_mask == nullptr || active_node_mask[i] != 0u)) {
+        const double lx = rx[i];
+        const double ly = ry[i];
+        const double lz = rz[i];
+        local_norm = sqrt(lx * lx + ly * ly + lz * lz);
+    }
+
+    typedef cub::BlockReduce<double, 256> BlockReduce;
+    __shared__ typename BlockReduce::TempStorage temp_storage;
+    const double block_max = BlockReduce(temp_storage).Reduce(local_norm, cub::Max());
+    if (threadIdx.x == 0 && block_max_rhs != nullptr) {
+        block_max_rhs[blockIdx.x] = block_max;
+    }
+}
+
+void fullmag_cuda_rhs_norm_blocks(
+    const double *rx, const double *ry, const double *rz,
+    const uint8_t *active_node_mask,
+    double *block_max_rhs,
+    int N, cudaStream_t stream)
+{
+    if (block_max_rhs == nullptr) {
+        return;
+    }
+    const int num_blocks = (N + kBlockSize - 1) / kBlockSize;
+    rhs_norm_blocks_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
+        rx, ry, rz, active_node_mask, block_max_rhs, N);
+}
+
 } // namespace fullmag::fem

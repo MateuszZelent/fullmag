@@ -759,8 +759,9 @@ pub(crate) fn apply_direct_minimizer_step_metrics(
     magnetization: &[[f64; 3]],
     h_eff: &[[f64; 3]],
     active_mask: Option<&[bool]>,
+    ms_field: Option<&[f64]>,
 ) -> f64 {
-    apply_average_m_to_step_stats_with_active_mask(stats, magnetization, active_mask);
+    apply_average_m_to_step_stats_with_active_mask(stats, magnetization, active_mask, ms_field);
     if let Some(values) = stats.per_object_scalars.get_mut("free") {
         values.insert("mx".to_string(), stats.mx);
         values.insert("my".to_string(), stats.my);
@@ -924,7 +925,7 @@ mod tests {
         let magnetization = [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
         let h_eff = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]];
 
-        apply_direct_minimizer_step_metrics(&mut stats, 1, 0.25, &magnetization, &h_eff, None);
+        apply_direct_minimizer_step_metrics(&mut stats, 1, 0.25, &magnetization, &h_eff, None, None);
 
         assert_eq!([stats.mx, stats.my, stats.mz], [0.5, 0.0, 0.5]);
         assert_eq!(
@@ -951,6 +952,7 @@ mod tests {
             &magnetization,
             &h_eff,
             Some(&active_mask),
+            None,
         );
 
         assert_eq!([stats.mx, stats.my, stats.mz], [0.5, 0.5, 0.0]);
@@ -1605,6 +1607,7 @@ mod tests {
             3e-6,
             &[[1.0, 0.0, 0.0]],
             &[[0.0, 4.0, 3.0]],
+            None,
             None,
         );
 

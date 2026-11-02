@@ -94,10 +94,21 @@ public:
     MsWeightedAos3AverageReduction ms_weighted_aos3_average_reduction(
         const std::vector<double> &aos3_nodal_values) const;
 
+    // The same exact reduction restricted to the active elements whose four
+    // vertices all belong to the node set (`node_member_mask[node] != 0`).
+    // This is the per-object form of the global DG0 moment-weighted average.
+    MsWeightedAos3AverageReduction ms_weighted_aos3_average_reduction_for_node_set(
+        const std::vector<double> &aos3_nodal_values,
+        const std::vector<std::uint8_t> &node_member_mask) const;
+
     // Versioned digest of topology, active scope, location tags, and values.
     std::uint64_t material_realization_hash() const noexcept;
 
 private:
+    MsWeightedAos3AverageReduction reduce_ms_weighted_aos3_average(
+        const std::vector<double> &aos3_nodal_values,
+        const std::vector<std::uint8_t> *node_member_mask) const;
+
     std::size_t node_count_ = 0;
     std::vector<P1TetrahedronMaterialTopology> elements_;
     std::vector<std::size_t> active_element_ordinals_;

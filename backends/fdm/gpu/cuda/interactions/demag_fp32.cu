@@ -75,7 +75,8 @@ __global__ void pack_magnetization_fft_fp32_kernel(
     int nx, int ny, int nz,
     int px, int py, int pz,
     int has_active_mask,
-    float ms)
+    float ms_scalar,
+    const double * __restrict__ ms_field)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int total = px * py * pz;
@@ -88,6 +89,7 @@ __global__ void pack_magnetization_fft_fp32_kernel(
 
     if (x < nx && y < ny && z < nz) {
         int src = z * ny * nx + y * nx + x;
+        const float ms = ms_field ? static_cast<float>(ms_field[src]) : ms_scalar;
         if (!has_active_mask || active_mask[src] != 0) {
             fx[idx] = make_cuFloatComplex(ms * mx[src], 0.0f);
             fy[idx] = make_cuFloatComplex(ms * my[src], 0.0f);
@@ -254,7 +256,8 @@ __global__ void combine_effective_field_fp32_kernel(
     float uz,
     const double * __restrict__ ku1_field,
     const double * __restrict__ ku2_field,
-    float ms,
+    float ms_scalar,
+    const double * __restrict__ ms_field,
     float exchange_stiffness,
     int has_cubic_anisotropy,
     float Kc1,
@@ -301,8 +304,10 @@ __global__ void combine_effective_field_fp32_kernel(
     float * __restrict__ rhs_x,
     float * __restrict__ rhs_y,
     float * __restrict__ rhs_z,
-    float gamma_bar,
-    float alpha,
+    float gamma_bar_scalar,
+    float alpha_scalar,
+    double gamma,
+    const double * __restrict__ alpha_field,
     int disable_precession,
     int write_rhs)
 {
@@ -324,6 +329,12 @@ __global__ void combine_effective_field_fp32_kernel(
     float mx = m_x[idx];
     float my = m_y[idx];
     float mz = m_z[idx];
+    // Cellwise material (null pointer keeps the scalar arithmetic unchanged).
+    const float ms = ms_field ? static_cast<float>(ms_field[idx]) : ms_scalar;
+    const float alpha = alpha_field ? static_cast<float>(alpha_field[idx]) : alpha_scalar;
+    const float gamma_bar = alpha_field
+        ? static_cast<float>(gamma / (1.0 + alpha_field[idx] * alpha_field[idx]))
+        : gamma_bar_scalar;
 
     float hx = hx_ext;
     float hy = hy_ext;
@@ -466,9 +477,9 @@ __global__ void combine_effective_field_fp32_kernel(
     if (has_magnetoelastic && ms > 0.0f) {
         const float mu0 = 4.0f * 3.14159265358979323846f * 1e-7f;
         const float inv_mu0_ms = -1.0f / (mu0 * ms);
-        hx += inv_mu0_ms * (2.0f * mel_b1 * mx * mel_e11 + mel_b2 * (my * mel_e12 + mz * mel_e13));
-        hy += inv_mu0_ms * (2.0f * mel_b1 * my * mel_e22 + mel_b2 * (mx * mel_e12 + mz * mel_e23));
-        hz += inv_mu0_ms * (2.0f * mel_b1 * mz * mel_e33 + mel_b2 * (mx * mel_e13 + my * mel_e23));
+        hx += inv_mu0_ms * (2.0f * mel_b1 * mx * mel_e11 + 2.0f * mel_b2 * (my * mel_e12 + mz * mel_e13));
+        hy += inv_mu0_ms * (2.0f * mel_b1 * my * mel_e22 + 2.0f * mel_b2 * (mx * mel_e12 + mz * mel_e23));
+        hz += inv_mu0_ms * (2.0f * mel_b1 * mz * mel_e33 + 2.0f * mel_b2 * (mx * mel_e13 + my * mel_e23));
     }
 
     if (enable_exchange) {
@@ -549,7 +560,8 @@ __global__ void anisotropy_field_fp32_kernel(
     float uz,
     const double * __restrict__ ku1_field,
     const double * __restrict__ ku2_field,
-    float ms,
+    float ms_scalar,
+    const double * __restrict__ ms_field,
     int has_cubic_anisotropy,
     float Kc1,
     float Kc2,
@@ -571,6 +583,7 @@ __global__ void anisotropy_field_fp32_kernel(
         float mx = m_x[idx];
         float my = m_y[idx];
         float mz = m_z[idx];
+        const float ms = ms_field ? static_cast<float>(ms_field[idx]) : ms_scalar;
 
         if (has_uniaxial_anisotropy && ms > 0.0f) {
             const float mu0 = 4.0f * 3.14159265358979323846f * 1e-7f;
@@ -663,7 +676,8 @@ void launch_demag_field_fp32(Context &ctx) {
         static_cast<int>(ctx.fft_ny),
         static_cast<int>(ctx.fft_nz),
         ctx.has_active_mask ? 1 : 0,
-        static_cast<float>(ctx.Ms));
+        static_cast<float>(ctx.Ms),
+        ctx.ms_field);
 
     cufftResult err = cufftExecC2C(
         ctx.fft_plan,
@@ -809,6 +823,7 @@ static void launch_effective_field_fp32_impl(
         ctx.ku1_field,
         ctx.ku2_field,
         static_cast<float>(ctx.Ms),
+        ctx.ms_field,
         static_cast<float>(ctx.A),
         ctx.has_cubic_anisotropy ? 1 : 0,
         static_cast<float>(ctx.Kc1),
@@ -856,6 +871,8 @@ static void launch_effective_field_fp32_impl(
         write_rhs ? static_cast<float*>(rhs_out->z) : nullptr,
         gamma_bar,
         alpha,
+        ctx.gamma,
+        ctx.alpha_field,
         ctx.disable_precession ? 1 : 0,
         write_rhs ? 1 : 0);
     const cudaError_t launch_error = cudaGetLastError();
@@ -993,6 +1010,7 @@ void launch_anisotropy_field_fp32(Context &ctx) {
         ctx.ku1_field,
         ctx.ku2_field,
         static_cast<float>(ctx.Ms),
+        ctx.ms_field,
         ctx.has_cubic_anisotropy ? 1 : 0,
         static_cast<float>(ctx.Kc1),
         static_cast<float>(ctx.Kc2),

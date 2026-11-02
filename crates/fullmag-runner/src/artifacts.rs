@@ -650,9 +650,14 @@ fn validate_direct_minimizer_realization(
 
     let expected_realization = match &plan.backend_plan {
         BackendPlanIR::Fdm(_) if resolved_device == "cpu" => {
-            Some(crate::relaxation::CPU_SOA_DIRECT_MINIMIZER_REALIZATION)
+            Some(crate::relaxation::expected_cpu_direct_minimizer_realization(
+                provenance.fdm_cpu_state_layout.as_ref(),
+            ))
         }
-        BackendPlanIR::Fdm(_) | BackendPlanIR::Fem(_) => {
+        BackendPlanIR::Fdm(_) if resolved_device == "gpu" => {
+            Some(crate::relaxation::CUDA_FDM_HOST_DIRECT_MINIMIZER_REALIZATION)
+        }
+        BackendPlanIR::Fem(_) => {
             crate::relaxation::native_direct_minimizer_realization(
                 control.algorithm,
                 resolved_device == "gpu",
@@ -6602,6 +6607,7 @@ mod tests {
                 boundary_correction: None,
                 boundary_geometry: None,
                 inter_region_exchange: vec![],
+                region_owner: Vec::new(),
                 current_density: None,
                 stt_degree: None,
                 stt_beta: None,
@@ -9034,6 +9040,52 @@ mod tests {
         )
         .expect_err("CPU PG-BB metadata must reject a CUDA realization ID");
 
+        assert!(error.to_string().contains("realization mismatch"));
+    }
+
+    #[test]
+    fn final_metadata_requires_cuda_fdm_host_direct_minimizer_realization() {
+        let problem = fdm_execution_problem("gpu", ExecutionMode::Strict);
+        let mut plan = test_execution_plan(None);
+        if let BackendPlanIR::Fdm(fdm) = &mut plan.backend_plan {
+            fdm.relaxation = Some(fullmag_ir::RelaxationControlIR {
+                algorithm: fullmag_ir::RelaxationAlgorithmIR::NonlinearCg,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1.0e-3),
+                    energy_tolerance_j: None,
+                    max_steps: Some(1),
+                    max_relaxation_time_s: None,
+                },
+            });
+        }
+        let provenance = |realization: &str| ExecutionProvenance {
+            execution_engine: "cuda_fdm".to_string(),
+            precision: "double".to_string(),
+            requested_energy_minimizer: Some("nonlinear_cg".to_string()),
+            resolved_energy_minimizer: Some("nonlinear_cg".to_string()),
+            energy_minimizer_realization: Some(realization.to_string()),
+            ..ExecutionProvenance::default()
+        };
+
+        let metadata = write_final_execution_test_metadata_without_fem_policy(
+            "cuda-fdm-ncg-realization",
+            &problem,
+            &plan,
+            provenance(crate::relaxation::CUDA_FDM_HOST_DIRECT_MINIMIZER_REALIZATION),
+        )
+        .expect("CUDA FDM NCG metadata should accept the host-orchestrated realization");
+        assert_eq!(
+            metadata["execution_provenance"]["energy_minimizer_realization"],
+            "cuda_fdm_host_tangent_gradient"
+        );
+
+        let error = write_final_execution_test_metadata_without_fem_policy(
+            "cuda-fdm-ncg-native-realization",
+            &problem,
+            &plan,
+            provenance("native_cuda_nonlinear_cg"),
+        )
+        .expect_err("CUDA FDM metadata must reject the FEM GPU native realization ID");
         assert!(error.to_string().contains("realization mismatch"));
     }
 

@@ -3,6 +3,7 @@
 use super::anisotropy_energy_density_for_magnetization;
 use crate::fdm::shared::VectorFieldSoA;
 use crate::vector::{cross, dot, norm, scale, squared_norm, sub};
+use crate::fdm::shared::types::{neighbor_index, AxisBoundary};
 use crate::{ExchangeLlgProblem, FftWorkspace, Vector3, MU0};
 
 #[cfg(feature = "parallel")]
@@ -117,9 +118,13 @@ impl ExchangeLlgProblem {
     ) -> f64 {
         let n = magnetization.len();
         debug_assert!(field.len() >= n);
-        let scale = mu0_scale * self.material.saturation_magnetisation * self.cell_size.volume();
+        let volume_scale = mu0_scale * self.cell_size.volume();
         let compute = |i: usize| {
-            scale
+            if !self.is_active(i) {
+                return 0.0;
+            }
+            volume_scale
+                * self.ms_at(i)
                 * (magnetization.x[i] * field.x[i]
                     + magnetization.y[i] * field.y[i]
                     + magnetization.z[i] * field.z[i])
@@ -141,11 +146,17 @@ impl ExchangeLlgProblem {
     // ===================================================================
 
     pub fn exchange_energy_from_vectors(&self, magnetization: &[Vector3]) -> f64 {
+        if let Some(faces) = self.exchange_faces.as_deref() {
+            return self.exchange_energy_from_faces(faces, magnetization);
+        }
         let cell_volume = self.cell_size.volume();
         let grid = self.grid;
         let dx2 = self.cell_size.dx * self.cell_size.dx;
         let dy2 = self.cell_size.dy * self.cell_size.dy;
         let dz2 = self.cell_size.dz * self.cell_size.dz;
+        let pbc_x = matches!(self.boundary_policy.x, AxisBoundary::Periodic);
+        let pbc_y = matches!(self.boundary_policy.y, AxisBoundary::Periodic);
+        let pbc_z = matches!(self.boundary_policy.z, AxisBoundary::Periodic);
 
         let compute_cell_energy = |flat_index: usize| -> f64 {
             if !self.is_active(flat_index) {
@@ -157,8 +168,9 @@ impl ExchangeLlgProblem {
             let center = magnetization[flat_index];
             let ai = self.a_at(flat_index);
             let mut e = 0.0;
-            if x + 1 < grid.nx {
-                let neighbor_index = grid.index(x + 1, y, z);
+            if x + 1 < grid.nx || (pbc_x && grid.nx > 1) {
+                let nx = if x + 1 < grid.nx { x + 1 } else { 0 };
+                let neighbor_index = grid.index(nx, y, z);
                 if self.is_active(neighbor_index) {
                     let aj = self.a_at(neighbor_index);
                     let aij = if ai == 0.0 || aj == 0.0 {
@@ -170,8 +182,9 @@ impl ExchangeLlgProblem {
                     e += aij * cell_volume * squared_norm(sub(neighbor, center)) / dx2;
                 }
             }
-            if y + 1 < grid.ny {
-                let neighbor_index = grid.index(x, y + 1, z);
+            if y + 1 < grid.ny || (pbc_y && grid.ny > 1) {
+                let ny = if y + 1 < grid.ny { y + 1 } else { 0 };
+                let neighbor_index = grid.index(x, ny, z);
                 if self.is_active(neighbor_index) {
                     let aj = self.a_at(neighbor_index);
                     let aij = if ai == 0.0 || aj == 0.0 {
@@ -183,8 +196,9 @@ impl ExchangeLlgProblem {
                     e += aij * cell_volume * squared_norm(sub(neighbor, center)) / dy2;
                 }
             }
-            if z + 1 < grid.nz {
-                let neighbor_index = grid.index(x, y, z + 1);
+            if z + 1 < grid.nz || (pbc_z && grid.nz > 1) {
+                let nz = if z + 1 < grid.nz { z + 1 } else { 0 };
+                let neighbor_index = grid.index(x, y, nz);
                 if self.is_active(neighbor_index) {
                     let aj = self.a_at(neighbor_index);
                     let aij = if ai == 0.0 || aj == 0.0 {
@@ -195,6 +209,65 @@ impl ExchangeLlgProblem {
                     let neighbor = magnetization[neighbor_index];
                     e += aij * cell_volume * squared_norm(sub(neighbor, center)) / dz2;
                 }
+            }
+            e
+        };
+
+        #[cfg(feature = "parallel")]
+        {
+            (0..grid.cell_count())
+                .into_par_iter()
+                .map(compute_cell_energy)
+                .sum()
+        }
+        #[cfg(not(feature = "parallel"))]
+        {
+            (0..grid.cell_count()).map(compute_cell_energy).sum()
+        }
+    }
+
+    /// `E = V sum_{f in F+} A_f |m_j - m_i|^2 / h_f^2` (note 0104,
+    /// `material-fdm-exchange-energy-discrete`), including periodic
+    /// connections; a zero coefficient marks a missing connection.
+    fn exchange_energy_from_faces(
+        &self,
+        faces: &crate::ExchangeFaces,
+        magnetization: &[Vector3],
+    ) -> f64 {
+        let grid = self.grid;
+        let dims = [grid.nx, grid.ny, grid.nz];
+        let periodic = [
+            matches!(self.boundary_policy.x, AxisBoundary::Periodic),
+            matches!(self.boundary_policy.y, AxisBoundary::Periodic),
+            matches!(self.boundary_policy.z, AxisBoundary::Periodic),
+        ];
+        let dist2 = [
+            self.cell_size.dx * self.cell_size.dx,
+            self.cell_size.dy * self.cell_size.dy,
+            self.cell_size.dz * self.cell_size.dz,
+        ];
+        let cell_volume = self.cell_size.volume();
+        let compute_cell_energy = |flat_index: usize| -> f64 {
+            let coords = [
+                flat_index % grid.nx,
+                (flat_index / grid.nx) % grid.ny,
+                flat_index / (grid.nx * grid.ny),
+            ];
+            let center = magnetization[flat_index];
+            let mut e = 0.0;
+            for (axis, plus_faces) in [&faces.x_plus, &faces.y_plus, &faces.z_plus]
+                .into_iter()
+                .enumerate()
+            {
+                let a_f = plus_faces[flat_index];
+                if a_f == 0.0 {
+                    continue;
+                }
+                let mut neighbor = coords;
+                neighbor[axis] = neighbor_index(coords[axis], dims[axis], 1, periodic[axis]);
+                let neighbor_flat = grid.index(neighbor[0], neighbor[1], neighbor[2]);
+                e += a_f * cell_volume * squared_norm(sub(magnetization[neighbor_flat], center))
+                    / dist2[axis];
             }
             e
         };

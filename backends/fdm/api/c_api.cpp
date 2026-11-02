@@ -1016,9 +1016,52 @@ uint64_t fullmag_fdm_capability_bits_v1(void) {
 
 /* ── Create ── */
 
+/// Realized exchange operator carried by the v2 descriptor tail. The base
+/// descriptor alone always means the uniform operator.
+struct ExchangeOperatorInput {
+    bool faces = false;
+    const double *x_plus = nullptr;
+    const double *y_plus = nullptr;
+    const double *z_plus = nullptr;
+    uint64_t len = 0;
+};
+
+static bool valid_cellwise_values(
+    const double *values,
+    uint64_t len,
+    const uint8_t *active_mask,
+    bool require_positive)
+{
+    for (uint64_t index = 0; index < len; ++index) {
+        const double value = values[index];
+        const bool active = active_mask == nullptr || active_mask[index] != 0;
+        if (!std::isfinite(value) || value < 0.0 ||
+            (require_positive && active && value <= 0.0)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool cellwise_values_equal_scalar(
+    const double *values,
+    uint64_t len,
+    const uint8_t *active_mask,
+    double scalar)
+{
+    for (uint64_t index = 0; index < len; ++index) {
+        const bool active = active_mask == nullptr || active_mask[index] != 0;
+        if (active && values[index] != scalar) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
     const fullmag_fdm_plan_desc *plan,
-    bool reserve_rotated_dmi)
+    bool reserve_rotated_dmi,
+    const ExchangeOperatorInput &exchange_operator)
 {
 #if FULLMAG_HAS_CUDA
     if (!plan) return nullptr;
@@ -1107,7 +1150,7 @@ static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
     ctx->has_active_mask = plan->active_mask != nullptr;
     ctx->has_frozen_mask = plan->frozen_mask != nullptr;
     ctx->has_region_mask = plan->region_mask != nullptr;
-    ctx->has_exchange_lut = ctx->has_region_mask; // always build LUT when regions are present
+    ctx->has_exchange_faces = exchange_operator.faces;
     ctx->has_demag_tensor_kernel = plan->demag_kernel_spectrum_len != 0;
     ctx->external_field[0] = plan->external_field_am[0];
     ctx->external_field[1] = plan->external_field_am[1];
@@ -1391,15 +1434,89 @@ static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
             "oersted configuration is ambiguous: provide either OerstedCylinder or oersted_field_xyz, not both";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
-    const bool has_cellwise_material_field =
-        plan->ms_field != nullptr || plan->a_field != nullptr || plan->alpha_field != nullptr
-        || plan->dind_field != nullptr || plan->dbulk_field != nullptr
-        || plan->ms_field_len != 0 || plan->a_field_len != 0 || plan->alpha_field_len != 0
+    const bool has_cellwise_dmi_field =
+        plan->dind_field != nullptr || plan->dbulk_field != nullptr
         || plan->dind_field_len != 0 || plan->dbulk_field_len != 0;
-    if (has_cellwise_material_field) {
+    if (has_cellwise_dmi_field) {
         ctx->last_error =
-            "FDM cellwise material fields reached native backend before kernel support is enabled; planner/runtime materialization must keep this path capability-gated";
+            "fdm_cuda_heterogeneous_material_unsupported:cellwise_dmi: cellwise DMI fields are not supported on native FDM CUDA";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    const struct {
+        const char *name;
+        const double *values;
+        uint64_t len;
+        bool require_positive;
+    } cellwise_material_fields[] = {
+        {"ms_field", plan->ms_field, plan->ms_field_len, true},
+        {"a_field", plan->a_field, plan->a_field_len, false},
+        {"alpha_field", plan->alpha_field, plan->alpha_field_len, false},
+    };
+    for (const auto &field : cellwise_material_fields) {
+        if ((field.values == nullptr) != (field.len == 0) ||
+            (field.values != nullptr && field.len != ctx->cell_count)) {
+            ctx->last_error = std::string(field.name) + " must be null or provide cell_count="
+                + std::to_string(ctx->cell_count) + " values, got len="
+                + std::to_string(field.len);
+            return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+        }
+        if (field.values != nullptr &&
+            !valid_cellwise_values(
+                field.values, field.len, plan->active_mask, field.require_positive)) {
+            ctx->last_error = std::string(field.name)
+                + " must be finite and >= 0"
+                + (field.require_positive ? " and > 0 on active cells" : "");
+            return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+        }
+    }
+    if (exchange_operator.faces) {
+        if (exchange_operator.len != ctx->cell_count ||
+            !exchange_operator.x_plus || !exchange_operator.y_plus || !exchange_operator.z_plus ||
+            !valid_cellwise_values(exchange_operator.x_plus, exchange_operator.len, nullptr, false) ||
+            !valid_cellwise_values(exchange_operator.y_plus, exchange_operator.len, nullptr, false) ||
+            !valid_cellwise_values(exchange_operator.z_plus, exchange_operator.len, nullptr, false)) {
+            ctx->last_error =
+                "exchange face coefficients must be three finite, non-negative arrays of cell_count values";
+            return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+        }
+    }
+    if (plan->enable_exchange != 0 && !exchange_operator.faces && plan->a_field != nullptr &&
+        !cellwise_values_equal_scalar(
+            plan->a_field, plan->a_field_len, plan->active_mask,
+            plan->material.exchange_stiffness)) {
+        // CUDA exchange reads A only from the face tail. A variable a_field
+        // without faces would silently run with the scalar A.
+        ctx->last_error =
+            "a_field_requires_exchange_faces: a cellwise A that differs from the scalar "
+            "exchange stiffness must be passed as FACES exchange coefficients";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    // Face coefficients only change exchange; the terms below read the scalar
+    // Ms/alpha (or a local A) and are blocked for cellwise material fields.
+    const bool cellwise_ms_or_alpha =
+        plan->ms_field != nullptr || plan->alpha_field != nullptr;
+    if (cellwise_ms_or_alpha || plan->a_field != nullptr) {
+        const char *owner = nullptr;
+        if (!cellwise_ms_or_alpha) {
+            // Only a variable A: exchange itself is fully supported.
+        } else if (plan->boundary_correction != FULLMAG_FDM_BOUNDARY_NONE) {
+            owner = "boundary_correction";
+        } else if (plan->temperature > 0.0) {
+            owner = "thermal";
+        } else if (ctx->has_zhang_li_stt || ctx->has_slonczewski_stt || ctx->has_sot) {
+            owner = "spin_torque";
+        } else if (reserve_rotated_dmi && plan->ms_field != nullptr) {
+            owner = "rotated_dmi_variable_ms";
+        }
+        if (owner == nullptr && plan->a_field != nullptr &&
+            (plan->has_interfacial_dmi != 0 || plan->has_bulk_dmi != 0 || reserve_rotated_dmi)) {
+            owner = "dmi_variable_exchange";
+        }
+        if (owner != nullptr) {
+            ctx->last_error = std::string("fdm_cuda_heterogeneous_material_unsupported:") + owner
+                + ": heterogeneous Ms/A/alpha does not yet combine with this term on native FDM CUDA";
+            return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+        }
     }
     if (has_oersted_field && plan->oersted_field_len != ctx->cell_count * 3u) {
         ctx->last_error = "oersted_field_len mismatch: expected "
@@ -1413,23 +1530,22 @@ static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
             + ", got " + std::to_string(plan->region_mask_len);
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
-    if (ctx->has_region_mask) {
-        for (uint64_t index = 0; index < plan->region_mask_len; ++index) {
-            if (plan->region_mask[index] > FULLMAG_FDM_MAX_REGION_ID) {
-                ctx->last_error = "fdm_region_lut_capacity_exceeded: requested_region_id="
-                    + std::to_string(plan->region_mask[index])
-                    + " supported_region_ids="
-                    + std::to_string(FULLMAG_FDM_MAX_REGION_ID);
-                return reinterpret_cast<fullmag_fdm_backend *>(ctx);
-            }
-        }
-    }
-    if (plan->exchange_pair_count != 0 && plan->exchange_pairs == nullptr) {
-        ctx->last_error = "exchange_pair_count is non-zero but exchange_pairs is null";
+    if (plan->exchange_lut != nullptr || plan->exchange_lut_len != 0 ||
+        plan->exchange_pairs != nullptr || plan->exchange_pair_count != 0 ||
+        (plan->exchange_pair_default != FULLMAG_FDM_EXCHANGE_PAIR_UNSPECIFIED &&
+         plan->exchange_pair_default != FULLMAG_FDM_EXCHANGE_PAIR_HARMONIC_MEAN)) {
+        ctx->last_error =
+            "fdm_exchange_lut_retired: region-pair exchange tables are retired; pass per-connection face coefficients through the fullmag_fdm_plan_desc_v2 exchange-operator tail";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
-    if (plan->exchange_pair_count != 0 && !ctx->has_region_mask) {
-        ctx->last_error = "exchange_pairs require region_mask";
+    if (plan->enable_exchange != 0 && ctx->has_region_mask && !exchange_operator.faces &&
+        plan->exchange_pair_default == FULLMAG_FDM_EXCHANGE_PAIR_UNSPECIFIED) {
+        // Historically UNSPECIFIED with a region mask and no LUT decoupled
+        // regions (A_ij = 0). The uniform operator would re-couple them, so
+        // such a descriptor must state its coupling explicitly. Without
+        // exchange the mask only serves observables and stays accepted.
+        ctx->last_error =
+            "fdm_exchange_pair_unspecified_retired: a region mask with exchange_pair_default=UNSPECIFIED historically decoupled regions; pass HARMONIC_MEAN for the uniform operator or FACES coefficients for any other coupling";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
     if (ctx->has_active_mask) {
@@ -1562,68 +1678,21 @@ static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
     {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
-    // Build or upload inter-region exchange coupling LUT
-    if (ctx->has_exchange_lut) {
-        constexpr uint64_t N = FULLMAG_FDM_MAX_EXCHANGE_REGIONS;
-        std::vector<double> lut_host(N * N, 0.0);
-        if (plan->exchange_lut != nullptr && plan->exchange_lut_len == N * N) {
-            // Use caller-provided LUT
-            std::memcpy(lut_host.data(), plan->exchange_lut, N * N * sizeof(double));
-        } else {
-            switch (plan->exchange_pair_default) {
-            case FULLMAG_FDM_EXCHANGE_PAIR_HARMONIC_MEAN:
-                // Uniform-material harmonic mean is A for every active pair.
-                std::fill(lut_host.begin(), lut_host.end(), ctx->A);
-                break;
-            case FULLMAG_FDM_EXCHANGE_PAIR_EXPLICIT:
-                ctx->last_error =
-                    "exchange_pair_default=explicit is not a valid default; use exchange_pairs for explicit overrides";
-                return reinterpret_cast<fullmag_fdm_backend *>(ctx);
-            case FULLMAG_FDM_EXCHANGE_PAIR_DISABLED:
-            case FULLMAG_FDM_EXCHANGE_PAIR_UNSPECIFIED:
-                // Legacy/free-surface default: A_ii = A, A_ij(i!=j) = 0.
-                for (uint64_t r = 0; r < N; ++r) {
-                    lut_host[r * N + r] = ctx->A;
-                }
-                break;
-            default:
-                ctx->last_error = "invalid exchange_pair_default";
-                return reinterpret_cast<fullmag_fdm_backend *>(ctx);
-            }
-            for (uint64_t index = 0; index < plan->exchange_pair_count; ++index) {
-                const fullmag_fdm_exchange_pair_desc &pair = plan->exchange_pairs[index];
-                if (pair.region_i > FULLMAG_FDM_MAX_REGION_ID ||
-                    pair.region_j > FULLMAG_FDM_MAX_REGION_ID) {
-                    ctx->last_error = "fdm_region_lut_capacity_exceeded: exchange pair region index exceeds supported_region_ids="
-                        + std::to_string(FULLMAG_FDM_MAX_REGION_ID);
-                    return reinterpret_cast<fullmag_fdm_backend *>(ctx);
-                }
-                double value = 0.0;
-                switch (pair.mode) {
-                case FULLMAG_FDM_EXCHANGE_PAIR_HARMONIC_MEAN:
-                    value = ctx->A * pair.scale;
-                    break;
-                case FULLMAG_FDM_EXCHANGE_PAIR_EXPLICIT:
-                    value = pair.inter_exchange * pair.scale;
-                    break;
-                case FULLMAG_FDM_EXCHANGE_PAIR_DISABLED:
-                    value = 0.0;
-                    break;
-                case FULLMAG_FDM_EXCHANGE_PAIR_UNSPECIFIED:
-                    ctx->last_error = "exchange pair mode must not be unspecified";
-                    return reinterpret_cast<fullmag_fdm_backend *>(ctx);
-                default:
-                    ctx->last_error = "invalid exchange pair mode";
-                    return reinterpret_cast<fullmag_fdm_backend *>(ctx);
-                }
-                lut_host[pair.region_i * N + pair.region_j] = value;
-                lut_host[pair.region_j * N + pair.region_i] = value;
-            }
-        }
-        if (!context_upload_exchange_lut(*ctx, lut_host.data(), N * N)) {
-            return reinterpret_cast<fullmag_fdm_backend *>(ctx);
-        }
-        ctx->exchange_lut_host = std::move(lut_host);
+    if (ctx->has_exchange_faces &&
+        !context_upload_exchange_faces(
+            *ctx,
+            exchange_operator.x_plus,
+            exchange_operator.y_plus,
+            exchange_operator.z_plus,
+            exchange_operator.len))
+    {
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    if ((plan->ms_field != nullptr || plan->alpha_field != nullptr) &&
+        !context_upload_material_fields(
+            *ctx, plan->ms_field, plan->alpha_field, ctx->cell_count))
+    {
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
     if (plan->demag_kernel_spectrum_len != 0 &&
         !context_upload_demag_kernel_spectra(
@@ -1741,7 +1810,7 @@ static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
 fullmag_fdm_backend *fullmag_fdm_backend_create(
     const fullmag_fdm_plan_desc *plan)
 {
-    return fullmag_fdm_backend_create_impl(plan, false);
+    return fullmag_fdm_backend_create_impl(plan, false, ExchangeOperatorInput{});
 }
 
 int fullmag_fdm_backend_create_time_policy_v2_checked(
@@ -1757,9 +1826,18 @@ int fullmag_fdm_backend_create_time_policy_v2_checked(
     std::unique_ptr<fullmag_fdm_plan_ingestion_v2> ingestion(raw_ingestion);
 #if FULLMAG_HAS_CUDA
     plan = &plan_ingestion_descriptor(*ingestion);
+    ExchangeOperatorInput exchange_operator;
+    if (plan->exchange_operator_mode == FULLMAG_FDM_EXCHANGE_OPERATOR_FACES) {
+        exchange_operator.faces = true;
+        exchange_operator.x_plus = plan->exchange_face_x_plus;
+        exchange_operator.y_plus = plan->exchange_face_y_plus;
+        exchange_operator.z_plus = plan->exchange_face_z_plus;
+        exchange_operator.len = plan->exchange_face_len;
+    }
     fullmag_fdm_backend *handle = fullmag_fdm_backend_create_impl(
         &plan->base,
-        plan->has_rotated_interfacial_dmi != 0);
+        plan->has_rotated_interfacial_dmi != 0,
+        exchange_operator);
     if (!handle) return FULLMAG_FDM_ERR_CUDA;
     *out_handle = handle;
     auto *ctx = reinterpret_cast<Context *>(handle);
@@ -2338,6 +2416,14 @@ int fullmag_fdm_context_bind_gpu_transport_v1(
     if (ctx->has_multilayer_plan_v2) {
         ctx->last_error =
             "spin transport is unsupported for v2 multilayer handles";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    // The transport torque term uses the scalar alpha (and Ms). The create-time
+    // gate cannot see a binding attached later, so reject it here as well.
+    if (ctx->ms_field != nullptr || ctx->alpha_field != nullptr) {
+        ctx->last_error =
+            "fdm_cuda_heterogeneous_material_unsupported:gpu_transport: heterogeneous "
+            "Ms/alpha does not yet combine with GPU transport torque on native FDM CUDA";
         return FULLMAG_FDM_ERR_INVALID;
     }
     if (!context_bind_gpu_transport_rhs(*ctx, *binding)) {
