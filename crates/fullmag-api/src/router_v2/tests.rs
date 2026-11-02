@@ -16434,9 +16434,10 @@ async fn mesh_region_membership_returns_typed_422_for_selection_failures() {
         (
             "unsupported",
             fullmag_authoring::SceneRegionShape::Csg {
-                expression: Box::new(fullmag_ir::GeometryEntryIR::Ellipsoid {
-                    name: "ellipsoid".to_string(),
-                    radii: [1.0; 3],
+                expression: Box::new(fullmag_ir::GeometryEntryIR::Ellipse {
+                    name: "ellipse".to_string(),
+                    radii: [1.0; 2],
+                    height: 1.0,
                 }),
             },
             None,
@@ -16555,9 +16556,10 @@ async fn mesh_region_quality_preserves_selection_error() {
                 owner_object: "body".to_string(),
                 name: "Unsupported".to_string(),
                 shape: fullmag_authoring::SceneRegionShape::Csg {
-                    expression: Box::new(fullmag_ir::GeometryEntryIR::Ellipsoid {
-                        name: "ellipsoid".to_string(),
-                        radii: [1.0; 3],
+                    expression: Box::new(fullmag_ir::GeometryEntryIR::Ellipse {
+                        name: "ellipse".to_string(),
+                        radii: [1.0; 2],
+                        height: 1.0,
                     }),
                 },
                 frame: fullmag_authoring::SceneRegionFrame::Object,

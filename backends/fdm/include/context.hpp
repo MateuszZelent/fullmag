@@ -466,6 +466,8 @@ struct Context {
     RegionalFieldDriveParams *regional_field_drive_params = nullptr;
     double *regional_field_drive_points = nullptr;
     uint32_t regional_field_drive_count = 0;
+    // True when any uploaded drive has a non-constant waveform.
+    bool regional_field_drive_time_dependent = false;
     uint64_t regional_field_drive_point_count = 0;
 
     // Execution

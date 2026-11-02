@@ -365,10 +365,8 @@ __global__ void exchange_energy_blocks_kernel(
         if (has_active_mask && active_mask[idx] == 0) {
             continue;
         }
-        // Per-cell effective volume: V_i = φ_i × dx×dy×dz
         const double phi_i = has_volume_fraction ? volume_fraction[idx] : 1.0;
         if (phi_i <= 0.0) continue;
-        const double v_i = phi_i * cell_volume;
 
         int z = static_cast<int>(idx / (static_cast<uint64_t>(ny) * nx));
         int rem = static_cast<int>(idx - static_cast<uint64_t>(z) * ny * nx);
@@ -386,9 +384,10 @@ __global__ void exchange_energy_blocks_kernel(
             if (!has_active_mask || active_mask[ni] != 0) {
                 const double phi_j = has_volume_fraction ? volume_fraction[ni] : 1.0;
                 if (phi_j > 0.0) {
+                    const double phi_pair = 0.5 * (phi_i + phi_j);
                     double coeff = has_faces
-                        ? face_xp[idx] * v_i
-                        : a_times_v * phi_i;
+                        ? face_xp[idx] * phi_pair * cell_volume
+                        : a_times_v * phi_pair;
                     double dx_ = to_f64(mx[ni]) - cx;
                     double dy_ = to_f64(my[ni]) - cy;
                     double dz_ = to_f64(mz[ni]) - cz;
@@ -403,9 +402,10 @@ __global__ void exchange_energy_blocks_kernel(
             if (!has_active_mask || active_mask[ni] != 0) {
                 const double phi_j = has_volume_fraction ? volume_fraction[ni] : 1.0;
                 if (phi_j > 0.0) {
+                    const double phi_pair = 0.5 * (phi_i + phi_j);
                     double coeff = has_faces
-                        ? face_yp[idx] * v_i
-                        : a_times_v * phi_i;
+                        ? face_yp[idx] * phi_pair * cell_volume
+                        : a_times_v * phi_pair;
                     double dx_ = to_f64(mx[ni]) - cx;
                     double dy_ = to_f64(my[ni]) - cy;
                     double dz_ = to_f64(mz[ni]) - cz;
@@ -421,9 +421,10 @@ __global__ void exchange_energy_blocks_kernel(
             if (!has_active_mask || active_mask[ni] != 0) {
                 const double phi_j = has_volume_fraction ? volume_fraction[ni] : 1.0;
                 if (phi_j > 0.0) {
+                    const double phi_pair = 0.5 * (phi_i + phi_j);
                     double coeff = has_faces
-                        ? face_zp[idx] * v_i
-                        : a_times_v * phi_i;
+                        ? face_zp[idx] * phi_pair * cell_volume
+                        : a_times_v * phi_pair;
                     double dx_ = to_f64(mx[ni]) - cx;
                     double dy_ = to_f64(my[ni]) - cy;
                     double dz_ = to_f64(mz[ni]) - cz;
@@ -495,8 +496,10 @@ __global__ void exchange_energy_t0_blocks_kernel(
 
         const double phi_i = volume_fraction[idx];
         if (phi_i <= 0.0) continue;
-        const double phi_eff = (phi_i > phi_floor) ? phi_i : phi_floor;
-        const double v_eff = phi_eff * cell_volume;
+        // Variational consistency with exchange_field_t0_fp64_kernel:
+        // H_ex_i scales by 1/phi_eff_i while cell weighting scales by phi_eff_i * cell_volume,
+        // so phi_eff_i cancels and each face link carries weight A_ij * f * cell_volume.
+        (void)phi_floor;
 
         int z = static_cast<int>(idx / (static_cast<uint64_t>(ny) * nx));
         int rem = static_cast<int>(idx - static_cast<uint64_t>(z) * ny * nx);
@@ -512,12 +515,12 @@ __global__ void exchange_energy_t0_blocks_kernel(
             const double f = face_xp[idx];
             if (f > 0.0) {
                 uint64_t ni = idx + 1;
-                if (!has_active_mask || active_mask[ni] != 0) {
+                if ((!has_active_mask || active_mask[ni] != 0) && volume_fraction[ni] > 0.0) {
                     double A_ij = exch_xp ? exch_xp[idx] : A_uniform;
                     double dmx = to_f64(mx[ni]) - cx;
                     double dmy = to_f64(my[ni]) - cy;
                     double dmz = to_f64(mz[ni]) - cz;
-                    energy += A_ij * f * v_eff * (dmx*dmx + dmy*dmy + dmz*dmz) * inv_dx2;
+                    energy += A_ij * f * cell_volume * (dmx*dmx + dmy*dmy + dmz*dmz) * inv_dx2;
                 }
             }
         }
@@ -526,12 +529,12 @@ __global__ void exchange_energy_t0_blocks_kernel(
             const double f = face_yp[idx];
             if (f > 0.0) {
                 uint64_t ni = idx + nx;
-                if (!has_active_mask || active_mask[ni] != 0) {
+                if ((!has_active_mask || active_mask[ni] != 0) && volume_fraction[ni] > 0.0) {
                     double A_ij = exch_yp ? exch_yp[idx] : A_uniform;
                     double dmx = to_f64(mx[ni]) - cx;
                     double dmy = to_f64(my[ni]) - cy;
                     double dmz = to_f64(mz[ni]) - cz;
-                    energy += A_ij * f * v_eff * (dmx*dmx + dmy*dmy + dmz*dmz) * inv_dy2;
+                    energy += A_ij * f * cell_volume * (dmx*dmx + dmy*dmy + dmz*dmz) * inv_dy2;
                 }
             }
         }
@@ -540,12 +543,12 @@ __global__ void exchange_energy_t0_blocks_kernel(
             const double f = face_zp[idx];
             if (f > 0.0) {
                 uint64_t ni = idx + static_cast<uint64_t>(nx) * ny;
-                if (!has_active_mask || active_mask[ni] != 0) {
+                if ((!has_active_mask || active_mask[ni] != 0) && volume_fraction[ni] > 0.0) {
                     double A_ij = exch_zp ? exch_zp[idx] : A_uniform;
                     double dmx = to_f64(mx[ni]) - cx;
                     double dmy = to_f64(my[ni]) - cy;
                     double dmz = to_f64(mz[ni]) - cz;
-                    energy += A_ij * f * v_eff * (dmx*dmx + dmy*dmy + dmz*dmz) * inv_dz2;
+                    energy += A_ij * f * cell_volume * (dmx*dmx + dmy*dmy + dmz*dmz) * inv_dz2;
                 }
             }
         }
@@ -607,8 +610,7 @@ __global__ void exchange_energy_t1_blocks_kernel(
 
         const double phi_i = volume_fraction[idx];
         if (phi_i <= 0.0) continue;
-        const double phi_eff = (phi_i > phi_floor) ? phi_i : phi_floor;
-        const double v_eff = phi_eff * cell_volume;
+        (void)phi_floor;
 
         int z = static_cast<int>(idx / (static_cast<uint64_t>(ny) * nx));
         int rem = static_cast<int>(idx - static_cast<uint64_t>(z) * ny * nx);
@@ -623,16 +625,20 @@ __global__ void exchange_energy_t1_blocks_kernel(
         const double dxm = fmax(d_delta_xm[idx], delta_min);
         const double dxp = fmax(d_delta_xp[idx], delta_min);
 
-        // +x neighbor: denominator = dx × (dx + δ_xm)  [opposite side delta]
+        // +x neighbor: symmetrized forward/backward T1 denominator
         if (x + 1 < nx && dxp > 0.0) {
             uint64_t ni = idx + 1;
             const double mn_x = to_f64(mx[ni]), mn_y = to_f64(my[ni]), mn_z = to_f64(mz[ni]);
             if (mn_x != 0.0 || mn_y != 0.0 || mn_z != 0.0) {
-                if (!has_active_mask || active_mask[ni] != 0) {
+                if ((!has_active_mask || active_mask[ni] != 0) && volume_fraction[ni] > 0.0) {
                     double A_ij = exch_xp ? exch_xp[idx] : A_uniform;
-                    double denom = dx * (dx + dxm);
+                    const double dxp_ni = fmax(d_delta_xp[ni], delta_min);
+                    const double inv_denom_sym = 0.5 * (
+                        2.0 / (dx * (dx + dxm)) +
+                        2.0 / (dx * (dx + dxp_ni))
+                    );
                     double dmx = mn_x - cx, dmy = mn_y - cy, dmz = mn_z - cz;
-                    energy += A_ij * v_eff * 2.0 / denom * (dmx*dmx + dmy*dmy + dmz*dmz);
+                    energy += A_ij * cell_volume * inv_denom_sym * (dmx*dmx + dmy*dmy + dmz*dmz);
                 }
             }
         }
@@ -645,11 +651,15 @@ __global__ void exchange_energy_t1_blocks_kernel(
             uint64_t ni = idx + nx;
             const double mn_x = to_f64(mx[ni]), mn_y = to_f64(my[ni]), mn_z = to_f64(mz[ni]);
             if (mn_x != 0.0 || mn_y != 0.0 || mn_z != 0.0) {
-                if (!has_active_mask || active_mask[ni] != 0) {
+                if ((!has_active_mask || active_mask[ni] != 0) && volume_fraction[ni] > 0.0) {
                     double A_ij = exch_yp ? exch_yp[idx] : A_uniform;
-                    double denom = dy * (dy + dym);
+                    const double dyp_ni = fmax(d_delta_yp[ni], delta_min);
+                    const double inv_denom_sym = 0.5 * (
+                        2.0 / (dy * (dy + dym)) +
+                        2.0 / (dy * (dy + dyp_ni))
+                    );
                     double dmx = mn_x - cx, dmy = mn_y - cy, dmz = mn_z - cz;
-                    energy += A_ij * v_eff * 2.0 / denom * (dmx*dmx + dmy*dmy + dmz*dmz);
+                    energy += A_ij * cell_volume * inv_denom_sym * (dmx*dmx + dmy*dmy + dmz*dmz);
                 }
             }
         }
@@ -663,11 +673,15 @@ __global__ void exchange_energy_t1_blocks_kernel(
                 uint64_t ni = idx + static_cast<uint64_t>(nx) * ny;
                 const double mn_x = to_f64(mx[ni]), mn_y = to_f64(my[ni]), mn_z = to_f64(mz[ni]);
                 if (mn_x != 0.0 || mn_y != 0.0 || mn_z != 0.0) {
-                    if (!has_active_mask || active_mask[ni] != 0) {
+                    if ((!has_active_mask || active_mask[ni] != 0) && volume_fraction[ni] > 0.0) {
                         double A_ij = exch_zp ? exch_zp[idx] : A_uniform;
-                        double denom = dz * (dz + dzm);
+                        const double dzp_ni = fmax(d_delta_zp[ni], delta_min);
+                        const double inv_denom_sym = 0.5 * (
+                            2.0 / (dz * (dz + dzm)) +
+                            2.0 / (dz * (dz + dzp_ni))
+                        );
                         double dmx = mn_x - cx, dmy = mn_y - cy, dmz = mn_z - cz;
-                        energy += A_ij * v_eff * 2.0 / denom * (dmx*dmx + dmy*dmy + dmz*dmz);
+                        energy += A_ij * cell_volume * inv_denom_sym * (dmx*dmx + dmy*dmy + dmz*dmz);
                     }
                 }
             }
@@ -1678,39 +1692,20 @@ __global__ void dmi_energy_blocks_kernel(
         }
 
         double mmx = to_f64(mx[idx]), mmy = to_f64(my[idx]), mmz = to_f64(mz[idx]);
+        (void)exchange_stiffness;
 
-        const bool missing_xm = !periodic_x && ix == 0;
-        const bool missing_xp = !periodic_x && ix == nx - 1;
-        const bool missing_ym = !periodic_y && iy == 0;
-        const bool missing_yp = !periodic_y && iy == ny - 1;
         double mxm = to_f64(mx[xm]), mym = to_f64(my[xm]), mzm = to_f64(mz[xm]);
         double mxp = to_f64(mx[xp]), myp = to_f64(my[xp]), mzp = to_f64(mz[xp]);
         double mxym = to_f64(mx[ym]), myym = to_f64(my[ym]), mzym = to_f64(mz[ym]);
         double mxyP = to_f64(mx[yp]), myyP = to_f64(my[yp]), mzyP = to_f64(mz[yp]);
-        if (has_interfacial && exchange_stiffness > 0.0) {
-            const double d_over_2a = D_int / (2.0 * exchange_stiffness);
-            const double dx_cell = 1.0 / (2.0 * inv_2dx);
-            const double dy_cell = 1.0 / (2.0 * inv_2dy);
-            if (missing_xm) {
-                mxm = mmx + dx_cell * d_over_2a * mmz;
-                mzm = mmz - dx_cell * d_over_2a * mmx;
-            }
-            if (missing_xp) {
-                mxp = mmx - dx_cell * d_over_2a * mmz;
-                mzp = mmz + dx_cell * d_over_2a * mmx;
-            }
-            if (missing_ym) {
-                myym = mmy + dy_cell * d_over_2a * mmz;
-                mzym = mmz - dy_cell * d_over_2a * mmy;
-            }
-            if (missing_yp) {
-                myyP = mmy - dy_cell * d_over_2a * mmz;
-                mzyP = mmz + dy_cell * d_over_2a * mmy;
-            }
-        }
+        (void)mym;
+        (void)myp;
+        (void)mxym;
+        (void)mxyP;
 
         if (has_interfacial) {
-            // E_dmi = D * [mz(dmx/dx + dmy/dy) - mx*dmz/dx - my*dmz/dy] * V
+            // Clamped central difference matches the exact face-based DMI energy
+            // functional from fullmag-engine (dmi.rs) and energy_density_fp64.cu.
             double dmx_dx = (mxp - mxm) * inv_2dx;
             double dmy_dy = (myyP - myym) * inv_2dy;
             double dmz_dx = (mzp - mzm) * inv_2dx;
