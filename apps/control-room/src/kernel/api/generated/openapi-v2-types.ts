@@ -2804,6 +2804,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/diagnostics/performance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["diagnostics_get_sessions_current_diagnostics_performance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/diagnostics/solver-profile": {
         parameters: {
             query?: never;
@@ -13571,6 +13587,60 @@ export interface components {
         RunOutput: {
             kind: string;
             path: string;
+        };
+        /** @description Bounded automatic run telemetry. GPU samples describe the whole device. */
+        RunPerformancePointResource: {
+            /**
+             * Format: double
+             * @description Process CPU utilization; can exceed 100 percent for multiple cores.
+             */
+            cpu_percent?: number | null;
+            /** Format: int64 */
+            elapsed_monotonic_ns: number;
+            /** Format: int64 */
+            gpu_memory_bytes?: number | null;
+            /** Format: double */
+            gpu_percent?: number | null;
+            /** Format: double */
+            gpu_power_watts?: number | null;
+            /** Format: int64 */
+            rss_bytes?: number | null;
+            /** Format: int64 */
+            step_index?: number | null;
+        };
+        RunPerformanceResource: {
+            attempt_id?: string | null;
+            /** Format: int64 */
+            collection_overhead_ns?: number | null;
+            /** Format: int64 */
+            elapsed_monotonic_ns: number;
+            /** Format: int64 */
+            first_step_index?: number | null;
+            gpu_scope: string;
+            gpu_unavailable_reason?: string | null;
+            /** Format: int64 */
+            latest_evaluate_host_wall_ns?: number | null;
+            /** Format: int64 */
+            latest_rejected_attempts?: number | null;
+            /** Format: int64 */
+            latest_step_wall_ns?: number | null;
+            /** Format: int64 */
+            ownership_epoch?: number | null;
+            points: components["schemas"]["RunPerformancePointResource"][];
+            reason?: string | null;
+            revision: string;
+            /** Format: int64 */
+            rows_dropped: number;
+            run_id?: string | null;
+            /** Format: int64 */
+            sample_sequence: number;
+            state: string;
+            step_id?: string | null;
+            /** Format: int64 */
+            step_index?: number | null;
+            task_id?: string | null;
+            /** Format: int64 */
+            unique_step_callback_records: number;
         };
         /** @description What produced the results. */
         RunSource: {
@@ -26188,6 +26258,50 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["GpuTelemetryResponse"];
                 };
+            };
+        };
+    };
+    diagnostics_get_sessions_current_diagnostics_performance: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded automatic telemetry for the verified current run attempt */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunPerformanceResource"];
+                };
+            };
+            /** @description Performance snapshot not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Retryable performance observation conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

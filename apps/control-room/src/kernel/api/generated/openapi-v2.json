@@ -33710,6 +33710,209 @@
         ],
         "type": "object"
       },
+      "RunPerformancePointResource": {
+        "description": "Bounded automatic run telemetry. GPU samples describe the whole device.",
+        "properties": {
+          "cpu_percent": {
+            "description": "Process CPU utilization; can exceed 100 percent for multiple cores.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "elapsed_monotonic_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "gpu_memory_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "gpu_percent": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "gpu_power_watts": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "rss_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "step_index": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "elapsed_monotonic_ns"
+        ],
+        "type": "object"
+      },
+      "RunPerformanceResource": {
+        "properties": {
+          "attempt_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "collection_overhead_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "elapsed_monotonic_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "first_step_index": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "gpu_scope": {
+            "type": "string"
+          },
+          "gpu_unavailable_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "latest_evaluate_host_wall_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "latest_rejected_attempts": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "latest_step_wall_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ownership_epoch": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/RunPerformancePointResource"
+            },
+            "maxItems": 120,
+            "type": "array"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "type": "string"
+          },
+          "rows_dropped": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sample_sequence": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          },
+          "step_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "step_index": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unique_step_callback_records": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "state",
+          "sample_sequence",
+          "elapsed_monotonic_ns",
+          "unique_step_callback_records",
+          "rows_dropped",
+          "gpu_scope",
+          "points"
+        ],
+        "type": "object"
+      },
       "RunSource": {
         "description": "What produced the results.",
         "properties": {
@@ -63317,6 +63520,40 @@
               }
             },
             "description": "GPU telemetry or degraded unavailable response"
+          }
+        },
+        "tags": [
+          "diagnostics"
+        ]
+      }
+    },
+    "/v2/sessions/current/diagnostics/performance": {
+      "get": {
+        "operationId": "diagnostics_get_sessions_current_diagnostics_performance",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunPerformanceResource"
+                }
+              }
+            },
+            "description": "Bounded automatic telemetry for the verified current run attempt"
+          },
+          "304": {
+            "description": "Performance snapshot not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "No active workspace"
+          },
+          "409": {
+            "description": "Retryable performance observation conflict"
           }
         },
         "tags": [

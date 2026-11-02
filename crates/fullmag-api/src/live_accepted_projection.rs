@@ -214,11 +214,17 @@ pub(crate) fn spawn(state: Arc<AppState>) {
         let mut study_cache: Option<Arc<fullmag_runtime_control::AcceptedStudySnapshot>> = None;
         // Last live quantity demand published beside a run (run id, quantities).
         let mut published_demand: Option<(String, Vec<String>)> = None;
+        let mut performance = crate::accepted_run_performance::InvalidationCursor::default();
         // The poll repeats every interval; report each distinct deferral once.
         let mut last_deferral: Option<String> = None;
         let mut repeated_deferrals: u32 = 0;
         loop {
             interval.tick().await;
+            // The recorder advances independently of solver callbacks. Reuse
+            // this bounded tick without rebuilding physics/read-model state.
+            if let Err(error) = crate::accepted_run_performance::publish_if_changed(&state, &mut performance).await {
+                tracing::debug!(error = %error, "automatic performance invalidation deferred");
+            }
             match poll_once(&state, &mut cursor, &mut study_cache, &mut published_demand).await {
                 Ok(()) => {
                     last_deferral = None;

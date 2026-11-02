@@ -2778,6 +2778,14 @@ fn execute_accepted_worker_start_with_snapshot(
     // Keep the authored runtime selection intact. The managed lease is an
     // effective runtime override, recorded separately for provenance.
     let mut problem = accepted_step.problem.clone();
+    problem.problem_meta.runtime_metadata.insert("performance_execution_identity".into(),
+        serde_json::json!({
+            "run_id": accepted_step.claim.run_id.as_str(),
+            "task_id": accepted_step.claim.task_id.as_str(),
+            "step_id": accepted_step.step_id,
+            "attempt_id": accepted_step.claim.attempt_id.as_str(),
+            "ownership_epoch": accepted_step.claim.ownership_epoch.value(),
+        }));
     problem
         .problem_meta
         .runtime_metadata

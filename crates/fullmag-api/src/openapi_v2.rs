@@ -362,6 +362,7 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::platform::system::get_cpu_telemetry,
         crate::router_v2::handlers::platform::system::get_gpu_telemetry,
         crate::router_v2::handlers::platform::system::get_solver_profile,
+        crate::router_v2::handlers::platform::system::get_run_performance,
         crate::router_v2::handlers::persistence::session::export_session,
         crate::router_v2::handlers::persistence::session::inspect_project_archive,
         crate::router_v2::handlers::persistence::session::commit_session,
