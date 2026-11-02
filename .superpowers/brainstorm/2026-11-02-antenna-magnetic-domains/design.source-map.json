@@ -1,0 +1,241 @@
+{
+  "document": {
+    "path": ".superpowers/brainstorm/2026-11-02-antenna-magnetic-domains/design.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "planned",
+      "reason": "Projekt nie dowodzi wykonania; wymagane odrębne bramki."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "unsupported",
+      "reason": "Projekt nie dowodzi wykonania; wymagane odrębne bramki."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "unsupported",
+      "reason": "Projekt nie dowodzi wykonania; wymagane odrębne bramki."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "unsupported",
+      "reason": "Projekt nie dowodzi wykonania; wymagane odrębne bramki."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-domains-antenna-basis",
+      "symbols": [
+        "r",
+        "t",
+        "omega",
+        "iref",
+        "i",
+        "href",
+        "h",
+        "hant"
+      ],
+      "sources": [
+        "physical-intent"
+      ]
+    },
+    {
+      "id": "eq-domains-effective-field",
+      "symbols": [
+        "r",
+        "omega",
+        "heff",
+        "hbias",
+        "hdemag",
+        "hex",
+        "han",
+        "hant",
+        "m"
+      ],
+      "sources": [
+        "physical-intent"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "r",
+      "latex": "\\mathbf r",
+      "meaning": "Położenie w jednym układzie współrzędnych sceny",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "t",
+      "latex": "t",
+      "meaning": "Fizyczny czas dynamiki",
+      "si_unit": "\\mathrm s"
+    },
+    {
+      "id": "omega",
+      "latex": "\\Omega_m",
+      "meaning": "Domena materiału magnetycznego",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "iref",
+      "latex": "I_{\\mathrm{ref}}",
+      "meaning": "Podpisany prąd zaakceptowanego rozwiązania referencyjnego",
+      "si_unit": "\\mathrm A"
+    },
+    {
+      "id": "i",
+      "latex": "I(t)",
+      "meaning": "Zadany przebieg prądu ze swoją konwencją amplitudy i czasu",
+      "si_unit": "\\mathrm A"
+    },
+    {
+      "id": "href",
+      "latex": "\\mathbf H_{\\mathrm{ref}}",
+      "meaning": "Surowe pole anteny przy prądzie referencyjnym",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "h",
+      "latex": "\\mathbf h",
+      "meaning": "Baza pola na jednostkę prądu",
+      "si_unit": "\\mathrm{m^{-1}}"
+    },
+    {
+      "id": "hant",
+      "latex": "\\mathbf H_{\\mathrm{ant}}",
+      "meaning": "Pole wymuszające od anteny",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "heff",
+      "latex": "\\mathbf H_{\\mathrm{eff}}",
+      "meaning": "Pole efektywne w rozważanym zakresie interakcji",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "hbias",
+      "latex": "\\mathbf H_{\\mathrm{bias}}",
+      "meaning": "Zadane pole zewnętrzne",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "hdemag",
+      "latex": "\\mathbf H_{\\mathrm{demag}}",
+      "meaning": "Pole własne całego ferromagnetyka",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "hex",
+      "latex": "\\mathbf H_{\\mathrm{ex}}",
+      "meaning": "Wkład wymiany",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "han",
+      "latex": "\\mathbf H_{\\mathrm{an}}",
+      "meaning": "Wkład anizotropii",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "m",
+      "latex": "\\mathbf m",
+      "meaning": "Znormalizowana magnetyzacja w materiale",
+      "si_unit": "1"
+    }
+  ],
+  "sources": [
+    {
+      "id": "physical-intent",
+      "path": ".superpowers/brainstorm/2026-11-02-antenna-magnetic-domains/design.md",
+      "symbol": "DOC-ANCHOR:domains-design-physical-model",
+      "responsibility": "Projektowany zakres fizyczny; nie dowód nowej implementacji.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "target",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class FieldTarget",
+      "responsibility": "Istniejący selector i lowering celu."
+    },
+    {
+      "id": "universe",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyUniverseHandle",
+      "responsibility": "Istniejący zakres konfiguracji Universe i mesh."
+    },
+    {
+      "id": "sampling",
+      "path": "crates/fullmag-plan/src/antenna_field_solve.rs",
+      "symbol": "resolve_field_sampling",
+      "responsibility": "Obecne ograniczenia carrierów."
+    },
+    {
+      "id": "frozen",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "_extract_frozen_magnetic_submesh",
+      "responsibility": "Obecna ekstrakcja rdzenia magnetycznego."
+    },
+    {
+      "id": "merge",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "_merge_frozen_magnetic_submesh_with_air_mesh",
+      "responsibility": "Obecne składanie rdzenia i powietrza."
+    },
+    {
+      "id": "ui",
+      "path": "apps/control-room/src/modules/explorer/builders/airboxExplorerNodes.ts",
+      "symbol": "buildAirboxPresentationNode",
+      "responsibility": "Obecne pojedyncze ID Airbox."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "FieldTarget.object.object_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "Niepusty object_id; ValueError przy pustym ID; istnienie celu i mesh sprawdza planner.",
+        "meaning": "Cel pola wskazany przez stabilną tożsamość obiektu.",
+        "backend_support": "Obecny planner FEM: Object/Global na wspieranym Tet4; nowy workflow niekwalifikowany.",
+        "problem_ir": "antenna_field_solve_stages[].field_sampling_domain.object_id"
+      },
+      {
+        "python": "study.universe.mesh.maximum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "Finite > 0; ValueError dla niepoprawnej wartości; nie określa zasięgu pola.",
+        "meaning": "Maksymalny rozmiar elementu",
+        "backend_support": "Konfiguracja FEM CPU/GPU; bez mieszania z FDM cell_size; nowy workflow niekwalifikowany.",
+        "problem_ir": "runtime_metadata.study_universe.airbox_hmax"
+      },
+      {
+        "python": "study.universe.mesh.minimum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "Finite > 0 i <= maksimum, jeśli podane; ValueError przy sprzeczności.",
+        "meaning": "Minimalny rozmiar elementu",
+        "backend_support": "Konfiguracja FEM CPU/GPU; bez mieszania z FDM cell_size; nowy workflow niekwalifikowany.",
+        "problem_ir": "runtime_metadata.study_universe.airbox_hmin"
+      },
+      {
+        "python": "study.universe.mesh.maximum_element_growth_rate",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Finite 1 < g <= 2.5; ValueError poza zakresem; None pozostawia konfigurację bez nadpisania.",
+        "meaning": "Kontrola przejścia rozmiarów; nie estymator błędu pola.",
+        "backend_support": "Konfiguracja FEM CPU/GPU; bez mieszania z FDM cell_size; nowy workflow niekwalifikowany.",
+        "problem_ir": "runtime_metadata.study_universe.airbox_growth_rate"
+      }
+    ]
+  }
+}
