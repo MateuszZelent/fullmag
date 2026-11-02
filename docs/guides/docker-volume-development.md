@@ -471,6 +471,40 @@ Nie ponawia skryptu i nie zmienia danych sesji. Inny błąd, uruchomiony backend
 lub zaakceptowany run pozostawiają kwarantannę. Trasa na żywej grupie:
 **NOT VERIFIED**.
 
+Przepełnienie wyjścia helpera podczas odczytu flag startupu ma osobną,
+ograniczoną trasę zachowującą historię terminalnych runów:
+
+```bash
+just docker-dev-reconcile-helper-output "<checkout>" <activation-attempt>
+just docker-dev-reconcile-helper-output "<checkout>" <activation-attempt> true <plan-sha256>
+```
+
+Domyślny preview niczego nie zatrzymuje. Apply wymaga niezmienionego planu,
+dokładnego zapisanego HTTP 500 dla limitu 1048576 bajtów, pustej aktywnej sesji,
+terminalnych katalogów zadań, zwolnionych lease i dowodu braku `RunIntent`
+tego żądania we wszystkich zachowanych runach. Ta trasa nie zmienia warunków
+starszego `docker-dev-release-unknown-activation`.
+
+Operator zapisuje trwały intent przed SIGTERM. Nie wysyła SIGKILL; po przerwanej
+obserwacji wznowienie wymaga tego samego planu i tej samej inkarnacji backendu.
+Jeżeli backend nadal działa, ponownie sprawdza brak aktywnej sesji przed sygnałem.
+Po zatrzymaniu wymaga `Exited (0)`, native `drained`, ponownego sprawdzenia
+magazynu i niezmienionej historii. Dopiero wtedy publikuje dowód
+`terminal-history-output-proof.json` i pozwala oryginalnemu helperowi zwolnić
+jego techniczny lease. Oryginalny marker `started`, receipt i wszystkie wyniki
+pozostają zachowane; żądania startupu nie wolno ponawiać. Następny zarządzany
+`docker-dev` może wznowić zatrzymaną grupę z zachowanym storage, bez fresh-state.
+Przypadek z 14 historycznymi terminalnymi runami zweryfikowano w runtime;
+pozostałe stany nadal podlegają opisanym odmowom i testom fail-closed.
+
+Startup odczytuje teraz tylko `interactive_session_requested` i `wait_for_solve`
+przez wewnętrzne `export-run-config --runtime-flags-only`. Dokument sceny nadal
+przenosi odwołania do plikowych stanów magnetyzacji. Pełne wektory nie trafiają
+do wyjścia helpera służącego wyłącznie odczytowi tych flag; limit 1 MiB i limit
+czasu pozostają bez zmian. Lekki test regresji obejmuje 18528 wektorów i
+nieprawidłowy kontener metadanych; odbiór tej zmiany przez przebudowane API
+wymaga osobnego dowodu managed runtime.
+
 Każde jawne wywołanie otrzymuje nowy domyślny `request_id` w postaci
 `docker-volume-<uuid>`, zapisany w receipcie przed wysłaniem żądania. Dzięki temu
 ten sam plik może posłużyć do kolejnej symulacji. Jawny `request_id` pozostaje

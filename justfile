@@ -59,6 +59,11 @@ docker-dev-cancel-failed-no-spawn source_root container_id image_id process_rece
 docker-dev-release-unknown-activation source_root activation:
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev_release_unknown_activation.py" --repo-root "{{repo_root}}" --source-root {{quote(source_root)}} --activation {{quote(activation)}}
 
+# Reconcile only the known pre-admission helper-output failure, preserving terminal history.
+# Preview is read-only; apply requires its unchanged digest and authenticates drain.
+docker-dev-reconcile-helper-output source_root activation apply="false" plan_sha256="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev_reconcile_helper_output_failure.py" --repo-root "{{repo_root}}" --source-root {{quote(source_root)}} --activation {{quote(activation)}}{{if apply == "true" { " --apply --plan-sha256 " + quote(plan_sha256) } else if apply == "false" { "" } else { error("apply must be true or false") } }}
+
 # Stop one rejected startup before any RunIntent or host reservation was admitted.
 # Every identity and proof is explicit; the helper never retries the script or clears state.
 docker-dev-stop-unadmitted attempt config_sha256 source_root backend_container_id frontend_container_id image_id failure_marker_sha256 process_receipt_sha256 source_sha256 request_id session_id:
