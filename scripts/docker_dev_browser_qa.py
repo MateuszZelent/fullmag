@@ -17,7 +17,7 @@ import json
 import math
 import os
 from decimal import Decimal, ROUND_HALF_UP, localcontext
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import time
 from urllib.error import HTTPError, URLError
@@ -38,6 +38,7 @@ from docker_build_control import (
 from docker_compose_identity import compose_project_identity, source_labels, validate_source_labels
 from docker_dev_defaults import _validate_live_network, resolve_defaults
 from docker_backend_volume_cache import _safe_project_id as cache_project_id_for_layout
+from bootstrap_docker_toolchain import CONTROL_ROOT, CONTROL_VOLUME_SCHEMA
 
 
 PLAYWRIGHT_VERSION = "1.62.1"
@@ -125,20 +126,155 @@ def _inspect_existing_volume(name: str, label: str) -> dict[str, object]:
     return records[0]
 
 
-def _validate_existing_control_volume(control: BuildControl) -> None:
+def _validate_existing_control_volume(control: BuildControl) -> dict[str, object]:
     """Authenticate the control volume before any helper mount can create it."""
-    volume = _inspect_existing_volume(control.volume, "Selected control volume")
+    import docker_group_storage as group_storage
+
+    try:
+        expected_name = group_storage.volume_declaration(control)["name"]
+    except BuildControlError as error:
+        raise BuildControlError("Selected control volume is not the canonical group volume") from error
+    volume = _inspect_existing_volume(expected_name, "Selected control volume")
     labels = volume.get("Labels")
+    expected_labels = {
+        "com.fullmag.compose.project": control.project,
+        "com.fullmag.toolchain.control.schema": CONTROL_VOLUME_SCHEMA,
+        "com.fullmag.toolchain.control.project": control.project,
+        "com.fullmag.toolchain.control.mount": CONTROL_ROOT,
+    }
+    optional_labels = {
+        key: value for key, value in control.labels.items()
+        if isinstance(key, str) and key.startswith("org.fullmag.")
+    }
+    allowed_labels = set(expected_labels) | set(optional_labels)
+    try:
+        from docker_named_volume_safety import validate_local_named_volume
+        validate_local_named_volume(volume, expected_name)
+    except ValueError as error:
+        raise BuildControlError("Selected control volume backing differs") from error
     if (
-        volume.get("Name") != control.volume
+        control.volume != expected_name
+        or getattr(control, "shared_labels", None) != expected_labels
+        or volume.get("Name") != expected_name
         or volume.get("Driver") != "local"
-        or volume.get("Options")
+        or volume.get("Options") not in (None, {})
         or not isinstance(labels, Mapping)
-        or any(labels.get(key) != value for key, value in control.shared_labels.items())
+        or any(labels.get(key) != value for key, value in expected_labels.items())
+        or any(key in labels and labels.get(key) != value for key, value in optional_labels.items())
+        or set(labels) - allowed_labels
     ):
         raise BuildControlError(
             "Selected control volume ownership/driver differs; browser QA retains existing data"
         )
+    return volume
+
+
+def _private_group_storage_mode(receipt: Mapping[str, object]) -> bool:
+    """Select the retained single-volume layout without guessing from its name."""
+    marker = receipt.get("private_group_storage")
+    if marker is None:
+        return False
+    if marker != "group-volume-v1":
+        raise BuildControlError("Development receipt has an unsupported private group storage profile")
+    return True
+
+
+def _control_subpath(control: BuildControl, relative: str) -> str:
+    """Resolve a control subpath while keeping namespace and relative path exact."""
+    namespace = getattr(control, "namespace", None)
+    if (not isinstance(namespace, str)
+            or (namespace and re.fullmatch(r"namespaces/[0-9a-f]{32}", namespace) is None)):
+        raise BuildControlError("Selected control namespace is malformed")
+    expected = "/".join(value for value in (namespace, relative) if value)
+    resolver = getattr(control, "subpath", None)
+    if not callable(resolver) or resolver(relative) != expected:
+        raise BuildControlError("Selected control namespace subpath resolver differs")
+    return expected
+
+
+def _volume_mount_source(mountpoint: object, subpath: str) -> str:
+    if not isinstance(mountpoint, str) or not mountpoint.startswith("/"):
+        raise BuildControlError("Selected group volume has no canonical Docker mountpoint")
+    root = PurePosixPath(mountpoint)
+    if str(root) != mountpoint or ".." in root.parts:
+        raise BuildControlError("Selected group volume mountpoint is not canonical")
+    if not isinstance(subpath, str) or (subpath and (
+        subpath.startswith("/") or "\\" in subpath
+        or any(part in {"", ".", ".."} for part in subpath.split("/"))
+    )):
+        raise BuildControlError("Selected group volume subpath is not canonical")
+    return str(root.joinpath(*subpath.split("/"))) if subpath else str(root)
+
+
+def _validate_group_volume_mounts(
+    document: Mapping[str, object],
+    control: BuildControl,
+    volume: Mapping[str, object],
+    expected: Mapping[str, tuple[str, bool]],
+) -> None:
+    """Match Docker declarations and resolved mounts for selected private leaves."""
+    host = document.get("HostConfig")
+    if not isinstance(host, Mapping):
+        raise BuildControlError("Selected service HostConfig is malformed")
+    host_mounts = host.get("Mounts")
+    actual_mounts = document.get("Mounts")
+    if not isinstance(host_mounts, list) or not isinstance(actual_mounts, list):
+        raise BuildControlError("Selected service does not expose both configured and resolved mounts")
+    if (any(not isinstance(mount, Mapping) for mount in host_mounts)
+            or any(not isinstance(mount, Mapping) for mount in actual_mounts)):
+        raise BuildControlError("Selected service mount records are malformed")
+    host_targets = [mount.get("Target") for mount in host_mounts]
+    actual_targets = [mount.get("Destination") for mount in actual_mounts]
+    if (any(not isinstance(target, str) or not target for target in host_targets + actual_targets)
+            or len(set(host_targets)) != len(host_targets)
+            or len(set(actual_targets)) != len(actual_targets)
+            or set(host_targets) != set(actual_targets)):
+        raise BuildControlError("Selected service configured and resolved mount targets differ")
+
+    targets = set(expected)
+    declared = [
+        mount for mount in host_mounts
+        if isinstance(mount, Mapping)
+        and (mount.get("Target") in targets or mount.get("Source") == control.volume)
+    ]
+    if len(declared) != len(expected) or {mount.get("Target") for mount in declared} != targets:
+        raise BuildControlError("Selected service has a missing, duplicate, or extra group-volume declaration")
+    for mount in declared:
+        target = mount.get("Target")
+        subpath, read_only = expected[target]
+        options = mount.get("VolumeOptions")
+        observed_read_only = mount.get("ReadOnly")
+        read_only_matches = (
+            observed_read_only is True if read_only
+            else observed_read_only is None or observed_read_only is False
+        )
+        if (mount.get("Type") != "volume" or mount.get("Source") != control.volume
+                or not read_only_matches
+                or not isinstance(options, Mapping)
+                or set(options) != {"NoCopy", "Subpath"}
+                or options.get("NoCopy") is not True
+                or options.get("Subpath") != subpath):
+            raise BuildControlError("Selected service group-volume options differ")
+
+    resolved = [
+        mount for mount in actual_mounts
+        if isinstance(mount, Mapping)
+        and (mount.get("Destination") in targets or mount.get("Name") == control.volume)
+    ]
+    if (len(resolved) != len(expected)
+            or {mount.get("Destination") for mount in resolved} != targets):
+        raise BuildControlError("Selected service has a missing, duplicate, or extra resolved group mount")
+    mountpoint = volume.get("Mountpoint")
+    for mount in resolved:
+        target = mount.get("Destination")
+        subpath, read_only = expected[target]
+        root_source = _volume_mount_source(mountpoint, "")
+        role_source = _volume_mount_source(mountpoint, subpath)
+        if (mount.get("Type") != "volume" or mount.get("Name") != control.volume
+                or mount.get("RW") is not (not read_only)
+                or mount.get("Driver") != "local"
+                or mount.get("Source") not in {root_source, role_source}):
+            raise BuildControlError("Selected service resolved group mount differs from its private subpath")
 
 
 def _mount_path(value: object) -> str | None:
@@ -223,8 +359,9 @@ def _validate_frontend_volume(
     control: BuildControl,
     frontend_volume: str,
     frontend_inputs: Mapping[str, object],
+    current: Mapping[str, object] | None = None,
 ) -> None:
-    """Require the exact retained frontend volume ownership contract."""
+    """Require the selected legacy or single-volume frontend ownership contract."""
     if frontend_inputs.get("schema") != "fullmag.docker-development-inputs.v1":
         raise BuildControlError("Frontend inputs have an unsupported schema")
     dependency_digest = frontend_inputs.get("dependency_seed_sha256")
@@ -233,6 +370,28 @@ def _validate_frontend_volume(
         raise BuildControlError("Frontend inputs have an invalid dependency seed digest")
     if not isinstance(toolpins_digest, str) or SHA256_RE.fullmatch(toolpins_digest) is None:
         raise BuildControlError("Frontend inputs have an invalid tool pin digest")
+    grouped = _private_group_storage_mode(current or {})
+    if grouped:
+        import docker_group_storage as group_storage
+
+        if frontend_volume != control.volume:
+            raise BuildControlError("Frontend state volume differs from the pinned private group volume")
+        volume = _validate_existing_control_volume(control)
+        try:
+            expected_marker = group_storage.owner_manifest(
+                control, control.identity.get("source_root"),
+            )
+            owner_marker = control.read("private/.owner.json", optional=True)
+        except BuildControlError:
+            raise
+        except Exception as error:
+            raise BuildControlError("Private group storage owner marker could not be validated") from error
+        if not isinstance(owner_marker, Mapping) or dict(owner_marker) != expected_marker:
+            raise BuildControlError("Private group storage owner marker differs from selected checkout")
+        _volume_mount_source(volume.get("Mountpoint"), group_storage.role_subpath(control, "frontend"))
+        _volume_mount_source(volume.get("Mountpoint"), _control_subpath(control, "frontend"))
+        return
+
     from docker_development_inputs import metadata_cache_key
     cache_key = metadata_cache_key(frontend_inputs, control.project)
     expected_name = "fullmag-dev-frontend-v1-" + cache_key[:24]
@@ -412,6 +571,127 @@ def _validate_shared_frontend_pnpm(document, identity):
     return {descriptor["name"]}
 
 
+def _validate_private_group_compose(
+    compose: Mapping[str, object],
+    control: BuildControl,
+    current: Mapping[str, object],
+) -> None:
+    """Validate retained frontend/backend/ledger leaves for group-volume-v1."""
+    import docker_backend_volume_cache as backend_cache
+    import docker_group_ledger as group_ledger
+    import docker_group_storage as group_storage
+
+    if not _private_group_storage_mode(current):
+        raise BuildControlError("Private group Compose validation has no pinned layout marker")
+    volumes = compose.get("volumes")
+    services = compose.get("services")
+    if not isinstance(volumes, Mapping) or not isinstance(services, Mapping):
+        raise BuildControlError("Retained private group Compose services or volumes are malformed")
+
+    def require_group_volume(alias: str) -> None:
+        declaration = volumes.get(alias)
+        if (not isinstance(declaration, Mapping)
+                or dict(declaration) != {"name": control.volume, "external": True}):
+            raise BuildControlError("Retained private group volume declaration differs")
+
+    try:
+        group_storage.volume_declaration(control)
+        frontend_subpath = group_storage.role_subpath(control, "frontend")
+        backend_subpath = group_storage.role_subpath(control, "backend")
+        ledger_subpath = group_storage.role_subpath(control, "ledger")
+        control_subpath = _control_subpath(control, "frontend")
+        expected_frontend_mount = group_storage.compose_mount_descriptor(
+            control, "frontend", "/state/development", compose_name="frontend-build",
+        )
+        expected_backend_mount = group_storage.compose_mount_descriptor(
+            control, "backend", backend_cache.BUILD_TARGET,
+            compose_name=backend_cache.COMPOSE_BUILD_VOLUME,
+        )
+    except BuildControlError:
+        raise
+    except Exception as error:
+        raise BuildControlError("Retained private group storage paths are invalid") from error
+
+    frontend = services.get("frontend")
+    backend = services.get("backend")
+    if not isinstance(frontend, Mapping) or not isinstance(backend, Mapping):
+        raise BuildControlError("Retained private group Compose service is missing")
+    frontend_environment = frontend.get("environment")
+    backend_environment = backend.get("environment")
+    if (not isinstance(frontend_environment, Mapping)
+            or frontend_environment.get("FULLMAG_PRIVATE_GROUP_STORAGE") != "group-volume-v1"
+            or frontend_environment.get("FULLMAG_DEVELOPMENT_INPUTS_PATH")
+            != "/opt/fullmag/control/development-inputs.json"
+            or not isinstance(backend_environment, Mapping)
+            or backend_environment.get("FULLMAG_PRIVATE_GROUP_STORAGE") != "group-volume-v1"):
+        raise BuildControlError("Retained private group Compose marker differs")
+
+    for alias in ("frontend-build", "build-control", backend_cache.COMPOSE_BUILD_VOLUME,
+                  group_ledger.COMPOSE_VOLUME):
+        require_group_volume(alias)
+
+    frontend_mounts = frontend.get("volumes")
+    if not isinstance(frontend_mounts, list):
+        raise BuildControlError("Retained frontend has no explicit volume declarations")
+    expected_control_mount = {
+        "type": "volume",
+        "source": "build-control",
+        "target": "/opt/fullmag/control",
+        "read_only": True,
+        "volume": {"nocopy": True, "subpath": control_subpath},
+    }
+    for target, expected_mount in (
+        ("/state/development", expected_frontend_mount),
+        ("/opt/fullmag/control", expected_control_mount),
+    ):
+        matches = [mount for mount in frontend_mounts
+                   if isinstance(mount, Mapping) and mount.get("target") == target]
+        expected_shapes = [expected_mount]
+        if target == "/state/development" and expected_mount.get("read_only") is False:
+            no_explicit_rw = dict(expected_mount)
+            no_explicit_rw.pop("read_only")
+            expected_shapes.append(no_explicit_rw)
+        if len(matches) != 1 or dict(matches[0]) not in expected_shapes:
+            raise BuildControlError("Retained frontend role/control subpath mount differs")
+
+    group_aliases = {
+        alias for alias, declaration in volumes.items()
+        if isinstance(alias, str) and isinstance(declaration, Mapping)
+        and declaration.get("name") == control.volume
+    }
+    frontend_group_mounts = [mount for mount in frontend_mounts
+                             if isinstance(mount, Mapping)
+                             and mount.get("source") in group_aliases]
+    if (len(frontend_group_mounts) != 2
+            or {mount.get("target") for mount in frontend_group_mounts}
+            != {"/state/development", "/opt/fullmag/control"}):
+        raise BuildControlError("Retained frontend exposes an extra group-volume path")
+
+    backend_mounts = backend.get("volumes")
+    if not isinstance(backend_mounts, list):
+        raise BuildControlError("Retained backend has no explicit volume declarations")
+    build_mounts = [mount for mount in backend_mounts
+                    if isinstance(mount, Mapping) and mount.get("target") == backend_cache.BUILD_TARGET]
+    if len(build_mounts) != 1 or dict(build_mounts[0]) != expected_backend_mount:
+        raise BuildControlError("Retained backend cache mount is not its private/backend subpath")
+    backend_group_mounts = [mount for mount in backend_mounts
+                            if isinstance(mount, Mapping)
+                            and mount.get("source") in group_aliases]
+    if any(mount.get("target") == "/" for mount in backend_group_mounts):
+        raise BuildControlError("Retained backend exposes the private group volume root")
+
+    backend_image = (current.get("inputs") or {}).get("image_id")
+    try:
+        ledger = group_ledger.retained_profile(compose, backend_image)
+    except Exception as error:
+        raise BuildControlError("Retained group ledger mount/profile is invalid") from error
+    if (ledger.get("volume_name") != control.volume
+            or ledger.get("ledger_subpath") != ledger_subpath):
+        raise BuildControlError("Retained group ledger is not the private/ledger subpath")
+    if backend_subpath != expected_backend_mount["volume"].get("subpath"):
+        raise BuildControlError("Retained backend subpath is not canonical")
+
+
 def _validate_frontend(
     document: dict[str, object],
     control: BuildControl,
@@ -421,6 +701,9 @@ def _validate_frontend(
     port: int,
     *, cache_project_id: str | None = None,
 ) -> None:
+    grouped = _private_group_storage_mode(current)
+    if grouped and frontend_volume != control.volume:
+        raise BuildControlError("Frontend state volume differs from the pinned private group volume")
     try:
         validate_source_labels(document, identity)
     except ValueError as error:
@@ -450,6 +733,8 @@ def _validate_frontend(
             or not isinstance(services.get("backend"), Mapping)
             or services["backend"].get("image") != (current.get("inputs") or {}).get("image_id")):
         raise BuildControlError("Pinned development service image declarations differ")
+    if grouped:
+        _validate_private_group_compose(compose, control, current)
     expected_image = services["frontend"].get("image")
     if (not isinstance(expected_image, str) or IMAGE_ID_RE.fullmatch(expected_image) is None
             or document.get("Image") != expected_image):
@@ -466,12 +751,21 @@ def _validate_frontend(
     mounts = document.get("Mounts") or []
     if not isinstance(mounts, list):
         raise BuildControlError("Frontend mount inspection is invalid")
-    state_mounts = [m for m in mounts if isinstance(m, Mapping) and m.get("Destination") == "/state/development"]
-    if len(state_mounts) != 1 or state_mounts[0].get("Type") != "volume" or state_mounts[0].get("Name") != frontend_volume or state_mounts[0].get("RW") is not True:
-        raise BuildControlError("Frontend state mount is not the retained named volume")
-    control_mounts = [m for m in mounts if isinstance(m, Mapping) and m.get("Destination") == "/opt/fullmag/control"]
-    if len(control_mounts) != 1 or control_mounts[0].get("Type") != "volume" or control_mounts[0].get("Name") != control.volume or control_mounts[0].get("RW") is not False:
-        raise BuildControlError("Frontend control mount is not the selected readonly control namespace")
+    if grouped:
+        import docker_group_storage as group_storage
+
+        volume = _validate_existing_control_volume(control)
+        _validate_group_volume_mounts(document, control, volume, {
+            "/state/development": (group_storage.role_subpath(control, "frontend"), False),
+            "/opt/fullmag/control": (_control_subpath(control, "frontend"), True),
+        })
+    else:
+        state_mounts = [m for m in mounts if isinstance(m, Mapping) and m.get("Destination") == "/state/development"]
+        if len(state_mounts) != 1 or state_mounts[0].get("Type") != "volume" or state_mounts[0].get("Name") != frontend_volume or state_mounts[0].get("RW") is not True:
+            raise BuildControlError("Frontend state mount is not the retained named volume")
+        control_mounts = [m for m in mounts if isinstance(m, Mapping) and m.get("Destination") == "/opt/fullmag/control"]
+        if len(control_mounts) != 1 or control_mounts[0].get("Type") != "volume" or control_mounts[0].get("Name") != control.volume or control_mounts[0].get("RW") is not False:
+            raise BuildControlError("Frontend control mount is not the selected readonly control namespace")
     shared_volumes = _validate_shared_frontend_pnpm(document, {"project_id": cache_project_id})
     for mount in mounts:
         if not isinstance(mount, Mapping):
@@ -751,7 +1045,29 @@ def _compose_document(
     source_script_sha256: str | None = None,
     expect_fem_airbox_vectors: bool | None = None,
     expect_terminal_telemetry: bool | None = None,
+    control: BuildControl | None = None,
+    private_group_storage: bool = False,
 ) -> dict[str, object]:
+    if type(private_group_storage) is not bool:
+        raise BuildControlError("Browser QA private group storage marker must be boolean")
+    frontend_state_volume = {"type": "volume", "source": "frontend-state",
+                             "target": "/state/development", "read_only": True,
+                             "volume": {"nocopy": True}}
+    if private_group_storage:
+        import docker_group_storage as group_storage
+
+        if (control is None or control.project != identity.get("project_name")
+                or frontend_volume != control.volume):
+            raise BuildControlError("Browser QA private group volume differs from the selected BuildControl")
+        try:
+            group_storage.volume_declaration(control)
+            frontend_state_volume["volume"]["subpath"] = group_storage.role_subpath(control, "frontend")
+        except BuildControlError:
+            raise
+        except Exception as error:
+            raise BuildControlError("Browser QA private frontend subpath is invalid") from error
+    elif control is not None and control.project != identity.get("project_name"):
+        raise BuildControlError("Browser QA BuildControl belongs to another Compose project")
     if saved_playback_item_id is not None:
         if not re.fullmatch(r"[0-9]{1,20}", saved_playback_item_id):
             raise BuildControlError("Saved Playback QA requires a decimal item id of at most 20 digits")
@@ -830,6 +1146,8 @@ def _compose_document(
         "CONTROL_ROOM_BROWSER_QA_TIMEOUT_MS": str(timeout * 1000),
         "NVIDIA_VISIBLE_DEVICES": "void",
     }
+    if private_group_storage:
+        environment["FULLMAG_PRIVATE_GROUP_STORAGE"] = "group-volume-v1"
     if airbox_inspector:
         environment["CONTROL_ROOM_BROWSER_QA_SCENARIO"] = "airbox-inspector"
     elif saved_playback_item_id is not None:
@@ -888,13 +1206,7 @@ def _compose_document(
                     ]
                 ),
                 "volumes": [
-                    {
-                        "type": "volume",
-                        "source": "frontend-state",
-                        "target": "/state/development",
-                        "read_only": True,
-                        "volume": {"nocopy": True},
-                    },
+                    frontend_state_volume,
                     {
                         "type": "bind",
                         "source": str(selected / "apps/control-room/scripts"),
@@ -933,7 +1245,12 @@ def _validate_browser_helper(
     source_script_sha256: str | None = None,
     expect_fem_airbox_vectors: bool | None = None,
     expect_terminal_telemetry: bool | None = None,
+    private_group_storage: bool = False,
 ) -> None:
+    if type(private_group_storage) is not bool:
+        raise ControlOutcomeUnknown("Browser helper private group storage marker is malformed")
+    if private_group_storage and frontend_volume != control.volume:
+        raise ControlOutcomeUnknown("Browser helper frontend volume differs from the pinned group volume")
     try:
         validate_source_labels(document, identity)
     except ValueError as error:
@@ -955,13 +1272,25 @@ def _validate_browser_helper(
         raise ControlOutcomeUnknown("Browser helper user does not match the owned frontend volume")
     if (host.get("GroupAdd") or []) != _script_bind_groups(selected):
         raise ControlOutcomeUnknown("Browser helper source read group differs")
-    environment = set(config.get("Env") or [])
+    raw_environment = config.get("Env") or []
+    if not isinstance(raw_environment, list) or any(not isinstance(entry, str) for entry in raw_environment):
+        raise ControlOutcomeUnknown("Browser helper runtime environment is malformed")
+    environment = set(raw_environment)
     if {
         "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright",
         "CONTROL_ROOM_URL=http://frontend:8080",
         "NVIDIA_VISIBLE_DEVICES=void",
     } - environment:
         raise ControlOutcomeUnknown("Browser helper runtime environment differs")
+    private_storage_environment = [
+        entry for entry in raw_environment
+        if entry.startswith("FULLMAG_PRIVATE_GROUP_STORAGE=")
+    ]
+    if private_group_storage:
+        if private_storage_environment != ["FULLMAG_PRIVATE_GROUP_STORAGE=group-volume-v1"]:
+            raise ControlOutcomeUnknown("Browser helper private group storage profile differs")
+    elif private_storage_environment:
+        raise ControlOutcomeUnknown("Legacy browser helper unexpectedly declares a private group profile")
     if saved_playback_item_id is not None:
         if (not re.fullmatch(r"[0-9]{1,20}", saved_playback_item_id)
                 or not isinstance(source_script_sha256, str)
@@ -990,7 +1319,6 @@ def _validate_browser_helper(
             "/state/development/workspace/apps/control-room/scripts/verify-airbox-inspector.mjs",
         ]:
             raise ControlOutcomeUnknown("Browser helper did not run the selected Airbox Inspector harness")
-    raw_environment = config.get("Env") or []
     fem_observation_environment = [
         entry for entry in raw_environment
         if entry.startswith("CONTROL_ROOM_BROWSER_QA_EXPECT_FEM_AIRBOX_VECTORS=")
@@ -1078,6 +1406,40 @@ def _validate_browser_helper(
     }
     if destinations != expected:
         raise ControlOutcomeUnknown("Browser helper has an unexpected mount boundary")
+    if private_group_storage:
+        import docker_group_storage as group_storage
+
+        volume = _validate_existing_control_volume(control)
+        try:
+            frontend_subpath = group_storage.role_subpath(control, "frontend")
+        except BuildControlError as error:
+            raise ControlOutcomeUnknown("Browser helper private frontend subpath is invalid") from error
+        try:
+            _validate_group_volume_mounts(document, control, volume, {
+                "/state/development": (frontend_subpath, True),
+            })
+        except BuildControlError as error:
+            raise ControlOutcomeUnknown(str(error)) from error
+        host_mounts = host.get("Mounts")
+        if not isinstance(host_mounts, list) or len(host_mounts) != 2:
+            raise ControlOutcomeUnknown("Browser helper has a missing or unknown configured mount")
+        host_binds = [mount for mount in host_mounts if isinstance(mount, Mapping)
+                      and mount.get("Target") == "/state/development/workspace/apps/control-room/scripts"]
+        resolved_binds = [mount for mount in mounts if isinstance(mount, Mapping)
+                          and mount.get("Destination") == "/state/development/workspace/apps/control-room/scripts"]
+        if (len(host_binds) != 1 or len(resolved_binds) != 1
+                or host_binds[0].get("Type") != "bind"
+                or host_binds[0].get("ReadOnly") is not True
+                or not _source_mount_matches_selected(
+                    host_binds[0].get("Source"), selected / "apps/control-room/scripts"
+                )):
+            raise ControlOutcomeUnknown("Browser helper configured script mount is not the selected readonly bind")
+        if (resolved_binds[0].get("Type") != "bind"
+                or resolved_binds[0].get("RW") is not False
+                or not _source_mount_matches_selected(
+                    resolved_binds[0].get("Source"), selected / "apps/control-room/scripts"
+                )):
+            raise ControlOutcomeUnknown("Browser helper resolved script mount is not the selected readonly bind")
     for mount in mounts:
         if mount.get("RW") is not False:
             raise ControlOutcomeUnknown("Browser helper has a writable volume or bind")
@@ -2344,6 +2706,7 @@ def _run(
     expect_fem_airbox_vectors: bool = False,
     expect_terminal_telemetry: bool = False,
     terminal_telemetry_helper_sha256: str | None = None,
+    private_group_storage: bool = False,
 ) -> None:
     root = operation["root"]
     helper_name = "fullmag-browser-qa-" + operation["receipt"]["attempt"][:12]
@@ -2403,7 +2766,8 @@ def _run(
         ),
         airbox_inspector=airbox_inspector,
         saved_playback_item_id=saved_playback_item_id,
-        source_script_sha256=source_script_sha256)
+        source_script_sha256=source_script_sha256,
+        private_group_storage=private_group_storage)
     if observed["Config"].get("Cmd") != document["services"]["browser-qa"]["command"]:
         raise ControlOutcomeUnknown("Browser helper command differs from the admitted Compose harness")
     operation["receipt"]["browser_container_id"] = observed["Id"]
@@ -2497,6 +2861,12 @@ def reconcile_browser_qa(control, selected, identity, args):
         raise BuildControlError("QA reconciliation inputs are missing")
     if inputs.get("source_root") != str(selected) or inputs.get("worktree_id") != identity["worktree_id"]:
         raise BuildControlError("QA reconciliation source identity differs")
+    private_group_marker = inputs.get("private_group_storage")
+    if private_group_marker not in (None, "group-volume-v1"):
+        raise BuildControlError("QA reconciliation private group storage profile is unsupported")
+    private_group_storage = private_group_marker == "group-volume-v1"
+    if private_group_storage and inputs.get("frontend_volume") != control.volume:
+        raise BuildControlError("QA reconciliation frontend volume differs from its group profile")
     scenario = inputs.get("scenario", "standard")
     if scenario not in {"standard", "airbox-inspector", "saved-playback"}:
         raise BuildControlError("QA reconciliation scenario is unsupported")
@@ -2629,7 +2999,9 @@ def reconcile_browser_qa(control, selected, identity, args):
         ),
         airbox_inspector=airbox_inspector,
         saved_playback_item_id=saved_playback_item_id,
-        source_script_sha256=source_script_sha256)
+        source_script_sha256=source_script_sha256,
+        control=control,
+        private_group_storage=private_group_storage)
     if canonical(document) != canonical(expected_document):
         raise BuildControlError("QA reconciliation Compose recipe differs")
     helper_name = "fullmag-control-" + attempt
@@ -2691,7 +3063,8 @@ def reconcile_browser_qa(control, selected, identity, args):
         ),
         airbox_inspector=airbox_inspector,
         saved_playback_item_id=saved_playback_item_id,
-        source_script_sha256=source_script_sha256)
+        source_script_sha256=source_script_sha256,
+        private_group_storage=private_group_storage)
     service = document["services"]["browser-qa"]
     if (observed["Config"].get("Cmd") != service["command"]
             or observed["Config"].get("Entrypoint") != image["Config"].get("Entrypoint")):
@@ -2895,7 +3268,8 @@ def main(argv: list[str] | None = None) -> int:
     current, backend_id, frontend_id, frontend_volume, frontend_inputs = _read_live_development(
         control, selected, identity, args.port
     )
-    _validate_frontend_volume(control, frontend_volume, frontend_inputs)
+    private_group_storage = _private_group_storage_mode(current)
+    _validate_frontend_volume(control, frontend_volume, frontend_inputs, current)
     frontend = _inspect(frontend_id)
     _validate_frontend(frontend, control, identity, frontend_volume, current, args.port, cache_project_id=cache_project_id_for_layout(layout))
     try:
@@ -2936,6 +3310,8 @@ def main(argv: list[str] | None = None) -> int:
         airbox_inspector=args.airbox_inspector,
         saved_playback_item_id=args.saved_playback_item_id,
         source_script_sha256=source_script_sha256,
+        control=control,
+        private_group_storage=private_group_storage,
     )
     source_commit = (current.get("source_commit") or (current.get("inputs") or {}).get("source_commit"))
     inputs = {
@@ -2973,6 +3349,8 @@ def main(argv: list[str] | None = None) -> int:
         ),
         "airbox_inspector_script_sha256": airbox_inspector_script_sha256,
     }
+    if private_group_storage:
+        inputs["private_group_storage"] = "group-volume-v1"
     if args.expect_fem_airbox_vectors:
         inputs["expect_fem_airbox_vectors"] = True
     if args.saved_playback_item_id is not None:
@@ -3009,6 +3387,7 @@ def main(argv: list[str] | None = None) -> int:
             args.expect_fem_airbox_vectors,
             args.expect_terminal_telemetry,
             terminal_telemetry_helper_sha256,
+            private_group_storage,
         )
     return 0
 
