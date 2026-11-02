@@ -1526,6 +1526,7 @@ impl NativeFdmBackend {
         let resolved_demag_boundary = crate::fdm::resolve_fdm_demag_boundary(plan)?;
         let exchange_operator = crate::fdm::exchange_operator::build_plan_exchange_operator(plan)?;
         ensure_cuda_heterogeneous_material_supported(plan)?;
+        ensure_cuda_boundary_correction_supported(plan)?;
         let exchange_faces = match &exchange_operator {
             fullmag_engine::ExchangeOperator::Faces(faces) => Some(faces),
             fullmag_engine::ExchangeOperator::Uniform => None,
@@ -4197,6 +4198,24 @@ fn ensure_cuda_heterogeneous_material_supported(
         Some(message) => Err(RunError { message }),
         None => Ok(()),
     }
+}
+
+#[cfg(feature = "cuda")]
+/// T1 (`boundary_correction="full"`) is not qualified (note 0400, T1 consistency):
+/// its stencil over-couples grid-aligned free faces by 4/3. Fail before any
+/// allocation; the C ABI repeats the check.
+fn ensure_cuda_boundary_correction_supported(
+    plan: &fullmag_ir::FdmPlanIR,
+) -> Result<(), RunError> {
+    if plan.boundary_correction.as_deref() == Some("full") {
+        return Err(RunError {
+            message: "fdm_boundary_correction_t1_unqualified: T1 boundary-corrected exchange is \
+                      not consistent with the planner's boundary distances (note 0400, T1 consistency); use \
+                      boundary_correction=\"volume\" or \"none\""
+                .to_string(),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]

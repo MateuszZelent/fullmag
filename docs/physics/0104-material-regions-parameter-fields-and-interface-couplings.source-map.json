@@ -233,7 +233,8 @@
         "fdm-mel-local-ms-field",
         "fdm-cuda-mel-energy",
         "fdm-moment-weighted-average-m",
-        "fdm-cuda-late-transport-gate"
+        "fdm-cuda-late-transport-gate",
+        "fdm-dmi-decoupled-connection-gate"
       ]
     }
   ],
@@ -960,6 +961,13 @@
       "path": "crates/fullmag-runner/src/native_fem/steady_transport/descriptor.rs",
       "symbol": "transport_plan_rejects_spatial_ms_before_native_call",
       "responsibility": "Runner regression for the transport Ms preflight.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-dmi-decoupled-connection-gate",
+      "path": "crates/fullmag-runner/src/fdm/exchange_operator.rs",
+      "symbol": "build_plan_exchange_operator",
+      "responsibility": "Rejects FDM CPU and CUDA plans that combine non-zero DMI with a zero exchange connection between two active cells (fdm_dmi_decoupled_exchange_connection); first_decoupled_connection in crates/fullmag-engine/src/fdm/shared/exchange_operator.rs locates the connection and backends/fdm/api/c_api.cpp repeats the check for a FACES tail.",
       "evidence_status": "implemented"
     }
   ],

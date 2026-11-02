@@ -18,8 +18,8 @@ pub use cpu::fft::{
 };
 
 pub use shared::exchange_operator::{
-    build_exchange_operator, harmonic_exchange, ExchangeFaces, ExchangeOperator,
-    ExchangeOperatorInputs, ExchangePairMode, ExchangePairRule,
+    build_exchange_operator, first_decoupled_connection, harmonic_exchange, ExchangeFaces,
+    ExchangeOperator, ExchangeOperatorInputs, ExchangePairMode, ExchangePairRule,
 };
 pub use shared::problem::ExchangeLlgProblem;
 
