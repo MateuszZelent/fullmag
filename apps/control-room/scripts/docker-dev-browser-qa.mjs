@@ -76,6 +76,9 @@ const expectedResponseDrops = [];
 const intentionalResponseDropRequests = new WeakSet();
 const resourceResponses = [];
 const femAirboxVectorResponses = [];
+const fieldTransportLifecycle = [];
+const fieldTransportLifecycleByRequest = new WeakMap();
+const fieldTransportLifecycleStartedAt = new WeakMap();
 const blockedMutations = [];
 let visualizationClientAckRequestCount = 0;
 let displayPatchRequestCount = 0;
@@ -84,9 +87,60 @@ let harnessSourceHashes = null;
 let failurePageState = null;
 let browserRoute = null;
 let partialProof = {};
+let cleanupStarted = false;
 const bounded = (value) => String(value).slice(0, 2048);
 const collect = (target, value) => {
   if (target.length < 32) target.push(bounded(value));
+};
+
+const fieldTransportPathPattern = /^\/v2\/sessions\/current\/data\/fields\/[^/]+\/samples\/vector$/;
+const recordFieldTransportRequest = (request) => {
+  let url;
+  try {
+    url = new URL(request.url());
+  } catch {
+    return null;
+  }
+  if (!fieldTransportPathPattern.test(url.pathname)) return null;
+  const existing = fieldTransportLifecycleByRequest.get(request);
+  if (existing) return existing;
+  if (fieldTransportLifecycle.length >= 16) return null;
+  const relativePath = `${url.pathname}${url.search}`;
+  const record = {
+    method: request.method(),
+    path: relativePath.slice(0, 2048),
+    ...(relativePath.length > 2048 ? { path_truncated: true } : {}),
+    cleanupStarted,
+    events: [],
+  };
+  fieldTransportLifecycleByRequest.set(request, record);
+  fieldTransportLifecycleStartedAt.set(request, Date.now());
+  fieldTransportLifecycle.push(record);
+  return record;
+};
+const recordFieldTransportEvent = (request, event, details = {}) => {
+  const record = fieldTransportLifecycleByRequest.get(request);
+  if (!record || record.events.length >= 3) return;
+  const startedAt = fieldTransportLifecycleStartedAt.get(request) ?? Date.now();
+  record.events.push({
+    event,
+    ...details,
+    elapsed_ms: Math.max(0, Date.now() - startedAt),
+    cleanupStarted,
+  });
+};
+const installFieldTransportLifecycleObserver = (page) => {
+  page.on("request", (request) => recordFieldTransportRequest(request));
+  page.on("response", (response) => recordFieldTransportEvent(
+    response.request(), "response", { status: response.status() },
+  ));
+  page.on("requestfinished", (request) =>
+    recordFieldTransportEvent(request, "requestfinished"));
+  page.on("requestfailed", (request) => recordFieldTransportEvent(
+    request,
+    "requestfailed",
+    { error: bounded(request.failure()?.errorText ?? "failed") },
+  ));
 };
 
 const sha256File = async (path) => createHash("sha256").update(await readFile(path)).digest("hex");
@@ -973,6 +1027,7 @@ const main = async () => {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 });
     page = await context.newPage();
     page.setDefaultTimeout(timeout);
+    installFieldTransportLifecycleObserver(page);
     if (expectFemAirboxVectors) {
       await page.route("**/v2/**", async (route) => {
         const request = route.request();
@@ -1156,6 +1211,7 @@ const main = async () => {
       try {
         page = await highDprContext.newPage();
         page.setDefaultTimeout(timeout);
+        installFieldTransportLifecycleObserver(page);
         await installViewportPerformanceProbe(page);
         page.on("pageerror", (error) => collect(pageErrors, error));
         page.on("console", (message) => {
@@ -1201,6 +1257,10 @@ const main = async () => {
       partialProof.viewport_lifecycle = lifecycleQa;
     }
     const before = await assertCanvas(page, "before Home");
+    partialProof.canvas_before = before;
+    if (canvasOnly && expectedLiveField) {
+      partialProof.canvas_before_screenshot = await captureCanvasScreenshot(page, before);
+    }
     const viewportDomBefore = await viewportDomObservation(page);
     const viewportDomObservations = {
       before_home: viewportDomBefore,
@@ -1257,6 +1317,7 @@ const main = async () => {
     const canvasDomStable = await canvasHandle.evaluate((canvas) => canvas === document.querySelector(".fm-viewport-3d canvas") && document.contains(canvas));
     if (!canvasDomStable) throw new Error("Home unmounted or replaced the workspace canvas");
     const after = await assertCanvas(page, "after Home");
+    partialProof.canvas_after = after;
     const viewportDomAfter = await viewportDomObservation(page);
     viewportDomObservations.after_home = viewportDomAfter;
     if (expectedLiveField) {
@@ -1320,6 +1381,7 @@ const main = async () => {
     if (pageErrors.length || consoleErrors.length || requestFailures.length || httpErrors.length) {
       throw new Error("Browser flow recorded page, console, transport, or HTTP failures");
     }
+    partialProof.field_transport_lifecycle = fieldTransportLifecycle;
 
     const result = {
       schema: resultSchema,
@@ -1366,6 +1428,7 @@ const main = async () => {
         ambiguous_command_submission: ambiguousCommandSubmission,
         canvas_after_compute_fields: canvasAfterComputeFields,
       } : { ambiguous_command_submission: null }),
+      ...(canvasOnly && expectedLiveField ? { partial_proof: partialProof } : {}),
       page_errors: pageErrors.length,
       console_errors: consoleErrors.length,
       expected_console_errors: expectedConsoleErrors,
@@ -1389,6 +1452,7 @@ const main = async () => {
     };
   } catch (error) {
     if (error?.partialProof) partialProof.failed_step = error.partialProof;
+    partialProof.field_transport_lifecycle = fieldTransportLifecycle;
     if (page) {
       failurePageState = {
         url: page.url(),
@@ -1404,6 +1468,8 @@ const main = async () => {
     }
     throw error;
   } finally {
+    cleanupStarted = true;
+    partialProof.cleanupStarted = cleanupStarted;
     try {
       await browser?.close();
     } finally {
@@ -1455,6 +1521,8 @@ try {
   payload.browser_route = browserRoute;
   console.log(JSON.stringify(payload));
 } catch (error) {
+  partialProof.field_transport_lifecycle = fieldTransportLifecycle;
+  partialProof.cleanupStarted = cleanupStarted;
   console.log(JSON.stringify({
     schema: resultSchema,
     state: "failed",
