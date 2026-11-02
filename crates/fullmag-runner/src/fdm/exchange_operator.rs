@@ -52,10 +52,8 @@ pub(crate) fn build_plan_exchange_operator(plan: &FdmPlanIR) -> Result<ExchangeO
         ));
     }
     let region_owner = (!plan.region_owner.is_empty()).then_some(plan.region_owner.as_slice());
-    if !plan.enable_exchange {
-        return Ok(ExchangeOperator::Uniform);
-    }
-    let operator = build_exchange_operator(&ExchangeOperatorInputs {
+    let dmi_axes = plan_dmi_axes(plan);
+    let inputs = ExchangeOperatorInputs {
         grid,
         periodic,
         active: plan.active_mask.as_deref(),
@@ -64,36 +62,67 @@ pub(crate) fn build_plan_exchange_operator(plan: &FdmPlanIR) -> Result<ExchangeO
         exchange_stiffness: plan.material.exchange_stiffness,
         a_field: plan.material.a_field.as_deref(),
         rules: &rules,
-    })
-    .map_err(error)?;
-    if let ExchangeOperator::Faces(faces) = &operator {
-        if plan_enables_dmi(plan) {
-            if let Some((cell, neighbor)) =
-                first_decoupled_connection(faces, grid, periodic, plan.active_mask.as_deref())
-            {
-                return Err(error(format!(
-                    "fdm_dmi_decoupled_exchange_connection: cells {cell} and {neighbor} are active \
-                     but not exchange-coupled (touching objects, a zero inter-region stiffness or \
-                     a disabled rule); DMI would still couple them and omit their free-surface \
-                     term, so DMI is not supported with this exchange operator (note 0104)"
-                )));
-            }
+    };
+    if !plan.enable_exchange {
+        if let Some(axes) = dmi_axes {
+            // No exchange field, but objects and rules still decide which cells
+            // DMI may couple; a placeholder stiffness keeps A out of that test.
+            let connectivity = build_exchange_operator(&ExchangeOperatorInputs {
+                exchange_stiffness: 1.0,
+                a_field: None,
+                ..inputs
+            })
+            .map_err(error)?;
+            reject_dmi_across_decoupled_connection(&connectivity, plan, periodic, axes)
+                .map_err(error)?;
         }
+        return Ok(ExchangeOperator::Uniform);
+    }
+    let operator = build_exchange_operator(&inputs).map_err(error)?;
+    if let Some(axes) = dmi_axes {
+        reject_dmi_across_decoupled_connection(&operator, plan, periodic, axes).map_err(error)?;
     }
     Ok(operator)
 }
 
-/// Any interfacial, rotated interfacial or bulk DMI coefficient is non-zero.
-fn plan_enables_dmi(plan: &FdmPlanIR) -> bool {
+fn reject_dmi_across_decoupled_connection(
+    operator: &ExchangeOperator,
+    plan: &FdmPlanIR,
+    periodic: [bool; 3],
+    axes: [bool; 3],
+) -> Result<(), String> {
+    let ExchangeOperator::Faces(faces) = operator else {
+        return Ok(());
+    };
+    let grid = GridShape::new(
+        plan.grid.cells[0] as usize,
+        plan.grid.cells[1] as usize,
+        plan.grid.cells[2] as usize,
+    )
+    .map_err(|engine_error| engine_error.to_string())?;
+    match first_decoupled_connection(faces, grid, periodic, plan.active_mask.as_deref(), axes) {
+        Some((cell, neighbor)) => Err(format!(
+            "fdm_dmi_decoupled_exchange_connection: cells {cell} and {neighbor} are active but \
+             not exchange-coupled (touching objects, a zero inter-region stiffness or a disabled \
+             rule); DMI would still couple them and omit their free-surface term, so DMI is not \
+             supported with this exchange operator (note 0104)"
+        )),
+        None => Ok(()),
+    }
+}
+
+/// Axes on which a non-zero DMI term couples neighbours: interfacial and
+/// rotated interfacial DMI use x and y, bulk DMI also z. `None` without DMI.
+fn plan_dmi_axes(plan: &FdmPlanIR) -> Option<[bool; 3]> {
     let nonzero = |value: Option<f64>| value.is_some_and(|d| d != 0.0);
     let any_nonzero = |field: &Option<Vec<f64>>| {
         field
             .as_deref()
             .is_some_and(|values| values.iter().any(|d| *d != 0.0))
     };
-    nonzero(plan.interfacial_dmi)
+    let interfacial = nonzero(plan.interfacial_dmi)
         || nonzero(plan.rotated_interfacial_dmi)
-        || nonzero(plan.bulk_dmi)
-        || any_nonzero(&plan.dind_field)
-        || any_nonzero(&plan.dbulk_field)
+        || any_nonzero(&plan.dind_field);
+    let bulk = nonzero(plan.bulk_dmi) || any_nonzero(&plan.dbulk_field);
+    (interfacial || bulk).then_some([true, true, bulk])
 }

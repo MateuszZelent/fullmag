@@ -245,6 +245,17 @@ demag recovery merges the recovery weights and sparse recovery rows per class
 once at setup. Rotated interfacial DMI with periodic node pairs remains
 rejected by the planner until it is validated against this reduction.
 
+The Rust reference FEM (`crates/fullmag-engine/src/fem.rs`,
+`project_residual_by_lumped_mass`) follows the same class reduction for its DMI
+fields since 2026-11-02; before, it divided every node by its own mass and then
+averaged the class, which is wrong whenever class members carry different
+masses. Analytic check `periodic_dmi_class_field_divides_class_residual_by_class_mass`:
+a class with masses 1 and 3 and residuals 2 and 3 must give
+$-1.25/(\mu_0M_s)$ on both members, where the per-node average gives
+$-1.5/(\mu_0M_s)$. The reference lane is not selectable for periodic DMI from
+the DSL (the runner rejects periodic pairs with DMI there), so this corrects
+the reference probe API, not a production path.
+
 ## Contract index for this page
 
 (problem-statement)=

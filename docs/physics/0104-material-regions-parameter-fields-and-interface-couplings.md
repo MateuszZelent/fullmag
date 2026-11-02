@@ -453,10 +453,16 @@ region legend, without generating pair rules for every object pair.
   explicit zero inter-region stiffness, a `Disabled` rule, or a cell with
   $A=0$. Until the DMI stencils read the connection operator, the FDM runner
   rejects interfacial, rotated interfacial or bulk DMI (scalar or cellwise
-  $D\ne0$) when the resolved `faces` operator has such a connection, on CPU
-  and CUDA, with `fdm_dmi_decoupled_exchange_connection`, after resolving the
-  operator and before the first step. The native C ABI repeats the check for a
-  `FACES` tail. The gate is fail-closed and has no fallback; physical DMI
+  $D\ne0$) when the resolved `faces` operator has such a connection along an
+  axis that the DMI term couples, on CPU and CUDA, with
+  `fdm_dmi_decoupled_exchange_connection`, after resolving the operator and
+  before the first step. Interfacial and rotated interfacial DMI couple only
+  $x$/$y$ neighbours, so stacked films decoupled along $z$ stay allowed; bulk
+  DMI also checks $z$. Without an exchange field the objects and rules still
+  define the connections: the runner resolves them with a placeholder positive
+  stiffness, so only owners and rules decide. The native C ABI repeats the
+  check for a `FACES` tail, counting only terms with $D\ne0$. The gate is
+  fail-closed and has no fallback; physical DMI
   coupling across an interface between distinct materials remains deferred
   (assumption 8).
 - **Magnetoelastic coupling** (prescribed strain, note 0700). The energy density
@@ -1231,9 +1237,11 @@ They are part of the physics contract, not implementation preferences.
 5. `Ms=0` in active magnetic cells/nodes/elements is rejected before runtime.
 6. DMI with a decoupled connection is rejected; DMI with positive non-uniform
    faces is not. `first_decoupled_connection` finds the zero face between two
-   active cells (owner-decoupled pair, explicit zero, periodic wrap) and
-   ignores zero faces next to inactive cells; the runner predicate rejects the
-   plan only when a DMI coefficient is non-zero.
+   active cells (owner-decoupled pair, explicit zero, periodic wrap) on the
+   scanned axes, ignores zero faces next to inactive cells and ignores a
+   $z$-only decoupling when only $x$/$y$ are scanned; the runner rejects the
+   plan only when a DMI coefficient is non-zero, also without an exchange
+   field.
 
 ### 5.2 Cross-backend checks
 

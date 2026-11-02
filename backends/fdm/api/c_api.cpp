@@ -1024,6 +1024,9 @@ struct ExchangeOperatorInput {
     const double *y_plus = nullptr;
     const double *z_plus = nullptr;
     uint64_t len = 0;
+    // Rotated interfacial DMI with a non-zero coefficient (the workspace
+    // reservation flag alone does not mean the term couples cells).
+    bool rotated_dmi_active = false;
 };
 
 static bool valid_cellwise_values(
@@ -1097,10 +1100,10 @@ static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
     if (plan->boundary_correction == FULLMAG_FDM_BOUNDARY_FULL) {
-        // Note 0550 §3.2.1a: the T1 stencil over-couples grid-aligned free faces
+        // Note 0400 (T1 consistency): the T1 stencil over-couples grid-aligned free faces
         // by 4/3 and counts the cut volume twice.
         ctx->last_error =
-            "fdm_boundary_correction_t1_unqualified: T1 boundary-corrected exchange is not consistent with the planner's boundary distances (note 0550); use boundary_correction=volume or none";
+            "fdm_boundary_correction_t1_unqualified: T1 boundary-corrected exchange is not consistent with the planner's boundary distances (note 0400, T1 consistency); use boundary_correction=volume or none";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
     if (plan->enable_demag != 0 && plan->demag_kernel_spectrum_len == 0) {
@@ -1486,9 +1489,15 @@ static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
                 "exchange face coefficients must be three finite, non-negative arrays of cell_count values";
             return reinterpret_cast<fullmag_fdm_backend *>(ctx);
         }
-        if (plan->has_interfacial_dmi != 0 || plan->has_bulk_dmi != 0 || reserve_rotated_dmi) {
+        const bool interfacial_dmi =
+            (plan->has_interfacial_dmi != 0 && plan->dmi_D_interfacial != 0.0) ||
+            exchange_operator.rotated_dmi_active;
+        const bool bulk_dmi = plan->has_bulk_dmi != 0 && plan->dmi_D_bulk != 0.0;
+        if (interfacial_dmi || bulk_dmi) {
             // Note 0104: a zero connection between two active cells is a free
             // surface for exchange, but the DMI stencils would couple across it.
+            // Interfacial DMI couples only x/y neighbours; bulk DMI also z.
+            const bool scanned_axes[3] = {true, true, bulk_dmi};
             const uint64_t nx = plan->grid.nx, ny = plan->grid.ny, nz = plan->grid.nz;
             const uint64_t dims[3] = {nx, ny, nz};
             const uint64_t strides[3] = {1u, nx, nx * ny};
@@ -1502,6 +1511,7 @@ static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
                 if (!active(index)) continue;
                 const uint64_t coords[3] = {index % nx, (index / nx) % ny, index / (nx * ny)};
                 for (int axis = 0; axis < 3; ++axis) {
+                    if (!scanned_axes[axis]) continue;
                     uint64_t neighbor = 0;
                     if (coords[axis] + 1 < dims[axis]) {
                         neighbor = index + strides[axis];
@@ -1873,6 +1883,8 @@ int fullmag_fdm_backend_create_time_policy_v2_checked(
         exchange_operator.z_plus = plan->exchange_face_z_plus;
         exchange_operator.len = plan->exchange_face_len;
     }
+    exchange_operator.rotated_dmi_active =
+        plan->has_rotated_interfacial_dmi != 0 && plan->dmi_D_rotated_interfacial != 0.0;
     fullmag_fdm_backend *handle = fullmag_fdm_backend_create_impl(
         &plan->base,
         plan->has_rotated_interfacial_dmi != 0,

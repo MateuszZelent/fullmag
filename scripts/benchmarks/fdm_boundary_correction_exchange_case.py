@@ -1,4 +1,4 @@
-"""Analytic exchange cases for the FDM CUDA boundary-correction tiers (note 0550).
+"""Analytic exchange cases for the FDM CUDA boundary-correction tiers (notes 0400, 0550).
 
 ``aligned``: a disk two cells tall whose top and bottom faces lie on cell faces,
 with a helix along z. Away from the rim H_ex is the z coupling between the two

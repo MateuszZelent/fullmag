@@ -1844,6 +1844,19 @@ fn dmi_decoupled_exchange_connection_is_rejected_before_stepping() {
 }
 
 #[test]
+fn dmi_decoupled_exchange_connection_is_rejected_without_exchange_field() {
+    let mut plan = touching_objects_plan(Some(1.5e-3));
+    plan.enable_exchange = false;
+    let error = crate::fdm::exchange_operator::build_plan_exchange_operator(&plan)
+        .expect_err("touching objects stay decoupled for DMI without exchange");
+    assert!(
+        error.message.contains("fdm_dmi_decoupled_exchange_connection"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
 fn dmi_decoupled_exchange_gate_ignores_absent_or_zero_dmi() {
     for dmi in [None, Some(0.0)] {
         let operator =

@@ -178,15 +178,18 @@ pub fn build_exchange_operator(
     }
 }
 
-/// First `+x/+y/+z` connection with a zero coefficient between two distinct
-/// active cells, as `(cell, neighbour)`. Such a connection is a free surface
-/// for exchange; the FDM DMI stencils do not read the faces and would couple
-/// across it (note 0104, DMI across decoupled connections).
+/// First `+x/+y/+z` connection along an axis selected by `axes` with a zero
+/// coefficient between two distinct active cells, as `(cell, neighbour)`.
+/// Such a connection is a free surface for exchange; the FDM DMI stencils do
+/// not read the faces and would couple across it (note 0104, DMI across
+/// decoupled connections). Interfacial DMI couples only in-plane neighbours,
+/// so callers pass `[true, true, bulk]`.
 pub fn first_decoupled_connection(
     faces: &ExchangeFaces,
     grid: GridShape,
     periodic: [bool; 3],
     active: Option<&[bool]>,
+    axes: [bool; 3],
 ) -> Option<(usize, usize)> {
     let is_active = |index: usize| active.map_or(true, |mask| mask[index]);
     let dims = [grid.nx, grid.ny, grid.nz];
@@ -200,6 +203,7 @@ pub fn first_decoupled_connection(
                 for (axis, values) in [&faces.x_plus, &faces.y_plus, &faces.z_plus]
                     .into_iter()
                     .enumerate()
+                    .filter(|(axis, _)| axes[*axis])
                 {
                     let Some(neighbor) =
                         plus_neighbor(grid, [x, y, z], axis, dims[axis], periodic[axis])
@@ -436,7 +440,7 @@ mod tests {
             .expect("operator"),
         );
         assert_eq!(
-            first_decoupled_connection(&decoupled, grid(3, 1, 1), [false; 3], None),
+            first_decoupled_connection(&decoupled, grid(3, 1, 1), [false; 3], None, [true; 3]),
             Some((0, 1))
         );
 
@@ -454,7 +458,7 @@ mod tests {
             })
             .expect("operator"),
         );
-        assert_eq!(first_decoupled_connection(&scaled, grid(3, 1, 1), [false; 3], None), None);
+        assert_eq!(first_decoupled_connection(&scaled, grid(3, 1, 1), [false; 3], None, [true; 3]), None);
     }
 
     #[test]
@@ -467,7 +471,7 @@ mod tests {
         };
         let active = [true, true, false];
         assert_eq!(
-            first_decoupled_connection(&zero_next_to_inactive, shape, [false; 3], Some(&active)),
+            first_decoupled_connection(&zero_next_to_inactive, shape, [false; 3], Some(&active), [true; 3]),
             None
         );
         // The +x wrap of the last cell joins it to cell 0.
@@ -476,10 +480,27 @@ mod tests {
             y_plus: vec![0.0; 3],
             z_plus: vec![0.0; 3],
         };
-        assert_eq!(first_decoupled_connection(&open_wrap, shape, [false; 3], None), None);
+        assert_eq!(first_decoupled_connection(&open_wrap, shape, [false; 3], None, [true; 3]), None);
         assert_eq!(
-            first_decoupled_connection(&open_wrap, shape, [true, false, false], None),
+            first_decoupled_connection(&open_wrap, shape, [true, false, false], None, [true; 3]),
             Some((2, 0))
+        );
+    }
+
+    #[test]
+    fn decoupled_connection_along_z_matters_only_when_z_is_scanned() {
+        // Two stacked films with no exchange between the layers.
+        let shape = grid(1, 1, 2);
+        let stacked = ExchangeFaces {
+            x_plus: vec![0.0; 2],
+            y_plus: vec![0.0; 2],
+            z_plus: vec![0.0, 0.0],
+        };
+        let in_plane = [true, true, false];
+        assert_eq!(first_decoupled_connection(&stacked, shape, [false; 3], None, in_plane), None);
+        assert_eq!(
+            first_decoupled_connection(&stacked, shape, [false; 3], None, [true; 3]),
+            Some((0, 1))
         );
     }
 

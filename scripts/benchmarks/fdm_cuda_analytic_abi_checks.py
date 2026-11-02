@@ -13,7 +13,7 @@ Loads the built ``libfullmag_fdm.so`` (no compilation) and mirrors the
 3. A GPU transport binding attached after creation is rejected with the
    heterogeneous-material gate when the backend holds cellwise alpha or Ms,
    and not on a uniform backend.
-4. T1 boundary-corrected exchange (note 0550): a three-cell chain whose free
+4. T1 boundary-corrected exchange (note 0400, T1 consistency): a three-cell chain whose free
    ends lie on the outer cell faces (delta = dx/2). The exact Neumann field of
    the end cell equals the clamped stencil (T0 and the uncorrected kernel);
    T1 is not qualified and must be rejected at backend creation.
@@ -287,7 +287,8 @@ def main() -> int:
     results["t1_aligned_free_face"] = t1
     for tier in ("none", "volume"):
         entry = t1[tier]
-        if not entry["created"] or abs(entry["ratio_to_exact"] - 1.0) > 1e-12:
+        # Written as an acceptance test so a NaN ratio fails.
+        if not (entry["created"] and abs(entry["ratio_to_exact"] - 1.0) <= 1e-12):
             failures.append(f"{tier} end-cell exchange field: {entry}")
     if t1["full"]["created"] or "fdm_boundary_correction_t1_unqualified" not in t1["full"]["error"]:
         failures.append(f"T1 must be rejected at creation: {t1['full']}")
@@ -307,7 +308,7 @@ def main() -> int:
     results["t0_partial_cell_energy_density"] = {
         "phi": phi, "eden_ex_J_per_m3": eden, "sum_eden_V_J": summed,
         "E_ex_J": stats.exchange_energy_joules, "rel_error": rel}
-    if rel > 1e-12:
+    if not rel <= 1e-12:
         failures.append(f"T0 sum(eden_ex) V vs E_ex rel {rel:.3e}")
 
     print(json.dumps(results, indent=2))

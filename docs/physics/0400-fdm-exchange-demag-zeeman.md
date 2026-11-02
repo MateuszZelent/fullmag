@@ -423,9 +423,9 @@ energy is a diagnostic.
   weight: $e_{\mathrm{ex},i}=-\tfrac12\mu_0M_s\,\varphi_i^{\mathrm{eff}}\,
   \mathbf m_i\cdot\mathbf H_{\mathrm{ex},i}$, so $\sum_i e_{\mathrm{ex},i}V=E_\mathrm{ex}$
   even when $0<\varphi_i<\varphi_\mathrm{floor}$; the other terms keep $\varphi_i$.
-- **T1 (boundary-corrected):** not qualified and rejected at runtime (note
-  0550 §3.2.1a); the reduction is kept for a later rederivation. The corrected
-  field operator is not symmetric,
+- **T1 (boundary-corrected):** not qualified and rejected at runtime (see
+  *T1 consistency* below); the reduction is kept for a later rederivation. The
+  corrected field operator is not symmetric,
   because the denominator at cell $i$ uses the boundary distance on the
   opposite side of $i$, so no exact discrete energy exists. The reported energy
   uses the symmetric link weight
@@ -443,6 +443,46 @@ energy is a diagnostic.
   whichever cell it is reduced from.
 
 Like the T0/T1 fields, these energies use open, non-periodic neighbours.
+
+**T1 consistency (review 2026-11-02).** Note 0550 §3.2.1 writes the T1
+boundary stencil with denominator $\Delta x(\Delta x+\delta)$, where the planner
+defines $\delta$ as the distance from the cell centre to the boundary
+($\Delta x$ when no crossing lies within one cell step). With a Neumann boundary
+at $x_i+\delta$ and an interior neighbour at $x_i-\Delta x$, Taylor expansion
+gives $m_{i-1}-m_i=-\Delta x\,m'_i+\tfrac12\Delta x^2m''_i+O(\Delta x^3)$ and
+$m'_i+\delta\,m''_i=O(\delta^2)$, hence
+
+$$
+\partial_x^2 m\big|_i=\frac{2\,(m_{i-1}-m_i)}{\Delta x\,(\Delta x+2\delta)}+O(\Delta x),
+$$
+
+exact for quadratic profiles. The one-sided form correctly takes $\delta$ from
+the boundary on the opposite side of the neighbour (an audit claim that the
+two distances are swapped is not supported); the error is the factor in front
+of $\delta$. Consequences with the current planner data:
+
+- a free face aligned with the grid has $\delta=\Delta x/2$, where the exact
+  discrete Neumann operator is the clamped stencil $1/\Delta x^2$ (T0 and the
+  uncorrected kernel), but T1 gives $4/(3\Delta x^2)$, over-coupling by $4/3$;
+- the T1 field also divides by $\varphi_i^{\mathrm{eff}}$, so for a cut cell
+  the $\delta$ denominator and $1/\varphi_i^{\mathrm{eff}}$ both count the
+  reduced control volume;
+- the sentinel $\delta=\Delta x$ cannot distinguish "no crossing" from a
+  boundary at the grid edge.
+
+Analytic check through the public C ABI
+(`scripts/benchmarks/fdm_cuda_analytic_abi_checks.py`, check 4): a three-cell
+chain with $\mathbf m=(+\hat x,-\hat x,+\hat x)$ and free ends on the outer
+cell faces, where the exact end-cell field is $H_x=-4A/(\mu_0M_s\Delta x^2)$.
+On the CUDA build of master c6c07b8ad the uncorrected kernel and T0 give ratio
+$1.0000000000000$ to the exact value and T1 gives $1.333333333333333$. Until the
+stencil is rederived consistently with $\varphi$ and $\delta$, the CUDA runner
+and the C ABI reject `boundary_correction="full"` with
+`fdm_boundary_correction_t1_unqualified` before any allocation, with no
+fallback; T0 (`"volume"`) remains available and the planner still produces the
+T1 data. Check 5 of the same harness verifies the T0 density weighting above
+with a cell at $\varphi=0.02$: before the change $\sum_i e_{\mathrm{ex},i}V$ differed
+from $E_\mathrm{ex}$ by a relative $0.15$ (the density used $\varphi_i$).
 
 #### 3.1.3 Demag: tensor convolution and FFT realization
 

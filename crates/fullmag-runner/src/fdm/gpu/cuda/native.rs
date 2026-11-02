@@ -4105,7 +4105,8 @@ fn ensure_cuda_heterogeneous_material_supported(
     }
 }
 
-/// T1 (`boundary_correction="full"`) is not qualified (note 0550 §3.2.1a):
+#[cfg(feature = "cuda")]
+/// T1 (`boundary_correction="full"`) is not qualified (note 0400, T1 consistency):
 /// its stencil over-couples grid-aligned free faces by 4/3. Fail before any
 /// allocation; the C ABI repeats the check.
 fn ensure_cuda_boundary_correction_supported(
@@ -4114,7 +4115,7 @@ fn ensure_cuda_boundary_correction_supported(
     if plan.boundary_correction.as_deref() == Some("full") {
         return Err(RunError {
             message: "fdm_boundary_correction_t1_unqualified: T1 boundary-corrected exchange is \
-                      not consistent with the planner's boundary distances (note 0550); use \
+                      not consistent with the planner's boundary distances (note 0400, T1 consistency); use \
                       boundary_correction=\"volume\" or \"none\""
                 .to_string(),
         });

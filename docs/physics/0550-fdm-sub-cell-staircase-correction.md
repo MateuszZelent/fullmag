@@ -208,60 +208,6 @@ equivalent to $200 \times 200$ without correction.
 **Data needed per cell:** 6 intersection distances $\delta_{i,\pm x}, \delta_{i,\pm y},
 \delta_{i,\pm z}$ (f64 or f32), computed from the SDF at planning time.
 
-#### 3.2.1a Consistency of the T1 stencil (review 2026-11-02)
-
-The derivation above is not consistent with the planner's definition of
-$\delta$ (§2: distance from the cell centre to the boundary, $\Delta x$ when no
-crossing lies within one cell step). Take a Neumann boundary at $x_i+\delta$
-and an interior neighbour at $x_i-\Delta x$. Taylor expansion gives
-
-$$
-m_{i-1}-m_i = -\Delta x\,m'_i + \tfrac12\Delta x^2 m''_i + O(\Delta x^3),
-\qquad
-m'_i + \delta\,m''_i = O(\delta^2),
-$$
-
-the second relation from $\partial_x m(x_i+\delta)=0$. Hence
-
-$$
-\frac{\partial^2 m}{\partial x^2}\bigg|_i
-=
-\frac{2\,(m_{i-1}-m_i)}{\Delta x\,(\Delta x+2\delta)} + O(\Delta x),
-$$
-
-exact for quadratic profiles. The stencil above uses $\Delta x(\Delta x+\delta)$,
-which is consistent only if $\delta$ were twice the distance to the boundary.
-The audit claim that the $-x$ neighbour should use $\delta_-$ instead of
-$\delta_+$ is not supported: the one-sided formula correctly takes the boundary
-on the opposite side; the error is the factor in front of $\delta$.
-
-Consequences with the current planner data:
-
-- A free face aligned with the grid has $\delta=\Delta x/2$. There the exact
-  discrete Neumann operator is the clamped stencil $1/\Delta x^2$ (T0 and the
-  uncorrected kernel), but T1 gives $2/(\Delta x\cdot\tfrac32\Delta x)=4/(3\Delta x^2)$:
-  T1 over-couples by $4/3$ at every grid-aligned free face, including the outer
-  faces of a body that fills the grid.
-- The T1 field also divides by $\varphi_i^{\mathrm{eff}}$ (§3.1). For a cut cell
-  the $\delta$ denominator and $1/\varphi_i^{\mathrm{eff}}$ both account for the
-  reduced control volume, so the cut is counted twice.
-- The sentinel $\delta=\Delta x$ cannot distinguish "no crossing within one
-  cell" from a boundary at the grid edge.
-
-Analytic check (`scripts/benchmarks/fdm_cuda_analytic_abi_checks.py`, check 4,
-through the public C ABI): a three-cell chain with $\mathbf m=(+\hat x,-\hat x,+\hat x)$
-and free ends on the outer cell faces ($\delta=\Delta x/2$). The exact end-cell
-field is $H_x=-4A/(\mu_0M_s\Delta x^2)$. Measured on the CUDA build of master
-c6c07b8ad: uncorrected and T0 give ratio $1.0000000000000$ to the exact value,
-T1 gives $1.333333333333333$.
-
-**Status.** T1 exchange is not qualified. Until the stencil is rederived
-consistently with $\varphi$ and $\delta$, the CUDA runner and the C ABI reject
-`boundary_correction="full"` with `fdm_boundary_correction_t1_unqualified`
-before any allocation, with no fallback; T0 (`"volume"`) remains available. The
-planner still produces the T1 data, so a later rederivation does not need a new
-IR.
-
 #### 3.2.2 Demag: $H_{\text{rough}} + H_{\text{corr}}$ (Donahue–McMichael)
 
 Decompose the demag field into:
@@ -414,15 +360,6 @@ All existing tests must pass with `boundary_correction="none"` (backward compati
 
 ## 7. Known limits and deferred work
 
-- T1 exchange is rejected at runtime until its stencil is rederived
-  (§3.2.1a); the planner data stays.
-- The T0/T1 per-cell exchange energy density (`eden_ex`, `eden_total`) is
-  weighted by $\varphi_i^{\mathrm{eff}}V$, the same weight as the scalar exchange
-  energy (note 0400 §3.1.2), so $\sum_i e_{\mathrm{ex},i}V=E_\mathrm{ex}$ also when
-  $0<\varphi_i<\varphi_\mathrm{floor}$. Measured with a cell at $\varphi=0.02$
-  (check 5 of `fdm_cuda_analytic_abi_checks.py`): relative error $0.15$ before
-  the fix (the density used $\varphi_i$ while the field carries
-  $1/\varphi_i^{\mathrm{eff}}$).
 - T1 assumes **static geometry** (SDF evaluated once at planning time).
 - **DMI** correction follows the same pattern but is deferred.
 - **AMR** (T2) is orthogonal and deferred.

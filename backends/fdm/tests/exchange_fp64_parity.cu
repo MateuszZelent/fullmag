@@ -253,7 +253,7 @@ int main() {
 
         run_tier(FULLMAG_FDM_BOUNDARY_VOLUME);
 
-        // T1 is not qualified (note 0550 §3.2.1a) and is rejected at creation.
+        // T1 is not qualified (note 0400, T1 consistency) and is rejected at creation.
         fullmag_fdm_plan_desc t1_plan = {};
         t1_plan.grid = {nx, 1, 1, dx, dx, dx};
         t1_plan.material = {ms, exchange, 0.5, 2.211e5};
