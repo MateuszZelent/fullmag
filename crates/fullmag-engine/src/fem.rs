@@ -4229,7 +4229,7 @@ mod tests {
             (actual - expected).abs() <= 1e-14 * expected.abs()
         };
         let mut field = vec![[2.0, 0.0, 0.0], [3.0, 0.0, 0.0], [4.0, 0.0, 0.0]];
-        project_residual_by_lumped_mass(&mut field, &masses, field_scale, Some((&[0, 0, 1], 2)));
+        project_residual_by_lumped_mass(&mut field, &masses, field_scale, Some((&[0usize, 0, 1][..], 2)));
         // Class: (2 + 3) / (1 + 3) = 1.25. A per-node average would give
         // (2/1 + 3/3) / 2 = 1.5.
         assert!(close(field[0][0], 1.25 * field_scale), "{:?}", field);
