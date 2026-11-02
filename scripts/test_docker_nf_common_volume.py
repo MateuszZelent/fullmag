@@ -62,6 +62,81 @@ class QualificationContract(unittest.TestCase):
             self.assertTrue(all(m["readonly"] for m in s["mounts"] if m["kind"]=="volume"))
             self.assertEqual([m["target"] for m in s["mounts"] if not m["readonly"]],["/export"])
 
+    def test_group_volume_preserves_package_and_boris_prefix_subpaths(self):
+        cache = dict(group_volume="selected-control", build_subpath="private/backend",
+            shared_packages=True, shared_package_subpath="groups/"+"1"*64,
+            volume_names=dict(build="selected-control", package="shared-packages"))
+        for role, case in (("boris", "r0"), ("fullmag", None), ("compare", None)):
+            with self.subTest(role=role):
+                value = q.specification(binding(), "selected-control", cache,
+                    "nf-scientific/attempts/"+RUN+"/qualification", Path("/owned/export"), role, case)
+                package = next(m for m in value["mounts"] if m["target"] == "/package")
+                self.assertEqual(package["subpath"], cache["shared_package_subpath"])
+                if role == "boris":
+                    prefix = next(m for m in value["mounts"] if m["target"] == "/opt/fullmag-boris")
+                    self.assertEqual(prefix["subpath"], "private/backend/external-reference-boris/"+
+                        binding()["producer_attempt"]+"/prefix")
+                q.attest(observed(value), value, RUN, 0)
+                self.assertTrue(all(m["readonly"] for m in value["mounts"] if m["kind"] == "volume"))
+
+    def test_private_cache_requires_explicit_safe_subpaths(self):
+        for field in ("build_subpath", "shared_package_subpath"):
+            for bad in (None, "", "../escape", "/root", "a//b", "a,readonly"):
+                with self.subTest(field=field, bad=bad), self.assertRaises(q.BuildControlError):
+                    cache = dict(group_volume="group", build_subpath="private/backend", shared_packages=True,
+                        shared_package_subpath="groups/"+"1"*64,
+                        volume_names=dict(build="group", package="packages"))
+                    cache[field] = bad
+                    q.specification(binding(), "control", cache, "nf/qualification", Path("/owned/export"), "boris", "r0")
+
+    def test_copy_retains_backend_subpath_and_readonly_access(self):
+        control = SimpleNamespace(helper_args=lambda script, **kwargs:
+            ["docker", "run", "--entrypoint", "sh", "helper", "-c", script])
+        for subpath in ("", "private/backend", "task/private/backend"):
+            cache = dict(volume_names=dict(build="selected-build"))
+            if subpath:
+                cache.update(group_volume="selected-build", build_subpath=subpath)
+            with self.subTest(subpath=subpath):
+                argv = q.copy_args(control, "fixed-copy", RUN, cache)
+                self.assertEqual(argv[argv.index("--mount")+1],
+                    "type=volume,src=selected-build,dst=/build,readonly,volume-nocopy" +
+                    (",volume-subpath="+subpath if subpath else ""))
+                self.assertEqual(argv[argv.index("--entrypoint"):], ["--entrypoint", "sh", "helper", "-c", "fixed-copy"])
+
+    def test_copy_refuses_missing_or_unsafe_private_subpath(self):
+        for subpath in (None, "", "../escape", "/private/backend", "a//b", "a,readonly"):
+            with self.subTest(subpath=subpath), self.assertRaises(q.BuildControlError):
+                q.copy_args(SimpleNamespace(), "fixed-copy", RUN, dict(group_volume="selected-build",
+                    volume_names=dict(build="selected-build"), build_subpath=subpath))
+
+    def test_cpu_compatibility_path_keeps_roles_device_denied(self):
+        for role in ("boris", "fullmag", "compare"):
+            with self.subTest(role=role):
+                value = spec(role)
+                paths = value["environment"]["LD_LIBRARY_PATH"].split(":")
+                self.assertEqual("/usr/local/cuda/compat" in paths, role == "fullmag")
+                self.assertEqual(value["environment"]["NVIDIA_VISIBLE_DEVICES"], "void")
+                self.assertEqual(value["environment"]["NVIDIA_DRIVER_CAPABILITIES"], "")
+                argv = q.create_args(value, RUN, 0)
+                self.assertEqual(argv[argv.index("--runtime")+1], "runc")
+                self.assertNotIn("--gpus", argv)
+                self.assertNotIn("--device", argv)
+                q.attest(observed(value), value, RUN, 0)
+
+    def test_fullmag_cpu_attestation_rejects_device_or_loader_drift(self):
+        value = spec("fullmag")
+        for key, changed in (("Runtime", "nvidia"), ("DeviceRequests", [{"Count": -1}]),
+                             ("Devices", [{"PathOnHost": "/dev/dxg"}])):
+            with self.subTest(key=key), self.assertRaises(q.BuildControlError):
+                actual = observed(value)
+                actual["HostConfig"][key] = changed
+                q.attest(actual, value, RUN, 0)
+        actual = observed(value)
+        actual["Config"]["Env"] = ["LD_LIBRARY_PATH=/foreign" if entry.startswith("LD_LIBRARY_PATH=")
+            else entry for entry in actual["Config"]["Env"]]
+        with self.assertRaises(q.BuildControlError):
+            q.attest(actual, value, RUN, 0)
+
     def test_single_file_logging_explicitly_disables_default_compression(self):
         s=spec();args=q.create_args(s,RUN,0)
         self.assertEqual([args[i+1] for i,value in enumerate(args) if value=="--log-opt"],
@@ -298,6 +373,77 @@ class CopyHelperLeaseRegression(unittest.TestCase):
         self.assertFalse(any(path.endswith("/terminal.json") for path,_ in writes))
         logger.wait.assert_not_called()
 
+
+
+
+
+class IsolatedWorkerImportBoundary(unittest.TestCase):
+    def entrypoint(self, source_name, role, *, host_import=False):
+        import ast
+        import json
+        import shutil
+        import subprocess
+        import sys
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            if source_name=='docker_nf_common_volume.original.py':
+                source=Path(q.__file__).read_text()
+                eager=next(node for node in ast.walk(ast.parse(source))
+                    if isinstance(node,ast.ImportFrom) and node.module=='docker_build_control')
+                (root/'docker_nf_common_volume.py').write_text(ast.get_source_segment(source,eager)+'\n')
+            else:
+                shutil.copyfile(Path(q.__file__),root/'docker_nf_common_volume.py')
+            shutil.copyfile(Path(sys.modules['docker_build_control'].__file__),root/'docker_build_control.py')
+            code=r"""import importlib.util,json,runpy,sys
+root,role,host_import=sys.argv[1:]
+sys.path.insert(0,root)
+assert importlib.util.find_spec('docker_dev_host') is None
+path=root+'/docker_nf_common_volume.py'
+sys.argv=[path,role]
+class WorkerEntered(BaseException): pass
+def profile(frame,event,arg):
+ if event=='call' and frame.f_code.co_name in ('_boris','_fullmag','_compare') and frame.f_globals.get('__name__')=='__main__':
+  sys.setprofile(None)
+  assert frame.f_code.co_name==role
+  assert 'docker_build_control' not in sys.modules
+  assert 'docker_dev_host' not in sys.modules
+  value={'a':'µ','nested':[1,True,None]}
+  assert frame.f_globals['canonical'](value)==json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode('utf-8')
+  frame.f_globals['require'](True,'valid')
+  try:frame.f_globals['require'](False,'worker validation remains enforced')
+  except RuntimeError as error:assert str(error)=='N/F volume qualification: worker validation remains enforced'
+  else:raise AssertionError('worker validation was bypassed')
+  print(json.dumps({'entered':role,'host_imported':False,'solver_started':False}))
+  raise WorkerEntered()
+if host_import=='no':sys.setprofile(profile)
+try:
+ runpy.run_path(path,run_name='dependency_probe' if host_import=='yes' else '__main__')
+except WorkerEntered:pass
+"""
+            result=subprocess.run([sys.executable,'-I','-S','-B','-c',code,str(root),role,'yes' if host_import else 'no'],
+                capture_output=True,text=True,timeout=15)
+            return result
+
+    def test_eager_host_import_reproduces_missing_host_module_before_worker_dispatch(self):
+        result=self.entrypoint('docker_nf_common_volume.original.py','_boris')
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn("ModuleNotFoundError: No module named 'docker_dev_host'",result.stderr)
+        self.assertEqual(result.stdout,'')
+
+    def test_each_exact_worker_reaches_dispatch_without_host_modules_or_solver(self):
+        import json
+        for role in ('_boris','_fullmag','_compare'):
+            with self.subTest(role=role):
+                result=self.entrypoint('docker_nf_common_volume.py',role)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertEqual(json.loads(result.stdout),dict(entered=role,host_imported=False,solver_started=False))
+
+    def test_host_import_keeps_existing_host_dependency_boundary(self):
+        result=self.entrypoint('docker_nf_common_volume.py','_boris',host_import=True)
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn("ModuleNotFoundError: No module named 'docker_dev_host'",result.stderr)
+        self.assertEqual(result.stdout,'')
 
 
 if __name__=="__main__":unittest.main()

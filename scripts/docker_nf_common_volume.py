@@ -14,8 +14,17 @@ import shlex
 import sys
 import time
 
-from docker_build_control import (BuildControl, BuildControlError, ControlOutcomeUnknown,
-    bounded_capture, canonical, docker_capture, toolchain_configuration)
+_WORKER_ENTRY = (__name__ == "__main__" and len(sys.argv) == 2
+    and sys.argv[1] in ("_boris", "_fullmag", "_compare"))
+if _WORKER_ENTRY:
+    # Isolated workers carry scientific tools, never host admission dependencies.
+    BuildControlError = RuntimeError
+
+    def canonical(value):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+else:
+    from docker_build_control import (BuildControl, BuildControlError, ControlOutcomeUnknown,
+        bounded_capture, canonical, docker_capture, toolchain_configuration)
 
 SCHEMA = "fullmag.nf-common.volume-scientific.v1"
 IDENTITY = "fullmag.boris.volume-runtime.v1"
@@ -122,6 +131,15 @@ def volume(name, target, subpath=""):
     return dict(kind="volume", source=name, target=target, subpath=subpath, readonly=True)
 
 
+def cache_subpaths(cache):
+    build_subpath = cache.get("build_subpath", "") if cache.get("group_volume") else ""
+    package_subpath = cache.get("shared_package_subpath", "") if cache.get("shared_packages") else ""
+    for enabled, subpath in ((cache.get("group_volume"), build_subpath), (cache.get("shared_packages"), package_subpath)):
+        require(not enabled or isinstance(subpath, str) and
+                re.fullmatch(r"[a-zA-Z0-9_-]+(?:/[a-zA-Z0-9_-]+)*", subpath), "private cache subpath required")
+    return build_subpath, package_subpath
+
+
 def specification(binding, control_volume, cache, technical, export, role, case_key=None):
     require(binding.get("schema") == SCHEMA and re.fullmatch(r"sha256:[a-f0-9]{64}", binding["image_id"]), "invalid native binding")
     require(role in ("boris", "fullmag", "compare"), "unknown scientific role")
@@ -129,9 +147,10 @@ def specification(binding, control_volume, cache, technical, export, role, case_
         require(case_key in ("r0", "r1", "r2"), "fixed BORIS case required")
     else:
         require(case_key is None, "unexpected case selector")
+    build_subpath, package_subpath = cache_subpaths(cache)
     mounts = [volume(control_volume, "/qualification", technical + "/controller"),
         volume(control_volume, "/source", technical + "/source"),
-        volume(cache["volume_names"]["package"], "/package")]
+        volume(cache["volume_names"]["package"], "/package", package_subpath)]
     env = dict(PYTHONDONTWRITEBYTECODE="1", PYTHONNOUSERSITE="1", PYTHONHOME="", LD_PRELOAD="", LD_AUDIT="",
         PATH="/package/bin:/usr/local/bin:/usr/bin:/bin", HOME="/tmp", MPLCONFIGDIR="/tmp/matplotlib",
         NVIDIA_VISIBLE_DEVICES="void", NVIDIA_DRIVER_CAPABILITIES="", OMP_NUM_THREADS="2", FULLMAG_CPU_THREADS="2",
@@ -145,11 +164,13 @@ def specification(binding, control_volume, cache, technical, export, role, case_
             volume(control_volume, "/input", technical + "/input/" + case_key),
             volume(control_volume, "/boris", technical + "/boris"),
             volume(cache["volume_names"]["build"], "/opt/fullmag-boris",
-                   "external-reference-boris/" + binding["producer_attempt"] + "/prefix")]
+                   "/".join(v for v in (build_subpath, "external-reference-boris", binding["producer_attempt"], "prefix") if v))]
         env["PYTHONPATH"] = "/tools/scripts:/opt/fullmag-boris/source:/opt/fullmag-boris/python"
         env["LD_LIBRARY_PATH"] = "/opt/fullmag-boris/sdk/usr/lib/x86_64-linux-gnu:/usr/local/lib"
         seconds = BORIS_SECONDS
     elif role == "fullmag":
+        # Match the image entrypoint CPU ABI path without NVIDIA device injection.
+        env["LD_LIBRARY_PATH"] += ":/usr/local/cuda/compat"
         mounts += [volume(control_volume, "/tools", technical + "/fullmag-tools")]
         seconds = FULLMAG_SECONDS
     else:
@@ -236,6 +257,18 @@ def attest(value, spec, run_id, ordinal):
             require(_source_mount_matches_selected(raw, Path(expected["source"])), "scientific export path differs")
     return value
 
+
+
+def copy_args(control, script, token, cache):
+    build_subpath, _ = cache_subpaths(cache)
+    mount = volume(cache["volume_names"]["build"], "/build", build_subpath)
+    text = "type=volume,src="+mount["source"]+",dst=/build,readonly,volume-nocopy"
+    if mount["subpath"]:
+        text += ",volume-subpath="+mount["subpath"]
+    argv = control.helper_args(script, name="fullmag-nf-copy-"+token)
+    point = argv.index("--entrypoint")
+    argv[point:point] = ["--mount", text]
+    return argv
 
 
 def dispatch_copy(control, operation, argv, binding):
@@ -574,10 +607,8 @@ def run(args):
             src, dst = source + "/" + name, target + "/" + name
             copy += "; test ! -L " + shlex.quote(src) + "; test \"$(sha256sum " + shlex.quote(src) + " | cut -d' ' -f1)\" = " + expected
             copy += "; cp -- " + shlex.quote(src) + " " + shlex.quote(dst) + "; test \"$(sha256sum " + shlex.quote(dst) + " | cut -d' ' -f1)\" = " + expected
-        argv = control.helper_args("timeout --signal=TERM --kill-after=10 240 bash -euo pipefail -c " + shlex.quote(copy),
-            name="fullmag-nf-copy-" + operation["receipt"]["attempt"])
-        point = argv.index("--entrypoint")
-        argv[point:point] = ["--mount", "type=volume,src=" + cache["volume_names"]["build"] + ",dst=/build,readonly,volume-nocopy"]
+        argv = copy_args(control, "timeout --signal=TERM --kill-after=10 240 bash -euo pipefail -c " + shlex.quote(copy),
+            operation["receipt"]["attempt"], cache)
         dispatch_copy(control, operation, argv, dict(native_binding_sha256=digest(canonical(binding)),
             build_volume=cache["volume_names"]["build"], source=source, target=target, outputs=binding["boris_outputs"]))
         import base64
@@ -663,7 +694,7 @@ def main():
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] in (["_boris"], ["_fullmag"], ["_compare"]):
+    if _WORKER_ENTRY:
         globals()[sys.argv[1]]()
     else:
         main()
