@@ -13,6 +13,7 @@ import {
   ObjectVisualizationController,
   resolveGlobalObjectVisualizationSettings,
   resolveTargetVisualization,
+  targetForFdmNativeLayer,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import type { DecodedFieldVector, DecodedTopology } from "@/kernel/api/codecs";
 import {
@@ -69,6 +70,7 @@ import {
   resolveViewport3DResourceFrameState,
   resolveViewport3DSceneCameraView,
   resolveViewport3DFdmTargetVisualization,
+  resolveViewport3DFdmNativeLayerSettings,
   resolveViewport3DAirboxFieldVectorDemandPlan,
   resolveViewport3DAirboxVectorSampleBudget,
   resolveViewport3DScopedPartVectorFieldDemandPlan,
@@ -95,7 +97,10 @@ import {
 import {
   resolveHysteresisStepViewportTarget,
 } from "../model/viewport3DTargets";
-import { summarizeViewport3DFieldDemandDiagnostics } from "../model/viewport3DFieldDataPlan";
+import {
+  resolveViewport3DFdmNativeLayerFieldRequests,
+  summarizeViewport3DFieldDemandDiagnostics,
+} from "../model/viewport3DFieldDataPlan";
 import { resolveViewport3DFieldVectorResourceKey } from "../viewport3dResources";
 import {
   buildViewport3DFieldRenderModel,
@@ -964,7 +969,7 @@ describe("useViewport3DSceneModel", () => {
     ).toHaveLength(2);
   });
 
-  it("resolves FDM native layers from canonical state and pending local target edits", () => {
+  it("resolves FDM native layers through their canonical object owner", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     const nativeLayerSettingsBlock = source.slice(
       source.indexOf("const fdmNativeLayerSettingsById = useMemo"),
@@ -972,11 +977,193 @@ describe("useViewport3DSceneModel", () => {
     );
 
     expect(nativeLayerSettingsBlock).toContain(
-      "resolveViewport3DFdmTargetVisualization({",
+      "resolveViewport3DFdmNativeLayerSettings({",
     );
-    expect(nativeLayerSettingsBlock).toContain("snapshot: objectVisualizationSnapshot");
-    // FDM native layers use canonical local targets; the FEM registry must not override them.
-    expect(nativeLayerSettingsBlock).not.toContain("visualizationState: renderingState");
+    expect(nativeLayerSettingsBlock).toContain(
+      "objectContext: getObjectContext(domain.objectId)",
+    );
+    expect(nativeLayerSettingsBlock).toContain("globalObjectBaseSettings");
+    expect(nativeLayerSettingsBlock).toContain("visualizationState: renderingState");
+    expect(nativeLayerSettingsBlock).toContain("getObjectContext,");
+    expect(nativeLayerSettingsBlock).toContain("globalObjectBaseSettings,");
+    expect(nativeLayerSettingsBlock).toContain("renderingState,");
+    expect(nativeLayerSettingsBlock).not.toContain("fdmTargetSettingsById");
+
+    const helperStart = source.indexOf(
+      "export function resolveViewport3DFdmNativeLayerSettings(",
+    );
+    const helperBlock = source.slice(
+      helperStart,
+      source.indexOf("\nfunction viewport3DObjectVisualizationSnapshotEquals", helperStart),
+    );
+    expect(helperBlock).toContain("canonicalVisualizationSceneObjectId(domain.objectId)");
+    expect(helperBlock).toContain("id: `object:${canonicalObjectId}`");
+    expect(helperBlock).toContain("inheritedSettings: globalObjectBaseSettings");
+    expect(helperBlock).toContain("inheritedSettings: owner.effectiveSettings");
+    expect(helperBlock).toContain("resolveFdmViewportVisualizationSettings(");
+  });
+
+  it("keeps native-layer ownership keyed by object id when layer ids and names differ", () => {
+    const visualization = new ObjectVisualizationController();
+    const layerA = {
+      ...nativeLayerFieldDomainFixture(),
+      layerId: "native-layer-a",
+      magnetName: "display-name-a",
+      objectId: "canonical-object-a",
+    };
+    const layerB = {
+      ...nativeLayerFieldDomainFixture(),
+      layerId: "native-layer-b",
+      magnetName: "display-name-b",
+      objectId: "canonical-object-b",
+    };
+    visualization.patchTarget(
+      { id: "object:canonical-object-a", kind: "object" },
+      { shaderVisible: true, surfaceColorSource: "component_x", visible: true },
+    );
+    visualization.patchTarget(
+      { id: "object:canonical-object-b", kind: "object" },
+      { shaderVisible: true, surfaceColorSource: "component_y", visible: true },
+    );
+
+    const resolve = (domain: typeof layerA) =>
+      resolveViewport3DFdmNativeLayerSettings({
+        activeMaskReady: true,
+        domain,
+        globalObjectBaseSettings: resolveGlobalObjectVisualizationSettings(null),
+        objectContext: undefined,
+        snapshot: visualization.getSnapshot(),
+        target: targetForFdmNativeLayer(domain.layerId, domain.magnetName),
+        visualizationState: null,
+      });
+
+    expect(resolve(layerA).surfaceColorSource).toBe("component_x");
+    expect(resolve(layerB).surfaceColorSource).toBe("component_y");
+  });
+
+  it("lets native-layer overrides win over inherited object settings", () => {
+    const visualization = new ObjectVisualizationController();
+    const domain = {
+      ...nativeLayerFieldDomainFixture(),
+      layerId: "layer-id-is-independent",
+      magnetName: "not-the-owner-id",
+      objectId: "owner-id",
+    };
+    const target = targetForFdmNativeLayer(domain.layerId, domain.magnetName);
+    visualization.patchTarget(
+      { id: "object:owner-id", kind: "object" },
+      { shaderVisible: true, surfaceColorSource: "component_x", visible: true },
+    );
+    visualization.patchTarget(target, {
+      shaderVisible: true,
+      surfaceColorSource: "component_z",
+      visible: true,
+    });
+
+    const settings = resolveViewport3DFdmNativeLayerSettings({
+      activeMaskReady: true,
+      domain,
+      globalObjectBaseSettings: resolveGlobalObjectVisualizationSettings(null),
+      objectContext: undefined,
+      snapshot: visualization.getSnapshot(),
+      target,
+      visualizationState: null,
+    });
+
+    expect(settings.surfaceColorSource).toBe("component_z");
+  });
+
+  it("does not request native-layer fields when the owning object is hidden", () => {
+    const visualization = new ObjectVisualizationController();
+    const domain = {
+      ...nativeLayerFieldDomainFixture(),
+      layerId: "hidden-owner-layer",
+      objectId: "hidden-owner",
+    };
+    visualization.patchTarget(
+      { id: "object:hidden-owner", kind: "object" },
+      { shaderVisible: true, vectorsVisible: true, visible: false },
+    );
+    const settings = resolveViewport3DFdmNativeLayerSettings({
+      activeMaskReady: true,
+      domain,
+      globalObjectBaseSettings: resolveGlobalObjectVisualizationSettings(null),
+      objectContext: undefined,
+      snapshot: visualization.getSnapshot(),
+      target: targetForFdmNativeLayer(domain.layerId, domain.magnetName),
+      visualizationState: null,
+    });
+
+    expect(settings).toMatchObject({
+      shaderVisible: false,
+      vectorsVisible: false,
+      visible: false,
+    });
+    expect(
+      resolveViewport3DFdmNativeLayerFieldRequests({
+        available: true,
+        layers: [{ layerId: domain.layerId, settings }],
+        maxSamples: 8,
+      }).size,
+    ).toBe(0);
+  });
+
+  it("keeps a native layer geometry-only while its declared active mask is unavailable", () => {
+    const visualization = new ObjectVisualizationController();
+    const domain = {
+      ...nativeLayerFieldDomainFixture(),
+      activeMaskPresent: true,
+      layerId: "layer-with-missing-mask",
+      objectId: "owner-with-mask",
+    };
+    visualization.patchTarget(
+      { id: "object:owner-with-mask", kind: "object" },
+      { shaderVisible: true, vectorsVisible: true, visible: true },
+    );
+    const settings = resolveViewport3DFdmNativeLayerSettings({
+      activeMaskReady: false,
+      domain,
+      globalObjectBaseSettings: resolveGlobalObjectVisualizationSettings(null),
+      objectContext: undefined,
+      snapshot: visualization.getSnapshot(),
+      target: targetForFdmNativeLayer(domain.layerId, domain.magnetName),
+      visualizationState: null,
+    });
+
+    expect(settings).toMatchObject({ shaderVisible: false, vectorsVisible: false });
+    expect(
+      resolveViewport3DFdmNativeLayerFieldRequests({
+        available: true,
+        layers: [{ layerId: domain.layerId, settings }],
+        maxSamples: 8,
+      }).size,
+    ).toBe(0);
+  });
+
+  it("preserves native-layer field scope identity", () => {
+    const domain = {
+      ...nativeLayerFieldDomainFixture(),
+      layerId: "layout-layer-identity",
+      magnetName: "different-display-name",
+      objectId: "different-object-identity",
+    };
+    const requests = resolveViewport3DFdmNativeLayerFieldRequests({
+      available: true,
+      layers: [{
+        layerId: domain.layerId,
+        settings: {
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          shaderVisible: true,
+          visible: true,
+        },
+      }],
+      maxSamples: 8,
+    });
+
+    expect(requests.get(domain.layerId)?.query).toMatchObject({
+      scope_id: domain.layerId,
+      scope_kind: "layer",
+    });
   });
 
   it("uses canonical Airbox settings only when the multilayer layout is unavailable", () => {

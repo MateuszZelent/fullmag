@@ -2979,6 +2979,42 @@ export function resolveViewport3DFdmTargetVisualization({
   });
 }
 
+export function resolveViewport3DFdmNativeLayerSettings({
+  activeMaskReady,
+  domain,
+  globalObjectBaseSettings,
+  objectContext,
+  snapshot,
+  target,
+  visualizationState,
+}: {
+  activeMaskReady: boolean;
+  domain: import("../viewport3dDomainAdapter").FdmNativeLayerRenderDomain;
+  globalObjectBaseSettings: ReturnType<typeof resolveGlobalObjectVisualizationSettings>;
+  objectContext?: VisualizationObjectContext;
+  snapshot: ObjectVisualizationSnapshot;
+  target: VisualizationTargetRef;
+  visualizationState?: VisualizationStateResource | null;
+}) {
+  const canonicalObjectId = canonicalVisualizationSceneObjectId(domain.objectId);
+  const owner = resolveViewport3DFdmTargetVisualization({
+    objectContext,
+    inheritedSettings: globalObjectBaseSettings,
+    snapshot,
+    target: { id: `object:${canonicalObjectId}`, kind: "object" },
+    visualizationState,
+  });
+  const resolved = resolveViewport3DFdmTargetVisualization({
+    objectContext,
+    inheritedSettings: owner.effectiveSettings,
+    snapshot,
+    target,
+    visualizationState,
+  }).effectiveSettings;
+
+  return resolveFdmViewportVisualizationSettings(resolved, activeMaskReady);
+}
+
 function viewport3DObjectVisualizationSnapshotEquals(
   previous: ObjectVisualizationSnapshot,
   next: ObjectVisualizationSnapshot,
@@ -4291,27 +4327,32 @@ export function useViewport3DSceneModel({
     const settingsById = new Map<string, VisualizationTargetSettings>();
     for (const domain of fdmNativeLayerDomains) {
       const target = targetForFdmNativeLayer(domain.layerId, domain.magnetName);
-      const resolved = resolveViewport3DFdmTargetVisualization({
-        snapshot: objectVisualizationSnapshot,
-        target,
-      }).effectiveSettings;
       settingsById.set(
         domain.layerId,
-        resolveFdmViewportVisualizationSettings(
-          resolved,
-          !domain.activeMaskPresent ||
+        resolveViewport3DFdmNativeLayerSettings({
+          activeMaskReady:
+            !domain.activeMaskPresent ||
             domain.activeCellCount === domain.totalCells ||
             Boolean(
               fdmMultilayerLayerActiveMasks.data?.masks.get(domain.layerId),
             ),
-        ),
+          domain,
+          globalObjectBaseSettings,
+          objectContext: getObjectContext(domain.objectId),
+          snapshot: objectVisualizationSnapshot,
+          target,
+          visualizationState: renderingState,
+        }),
       );
     }
     return settingsById;
   }, [
     fdmNativeLayerDomains,
     fdmMultilayerLayerActiveMasks.data,
+    getObjectContext,
+    globalObjectBaseSettings,
     objectVisualizationSnapshot,
+    renderingState,
   ]);
   const nativeLayerFieldRequests = useMemo<
     ReadonlyMap<string, Viewport3DFieldResourceRequest>
