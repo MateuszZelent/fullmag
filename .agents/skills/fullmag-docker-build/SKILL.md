@@ -70,7 +70,18 @@ sprawdzić, jeśli źródła się zmieniły.
 
 ## Granica danych i retencja
 
-Nowe grupy automatycznie utrzymują current + jeden rollback i limit incremental po udanym zarządzanym starcie. Zakończenie `worktree-finish ... completed` wymaga usuniętych kontenerów i wykonuje kwalifikowaną retencję prywatnego cache; zachowuje globalne shared volumes, control i dane użytkownika. Szczegóły: [kontrakt retencji](../../../docs/guides/shared-build-storage.md).
+Wspierana automatyka nowej grupy utrzymuje current + jeden rollback i limit
+incremental po udanym zarządzanym starcie; wymagany jest receipt tej próby.
+Sama obecność nowego skilla nie wdraża jej do starszego obrazu ani konfiguracji.
+Po każdej publikacji, błędzie/anulowaniu etapu, zwykłym zatrzymaniu po drain i
+zakończeniu zadania uzgodnij receipt oraz wykonaj dostępną kwalifikowaną
+retencję; preview nie zamyka cleanupu. Grupę zakończoną, scaloną i bez
+konsumentów wycofaj przez `worktree-finish`, usuwając jej prywatne namespace
+backend build/package i frontend. Zachowaj current + bezpośredni rollback
+grupy pozostającej w użyciu, aktywne piny i referencje, shared dependencies,
+control/provenance oraz sesje i wyniki użytkownika. Szczegółowy kontrakt, w tym
+kontrolę historycznych etykiet i pomiarów, opisuje
+[retencja Docker build storage](../../../docs/guides/shared-build-storage.md).
 
 Buildowe zależności, cache Cargo/CMake/pnpm/Next, pakiety, logi i techniczne
 receipty aktywnej trasy są przypięte do named volumes grupy lub magazynu
@@ -113,9 +124,13 @@ odwrotnie. Sprawdź bieżące źródła i wynik konkretnej próby.
 4. Zapisz dowód poprawnego buildu i startu API. Sprawdź restart bez zmian,
    małą zmianę backendu oraz frontend HMR, mierząc rzeczywistą pracę i zajętość.
    Nie obiecuj stałego czasu ani kompilacji tylko jednego crate.
-5. Po etapie wykonaj kwalifikację retencji opisaną w procedurze. Zapisz wynik
-   w wolumenie; raportuj pozostawione generacje i powód. Nie stosuj globalnego
-   prune ani automatycznego usuwania wolumenów czy danych użytkownika.
+5. Po każdym zdarzeniu retencji wymienionym wyżej uzgodnij receipt dokładnej
+   próby i zastosuj kwalifikowaną retencję; zapisz receipt oraz inventory po
+   zmianie. Przed/po zmierz fizyczne użycie backing filesystemu Docker i C:
+   oddzielnie. Jeżeli helper nie obsługuje stanu albo historyczne namespace'y
+   pozostają nierozstrzygnięte, oznacz cleanup jako `blocked` i wypisz dokładne
+   cele. Nie zastępuj apply preview, globalnym prune, `compose down -v` ani
+   usuwaniem danych użytkownika.
 
 Odróżniaj: plan, audyt źródeł, strukturalny test mountów, build, API, HMR,
 wykonanie symulacji i pomiar odzyskanych bajtów. Brak dowodu oznacza

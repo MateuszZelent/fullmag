@@ -175,17 +175,21 @@ Szczegóły: [Docker development architecture](docs/guides/docker-development-ar
 
 ## Sprzątanie danych po etapie deweloperskim
 
-- Po zakończeniu etapu (także błędem lub anulowaniem) i przed kolejnym ciężkim buildem oceń dane wygenerowane przez ten etap. Użyj skilla `fullmag-build-stage-cleanup`; jeżeli nie jest dostępny, zastosuj reguły retencji z build-storage governance i zgłoś brak skilla.
+- Po publikacji pakietu, zakończeniu etapu (także błędem lub anulowaniem), zwykłym zatrzymaniu po drain oraz domknięciu zadania uzgodnij ostatni receipt i wykonaj kwalifikowaną retencję. Dla sprzątania etapu użyj skilla `fullmag-build-stage-cleanup`; jeżeli nie jest dostępny, zastosuj build-storage governance. Zakończonej retencji nie zastępuje preview ani plan. Jeżeli dostępna ścieżka nie obsługuje danego stanu, oznacz cleanup jako `blocked`, wypisz dokładne pozostałe cele i następny krok; nie omijaj blokad.
 - Najpierw kwalifikuj zakończone `execution`, następnie zbędny staging i kopie źródeł, a potem zastąpione pakiety runtime. Przestarzałość oznacza wykazaną zbędność: sam wiek, rozmiar lub nowszy commit nie wystarczają. Zachowaj używany cache przyrostowy, ostatni zweryfikowany pakiet i dane referencjonowane przez wyniki, projekty, sesje lub rollback.
 - Przed wykonaniem autoryzowanego planu ponownie sprawdź stan jobów, aktywne procesy, kontenery, mounty, lease oraz dokładne cele w rozwiązanym storage. Zachowaj wyniki, logi, receipty, manifesty i provenance. Nie rozszerzaj zgody na inne katalogi ani nie używaj globalnego prune.
-- W checkpointcie etapu zapisz decyzję dla każdego kandydata, dowód zbędności, zachowywane dane, plan/receipt i pomiar wolnego miejsca. Dla pozostawionych danych podaj warunek ponownej oceny. Preview ani zapis skilla nie dowodzą wykonania lub wdrożenia automatycznego sprzątania.
+- Dla zachowywanej grupy Docker utrzymuj zweryfikowany pakiet current i jeden bezpośredni rollback; usuń starsze, kwalifikowane generacje. Po scaleniu i drain nieużywanej grupy wykonaj kwalifikowane wycofanie jej prywatnych namespace backend build/package i frontend przez `worktree-finish`; niezależnie potwierdź pokrycie wszystkich identity i brak konsumentów/referencji. Współdzielonych zależności, danych użytkownika, sesji/wyników, control, provenance ani aktywnych pinów nie obejmuje sprzątanie grupy.
+- Inwentaryzuj jednocześnie źródło/storage root, worktree i historyczne tożsamości projektu Compose oraz etykiety wolumenów. Pusty receipt nie potwierdza kompletności, jeżeli niezależny inventory nadal pokazuje należące do grupy bajty. Raportuj pomiar przed/po na filesystemie Docker i na C: osobno; `docker system df` jest osobną księgowością logiczną. Szczegółowy kontrakt: [retencja Docker build storage](docs/guides/shared-build-storage.md).
+- W checkpointcie etapu zapisz decyzję dla każdego kandydata, dowód zbędności, zachowywane dane, plan i receipt. Dla pozostawionych danych podaj warunek ponownej oceny. Zapis skilla ani opis automatyki nie dowodzi jej wdrożenia lub wykonania.
 
 ### Współdzielony cache DEV
 
 Nowy launcher używa project-scoped wolumenów `fullmag-shared-*` dla pakietów,
-Cargo i pnpm. Zasady oraz utrzymanie: [shared build storage](docs/guides/shared-build-storage.md).
-Retencję po gotowości API uruchamia nowy obraz również przy zwykłym restarcie
-kontenera. Starsze worktree migruj aktualnym launcherem przez przypiętą parę
+Cargo i pnpm. Zasady: [shared build storage](docs/guides/shared-build-storage.md).
+Retencja po gotowości API działa tylko w obrazie i konfiguracji, które ją
+zawierają; potwierdza ją receipt konkretnej próby. `docker restart` nie
+aktualizuje obrazu ani konfiguracji. Starsze worktree migruj aktualnym
+launcherem przez przypiętą parę
 `--helper-source-root`/`--helper-source-commit`; nie nadpisuj ich źródeł aplikacji.
 Przed każdym recreate ponów kontrolę aktywności i receipts. Działające grupy
 innych wątków odłóż do ich naturalnego zatrzymania; brak drain lub osierocony

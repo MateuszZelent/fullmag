@@ -393,10 +393,22 @@ odpowiednie kroki. Nie obejmuje to starych, obcych worktree, cache ani wyników.
    mounty i linki. Z dostępnego cleanup executora — głównego checkoutu albo
    innego zachowanego checkoutu, którego nie usuwasz — wykonaj
    najpierw `worktree-finish ... completed` w jeszcze istniejącym worktree.
-   Polecenie sprawdza ownera, brak kontenerów i usuwa zakwalifikowany prywatny
-   cache oraz namespace pakietów; nie usuwaj ręcznie ich wolumenów przed tym
-   krokiem, bo etykiety są dowodem właściciela namespace. Po receipcie cleanupu
-   wykonaj `git worktree remove` dla pojedynczej zweryfikowanej ścieżki, bez `--force`.
+   Polecenie sprawdza ownera, brak kontenerów i wykonuje cleanup objęty
+   kwalifikacją oraz receiptem; receipt nie dowodzi, że rozpoznano każdą
+   starszą tożsamość. Nie usuwaj ręcznie wolumenów przed tym krokiem, bo
+   etykiety są dowodem właściciela namespace. Po receipcie cleanupu
+   wykonaj niezależny Docker inventory, łącząc bieżące i historyczne Compose
+   project IDs/etykiety z registered source/worktree i resolved storage root.
+   Dla zakończonej, nieużywanej grupy potwierdź brak jej prywatnych backend
+   build/package i frontend namespaces; dla grup, które nadal pozostają w użyciu,
+   potwierdź current + jeden bezpośredni rollback bez starszych kwalifikowanych
+   generacji. Pusty receipt nie wystarcza, jeśli inventory nadal pokazuje
+   należące bajty. Zmierz fizyczne bajty przed/po na backing filesystemie
+   Docker oraz na C: osobno, a logiczne `docker system df` zapisz oddzielnie.
+   Jeśli pomiar lub niezależny inventory jest niedostępny, oznacz cleanup jako
+   `NOT VERIFIED`/`blocked` i nie usuwaj worktree przy nierozstrzygniętej
+   tożsamości. Dopiero po tych kontrolach wykonaj `git worktree remove` dla
+   pojedynczej zweryfikowanej ścieżki, bez `--force`.
    Zweryfikuj brak wpisu
    w `git worktree list` i brak katalogu. Następnie usuń lokalny branch zadania
    dopiero po potwierdzeniu integracji: dla merge/fast-forward sprawdź ancestry,
@@ -462,5 +474,10 @@ retencję i migrację opisuje [shared build storage](shared-build-storage.md).
 Control, ledger, user storage i mutowalne katalogi kompilacji pozostają w swoich
 poprzednich granicach. Przy domykaniu zadania nie usuwaj wolumenu `fullmag-shared-*`;
 prywatny pakiet nowej grupy jest katalogiem `groups/<unit_key>`, a nie całym wolumenem.
-Wykonaj kwalifikowaną retencję przed zakończeniem etapu. Samo usunięcie worktree
-nie jest dowodem zwolnienia danych Docker.
+Po publikacji pakietu, zakończeniu etapu także błędem/anulowaniem, zwykłym
+zatrzymaniu po drain i domknięciu zadania wykonaj kwalifikowaną retencję;
+preview nie zamyka operacji. Uzgodnij historyczne i obecne identity oraz
+sprawdź niezależny inventory po cleanupie, bo samo `worktree-finish` albo
+usunięcie worktree nie dowodzi braku pozostałych bajtów Docker. Stare grupy nie
+dziedziczą nowego obrazu/konfiguracji. Szczegółowy zakres, zachowywane dane i
+pomiar przed/po określa [shared build storage](shared-build-storage.md).

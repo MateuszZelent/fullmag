@@ -203,7 +203,7 @@ trasy. Nowa próba przechowuje konfigurację i wynik w wolumenie kontrolnym.
 
 ## 4. Miejsce i retencja
 
-Nowe grupy korzystają z [kontraktu współdzielenia i retencji](../../../../docs/guides/shared-build-storage.md). Po udanym zarządzanym starcie retencja pakietów i prywatnego incremental działa automatycznie; `docker-dev-maintain-cache` służy również do jawnego ponowienia. Przed usunięciem worktree `worktree-finish ... completed` wykonuje kwalifikowane sprzątanie jego prywatnych wolumenów/namespace; aktywny konsument blokuje zakończenie. Nigdy nie usuwa całego `fullmag-shared-*`.
+Nowe grupy korzystają z [kontraktu współdzielenia i retencji](../../../../docs/guides/shared-build-storage.md). Po udanym zarządzanym starcie retencja pakietów i prywatnego incremental działa automatycznie tylko przy obrazie i konfiguracji, które ją zawierają; jej receipt musi odpowiadać dokładnej próbie. `docker-dev-maintain-cache` służy do jawnego zastosowania lub ponowienia w obsługiwanym stanie. Po publikacji, błędzie/anulowaniu etapu, zatrzymaniu po drain i ukończeniu zadania uzgodnij receipt oraz zastosuj kwalifikowaną retencję. Każda zachowywana grupa utrzymuje current + jeden bezpośredni rollback; po scaleniu, drain i sprawdzeniu braku konsumentów użyj `worktree-finish ... completed` do wycofania prywatnych backend build/package i frontend namespace. Receipt potwierdza tylko zasoby, które obejmuje; porównaj go niezależnie ze wszystkimi historycznymi etykietami i Compose project IDs obok source/storage root. Stare grupy nie dziedziczą nowego obrazu ani konfiguracji. Niezależne znalezione bajty należące do grupy unieważniają wniosek z pustego planu. W razie braku obsługi lub niejasnego ownera zgłoś `blocked` z dokładnymi celami. Nie usuwaj całego `fullmag-shared-*`.
 
 
 Stosuj [kontrakt danych builda](artifact-policy.md): mapa writerów, ograniczenie
@@ -225,13 +225,19 @@ egzekwuje. Nie sumuj współdzielonych warstw obrazów jako niezależnych kopii.
 
 Retencja ma odróżniać:
 
-- **pakiety:** bieżący + jeden zweryfikowany rollback; starsze binaria dopiero
-  po trwałej publikacji i pod blokadą. Retired zachowuje receipt i rotację, bez
-  pełnych kopii logów; limit wynosi 8 archiwów i 64 MiB plików. Legacy logi
-  są hashowane tylko dla wpisów, które pozostaną w budżecie;
+- **pakiety:** w każdej retained group zachowaj bieżący i jeden zweryfikowany
+  bezpośredni rollback; po trwałej publikacji usuń starsze nieprzypięte backupy
+  dopiero po walidacji całego łańcucha receipt/rotation i pod blokadą. Wpis
+  `.development/backups` jest kopią techniczną pakietu, nie wynikiem naukowym
+  tylko z powodu nazwy. `Retired` zachowuje receipt i rotację, bez pełnych kopii
+  logów; limit wynosi 8 archiwów i 64 MiB plików. Legacy logi są hashowane
+  tylko dla wpisów, które pozostaną w budżecie;
 - **aktywny cache przyrostowy:** pozostaje dla kolejnego buildu;
-- **nieaktywne generacje:** kandydaci do osobnego bounded cleanup po ustaleniu
-  właścicieli, mountów, lease, rollbacku i referencji wyników;
+- **nieaktywne generacje prywatnego build/cache:** po ustaleniu właścicieli,
+  mountów, lease, rollbacku i referencji zastosuj bounded cleanup na tym samym
+  etapie; zachowaj wyłącznie dane aktywne lub wymagane przez te referencje.
+  Nierozstrzygnięty owner albo referencja oznacza `blocked` z dokładnymi celami,
+  nie ciche odłożenie kwalifikowanych starych generacji;
 - **orphan staging po awarii:** nie usuwać wyłącznie po nazwie lub wieku;
   wymaga dowodu zakończenia procesu/operacji i braku referencji;
 - **logi i metadane:** stdout/stderr usługi Compose ma obecnie rotację
@@ -242,11 +248,20 @@ Retencja ma odróżniać:
   Cargo/CMake/BuildKit i stare wolumeny nadal nie mają ogólnego GC;
 - **sesje/wyniki/settings/ledger:** poza cleanupem builda.
 
+Po każdym zdarzeniu retencji wymaganym wyżej odróżniaj kwalifikację od apply:
+preview/dry-run nie zamyka etapu. Po udanym cleanupie zachowaj plan, receipt,
+inventory po zmianie oraz pomiar fizycznych bajtów przed/po na backing
+filesystemie Docker i na C: osobno. `docker system df` raportuj oddzielnie jako
+wartość logiczną. Inwentaryzuj source/storage root i worktree wraz ze wszystkimi
+znanymi historycznymi Compose project IDs i etykietami; receipt bez kandydatów
+nie wystarcza, jeżeli niezależny inventory nadal wykazuje należące do grupy
+bajty. Gdy owner, receipt chain, blokada albo brak konsumentów nie są
+potwierdzone, pozostaw dane i oznacz `blocked` z dokładnymi celami.
+
 Nie wykonuj globalnego `docker system prune`, `volume prune`, kasowania targetu
-ani usuwania wszystkich starych grup. Zachowaj istniejący cache, jeżeli nie
-można dowieść jego zbędności. Przed autoryzowanym cleanupem ponów kontrolę
-konsumentów; zachowaj plan, receipt i pomiar faktycznie odzyskanych bajtów.
-Nie wolno zastąpić tej procedury wyłączaniem blokad ani usuwaniem provenance.
+ani usuwania wszystkich starych grup. Zachowaj aktywny cache, wyniki, sesje,
+control, provenance, current/rollback w zachowywanej grupie i piny. Nie wolno
+zastąpić tej procedury wyłączaniem blokad ani usuwaniem provenance.
 
 ## 5. Minimalny odbiór
 
