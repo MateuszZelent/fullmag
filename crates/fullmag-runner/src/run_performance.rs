@@ -1406,3 +1406,248 @@ fn terminal_replay_latency_unavailable(identity: &Value) -> bool {
         })
         .unwrap_or(false)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT_TEST_DIR: AtomicUsize = AtomicUsize::new(0);
+
+    fn stats(step: u64) -> StepStats {
+        let mut stats = StepStats::default();
+        stats.step = step;
+        stats
+    }
+
+    fn recorder(sender: Option<SyncSender<StepRow>>, identity: Value) -> RunPerformanceRecorder {
+        let started_at = Instant::now();
+        RunPerformanceRecorder {
+            started_at,
+            started_at_unix_ms: 0,
+            callback_latency_unavailable_reason: terminal_replay_latency_unavailable(&identity)
+                .then_some("terminal_replay_no_callback"),
+            solver_wall_cumulative: identity
+                .get("solver_wall_time_semantics")
+                .and_then(Value::as_str)
+                == Some("cumulative"),
+            identity,
+            realization: "test_cpu".to_owned(),
+            sender,
+            finalize_slot: Arc::new(Mutex::new(None)),
+            done_receiver: None,
+            writer_thread: None,
+            writer_start_error: None,
+            finished: false,
+            callback_count: 0,
+            duplicate_step_callbacks: 0,
+            out_of_order_callbacks: 0,
+            unique_step_callbacks: 0,
+            first_step: None,
+            last_step: None,
+            missing_step_indices: 0,
+            step_gap_count: 0,
+            last_callback_elapsed_ns: None,
+            last_solver_wall_time_ns: None,
+            solver_wall_clock_regressions: 0,
+            sum_step_reported_rejected_attempts: 0,
+            dropped_rows: 0,
+            collection_overhead_ns: 0,
+            callback_delta: MetricAggregate::default(),
+            solver_wall_delta: MetricAggregate::default(),
+            timing_nonzero: [false; TIMING_COLUMN_COUNT],
+            counter_nonzero: [false; COUNTER_COLUMN_COUNT],
+            latest_stats_row: None,
+        }
+    }
+
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "fullmag-run-performance-{}-{}",
+                std::process::id(),
+                NEXT_TEST_DIR.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&path).expect("create isolated test directory");
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn counts_only_unique_monotonic_steps_and_keeps_gaps_as_spans() {
+        let (sender, _receiver) = mpsc::sync_channel(8);
+        let mut recorder = recorder(Some(sender), json!({}));
+
+        let mut first = stats(10);
+        first.rejected_attempts = 2;
+        recorder.observe(&first);
+
+        let mut duplicate = stats(10);
+        duplicate.rejected_attempts = 100;
+        recorder.observe(&duplicate);
+
+        let mut out_of_order = stats(9);
+        out_of_order.rejected_attempts = 200;
+        recorder.observe(&out_of_order);
+
+        let mut after_gap = stats(13);
+        after_gap.rejected_attempts = 3;
+        recorder.observe(&after_gap);
+
+        let snapshot = recorder.final_snapshot("completed");
+        assert_eq!(snapshot.callback_count, 4);
+        assert_eq!(snapshot.duplicate_step_callbacks, 1);
+        assert_eq!(snapshot.out_of_order_callbacks, 1);
+        assert_eq!(snapshot.unique_step_callbacks, 2);
+        assert_eq!(snapshot.first_step, Some(10));
+        assert_eq!(snapshot.last_step, Some(13));
+        assert_eq!(snapshot.step_gap_count, 1);
+        assert_eq!(snapshot.missing_step_indices, 2);
+        assert_eq!(snapshot.sum_step_reported_rejected_attempts, 5);
+
+        let row = snapshot.latest_stats_row.expect("latest accepted row");
+        assert_eq!(row.step, 13);
+        assert_eq!(row.step_gap, Some(3));
+        assert_eq!(row.unique_step_callback_count, 2);
+        let callback_delta = row
+            .callback_delta_wall_ns
+            .expect("second unique callback interval");
+        assert_eq!(row.callback_delta_ns_per_step_gap, Some(callback_delta / 3));
+    }
+
+    #[test]
+    fn terminal_replay_does_not_claim_callback_latency() {
+        let (sender, _receiver) = mpsc::sync_channel(1);
+        let mut recorder = recorder(
+            Some(sender),
+            json!({"step_capture": "terminal_replay_no_callback"}),
+        );
+        recorder.observe(&stats(42));
+
+        let snapshot = recorder.final_snapshot("completed");
+        let row = snapshot.latest_stats_row.expect("terminal stats row");
+        assert_eq!(row.callback_delta_wall_ns, None);
+        assert_eq!(snapshot.callback_delta.count, 0);
+        assert_eq!(
+            summary_json(&snapshot, &WriterDiagnostics::default())["callback_latency_availability"],
+            "terminal_replay_no_callback"
+        );
+    }
+
+    #[test]
+    fn terminal_live_snapshot_uses_latest_stats_after_queue_drop() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let mut recorder = recorder(Some(sender), json!({}));
+
+        let mut delivered = stats(4);
+        delivered.rejected_attempts = 1;
+        delivered.relaxation_line_search_wall_time_ns = 111;
+        recorder.observe(&delivered);
+        receiver.try_recv().expect("first row fits bounded queue");
+
+        let mut delivered_latest = stats(5);
+        delivered_latest.rejected_attempts = 2;
+        delivered_latest.relaxation_line_search_wall_time_ns = 222;
+        recorder.observe(&delivered_latest);
+        let last_delivered = receiver.try_recv().expect("second row is delivered");
+
+        recorder.observe(&stats(6));
+        let mut terminal = stats(7);
+        terminal.rejected_attempts = 9;
+        terminal.relaxation_line_search_wall_time_ns = 777;
+        recorder.observe(&terminal);
+        assert_eq!(recorder.dropped_rows, 1);
+        let snapshot = recorder.final_snapshot("completed");
+
+        let test_dir = TestDir::new();
+        let performance_dir = test_dir.0.join("performance");
+        fs::create_dir(&performance_dir).expect("create performance output directory");
+        let mut points = VecDeque::new();
+        let mut sequence = 0;
+        let mut diagnostics = WriterDiagnostics::default();
+        publish_live_performance(
+            &performance_dir,
+            &json!({}),
+            &mut points,
+            &mut sequence,
+            json!({
+                "elapsed_monotonic_ns": 1,
+                "gpu_percent": null,
+                "gpu_uuid": null,
+                "gpu_unavailable_reason": null
+            }),
+            Some(last_delivered),
+            Some(4),
+            2,
+            Some(&snapshot),
+            &mut diagnostics,
+        );
+
+        let live: Value = serde_json::from_slice(
+            &fs::read(performance_dir.join("live.v1.json")).expect("read published snapshot"),
+        )
+        .expect("parse published snapshot");
+        assert_eq!(live["step_index"], 7);
+        assert_eq!(live["unique_step_callback_records"], 4);
+        assert_eq!(live["rows_dropped"], 1);
+        assert_eq!(live["latest_rejected_attempts"], 9);
+        assert_eq!(live["latest_evaluate_host_wall_ns"], 777);
+        assert_eq!(live["points"][0]["step_index"], 7);
+        let summary = summary_json(&snapshot, &WriterDiagnostics::default());
+        assert_eq!(summary["terminal_stats_snapshot"]["step_index"], 7);
+        assert_eq!(
+            summary["terminal_stats_snapshot"]["timings_ns"]["relaxation_line_search_wall_time_ns"],
+            777
+        );
+    }
+
+    #[test]
+    fn live_resource_points_preserve_zero_separately_from_unavailable() {
+        let test_dir = TestDir::new();
+        let performance_dir = test_dir.0.join("performance");
+        fs::create_dir(&performance_dir).expect("create performance output directory");
+        let mut points = VecDeque::new();
+        let mut sequence = 0;
+        let mut diagnostics = WriterDiagnostics::default();
+
+        for (gpu_percent, unavailable_reason) in [
+            (json!(0), Value::Null),
+            (Value::Null, json!("nvml_library_unavailable")),
+        ] {
+            let elapsed_monotonic_ns = sequence + 1;
+            publish_live_performance(
+                &performance_dir,
+                &json!({}),
+                &mut points,
+                &mut sequence,
+                json!({
+                    "elapsed_monotonic_ns": elapsed_monotonic_ns,
+                    "gpu_percent": gpu_percent,
+                    "gpu_uuid": null,
+                    "gpu_unavailable_reason": unavailable_reason
+                }),
+                None,
+                None,
+                0,
+                None,
+                &mut diagnostics,
+            );
+        }
+
+        let live: Value = serde_json::from_slice(
+            &fs::read(performance_dir.join("live.v1.json")).expect("read published snapshot"),
+        )
+        .expect("parse published snapshot");
+        assert_eq!(live["points"][0]["gpu_percent"], 0);
+        assert!(live["points"][1]["gpu_percent"].is_null());
+        assert_eq!(live["gpu_unavailable_reason"], "nvml_library_unavailable");
+    }
+}
