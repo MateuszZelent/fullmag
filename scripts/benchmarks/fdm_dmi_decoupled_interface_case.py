@@ -40,8 +40,8 @@ def configure(body):
     body.Aex = 13e-12
     body.alpha = 0.5
     body.Dind = 2e-3
-    body.m = fm.texture.helical(wavevector=(2.0e8, 0.0, 0.0), e1=(1.0, 0.0, 0.0),
-                                e2=(0.0, 0.0, 1.0))
+    # A uniform texture is valid per body; the gate does not depend on m.
+    body.m = fm.texture.uniform(0.0, 0.0, 1.0)
 
 
 if CASE == "bodies":
