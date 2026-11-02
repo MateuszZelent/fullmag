@@ -74,6 +74,12 @@ CANVAS_ONLY_SKIPPED_AREAS = [
     "scene/model adoption readiness endpoint",
     "viewport performance instrumentation",
 ]
+RUN_PERFORMANCE_VIEWPORT_DOM_SKIPPED_AREA = "viewport DOM/model-adoption observations (performance-only scope)"
+RUN_PERFORMANCE_VIEWPORT_DOM_OMISSION_REASON = (
+    "The performance-only scope proves the viewport canvas and footer performance panel; "
+    "it does not inspect model-adoption or quantity-label DOM."
+)
+RUN_PERFORMANCE_QA_SCOPE = "canvas-engine-run-performance"
 VIEWPORT_DOM_OBSERVATIONS_NOTE = (
     "Viewport dataset and quantity label attributes are DOM observations only; "
     "they do not prove field payload presence or values."
@@ -1556,7 +1562,24 @@ def _validate_session_result(value: object) -> None:
             raise BuildControlError(f"Browser helper session identity field is invalid: {key}")
 
 
-def _validate_viewport_dom_observations(value: object) -> None:
+def _validate_viewport_dom_observations(
+    value: object,
+    *,
+    performance_scope_only: bool = False,
+) -> None:
+    if performance_scope_only:
+        expected_omission = {
+            "field_data_proven": False,
+            "note": VIEWPORT_DOM_OBSERVATIONS_NOTE,
+            "reason": RUN_PERFORMANCE_VIEWPORT_DOM_OMISSION_REASON,
+            "scope": RUN_PERFORMANCE_QA_SCOPE,
+            "state": "omitted",
+        }
+        if not isinstance(value, Mapping) or dict(value) != expected_omission:
+            raise BuildControlError(
+                "Run performance-only browser QA must explicitly omit viewport DOM/model-adoption observations"
+            )
+        return
     if (not isinstance(value, Mapping) or value.get("field_data_proven") is not False
             or value.get("note") != VIEWPORT_DOM_OBSERVATIONS_NOTE):
         raise BuildControlError("Browser helper omitted bounded viewport DOM observations")
@@ -2012,67 +2035,108 @@ def _validate_run_performance_browser_proof(
         field = api.get(key)
         if not isinstance(field, str) or not field or len(field) > 512 or field != session.get(key):
             raise BuildControlError(f"Run performance API session identity differs at {key}")
-    identity_fields = ("run_id", "task_id", "step_id", "attempt_id")
-    for key in identity_fields:
-        field = api.get(key)
-        if not isinstance(field, str) or not field.strip() or len(field) > 512:
-            raise BuildControlError(f"Run performance API identity field is malformed: {key}")
-    if api.get("status_run_id") != api.get("run_id"):
-        raise BuildControlError("Run performance resource differs from the current session run")
-    if api.get("state") == "unavailable":
-        raise BuildControlError("Run performance proof has no verified attempt")
-    revision = api.get("revision")
-    if not isinstance(revision, str) or not revision or len(revision) > 512:
-        raise BuildControlError("Run performance resource revision is malformed")
-    integer_fields = (
-        "ownership_epoch", "first_step_index", "step_index", "elapsed_monotonic_ns", "point_count",
-    )
-    integers: dict[str, int] = {}
-    for key in integer_fields:
-        number = api.get(key)
-        if type(number) is not int or not 0 <= number <= MAX_SAFE_JSON_INTEGER:
-            raise BuildControlError(f"Run performance {key} is not a safe non-negative integer")
-        integers[key] = number
-    if (integers["elapsed_monotonic_ns"] <= 0
-            or integers["step_index"] < integers["first_step_index"]
-            or not 1 <= integers["point_count"] <= 120):
-        raise BuildControlError("Run performance step span, elapsed time, or bounded sample count is invalid")
-    measured: dict[str, int | float | None] = {}
-    for key in ("cpu_percent", "gpu_percent"):
-        number = api.get(key)
-        if number is not None and (type(number) not in (int, float) or not math.isfinite(number) or number < 0):
-            raise BuildControlError(f"Run performance {key} is not a finite non-negative measurement")
-        measured[key] = number
-    if measured["cpu_percent"] is None and measured["gpu_percent"] is None:
-        raise BuildControlError("Run performance has neither a measured CPU nor GPU value")
-    calculated_rate = (
-        integers["step_index"] - integers["first_step_index"]
-    ) / (integers["elapsed_monotonic_ns"] / 1_000_000_000)
-    reported_rate = api.get("stage_rate_steps_per_s")
-    if (type(reported_rate) not in (int, float) or not math.isfinite(reported_rate)
-            or not math.isclose(reported_rate, calculated_rate, rel_tol=1e-12, abs_tol=1e-12)):
-        raise BuildControlError("Run performance stage rate does not match the verified step span and elapsed time")
-
     expected_scope = "session=" + quote(api["session_id"], safe="-_.!~*'()")
     expected_scope += "&epoch=" + quote(api["session_epoch"], safe="-_.!~*'()")
     expected_scope += "&request_scope_epoch=" + quote(api["request_scope_epoch"], safe="-_.!~*'()")
+
+    def validate_api_snapshot(candidate: object) -> tuple[dict[str, int], float]:
+        if not isinstance(candidate, Mapping):
+            raise BuildControlError("Run performance API snapshot is malformed")
+        for key in ("run_id", "task_id", "step_id", "attempt_id"):
+            field = candidate.get(key)
+            if not isinstance(field, str) or not field.strip() or len(field) > 512:
+                raise BuildControlError(f"Run performance API identity field is malformed: {key}")
+        identity_fields = (
+            "api_instance_id", "session_id", "session_epoch", "request_scope_epoch",
+            "run_id", "task_id", "step_id", "attempt_id", "ownership_epoch",
+        )
+        if any(candidate.get(key) != api.get(key) for key in identity_fields):
+            raise BuildControlError("Run performance API snapshot changed its run/task/attempt/session/API identity")
+        if candidate.get("status_run_id") != candidate.get("run_id"):
+            raise BuildControlError("Run performance resource differs from the current session run")
+        if not isinstance(candidate.get("state"), str) or candidate["state"] == "unavailable":
+            raise BuildControlError("Run performance proof has no verified attempt state")
+        revision = candidate.get("revision")
+        if not isinstance(revision, str) or not revision or len(revision) > 512:
+            raise BuildControlError("Run performance resource revision is malformed")
+        integer_fields = (
+            "ownership_epoch", "first_step_index", "step_index", "elapsed_monotonic_ns",
+            "point_count", "sample_sequence",
+        )
+        integers: dict[str, int] = {}
+        for key in integer_fields:
+            number = candidate.get(key)
+            if type(number) is not int or not 0 <= number <= MAX_SAFE_JSON_INTEGER:
+                raise BuildControlError(f"Run performance {key} is not a safe non-negative integer")
+            integers[key] = number
+        if (integers["elapsed_monotonic_ns"] <= 0
+                or integers["step_index"] < integers["first_step_index"]
+                or not 1 <= integers["point_count"] <= 120):
+            raise BuildControlError("Run performance step span, elapsed time, or bounded sample count is invalid")
+        measured: dict[str, int | float | None] = {}
+        for key in ("cpu_percent", "gpu_percent"):
+            number = candidate.get(key)
+            if number is not None and (type(number) not in (int, float) or not math.isfinite(number) or number < 0):
+                raise BuildControlError(f"Run performance {key} is not a finite non-negative measurement")
+            measured[key] = number
+        if measured["cpu_percent"] is None and measured["gpu_percent"] is None:
+            raise BuildControlError("Run performance has neither a measured CPU nor GPU value")
+        calculated_rate = (
+            integers["step_index"] - integers["first_step_index"]
+        ) / (integers["elapsed_monotonic_ns"] / 1_000_000_000)
+        reported_rate = candidate.get("stage_rate_steps_per_s")
+        if (type(reported_rate) not in (int, float) or not math.isfinite(reported_rate)
+                or not math.isclose(reported_rate, calculated_rate, rel_tol=1e-12, abs_tol=1e-12)):
+            raise BuildControlError("Run performance stage rate does not match the verified step span and elapsed time")
+        return integers, calculated_rate
+
+    main_integers, main_rate = validate_api_snapshot(api)
+    snapshots = value.get("api_snapshots")
+    if not isinstance(snapshots, list) or not 1 <= len(snapshots) <= 8:
+        raise BuildControlError("Run performance proof omitted its bounded recent API snapshots")
+    previous_sequence = -1
+    previous_elapsed = -1
+    for snapshot in snapshots:
+        integers, _ = validate_api_snapshot(snapshot)
+        if (integers["sample_sequence"] < previous_sequence
+                or integers["elapsed_monotonic_ns"] < previous_elapsed):
+            raise BuildControlError("Run performance API snapshots are not in monotonic sequence order")
+        previous_sequence = integers["sample_sequence"]
+        previous_elapsed = integers["elapsed_monotonic_ns"]
+    if not any(snapshot == api for snapshot in snapshots):
+        raise BuildControlError("Run performance selected API snapshot is outside its bounded observation history")
+
     requests = value.get("api_requests")
-    expected_paths = [
-        "/v2/sessions/current/status",
-        "/v2/sessions/current/diagnostics/performance",
-    ]
-    if not isinstance(requests, list) or len(requests) != len(expected_paths):
-        raise BuildControlError("Run performance proof must include exactly the scoped status and performance GETs")
-    for index, (request, path) in enumerate(zip(requests, expected_paths)):
+    if (not isinstance(requests, list) or not 2 <= len(requests) <= 9
+            or not isinstance(requests[0], Mapping)):
+        raise BuildControlError("Run performance proof must include bounded scoped status and performance GETs")
+    status_request = requests[0]
+    if (status_request.get("method") != "GET"
+            or status_request.get("path") != "/v2/sessions/current/status"
+            or status_request.get("status") != 200
+            or status_request.get("api_instance_id") != api_instance_id
+            or status_request.get("session_scope_header_sent") != expected_scope
+            or status_request.get("api_instance_header_sent") is not None):
+        raise BuildControlError("Run performance status GET is not correctly scoped")
+    successful_performance_reads = 0
+    busy_performance_reads = 0
+    for request in requests[1:]:
         if (not isinstance(request, Mapping)
                 or request.get("method") != "GET"
-                or request.get("path") != path
-                or type(request.get("status")) is not int
-                or request["status"] != 200
-                or request.get("api_instance_id") != api_instance_id
+                or request.get("path") != "/v2/sessions/current/diagnostics/performance"
                 or request.get("session_scope_header_sent") != expected_scope
-                or request.get("api_instance_header_sent") != (api_instance_id if index == 1 else None)):
-            raise BuildControlError(f"Run performance API request is not correctly scoped: {path}")
+                or request.get("api_instance_header_sent") != api_instance_id
+                or request.get("api_instance_id") != api_instance_id):
+            raise BuildControlError("Run performance resource GET changed its session/API scope")
+        if request.get("status") == 200 and "error_code" not in request:
+            successful_performance_reads += 1
+        elif (request.get("status") == 409
+                and request.get("error_code") == "performance_observation_busy"):
+            busy_performance_reads += 1
+        else:
+            raise BuildControlError("Run performance observation reported a non-retryable API response")
+    if successful_performance_reads != len(snapshots) or successful_performance_reads + busy_performance_reads > 8:
+        raise BuildControlError("Run performance snapshot and bounded API request counts differ")
 
     def parse_displayed_number(text: object, suffix: str, label: str) -> float | None:
         if text == "N/A":
@@ -2096,34 +2160,99 @@ def _validate_run_performance_browser_proof(
         elif displayed is None or not math.isclose(displayed, float(raw), rel_tol=1e-12, abs_tol=0.0051):
             raise BuildControlError(f"Run performance panel {label} differs from its scoped API value")
 
+    def validate_panel_match(candidate: object, candidate_api: Mapping[str, object]) -> None:
+        if not isinstance(candidate, Mapping) or candidate.get("visible") is not True:
+            raise BuildControlError("Automatic performance panel match is not visibly rendered")
+        candidate_integers, candidate_rate = validate_api_snapshot(candidate_api)
+        expected_identity = " · ".join((
+            f"Run {candidate_api['run_id']}", f"Task {candidate_api['task_id']}",
+            f"Step {candidate_api['step_id']}", f"Attempt {candidate_api['attempt_id']}",
+            f"Epoch {candidate_integers['ownership_epoch']}",
+        ))
+        if candidate.get("identity") != expected_identity:
+            raise BuildControlError("Automatic performance panel identity differs from its matched API snapshot")
+        elapsed_ns = candidate_integers["elapsed_monotonic_ns"]
+        if elapsed_ns >= 1_000_000_000:
+            elapsed_unit, elapsed_expected = " s", elapsed_ns / 1_000_000_000
+        elif elapsed_ns >= 1_000_000:
+            elapsed_unit, elapsed_expected = " ms", elapsed_ns / 1_000_000
+        else:
+            elapsed_unit, elapsed_expected = " ns", float(math.floor(elapsed_ns + 0.5))
+        elapsed_display = parse_displayed_number(candidate.get("elapsed"), elapsed_unit, "elapsed")
+        elapsed_tolerance = 0.51 if elapsed_unit == " ns" else 0.0051
+        if elapsed_display is None or not math.isclose(elapsed_display, elapsed_expected, rel_tol=1e-12, abs_tol=elapsed_tolerance):
+            raise BuildControlError("Automatic performance panel elapsed value differs from its matched API snapshot")
+        require_display_matches(candidate.get("stage_rate"), candidate_rate, " steps/s", "stage rate")
+        require_display_matches(candidate.get("cpu"), candidate_api.get("cpu_percent"), "%", "CPU")
+        require_display_matches(candidate.get("gpu"), candidate_api.get("gpu_percent"), "%", "GPU")
+
+    panel_matches = value.get("panel_matches")
+    if not isinstance(panel_matches, list) or not 1 <= len(panel_matches) <= 8:
+        raise BuildControlError("Run performance proof omitted bounded atomically sampled panel matches")
+    matched_sequences: set[int] = set()
+    for match in panel_matches:
+        if not isinstance(match, Mapping) or match.get("matched") is not True:
+            raise BuildControlError("Run performance panel observation was not matched to an API snapshot")
+        matched_api = match.get("api")
+        if not isinstance(matched_api, Mapping) or not any(matched_api == snapshot for snapshot in snapshots):
+            raise BuildControlError("Run performance panel match points outside the sampled API history")
+        sample_sequence = matched_api.get("sample_sequence")
+        if type(sample_sequence) is not int or sample_sequence in matched_sequences:
+            raise BuildControlError("Run performance panel matches duplicated a sample sequence")
+        matched_sequences.add(sample_sequence)
+        validate_panel_match(match.get("panel"), matched_api)
+
     panel = value.get("panel")
-    if not isinstance(panel, Mapping) or panel.get("visible") is not True:
-        raise BuildControlError("Automatic performance panel is not visibly rendered")
-    expected_identity = " · ".join((
-        f"Run {api['run_id']}", f"Task {api['task_id']}", f"Step {api['step_id']}",
-        f"Attempt {api['attempt_id']}", f"Epoch {integers['ownership_epoch']}",
-    ))
-    if panel.get("identity") != expected_identity:
-        raise BuildControlError("Automatic performance panel identity differs from the scoped API attempt")
-    elapsed_ns = integers["elapsed_monotonic_ns"]
-    if elapsed_ns >= 1_000_000_000:
-        elapsed_unit, elapsed_expected = " s", elapsed_ns / 1_000_000_000
-    elif elapsed_ns >= 1_000_000:
-        elapsed_unit, elapsed_expected = " ms", elapsed_ns / 1_000_000
-    else:
-        elapsed_unit, elapsed_expected = " ns", float(math.floor(elapsed_ns + 0.5))
-    elapsed_display = parse_displayed_number(panel.get("elapsed"), elapsed_unit, "elapsed")
-    elapsed_tolerance = 0.51 if elapsed_unit == " ns" else 0.0051
-    if elapsed_display is None or not math.isclose(elapsed_display, elapsed_expected, rel_tol=1e-12, abs_tol=elapsed_tolerance):
-        raise BuildControlError("Automatic performance panel elapsed value differs from the API resource")
-    require_display_matches(panel.get("stage_rate"), calculated_rate, " steps/s", "stage rate")
-    require_display_matches(panel.get("cpu"), measured["cpu_percent"], "%", "CPU")
-    require_display_matches(panel.get("gpu"), measured["gpu_percent"], "%", "GPU")
+    if not isinstance(panel, Mapping):
+        raise BuildControlError("Automatic performance panel observation is missing")
+    final_match = panel_matches[-1]
+    final_panel_observation = final_match.get("panel")
+    if not isinstance(final_panel_observation, Mapping):
+        raise BuildControlError("Automatic performance final panel observation is malformed")
+    validate_panel_match(final_panel_observation, final_match["api"])
+    for key in ("identity", "elapsed", "stage_rate", "cpu", "gpu", "visible", "gpu_scope_note", "status"):
+        if panel.get(key) != final_panel_observation.get(key):
+            raise BuildControlError("Final Automatic performance panel differs from its atomically matched observation")
+    measured = {key: api.get(key) for key in ("cpu_percent", "gpu_percent")}
     expected_metric_label = "CPU per core" if measured["cpu_percent"] is not None else "GPU whole device"
     expected_metric = measured["cpu_percent"] if measured["cpu_percent"] is not None else measured["gpu_percent"]
-    if (panel.get("metric_label") != expected_metric_label
+    if (panel.get("visible") is not True
+            or panel.get("metric_label") != expected_metric_label
             or panel.get("metric_value") != panel.get("cpu" if expected_metric_label.startswith("CPU") else "gpu")):
-        raise BuildControlError("Automatic performance chart metric differs from its measured API series")
+        raise BuildControlError("Automatic performance panel/chart metric differs from its measured API series")
+
+    state_was_running = any(snapshot.get("state") == "running" for snapshot in snapshots)
+    live_refresh = value.get("live_refresh")
+    if not isinstance(live_refresh, Mapping):
+        raise BuildControlError("Run performance proof omitted its refresh classification")
+    if state_was_running:
+        if live_refresh.get("state") != "verified":
+            raise BuildControlError("Running performance proof did not verify a live panel refresh")
+        refresh_pair = None
+        for first_index, first in enumerate(panel_matches):
+            first_api = first["api"]
+            for second in panel_matches[first_index + 1:]:
+                second_api = second["api"]
+                if (first_api.get("state") == second_api.get("state") == "running"
+                        and first_api.get("revision") != second_api.get("revision")
+                        and first_api.get("sample_sequence") < second_api.get("sample_sequence")
+                        and first_api.get("elapsed_monotonic_ns") < second_api.get("elapsed_monotonic_ns")
+                        and first["panel"].get("elapsed") != second["panel"].get("elapsed")):
+                    refresh_pair = (first, second)
+                    break
+            if refresh_pair:
+                break
+        if refresh_pair is None:
+            raise BuildControlError("Running performance panel did not match two advancing revisions/sample sequences")
+        unique_revisions = {item["api"]["revision"] for item in panel_matches}
+        unique_sequences = {item["api"]["sample_sequence"] for item in panel_matches}
+        window_ms = live_refresh.get("window_ms")
+        if (live_refresh.get("matched_revision_count") != len(unique_revisions)
+                or live_refresh.get("matched_sample_sequence_count") != len(unique_sequences)
+                or type(window_ms) is not int or not 0 <= window_ms <= 20_000):
+            raise BuildControlError("Running performance refresh counts or observation bound are invalid")
+    elif live_refresh.get("state") != "terminal-single-snapshot":
+        raise BuildControlError("Terminal performance proof changed its single-snapshot QA behavior")
     gpu_scope_note = panel.get("gpu_scope_note")
     if (not isinstance(gpu_scope_note, str)
             or "whole_device" not in gpu_scope_note
@@ -2790,7 +2919,12 @@ def _parse_result(
     )
     if payload.get("qa_scope") != expected_scope:
         raise BuildControlError("Browser helper QA scope differs from the admitted operation")
-    expected_skipped = CANVAS_ONLY_SKIPPED_AREAS if canvas_only else []
+    if expect_run_performance:
+        expected_skipped = [*CANVAS_ONLY_SKIPPED_AREAS, RUN_PERFORMANCE_VIEWPORT_DOM_SKIPPED_AREA]
+    elif canvas_only:
+        expected_skipped = CANVAS_ONLY_SKIPPED_AREAS
+    else:
+        expected_skipped = []
     if payload.get("skipped_areas") != expected_skipped:
         raise BuildControlError("Browser helper skipped-area declaration differs from its QA scope")
     if payload.get("home_round_trip") is not True:
@@ -2802,7 +2936,10 @@ def _parse_result(
         raise BuildControlError("Browser helper did not prove a visible, stable workspace canvas")
     _validate_canvas_result(payload.get("canvas_before"), "before Home")
     _validate_canvas_result(payload.get("canvas_after"), "after Home")
-    _validate_viewport_dom_observations(payload.get("viewport_dom_observations"))
+    _validate_viewport_dom_observations(
+        payload.get("viewport_dom_observations"),
+        performance_scope_only=expect_run_performance,
+    )
     if expect_live_field is not None:
         _validate_live_field_observation(
             payload.get("live_field_observation"), expect_live_field, expect_airbox_vectors
