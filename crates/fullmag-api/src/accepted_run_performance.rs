@@ -157,9 +157,12 @@ fn load_verified(root: &Path, run_id: &str, stage_ids: &[String]) -> Result<RunP
                     | "fullmag.accepted_worker_execution.v3" | "fullmag.accepted_worker_execution.v4"))
         { bail!("performance completed receipt does not bind the terminal attempt"); }
     } else if matches!(task.lifecycle, FmsTaskLifecycle::Running | FmsTaskLifecycle::Stopping) {
-        let active = fullmag_runtime_control::load_current_task_claim(&store,
-            &fullmag_application::RunId::parse(run_id)?, &expected.task_id)?;
-        if !claim.is_same_or_renewed_by(&active) { bail!("performance active claim changed"); }
+        // load_current_task_claim is a writer/recovery helper. Calling it
+        // under this shared read fence would conflict with our own reader.
+        // Observe the exact immutable receipt-pinned lease without mutation.
+        let lease = store.read_resource_lease(run_id, claim.lease.resource_id.as_str(),
+            claim.lease.lease_token.as_str())?.context("performance active lease missing")?;
+        validate_active_lease(task, &claim, &lease)?;
     } else if matches!(task.lifecycle, FmsTaskLifecycle::Failed | FmsTaskLifecycle::Cancelled | FmsTaskLifecycle::Interrupted) {
         // Failed/cancelled workers do not write a completed execution receipt.
         // Their existing process-exit receipt plus released exact lease proves
@@ -214,6 +217,43 @@ fn load_verified(root: &Path, run_id: &str, stage_ids: &[String]) -> Result<RunP
             } else { "gpu_telemetry_unavailable".into() }),
         points: record.points,
     })
+}
+
+/// Caller retains the native shared transaction covering both task and lease.
+/// This is a diagnostic observation, never a publication/admission authority.
+fn validate_active_lease(
+    task: &fullmag_session::FmsTaskCatalogEntry,
+    claim: &fullmag_application::TaskClaim,
+    lease: &fullmag_session::FmsResourceLease,
+) -> Result<()> {
+    use fullmag_application::ResourceKind;
+    use fullmag_session::{FmsResourceKind, FmsResourceLeaseState, FmsTaskReadiness};
+    let kind = match claim.lease.kind {
+        ResourceKind::Cpu => FmsResourceKind::Cpu,
+        ResourceKind::Gpu => FmsResourceKind::Gpu,
+        ResourceKind::Storage => FmsResourceKind::Storage,
+        ResourceKind::Meshing => FmsResourceKind::Meshing,
+    };
+    if task.readiness != FmsTaskReadiness::Ready
+        || !matches!(task.lifecycle, FmsTaskLifecycle::Running | FmsTaskLifecycle::Stopping)
+        || task.task_id != claim.task_id.as_str()
+        || task.attempt_id.as_deref() != Some(claim.attempt_id.as_str())
+        || task.ownership_epoch != Some(claim.ownership_epoch.value())
+        || task.resource_id.as_deref() != Some(claim.lease.resource_id.as_str())
+        || lease.state != FmsResourceLeaseState::Active
+        || lease.run_id != claim.run_id.as_str() || lease.task_id != claim.task_id.as_str()
+        || lease.attempt_id != claim.attempt_id.as_str()
+        || lease.ownership_epoch != claim.ownership_epoch.value()
+        || lease.resource_id != claim.lease.resource_id
+        || lease.lease_token != claim.lease.lease_token.as_str()
+        || lease.kind != kind || lease.budget.cpu_millis != claim.lease.budget.cpu_millis
+        || lease.budget.memory_bytes != claim.lease.budget.memory_bytes
+        || lease.budget.gpu_memory_bytes != claim.lease.budget.gpu_memory_bytes
+        || lease.budget.storage_bytes != claim.lease.budget.storage_bytes
+        || lease.heartbeat_sequence < claim.lease.heartbeat_sequence {
+        bail!("performance active task/lease differs from the pinned claim");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -305,6 +345,80 @@ mod tests {
         assert!(is_observation_busy(&error));
         drop(writer);
         assert_eq!(load(store.root(), "run", &[]).unwrap().state, "unavailable");
+    }
+
+    #[test]
+    fn running_performance_uses_exact_lease_under_shared_fence_without_writer_recovery() {
+        use fullmag_application::{TaskClaim, RunId, TaskId, AttemptId, OwnershipEpoch,
+            ResourceLease, ResourceBudget, ResourceKind};
+        use fullmag_session::{FmsTaskCatalogEntry, FmsTaskReadiness, FmsCoordinatorWatermark,
+            FmsRunCatalog, FmsResourceLease, FmsResourceLeaseState, FmsResourceKind,
+            FmsResourceBudget, FMS_RUN_CATALOG_SCHEMA, FMS_RESOURCE_LEASE_SCHEMA};
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let task_id = fullmag_session::task_id_for_study_step("run", "stage").unwrap();
+        let claim = TaskClaim {
+            run_id: RunId::parse("run").unwrap(), task_id: TaskId::parse(&task_id).unwrap(),
+            attempt_id: AttemptId::parse("attempt").unwrap(), ownership_epoch: OwnershipEpoch::new(1).unwrap(),
+            lease: ResourceLease::new("cpu-performance", ResourceKind::Cpu,
+                ResourceBudget { cpu_millis: 100, memory_bytes: 1024, gpu_memory_bytes: 0, storage_bytes: 1024 }).unwrap(),
+        };
+        let task = FmsTaskCatalogEntry {
+            task_id: task_id.clone(), input_fingerprint: "a".repeat(64), lifecycle: FmsTaskLifecycle::Running,
+            readiness: FmsTaskReadiness::Ready, observation: None, attempt_id: Some("attempt".into()),
+            ownership_epoch: Some(1), resolved_input_fingerprint: None, artifact_ids: vec![],
+            resource_id: Some(claim.lease.resource_id.clone()), coordinator_watermark: Some(FmsCoordinatorWatermark::default()),
+            coordinator_genesis: None,
+        };
+        let now = chrono::Utc::now();
+        store.commit_run_catalog(&FmsRunCatalog {
+            schema_version: FMS_RUN_CATALOG_SCHEMA.into(), run_id: "run".into(), revision: 1,
+            updated_at: now, tasks: vec![task.clone()],
+        }).unwrap();
+        let lease = FmsResourceLease {
+            schema_version: FMS_RESOURCE_LEASE_SCHEMA.into(), resource_id: claim.lease.resource_id.clone(),
+            kind: FmsResourceKind::Cpu,
+            budget: FmsResourceBudget { cpu_millis: 100, memory_bytes: 1024, gpu_memory_bytes: 0, storage_bytes: 1024 },
+            run_id: "run".into(), task_id: task_id.clone(), attempt_id: "attempt".into(), ownership_epoch: 1,
+            lease_token: claim.lease.lease_token.as_str().into(), state: FmsResourceLeaseState::Active,
+            acquired_at: now, heartbeat_at: now, heartbeat_sequence: 0, released_at: None, host_launch_binding: None,
+        };
+        store.commit_resource_lease(&lease).unwrap();
+        let attempt = store.root().join(format!("runs/run/worker-attempts/{task_id}/attempt/epoch-1"));
+        std::fs::create_dir_all(attempt.join("performance")).unwrap();
+        std::fs::write(attempt.join("worker_execution_started.v1.json"), serde_json::to_vec(&json!({
+            "identity": { "schema_version": "fullmag.accepted_worker_execution.v1", "claim": claim,
+                "start_sequence": 2, "start_message_id": "start", "case_id": "default", "plan_fingerprint": "a".repeat(64) }
+        })).unwrap()).unwrap();
+        std::fs::write(attempt.join("performance/live.v1.json"), serde_json::to_vec(&json!({
+            "schema_version": "fullmag.run_performance_live.v1", "identity": { "accepted_identity": {
+                "run_id": "run", "task_id": task_id, "step_id": "stage", "attempt_id": "attempt", "ownership_epoch": 1
+            } }, "sample_sequence": 1, "state": "running", "elapsed_monotonic_ns": 1,
+            "first_step_index": null, "step_index": null, "unique_step_callback_records": 0,
+            "rows_dropped": 0, "collection_overhead_ns": null, "latest_step_wall_ns": null,
+            "latest_rejected_attempts": null, "latest_evaluate_host_wall_ns": null,
+            "gpu_scope": "whole_device", "gpu_unavailable_reason": "not_applicable_cpu_realization", "points": []
+        })).unwrap()).unwrap();
+        let reader = store.read_transaction().unwrap();
+        assert!(store.write_transaction().is_err(), "the shared fence must still exclude writers");
+        let resource = load_verified(store.root(), "run", &["stage".into()]).unwrap();
+        assert_eq!(resource.state, "running");
+        assert_eq!(resource.attempt_id.as_deref(), Some("attempt"));
+        let observed = store.read_resource_lease("run", &claim.lease.resource_id,
+            claim.lease.lease_token.as_str()).unwrap().unwrap();
+        assert!(validate_active_lease(&task, &claim, &observed).is_ok());
+        for change in 0..5 {
+            let mut invalid = observed.clone();
+            match change {
+                0 => invalid.state = FmsResourceLeaseState::Released,
+                1 => invalid.attempt_id = "foreign".into(),
+                2 => invalid.ownership_epoch += 1,
+                3 => invalid.lease_token = "foreign".into(),
+                _ => invalid.budget.memory_bytes += 1,
+            }
+            assert!(validate_active_lease(&task, &claim, &invalid).is_err());
+        }
+        drop(reader);
     }
 
     #[test]
