@@ -2067,6 +2067,27 @@ fn payload_field_is_set(payload: &BTreeMap<String, Value>, field: &str) -> bool 
     })
 }
 
+/// The Python DSL realizes `relax(relax_alpha=...)` as the damping of every
+/// material in the relaxation stage only (precession is off for
+/// llg_overdamped); later stages keep the authored material damping.
+fn apply_relax_alpha(ir: &mut ProblemIR, payload: &BTreeMap<String, Value>) -> Result<()> {
+    let Some(relax_alpha) = payload_f64(payload, "relax_alpha")? else {
+        return Ok(());
+    };
+    if !relax_alpha.is_finite() || relax_alpha <= 0.0 {
+        bail!("relax stage relax_alpha must be a positive finite damping");
+    }
+    if ir.material_parameter_fields.iter()
+        .any(|field| field.parameter == fullmag_ir::MaterialParameterNameIR::Alpha)
+    {
+        bail!("relax stage relax_alpha cannot override spatially varying alpha fields");
+    }
+    for material in &mut ir.materials {
+        material.damping = relax_alpha;
+    }
+    Ok(())
+}
+
 fn reject_direct_minimizer_llg_payload(
     algorithm: fullmag_ir::RelaxationAlgorithmIR,
     payload: &BTreeMap<String, Value>,
@@ -2167,6 +2188,7 @@ pub fn materialize_pipeline_relax(
     let dynamics = if algorithm == fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped {
         let mut dynamics = required_study_dynamics(&ir.study, "LLG relaxation pipeline stage")?;
         apply_dynamics_overrides(&mut dynamics, payload)?;
+        apply_relax_alpha(&mut ir, payload)?;
         Some(dynamics)
     } else {
         None
