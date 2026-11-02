@@ -447,6 +447,15 @@ k_s = LLG(m_stage, H_eff)
 Freezing the drive at `t_n` for a whole accepted step is invalid. This applies
 to Heun, RK4, RK23, and RK45 on every executable lane.
 
+Observation uses the same clock as the right-hand side. In the Rust reference
+FEM, `FemLlgProblem::observe(state)` evaluates the drive, and with it `H_ext`,
+`H_eff`, `E_ext`, `E_total` and the torque metrics, at `state.time_seconds`;
+`E_ext` includes every enabled dynamic drive. Before 2026-11-02 it evaluated
+the drive at $t=0$ and left dynamic drives out of `E_ext`. Analytic check
+`observe_evaluates_time_dependent_external_field_at_state_time`: a sinusoidal
+drive observed at a quarter period reports its peak amplitude and a negative
+`E_ext` for $\mathbf m$ parallel to it, and zero at $t=0$.
+
 The event scheduler works in absolute time and includes pulse edges, all PWL
 knots, stage activation boundaries, and output times. A step is capped at the
 next event. Pulse semantics are half-open; internal substages of a step ending

@@ -37,8 +37,8 @@ pub use fdm::constant_z_field_llg_from_positive_x;
 pub use fdm::neighbor_index;
 pub use fdm::shared::frozen_spins::FrozenSpinsState;
 pub use fdm::{
-    build_exchange_operator, harmonic_exchange, ExchangeFaces, ExchangeOperator,
-    ExchangeOperatorInputs, ExchangePairMode, ExchangePairRule,
+    build_exchange_operator, first_decoupled_connection, harmonic_exchange, ExchangeFaces,
+    ExchangeOperator, ExchangeOperatorInputs, ExchangePairMode, ExchangePairRule,
 };
 pub use fdm::{
     compute_newell_kernel_spectra, compute_newell_kernel_spectra_thin_film_2d,

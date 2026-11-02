@@ -1024,6 +1024,9 @@ struct ExchangeOperatorInput {
     const double *y_plus = nullptr;
     const double *z_plus = nullptr;
     uint64_t len = 0;
+    // Rotated interfacial DMI with a non-zero coefficient (the workspace
+    // reservation flag alone does not mean the term couples cells).
+    bool rotated_dmi_active = false;
 };
 
 static bool valid_cellwise_values(
@@ -1094,6 +1097,13 @@ static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
     {
         ctx->last_error =
             "FDM FP32 sub-cell boundary correction is unavailable until field/energy parity is qualified; use double precision or boundary_correction=none";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    if (plan->boundary_correction == FULLMAG_FDM_BOUNDARY_FULL) {
+        // Note 0400 (T1 consistency): the T1 stencil over-couples grid-aligned free faces
+        // by 4/3 and counts the cut volume twice.
+        ctx->last_error =
+            "fdm_boundary_correction_t1_unqualified: T1 boundary-corrected exchange is not consistent with the planner's boundary distances (note 0400, T1 consistency); use boundary_correction=volume or none";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
     if (plan->enable_demag != 0 && plan->demag_kernel_spectrum_len == 0) {
@@ -1479,6 +1489,45 @@ static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
                 "exchange face coefficients must be three finite, non-negative arrays of cell_count values";
             return reinterpret_cast<fullmag_fdm_backend *>(ctx);
         }
+        const bool interfacial_dmi =
+            (plan->has_interfacial_dmi != 0 && plan->dmi_D_interfacial != 0.0) ||
+            exchange_operator.rotated_dmi_active;
+        const bool bulk_dmi = plan->has_bulk_dmi != 0 && plan->dmi_D_bulk != 0.0;
+        if (interfacial_dmi || bulk_dmi) {
+            // Note 0104: a zero connection between two active cells is a free
+            // surface for exchange, but the DMI stencils would couple across it.
+            // Interfacial DMI couples only x/y neighbours; bulk DMI also z.
+            const bool scanned_axes[3] = {true, true, bulk_dmi};
+            const uint64_t nx = plan->grid.nx, ny = plan->grid.ny, nz = plan->grid.nz;
+            const uint64_t dims[3] = {nx, ny, nz};
+            const uint64_t strides[3] = {1u, nx, nx * ny};
+            const int periodic[3] = {plan->periodic_x, plan->periodic_y, plan->periodic_z};
+            const double *coefficients[3] = {
+                exchange_operator.x_plus, exchange_operator.y_plus, exchange_operator.z_plus};
+            const auto active = [&](uint64_t index) {
+                return plan->active_mask == nullptr || plan->active_mask[index] != 0;
+            };
+            for (uint64_t index = 0; index < ctx->cell_count; ++index) {
+                if (!active(index)) continue;
+                const uint64_t coords[3] = {index % nx, (index / nx) % ny, index / (nx * ny)};
+                for (int axis = 0; axis < 3; ++axis) {
+                    if (!scanned_axes[axis]) continue;
+                    uint64_t neighbor = 0;
+                    if (coords[axis] + 1 < dims[axis]) {
+                        neighbor = index + strides[axis];
+                    } else if (periodic[axis] != 0 && dims[axis] > 1) {
+                        neighbor = index - coords[axis] * strides[axis];
+                    } else {
+                        continue;
+                    }
+                    if (active(neighbor) && coefficients[axis][index] == 0.0) {
+                        ctx->last_error =
+                            "fdm_dmi_decoupled_exchange_connection: DMI is not supported with a zero exchange connection between two active cells (note 0104)";
+                        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+                    }
+                }
+            }
+        }
     }
     if (plan->enable_exchange != 0 && !exchange_operator.faces && plan->a_field != nullptr &&
         !cellwise_values_equal_scalar(
@@ -1834,6 +1883,8 @@ int fullmag_fdm_backend_create_time_policy_v2_checked(
         exchange_operator.z_plus = plan->exchange_face_z_plus;
         exchange_operator.len = plan->exchange_face_len;
     }
+    exchange_operator.rotated_dmi_active =
+        plan->has_rotated_interfacial_dmi != 0 && plan->dmi_D_rotated_interfacial != 0.0;
     fullmag_fdm_backend *handle = fullmag_fdm_backend_create_impl(
         &plan->base,
         plan->has_rotated_interfacial_dmi != 0,

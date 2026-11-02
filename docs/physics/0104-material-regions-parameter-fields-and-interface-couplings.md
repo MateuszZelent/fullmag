@@ -428,8 +428,9 @@ region legend, without generating pair rules for every object pair.
   boundary correction T0/T1 (its demagnetization correction and field scale use
   the scalar $M_s$), Brown thermal noise, Zhang-Li/Slonczewski/SOT and GPU
   transport torques, and rotated interfacial DMI with non-uniform $M_s$. DMI
-  with non-uniform $A$ is blocked as well (its natural boundary condition
-  depends on local $A$), and cellwise DMI fields remain unsupported. One
+  with non-uniform $A$ stays blocked on CUDA until its parity with the CPU
+  reference is qualified (the DMI stencil and its free-surface term do not
+  read $A$ on either lane), and cellwise DMI fields remain unsupported. One
   predicate on the FDM plan rejects each combination with an explicit
   `fdm_cuda_heterogeneous_material_unsupported:<owner>` error: at planning time
   for an explicit CUDA request, and again at backend construction. There is no
@@ -441,6 +442,29 @@ region legend, without generating pair rules for every object pair.
   the scalar on an active cell but arrives without face coefficients
   (`a_field_requires_exchange_faces`), because CUDA exchange reads $A$ only from
   the faces.
+- **DMI across decoupled connections (CPU and CUDA).** The FDM DMI stencils
+  (notes 0404–0406) couple a cell to every active neighbour and apply the
+  free-surface term only at grid edges and inactive neighbours. They do not
+  read $A$, so positive non-uniform face coefficients (harmonic scale, explicit
+  $A_{ij}>0$, a cellwise $A$) leave DMI unchanged. A connection with $A_f=0$
+  between two active cells is different: exchange treats it as a free surface,
+  while DMI would still couple the two sides and omit the free-surface term on
+  both. Such connections come from touching objects with different owners, an
+  explicit zero inter-region stiffness, a `Disabled` rule, or a cell with
+  $A=0$. Until the DMI stencils read the connection operator, the FDM runner
+  rejects interfacial, rotated interfacial or bulk DMI (scalar or cellwise
+  $D\ne0$) when the resolved `faces` operator has such a connection along an
+  axis that the DMI term couples, on CPU and CUDA, with
+  `fdm_dmi_decoupled_exchange_connection`, after resolving the operator and
+  before the first step. Interfacial and rotated interfacial DMI couple only
+  $x$/$y$ neighbours, so stacked films decoupled along $z$ stay allowed; bulk
+  DMI also checks $z$. Without an exchange field the objects and rules still
+  define the connections: the runner resolves them with a placeholder positive
+  stiffness, so only owners and rules decide. The native C ABI repeats the
+  check for a `FACES` tail, counting only terms with $D\ne0$. The gate is
+  fail-closed and has no fallback; physical DMI
+  coupling across an interface between distinct materials remains deferred
+  (assumption 8).
 - **Magnetoelastic coupling** (prescribed strain, note 0700). The energy density
   $e_\mathrm{mel}(\mathbf m_i,\boldsymbol\varepsilon_i)$ does not depend on
   $M_s$, so the field divides by the local moment:
@@ -1211,6 +1235,13 @@ They are part of the physics contract, not implementation preferences.
    Taylor test with the same `A_ij`.
 4. `Ms(x)` in the exchange denominator changes `H_ex` locally as expected.
 5. `Ms=0` in active magnetic cells/nodes/elements is rejected before runtime.
+6. DMI with a decoupled connection is rejected; DMI with positive non-uniform
+   faces is not. `first_decoupled_connection` finds the zero face between two
+   active cells (owner-decoupled pair, explicit zero, periodic wrap) on the
+   scanned axes, ignores zero faces next to inactive cells and ignores a
+   $z$-only decoupling when only $x$/$y$ are scanned; the runner rejects the
+   plan only when a DMI coefficient is non-zero, also without an exchange
+   field.
 
 ### 5.2 Cross-backend checks
 
