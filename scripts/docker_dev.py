@@ -2797,6 +2797,21 @@ def _parser() -> argparse.ArgumentParser:
     recreate_volume.set_defaults(profile="dev", image=None, toolchain_image=None, source_manifest=None,
                                  include_untracked=None, script=None)
 
+    interrupted_archive = subparsers.add_parser(
+        "resume-interrupted-fresh-archive",
+        help="finish one exact outcome-unknown fresh-state archive without stopping or starting services",
+    )
+    interrupted_archive.add_argument("--prior-attempt", required=True)
+    interrupted_archive.add_argument("--config-sha256", required=True)
+    interrupted_archive.add_argument("--source-root", type=Path, required=True)
+    interrupted_archive.add_argument("--recreation-attempt", required=True)
+    interrupted_archive.add_argument("--unknown-receipt-sha256", required=True)
+    interrupted_archive.add_argument("--helper-container-id", required=True)
+    interrupted_archive.add_argument("--helper-image", required=True)
+    interrupted_archive.add_argument("--engine-id", required=True)
+    interrupted_archive.add_argument("--expected-plan-sha256")
+    interrupted_archive.add_argument("--apply", action="store_true")
+
     cancel_unclaimed = subparsers.add_parser(
         "cancel-unclaimed-volume",
         help=(
@@ -3053,6 +3068,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             from docker_volume_cancelled_activation import run as recover_cancelled_activation
             result = recover_cancelled_activation(args)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        elif args.action == "resume-interrupted-fresh-archive":
+            from docker_volume_interrupted_fresh_archive import run as resume_interrupted_archive
+            return resume_interrupted_archive(args)
         elif args.action == "stop-bootstrap-volume":
             from docker_volume_stop_bootstrap import stop_bootstrap
             result = stop_bootstrap(args)

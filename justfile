@@ -186,6 +186,11 @@ docker-dev-recreate-volume attempt config_sha256 source_root port="3197" fresh_s
 docker-dev-resume-recreation attempt config_sha256 source_root recreation_attempt port="3197":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" recreate-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --resume-recreation {{quote(recreation_attempt)}}
 
+# Continue one exact failed-before-archive fresh recreation. Preview by default;
+# apply requires the exact plan SHA printed by the preview.
+docker-dev-resume-interrupted-fresh-archive prior_attempt config_sha256 source_root recreation_attempt unknown_receipt_sha256 helper_container_id helper_image engine_id expected_plan_sha256="" apply="false":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" resume-interrupted-fresh-archive --prior-attempt {{quote(prior_attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --recreation-attempt {{quote(recreation_attempt)}} --unknown-receipt-sha256 {{quote(unknown_receipt_sha256)}} --helper-container-id {{quote(helper_container_id)}} --helper-image {{quote(helper_image)}} --engine-id {{quote(engine_id)}}{{if apply == "true" { if expected_plan_sha256 == "" { error("apply requires expected_plan_sha256 from preview") } else { " --apply --expected-plan-sha256 " + quote(expected_plan_sha256) } } else if apply == "false" { if expected_plan_sha256 == "" { "" } else { error("expected_plan_sha256 requires apply=true") } } else { error("apply must be true or false") } }}
+
 # Drain saved authoring before a managed configuration migration; preserve all data.
 docker-dev-stop-saved-authoring attempt config_sha256 source_root checkpoint checkpoint_sha256 port="3197":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" restart-idle-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --saved-authoring-checkpoint {{quote(checkpoint)}} --saved-authoring-checkpoint-sha256 {{quote(checkpoint_sha256)}} --stop-only

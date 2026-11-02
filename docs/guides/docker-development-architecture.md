@@ -395,6 +395,41 @@ tożsamości, CAS, provenance lub storage pozostaje fail-closed, z zachowanym
 receiptem i diagnostyką. Stara recepta hostowego receipt DEV pozostaje ścieżką
 odrzuconą, a nie instrukcją kompatybilności.
 
+### Dokończenie przerwanego fresh-state archiwum
+
+Jeśli dokładnie przypięta operacja `recreate-services` zakończyła się stanem
+`outcome-unknown-resources-retained` przed archiwizacją, ale jej pierwotny helper
+nadal utrzymuje `/control/active`, użyj dedykowanej kontynuacji. Nie ponawia ona
+`docker stop`, `docker rm` ani Solve. Wymaga bieżącego procesu hostowego bez
+pierwotnego writera, potwierdzonego `READY`/`LOGGED` oryginalnego helpera,
+pełnego ID kontenera, obrazu helpera i ID silnika Docker. Weryfikuje także
+kanoniczny fence anulowania oraz historyczny snapshot pary usług; backend musi
+być zatrzymany z kodem 0. Snapshot frontendu może pochodzić sprzed jego
+zatrzymania i nie jest traktowany jako dowód jego kodu wyjścia.
+
+Najpierw uruchom preview bez `apply`; wypisany SHA jest wymagany przy apply:
+
+```powershell
+just docker-dev-resume-interrupted-fresh-archive `
+  $priorAttempt $configSha256 $source $recreationAttempt `
+  $unknownReceiptSha256 $helperContainerId $helperImage $engineId
+
+just docker-dev-resume-interrupted-fresh-archive `
+  $priorAttempt $configSha256 $source $recreationAttempt `
+  $unknownReceiptSha256 $helperContainerId $helperImage $engineId `
+  $planSha256 true
+```
+
+Kontynuacja zachowuje bajty pierwotnego niepewnego receipt w niemutowalnym
+sidecarze, publikuje intent przed ruchem danych i korzysta z istniejącego
+archiwizatora runtime. Końcowe `receipt.json`, `current.json`, `verified.json`
+i `terminal.json` muszą zawierać identyczny succeeded receipt; terminal jest
+publikowany jako ostatni, aby pierwotny helper sam zwolnił marker aktywności.
+Po publikacji kontynuacja wykonuje odłączony readback i przypina archiwum do
+fence anulowania. Nie uruchamia usług ani nowej sesji. Jeśli obserwacja helpera,
+CAS, kontenerów lub inode zmieni się względem preview, niczego nie usuwa i
+kończy się błędem do ponownego inventory/review.
+
 ### Logi i gotowość
 
 Docker Desktop pokazuje kompilację i późniejszy start API w logu tej samej
