@@ -4265,6 +4265,7 @@ export function useViewport3DSceneModel({
       const resolved = resolveViewport3DFdmTargetVisualization({
         snapshot: objectVisualizationSnapshot,
         target,
+        visualizationState: renderingState,
       }).effectiveSettings;
       settingsById.set(
         domain.layerId,
@@ -4283,6 +4284,7 @@ export function useViewport3DSceneModel({
     fdmNativeLayerDomains,
     fdmMultilayerLayerActiveMasks.data,
     objectVisualizationSnapshot,
+    renderingState,
   ]);
   const nativeLayerFieldRequests = useMemo<
     ReadonlyMap<string, Viewport3DFieldResourceRequest>
@@ -6234,8 +6236,14 @@ export function useViewport3DSceneModel({
               ) ?? "missing",
             )
           : "none";
+        const nativeCellGeometryRequired =
+          settings.shaderVisible ||
+          settings.pointsVisible ||
+          settings.wireframeVisible;
+        const nativeVectorsOnlyEnabled =
+          vectorsVisible && !nativeCellGeometryRequired;
         const targetStyleRevision =
-          `visible=${settings.visible}|vectors=${vectorsVisible}|budget=${maxVectors}` +
+          `visible=${settings.visible}|cells=${nativeCellGeometryRequired}|vectors=${vectorsVisible}|budget=${maxVectors}` +
           `|scale=${settings.vectorLengthScale}|center=${settings.vectorCenteringEnabled}|scope=${settings.geometryScope}`;
         const buildKey = buildViewport3DFdmCuboidJobKey({
           algorithmVersion: 2,
@@ -6258,7 +6266,10 @@ export function useViewport3DSceneModel({
           buildKey,
           cellSelection: "dense",
           domain: { ...domain, kind: "fdm-grid" as const },
-          enabled: settings.visible && (!activeMaskRequired || activeMask !== null),
+          enabled:
+            settings.visible &&
+            (nativeCellGeometryRequired || (vectorsVisible && maxVectors > 0)) &&
+            (!activeMaskRequired || activeMask !== null),
           groupKey: `fdm-cuboid:session=current:native-layer:${domain.layerId}`,
           id: `native:${domain.layerId}`,
           maxVectorGlyphs: maxVectors,
@@ -6271,19 +6282,16 @@ export function useViewport3DSceneModel({
           vectorField: vectorsVisible ? fieldVector : null,
           vectorGeometryScope: settings.geometryScope,
           vectorLengthScale: settings.vectorLengthScale,
-          vectorOnly:
-            vectorsVisible &&
-            !settings.pointsVisible &&
-            !settings.wireframeVisible
-              ? createFdmVectorOnlyBuildInput({
-                  cellSelection: "all",
-                  domain: { ...domain, kind: "fdm-grid" as const },
-                  fieldVector,
-                  maxSamples: maxVectors,
-                  nativeActiveMask: activeMask,
-                  realizedRegionIds: null,
-                })
-              : null,
+          vectorOnly: nativeVectorsOnlyEnabled
+            ? createFdmVectorOnlyBuildInput({
+                cellSelection: "all",
+                domain: { ...domain, kind: "fdm-grid" as const },
+                fieldVector,
+                maxSamples: maxVectors,
+                nativeActiveMask: activeMask,
+                realizedRegionIds: null,
+              })
+            : null,
           vectorScale: resolveViewport3DFdmGridVectorScale(
             domain.shape,
             domain.spacing,
@@ -6326,14 +6334,16 @@ export function useViewport3DSceneModel({
         maxVectors,
         airboxSettings.geometryScope,
       );
+      const airboxCellGeometryRequired =
+        airboxSettings.shaderVisible ||
+        airboxSettings.pointsVisible ||
+        airboxSettings.wireframeVisible;
       const airboxStyleRevision =
-        `visible=${airboxSettings.visible}|vectors=${vectorsVisible}|budget=${maxVectors}` +
+        `visible=${airboxSettings.visible}|cells=${airboxCellGeometryRequired}|vectors=${vectorsVisible}|budget=${maxVectors}` +
         `|scale=${airboxSettings.vectorLengthScale}|center=${airboxSettings.vectorCenteringEnabled}` +
         `|scope=${airboxSettings.geometryScope}`;
       const airboxVectorsOnlyEnabled =
-        vectorsVisible &&
-        !airboxSettings.pointsVisible &&
-        !airboxSettings.wireframeVisible;
+        vectorsVisible && !airboxCellGeometryRequired;
       entries.push({
         buildKey: buildViewport3DFdmCuboidJobKey({
           algorithmVersion: 2,
@@ -6354,7 +6364,7 @@ export function useViewport3DSceneModel({
         }),
         cellSelection: airboxVectorsOnlyEnabled ? "all" : "dense",
         domain: { ...fdmMultilayerAirboxDomain, kind: "fdm-grid" as const },
-        enabled: true,
+        enabled: airboxCellGeometryRequired || (vectorsVisible && maxVectors > 0),
         groupKey: "fdm-cuboid:session=current:multilayer-airbox",
         id: "airbox",
         maxVectorGlyphs: maxVectors,

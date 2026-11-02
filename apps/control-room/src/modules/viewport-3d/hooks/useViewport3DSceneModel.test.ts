@@ -794,8 +794,8 @@ describe("useViewport3DSceneModel", () => {
       "resolveViewport3DFdmTargetVisualization({",
     );
     expect(nativeLayerSettingsBlock).toContain("snapshot: objectVisualizationSnapshot");
-    // FDM native layers use canonical local targets; the FEM registry must not override them.
-    expect(nativeLayerSettingsBlock).not.toContain("visualizationState: renderingState");
+    // Persisted FDM overrides hydrate on reload; target-kind resolution excludes the FEM registry.
+    expect(nativeLayerSettingsBlock).toContain("visualizationState: renderingState");
   });
 
   it("uses canonical Airbox settings only when the multilayer layout is unavailable", () => {

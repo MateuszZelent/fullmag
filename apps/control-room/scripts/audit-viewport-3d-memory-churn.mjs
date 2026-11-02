@@ -1166,6 +1166,10 @@ async function assertPartialMultilayerNativeMaskRendered(
   const activeMaskPath = fdmMultilayerActiveMaskPath(FDM_PARTIAL_LAYER_ID);
   const requestsBeforeReload = countFixtureRequests(fixtureRequests, activeMaskPath);
   fixture.multilayerEnabled = true;
+  // This separate case qualifies cell geometry, independently of the display
+  // state left by the preceding quantity/style stress scenario.
+  fixture.visualizationState = fdmVisualizationStateFixture();
+  fixture.status = fdmStatusFixture(fixture);
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForFunction(
     () => Boolean(window.__FULLMAG_CONTROL_ROOM_AUDIT__),
@@ -1385,7 +1389,36 @@ async function assertColdFdmMultilayerVectorOnlyRendered(
   );
   await canvas.screenshot({ path: screenshot });
 
+  // Keep field identity and vectors unchanged while requesting cell geometry.
+  // A cached vector-only job must not suppress this subsequent full build.
+  fixture.visualizationState = applyPatch(fixture.visualizationState, {
+    overrides: fixture.visualizationState.overrides.map((entry) => (
+      entry.scope_id === target.id
+        ? mergeRecords(entry, { display: { surface: { visible: true } } })
+        : entry
+    )),
+    revision: fixture.visualizationState.revision + 1,
+  });
+  fixture.status.resources.visualization_state_revision = fixture.visualizationState.revision;
+  await publishVisualizationStateAndWait(
+    page,
+    fixture,
+    viewport,
+    expectedField.quantityId,
+    gpuAfter,
+  );
+  const modelCountAttribute = targetKind === "native"
+    ? "data-fdm-model-count"
+    : "data-fdm-airbox-model-count";
+  await waitForCondition(
+    async () => Number(await viewport.getAttribute(modelCountAttribute)) > 0,
+    15_000,
+    `Cold ${targetKind} vector-only job prevented the subsequent surface build.`,
+  );
+  const surfaceModelCount = Number(await viewport.getAttribute(modelCountAttribute));
+
   return {
+    surfaceModelCount,
     fieldResponse,
     glyphBuild,
     gpu: {
@@ -1435,8 +1468,24 @@ async function waitForColdVectorOnlyTargetSettings(page, target, targetKind) {
 async function readColdVectorOnlyTargetSettings(page, target) {
   return page.evaluate((targetRef) => {
     const hook = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
-    if (!hook?.readVisualizationTargetSettings) return null;
-    return hook.readVisualizationTargetSettings(targetRef);
+    // The controller getter exposes local patches, not persisted overrides.
+    // Admit the layout only after the browser's canonical resource is hydrated;
+    // the worker and draw assertions below verify that the viewport applies it.
+    const resource = hook?.readViewportAuditResource?.(
+      "/v2/sessions/current/visualization/state",
+    );
+    const scope = targetRef.kind === "fdm-native-layer" ? "fdm_native_layer" : "airbox";
+    const override = resource?.data?.overrides?.find((entry) => (
+      entry.scope === scope && entry.scope_id === targetRef.id
+    ));
+    if (!override) return null;
+    return {
+      visible: override.display?.visible ?? override.visible,
+      vectorsVisible: override.display?.vectors?.visible,
+      pointsVisible: override.display?.points?.visible,
+      wireframeVisible: override.display?.wireframe?.visible,
+      shaderVisible: override.display?.surface?.visible,
+    };
   }, target);
 }
 
