@@ -884,6 +884,8 @@ pub struct SceneStudyState {
     pub universe_mesh: Option<ScriptBuilderUniverseState>,
     #[serde(default = "default_mesh")]
     pub shared_domain_mesh: ScriptBuilderMeshState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_domain_mesh: Option<SceneFemDomainMeshReference>,
     #[serde(default = "default_mesh")]
     pub mesh_defaults: ScriptBuilderMeshState,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -906,6 +908,15 @@ pub struct SceneStudyState {
     /// with the scene for initial viewport defaults and is not solver input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visualization_hint: Option<Value>,
+}
+
+/// An authored native archive relative to the scene's asset root.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SceneFemDomainMeshReference {
+    pub source: String,
+    pub sha256: String,
+    pub build_requested: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]

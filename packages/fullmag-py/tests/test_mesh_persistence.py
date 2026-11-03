@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -176,6 +177,30 @@ class MeshPersistenceTests(unittest.TestCase):
         self.assertEqual(artifact.build_report, {"build_mode": "test"})
         self.assertEqual(artifact.authoring_fingerprint, mesh_authoring_fingerprint(authoring))
         self.assertEqual(artifact.topology_fingerprint, mesh.topology_fingerprint_v3())
+
+    def test_native_artifact_load_can_pin_archive_bytes(self) -> None:
+        mesh = _tetra_mesh()
+        authoring = {
+            "geometry": [{"kind": "box", "size": [1e-9, 1e-9, 1e-9]}],
+            "mesh_workflow": {"mesh_options": {"maximum_element_size": 1e-9}},
+        }
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "film.fullmag-mesh"
+            save_mesh_artifact(
+                path,
+                mesh=mesh,
+                mesh_name="study_domain",
+                authoring_document=authoring,
+                region_markers=[{"geometry_name": "film", "marker": 1}],
+                boundary_map={"film_air": 20, "outer": 10},
+            )
+            expected = sha256(path.read_bytes()).hexdigest()
+
+            artifact = load_mesh_artifact(path, expected_sha256=expected)
+            with self.assertRaises(MeshArtifactCorruptionError):
+                load_mesh_artifact(path, expected_sha256="0" * 64)
+
+        self.assertEqual(artifact.source_sha256, expected)
 
     def test_meshdata_npz_round_trips_quality_reports(self) -> None:
         quality = MeshQualityReport(
@@ -652,6 +677,50 @@ class MeshPersistenceTests(unittest.TestCase):
         self.assertEqual(first.action, "saved")
         self.assertEqual(second.action, "loaded")
         builder.assert_not_called()
+
+    def test_study_mesh_load_pins_archive_and_records_fem_reference(self) -> None:
+        from fullmag.world import _state
+
+        mesh = _tetra_mesh()
+        assets = {
+            "fem_domain_mesh_asset": {
+                "mesh_source": None,
+                "mesh": mesh.to_ir("study_domain"),
+                "region_markers": [{"geometry_name": "film", "marker": 1}],
+                "object_region_markers": [],
+            }
+        }
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "domain.fullmag-mesh"
+            study = fm.study("pinned-mesh-persistence")
+            study.engine("fem")
+            body = study.geometry(fm.Box(1e-9, 1e-9, 1e-9), name="film")
+            body.Ms = 800e3
+            body.Aex = 13e-12
+            body.mesh(maximum_element_size=1e-9, order=1)
+            with patch("fullmag.world._build_explicit_mesh_assets", return_value=assets):
+                study.mesh.save(path)
+            expected = sha256(path.read_bytes()).hexdigest()
+
+            with self.assertRaises(MeshArtifactCorruptionError):
+                study.mesh.load(
+                    path,
+                    expected_sha256="0" * 64,
+                    build_requested=True,
+                )
+            self.assertFalse(_state._default_mesh_spec.build_requested)
+
+            result = study.mesh.load(path, expected_sha256=expected)
+
+        self.assertEqual(result.action, "loaded")
+        self.assertEqual(
+            _state._extra_runtime_metadata["fem_domain_mesh"],
+            {
+                "source": str(path.resolve()),
+                "sha256": expected,
+                "build_requested": False,
+            },
+        )
 
     def test_study_mesh_save_or_load_materializes_real_shared_domain(self) -> None:
         with TemporaryDirectory() as tmp:

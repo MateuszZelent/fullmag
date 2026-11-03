@@ -910,6 +910,8 @@ pub struct ScriptBuilderState {
     pub solver: ScriptBuilderSolverState,
     pub mesh: ScriptBuilderMeshState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_domain_mesh: Option<crate::SceneFemDomainMeshReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub universe: Option<ScriptBuilderUniverseState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain_frame: Option<DomainFrameState>,

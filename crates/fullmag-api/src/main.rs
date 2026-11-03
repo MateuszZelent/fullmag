@@ -6494,7 +6494,7 @@ fn detect_preset_texture_changes(
 }
 
 fn scene_mesh_signature(scene: &SceneDocument) -> Value {
-    json!({
+    let mut signature = json!({
         "universe": scene.universe,
         "study_universe_mesh": scene.study.universe_mesh,
         "shared_domain_mesh": scene.study.shared_domain_mesh,
@@ -6525,7 +6525,11 @@ fn scene_mesh_signature(scene: &SceneDocument) -> Value {
             "object_mesh": object.object_mesh,
             "mesh_override": object.mesh_override,
         })).collect::<Vec<_>>(),
-    })
+    });
+    if let Some(reference) = scene.study.fem_domain_mesh.as_ref() {
+        signature["fem_domain_mesh"] = json!(reference);
+    }
+    signature
 }
 
 async fn list_physics_docs(

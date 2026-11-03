@@ -205,6 +205,13 @@ remains planner-owned. Validation errors reject malformed artifacts,
 and unsupported combinations fail explicitly without CPU/GPU or FDM/FEM
 fallback.
 
+A loaded native mesh archive is represented in the canonical scene by
+`study.fem_domain_mesh`. This reference carries an asset-root-relative
+`.fullmag-mesh` path, its SHA-256 digest, and the authored mesh build flag.
+Canonical preparation verifies the archive and replays the mesh-authoring
+check before producing the existing `fem_domain_mesh_asset`. Missing,
+changed, or incompatible archives fail preparation before solver admission.
+
 ### 7.1 Transakcja ręcznej przebudowy w sesji interaktywnej
 
 Ręczna przebudowa FEM jest zmianą dyskretyzacji w bezczynnym runtime,

@@ -119,6 +119,7 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
             solver: builder.solver.clone(),
             universe_mesh: builder.universe.clone(),
             shared_domain_mesh: builder.mesh.clone(),
+            fem_domain_mesh: builder.fem_domain_mesh.clone(),
             mesh_defaults: builder.mesh.clone(),
             mesh_interfaces: builder
                 .mesh_interfaces
@@ -266,6 +267,7 @@ pub fn scene_document_to_script_builder(
         rotated_interfacial_dmi_object_ids: normalized_scene.study.rotated_interfacial_dmi_object_ids.clone(),
         solver: normalized_scene.study.solver.clone(),
         mesh: normalized_scene.study.shared_domain_mesh.clone(),
+        fem_domain_mesh: normalized_scene.study.fem_domain_mesh.clone(),
         universe: normalized_scene
             .study
             .universe_mesh
@@ -539,6 +541,7 @@ pub fn scene_document_to_script_builder_overrides(
             .map(Value::from)
             .unwrap_or(Value::Null),
         "solver": solver_override_value(&builder.solver),
+        "fem_domain_mesh": builder.fem_domain_mesh,
         "mesh": {
             "algorithm_2d": builder.mesh.algorithm_2d,
             "algorithm_3d": builder.mesh.algorithm_3d,
@@ -2630,6 +2633,7 @@ mod tests {
             pbc: None,
             fem_demag_solver_policy: Some(fullmag_ir::FemLinearSolverPolicy::default()),
             fem_demag_accuracy_contract: None,
+            fem_domain_mesh: None,
             exchange_enabled: true,
             demag_enabled: true,
             demag_realization: Some("airbox_robin".to_string()),

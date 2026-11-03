@@ -1097,3 +1097,46 @@ def _lower_scene_document(
         requested_mode="strict",
         source_root=source_root,
     )
+
+
+def test_scene_document_rejects_pinned_mesh_path_escape(tmp_path: Path) -> None:
+    scene = _minimal_scene_document(tmp_path)
+    scene["study"]["requested_backend"] = "fem"
+    scene["study"]["backend"] = "fem"
+    outside_root = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside_root.mkdir()
+    (tmp_path / "linked").symlink_to(outside_root, target_is_directory=True)
+    scene["study"]["fem_domain_mesh"] = {
+        "source": "linked/outside.fullmag-mesh",
+        "sha256": "a" * 64,
+        "build_requested": True,
+    }
+
+    with pytest.raises(ValueError, match="beneath source_root"):
+        scene_document_to_problem_ir(
+            scene,
+            requested_backend="fem",
+            requested_device="cpu",
+            requested_precision="double",
+            requested_mode="strict",
+            source_root=tmp_path,
+        )
+
+
+def test_scene_document_rejects_pinned_fem_mesh_for_explicit_fdm(tmp_path: Path) -> None:
+    scene = _minimal_scene_document(tmp_path)
+    scene["study"]["fem_domain_mesh"] = {
+        "source": "assets/domain.fullmag-mesh",
+        "sha256": "a" * 64,
+        "build_requested": True,
+    }
+
+    with pytest.raises(ValueError, match="requires the FEM backend"):
+        scene_document_to_problem_ir(
+            scene,
+            requested_backend="fdm",
+            requested_device="cpu",
+            requested_precision="double",
+            requested_mode="strict",
+            source_root=tmp_path,
+        )

@@ -407,6 +407,12 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         ],
         "excitation_analysis": _export_excitation_analysis(base_problem),
     }
+    fem_domain_mesh = _export_fem_domain_mesh_reference(
+        base_problem,
+        source_root=source_root,
+    )
+    if fem_domain_mesh is not None:
+        draft["fem_domain_mesh"] = fem_domain_mesh
     fdm_draft = _export_fdm(base_problem)
     if fdm_draft is not None:
         draft["fdm"] = fdm_draft
@@ -727,6 +733,7 @@ def render_scene_document_as_script(
     *,
     include_authored_stages: bool = True,
     include_legacy_relax_stages: bool = True,
+    _source_root: str | Path | None = None,
 ) -> str:
     """Render a canonical Python script directly from a SceneDocument.
 
@@ -777,6 +784,20 @@ def render_scene_document_as_script(
                 if actual != builder[collection]:
                     raise ValueError(f"{collection} did not round-trip through the public antenna DSL")
         overrides = builder_overrides_from_scene_document(scene_for_render)
+        persisted_mesh = overrides.get("fem_domain_mesh")
+        if _source_root is not None and isinstance(persisted_mesh, Mapping):
+            stable_root = Path(_source_root).resolve()
+            resolved_mesh = (stable_root / str(persisted_mesh["source"])).resolve()
+            try:
+                resolved_mesh.relative_to(stable_root)
+            except ValueError as exc:
+                raise ValueError(
+                    "SceneDocument.study.fem_domain_mesh.source must resolve beneath source_root"
+                ) from exc
+            overrides["fem_domain_mesh"] = {
+                **dict(persisted_mesh),
+                "source": resolved_mesh.as_posix(),
+            }
         _omit_scene_mesh_editor_defaults(overrides)
         return render_loaded_problem_as_script(
             loaded,
@@ -1070,10 +1091,16 @@ def _omit_scene_mesh_editor_defaults(overrides: dict[str, object]) -> None:
         "optimize_iterations": 1,
     }
 
-    def omit(config: object) -> None:
+    preserve_pinned_object_algorithm = isinstance(
+        overrides.get("fem_domain_mesh"), Mapping
+    )
+
+    def omit(config: object, *, preserve_algorithm_3d: bool = False) -> None:
         if not isinstance(config, dict):
             return
         for key, default in defaults.items():
+            if preserve_algorithm_3d and key == "algorithm_3d":
+                continue
             value = config.get(key)
             if isinstance(value, bool) != isinstance(default, bool):
                 continue
@@ -1085,7 +1112,10 @@ def _omit_scene_mesh_editor_defaults(overrides: dict[str, object]) -> None:
     if isinstance(geometries, list):
         for geometry in geometries:
             if isinstance(geometry, dict):
-                omit(geometry.get("mesh"))
+                omit(
+                    geometry.get("mesh"),
+                    preserve_algorithm_3d=preserve_pinned_object_algorithm,
+                )
 
 
 def _inherit_scene_stage_timestep(
@@ -7660,6 +7690,25 @@ def _render_study_mesh_workflow(
     elif global_build_requested:
         lines.append(_mesh_build_call("study", global_mesh))
 
+    persisted_mesh = overrides.get("fem_domain_mesh")
+    if isinstance(persisted_mesh, Mapping):
+        source = str(persisted_mesh["source"])
+        source_path = Path(source)
+        if source_path.is_absolute():
+            source_expression = _python_literal(source)
+        else:
+            lines.append("from pathlib import Path")
+            source_expression = (
+                f"(Path(__file__).resolve().parent / {_py_repr(source)})"
+            )
+        lines.append(
+            "study.mesh.load("
+            f"{source_expression}, "
+            f"expected_sha256={_py_repr(str(persisted_mesh['sha256']))}, "
+            f"build_requested={_python_literal(persisted_mesh['build_requested'])}"
+            ")"
+        )
+
     if not lines:
         return []
     return ["# Mesh", *lines]
@@ -10066,6 +10115,57 @@ def _export_initial_state(problem: Problem) -> dict[str, object] | None:
         or infer_magnetization_state_format(magnet.m0.source_path),
         "dataset": magnet.m0.dataset,
         "sample_index": magnet.m0.sample_index,
+    }
+
+
+def _export_fem_domain_mesh_reference(
+    problem: Problem,
+    *,
+    source_root: Path,
+) -> dict[str, object] | None:
+    runtime_metadata = _normalize_mapping(problem.runtime_metadata)
+    raw_reference = runtime_metadata.get("fem_domain_mesh")
+    if raw_reference is None:
+        return None
+    if not isinstance(raw_reference, Mapping):
+        raise ValueError("runtime_metadata.fem_domain_mesh must be an object")
+    if set(raw_reference) != {"source", "sha256", "build_requested"}:
+        raise ValueError(
+            "runtime_metadata.fem_domain_mesh requires source, sha256, and build_requested"
+        )
+
+    raw_source = raw_reference.get("source")
+    if not isinstance(raw_source, str) or not raw_source.strip():
+        raise ValueError("runtime_metadata.fem_domain_mesh.source must be a path")
+    source = Path(raw_source).expanduser()
+    if not source.is_absolute():
+        source = source_root / source
+    resolved_source = source.resolve()
+    if resolved_source.suffix != ".fullmag-mesh":
+        raise ValueError(
+            "runtime_metadata.fem_domain_mesh.source must name a .fullmag-mesh artifact"
+        )
+    try:
+        relative_source = resolved_source.relative_to(source_root.resolve())
+    except ValueError as exc:
+        raise ValueError(
+            "runtime_metadata.fem_domain_mesh.source must resolve beneath source_root"
+        ) from exc
+
+    digest = raw_reference.get("sha256")
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise ValueError(
+            "runtime_metadata.fem_domain_mesh.sha256 must be 64 lowercase hexadecimal characters"
+        )
+    build_requested = raw_reference.get("build_requested")
+    if not isinstance(build_requested, bool):
+        raise ValueError(
+            "runtime_metadata.fem_domain_mesh.build_requested must be a bool"
+        )
+    return {
+        "source": relative_source.as_posix(),
+        "sha256": digest,
+        "build_requested": build_requested,
     }
 
 
