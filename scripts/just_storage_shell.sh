@@ -135,7 +135,7 @@ case "${recipe}" in
     exec "${python_cmd}" -B "${script_dir}/docker_dev_preclaim_cancel.py" "${preclaim_args[@]}"
     ;;
   *"scripts/docker_goebel_qualification.py"*)
-    goebel_pattern="^[[:space:]]+ \"[^\"]+/scripts/docker_goebel_qualification.py\" --repo-root \"[^\"]+\" --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --source-commit '([0-9a-f]{40})' --port '([0-9]{4,5})'( --terminal-run-id '([A-Za-z0-9][A-Za-z0-9._-]{0,159})')?[[:space:]]*$"
+    goebel_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_goebel_qualification.py\" --repo-root \"[^\"]+\" --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --source-commit '([0-9a-f]{40})' --port '([0-9]{4,5})'( --terminal-run-id '([A-Za-z0-9][A-Za-z0-9._-]{0,159})')?[[:space:]]*$"
     if [[ ! "${recipe}" =~ ${goebel_pattern} ]]; then
       echo "[fullmag just] invalid Goebel GPU qualification recipe" >&2
       exit 2
