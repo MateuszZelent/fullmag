@@ -149,6 +149,7 @@ class RetirementTests(unittest.TestCase):
             "repo_root": str(self.source), "storage_root": str(self.storage_root),
             "worktree_id": WORKTREE_ID, "project_id": PROJECT_ID,
         }
+        self.cache_project_id = PROJECT_ID
         self.control = FakeControl(self.source)
         self.docker = FakeDocker()
         self.backend_profile = self._backend_profile(WORKTREE_ID, self.source, self.project)
@@ -181,7 +182,7 @@ class RetirementTests(unittest.TestCase):
     def _backend_profile(self, worktree_id, source_root, compose_project, *, shared_packages=False,
                          cargo_profile="backend-dev"):
         return backend_cache.prepare(
-            {"storage_root": str(self.storage_root), "project_id": PROJECT_ID,
+            {"storage_root": str(self.storage_root), "project_id": self.cache_project_id,
              "worktree_id": worktree_id, "compose_project": compose_project},
             source_root, RUNTIME_IMAGE, self.storage_root,
             source_root=source_root, toolchain_image=TOOLCHAIN_IMAGE,
@@ -197,7 +198,7 @@ class RetirementTests(unittest.TestCase):
     def _group_cache_profile(self, *, source_root=None):
         source_root = source_root or self.source
         prepared = backend_cache._plan(
-            {"storage_root": str(self.storage_root), "project_id": PROJECT_ID,
+            {"storage_root": str(self.storage_root), "project_id": self.cache_project_id,
              "worktree_id": WORKTREE_ID, "compose_project": self.project},
             source_root, RUNTIME_IMAGE, self.storage_root,
             source_root=source_root, toolchain_image=TOOLCHAIN_IMAGE,
@@ -235,7 +236,7 @@ class RetirementTests(unittest.TestCase):
         receipt = {
             "schema": backend_cache.MAINTENANCE_RECEIPT_SCHEMA,
             "profile": backend_cache.PROFILE, "state": "ready",
-            "project_id": PROJECT_ID, "worktree_id": WORKTREE_ID,
+            "project_id": self.cache_project_id, "worktree_id": WORKTREE_ID,
             "cache_key": prepared["cache_key"], "unit_key": prepared["unit_key"],
             "owner_id": prepared["owner_id"], "cargo_profile": prepared["cargo_profile"],
             "runtime_image_id": RUNTIME_IMAGE, "toolchain_image_id": TOOLCHAIN_IMAGE,
@@ -421,6 +422,33 @@ class RetirementTests(unittest.TestCase):
         result = self._retire(lambda keys, operation: {"state": "succeeded", "unit_keys": keys})
         self.assertEqual(result["state"], "succeeded")
         self.assertIn(self.shared_name, self.docker.volumes)
+
+    def test_split_project_ids_retire_only_the_registered_private_namespace(self):
+        self.layout.pop("project_id")
+        self.layout.update(project_root=str(self.root), env={"FULLMAG_PROJECT_ID": PROJECT_ID})
+        self.cache_project_id = backend_cache._safe_project_id(self.layout)
+        self.assertNotEqual(self.cache_project_id, PROJECT_ID)
+        self.shared_name = shared_storage.shared_volume_names(self.cache_project_id)[shared_storage.PACKAGE_ROLE]
+        self.docker.add_volume(self.shared_name, shared_storage.shared_volume_labels(
+            self.cache_project_id, shared_storage.PACKAGE_ROLE,
+        ))
+        profile = self._group_cache_profile()
+        self._add_root_consumer(other=True, group_volume=True)
+        identity = retirement._identity(self.control, self.layout)
+        self.assertEqual(identity["project_id"], PROJECT_ID)
+        self.assertEqual(identity["cache_project_id"], self.cache_project_id)
+        shared = retirement._shared_package(self.control, identity, self.docker)
+        consumer = self.docker.containers["2" * 64]
+        consumer_unit = consumer["Config"]["Labels"][backend_cache.LABEL_UNIT]
+        with self.assertRaisesRegex(retirement.CacheRetirementError, "still consumes a retiring"):
+            retirement._registered_other_shared_consumer(consumer, identity, shared, {consumer_unit})
+        callback = mock.Mock(return_value={"state": "succeeded", "unit_keys": [profile["unit_key"]]})
+        with mock.patch.object(retirement, "_clear_private_group_cache", return_value={"state": "succeeded"}):
+            result = self._retire(callback)
+        self.assertEqual(result["state"], "succeeded")
+        self.assertEqual(callback.call_args.args[0], [profile["unit_key"]])
+        self.assertIn(self.shared_name, self.docker.volumes)
+        self.assertIn("2" * 64, self.docker.containers)
 
     def test_partial_retry_uses_durable_units_after_build_volume_is_absent(self):
         build_name = self.backend_profile["volume_names"][backend_cache.BUILD_VOLUME_ROLE]
@@ -727,12 +755,19 @@ class RetirementTests(unittest.TestCase):
         self.assertEqual(payload.read_text(encoding="utf-8"), "preserve")
         self.assertEqual(report["leaves"]["frontend/workspace/node_modules"], "cleared")
 
-    def _add_root_consumer(self, *, other, malformed=False):
+    def _add_root_consumer(self, *, other, malformed=False, group_volume=False):
         worktree = "other-wt" if other else WORKTREE_ID
         source = self.root / worktree
         source.mkdir(exist_ok=True)
         compose = f"fullmag-worktree-{worktree}"
-        profile = self._backend_profile(worktree, source, compose, shared_packages=True)
+        profile = backend_cache._plan(
+            {**self.layout, "project_id": self.cache_project_id,
+             "worktree_id": worktree, "compose_project": compose},
+            source, RUNTIME_IMAGE, self.storage_root, source_root=source,
+            toolchain_image=TOOLCHAIN_IMAGE, cargo_profile="backend-dev",
+            control_volume_name=bootstrap.control_volume_name(compose),
+            control_namespace="", shared_packages=True, group_volume=group_volume,
+        )
         unit = profile["unit_key"]
         labels = {
             **backend_cache._container_labels(profile),
@@ -750,6 +785,11 @@ class RetirementTests(unittest.TestCase):
             "FULLMAG_SOURCE_WORKTREE_ID": worktree,
             "FULLMAG_SOURCE_CHECKOUT_KIND": "worktree",
         }
+        if group_volume:
+            environment = {
+                **profile["environment"],
+                "FULLMAG_SOURCE_HOST_ROOT": str(source),
+            }
         if malformed:
             labels[backend_cache.LABEL_CACHE_KEY] = "e" * 64
             environment["FULLMAG_BACKEND_CACHE_KEY"] = "e" * 64

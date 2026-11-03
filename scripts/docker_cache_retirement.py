@@ -209,8 +209,22 @@ def _identity(control: Any, layout: Mapping[str, Any]) -> dict[str, str]:
     segment = re.sub(r"[^a-z0-9_-]+", "-", worktree_id).strip("-")
     if project != f"fullmag-worktree-{segment}":
         raise CacheRetirementError("Compose project is not the exact worktree project")
-    return {"worktree_id": worktree_id, "source_root": source_root,
-            "project_id": project_id, "compose_project": project}
+    from docker_backend_volume_cache import BackendVolumeCacheError, _safe_project_id
+
+    try:
+        cache_project_id = _safe_project_id(layout)
+    except BackendVolumeCacheError as error:
+        raise CacheRetirementError("Resolved backend cache project identity is invalid") from error
+    result = {"worktree_id": worktree_id, "source_root": source_root,
+              "project_id": project_id, "compose_project": project}
+    # Preserve the identity of durable plans written with a common project ID.
+    if cache_project_id != project_id:
+        result["cache_project_id"] = cache_project_id
+    return result
+
+
+def _cache_project_id(identity: Mapping[str, str]) -> str:
+    return identity.get("cache_project_id", identity["project_id"])
 
 
 def _same_volume_identity(first: Mapping[str, Any], second: Mapping[str, Any]) -> bool:
@@ -256,7 +270,7 @@ def _private_group_registry(control: Any, layout: Mapping[str, Any],
     namespace = getattr(control, "namespace", "")
     try:
         planned = cache._plan(
-            {**dict(layout), "project_id": identity["project_id"],
+            {**dict(layout), "project_id": _cache_project_id(identity),
              "worktree_id": identity["worktree_id"],
              "compose_project": identity["compose_project"]},
             identity["source_root"], profile.get("runtime_image_id"),
@@ -270,14 +284,14 @@ def _private_group_registry(control: Any, layout: Mapping[str, Any],
         if (profile.get("state") != "ready" or profile.get("group_volume") is not True
                 or profile.get("shared_packages") is not True
                 or profile.get("volume_names", {}).get(cache.BUILD_VOLUME_ROLE) != control.volume
-                or profile.get("project_id") != identity["project_id"]
+                or profile.get("project_id") != _cache_project_id(identity)
                 or profile.get("worktree_id") != identity["worktree_id"]
                 or profile.get("control_project") != identity["compose_project"]
                 or profile.get("control_namespace") != namespace):
             raise CacheRetirementError("Private group cache profile is not bound to this worktree/control volume")
         expected_unit = cache._sha256({
             "schema": _PRIVATE_UNIT_SCHEMA,
-            "project_id": identity["project_id"],
+            "project_id": _cache_project_id(identity),
             "worktree_id": identity["worktree_id"],
             "source_root": identity["source_root"],
         })
@@ -646,7 +660,7 @@ def _expected_backend_profile(control: Any, layout: Mapping[str, Any], identity:
             or cargo_profile not in cache.SUPPORTED_CARGO_PROFILES
             or not isinstance(unit, str) or _SHA.fullmatch(unit) is None):
         raise CacheRetirementError("Backend cache volume identity labels are incomplete")
-    project_layout = {**dict(layout), "project_id": identity["project_id"],
+    project_layout = {**dict(layout), "project_id": _cache_project_id(identity),
                       "compose_project": identity["compose_project"]}
     shared_packages = role == cache.BUILD_VOLUME_ROLE
     try:
@@ -674,7 +688,7 @@ def _backend_volumes(control: Any, layout: Mapping[str, Any], identity: Mapping[
 
     # Scope loosely enough to notice malformed identity labels for this
     # exact project and worktree, then validate the complete set below.
-    filters = {cache.LABEL_PROJECT: identity["project_id"],
+    filters = {cache.LABEL_PROJECT: _cache_project_id(identity),
                cache.LABEL_WORKTREE: identity["worktree_id"]}
     names = _list_volumes(filters, docker)
     builds: dict[str, dict[str, Any]] = {}
@@ -766,12 +780,12 @@ def _frontend_volumes(control: Any, identity: Mapping[str, str],
 def _shared_package(control: Any, identity: Mapping[str, str], docker: Callable[..., Any] | None):
     import docker_shared_build_storage as shared
 
-    name = shared.shared_volume_names(identity["project_id"])[shared.PACKAGE_ROLE]
+    name = shared.shared_volume_names(_cache_project_id(identity))[shared.PACKAGE_ROLE]
     document = _inspect_volume(name, docker)
     if document is None:
         return None
     try:
-        validated = shared.validate_volume_document(document, identity["project_id"], shared.PACKAGE_ROLE)
+        validated = shared.validate_volume_document(document, _cache_project_id(identity), shared.PACKAGE_ROLE)
     except shared.SharedBuildStorageError as error:
         raise CacheRetirementError(f"Shared package volume identity is unsafe: {error}") from error
     return {"name": name, "labels": dict(validated["Labels"]), "mountpoint": validated["Mountpoint"]}
@@ -802,42 +816,42 @@ def _registered_other_shared_consumer(document: Mapping[str, Any], identity: Map
             raise CacheRetirementError("A container still consumes the retiring worktree's shared package namespace")
     if isinstance(unit, str) and unit in retiring_units:
         raise CacheRetirementError("A container still consumes a retiring groups/<unit_key> namespace")
-    maintenance = cache._is_registered_shared_maintenance(document["Config"], labels, identity["project_id"])
+    project_id = _cache_project_id(identity)
+    maintenance = cache._is_registered_shared_maintenance(document["Config"], labels, project_id)
     compose_project = labels.get("com.docker.compose.project")
     worktree = labels.get(cache.LABEL_WORKTREE)
     cache_key = labels.get(cache.LABEL_CACHE_KEY)
     toolchain = labels.get(cache.LABEL_TOOLCHAIN)
     cargo_profile = labels.get(cache.LABEL_CARGO_PROFILE)
-    expected_unit = None
-    if (labels.get(cache.LABEL_SCHEMA) == cache.SCHEMA
-            and labels.get(cache.LABEL_PROFILE) == cache.PROFILE
-            and labels.get(cache.LABEL_PROJECT) == identity["project_id"]
-            and isinstance(unit, str) and _SHA.fullmatch(unit)
-            and labels.get(cache.LABEL_OWNER) == unit
-            and isinstance(cache_key, str) and _SHA.fullmatch(cache_key)
-            and isinstance(worktree, str) and _ID.fullmatch(worktree)
-            and isinstance(toolchain, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", toolchain)
-            and cargo_profile in cache.SUPPORTED_CARGO_PROFILES):
-        expected_unit = cache._sha256({
-            "schema": cache.SCHEMA, "project_id": identity["project_id"],
-            "cache_key": cache_key, "worktree_id": worktree,
-            "toolchain_image_id": toolchain, "cargo_profile": cargo_profile,
-        })
-    if expected_unit is None or expected_unit != unit:
+    if (labels.get(cache.LABEL_SCHEMA) != cache.SCHEMA
+            or labels.get(cache.LABEL_PROFILE) != cache.PROFILE
+            or labels.get(cache.LABEL_PROJECT) != project_id
+            or not isinstance(unit, str) or _SHA.fullmatch(unit) is None
+            or labels.get(cache.LABEL_OWNER) != unit
+            or not isinstance(cache_key, str) or _SHA.fullmatch(cache_key) is None
+            or not isinstance(worktree, str) or _ID.fullmatch(worktree) is None
+            or not isinstance(toolchain, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", toolchain) is None
+            or cargo_profile not in cache.SUPPORTED_CARGO_PROFILES):
         raise CacheRetirementError("Unknown shared package consumer identity; all shared root consumers must be registered")
-    expected_compose = ("fullmag-master" if labels.get("org.fullmag.source.checkout-kind") == "main-checkout"
+    checkout_kind = labels.get("org.fullmag.source.checkout-kind")
+    expected_compose = ("fullmag-master" if checkout_kind == "main-checkout"
                         else "fullmag-worktree-" + re.sub(r"[^a-z0-9_-]+", "-", worktree).strip("-"))
+    # Current Compose pins source identity in labels and only exports the host
+    # source path. Older profiles can also carry the matching source env pins.
+    source_pins = {
+        "FULLMAG_SOURCE_PROJECT_ID": identity["project_id"],
+        "FULLMAG_SOURCE_WORKTREE_ID": worktree,
+        "FULLMAG_SOURCE_CHECKOUT_KIND": checkout_kind,
+    }
     if (compose_project != expected_compose
             or labels.get("org.fullmag.source.project-id") != identity["project_id"]
             or labels.get("org.fullmag.source.worktree-id") != worktree
-            or labels.get("org.fullmag.source.checkout-kind") not in {"worktree", "main-checkout"}
+            or checkout_kind not in {"worktree", "main-checkout"}
             or labels.get("org.fullmag.compose.project") != expected_compose
-            or environment.get("FULLMAG_SOURCE_PROJECT_ID") != identity["project_id"]
-            or environment.get("FULLMAG_SOURCE_WORKTREE_ID") != worktree
-            or environment.get("FULLMAG_SOURCE_CHECKOUT_KIND") != labels.get("org.fullmag.source.checkout-kind")
+            or any(environment.get(key, value) != value for key, value in source_pins.items())
             or environment.get("FULLMAG_BACKEND_CACHE_SCHEMA") != cache.SCHEMA
             or environment.get("FULLMAG_BACKEND_CACHE_PROFILE") != cache.PROFILE
-            or environment.get("FULLMAG_BACKEND_CACHE_PROJECT_ID") != identity["project_id"]
+            or environment.get("FULLMAG_BACKEND_CACHE_PROJECT_ID") != project_id
             or environment.get("FULLMAG_BACKEND_CACHE_UNIT_KEY") != unit
             or environment.get("FULLMAG_BACKEND_CACHE_OWNER_ID") != unit
             or environment.get("FULLMAG_BACKEND_CACHE_KEY") != cache_key
@@ -847,14 +861,36 @@ def _registered_other_shared_consumer(document: Mapping[str, Any], identity: Map
             or environment.get("FULLMAG_SHARED_BACKEND_STORE") != cache.SHARED_BACKEND_TARGET
             or environment.get("FULLMAG_SHARED_BACKEND_GROUP") != cache.shared_group(unit)):
         raise CacheRetirementError("Shared package consumer labels/environment do not form one exact registered identity")
-    source_root = environment.get("FULLMAG_SOURCE_ROOT")
+    source_root = environment.get("FULLMAG_SOURCE_HOST_ROOT", environment.get("FULLMAG_SOURCE_ROOT"))
     try:
-        observed_key = cache.cache_key(source_root, worktree, toolchain, cargo_profile)["key"]
+        key_document = cache.cache_key(source_root, worktree, toolchain, cargo_profile)
     except (cache.BackendVolumeCacheError, TypeError) as error:
         raise CacheRetirementError("Shared package consumer source root cannot be qualified") from error
-    name_id = hashlib.sha256(f"{identity['project_id']}:{unit}".encode()).hexdigest()[:24]
-    if (observed_key != cache_key
-            or environment.get("FULLMAG_BACKEND_CACHE_BUILD_VOLUME") != f"fullmag-backend-v2-{name_id}-build"
+    storage_profile = environment.get("FULLMAG_PRIVATE_GROUP_STORAGE")
+    if storage_profile == "group-volume-v1":
+        from bootstrap_docker_toolchain import control_volume_name
+
+        build_volume = control_volume_name(expected_compose)
+        expected_unit = cache._sha256({
+            "schema": _PRIVATE_UNIT_SCHEMA, "project_id": project_id,
+            "worktree_id": worktree, "source_root": key_document["inputs"]["source_root"],
+        })
+        if environment.get("FULLMAG_BACKEND_CACHE_CONTROL_VOLUME") != build_volume:
+            raise CacheRetirementError("Shared package consumer group control volume is not canonical")
+    elif storage_profile is None:
+        expected_unit = cache._sha256({
+            "schema": cache.SCHEMA, "project_id": project_id,
+            "cache_key": cache_key, "worktree_id": worktree,
+            "toolchain_image_id": toolchain, "cargo_profile": cargo_profile,
+        })
+        name_id = hashlib.sha256(f"{project_id}:{unit}".encode()).hexdigest()[:24]
+        build_volume = f"fullmag-backend-v2-{name_id}-build"
+    else:
+        raise CacheRetirementError("Shared package consumer has an unknown private storage profile")
+    if expected_unit != unit:
+        raise CacheRetirementError("Unknown shared package consumer unit identity")
+    if (key_document["key"] != cache_key
+            or environment.get("FULLMAG_BACKEND_CACHE_BUILD_VOLUME") != build_volume
             or environment.get("FULLMAG_BACKEND_CACHE_PACKAGE_VOLUME") != volume
             or environment.get("FULLMAG_SHARED_BACKEND_VOLUME") != volume):
         raise CacheRetirementError("Shared package consumer cache key or volume names are not derived from its source identity")
@@ -1081,8 +1117,8 @@ def _validate_prior_plan(plan: Any, control: Any, layout: Mapping[str, Any],
         import docker_shared_build_storage as shared
         if not isinstance(shared_doc, Mapping) or not isinstance(shared_doc.get("labels"), Mapping):
             raise CacheRetirementError("Existing retirement shared package volume record is malformed")
-        if (shared_doc.get("name") != shared.shared_volume_names(identity["project_id"])[shared.PACKAGE_ROLE]
-                or dict(shared_doc["labels"]) != shared.shared_volume_labels(identity["project_id"], shared.PACKAGE_ROLE)
+        if (shared_doc.get("name") != shared.shared_volume_names(_cache_project_id(identity))[shared.PACKAGE_ROLE]
+                or dict(shared_doc["labels"]) != shared.shared_volume_labels(_cache_project_id(identity), shared.PACKAGE_ROLE)
                 or pending != sorted(set(unit_keys) | ({group_unit} if group_unit else set()))):
             raise CacheRetirementError("Existing retirement shared namespace plan is inconsistent")
         try:
