@@ -17,6 +17,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 from docker_build_control import BuildControl, BuildControlError, canonical, toolchain_configuration
 import docker_dev_codegen as codegen
 from docker_dev_defaults import _discover_pins, resolve_defaults
+from docker_volume_activate import _same_host_path
 from docker_volume_dev import _retained_device_access
 from fullmag_storage import resolve_layout, validate_path
 
@@ -319,7 +320,7 @@ def _run_worker(token, inputs, binary_sha, terminal_run_id):
         report = verify_bundle(results / "output.zarr", log, raise_on_failure=False)
         require(report.get("check_count") == 19 and len(report.get("checks", {})) == 19,
                 "the pinned verifier did not return its 19-check contract")
-    except (OSError, ValueError, KeyError, TypeError) as error:
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as error:
         report = {"status": "not_verified", "error": str(error)}
     raw = canonical(report) + b"\n"
     with (results / "verification.json").open("xb") as stream:
@@ -332,6 +333,7 @@ def _run_worker(token, inputs, binary_sha, terminal_run_id):
         "passed_checks": sum(value is True for value in report.get("checks", {}).values()),
         "failed_checks": [key for key, value in report.get("checks", {}).items() if value is not True],
         "check_count": report.get("check_count"),
+        "error": report.get("error"),
     }
     return result
 
@@ -358,6 +360,12 @@ def run(args):
     require(terminal.get("state") == "succeeded" and digest(canonical(document)) == args.config_sha256
             and _retained_device_access(terminal, document) == "gpu", "DEV attempt is not a successful GPU admission")
     state = validate_path(Path(terminal["state_root"]), Path(layout["runtime_root"]), "qualification state root")
+    state_mounts = [mount for mount in document["services"]["backend"]["volumes"]
+                    if mount.get("target") == "/state"]
+    require(len(state_mounts) == 1 and state_mounts[0].get("type") == "bind"
+            and not state_mounts[0].get("read_only")
+            and _same_host_path(state_mounts[0].get("source"), str(state)),
+            "retained /state bind does not match the resolved qualification state root")
     hashes = {name: digest(raw) for name, raw in data.items()}
 
     with control.operation(PHASE, {
@@ -375,6 +383,9 @@ def run(args):
                 and codegen._backend_control_namespace(observed) == (control.namespace or "")
                 and codegen._mount_for(observed, "/opt/fullmag/control").get("Name") == control.volume,
                 "backend is outside the leased control namespace")
+        state_mount = codegen._mount_for(observed, "/state")
+        require(state_mount.get("Type") == "bind" and state_mount.get("RW") is True,
+                "backend no longer has the admitted writable /state bind")
         receipt, provenance, receipt_sha, proof = codegen._backend_documents(backend_id)
         backend, provenance_sha, _ = codegen._validate_backend(receipt, provenance, receipt_sha, proof)
         binary_sha = expected_solver_sha(receipt, provenance)
@@ -400,9 +411,13 @@ def run(args):
         operation["receipt"]["scientific_execution"] = result
         control.write(operation["root"] + "/receipt.json", operation["receipt"])
         worker = (
-            "import json,sys; from docker_goebel_qualification import _run_worker; "
-            "print(json.dumps(_run_worker(sys.argv[1],json.loads(sys.argv[2]),"
-            "sys.argv[3],sys.argv[4] or None)))"
+            "import json,sys\n"
+            "from docker_goebel_qualification import _run_worker\n"
+            "try:\n"
+            "    result = _run_worker(sys.argv[1], json.loads(sys.argv[2]), sys.argv[3], sys.argv[4] or None)\n"
+            "except Exception as error:\n"
+            "    result = {'worker_error': f'{type(error).__name__}: {error}'}\n"
+            "print(json.dumps(result))"
         )
         # The worker controller is copied from the verified reference commit,
         # independently of the backend's read-only runtime source mount.
@@ -421,6 +436,9 @@ def run(args):
                          + ":/opt/fullmag/source/scripts"},
         )
         completed = codegen._read_json_bytes(stdout, "Göbel worker completion")
+        if isinstance(completed.get("worker_error"), str):
+            operation["daemon_pending"] = False
+            raise BuildControlError("qualification worker rejected the run: " + completed["worker_error"])
         require(type(completed.get("runtime_exit_code")) is int
                 and SHA.fullmatch(completed.get("runtime_log_sha256") or "")
                 and isinstance(completed.get("verification"), dict),
