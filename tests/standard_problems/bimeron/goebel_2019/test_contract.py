@@ -222,6 +222,11 @@ def test_periodic_fem_lowers_same_physics_and_stages_as_fdm(monkeypatch) -> None
     runtime = metadata["runtime_selection"]
     assert (runtime["backend"], runtime["device"]) == ("fem", "cpu")
     assert (runtime["execution_mode"], runtime["execution_precision"]) == ("strict", "double")
+    for ir in (fem_ir, *(stage["ir"] for stage in fem["stages"])):
+        assert ir["backend_policy"]["discretization_hints"]["fem"]["demag_solver_policy"] == {
+            "solver": "CG", "preconditioner": "AMG", "rtol": 1e-8,
+            "max_iterations": 500, "print_level": 0,
+        }
     mesh = metadata["mesh_workflow"]
     assert mesh["default_mesh"]["periodic_pair_ids"] == ["x_faces"]
     assert mesh["per_geometry"][0]["order"] == 1

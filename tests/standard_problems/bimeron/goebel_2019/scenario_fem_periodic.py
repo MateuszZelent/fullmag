@@ -69,6 +69,7 @@ study.domain_mesh(Path(__file__).with_name(MESH_FILENAME), region_markers={"film
 
 study.terms.add(fm.RotatedInterfacialDMI(D=D_ROTATED))
 study.demag(realization="poisson_robin")
+study.fem_demag_solver(solver="CG", preconditioner="AMG", rtol=1e-8, max_iterations=500)
 study.solver(fix_dt=LLG_DT, integrator="rk45", gamma=GAMMA_H)
 
 relax = study.stages.add_relax(
