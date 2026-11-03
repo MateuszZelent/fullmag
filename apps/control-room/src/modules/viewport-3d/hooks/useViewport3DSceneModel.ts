@@ -250,6 +250,7 @@ import {
   resolveFdmMultilayerAirboxFieldVector,
   shouldRequestFdmMultilayerAirboxField,
 } from "../model/viewport3DFdmMultilayerAirbox";
+import { resolveFdmVectorOnlyRenderBuffers } from "../model/fdmVectorOnlyRenderBuffers";
 import { buildViewport3DFdmCuboidJobKey } from "../build-engine/viewport3dBuildJobKeys";
 import { modeCompositionTargetIdForMeshPart } from "../model/modeCompositionViewportProjection";
 import { Viewport3DScene } from "../layers/Viewport3DScene";
@@ -4264,6 +4265,7 @@ export function useViewport3DSceneModel({
       const resolved = resolveViewport3DFdmTargetVisualization({
         snapshot: objectVisualizationSnapshot,
         target,
+        visualizationState: renderingState,
       }).effectiveSettings;
       settingsById.set(
         domain.layerId,
@@ -4282,6 +4284,7 @@ export function useViewport3DSceneModel({
     fdmNativeLayerDomains,
     fdmMultilayerLayerActiveMasks.data,
     objectVisualizationSnapshot,
+    renderingState,
   ]);
   const nativeLayerFieldRequests = useMemo<
     ReadonlyMap<string, Viewport3DFieldResourceRequest>
@@ -6233,8 +6236,14 @@ export function useViewport3DSceneModel({
               ) ?? "missing",
             )
           : "none";
+        const nativeCellGeometryRequired =
+          settings.shaderVisible ||
+          settings.pointsVisible ||
+          settings.wireframeVisible;
+        const nativeVectorsOnlyEnabled =
+          vectorsVisible && !nativeCellGeometryRequired;
         const targetStyleRevision =
-          `visible=${settings.visible}|vectors=${vectorsVisible}|budget=${maxVectors}` +
+          `visible=${settings.visible}|cells=${nativeCellGeometryRequired}|vectors=${vectorsVisible}|budget=${maxVectors}` +
           `|scale=${settings.vectorLengthScale}|center=${settings.vectorCenteringEnabled}|scope=${settings.geometryScope}`;
         const buildKey = buildViewport3DFdmCuboidJobKey({
           algorithmVersion: 2,
@@ -6255,9 +6264,14 @@ export function useViewport3DSceneModel({
         });
         return {
           buildKey,
-          cellSelection: "dense",
+          // Vector-only membership filters use active/inactive semantics, not dense geometry.
+          cellSelection:
+            nativeVectorsOnlyEnabled && activeMask ? "active" : "dense",
           domain: { ...domain, kind: "fdm-grid" as const },
-          enabled: settings.visible && (!activeMaskRequired || activeMask !== null),
+          enabled:
+            settings.visible &&
+            (nativeCellGeometryRequired || (vectorsVisible && maxVectors > 0)) &&
+            (!activeMaskRequired || activeMask !== null),
           groupKey: `fdm-cuboid:session=current:native-layer:${domain.layerId}`,
           id: `native:${domain.layerId}`,
           maxVectorGlyphs: maxVectors,
@@ -6270,19 +6284,16 @@ export function useViewport3DSceneModel({
           vectorField: vectorsVisible ? fieldVector : null,
           vectorGeometryScope: settings.geometryScope,
           vectorLengthScale: settings.vectorLengthScale,
-          vectorOnly:
-            vectorsVisible &&
-            !settings.pointsVisible &&
-            !settings.wireframeVisible
-              ? createFdmVectorOnlyBuildInput({
-                  cellSelection: "all",
-                  domain: { ...domain, kind: "fdm-grid" as const },
-                  fieldVector,
-                  maxSamples: maxVectors,
-                  nativeActiveMask: activeMask,
-                  realizedRegionIds: null,
-                })
-              : null,
+          vectorOnly: nativeVectorsOnlyEnabled
+            ? createFdmVectorOnlyBuildInput({
+                cellSelection: "active",
+                domain: { ...domain, kind: "fdm-grid" as const },
+                fieldVector,
+                maxSamples: maxVectors,
+                nativeActiveMask: activeMask,
+                realizedRegionIds: null,
+              })
+            : null,
           vectorScale: resolveViewport3DFdmGridVectorScale(
             domain.shape,
             domain.spacing,
@@ -6325,14 +6336,16 @@ export function useViewport3DSceneModel({
         maxVectors,
         airboxSettings.geometryScope,
       );
+      const airboxCellGeometryRequired =
+        airboxSettings.shaderVisible ||
+        airboxSettings.pointsVisible ||
+        airboxSettings.wireframeVisible;
       const airboxStyleRevision =
-        `visible=${airboxSettings.visible}|vectors=${vectorsVisible}|budget=${maxVectors}` +
+        `visible=${airboxSettings.visible}|cells=${airboxCellGeometryRequired}|vectors=${vectorsVisible}|budget=${maxVectors}` +
         `|scale=${airboxSettings.vectorLengthScale}|center=${airboxSettings.vectorCenteringEnabled}` +
         `|scope=${airboxSettings.geometryScope}`;
       const airboxVectorsOnlyEnabled =
-        vectorsVisible &&
-        !airboxSettings.pointsVisible &&
-        !airboxSettings.wireframeVisible;
+        vectorsVisible && !airboxCellGeometryRequired;
       entries.push({
         buildKey: buildViewport3DFdmCuboidJobKey({
           algorithmVersion: 2,
@@ -6353,7 +6366,7 @@ export function useViewport3DSceneModel({
         }),
         cellSelection: airboxVectorsOnlyEnabled ? "all" : "dense",
         domain: { ...fdmMultilayerAirboxDomain, kind: "fdm-grid" as const },
-        enabled: true,
+        enabled: airboxCellGeometryRequired || (vectorsVisible && maxVectors > 0),
         groupKey: "fdm-cuboid:session=current:multilayer-airbox",
         id: "airbox",
         maxVectorGlyphs: maxVectors,
@@ -6485,13 +6498,14 @@ export function useViewport3DSceneModel({
           colorKey: surfaceColorKey,
           owner: domain,
         });
-        const vectorsVisible =
-          Boolean(model && fieldVector) &&
-          settings.visible &&
-          settings.vectorsVisible;
-        const vectorCellIndices = vectorsVisible
-          ? buildResult?.vectorCellIndices ?? null
-          : null;
+        const vectorBuffers = resolveFdmVectorOnlyRenderBuffers({
+          buildResult,
+          fieldAvailable: Boolean(fieldVector),
+          layerVisible: settings.visible,
+          vectorsEnabled: settings.vectorsVisible,
+        });
+        const vectorsVisible = vectorBuffers.vectorsVisible;
+        const vectorCellIndices = vectorBuffers.vectorCellIndices;
         const vectorGlyphColors =
           vectorsVisible && vectorCellIndices
             ? buildFdmSampledScalarColors(
@@ -6502,9 +6516,7 @@ export function useViewport3DSceneModel({
                 settings.scalarColorPalette,
               )
             : null;
-        const vectorSegments = vectorsVisible
-          ? buildResult?.vectorSegments ?? null
-          : null;
+        const vectorSegments = vectorBuffers.vectorSegments;
 
         return {
           domain,
@@ -6623,12 +6635,14 @@ export function useViewport3DSceneModel({
       colorKey: surfaceColorKey,
       owner: fdmMultilayerAirboxDomain,
     });
-    const vectorsVisible = Boolean(
-      model && fieldBuffer && fieldVector && airboxSettings.vectorsVisible,
-    );
-    const vectorCellIndices = vectorsVisible
-      ? buildResult?.vectorCellIndices ?? null
-      : null;
+    const vectorBuffers = resolveFdmVectorOnlyRenderBuffers({
+      buildResult,
+      fieldAvailable: Boolean(fieldBuffer && fieldVector),
+      layerVisible: airboxSettings.visible,
+      vectorsEnabled: airboxSettings.vectorsVisible,
+    });
+    const vectorsVisible = vectorBuffers.vectorsVisible;
+    const vectorCellIndices = vectorBuffers.vectorCellIndices;
     const vectorGlyphColors =
       vectorsVisible && vectorCellIndices && fieldVector
         ? buildFdmSampledScalarColors(
@@ -6639,9 +6653,7 @@ export function useViewport3DSceneModel({
             airboxSettings.scalarColorPalette,
           )
         : null;
-    const vectorSegments = vectorsVisible
-      ? buildResult?.vectorSegments ?? null
-      : null;
+    const vectorSegments = vectorBuffers.vectorSegments;
     const vectorBuildReference: Viewport3DVectorBuildReference | null =
       fieldBuffer &&
       vectorSegments &&
