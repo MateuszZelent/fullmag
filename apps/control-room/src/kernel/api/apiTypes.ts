@@ -374,6 +374,8 @@ export type RealtimeCommunicationPolicyPatch =
   components["schemas"]["RealtimeCommunicationPolicyPatch"];
 export type RealtimeCommunicationPolicyResource =
   components["schemas"]["RealtimeCommunicationPolicyResource"];
+export type RunPerformanceResource =
+  components["schemas"]["RunPerformanceResource"];
 export type SolverProfileResource =
   components["schemas"]["SolverProfileResource"];
 export type MaterialPatchRequest =

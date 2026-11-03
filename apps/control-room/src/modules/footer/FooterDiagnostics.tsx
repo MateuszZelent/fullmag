@@ -24,6 +24,8 @@ import {
 } from "@/kernel/resources/studyRuntimeResources";
 import { Button } from "@/shared/ui/Button";
 
+import { AutomaticPerformancePanel } from "./AutomaticPerformancePanel";
+
 interface SolverProfilePhaseBar {
   id: string;
   label: string;
@@ -206,6 +208,8 @@ export function FooterDiagnostics() {
           </div>
         )}
       </section>
+
+      <AutomaticPerformancePanel />
 
       <section
         className="fm-footer-diagnostics__panel"

@@ -31,6 +31,7 @@ import {
   DATA_QUANTITIES_PATH,
   DATA_PLANAR_FIELD_META_PATH,
   DATA_SCALARS_PATH,
+  DATA_TABLE_ROWS_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_SEMANTICS_PATH,
@@ -65,6 +66,7 @@ import {
   SIMULATION_COMMANDS_PATH,
   SIMULATION_OBJECT_METRICS_PATH,
   SIMULATION_PREPARATION_PATH,
+  SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
   SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
@@ -542,14 +544,24 @@ export class RealtimeInvalidationBridge {
         const planarFieldChange = change.resource === "planar_fields";
         const scalarChange = change.resource === "scalars";
 
-        if (scalarChange) {
-          this.queuePrefixInvalidation(DATA_SCALARS_PATH, change.revision);
-          // Energy history keys carry a `?limit=` window; the batch names only
-          // `energies/current`, so the history must follow every scalar row.
+        if (
+          recommendedFetch === SIMULATION_SOLVER_ENERGIES_CURRENT_PATH &&
+          change.resource === "simulation"
+        ) {
           this.queuePrefixInvalidation(
             SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
             change.revision,
           );
+        }
+
+        if (scalarChange) {
+          this.queuePrefixInvalidation(DATA_SCALARS_PATH, change.revision);
+          if (
+            recommendedFetch &&
+            stageScopedRegex(DATA_TABLE_ROWS_PATH).test(recommendedFetch)
+          ) {
+            this.queueResourceInvalidation(recommendedFetch, change.revision);
+          }
           this.queuePrefixInvalidation(
             resourceFamilyPrefix(SIMULATION_OBJECT_METRICS_PATH),
             dependentResourceRevision(

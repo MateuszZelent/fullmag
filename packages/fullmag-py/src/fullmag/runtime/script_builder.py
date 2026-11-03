@@ -280,6 +280,9 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "demag_realization": _export_demag_realization(base_problem),
         "external_field": _problem_external_field(base_problem),
         "rotated_interfacial_dmi": _problem_rotated_interfacial_dmi(base_problem),
+        "rotated_interfacial_dmi_object_ids": (
+            _problem_rotated_interfacial_dmi_object_ids(base_problem)
+        ),
         "solver": {
             "integrator": base_dynamics.integrator if base_dynamics is not None else None,
             "fixed_timestep": _text_number(base_dynamics.fixed_timestep) if base_dynamics is not None else None,
@@ -1091,7 +1094,8 @@ def _inherit_scene_stage_timestep(
     if not isinstance(study, dict) or not isinstance(study.get("stages"), list):
         return
     for stage in study["stages"]:
-        if isinstance(stage, dict) and str(stage.get("kind") or "relax") == "relax":
+        if (isinstance(stage, dict) and str(stage.get("kind") or "relax") == "relax"
+                and _scene_relax_uses_llg(stage)):
             stage.setdefault("fixed_timestep", fixed_timestep)
 
 
@@ -2334,6 +2338,10 @@ def _without_default_hysteresis_sampling(
     return stage
 
 
+def _scene_relax_uses_llg(stage: Mapping[str, object]) -> bool:
+    return (stage.get("algorithm") or stage.get("relax_algorithm") or "llg_overdamped") == "llg_overdamped"
+
+
 def _scene_relax_stage_kwargs(
     stage: Mapping[str, object],
     *,
@@ -2358,7 +2366,9 @@ def _scene_relax_stage_kwargs(
     max_relaxation_time_s = _finite_number(stage.get("max_relaxation_time_s"))
     if max_relaxation_time_s is not None:
         kwargs["max_relaxation_time_s"] = max_relaxation_time_s
-    kwargs.update(_relax_stage_timestep_kwargs(stage, solver))
+    # Global integration settings apply to LLG, not to direct minimization.
+    # Explicit stage controls still reach the public DSL's strict validator.
+    kwargs.update(_relax_stage_timestep_kwargs(stage, solver if _scene_relax_uses_llg(stage) else {}))
     return kwargs
 
 
@@ -8449,6 +8459,46 @@ def _render_stages(
         if previous_dynamics_signature is not None and dynamics_signature != previous_dynamics_signature:
             if stage_dynamics is not None:
                 stage_solver_override = dict(solver_override)
+                timestep_policy_keys = (
+                    "fixed_timestep",
+                    "adaptive_timestep",
+                    "dt_initial",
+                    "dt_min",
+                    "dt_max",
+                    "max_err",
+                )
+                has_stage_fixed_policy = (
+                    _number_or_none(stage_override.get("fixed_timestep"))
+                    is not None
+                )
+                has_stage_adaptive_policy = isinstance(
+                    stage_override.get("adaptive_timestep"), dict
+                )
+                has_stage_convenience_policy = any(
+                    _number_or_none(stage_override.get(key)) is not None
+                    for key in ("dt_initial", "dt_min", "dt_max", "max_err")
+                )
+                # A stage policy replaces the inherited study policy as one
+                # choice. Keep conflicting stage-authored choices intact so
+                # _render_solver_call still rejects them as ambiguous.
+                if has_stage_fixed_policy and not (
+                    has_stage_adaptive_policy or has_stage_convenience_policy
+                ):
+                    for key in timestep_policy_keys:
+                        if key != "fixed_timestep":
+                            stage_solver_override.pop(key, None)
+                elif has_stage_adaptive_policy and not (
+                    has_stage_fixed_policy or has_stage_convenience_policy
+                ):
+                    for key in timestep_policy_keys:
+                        if key != "adaptive_timestep":
+                            stage_solver_override.pop(key, None)
+                elif has_stage_convenience_policy and not (
+                    has_stage_fixed_policy or has_stage_adaptive_policy
+                ):
+                    for key in timestep_policy_keys:
+                        if key not in {"dt_initial", "dt_min", "dt_max", "max_err"}:
+                            stage_solver_override.pop(key, None)
                 for key in (
                     "integrator",
                     "fixed_timestep",
@@ -10922,7 +10972,9 @@ def _script_api_surface(
     # instead of rendering an invalid ``fm.terms`` call (or dropping it).
     has_rotated_dmi = any(
         isinstance(term, RotatedInterfacialDMI) for term in problem.energy
-    ) or _number_or_none(rotated_dmi_override) is not None
+    ) or _number_or_none(rotated_dmi_override) is not None or (
+        overrides.get("rotated_interfacial_dmi_object_ids") is not None
+    )
     if problem.couplings or (
         isinstance(couplings_override, list) and len(couplings_override) > 0
     ) or problem.monitors or (
@@ -11028,11 +11080,27 @@ def _problem_external_field(problem: Problem) -> list[float] | None:
     return None
 
 
-def _problem_rotated_interfacial_dmi(problem: Problem) -> float | None:
+def _problem_rotated_interfacial_dmi_term(
+    problem: Problem,
+) -> RotatedInterfacialDMI | None:
     for term in problem.energy:
         if isinstance(term, RotatedInterfacialDMI):
-            return term.D
+            return term
     return None
+
+
+def _problem_rotated_interfacial_dmi(problem: Problem) -> float | None:
+    term = _problem_rotated_interfacial_dmi_term(problem)
+    return term.D if term is not None else None
+
+
+def _problem_rotated_interfacial_dmi_object_ids(
+    problem: Problem,
+) -> list[str] | None:
+    term = _problem_rotated_interfacial_dmi_term(problem)
+    if term is None or term.object_ids is None:
+        return None
+    return list(term.object_ids)
 
 
 def _render_rotated_interfacial_dmi(
@@ -11041,15 +11109,43 @@ def _render_rotated_interfacial_dmi(
     overrides: Mapping[str, object],
     surface: str,
 ) -> list[str]:
-    value = _number_or_none(overrides.get("rotated_interfacial_dmi"))
-    if "rotated_interfacial_dmi" not in overrides:
-        value = _problem_rotated_interfacial_dmi(problem)
+    term = _problem_rotated_interfacial_dmi_term(problem)
+    if "rotated_interfacial_dmi" in overrides:
+        value = _number_or_none(overrides.get("rotated_interfacial_dmi"))
+    else:
+        value = term.D if term is not None else None
+    if "rotated_interfacial_dmi_object_ids" in overrides:
+        object_ids: object = overrides.get("rotated_interfacial_dmi_object_ids")
+    else:
+        object_ids = term.object_ids if term is not None else None
     if value is None:
+        if object_ids is not None:
+            raise ValueError(
+                "rotated_interfacial_dmi_object_ids requires a rotated_interfacial_dmi value"
+            )
         return []
     if surface != "study":
         raise ValueError("rotated interfacial DMI requires the canonical study API surface")
+    normalized = RotatedInterfacialDMI(D=value, object_ids=object_ids)
+    if normalized.object_ids is not None:
+        magnetic_object_ids = {
+            magnet.object_id if magnet.object_id is not None else magnet.name
+            for magnet in problem.magnets
+        }
+        unknown_object_ids = sorted(set(normalized.object_ids) - magnetic_object_ids)
+        if unknown_object_ids:
+            raise ValueError(
+                "rotated_interfacial_dmi references unknown magnetic object_id(s): "
+                + ", ".join(unknown_object_ids)
+            )
+    object_ids_arg = (
+        f", object_ids={_py_literal(normalized.object_ids)}"
+        if normalized.object_ids is not None
+        else ""
+    )
     return [
-        f"study.terms.add(fm.RotatedInterfacialDMI(D={_py_float_roundtrip(value)}))"
+        "study.terms.add(fm.RotatedInterfacialDMI("
+        f"D={_py_float_roundtrip(value)}{object_ids_arg}))"
     ]
 
 
@@ -11574,7 +11670,12 @@ def _py_literal(value: object) -> str:
     if isinstance(value, str):
         return _py_repr(value)
     if isinstance(value, tuple):
-        return "(" + ", ".join(_py_literal(item) for item in value) + ")"
+        return (
+            "("
+            + ", ".join(_py_literal(item) for item in value)
+            + ("," if len(value) == 1 else "")
+            + ")"
+        )
     if isinstance(value, list):
         return "[" + ", ".join(_py_literal(item) for item in value) + "]"
     if isinstance(value, dict):

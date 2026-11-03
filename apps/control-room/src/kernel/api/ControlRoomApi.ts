@@ -108,6 +108,7 @@ import {
   DIAGNOSTICS_CPU_PATH,
   DIAGNOSTICS_ENGINE_LOG_PATH,
   DIAGNOSTICS_GPU_PATH,
+  DIAGNOSTICS_RUN_PERFORMANCE_PATH,
   DIAGNOSTICS_SOLVER_PROFILE_PATH,
   MESHING_CAPABILITIES_PATH,
   MESHING_BUILDS_PATH,
@@ -379,6 +380,7 @@ import type {
   GeometryRealizationResource,
   GeometryValidationResource,
   GpuTelemetryResource,
+  RunPerformanceResource,
   HealthResource,
   RuntimeServiceStatusResource,
   WorkspaceItemsQuery,
@@ -763,14 +765,29 @@ export function transformFieldVectorForDisplay(
     "magnitude_squared"
       ? scale * scale
       : scale;
-  const values = Float64Array.from(result.data.values, (value) => value * projectionScale);
-  return {
-    ...result,
-    data: {
+  let data: DecodedFieldVector;
+  if (result.data.dtype === "float32") {
+    const values = Float32Array.from(
+      result.data.values,
+      (value) => value * projectionScale,
+    );
+    if (values.some((value) => !Number.isFinite(value))) {
+      throw new Error("Display conversion produced non-finite float32 values");
+    }
+    data = { ...result.data, quantityId: requestedQuantityId, values };
+  } else {
+    data = {
       ...result.data,
       quantityId: requestedQuantityId,
-      values,
-    },
+      values: Float64Array.from(
+        result.data.values,
+        (value) => value * projectionScale,
+      ),
+    };
+  }
+  return {
+    ...result,
+    data,
     responseMetadata: {
       ...result.responseMetadata,
       quantityId: requestedQuantityId,
@@ -2274,6 +2291,11 @@ export class ControlRoomApi {
     solverProfile: (options?: RequestOptions) =>
       this.requestJson<SolverProfileResource>(
         DIAGNOSTICS_SOLVER_PROFILE_PATH,
+        options,
+      ),
+    runPerformance: (options?: RequestOptions) =>
+      this.requestJson<RunPerformanceResource>(
+        DIAGNOSTICS_RUN_PERFORMANCE_PATH,
         options,
       ),
   };

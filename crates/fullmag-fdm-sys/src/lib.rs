@@ -21,6 +21,7 @@ pub const FULLMAG_FDM_FROZEN_SPINS_ABI_V1: u32 = 1;
 pub const FULLMAG_FDM_CAPABILITY_FROZEN_SPINS_V1: u64 = 1_u64 << 0;
 pub const FULLMAG_FDM_PLAN_DESC_ABI_V2: u32 = 2;
 pub const FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1: u32 = 1;
+pub const FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_LAYERS_ABI_V1: u32 = 1;
 
 // ── Return codes ──
 
@@ -53,6 +54,7 @@ pub enum fullmag_fdm_plan_kind {
 pub enum fullmag_fdm_transfer_kind {
     FULLMAG_FDM_TRANSFER_IDENTITY = 0,
     FULLMAG_FDM_TRANSFER_PUSH_PULL = 1,
+    FULLMAG_FDM_TRANSFER_CENTERED_ALIGNED = 2,
 }
 
 #[repr(C)]
@@ -319,6 +321,25 @@ pub struct fullmag_fdm_rotated_interfacial_dmi_desc_v1 {
     pub has_rotated_interfacial_dmi: i32,
     pub reserved0: u32,
     pub dmi_d_rotated_interfacial: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_rotated_interfacial_dmi_layer_v1 {
+    pub layer_index: u32,
+    pub has_rotated_interfacial_dmi: i32,
+    pub reserved0: u32,
+    pub dmi_d_rotated_interfacial: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_rotated_interfacial_dmi_layers_desc_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub layers: *const fullmag_fdm_rotated_interfacial_dmi_layer_v1,
+    pub entry_count: u32,
+    pub reserved0: u32,
 }
 
 #[repr(C)]
@@ -1962,6 +1983,10 @@ extern "C" {
         handle: *mut fullmag_fdm_backend,
         descriptor: *const fullmag_fdm_rotated_interfacial_dmi_desc_v1,
     ) -> i32;
+    pub fn fullmag_fdm_backend_set_rotated_interfacial_dmi_layers_v1(
+        handle: *mut fullmag_fdm_backend,
+        descriptor: *const fullmag_fdm_rotated_interfacial_dmi_layers_desc_v1,
+    ) -> i32;
 
     pub fn fullmag_fdm_backend_set_stats_policy_v1(
         handle: *mut fullmag_fdm_backend,
@@ -2179,6 +2204,11 @@ extern "C" {
         m_xyz: *const f32,
         len: u64,
     ) -> i32;
+
+    pub fn fullmag_fdm_backend_multilayer_bb(
+        handle: *mut fullmag_fdm_backend, op: u32, lambda: f64,
+        layer_scalars: *mut f64, scalar_count: u64,
+    ) -> ::std::os::raw::c_int;
 
     pub fn fullmag_fdm_backend_refresh_multilayer_demag(handle: *mut fullmag_fdm_backend) -> i32;
 

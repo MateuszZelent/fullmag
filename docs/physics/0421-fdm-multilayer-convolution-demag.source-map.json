@@ -15,7 +15,7 @@
       "solver": "FDM",
       "device": "GPU",
       "status": "implemented",
-      "scope": "existing CUDA realization; multilayer heterogeneous/transfer parity is unqualified",
+      "scope": "CUDA identity plus new bounded centered equal-cell FP64 fixed-Heun insertion/crop source contract; general heterogeneous/transfer parity is unqualified",
       "qualification": "not production-qualified",
       "evidence": "compile/contracts only; no fresh managed device run"
     },
@@ -212,13 +212,12 @@
       "sources": [
         "transferContractMetadata",
         "push",
-        "pull"
-      ]
+        "pull", "cudaCenteredAdmission", "cudaCenteredPush", "cudaCenteredPull"]
     },
     {
       "id": "eq-multilayer-transfer-moment-density",
       "symbols": ["P", "Pstar", "M", "Hc", "Vn_i", "Vscratch_q", "active_i", "overlap_qi"],
-      "sources": ["transferContractMetadata", "push", "pull", "unequalTransferCompositionTests"]
+      "sources": ["transferContractMetadata", "push", "pull", "unequalTransferCompositionTests", "cudaCenteredAdmission", "cudaCenteredPush", "cudaCenteredPull"]
     },
     {
       "id": "eq-multilayer-kernel-density",
@@ -312,6 +311,48 @@
     {"id":"Nyz","latex":"N_{yz}","meaning":"off-diagonal yz component in Table I","si_unit":"1"}
   ],
   "sources": [
+    {
+      "id": "cudaAcceptedStepFieldCapture",
+      "path": "crates/fullmag-runner/src/fdm/gpu/cuda/multilayer.rs",
+      "symbol": "record_accepted_step_autosave_fields",
+      "responsibility": "Emit requested StageAutosave accepted-step fields from already captured native observables; suppress only exact-state/name OutputIR duplicates.",
+      "evidence_status": "source implemented; managed field-count verification pending"
+    },
+    {
+      "id": "fdmNativePresetInit",
+      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
+      "symbol": "_materialize_preset_texture_initial_conditions",
+      "responsibility": "Preserve FDM multilayer analytic presets for sampling on final cropped native grids instead of padded universe assets.",
+      "evidence_status": "102 related Python tests passed; managed plan/device proof pending"
+    },
+    {
+      "id": "cudaCenteredAdmission",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "fdm_multilayer_cuda_aligned_embedding_eligible",
+      "responsibility": "Qualify exact same-cell centered integer XY embedding from physical origins; reject generic resampling.",
+      "evidence_status": "implemented source contract; managed runtime/numerical parity NOT VERIFIED"
+    },
+    {
+      "id": "cudaCenteredPush",
+      "path": "backends/fdm/gpu/cuda/runtime/context.cu",
+      "symbol": "static void build_centered_aligned_push_map_host",
+      "responsibility": "Create exact sparse insertion with coefficient one and zero scratch exterior.",
+      "evidence_status": "implemented source contract; managed runtime/numerical parity NOT VERIFIED"
+    },
+    {
+      "id": "cudaCenteredPull",
+      "path": "backends/fdm/gpu/cuda/runtime/context.cu",
+      "symbol": "static void build_centered_aligned_pull_map_host",
+      "responsibility": "Create the exact transpose native crop for the centered same-volume map.",
+      "evidence_status": "implemented source contract; managed runtime/numerical parity NOT VERIFIED"
+    },
+    {
+      "id": "cudaCenteredExecution",
+      "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs",
+      "symbol": "validate_multilayer_stage_telemetry_impl",
+      "responsibility": "Preserve separate truthful L-squared per-pair FFT telemetry and D-07 batched counters.",
+      "evidence_status": "implemented source contract; managed runtime/numerical parity NOT VERIFIED"
+    },
     {
       "id": "airboxEffectiveComposition",
       "path": "crates/fullmag-runner/src/fdm/cpu/airbox_observation.rs",

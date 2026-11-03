@@ -266,6 +266,35 @@ describe("ModeCompositionFieldLayerController", () => {
     },
   );
 
+  it("rejects float32 display payloads for complex scientific mode fields", async () => {
+    const controller = new ModeCompositionFieldLayerController();
+    const source = loaders();
+    source.loadBinary.mockImplementationOnce(async (layer) => {
+      const decoded = binary(layer.field_id, layer.object_id, 5);
+      return {
+        artifactGenerationId: "publication-12",
+        byteLength: 48,
+        data: {
+          ...decoded,
+          dtype: "float32",
+          values: new Float32Array(decoded.values),
+        },
+        encoding: "FMVP;version=5",
+        etag: "field-etag-11",
+        fieldRevision: "field-11",
+      };
+    });
+
+    await controller.activate(composition(), { "object:object-a": topology }, source);
+
+    expect(controller.getSnapshot().get("object:object-a")).toMatchObject({
+      field: null,
+      identity: null,
+      reason: "identity_mismatch",
+      status: "error",
+    });
+  });
+
   it.each([2, 4] as const)("rejects unsupported FMVP v%s mode fields", async (formatVersion) => {
     const controller = new ModeCompositionFieldLayerController();
     const source = loaders();

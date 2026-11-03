@@ -133,6 +133,189 @@ void invalid_transfer_kind_reports_validation_error() {
     fullmag_fdm_backend_destroy(handle);
 }
 
+void centered_aligned_transfer_rejects_malformed_geometry() {
+    const double magnetization[3] = {1.0, 0.0, 0.0};
+    fullmag_fdm_layer_desc_v2 layer = make_layer(0, magnetization);
+    layer.transfer_kind = FULLMAG_FDM_TRANSFER_CENTERED_ALIGNED;
+    layer.native_grid = {1, 1, 1, 1.0e-9, 1.0e-9, 1.0e-9};
+    layer.convolution_grid = {2, 1, 1, 1.0e-9, 1.0e-9, 1.0e-9};
+    layer.z_offset_cells = 0;
+    auto plan = make_plan(&layer, 1);
+
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create_v2(&plan);
+    check(handle != nullptr, "invalid centered-aligned plan should return an error handle");
+    check_error_contains(handle, "centered-aligned transfer requires equal cell sizes");
+    fullmag_fdm_backend_destroy(handle);
+
+    layer.convolution_grid = {3, 1, 1, 1.0e-9, 1.0e-9, 1.0e-9};
+    layer.z_offset_cells = 1;
+    handle = fullmag_fdm_backend_create_v2(&plan);
+    check(handle != nullptr, "nonzero centered-aligned z offset should return an error handle");
+    check_error_contains(handle, "zero z offset");
+    fullmag_fdm_backend_destroy(handle);
+
+    constexpr double cell = 1.0e-9;
+    const double centered_m[3] = {1.0, 0.0, 0.0};
+    double identity_m[15] = {};
+    for (uint32_t index = 0; index < 5; ++index) {
+        identity_m[index * 3] = 1.0;
+    }
+    fullmag_fdm_layer_desc_v2 layers[2] = {
+        make_layer(0, centered_m),
+        make_layer(1, identity_m),
+    };
+    layers[0].transfer_kind = FULLMAG_FDM_TRANSFER_CENTERED_ALIGNED;
+    layers[0].native_grid = {1, 1, 1, cell, cell, cell};
+    layers[0].convolution_grid = {3, 1, 1, cell, cell, cell};
+    layers[0].z_offset_cells = 0;
+    layers[1].native_grid = {5, 1, 1, cell, cell, cell};
+    layers[1].convolution_grid = {5, 1, 1, cell, cell, cell};
+    layers[1].initial_magnetization_len = 15;
+    auto mixed_grid_plan = make_plan(layers, 2);
+    handle = fullmag_fdm_backend_create_v2(&mixed_grid_plan);
+    check(handle != nullptr,
+          "mixed centered-aligned convolution grids should return an error handle");
+    check_error_contains(handle, "one common convolution grid");
+    fullmag_fdm_backend_destroy(handle);
+
+    // Identity layers in a centered-aligned group must occupy the common
+    // convolution grid exactly; otherwise the inferred center would be ambiguous.
+    layers[1].native_grid = {1, 1, 1, cell, cell, cell};
+    layers[1].convolution_grid = {3, 1, 1, cell, cell, cell};
+    layers[1].initial_magnetization_len = 3;
+    handle = fullmag_fdm_backend_create_v2(&mixed_grid_plan);
+    check(handle != nullptr,
+          "non-common identity grid should return an error handle");
+    check_error_contains(handle, "identity native grids equal to that common grid");
+    fullmag_fdm_backend_destroy(handle);
+
+    // Even a common identity grid is invalid if its native cell spacing differs.
+    layers[1].native_grid = {3, 1, 1, 2.0 * cell, cell, cell};
+    layers[1].convolution_grid = {3, 1, 1, cell, cell, cell};
+    layers[1].initial_magnetization_len = 9;
+    handle = fullmag_fdm_backend_create_v2(&mixed_grid_plan);
+    check(handle != nullptr,
+          "mismatched native cell size should return an error handle");
+    check_error_contains(handle, "matching native cell sizes");
+    fullmag_fdm_backend_destroy(handle);
+
+    // The new centered group cannot mix with legacy zero-origin push/pull maps.
+    layers[1].transfer_kind = FULLMAG_FDM_TRANSFER_PUSH_PULL;
+    layers[1].native_grid = {3, 1, 1, cell, cell, cell};
+    layers[1].convolution_grid = {3, 1, 1, cell, cell, cell};
+    handle = fullmag_fdm_backend_create_v2(&mixed_grid_plan);
+    check(handle != nullptr,
+          "mixed centered and legacy push/pull group should return an error handle");
+    check_error_contains(handle, "identity or centered-aligned layers");
+    fullmag_fdm_backend_destroy(handle);
+}
+
+void centered_aligned_transfer_embeds_masks_and_pulls_native_fields() {
+    if (fullmag_fdm_is_available() == 0) {
+        std::printf("centered-aligned multilayer transfer check skipped: CUDA backend unavailable\n");
+        return;
+    }
+
+    constexpr double cell = 1.0e-9;
+    constexpr uint64_t fft_cell_count = 4u * 4u * 2u;
+    std::vector<double> film_m(4u * 3u, 0.0);
+    std::vector<double> cylinder_m(4u * 2u * 2u * 3u, 0.0);
+    for (std::size_t cell_index = 0; cell_index < film_m.size() / 3; ++cell_index) {
+        film_m[cell_index * 3] = 1.0;
+    }
+    for (std::size_t cell_index = 0; cell_index < cylinder_m.size() / 3; ++cell_index) {
+        cylinder_m[cell_index * 3] = 0.5;
+    }
+
+    std::vector<uint8_t> cylinder_mask(4u * 2u * 2u, 1);
+    cylinder_mask[2] = 0; // x=2,y=0,z=0: omit this source and zero its pulled field.
+
+    fullmag_fdm_layer_desc_v2 layers[2] = {
+        make_layer(0, film_m.data()),
+        make_layer(1, cylinder_m.data()),
+    };
+    layers[0].transfer_kind = FULLMAG_FDM_TRANSFER_CENTERED_ALIGNED;
+    layers[0].native_grid = {2, 2, 1, cell, cell, cell};
+    layers[0].convolution_grid = {4, 4, 2, cell, cell, cell};
+    layers[0].z_offset_cells = 0;
+    layers[0].material.saturation_magnetisation = 2.0;
+    layers[0].initial_magnetization_len = film_m.size();
+
+    layers[1].transfer_kind = FULLMAG_FDM_TRANSFER_CENTERED_ALIGNED;
+    layers[1].native_grid = {4, 2, 2, cell, cell, cell};
+    layers[1].convolution_grid = {4, 4, 2, cell, cell, cell};
+    layers[1].z_offset_cells = 0;
+    layers[1].material.saturation_magnetisation = 3.0;
+    layers[1].active_mask = cylinder_mask.data();
+    layers[1].active_mask_len = cylinder_mask.size();
+    layers[1].initial_magnetization_len = cylinder_m.size();
+
+    // A constant Kxx spectrum makes the diagnostic tensor operation a
+    // negative identity on the common scratch grid; other tensor components are zero.
+    // This isolates centered embedding/cropping, Ms weighting, and masks.
+    std::vector<fullmag_fdm_complex64> kxx(
+        fft_cell_count, fullmag_fdm_complex64{1.0, 0.0});
+    std::vector<fullmag_fdm_complex64> zero(
+        fft_cell_count, fullmag_fdm_complex64{0.0, 0.0});
+    std::vector<fullmag_fdm_tensor_kernel_desc_v2> kernels(4);
+    for (uint32_t dst_layer = 0; dst_layer < 2; ++dst_layer) {
+        for (uint32_t src_layer = 0; src_layer < 2; ++src_layer) {
+            auto &kernel = kernels[dst_layer * 2 + src_layer];
+            kernel = make_kernel(dst_layer, src_layer, kxx.data());
+            kernel.fft_grid = {4, 4, 2, cell, cell, cell};
+            kernel.kernel_len = fft_cell_count;
+            kernel.kernel_yy = zero.data();
+            kernel.kernel_zz = zero.data();
+            kernel.kernel_xy = zero.data();
+            kernel.kernel_xz = zero.data();
+            kernel.kernel_yz = zero.data();
+        }
+    }
+
+    auto plan = make_plan(layers, 2);
+    plan.enable_exchange = 1;
+    plan.enable_demag = 1;
+    plan.kernels = kernels.data();
+    plan.kernel_count = static_cast<uint32_t>(kernels.size());
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create_v2(&plan);
+    check(handle != nullptr, "centered-aligned multilayer transfer creation failed");
+    check_error_contains(handle, "uploaded 2 layers and 4 tensor kernels");
+    check(fullmag_fdm_backend_refresh_multilayer_demag(handle) == FULLMAG_FDM_OK,
+          "centered-aligned pairwise CUDA demag refresh failed");
+
+    std::vector<double> film_h(film_m.size(), 0.0);
+    std::vector<double> cylinder_h(cylinder_m.size(), 0.0);
+    check(fullmag_fdm_backend_copy_layer_field_f64(
+              handle, 0, FULLMAG_FDM_OBSERVABLE_H_DEMAG,
+              film_h.data(), film_h.size()) == FULLMAG_FDM_OK,
+          "centered-aligned film field copy failed");
+    check(fullmag_fdm_backend_copy_layer_field_f64(
+              handle, 1, FULLMAG_FDM_OBSERVABLE_H_DEMAG,
+              cylinder_h.data(), cylinder_h.size()) == FULLMAG_FDM_OK,
+          "centered-aligned cylinder field copy failed");
+
+    check_close(film_h[0], -3.5, 1.0e-12,
+                "centered film cell must overlap the offset cylinder cell");
+    check_close(film_h[3], -2.0, 1.0e-12,
+                "masked cylinder source must not contribute to film field");
+    check_close(cylinder_h[3], -3.5, 1.0e-12,
+                "centered-aligned pull must crop the shared overlap to native coordinates");
+    check_close(cylinder_h[6], 0.0, 1.0e-12,
+                "inactive cylinder cell must have zero pulled field");
+    check_close(cylinder_h[9u * 3u], -1.5, 1.0e-12,
+                "cylinder cells beyond the film z extent must retain native-z fields");
+
+    fullmag_fdm_step_stats stats{};
+    check(fullmag_fdm_backend_step(handle, 1.0e-13, &stats) == FULLMAG_FDM_OK,
+          "centered-aligned pairwise multilayer Heun step failed");
+    check(stats.multilayer_refresh_count == 1 &&
+              stats.multilayer_forward_fft_count == kernels.size() &&
+              stats.multilayer_inverse_fft_count == kernels.size() &&
+              stats.multilayer_pair_accumulation_count == kernels.size(),
+          "centered pairwise telemetry must report actual L-squared FFT/pair work");
+    fullmag_fdm_backend_destroy(handle);
+}
+
 void rotated_dmi_setter_requires_positive_boundary_aex() {
     if (fullmag_fdm_is_available() == 0) {
         std::printf("rotated-DMI boundary Aex setter check skipped: CUDA backend unavailable\n");
@@ -174,6 +357,149 @@ void rotated_dmi_setter_requires_positive_boundary_aex() {
     check(fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
               handle, &zero) == FULLMAG_FDM_OK,
           "D=0 rotated-DMI setter must remain a no-op for zero boundary Aex");
+    fullmag_fdm_backend_destroy(handle);
+}
+
+void rotated_dmi_layer_setter_scopes_and_clears_channels() {
+    if (fullmag_fdm_is_available() == 0) {
+        std::printf("per-layer rotated-DMI setter check skipped: CUDA backend unavailable\n");
+        return;
+    }
+
+    const double magnetization[27] = {
+        1.0, 0.0, 0.0,  0.0, 1.0, 0.0,  0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,  1.0, 0.0, 0.0,  0.0, 1.0, 0.0,
+        0.0, 1.0, 0.0,  0.0, 0.0, 1.0,  1.0, 0.0, 0.0,
+    };
+    fullmag_fdm_layer_desc_v2 layers[2] = {
+        make_layer(0, magnetization), make_layer(1, magnetization),
+    };
+    for (auto &layer : layers) {
+        layer.native_grid.nx = 3;
+        layer.native_grid.ny = 3;
+        layer.convolution_grid.nx = 3;
+        layer.convolution_grid.ny = 3;
+        layer.initial_magnetization_len = 27;
+    }
+    auto plan = make_plan(layers, 2);
+    auto *handle = fullmag_fdm_backend_create_v2(&plan);
+    check(handle != nullptr, "per-layer rotated-DMI fixture creation failed");
+    check_error_contains(handle, "uploaded 2 layers");
+
+    const auto descriptor_for = [](const fullmag_fdm_rotated_interfacial_dmi_layer_v1 *entries,
+                                   uint32_t count) {
+        fullmag_fdm_rotated_interfacial_dmi_layers_desc_v1 descriptor{};
+        descriptor.abi_version =
+            FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_LAYERS_ABI_V1;
+        descriptor.struct_size = sizeof(descriptor);
+        descriptor.layers = entries;
+        descriptor.entry_count = count;
+        return descriptor;
+    };
+    const auto rotated_field = [&](uint32_t layer_index) {
+        std::vector<double> values(27);
+        check(fullmag_fdm_backend_copy_layer_field_f64(
+                  handle, layer_index, FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI,
+                  values.data(), values.size()) == FULLMAG_FDM_OK,
+              "per-layer rotated-DMI field copy failed");
+        return values;
+    };
+
+    const fullmag_fdm_rotated_interfacial_dmi_layer_v1 all_zero_entries[2] = {
+        {0, 0, 0, 0.0}, {1, 0, 0, 0.0},
+    };
+    auto all_zero = descriptor_for(all_zero_entries, 2);
+    check(fullmag_fdm_backend_set_rotated_interfacial_dmi_layers_v1(
+              handle, &all_zero) == FULLMAG_FDM_OK,
+          "explicit all-zero per-layer descriptor should be accepted");
+    for (uint32_t layer_index = 0; layer_index < 2; ++layer_index) {
+        const auto values = rotated_field(layer_index);
+        check(std::all_of(values.begin(), values.end(), [](double value) {
+                  return value == 0.0;
+              }),
+              "all-zero per-layer descriptor must expose zero fields");
+    }
+
+    const fullmag_fdm_rotated_interfacial_dmi_layer_v1 scoped_entries[2] = {
+        {0, 1, 0, 4.0e-3}, {1, 0, 0, 0.0},
+    };
+    auto scoped = descriptor_for(scoped_entries, 2);
+    check(fullmag_fdm_backend_set_rotated_interfacial_dmi_layers_v1(
+              handle, &scoped) == FULLMAG_FDM_OK,
+          "layer-scoped rotated-DMI descriptor should be accepted");
+    const auto active_field = rotated_field(0);
+    const auto zero_field = rotated_field(1);
+    check(std::any_of(active_field.begin(), active_field.end(), [](double value) {
+              return std::fabs(value) > 0.0;
+          }),
+          "selected layer must receive the rotated-DMI field");
+    check(std::all_of(zero_field.begin(), zero_field.end(), [](double value) {
+              return value == 0.0;
+          }),
+          "explicitly disabled layer must retain a zero rotated-DMI field");
+
+    const fullmag_fdm_rotated_interfacial_dmi_layer_v1 changed_entries[2] = {
+        {0, 1, 0, -3.0e-3}, {1, 0, 0, 0.0},
+    };
+    auto changed = descriptor_for(changed_entries, 2);
+    check(fullmag_fdm_test_inject_rotated_dmi_refresh_failure_once(handle) ==
+              FULLMAG_FDM_OK,
+          "per-layer refresh fault injection failed");
+    check(fullmag_fdm_backend_set_rotated_interfacial_dmi_layers_v1(
+              handle, &changed) == FULLMAG_FDM_ERR_CUDA,
+          "injected per-layer refresh failure must be returned");
+    check_error_contains(handle, "injected rotated DMI observable refresh failure");
+    check(rotated_field(0) == active_field,
+          "failed per-layer refresh must restore the previous layer coefficient");
+    check(rotated_field(1) == zero_field,
+          "failed per-layer refresh must restore the disabled layer");
+
+    const fullmag_fdm_rotated_interfacial_dmi_layer_v1 unknown_entry = {
+        2, 1, 0, 2.0e-3,
+    };
+    auto unknown = descriptor_for(&unknown_entry, 1);
+    check(fullmag_fdm_backend_set_rotated_interfacial_dmi_layers_v1(
+              handle, &unknown) == FULLMAG_FDM_ERR_INVALID,
+          "unknown per-layer index must be rejected");
+    const auto after_unknown = rotated_field(0);
+    check(after_unknown == active_field,
+          "unknown layer rejection must not mutate existing fields");
+
+    const fullmag_fdm_rotated_interfacial_dmi_layer_v1 duplicate_entries[2] = {
+        {0, 1, 0, 2.0e-3}, {0, 1, 0, 3.0e-3},
+    };
+    auto duplicate = descriptor_for(duplicate_entries, 2);
+    check(fullmag_fdm_backend_set_rotated_interfacial_dmi_layers_v1(
+              handle, &duplicate) == FULLMAG_FDM_ERR_INVALID,
+          "duplicate per-layer index must be rejected");
+    check(rotated_field(0) == active_field,
+          "duplicate layer rejection must not mutate existing fields");
+
+    const fullmag_fdm_rotated_interfacial_dmi_layer_v1 malformed_entry = {
+        0, 0, 0, 1.0e-3,
+    };
+    auto malformed = descriptor_for(&malformed_entry, 1);
+    check(fullmag_fdm_backend_set_rotated_interfacial_dmi_layers_v1(
+              handle, &malformed) == FULLMAG_FDM_ERR_INVALID,
+          "disabled per-layer entries must reject nonzero coefficients");
+    check(rotated_field(0) == active_field,
+          "malformed layer rejection must not mutate existing fields");
+
+    const fullmag_fdm_rotated_interfacial_dmi_layer_v1 disabled_entries[2] = {
+        {0, 0, 0, 0.0}, {1, 0, 0, 0.0},
+    };
+    auto disabled = descriptor_for(disabled_entries, 2);
+    check(fullmag_fdm_backend_set_rotated_interfacial_dmi_layers_v1(
+              handle, &disabled) == FULLMAG_FDM_OK,
+          "disabling every rotated-DMI layer should succeed");
+    for (uint32_t layer_index = 0; layer_index < 2; ++layer_index) {
+        const auto values = rotated_field(layer_index);
+        check(std::all_of(values.begin(), values.end(), [](double value) {
+                  return value == 0.0;
+              }),
+              "disabling every layer must clear rotated-DMI outputs");
+    }
+
     fullmag_fdm_backend_destroy(handle);
 }
 
@@ -1364,7 +1690,9 @@ void repeated_create_destroy_reclaims_cuda_workspace() {
 int main() {
     invalid_plan_reports_validation_error();
     invalid_transfer_kind_reports_validation_error();
+    centered_aligned_transfer_rejects_malformed_geometry();
     rotated_dmi_setter_requires_positive_boundary_aex();
+    rotated_dmi_layer_setter_scopes_and_clears_channels();
     rotated_dmi_setter_rolls_back_failed_refresh();
     overflowed_single_grid_is_rejected_before_workspace_setup();
     overflowed_fft_spectrum_is_rejected_before_workspace_setup();
@@ -1381,6 +1709,7 @@ int main() {
     push_pull_maps_are_rejected_as_part_of_the_aggregate();
     d07_batch_workspace_is_rejected_as_part_of_the_aggregate();
     synchronous_preview_reuses_setup_owned_workspace();
+    centered_aligned_transfer_embeds_masks_and_pulls_native_fields();
     valid_plan_runs_heun_step_with_demag_and_exchange();
     valid_plan_runs_heun_step_without_demag();
     valid_plan_runs_fixed_step_rk23_without_demag();

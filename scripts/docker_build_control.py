@@ -161,6 +161,10 @@ class ControlOutcomeUnknown(BuildControlError):
     """The client observation ended without proving a daemon-side outcome."""
 
 
+class DockerObservationBudgetExceeded(ControlOutcomeUnknown):
+    """A Docker client observation did not finish within its bounded budget."""
+
+
 def bounded_capture(command, *, data=None, timeout=90, env=None, maximum=MAX_DOCUMENT_BYTES):
     # Identify the failing control step without logging command arguments,
     # stdin, or environment values (which may contain private runtime data).
@@ -212,7 +216,7 @@ def bounded_capture(command, *, data=None, timeout=90, env=None, maximum=MAX_DOC
     if sender is not None and not sender.is_alive() and not process.stdin.closed:
         process.stdin.close()
     if interrupted or exceeded.is_set() or any(t.is_alive() for t in readers) or (sender and sender.is_alive()):
-        raise ControlOutcomeUnknown(
+        raise DockerObservationBudgetExceeded(
             f"Docker observation exceeded its time/output budget during {caller} "
             f"(timeout={timeout}s); daemon resources retained"
         )

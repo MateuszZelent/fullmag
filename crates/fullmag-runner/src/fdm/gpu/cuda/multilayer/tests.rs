@@ -10,6 +10,7 @@ fn make_plan(enable_demag: bool, precision: ExecutionPrecision) -> FdmMultilayer
         resolved_periodic_images: None,
         layers: vec![
             FdmLayerPlanIR {
+                rotated_interfacial_dmi: None,
                 magnet_name: "free".to_string(),
                 layer_id: "layer:free".to_string(),
                 object_id: "free".to_string(),
@@ -33,6 +34,7 @@ fn make_plan(enable_demag: bool, precision: ExecutionPrecision) -> FdmMultilayer
                 transfer_kind: "identity".to_string(),
             },
             FdmLayerPlanIR {
+                rotated_interfacial_dmi: None,
                 magnet_name: "ref".to_string(),
                 layer_id: "layer:ref".to_string(),
                 object_id: "ref".to_string(),
@@ -106,6 +108,7 @@ fn make_touching_plan(precision: ExecutionPrecision) -> FdmMultilayerPlanIR {
         field_refresh: None,
         layers: vec![
             FdmLayerPlanIR {
+                rotated_interfacial_dmi: None,
                 magnet_name: "bottom".to_string(),
                 layer_id: "layer:bottom".to_string(),
                 object_id: "bottom".to_string(),
@@ -129,6 +132,7 @@ fn make_touching_plan(precision: ExecutionPrecision) -> FdmMultilayerPlanIR {
                 transfer_kind: "identity".to_string(),
             },
             FdmLayerPlanIR {
+                rotated_interfacial_dmi: None,
                 magnet_name: "top".to_string(),
                 layer_id: "layer:top".to_string(),
                 object_id: "top".to_string(),

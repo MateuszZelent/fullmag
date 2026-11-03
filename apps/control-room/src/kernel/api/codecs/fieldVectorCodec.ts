@@ -9,6 +9,7 @@ import type {
 
 const HEADER_LEN = 48;
 const KIND_F64 = 1;
+const KIND_F32 = 2;
 const MAGIC = "FMVP";
 const METADATA_FIXED_LEN = 68;
 const METADATA_V4_FIXED_LEN = 80;
@@ -50,9 +51,9 @@ export function decodeFieldVector(buffer: ArrayBuffer): DecodedFieldVector {
   }
 
   const kind = view.getUint8(5);
-  if (kind !== KIND_F64) {
+  if (kind !== KIND_F64 && kind !== KIND_F32) {
     throw new Error(
-      `Unsupported FMVP value kind: expected ${KIND_F64}, got ${kind}`,
+      `Unsupported FMVP value kind: expected ${KIND_F64} or ${KIND_F32}, got ${kind}`,
     );
   }
 
@@ -80,16 +81,22 @@ export function decodeFieldVector(buffer: ArrayBuffer): DecodedFieldVector {
   const gridY = view.getUint32(20, true);
   const gridZ = view.getUint32(24, true);
   const valueOffset = HEADER_LEN + metadataLength;
+  const bytesPerValue =
+    kind === KIND_F32
+      ? Float32Array.BYTES_PER_ELEMENT
+      : Float64Array.BYTES_PER_ELEMENT;
   const expectedLength =
-    valueOffset + valueCount * Float64Array.BYTES_PER_ELEMENT;
+    valueOffset + valueCount * bytesPerValue;
 
   if (buffer.byteLength !== expectedLength) {
     throw new Error(
       `FMVP buffer size mismatch: expected ${expectedLength}, got ${buffer.byteLength}`,
     );
   }
-  if (valueOffset % Float64Array.BYTES_PER_ELEMENT !== 0) {
-    throw new Error(`FMVP metadata length is not 8-byte aligned: ${metadataLength}`);
+  if (valueOffset % bytesPerValue !== 0) {
+    throw new Error(
+      `FMVP metadata length is not ${bytesPerValue}-byte aligned: ${metadataLength}`,
+    );
   }
 
   const idBytes = new Uint8Array(buffer, 28, 16);
@@ -109,13 +116,11 @@ export function decodeFieldVector(buffer: ArrayBuffer): DecodedFieldVector {
     version >= 3
       ? decodeFieldVectorMetadata(view, version, metadataLength, pointCount)
       : legacyFieldVectorMetadata();
-
-  return {
-    dtype: "float64",
+  const decoded = {
     domainGenerationId: metadata.domainGenerationId,
     fieldGenerationId: metadata.fieldGenerationId,
     formatVersion: version as 2 | 3 | 4 | 5,
-    grid: [gridX, gridY, gridZ],
+    grid: [gridX, gridY, gridZ] as [number, number, number],
     indexing: metadata.indexing,
     meshTopologyHash: metadata.meshTopologyHash,
     meshTopologyRevision: metadata.meshTopologyRevision,
@@ -130,6 +135,17 @@ export function decodeFieldVector(buffer: ArrayBuffer): DecodedFieldVector {
     sourceKind: metadata.sourceKind,
     sourceRevision: metadata.sourceRevision,
     valueCount,
+  };
+  if (kind === KIND_F32) {
+    const values = new Float32Array(buffer, valueOffset, valueCount);
+    if (values.some((value) => !Number.isFinite(value))) {
+      throw new Error("FMVP float32 values must be finite");
+    }
+    return { ...decoded, dtype: "float32", values };
+  }
+  return {
+    ...decoded,
+    dtype: "float64",
     values: new Float64Array(buffer, valueOffset, valueCount),
   };
 }
@@ -470,7 +486,13 @@ function hexFromBytes(bytes: Uint8Array): string {
 export function asDecodedComplexFieldVector(
   fieldVector: DecodedFieldVector | null | undefined,
 ): DecodedComplexFieldVector | null {
-  if (!fieldVector || fieldVector.nComp < 2 || fieldVector.nComp % 2 !== 0) {
+  if (
+    !fieldVector ||
+    fieldVector.dtype !== "float64" ||
+    !(fieldVector.values instanceof Float64Array) ||
+    fieldVector.nComp < 2 ||
+    fieldVector.nComp % 2 !== 0
+  ) {
     return null;
   }
   const componentCount = fieldVector.nComp / 2;

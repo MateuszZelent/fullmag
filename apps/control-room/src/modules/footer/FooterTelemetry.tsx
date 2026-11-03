@@ -82,6 +82,17 @@ type FooterScalarResourceSample = {
   sessionId: string;
 };
 
+type FooterRelaxationAlgorithm = NonNullable<
+  LiveStatusResource["solver"]["relaxation_algorithm"]
+>;
+
+const FOOTER_RELAXATION_ALGORITHMS = new Set<FooterRelaxationAlgorithm>([
+  "llg_overdamped",
+  "projected_gradient_bb",
+  "nonlinear_cg",
+  "tangent_plane_implicit",
+]);
+
 const FOOTER_SCALAR_COLUMNS = ["step", "time", "mx", "my", "mz", "e_total"] as const;
 
 export function FooterTelemetry({
@@ -283,7 +294,12 @@ export type FooterTelemetryStatus = {
   scalarsRevision: number;
   solver: Pick<
     LiveStatusResource["solver"],
-    "converged" | "dt" | "max_torque_T" | "state"
+    | "algorithm"
+    | "converged"
+    | "dt"
+    | "max_torque_T"
+    | "relaxation_algorithm"
+    | "state"
   >;
 };
 
@@ -325,9 +341,11 @@ export function selectFooterTelemetryStatus(
     requestScopeEpoch: data.session.request_scope_epoch,
     scalarsRevision: data.resources.scalars_revision,
     solver: {
+      algorithm: data.solver.algorithm ?? null,
       converged: data.solver.converged ?? null,
       dt: data.solver.dt ?? null,
       max_torque_T: data.solver.max_torque_T ?? null,
+      relaxation_algorithm: data.solver.relaxation_algorithm ?? null,
       state: data.solver.state,
     },
   };
@@ -376,6 +394,8 @@ export function footerTelemetryStatusEquals(
       previous.run?.solver_time ?? null,
       next.run?.solver_time ?? null,
     ) &&
+    Object.is(previous.solver.algorithm, next.solver.algorithm) &&
+    Object.is(previous.solver.relaxation_algorithm, next.solver.relaxation_algorithm) &&
     Object.is(previous.solver.converged, next.solver.converged) &&
     Object.is(previous.solver.dt, next.solver.dt) &&
     Object.is(previous.solver.max_torque_T, next.solver.max_torque_T) &&
@@ -456,6 +476,19 @@ export function buildFooterTelemetryModel(
       sessionSolverState: status?.solver?.state,
     }) ?? "unknown";
   const runtimeStateLabel = formatRuntimeStateLabel(runtimeState);
+  const activeStageMethod = resolveFooterActiveStageMethod(status, stageExecution);
+  const runtimeRelaxationAlgorithm = resolveFooterRuntimeRelaxationAlgorithm(
+    status,
+    runSolverStatus,
+    stageExecution,
+  );
+  const runtimeSolverDescription = describeFooterSolverAlgorithm(
+    runtimeRelaxationAlgorithm,
+    runSolverStatus?.integrator,
+    activeStageMethod,
+  );
+  const activeSolverExecution = Boolean(status.run?.run_id) &&
+    (isRuntimeStateActive(runtimeState) || activeStageMethod !== null);
   const simTimeSeconds =
     (completedRun
       ? status?.run?.solver_time ??
@@ -464,16 +497,26 @@ export function buildFooterTelemetryModel(
       : scalarSampleNumber(liveRow, "time") ??
         runSolverStatus?.sim_time_seconds ??
         status?.run?.solver_time) ?? null;
-  const pseudoTimeSeconds =
-    scalarSampleNumber(liveRow, "pseudo_time_s") ??
-    runSolverStatus?.pseudo_time_seconds ??
-    null;
+  const currentStageIsLlg = isFooterLlgRuntimeStageMethod(activeStageMethod);
+  const pseudoTimeSeconds = currentStageIsLlg
+    ? null
+    : scalarSampleNumber(liveRow, "pseudo_time_s") ??
+      runSolverStatus?.pseudo_time_seconds ??
+      null;
   const activeRuntimeSeconds =
     scalarSampleNumber(liveRow, "active_runtime_s") ??
     objectNumber(runSolverStatus, "active_runtime_seconds") ??
     null;
   const usesPseudoTime = pseudoTimeSeconds !== null;
-  const primaryTimeSeconds = usesPseudoTime ? pseudoTimeSeconds : simTimeSeconds;
+  const directMinimizerWithoutPseudoTime =
+    runtimeRelaxationAlgorithm !== null &&
+    runtimeRelaxationAlgorithm !== "llg_overdamped" &&
+    !usesPseudoTime;
+  const primaryTimeSeconds = usesPseudoTime
+    ? pseudoTimeSeconds
+    : directMinimizerWithoutPseudoTime
+      ? null
+      : simTimeSeconds;
   const totalSteps =
     (completedRun
       ? status?.run?.solver_steps ??
@@ -561,6 +604,20 @@ export function buildFooterTelemetryModel(
         : status
           ? "Source: session status"
           : "Source unavailable";
+  const solverMetric: FooterTelemetryMetric = {
+    detail: activeSolverExecution
+      ? runtimeSolverDescription?.detail ?? "Runtime solver provenance unavailable"
+      : "No active solver execution",
+    icon: <Gauge size={14} aria-hidden="true" />,
+    id: "active-solver",
+    label: "Solver",
+    subdetail: activeSolverExecution
+      ? `Runtime state: ${runtimeStateLabel}`
+      : `State: ${runtimeStateLabel}`,
+    value: activeSolverExecution
+      ? runtimeSolverDescription?.value ?? "Unknown"
+      : "—",
+  };
   const frequencyDomainProgress = buildFrequencyDomainProgress({
     responseProgress,
     responseSweep,
@@ -584,12 +641,16 @@ export function buildFooterTelemetryModel(
       {
         detail: usesPseudoTime
           ? "Direct minimizer pseudotime"
-          : "Physical simulation time",
+          : directMinimizerWithoutPseudoTime
+            ? `${runtimeSolverDescription?.detail ?? "Direct minimizer"} does not integrate physical time`
+            : "Physical simulation time",
         icon: <Clock3 size={14} aria-hidden="true" />,
         id: "time",
         label: usesPseudoTime ? "Pseudo time" : "Sim time",
-        subdetail: timeSource,
-        unit: "s",
+        subdetail: directMinimizerWithoutPseudoTime
+          ? "Not applicable: the runtime did not publish pseudotime"
+          : timeSource,
+        unit: directMinimizerWithoutPseudoTime ? undefined : "s",
         value: formatScientific(primaryTimeSeconds, "—"),
       },
       ...(usesPseudoTime
@@ -632,27 +693,37 @@ export function buildFooterTelemetryModel(
         icon: <Hash size={14} aria-hidden="true" />,
         id: "step",
         label: "Step",
-        subdetail: `t=${formatScientific(
-          completedRun || liveRow
-            ? simTimeSeconds
-            : objectMetrics?.time_seconds ?? simTimeSeconds,
-          "—",
-        )} s`,
+        subdetail: directMinimizerWithoutPseudoTime
+          ? "Physical time not applicable"
+          : `t=${formatScientific(
+              completedRun || liveRow
+                ? simTimeSeconds
+                : objectMetrics?.time_seconds ?? simTimeSeconds,
+              "—",
+            )} s`,
         value: formatInteger(
           completedRun || liveRow ? totalSteps : objectMetrics?.step ?? totalSteps,
         ),
         unit: "steps",
       },
       {
-        detail: usesPseudoTime ? "Minimizer pseudotime step" : "Solver timestep",
+        detail: usesPseudoTime
+          ? "Minimizer pseudotime step"
+          : directMinimizerWithoutPseudoTime
+            ? `${runtimeSolverDescription?.value ?? "Direct minimizer"} does not publish a physical timestep`
+            : "Solver timestep",
         icon: <Clock3 size={14} aria-hidden="true" />,
         id: "dt",
         label: usesPseudoTime ? "Pseudo dt" : "dt",
-        subdetail: `State: ${runtimeStateLabel}`,
-        unit: "s",
-        value: formatScientific(dt, "—"),
+        subdetail: directMinimizerWithoutPseudoTime
+          ? "Not applicable: no physical timestep is used"
+          : `State: ${runtimeStateLabel}`,
+        unit: directMinimizerWithoutPseudoTime ? undefined : "s",
+        value: formatScientific(directMinimizerWithoutPseudoTime ? null : dt, "—"),
       },
-      ...(!usesPseudoTime && (errorEstimate !== null || maxError !== null)
+      solverMetric,
+      ...(!usesPseudoTime && !directMinimizerWithoutPseudoTime &&
+      (errorEstimate !== null || maxError !== null)
         ? [
             {
               detail: "Latest embedded vector error",
@@ -1450,6 +1521,115 @@ function resolveFooterSolverStatus(
   return solverStatus;
 }
 
+export function resolveFooterRuntimeRelaxationAlgorithm(
+  status: FooterTelemetryStatus | null | undefined,
+  solverStatus?: SolverStatusResource | null,
+  stageExecution?: StageExecutionResource | null,
+): FooterRelaxationAlgorithm | null {
+  if (!status?.run?.run_id) return null;
+  const currentSolverStatus = resolveFooterSolverStatus(status, solverStatus);
+  const currentStageMethod = resolveFooterActiveStageMethod(status, stageExecution);
+  const stageAlgorithm = normalizeFooterStageMethod(currentStageMethod);
+  if (stageAlgorithm) return stageAlgorithm;
+  const candidates = [
+    currentSolverStatus?.relaxation_algorithm,
+    status.solver.relaxation_algorithm,
+    currentSolverStatus?.algorithm,
+    status.solver.algorithm,
+  ];
+  for (const candidate of candidates) {
+    const normalized = normalizeFooterRelaxationAlgorithm(candidate);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function resolveFooterActiveStageMethod(
+  status: FooterTelemetryStatus,
+  stageExecution: StageExecutionResource | null | undefined,
+): string | null {
+  if (
+    !stageExecution ||
+    stageExecution.session_id !== status.sessionId ||
+    stageExecution.session_epoch !== status.sessionEpoch ||
+    stageExecution.request_scope_epoch !== status.requestScopeEpoch ||
+    stageExecution.run_id !== status.run?.run_id ||
+    !isRuntimeStateActive(stageExecution.runtime_state) ||
+    !Number.isSafeInteger(stageExecution.active_stage_index)
+  ) {
+    return null;
+  }
+  const activeStage = stageExecution.stages.find(
+    (stage) => stage.index === stageExecution.active_stage_index,
+  );
+  if (
+    !activeStage ||
+    !["active", "running"].includes(activeStage.status.trim().toLowerCase())
+  ) {
+    return null;
+  }
+  return activeStage.current_settle_step_method ?? null;
+}
+
+function normalizeFooterRelaxationAlgorithm(
+  value: unknown,
+): FooterRelaxationAlgorithm | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  return FOOTER_RELAXATION_ALGORITHMS.has(normalized as FooterRelaxationAlgorithm)
+    ? normalized as FooterRelaxationAlgorithm
+    : null;
+}
+
+function normalizeFooterStageMethod(value: string | null): FooterRelaxationAlgorithm | null {
+  if (isFooterLlgRuntimeStageMethod(value)) return "llg_overdamped";
+  return normalizeFooterRelaxationAlgorithm(value);
+}
+
+function isFooterLlgRuntimeStageMethod(value: string | null): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "llg_overdamped" || normalized === "heun_dynamics_settle";
+}
+
+function describeFooterSolverAlgorithm(
+  algorithm: FooterRelaxationAlgorithm | null,
+  integrator: string | null | undefined,
+  stageMethod: string | null,
+): { detail: string; value: string } | null {
+  if (stageMethod?.trim().toLowerCase() === "heun_dynamics_settle") {
+    return {
+      detail: "Landau–Lifshitz–Gilbert overdamped with Heun integrator",
+      value: "LLG + HEUN",
+    };
+  }
+  switch (algorithm) {
+    case "projected_gradient_bb":
+      return { detail: "Barzilai–Borwein direct minimizer", value: "BB" };
+    case "nonlinear_cg":
+      return { detail: "Nonlinear conjugate-gradient direct minimizer", value: "NCG" };
+    case "tangent_plane_implicit":
+      return { detail: "Tangent-plane implicit direct minimizer", value: "TPI" };
+    case "llg_overdamped": {
+      const activeIntegrator = integrator?.trim() || null;
+      return {
+        detail: activeIntegrator
+          ? `Landau–Lifshitz–Gilbert overdamped with ${activeIntegrator} integrator`
+          : "Landau–Lifshitz–Gilbert overdamped",
+        value: activeIntegrator ? `LLG + ${activeIntegrator.toUpperCase()}` : "LLG",
+      };
+    }
+    default: {
+      const runtimeIntegrator = integrator?.trim() || null;
+      return runtimeIntegrator
+        ? {
+            detail: `Runtime integrator ${runtimeIntegrator}`,
+            value: runtimeIntegrator.toUpperCase(),
+          }
+        : null;
+    }
+  }
+}
+
 function isTerminalFooterSolverState(value: unknown): boolean {
   if (typeof value !== "string") return false;
   return TERMINAL_FOOTER_SOLVER_STATES.has(value.trim().toLowerCase());
@@ -1476,7 +1656,7 @@ export function resolvePrimaryTelemetryObjectId(
 function metricGroup(id: string): "runtime" | "solver" | "magnetization" | "energy" {
   if (id.startsWith("energy-")) return "energy";
   if (id === "avg-mx" || id === "avg-my" || id === "avg-mz" || id === "avg-m") return "magnetization";
-  if (id === "step" || id === "dt" || id === "solver-error" || id === "solver-max-error" || id === "max-torque") return "solver";
+  if (id === "step" || id === "dt" || id === "active-solver" || id === "solver-error" || id === "solver-max-error" || id === "max-torque") return "solver";
   return "runtime";
 }
 

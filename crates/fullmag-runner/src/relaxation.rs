@@ -6,6 +6,7 @@
 
 pub(crate) mod convergence;
 pub(crate) mod direct_minimizer;
+pub(crate) mod multilayer_bb;
 mod direct_minimizer_reference;
 pub(crate) mod provenance;
 pub(crate) mod vector_math;

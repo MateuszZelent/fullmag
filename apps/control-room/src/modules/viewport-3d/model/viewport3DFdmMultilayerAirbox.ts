@@ -22,7 +22,8 @@ export function buildFdmMultilayerAirboxFieldRequest(
   maxSamples?: number | null,
   expectedQuantity: FdmMultilayerAirboxQuantityId =
     DEFAULT_FDM_MULTILAYER_AIRBOX_QUANTITY_ID,
-): Viewport3DFieldResourceRequest {
+): Viewport3DFieldResourceRequest | null {
+  if (_domain.geometryOnly || !_domain.carrierFingerprint) return null;
   const query: FdmMultilayerFieldVectorQuery = {
     component: "full",
     scope_id: FDM_MULTILAYER_AIRBOX_SCOPE_ID,
@@ -49,8 +50,14 @@ export function shouldRequestFdmMultilayerAirboxField(
   >,
   expectedQuantity: string =
     DEFAULT_FDM_MULTILAYER_AIRBOX_QUANTITY_ID,
+  domain?: Pick<
+    FdmMultilayerAirboxRenderDomain,
+    "carrierFingerprint" | "geometryOnly"
+  > | null,
 ): boolean {
   return (
+    (!domain ||
+      (!domain.geometryOnly && Boolean(domain.carrierFingerprint))) &&
     isFdmMultilayerAirboxQuantity(expectedQuantity) &&
     settings.visible &&
     (settings.shaderVisible || settings.vectorsVisible) &&
@@ -61,13 +68,17 @@ export function shouldRequestFdmMultilayerAirboxField(
 export function resolveFdmMultilayerAirboxFieldVector(
   domain: Pick<
     FdmMultilayerAirboxRenderDomain,
-    "carrierFingerprint" | "domainGenerationId" | "shape" | "totalCells"
+    | "carrierFingerprint"
+    | "domainGenerationId"
+    | "geometryOnly"
+    | "shape"
+    | "totalCells"
   >,
   fieldVector: DecodedFieldVector | null | undefined,
   expectedQuantity: string =
     DEFAULT_FDM_MULTILAYER_AIRBOX_QUANTITY_ID,
 ): DecodedFieldVector | null {
-  if (!fieldVector) return null;
+  if (!fieldVector || domain.geometryOnly || !domain.carrierFingerprint) return null;
   if (!isFdmMultilayerAirboxQuantity(expectedQuantity)) return null;
   const fieldGenerationId = safeNonEmptyDomainGenerationId(
     fieldVector.domainGenerationId,

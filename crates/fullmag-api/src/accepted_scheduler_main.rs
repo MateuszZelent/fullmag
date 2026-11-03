@@ -27,6 +27,9 @@ use std::sync::{
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+const ACTIVE_WORKER_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const MAX_ACTIVE_ADMISSION_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct SchedulerResourceOffer {
@@ -48,6 +51,10 @@ fn scheduler_startup_event(phase: &str, started_at: Instant) {
                 .as_millis(),
         })
     );
+}
+
+fn bounded_active_admission_interval(idle_poll_interval: Duration) -> Duration {
+    idle_poll_interval.min(MAX_ACTIVE_ADMISSION_POLL_INTERVAL)
 }
 
 struct SchedulerArgs {
@@ -463,6 +470,10 @@ fn run_scheduler(
     let mut first_loop_reported = false;
     let mut reconciliation_deferred_detail = None::<String>;
     let mut reconciliation_stages_reported = false;
+    let active_admission_interval = bounded_active_admission_interval(args.idle_poll_interval);
+    let mut next_admission_pass_at = Instant::now();
+    let mut drain_reconciliation_pending = false;
+    let mut drain_observed = false;
     while args
         .max_tasks
         .map_or(true, |max_tasks| executed.len() < max_tasks)
@@ -474,11 +485,26 @@ fn run_scheduler(
             first_loop_reported = true;
         }
         let draining = shutdown_requested.load(Ordering::Acquire);
-        resolve_pending_task_outcomes(&store, &mut pending_task_outcomes)?;
+        if draining && !drain_observed {
+            drain_reconciliation_pending = true;
+            drain_observed = true;
+        }
+        let finished_resource_id = active_workers.iter().find_map(|(resource_id, worker)| {
+            worker.handle.is_finished().then(|| resource_id.clone())
+        });
         if draining && active_workers.is_empty() && pending_task_outcomes.is_empty() {
             break;
         }
         let mut reconciliation_deferred = false;
+        let should_run_admission_pass = active_workers.is_empty()
+            || finished_resource_id.is_some()
+            || drain_reconciliation_pending
+            || Instant::now() >= next_admission_pass_at;
+        if !should_run_admission_pass {
+            std::thread::sleep(ACTIVE_WORKER_EXIT_POLL_INTERVAL);
+            continue;
+        }
+        resolve_pending_task_outcomes(&store, &mut pending_task_outcomes)?;
         if let Some(host_admission) = host_admission.as_ref() {
             let log_reconciliation_stages = !reconciliation_stages_reported;
             let reconciliation = (|| -> Result<()> {
@@ -884,6 +910,12 @@ fn run_scheduler(
                 }
             }
         }
+        if draining {
+            drain_reconciliation_pending = false;
+        }
+        if !active_workers.is_empty() {
+            next_admission_pass_at = Instant::now() + active_admission_interval;
+        }
         if active_workers.is_empty() {
             if reconciliation_deferred || scheduling_deferred {
                 if shutdown_requested.load(Ordering::Acquire)
@@ -912,19 +944,14 @@ fn run_scheduler(
             std::thread::sleep(args.idle_poll_interval);
             continue;
         }
-        let Some(resource_id) = active_workers.iter().find_map(|(resource_id, worker)| {
-            worker.handle.is_finished().then(|| resource_id.clone())
-        }) else {
-            std::thread::sleep(if reconciliation_deferred || scheduling_deferred {
-                args.idle_poll_interval
-            } else {
-                Duration::from_millis(10)
-            });
+        let Some(resource_id) = finished_resource_id else {
+            std::thread::sleep(ACTIVE_WORKER_EXIT_POLL_INTERVAL);
             continue;
         };
         let worker = active_workers
             .remove(&resource_id)
             .context("finished scheduler worker handle disappeared")?;
+        next_admission_pass_at = Instant::now();
         let worker_run_id = worker.run_id.clone();
         let worker_task_id = worker.task_id.clone();
         let completed = match worker.handle.join() {
@@ -943,7 +970,12 @@ fn run_scheduler(
                     error = ?error,
                     "compute scheduler deferred worker launch; runtime remains available"
                 );
-                std::thread::sleep(args.idle_poll_interval);
+                if active_workers.is_empty() {
+                    std::thread::sleep(args.idle_poll_interval);
+                } else {
+                    next_admission_pass_at = Instant::now() + active_admission_interval;
+                    std::thread::sleep(ACTIVE_WORKER_EXIT_POLL_INTERVAL);
+                }
                 continue;
             }
             Ok(Err(error)) => {

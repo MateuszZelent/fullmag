@@ -1171,7 +1171,12 @@ export function resolveViewport3DRealizedFdmObjectIds({
     ),
   );
   for (const view of fdmNativeLayerViews) {
-    objectIds.add(view.domain.objectId);
+    // The layout can arrive before the asynchronous native cuboid build. Keep
+    // the primitive preview until the replacement has a non-empty model to
+    // render; otherwise the primitive disappears during the build handoff.
+    if (view.model && view.model.count > 0) {
+      objectIds.add(view.domain.objectId);
+    }
   }
   return objectIds;
 }

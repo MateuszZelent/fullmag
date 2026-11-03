@@ -206,7 +206,8 @@ fn scalar_metric_is_active(plan: Option<&ExecutionPlanIR>, metric_key: &str) -> 
             _ => false,
         },
         BackendPlanIR::FdmMultilayer(plan) => match metric_key {
-            "e_rotated_dmi" => plan.rotated_interfacial_dmi.is_some(),
+            "e_rotated_dmi" => plan.rotated_interfacial_dmi.is_some()
+                || plan.layers.iter().any(|layer| layer.rotated_interfacial_dmi.is_some()),
             _ => true,
         },
     }
@@ -263,7 +264,8 @@ fn plan_is_rotated_dmi_only(plan: &ExecutionPlanIR) -> bool {
                 && plan.dbulk_field.is_none()
         }
         BackendPlanIR::FdmMultilayer(plan) => {
-            plan.rotated_interfacial_dmi.is_some()
+            (plan.rotated_interfacial_dmi.is_some()
+                || plan.layers.iter().any(|layer| layer.rotated_interfacial_dmi.is_some()))
                 && plan.interfacial_dmi.is_none()
                 && plan.bulk_dmi.is_none()
         }
@@ -622,6 +624,7 @@ mod tests {
             requested_common_cell_size: None,
             grid_certificate: None,
             layers: vec![FdmLayerPlanIR {
+                rotated_interfacial_dmi: None,
                 magnet_name: "free".to_string(),
                 layer_id: "layer:free".to_string(),
                 object_id: "free".to_string(),

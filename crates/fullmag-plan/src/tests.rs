@@ -4862,7 +4862,7 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
 
     for d in [0.0_f64, -0.0_f64] {
         let mut zero_dmi = ir.clone();
-        zero_dmi.energy_terms = vec![EnergyTermIR::RotatedInterfacialDmi { d }];
+        zero_dmi.energy_terms = vec![EnergyTermIR::RotatedInterfacialDmi { d, object_ids: None }];
         zero_dmi.study.sampling_mut().outputs = vec![OutputIR::Field {
             name: "m".to_string(),
             every_seconds: 1e-12,
@@ -7048,7 +7048,7 @@ fn rotated_interfacial_dmi_plans_for_fdm_cpu_and_cuda_time_domain() {
         ir.backend_policy.requested_backend = BackendTarget::Fdm;
         ir.energy_terms = vec![
             EnergyTermIR::Exchange,
-            EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+            EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None },
         ];
         if let Some(device) = device {
             ir.problem_meta.runtime_metadata.insert(
@@ -7073,7 +7073,7 @@ fn rotated_interfacial_dmi_plans_for_fem_cpu_and_gpu_time_domain() {
         attach_unit_fem_domain_mesh(&mut ir);
         ir.energy_terms = vec![
             EnergyTermIR::Exchange,
-            EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+            EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None },
         ];
         ir.problem_meta.runtime_metadata.insert(
             "runtime_selection".to_string(),
@@ -7092,7 +7092,7 @@ fn rotated_interfacial_dmi_plans_for_fem_cpu_and_gpu_time_domain() {
 fn rotated_interfacial_dmi_rejects_open_boundary_without_exchange() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fdm;
-    ir.energy_terms = vec![EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 }];
+    ir.energy_terms = vec![EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None }];
 
     let error = plan(&ir).expect_err("open-boundary rotated DMI requires exchange");
     assert!(error.reasons.iter().any(|reason| {
@@ -7124,7 +7124,7 @@ fn rotated_interfacial_dmi_rejects_active_mask_boundary_without_exchange() {
         fem_mesh_assets: vec![],
         fem_domain_mesh_asset: None,
     });
-    ir.energy_terms = vec![EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 }];
+    ir.energy_terms = vec![EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None }];
 
     let error = plan(&ir).expect_err("active-mask rotated DMI requires exchange");
     assert!(error.reasons.iter().any(|reason| {
@@ -7140,7 +7140,7 @@ fn rotated_interfacial_dmi_rejects_zero_resolved_aex_on_open_boundary() {
     ir.backend_policy.requested_backend = BackendTarget::Fdm;
     ir.energy_terms = vec![
         EnergyTermIR::Exchange,
-        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None },
     ];
     ir.materials[0].exchange_stiffness = 0.0;
 
@@ -7160,7 +7160,7 @@ fn rotated_interfacial_dmi_rejects_zero_resolved_aex_on_open_boundary() {
 fn rotated_interfacial_dmi_zero_is_noop_for_open_boundary_validation() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fdm;
-    ir.energy_terms = vec![EnergyTermIR::RotatedInterfacialDmi { d: 0.0 }];
+    ir.energy_terms = vec![EnergyTermIR::RotatedInterfacialDmi { d: 0.0, object_ids: None }];
     ir.materials[0].exchange_stiffness = 0.0;
     if let fullmag_ir::StudyIR::TimeEvolution { sampling, .. } = &mut ir.study {
         sampling.outputs.clear();
@@ -7179,7 +7179,7 @@ fn rotated_interfacial_dmi_allows_zero_resolved_aex_away_from_open_boundary() {
     ir.backend_policy.requested_backend = BackendTarget::Fdm;
     ir.energy_terms = vec![
         EnergyTermIR::Exchange,
-        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None },
     ];
     ir.material_parameter_fields
         .push(fullmag_ir::MaterialParameterAssignmentIR {
@@ -7251,7 +7251,7 @@ fn rotated_interfacial_dmi_rejects_zero_resolved_aex_on_active_mask_boundary() {
     });
     ir.energy_terms = vec![
         EnergyTermIR::Exchange,
-        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None },
     ];
     ir.materials[0].exchange_stiffness = 0.0;
 
@@ -7282,7 +7282,7 @@ fn rotated_interfacial_dmi_allows_zero_resolved_aex_on_fully_periodic_grid() {
     });
     ir.energy_terms = vec![
         EnergyTermIR::Exchange,
-        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None },
     ];
     ir.materials[0].exchange_stiffness = 0.0;
 
@@ -7314,7 +7314,7 @@ fn rotated_interfacial_dmi_allows_zero_resolved_aex_with_open_film_surfaces() {
     });
     ir.energy_terms = vec![
         fullmag_ir::EnergyTermIR::Exchange,
-        fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+        fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None },
     ];
     ir.materials[0].exchange_stiffness = 0.0;
 
@@ -7331,7 +7331,7 @@ fn multilayer_rotated_interfacial_dmi_rejects_zero_resolved_aex_on_open_boundary
     let mut ir = stacked_two_body_multilayer_problem();
     ir.energy_terms = vec![
         fullmag_ir::EnergyTermIR::Exchange,
-        fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+        fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None },
     ];
     ir.materials[0].exchange_stiffness = 0.0;
 
@@ -7352,7 +7352,7 @@ fn multilayer_rotated_interfacial_dmi_accepts_positive_open_boundary_aex() {
     let mut ir = stacked_two_body_multilayer_problem();
     ir.energy_terms = vec![
         fullmag_ir::EnergyTermIR::Exchange,
-        fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+        fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None },
     ];
 
     let planned = plan(&ir).expect("positive multilayer boundary Aex must remain legal");
@@ -7368,7 +7368,7 @@ fn fem_zero_rotated_interfacial_dmi_is_preserved_without_exchange() {
         let mut ir = ProblemIR::bootstrap_example();
         ir.backend_policy.requested_backend = BackendTarget::Fem;
         attach_unit_fem_domain_mesh(&mut ir);
-        ir.energy_terms = vec![EnergyTermIR::RotatedInterfacialDmi { d }];
+        ir.energy_terms = vec![EnergyTermIR::RotatedInterfacialDmi { d, object_ids: None }];
         ir.study.sampling_mut().outputs = vec![OutputIR::Field {
             name: "m".to_string(),
             every_seconds: 1e-12,
@@ -7424,7 +7424,7 @@ fn fem_rotated_interfacial_dmi_rejects_periodic_node_pairs() {
     });
     ir.energy_terms = vec![
         EnergyTermIR::Exchange,
-        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None },
     ];
 
     let error = plan(&ir).expect_err("periodic FEM rotated DMI must fail closed");
@@ -7448,7 +7448,7 @@ fn rotated_interfacial_dmi_rejects_mixed_dmi_energy_channels() {
         ir.energy_terms = vec![
             EnergyTermIR::Exchange,
             conventional,
-            EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+            EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None },
         ];
         let error = plan(&ir).expect_err("mixed DMI must fail closed");
         assert!(error
@@ -7465,7 +7465,7 @@ fn fem_rotated_interfacial_dmi_ignores_unreferenced_material_dmi() {
     attach_unit_fem_domain_mesh(&mut ir);
     ir.energy_terms = vec![
         EnergyTermIR::Exchange,
-        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None },
     ];
     let mut unused_material = ir.materials[0].clone();
     unused_material.name = "unused".to_string();
@@ -7489,7 +7489,7 @@ fn fem_rotated_dmi_field_outputs_fail_until_materialized() {
     attach_unit_fem_domain_mesh(&mut ir);
     ir.energy_terms = vec![
         EnergyTermIR::Exchange,
-        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None },
     ];
     ir.study = fullmag_ir::StudyIR::TimeEvolution {
         dynamics: ir.study.dynamics().clone(),
@@ -7517,7 +7517,7 @@ fn fem_rotated_dmi_energy_output_is_allowed_without_rotated_field_materializatio
     attach_unit_fem_domain_mesh(&mut ir);
     ir.energy_terms = vec![
         EnergyTermIR::Exchange,
-        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None },
     ];
     ir.study = fullmag_ir::StudyIR::TimeEvolution {
         dynamics: ir.study.dynamics().clone(),
@@ -7545,7 +7545,7 @@ fn rotated_dmi_energy_density_snapshot_is_rejected_until_scalar_field_scheduling
     let mut ir = ProblemIR::bootstrap_example();
     ir.energy_terms = vec![
         EnergyTermIR::Exchange,
-        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None },
     ];
     ir.study = fullmag_ir::StudyIR::TimeEvolution {
         dynamics: ir.study.dynamics().clone(),
@@ -7574,7 +7574,7 @@ fn rotated_interfacial_dmi_rejects_eigen_and_frequency_domain_execution() {
     let mut frequency = fem_frequency_response_mesh_asset_problem();
     frequency
         .energy_terms
-        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 });
+        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None });
     let error = plan(&frequency).expect_err("frequency-domain rotated DMI must fail closed");
     assert!(error.reasons.iter().any(|reason| {
         reason.contains("RotatedInterfacialDmi")
@@ -7584,7 +7584,7 @@ fn rotated_interfacial_dmi_rejects_eigen_and_frequency_domain_execution() {
     let mut eigen = fem_frequency_response_mesh_asset_problem();
     eigen
         .energy_terms
-        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 });
+        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None });
     eigen.study = fullmag_ir::StudyIR::Eigenmodes {
         dynamics: eigen.study.dynamics().clone(),
         operator: fullmag_ir::EigenOperatorConfigIR {
@@ -9357,7 +9357,8 @@ fn cuda_unqualified_multilayer_operator_cases() -> Vec<(ProblemIR, &'static str)
     let GeometryEntryIR::Box { size, .. } = base.as_mut() else {
         panic!("stacked fixture reference geometry must be a box");
     };
-    size[0] = 20e-9;
+    // Half-cell centered padding stays outside the exact embedding contract.
+    size[0] = 18e-9;
     cases.push((push_pull, "fdm_cuda_multilayer_push_pull_unqualified"));
 
     let mut heterogeneous_hz = cuda_three_d_identity_multilayer_problem();
@@ -9461,7 +9462,7 @@ fn cuda_multilayer_containment_exact_center_accepts_canonical_centered_extents()
     };
     assert_eq!(
         fdm_multilayer_cuda_containment_reason_codes(true, "three_d", &multilayer.layers),
-        vec![FDM_CUDA_MULTILAYER_PUSH_PULL_UNQUALIFIED]
+        Vec::<&str>::new()
     );
 }
 
@@ -19924,6 +19925,152 @@ fn fem_eigen_branch_tracking_tetra_single_and_path_remain_plannable() {
     }
 }
 
+#[test]
+fn scoped_rotated_dmi_is_resolved_per_object_and_survives_plan_roundtrip() {
+    for d in [0.004, -0.004, 0.0] {
+        let mut ir = stacked_two_body_multilayer_problem();
+        ir.magnets[0].object_id = Some("film-id".into());
+        ir.magnets[1].object_id = Some("cylinder-id".into());
+        ir.energy_terms.push(EnergyTermIR::RotatedInterfacialDmi {
+            d, object_ids: Some(vec!["film-id".into()]),
+        });
+        let planned = plan(&ir).expect("object-scoped rDMI must plan");
+        let BackendPlanIR::FdmMultilayer(layers) = planned.backend_plan else { panic!("expected multilayer"); };
+        assert_eq!(layers.rotated_interfacial_dmi, None);
+        let film = layers.layers.iter().find(|l| l.object_id == "film-id").unwrap();
+        let cylinder = layers.layers.iter().find(|l| l.object_id == "cylinder-id").unwrap();
+        assert_eq!(film.rotated_interfacial_dmi, Some(d));
+        assert_eq!(cylinder.rotated_interfacial_dmi, Some(0.0));
+        let json = serde_json::to_value(&layers).unwrap();
+        let restored: fullmag_ir::FdmMultilayerPlanIR = serde_json::from_value(json).unwrap();
+        assert_eq!(restored, layers);
+    }
+}
+
+#[test]
+fn scoped_rotated_dmi_fem_fails_closed_even_for_zero_coefficient() {
+    for d in [0.004, 0.0] {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.backend_policy.requested_backend = BackendTarget::Fem;
+        attach_unit_fem_domain_mesh(&mut ir);
+        let id = ir.magnets[0].object_id.clone().unwrap_or_else(|| ir.magnets[0].name.clone());
+        ir.energy_terms = vec![EnergyTermIR::Exchange, EnergyTermIR::RotatedInterfacialDmi { d, object_ids: Some(vec![id]) }];
+        let errors = plan(&ir).expect_err("FEM scope must never become global");
+        assert!(errors.reasons.iter().any(|e| e.contains("object-scoped RotatedInterfacialDmi")), "{:?}", errors.reasons);
+    }
+}
+
+#[test]
+fn scoped_rotated_dmi_single_grid_uses_selected_object_coefficient() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fdm;
+    let id = ir.magnets[0].object_id.clone().unwrap_or_else(|| ir.magnets[0].name.clone());
+    ir.energy_terms = vec![EnergyTermIR::Exchange, EnergyTermIR::RotatedInterfacialDmi { d: 0.004, object_ids: Some(vec![id]) }];
+    let planned = plan(&ir).expect("single selected magnet");
+    let BackendPlanIR::Fdm(fdm) = planned.backend_plan else { panic!("expected FDM"); };
+    assert_eq!(fdm.rotated_interfacial_dmi, Some(0.004));
+}
+
+#[test]
+fn multilayer_material_parameters_remain_object_local() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    let mut other = ir.materials[0].clone();
+    other.name = "different-material".into();
+    other.saturation_magnetisation *= 1.5;
+    other.exchange_stiffness *= 0.75;
+    other.damping = 0.6;
+    other.uniaxial_anisotropy = Some(0.0);
+    other.uniaxial_anisotropy_k2 = Some(1200.0);
+    other.anisotropy_axis = Some([1.0, 0.0, 0.0]);
+    ir.magnets[1].material = other.name.clone();
+    ir.materials.push(other.clone());
+    let planned = plan(&ir).expect("asymmetric layer materials");
+    let BackendPlanIR::FdmMultilayer(p) = planned.backend_plan else { panic!("expected multilayer"); };
+    let free = p.layers.iter().find(|l| l.magnet_name == "free").unwrap();
+    let reference = p.layers.iter().find(|l| l.magnet_name == "ref").unwrap();
+    assert_ne!(free.material, reference.material);
+    assert_eq!(reference.material.saturation_magnetisation, other.saturation_magnetisation);
+    assert_eq!(reference.material.exchange_stiffness, other.exchange_stiffness);
+    assert_eq!(reference.material.damping, other.damping);
+    assert_eq!(reference.material.uniaxial_anisotropy_ku2, Some(1200.0));
+    assert_eq!(reference.material.anisotropy_axis, Some([1.0, 0.0, 0.0]));
+}
+
+#[test]
+fn fdm_material_dmi_rejects_bleed_and_preserves_uniform_material_value() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    let mut other = ir.materials[0].clone();
+    other.name = "no-dmi".into();
+    other.interfacial_dmi = Some(0.0);
+    ir.magnets[1].material = other.name.clone();
+    ir.materials[0].interfacial_dmi = Some(0.003);
+    ir.materials.push(other);
+    let error = plan(&ir).expect_err("different material DMI cannot become global");
+    assert!(error.reasons.iter().any(|e| e.contains("material-owned interfacial")), "{:?}", error.reasons);
+    ir.materials[1].interfacial_dmi = Some(0.003);
+    let planned = plan(&ir).expect("uniform material-owned DMI lowers without an explicit term");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("expected multilayer FDM plan");
+    };
+    assert_eq!(multilayer.interfacial_dmi, Some(0.003));
+}
+
+
+fn centered_cuda_embedding_fixture() -> fullmag_ir::FdmMultilayerPlanIR {
+    let BackendPlanIR::FdmMultilayer(mut plan) =
+        plan(&cuda_three_d_identity_multilayer_problem()).unwrap().backend_plan
+    else { panic!("expected multilayer fixture"); };
+    let common = plan.common_cells;
+    assert!(common[0] > 2 && common[1] > 2);
+    let layer = &mut plan.layers[1];
+    layer.transfer_kind = "push_pull".into();
+    layer.native_grid[0] = common[0] - 2;
+    layer.native_grid[1] = common[1] - 2;
+    layer.native_origin[0] = layer.convolution_origin[0] + layer.native_cell_size[0];
+    layer.native_origin[1] = layer.convolution_origin[1] + layer.native_cell_size[1];
+    let cells = layer.native_grid.iter().map(|n| *n as usize).product();
+    layer.initial_magnetization = vec![[1.0, 0.0, 0.0]; cells];
+    layer.native_active_mask = None;
+    plan.precision = fullmag_ir::ExecutionPrecision::Double;
+    plan.integrator = fullmag_ir::IntegratorChoice::Heun;
+    plan.fixed_timestep = Some(1e-15);
+    plan.periodicity = None;
+    plan
+}
+
+#[test]
+fn cuda_centered_embedding_is_exact_and_rejects_resampling_or_displacement() {
+    let plan = centered_cuda_embedding_fixture();
+    assert!(fdm_multilayer_cuda_aligned_embedding_eligible(&plan.layers));
+    assert!(fdm_multilayer_cuda_aligned_embedding_error(&plan).is_none());
+    for malformed in 0..5 {
+        let mut layers = plan.layers.clone();
+        let cell = layers[1].native_cell_size;
+        match malformed {
+            0 => layers[1].native_origin[0] += 0.25 * cell[0],
+            1 => layers[1].native_cell_size[0] *= 0.5,
+            2 => layers[1].native_grid[0] += 1,
+            3 => layers[1].convolution_origin[2] += cell[2],
+            _ => layers[1].native_origin[0] = f64::MAX,
+        }
+        assert!(!fdm_multilayer_cuda_aligned_embedding_eligible(&layers), "case {malformed}");
+    }
+    let mut unequal_z = plan.layers.clone();
+    unequal_z[0].native_grid[2] = 1;
+    unequal_z[0].transfer_kind = "push_pull".into();
+    assert!(fdm_multilayer_cuda_aligned_embedding_eligible(&unequal_z));
+}
+
+#[test]
+fn cuda_centered_embedding_restricts_execution_without_changing_identity_support() {
+    let plan = centered_cuda_embedding_fixture();
+    let mut single = plan.clone(); single.precision = fullmag_ir::ExecutionPrecision::Single;
+    let mut rk4 = plan.clone(); rk4.integrator = fullmag_ir::IntegratorChoice::Rk4;
+    let mut variable = plan.clone(); variable.fixed_timestep = None;
+    for unsupported in [single, rk4, variable] {
+        assert!(fdm_multilayer_cuda_aligned_embedding_error(&unsupported).is_some());
+    }
+}
 mod material_audit_fdm;
 mod material_audit_fem;
 mod material_boundary_stt;

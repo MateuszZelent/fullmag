@@ -379,18 +379,30 @@ function cloneFieldVectorForWorker(
   fieldVector: DecodedFieldVector | null | undefined,
 ): DecodedFieldVector | null | undefined {
   if (!fieldVector) return fieldVector;
+  if (fieldVector.dtype === "float32") {
+    return {
+      ...fieldVector,
+      values: cloneFieldVectorValues(fieldVector.values),
+    };
+  }
   return {
     ...fieldVector,
     values: cloneFieldVectorValues(fieldVector.values),
   };
 }
 
-function cloneFieldVectorValues(values: DecodedFieldVector["values"]) {
+function cloneFieldVectorValues(values: Float32Array): Float32Array;
+function cloneFieldVectorValues(values: Float64Array): Float64Array;
+function cloneFieldVectorValues(
+  values: Float32Array | Float64Array,
+): Float32Array | Float64Array {
   recordVisualizationDebugPerformanceMetric(
     "typedArrayCopiedBytes",
     values.byteLength,
   );
-  return new Float64Array(values);
+  return values instanceof Float32Array
+    ? new Float32Array(values)
+    : new Float64Array(values);
 }
 
 function transferablesForFdmCuboidBuildRequest(

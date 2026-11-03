@@ -1262,9 +1262,11 @@ fn build_reference_problem(plan: &FdmPlanIR) -> Result<ExchangeLlgProblem, RunEr
             external_field: plan.external_field,
             per_node_field: resolved_per_node_external_field(plan, 0.0),
             magnetoelastic: build_mel(plan),
-            uniaxial_anisotropy: plan.material.uniaxial_anisotropy_ku1.map(|ku1| {
+            uniaxial_anisotropy: (plan.material.uniaxial_anisotropy_ku1.is_some()
+                || plan.material.uniaxial_anisotropy_ku2.is_some())
+            .then(|| {
                 UniaxialAnisotropyConfig {
-                    ku1,
+                    ku1: plan.material.uniaxial_anisotropy_ku1.unwrap_or(0.0),
                     ku2: plan.material.uniaxial_anisotropy_ku2.unwrap_or(0.0),
                     axis: plan.material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]),
                 }
@@ -5101,6 +5103,21 @@ mod tests {
         let stats = make_step_stats(0, 0.0, 1.0e-14, 0, &observables, &problem);
         assert_eq!(stats.e_rotated_dmi, observables.rotated_dmi_energy);
         assert_eq!(stats.e_dmi, observables.dmi_energy);
+    }
+
+    #[test]
+    fn reference_problem_materializes_ku2_when_ku1_is_absent() {
+        let mut plan = make_test_plan();
+        plan.material.uniaxial_anisotropy_ku1 = None;
+        plan.material.uniaxial_anisotropy_ku2 = Some(2.5e4);
+
+        let problem = build_reference_problem(&plan).expect("reference problem should build");
+        let anisotropy = problem
+            .terms
+            .uniaxial_anisotropy
+            .expect("Ku2 alone must activate uniaxial anisotropy");
+        assert_eq!(anisotropy.ku1, 0.0);
+        assert_eq!(anisotropy.ku2, 2.5e4);
     }
 
     fn resolved_frozen_spins_test_plan(mask: Vec<bool>) -> ResolvedFrozenSpinsPlanIR {

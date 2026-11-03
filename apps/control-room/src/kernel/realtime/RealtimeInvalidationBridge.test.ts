@@ -82,6 +82,8 @@ import {
   SIMULATION_COMMANDS_PATH,
   SIMULATION_OBJECT_METRICS_PATH,
   SIMULATION_PREPARATION_PATH,
+  SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
+  SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
   SIMULATION_RUN_CURRENT_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
@@ -99,6 +101,7 @@ import {
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { resolveFdmRegionMembershipBinaryResourceKey } from "../resources/geometryLifecycleResources";
 import { PHYSICS_GRAPH_RESOURCE_KEY } from "../resources/physicsGraphResources";
+import { sessionScopedResourceKey } from "../resources/sessionResourceIdentity";
 
 import { RealtimeInvalidationBridge } from "./RealtimeInvalidationBridge";
 
@@ -1147,9 +1150,11 @@ describe("RealtimeInvalidationBridge", () => {
       "film",
     );
     const scalarWindowKey = `${DATA_SCALARS_PATH}?columns=step%2Ctime%2Cmx%2Cmy%2Cmz&limit=1&since_revision=9`;
+    const energyHistoryKey = `${SIMULATION_SOLVER_ENERGIES_HISTORY_PATH}?limit=120`;
 
     resources.subscribe(tableWindowKey, () => {});
     resources.subscribe(scalarWindowKey, () => {});
+    resources.subscribe(energyHistoryKey, () => {});
     resources.subscribe(objectMetricsKey, () => {});
     resources.invalidate(objectMetricsKey, 99);
 
@@ -1179,6 +1184,78 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBeNull();
     expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBeNull();
     expect(resources.getRevision(DATA_FIELDS_PATH)).toBeNull();
+    expect(resources.getRevision(energyHistoryKey)).toBeNull();
+  });
+
+  it("coalesces current-energy changes into active history limits only", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const scheduled: Array<() => void> = [];
+    const bridge = new RealtimeInvalidationBridge(resources, {
+      scheduleFlush: (callback) => {
+        scheduled.push(callback);
+        return () => {};
+      },
+    });
+    const sessionIdentity = {
+      requestScopeEpoch: "api-instance:7",
+      sessionEpoch: "session-1@7",
+      sessionId: "session-1",
+    };
+    const historyKeys = [120, 800].map((limit) =>
+      sessionScopedResourceKey(
+        sessionIdentity,
+        `${SIMULATION_SOLVER_ENERGIES_HISTORY_PATH}?limit=${limit}`,
+      ),
+    );
+    const historyRequests = historyKeys.map(() => vi.fn());
+    historyKeys.forEach((key, index) => resources.subscribe(key, historyRequests[index]!));
+
+    const inactiveHistoryRequest = vi.fn();
+    const unsubscribeInactive = resources.subscribe(
+      sessionScopedResourceKey(
+        sessionIdentity,
+        `${SIMULATION_SOLVER_ENERGIES_HISTORY_PATH}?limit=1600`,
+      ),
+      inactiveHistoryRequest,
+    );
+    unsubscribeInactive();
+    const unrelatedFieldRequest = vi.fn();
+    resources.subscribe(
+      sessionScopedResourceKey(sessionIdentity, DATA_FIELDS_PATH),
+      unrelatedFieldRequest,
+    );
+
+    for (const revision of [10, 11, 12]) {
+      expect(
+        bridge.handleEvent({
+          payload: {
+            changes: [
+              {
+                recommended_fetch: SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
+                resource: "simulation",
+                resource_id: "energies-current",
+                revision,
+              },
+            ],
+          },
+          run_id: "run-1",
+          session_id: "session-1",
+          type: "resource.batch_changed",
+        }),
+      ).toBe(true);
+    }
+
+    expect(scheduled).toHaveLength(1);
+    expect(historyRequests.map((request) => request.mock.calls)).toEqual([[], []]);
+    scheduled[0]!();
+
+    expect(historyRequests.map((request) => request.mock.calls)).toEqual([
+      [[12]],
+      [[12]],
+    ]);
+    expect(inactiveHistoryRequest).not.toHaveBeenCalled();
+    expect(unrelatedFieldRequest).not.toHaveBeenCalled();
   });
 
   it("emits scalar sample payload events without invalidating resources", () => {

@@ -874,6 +874,8 @@ pub struct SceneStudyState {
     pub external_field: Option<[f64; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotated_interfacial_dmi: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotated_interfacial_dmi_object_ids: Option<Vec<String>>,
     #[serde(default = "default_solver")]
     pub solver: ScriptBuilderSolverState,
     #[serde(default, skip_serializing_if = "Option::is_none")]

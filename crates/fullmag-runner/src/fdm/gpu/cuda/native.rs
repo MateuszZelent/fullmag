@@ -430,6 +430,15 @@ fn validate_multilayer_stage_telemetry(
     inverse_fft_count: u64,
     pair_accumulation_count: u64,
 ) -> Result<FdmMultilayerStageTelemetry, RunError> {
+    validate_multilayer_stage_telemetry_impl(layer_count, refresh_count, forward_fft_count,
+        inverse_fft_count, pair_accumulation_count, false)
+}
+
+#[cfg(any(feature = "cuda", test))]
+fn validate_multilayer_stage_telemetry_impl(
+    layer_count: u64, refresh_count: u64, forward_fft_count: u64,
+    inverse_fft_count: u64, pair_accumulation_count: u64, centered_pairwise: bool,
+) -> Result<FdmMultilayerStageTelemetry, RunError> {
     if refresh_count == 0
         && forward_fft_count == 0
         && inverse_fft_count == 0
@@ -446,20 +455,23 @@ fn validate_multilayer_stage_telemetry(
         .ok_or_else(|| RunError {
             message: "d07_stage_telemetry_counter_overflow: L^2 does not fit u64".to_string(),
         })?;
+    let expected_ffts = if centered_pairwise { expected_pairs } else { layer_count };
     if refresh_count != 1
-        || forward_fft_count != layer_count
-        || inverse_fft_count != layer_count
+        || forward_fft_count != expected_ffts
+        || inverse_fft_count != expected_ffts
         || pair_accumulation_count != expected_pairs
     {
         return Err(RunError {
             message: format!(
-                "d07_stage_telemetry_counter_mismatch: expected refresh=1 forward={layer_count} inverse={layer_count} pairs={expected_pairs}, got refresh={refresh_count} forward={forward_fft_count} inverse={inverse_fft_count} pairs={pair_accumulation_count}"
+                "d07_stage_telemetry_counter_mismatch: expected refresh=1 forward={expected_ffts} inverse={expected_ffts} pairs={expected_pairs}, got refresh={refresh_count} forward={forward_fft_count} inverse={inverse_fft_count} pairs={pair_accumulation_count}"
             ),
         });
     }
     Ok(FdmMultilayerStageTelemetry {
         status: "recorded".to_string(),
-        execution_engine: "cuda_native_multilayer_demag_v2".to_string(),
+        execution_engine: if centered_pairwise {
+            "cuda_native_multilayer_demag_v2_centered_pairwise"
+        } else { "cuda_native_multilayer_demag_v2" }.to_string(),
         data_residency: "device_resident_per_refresh".to_string(),
         fft_backend: "cuFFT".to_string(),
         layer_count,
@@ -853,6 +865,7 @@ pub(crate) struct NativeFdmBackend {
     adaptive_timestep_enabled: bool,
     stats_policy: NativeStatsPolicy,
     rotated_dmi_only: bool,
+    centered_aligned_multilayer: bool,
 }
 
 #[cfg(feature = "cuda")]
@@ -1072,6 +1085,11 @@ impl NativeFdmBackend {
 
     pub fn create_multilayer_v2(plan: &fullmag_ir::FdmMultilayerPlanIR) -> Result<Self, RunError> {
         reject_cuda_multilayer_containment(plan.enable_demag, &plan.mode, &plan.layers)?;
+        if let Some(message) = fullmag_plan::fdm_multilayer_cuda_aligned_embedding_error(plan) {
+            return Err(RunError { message });
+        }
+        let centered_aligned_multilayer = plan.enable_demag
+            && plan.layers.iter().any(|l| l.transfer_kind == "push_pull");
         validate_multilayer_grid_budget(
             plan,
             fullmag_fdm_demag::KernelAdmissionModel::CudaAbiV2PairPayload,
@@ -1141,7 +1159,9 @@ impl NativeFdmBackend {
                 Ok(ffi::fullmag_fdm_layer_desc_v2 {
                     native_grid: ffi_grid(layer.native_grid, layer.native_cell_size),
                     convolution_grid: ffi_grid(layer.convolution_grid, layer.convolution_cell_size),
-                    transfer_kind: ffi_transfer_kind(&layer.transfer_kind)?,
+                    transfer_kind: if centered_aligned_multilayer && layer.transfer_kind == "push_pull" {
+                        ffi::fullmag_fdm_transfer_kind::FULLMAG_FDM_TRANSFER_CENTERED_ALIGNED
+                    } else { ffi_transfer_kind(&layer.transfer_kind)? },
                     layer_index: index as u32,
                     z_offset_cells,
                     material: ffi::fullmag_fdm_material_desc {
@@ -1150,7 +1170,9 @@ impl NativeFdmBackend {
                         damping: layer.material.damping,
                         gyromagnetic_ratio: plan.gyromagnetic_ratio,
                     },
-                    has_uniaxial_anisotropy: if layer.material.uniaxial_anisotropy_ku1.is_some() {
+                    has_uniaxial_anisotropy: if layer.material.uniaxial_anisotropy_ku1.is_some()
+                        || layer.material.uniaxial_anisotropy_ku2.is_some()
+                    {
                         1
                     } else {
                         0
@@ -1313,7 +1335,12 @@ impl NativeFdmBackend {
             }
         }
 
-        if let Some(dmi_d) = plan.rotated_interfacial_dmi {
+        let has_explicit_layer_dmi = plan
+            .layers
+            .iter()
+            .any(|layer| layer.rotated_interfacial_dmi.is_some());
+        if !has_explicit_layer_dmi {
+            if let Some(dmi_d) = plan.rotated_interfacial_dmi {
             let descriptor = ffi::fullmag_fdm_rotated_interfacial_dmi_desc_v1 {
                 abi_version: ffi::FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1,
                 struct_size: std::mem::size_of::<ffi::fullmag_fdm_rotated_interfacial_dmi_desc_v1>()
@@ -1330,6 +1357,59 @@ impl NativeFdmBackend {
                     let err = ffi::fullmag_fdm_backend_last_error(handle);
                     if err.is_null() {
                         "failed to configure rotated interfacial DMI on CUDA FDM multilayer backend"
+                            .to_string()
+                    } else {
+                        CStr::from_ptr(err).to_string_lossy().to_string()
+                    }
+                };
+                unsafe { ffi::fullmag_fdm_backend_destroy(handle) };
+                return Err(RunError { message });
+            }
+            }
+        }
+
+        let layer_dmi_overrides = plan
+            .layers
+            .iter()
+            .enumerate()
+            .filter_map(|(layer_index, layer)| {
+                let dmi_d = if has_explicit_layer_dmi {
+                    layer.rotated_interfacial_dmi.or(plan.rotated_interfacial_dmi)
+                } else {
+                    layer.rotated_interfacial_dmi
+                }?;
+                Some({
+                    let active = dmi_d != 0.0;
+                    ffi::fullmag_fdm_rotated_interfacial_dmi_layer_v1 {
+                        layer_index: layer_index as u32,
+                        has_rotated_interfacial_dmi: i32::from(active),
+                        reserved0: 0,
+                        dmi_d_rotated_interfacial: if active { dmi_d } else { 0.0 },
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        if !layer_dmi_overrides.is_empty() {
+            let descriptor = ffi::fullmag_fdm_rotated_interfacial_dmi_layers_desc_v1 {
+                abi_version: ffi::FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_LAYERS_ABI_V1,
+                struct_size: std::mem::size_of::<
+                    ffi::fullmag_fdm_rotated_interfacial_dmi_layers_desc_v1,
+                >() as u32,
+                layers: layer_dmi_overrides.as_ptr(),
+                entry_count: layer_dmi_overrides.len() as u32,
+                reserved0: 0,
+            };
+            let status = unsafe {
+                ffi::fullmag_fdm_backend_set_rotated_interfacial_dmi_layers_v1(
+                    handle,
+                    &descriptor,
+                )
+            };
+            if status != ffi::FULLMAG_FDM_OK {
+                let message = unsafe {
+                    let err = ffi::fullmag_fdm_backend_last_error(handle);
+                    if err.is_null() {
+                        "failed to configure per-layer rotated interfacial DMI on CUDA FDM multilayer backend"
                             .to_string()
                     } else {
                         CStr::from_ptr(err).to_string_lossy().to_string()
@@ -1379,9 +1459,11 @@ impl NativeFdmBackend {
             gpu_transport_bound: false,
             adaptive_timestep_enabled: false,
             stats_policy: NativeStatsPolicy::full(1),
-            rotated_dmi_only: plan.rotated_interfacial_dmi.is_some()
+            rotated_dmi_only: (plan.rotated_interfacial_dmi.is_some()
+                || plan.layers.iter().any(|layer| layer.rotated_interfacial_dmi.is_some()))
                 && plan.interfacial_dmi.is_none()
                 && plan.bulk_dmi.is_none(),
+            centered_aligned_multilayer,
         })
     }
 
@@ -1709,7 +1791,9 @@ impl NativeFdmBackend {
                 .as_ref()
                 .map_or(0, |field| field.len() as u64),
 
-            has_uniaxial_anisotropy: if plan.material.uniaxial_anisotropy_ku1.is_some() {
+            has_uniaxial_anisotropy: if plan.material.uniaxial_anisotropy_ku1.is_some()
+                || plan.material.uniaxial_anisotropy_ku2.is_some()
+            {
                 1
             } else {
                 0
@@ -2114,6 +2198,7 @@ impl NativeFdmBackend {
             rotated_dmi_only: plan.rotated_interfacial_dmi.is_some()
                 && plan.interfacial_dmi.is_none()
                 && plan.bulk_dmi.is_none(),
+            centered_aligned_multilayer: false,
         })
     }
 
@@ -3382,6 +3467,15 @@ impl NativeFdmBackend {
         Ok(())
     }
 
+    /// Resident FP64 BB operation; only the packed layer scalars cross D2H.
+    pub(crate) fn multilayer_bb_op(&mut self, op: u32, lambda: f64, scalars: &mut [[f64; 20]]) -> Result<(), RunError> {
+        let rc = unsafe { ffi::fullmag_fdm_backend_multilayer_bb(
+            self.handle, op, lambda, scalars.as_mut_ptr().cast(), (scalars.len() * 20) as u64,
+        ) };
+        if rc != ffi::FULLMAG_FDM_OK { return Err(self.last_error_or("resident multilayer BB failed")); }
+        Ok(())
+    }
+
     pub fn refresh_multilayer_demag(&mut self) -> Result<(), RunError> {
         let rc = unsafe { ffi::fullmag_fdm_backend_refresh_multilayer_demag(self.handle) };
         if rc != ffi::FULLMAG_FDM_OK {
@@ -3425,12 +3519,13 @@ impl NativeFdmBackend {
         if rc != ffi::FULLMAG_FDM_OK {
             return Err(self.last_error_or("snapshot multilayer demag telemetry failed"));
         }
-        validate_multilayer_stage_telemetry(
+        validate_multilayer_stage_telemetry_impl(
             layer_count,
             stats.multilayer_refresh_count,
             stats.multilayer_forward_fft_count,
             stats.multilayer_inverse_fft_count,
             stats.multilayer_pair_accumulation_count,
+            self.centered_aligned_multilayer,
         )
     }
 
@@ -5365,9 +5460,11 @@ mod tests {
                 external_field: plan.external_field,
                 per_node_field: plan.oersted_field_xyz.clone(),
                 magnetoelastic: None,
-                uniaxial_anisotropy: plan.material.uniaxial_anisotropy_ku1.map(|ku1| {
+                uniaxial_anisotropy: (plan.material.uniaxial_anisotropy_ku1.is_some()
+                    || plan.material.uniaxial_anisotropy_ku2.is_some())
+                .then(|| {
                     UniaxialAnisotropyConfig {
-                        ku1,
+                        ku1: plan.material.uniaxial_anisotropy_ku1.unwrap_or(0.0),
                         ku2: plan.material.uniaxial_anisotropy_ku2.unwrap_or(0.0),
                         axis: plan.material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]),
                     }
@@ -7278,6 +7375,7 @@ mod exact_metric_contract_tests {
 
     fn containment_layer(name: &str, z: f64) -> fullmag_ir::FdmLayerPlanIR {
         fullmag_ir::FdmLayerPlanIR {
+            rotated_interfacial_dmi: None,
             magnet_name: name.to_string(),
             layer_id: format!("layer:{name}"),
             object_id: name.to_string(),
@@ -7315,6 +7413,7 @@ mod exact_metric_contract_tests {
 
         let mut push_pull = legal.clone();
         push_pull[1].transfer_kind = "push_pull".to_string();
+        push_pull[1].native_origin[0] += 0.5e-9;
         let push_pull = reject_cuda_multilayer_containment(true, "three_d", &push_pull)
             .expect_err("push_pull must fail before CUDA interaction");
         assert!(push_pull
@@ -7499,5 +7598,19 @@ mod exact_metric_contract_tests {
                 .contains("stats.per_object_scalars = single_object_scalars(\"free\", stats)"),
             "native average-m helper must refresh object-scoped telemetry"
         );
+    }
+}
+
+
+#[cfg(test)]
+mod centered_pairwise_stage_telemetry_tests {
+    use super::*;
+    #[test]
+    fn centered_pairwise_reports_actual_pair_fft_counts() {
+        let telemetry = validate_multilayer_stage_telemetry_impl(2, 1, 4, 4, 4, true).unwrap();
+        assert_eq!(telemetry.execution_engine, "cuda_native_multilayer_demag_v2_centered_pairwise");
+        assert!(validate_multilayer_stage_telemetry_impl(2, 1, 2, 2, 4, true).is_err());
+        assert!(validate_multilayer_stage_telemetry_impl(2, 1, 4, 3, 4, true).is_err());
+        assert!(validate_multilayer_stage_telemetry(2, 1, 4, 4, 4).is_err());
     }
 }

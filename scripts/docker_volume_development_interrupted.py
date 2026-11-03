@@ -8,6 +8,8 @@ import io
 import re
 import tarfile
 import uuid
+import time
+import threading
 from pathlib import Path
 import shlex
 import subprocess
@@ -20,6 +22,24 @@ from docker_dev_host import docker_argv
 
 SCHEMA = "fullmag.docker-development-interrupted.v1"
 RESUME_SCHEMA = "fullmag.docker-resume-interrupted.v1"
+PUBLICATION_SCHEMA = "fullmag.docker-resume-publication-observation-interrupted.v1"
+PUBLICATION_ERROR = "Docker observation exceeded its time/output budget during docker_capture (timeout=90s); daemon resources retained"
+RESUME_SCHEMAS = {RESUME_SCHEMA, PUBLICATION_SCHEMA}
+PUBLICATION_FILES = {
+    "owner": "/state/runs/docker-all/session-store/runtime-services/OWNER.json",
+    "process": "/opt/fullmag/runtime-control/runtime-service/process-tree.json",
+    "config": "/opt/fullmag/runtime-control/runtime-service/docker-all.json",
+    "request": "/opt/fullmag/runtime-control/worker-cgroup/request.json",
+    "ready": "/opt/fullmag/runtime-control/worker-cgroup/ready.json",
+}
+PUBLICATION_CONTROL_FILES = {
+    "owner": "runtime-control/runtime-services/OWNER.json",
+    "process": "runtime-control/runtime-service/process-tree.json",
+    "config": "runtime-control/runtime-service/docker-all.json",
+    "request": "runtime-control/worker-cgroup/request.json",
+    "ready": "runtime-control/worker-cgroup/ready.json",
+}
+STORAGE_FILES = (".fullmag-linux-native-owner.json", ".linux-native-sentinel", ".linux-native-restart", ".linux-native-probe.json")
 GATE_FAILURE_SCHEMA = "fullmag.docker-development-gate-failed.v1"
 GATE_FAILURE_MESSAGE = "Linux native host admission did not become ready"
 GATE_RUNTIME_ABSENT_PATHS = (
@@ -35,11 +55,11 @@ CONTROLLERS = ("docker_build_control.py", "docker_volume_dev.py", "docker_volume
 
 
 def _phase(r):
-    return "resume" if r["schema"] == RESUME_SCHEMA else "development"
+    return "resume" if r["schema"] in RESUME_SCHEMAS else "development"
 
 
 def _compose_relative(r):
-    attempt = r["base_attempt"] if r["schema"] == RESUME_SCHEMA else r["attempt"]
+    attempt = r["base_attempt"] if r["schema"] in RESUME_SCHEMAS else r["attempt"]
     return "development/attempts/" + attempt + "/compose.json"
 
 
@@ -315,16 +335,206 @@ def _resume_documents(control, original, document, r, source):
     return volumes
 
 
+def stopped_file(identifier, path, *, maximum=8 * 1024 * 1024, hash_only=False):
+    """Read one bounded regular Docker-cp member without extracting to the host."""
+    proc = subprocess.Popen(docker_argv("cp", identifier + ":" + path, "-"),
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    expired = threading.Event()
+    def stop():
+        expired.set()
+        proc.kill()
+    timer = threading.Timer(90, stop)
+    timer.start()
+    try:
+        digestor, payload, count, members = hashlib.sha256(), [], 0, 0
+        with tarfile.open(fileobj=proc.stdout, mode="r|*") as archive:
+            for member in archive:
+                members += 1
+                require(members == 1 and member.isfile() and 0 < member.size <= maximum,
+                        "Stopped evidence is not one bounded regular file: " + path)
+                with archive.extractfile(member) as stream:
+                    while block := stream.read(1024 * 1024):
+                        count += len(block)
+                        require(count <= maximum, "Stopped evidence exceeded its bound")
+                        digestor.update(block)
+                        if not hash_only:
+                            payload.append(block)
+                require(count == member.size, "Stopped evidence was truncated")
+        require(proc.wait(timeout=5) == 0 and members == 1 and not expired.is_set(),
+                "Cannot read stopped evidence: " + path)
+        return digestor.hexdigest() if hash_only else b"".join(payload)
+    except (tarfile.TarError, OSError, EOFError, subprocess.TimeoutExpired) as error:
+        raise BuildControlError("Cannot read stopped evidence: " + path) from error
+    finally:
+        timer.cancel()
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+        proc.stdout.close()
+
+
+def _docker_timestamp_ns(value):
+    """Parse Docker's nanosecond UTC timestamps on supported Python 3.10 hosts."""
+    import calendar
+    from datetime import datetime
+    match = re.fullmatch(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?Z", value)
+    require(match is not None, "Invalid Docker UTC timestamp")
+    try:
+        seconds = calendar.timegm(datetime.strptime(match[1], "%Y-%m-%dT%H:%M:%S").timetuple())
+    except ValueError as error:
+        raise BuildControlError("Invalid Docker UTC timestamp") from error
+    return seconds * 10**9 + int((match[2] or "0").ljust(9, "0"))
+
+
+def validate_publication_pins(r):
+    failure = r["observation_failure"]
+    require(isinstance(failure, dict) and set(failure) == {
+        "source_commit", "source_digest", "source_snapshot_sha256", "binary_sha256",
+        "runtime_documents", "storage_documents", "service_times"},
+        "Exact publication-observation evidence required")
+    require(isinstance(failure["source_commit"], str)
+            and re.fullmatch(r"[0-9a-f]{40}", failure["source_commit"]), "Invalid package commit")
+    for key in ("source_digest", "source_snapshot_sha256", "binary_sha256"):
+        require(isinstance(failure[key], str) and SHA.fullmatch(failure[key]), "Invalid publication pin: " + key)
+    for key, expected in (("runtime_documents", set(PUBLICATION_FILES)), ("storage_documents", set(STORAGE_FILES))):
+        require(isinstance(failure[key], dict) and set(failure[key]) == expected
+                and all(isinstance(value, str) and SHA.fullmatch(value) for value in failure[key].values()),
+                "Exact evidence digests required: " + key)
+    require(isinstance(failure["service_times"], dict) and set(failure["service_times"]) == {"backend", "frontend"},
+            "Both incarnation times required")
+    for pin in failure["service_times"].values():
+        require(isinstance(pin, dict) and set(pin) == {"StartedAt", "FinishedAt"}
+                and all(isinstance(value, str) and re.fullmatch(
+                    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z", value)
+                        for value in pin.values()), "Invalid Docker incarnation times")
+    times = failure["service_times"]
+    finish = [_docker_timestamp_ns(pin["FinishedAt"]) for pin in times.values()]
+    require(abs(finish[0] - finish[1]) <= 10**6,
+            "Services did not stop in the same pinned event")
+    for pin in times.values():
+        require(_docker_timestamp_ns(pin["StartedAt"]) < _docker_timestamp_ns(pin["FinishedAt"]),
+                "Invalid stop ordering")
+
+
+def validate_publication_original(original, document, r, control, source):
+    require(original.get("schema") == "fullmag.docker-build-operation.v1"
+            and original.get("phase") == "resume"
+            and original.get("state") == "outcome-unknown-resources-retained"
+            and original.get("attempt") == r["attempt"]
+            and original.get("compose_project") == control.project == r["compose_project"]
+            and original.get("control_volume") == control.volume
+            and original.get("helper_container") == "fullmag-control-" + r["attempt"]
+            and original.get("error") == PUBLICATION_ERROR
+            and r["source_root"] == str(source), "Original publication-observation timeout differs")
+    require(original.get("worker_cgroup") is None and original.get("worker_cgroup_helper") is None
+            and original.get("backend_started_at") == r["observation_failure"]["service_times"]["backend"]["StartedAt"],
+            "Resume passed the pre-admission boundary or backend incarnation differs")
+    require(original.get("inputs", {}).get("attempt") == r["base_attempt"]
+            and original.get("inputs", {}).get("config_sha256") == digest(canonical(document))
+            and original.get("config_sha256") is None, "Resume base/configuration differs")
+    require(document.get("name") == control.project and set(document.get("services", {})) == {"backend", "frontend"}
+            and document["services"]["backend"].get("environment", {}).get("FULLMAG_STARTUP_ENABLED") != "1"
+            and document["services"]["backend"].get("environment", {}).get("FULLMAG_SESSION_STORAGE_PROFILE") == "linux-native-v1"
+            and all(document["services"][service].get("image") == pin["image"] for service, pin in r["containers"].items())
+            and r["containers"]["backend"]["image"] == r["containers"]["frontend"]["image"],
+            "Retained Linux resume configuration/image/startup differs")
+
+
+def validate_publication_base(control, original, document, r):
+    raw = read_raw(control, "development/attempts/" + r["base_attempt"] + "/terminal.json")
+    previous = json.loads(raw)
+    require(digest(raw) == r["failure"]["previous_receipt_sha256"]
+            and previous.get("state") in {"succeeded", "failed-confirmed"}
+            and previous.get("attempt") == r["base_attempt"]
+            and previous.get("inputs", {}).get("source_root") == r["source_root"]
+            and all(previous.get(key) == original.get(key) for key in ("state_root", "backend_volumes", "frontend_volume")),
+            "Retained base resources differ")
+    require(digest(read_raw(control, "frontend/development-inputs.json")) == r["failure"]["inputs_sha256"],
+            "Frozen frontend inputs changed")
+    root = "resume/attempts/" + r["attempt"]
+    for filename in ("backend-build-receipt.json", "provenance.json", "storage-probe-log.json",
+                     "worker-cgroup-compose.json", "worker-cgroup-log.json", "docker_worker_cgroup.py"):
+        require(read_raw(control, root + "/" + filename, optional=True) is None,
+                "Resume publication/admission was already observed: " + filename)
+
+
+def validate_publication_service(actual, service, original, r):
+    require(all(actual["State"].get(key) == value for key, value in
+                r["observation_failure"]["service_times"][service].items()), "Stopped incarnation times changed")
+    require(actual["State"].get("ExitCode") == 255, "Publication timeout requires stopped exit-255 services")
+
+
+def validate_publication_runtime(documents, r):
+    require(set(documents) == set(PUBLICATION_FILES), "Runtime evidence inventory differs")
+    pins = r["observation_failure"]["runtime_documents"]
+    require(all(digest(raw) == pins[name] for name, raw in documents.items()), "Runtime evidence CAS differs")
+    owner, process, config, request, ready = [json.loads(documents[key]) for key in PUBLICATION_FILES]
+    require(owner.get("schema_version") == "runtime_service_owner.v1" and owner.get("state") == "drained"
+            and owner.get("target_id") == "docker-all" and type(owner.get("pid")) is int and owner["pid"] > 0
+            and isinstance(owner.get("children"), list) and len(owner["children"]) == 2
+            and {child.get("role") for child in owner["children"]} == {"compute", "preparation"}
+            and all(child.get("status") == "exited_success" and type(child.get("pid")) is int and child["pid"] > 0
+                    for child in owner["children"]), "Historical OWNER is not successful DRAINED state")
+    require(process.get("schema") == "fullmag.docker-process-tree.v1" and process.get("state") == "drained"
+            and process.get("runtime_pid") is None and process.get("pid") is None
+            and process.get("children", []) == [] and process.get("terminal_service_owner") == owner,
+            "Historical process tree/terminal OWNER differs")
+    require(config.get("schema_version") == "runtime_service_config.v2" and config.get("target_id") == "docker-all"
+            and config.get("store_root") == "/state/runs/docker-all/session-store", "Runtime configuration differs")
+    require(request.get("schema") == "fullmag.worker-cgroup-request.v1"
+            and request.get("container_id") == r["containers"]["backend"]["id"]
+            and request.get("compose_project") == r["compose_project"]
+            and ready.get("schema") == "fullmag.worker-cgroup-ready.v1"
+            and ready.get("container_id") == request.get("container_id")
+            and ready.get("compose_project") == request.get("compose_project")
+            and ready.get("image_id") == r["containers"]["backend"]["image"]
+            and ready.get("state") == "ready"
+            and type(request.get("pid")) is int and request["pid"] > 0
+            and isinstance(ready.get("nonce"), str) and TOKEN.fullmatch(ready["nonce"])
+            and isinstance(ready.get("process_start_token"), str) and ready["process_start_token"].isdigit()
+            and isinstance(request.get("boot_id"), str)
+            and re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", request["boot_id"])
+            and ready.get("boot_id") == request["boot_id"]
+            and isinstance(request.get("nonce"), str) and TOKEN.fullmatch(request["nonce"])
+            and isinstance(request.get("process_start_token"), str) and request["process_start_token"].isdigit()
+            and ready.get("nonce") != request["nonce"]
+            and ready.get("process_start_token") != request["process_start_token"],
+            "Worker evidence admits this incarnation or has ambiguous identity")
+
+
+def validate_publication_evidence(actual, r, state):
+    import docker_volume_dev as dev
+    documents = {key: stopped_file(actual["Id"], path) for key, path in PUBLICATION_FILES.items()}
+    validate_publication_runtime(documents, r)
+    # Runtime mounts are the control volume root, not a copied host namespace.
+    host = dev._session_host()
+    require(all(digest(host.read_owned_regular(state / name)) == value for name, value in
+                r["observation_failure"]["storage_documents"].items()), "Storage probe/history evidence changed")
+    receipt_raw = stopped_file(actual["Id"], "/opt/fullmag/package/backend-build-receipt.json")
+    provenance_raw = stopped_file(actual["Id"], "/opt/fullmag/control/backend/runtime-provenance.json")
+    require(digest(receipt_raw) == r["failure"]["receipt_sha256"]
+            and digest(provenance_raw) == r["failure"]["provenance_sha256"], "Publication CAS differs")
+    receipt, provenance = json.loads(receipt_raw), json.loads(provenance_raw)
+    failure = r["observation_failure"]
+    expected = dev._recovery_build_source(receipt, provenance, failure)
+    require(expected["binary_sha256"] == failure["binary_sha256"]
+            and expected["receipt_sha256"] == digest(receipt_raw)
+            and provenance.get("image_id") == actual["Image"]
+            and stopped_file(actual["Id"], "/opt/fullmag/package/bin/fullmag-bin", maximum=2 * 1024**3,
+                             hash_only=True) == failure["binary_sha256"], "Retained binary/image differs")
+
+
 def validate_request(r):
-    resume = isinstance(r, dict) and r.get("schema") == RESUME_SCHEMA
+    resume = isinstance(r, dict) and r.get("schema") in RESUME_SCHEMAS
     gate_failure = isinstance(r, dict) and r.get("schema") == GATE_FAILURE_SCHEMA
     require(isinstance(r, dict) and set(r) == {"schema", "attempt", "source_root", "source_revision",
         "compose_project", "engine_id", "observed_at", "receipt_sha256", "compose_sha256", "active_sha256",
         "current_sha256", "verified_sha256", "helper_absence_sha256", "backend_log_sha256", "containers",
         "controller_inputs", "controller_sha256", "attempt_documents", "storage_certificate_sha256"}
         | ({"base_attempt", "host_boot_id", "failure", "storage_identity"} if resume else set())
-        | ({"gate_failure"} if gate_failure else set()), "Exact interrupted-operation request required")
-    require(r["schema"] in {SCHEMA, RESUME_SCHEMA, GATE_FAILURE_SCHEMA}
+        | ({"gate_failure"} if gate_failure else set())
+        | ({"observation_failure"} if r.get("schema") == PUBLICATION_SCHEMA else set()), "Exact interrupted-operation request required")
+    require(r["schema"] in {SCHEMA, RESUME_SCHEMA, PUBLICATION_SCHEMA, GATE_FAILURE_SCHEMA}
             and isinstance(r["attempt"], str) and TOKEN.fullmatch(r["attempt"]),
             "Invalid schema or attempt")
     for k in ("receipt_sha256", "compose_sha256", "active_sha256", "helper_absence_sha256",
@@ -370,6 +580,8 @@ def validate_request(r):
             "inputs_sha256", "previous_receipt_sha256", "receipt_sha256", "provenance_sha256"}
             and all(isinstance(value, str) and SHA.fullmatch(value) for value in r["failure"].values()),
             "Exact retained publication pins required")
+    if r["schema"] == PUBLICATION_SCHEMA:
+        validate_publication_pins(r)
     if gate_failure:
         failure = r["gate_failure"]
         require(isinstance(failure, dict) and set(failure) == {
@@ -397,6 +609,8 @@ def validate_request(r):
 
 
 def validate_original(original, document, r, control, source):
+    if r["schema"] == PUBLICATION_SCHEMA:
+        return validate_publication_original(original, document, r, control, source)
     if r["schema"] == RESUME_SCHEMA:
         require(original.get("schema") == "fullmag.docker-build-operation.v1"
                 and original.get("phase") == "resume"
@@ -499,16 +713,22 @@ def failure_result(raw, document, r, request_sha):
         config_sha256=digest(canonical(document)), build_data_qualification="NOT VERIFIED",
         backend_container=r["containers"]["backend"]["id"], frontend_container=r["containers"]["frontend"]["id"],
         error=("Resume failed at frontend readiness; backend namespace later stopped after host restart"
-               if r["schema"] == RESUME_SCHEMA else GATE_FAILURE_MESSAGE if gate_failure else
+               if r["schema"] in RESUME_SCHEMAS else GATE_FAILURE_MESSAGE if gate_failure else
                "Development interrupted before package handoff; producer exit status unavailable"),
         reconciliation={"schema": r["schema"], "request_sha256": request_sha,
             "original_receipt_sha256": r["receipt_sha256"],
             "compose_binding": "retained-configuration-not-package-qualification",
             "service_exit_codes": ({"backend": 2, "frontend": 255} if gate_failure else
-                                    None if r["schema"] == RESUME_SCHEMA else {"backend": 255, "frontend": 255}),
+                                    None if r["schema"] in RESUME_SCHEMAS else {"backend": 255, "frontend": 255}),
             "producer_exit_code": None, "observation_time_not_build_completion": True,
             "containers": r["containers"]})
-    if r["schema"] == RESUME_SCHEMA:
+    if r["schema"] == PUBLICATION_SCHEMA:
+        result["error"] = "Przerwano obserwację publikacji przed admission runtime; potwierdzono zatrzymanie usług i brak helpera"
+        result["reconciliation"].update(
+            observation_failure=r["observation_failure"], retained_publication=r["failure"],
+            native_state_changed=False, owner_changed=False, solve_replayed=False, services_started=False,
+            native_storage_readmission_required=True, native_runtime_recovery_required=True)
+    elif r["schema"] == RESUME_SCHEMA:
         result["frontend_volume"] = document["volumes"]["frontend-build"]["name"]
         result["reconciliation"].update(
             seeded_frontend_volume=json.loads(raw)["frontend_volume"],
@@ -555,6 +775,46 @@ def _live_mount_consumes(actual, protected_volumes, protected_state_root, *, sta
                and mount.get("RW") is True for mount in actual.get("Mounts", []))
 
 
+def _publication_cache_profile(control, r, original, backend):
+    """Read and attest the stopped backend's pinned shared-package namespace."""
+    import docker_backend_volume_cache as cache
+    raw = read_raw(control, "development/attempts/" + r["base_attempt"] + "/backend-cache.json")
+    require(digest(raw) == r["attempt_documents"]["backend-cache.json"], "Backend cache profile CAS differs")
+    profile = json.loads(raw)
+    require(profile.get("schema") == cache.SCHEMA and profile.get("state") == "ready"
+            and profile.get("shared_packages") is True
+            and profile.get("volume_names") == original.get("backend_volumes")
+            and profile.get("control_project") == control.project
+            and isinstance(profile.get("volume_documents"), dict), "Shared package profile is not this group's ready cache")
+    try:
+        retained = cache._validate_volume_documents(profile["volume_documents"], profile)
+        fresh = cache.inspect_volume_pair(lambda *args: docker_capture(*args).stdout.decode("utf-8"), profile)
+        require(fresh == retained, "Backend cache volume identity or mountpoint changed")
+        checked = {**profile, "volume_documents": fresh}
+        cache.validate_container(backend, checked)
+    except cache.BackendVolumeCacheError as error:
+        raise BuildControlError("Cannot attest retained backend cache: " + str(error)) from error
+    return checked
+
+
+def _publication_shared_consumer(actual, profile, retained_volumes, state_root, *, state_alias=None):
+    """Allow only a registered foreign backend using a different package unit."""
+    import docker_backend_volume_cache as cache
+    package = profile["volume_names"][cache.PACKAGE_VOLUME_ROLE]
+    private = retained_volumes - {package}
+    require(not _live_mount_consumes(actual, private, state_root, state_alias=state_alias),
+            "A live container consumes private retained volumes or state")
+    labels = actual.get("Config", {}).get("Labels", {})
+    require(labels.get("com.docker.compose.service") == "backend"
+            and isinstance(labels.get("com.docker.compose.project"), str)
+            and labels["com.docker.compose.project"] != profile["control_project"],
+            "Shared package consumer is not a foreign backend service")
+    try:
+        cache._assert_no_active_consumers(profile, [actual])
+    except cache.BackendVolumeCacheError as error:
+        raise BuildControlError("Unsafe shared package consumer: " + str(error)) from error
+
+
 def _observe_host_clients(source, request, helper_name):
     # Legacy recoveries retain their host-wide observer. Fail-only gate recovery
     # changes this group's receipt under its operation.lock; unrelated DEV
@@ -580,18 +840,21 @@ def observe(control, source, r, result=None, helper_name=None):
     require(digest(document_raw) == r["compose_sha256"], "Compose changed")
     original, document = json.loads(raw), json.loads(document_raw)
     validate_original(original, document, r, control, source)
-    attempt_root = "development/attempts/" + (r["base_attempt"] if r["schema"] == RESUME_SCHEMA else r["attempt"])
+    attempt_root = "development/attempts/" + (r["base_attempt"] if r["schema"] in RESUME_SCHEMAS else r["attempt"])
     for name, sha in r["attempt_documents"].items():
         require(digest(read_raw(control, attempt_root + "/" + name)) == sha, "Attempt document changed: " + name)
     volumes = None
-    if r["schema"] == RESUME_SCHEMA:
+    if r["schema"] in RESUME_SCHEMAS:
         require(Path("/proc/sys/kernel/random/boot_id").read_text().strip() == r["host_boot_id"], "WSL boot changed")
-        volumes = _resume_documents(control, original, document, r, source)
+        if r["schema"] == RESUME_SCHEMA:
+            volumes = _resume_documents(control, original, document, r, source)
+        else:
+            validate_publication_base(control, original, document, r)
 
     import docker_volume_dev as dev
     state = (_compose_state_root(document) if r["schema"] == GATE_FAILURE_SCHEMA
              else Path(original["state_root"]))
-    if r["schema"] == RESUME_SCHEMA:
+    if r["schema"] in RESUME_SCHEMAS:
         _interrupted_resume_certificate(state, document, r)
     else:
         dev._retained_certificate(state, document)
@@ -632,6 +895,7 @@ def observe(control, source, r, result=None, helper_name=None):
                               "--format", "{{.ID}}").stdout.decode().split()
     actuals = json.loads(docker_capture("inspect", *group_ids).stdout) if group_ids else []
     app_ids = set()
+    publication_cache = None
     for actual in actuals:
         if helper_name and actual.get("Name") == "/" + helper_name:
             continue
@@ -640,7 +904,7 @@ def observe(control, source, r, result=None, helper_name=None):
         validate_container(actual, r["containers"][service], service, control.project,
                            interrupted_resume=r["schema"] == RESUME_SCHEMA,
                            gate_failure=r["schema"] == GATE_FAILURE_SCHEMA)
-        if r["schema"] == GATE_FAILURE_SCHEMA:
+        if r["schema"] in {GATE_FAILURE_SCHEMA, PUBLICATION_SCHEMA}:
             validate_gate_container_mounts(actual, service, document, state)
         if r["schema"] == GATE_FAILURE_SCHEMA and service == "backend":
             require(actual["State"].get("StartedAt") == r["gate_failure"]["backend_started_at"],
@@ -649,6 +913,11 @@ def observe(control, source, r, result=None, helper_name=None):
             require(package == {"receipt_sha256": r["gate_failure"]["package_receipt_sha256"],
                                 "provenance_sha256": r["gate_failure"]["provenance_sha256"]},
                     "Initial-gate package publication CAS changed")
+        if r["schema"] == PUBLICATION_SCHEMA:
+            validate_publication_service(actual, service, original, r)
+            if service == "backend":
+                validate_publication_evidence(actual, r, state)
+                publication_cache = _publication_cache_profile(control, r, original, actual)
         if volumes is not None:
             mounts = {m.get("Destination"): m for m in actual.get("Mounts", [])}
             if service == "backend":
@@ -681,18 +950,21 @@ def observe(control, source, r, result=None, helper_name=None):
     if r["schema"] == GATE_FAILURE_SCHEMA:
         validate_gate_log(raw_logs)
     else:
-        require(r["schema"] == RESUME_SCHEMA or b"phase=start state=handoff" not in raw_logs,
+        require(r["schema"] in RESUME_SCHEMAS or b"phase=start state=handoff" not in raw_logs,
                 "Package handoff was observed")
     running = docker_capture("ps", "--no-trunc", "--format", "{{.ID}}").stdout.decode().split()
     retained_volumes, retained_state_root = _protected_retained_mounts(
         original, document, r, volumes, state_root=state if r["schema"] == GATE_FAILURE_SCHEMA else None)
     state_alias = (document['services']['backend'].get('x-fullmag-daemon-binds', {}).get('/state')
-                   if r['schema'] == GATE_FAILURE_SCHEMA else None)
+                   if r['schema'] in {GATE_FAILURE_SCHEMA, PUBLICATION_SCHEMA} else None)
     for actual in (json.loads(docker_capture("inspect", *running).stdout) if running else []):
         if helper_name and actual.get("Name") == "/" + helper_name:
             continue
-        require(not _live_mount_consumes(actual, retained_volumes, retained_state_root, state_alias=state_alias),
-            "A live container consumes retained volumes")
+        if _live_mount_consumes(actual, retained_volumes, retained_state_root, state_alias=state_alias):
+            require(r["schema"] == PUBLICATION_SCHEMA and publication_cache is not None,
+                    "A live container consumes retained volumes")
+            _publication_shared_consumer(actual, publication_cache, retained_volumes, retained_state_root,
+                                         state_alias=state_alias)
     # This scanner identifies our held Docker helper as a mutating client.
     # Scan before acquiring it; canonical admissions thereafter share its flock.
     _observe_host_clients(source, r, helper_name)
@@ -715,12 +987,19 @@ def transaction_script(control, r, request_path, request_sha, result_path, resul
         if None in allowed:
             alternatives.append("test \"$observed\" = absent")
         checks.append("observe " + q(path) + "; { " + " || ".join(alternatives) + "; }")
-    documents = {"development/attempts/" + (r["base_attempt"] if r["schema"] == RESUME_SCHEMA else r["attempt"]) + "/" + name: sha
+    documents = {"development/attempts/" + (r["base_attempt"] if r["schema"] in RESUME_SCHEMAS else r["attempt"]) + "/" + name: sha
                  for name, sha in r["attempt_documents"].items()}
-    if r["schema"] == RESUME_SCHEMA:
+    if r["schema"] in RESUME_SCHEMAS:
         documents.update({"frontend/development-inputs.json": r["failure"]["inputs_sha256"],
             "development/attempts/" + r["base_attempt"] + "/terminal.json": r["failure"]["previous_receipt_sha256"],
             "backend/runtime-provenance.json": r["failure"]["provenance_sha256"]})
+    if r["schema"] == PUBLICATION_SCHEMA:
+        documents.update({path: r["observation_failure"]["runtime_documents"][key]
+                          for key, path in PUBLICATION_CONTROL_FILES.items()})
+    if r["schema"] == PUBLICATION_SCHEMA:
+        for filename in ("backend-build-receipt.json", "provenance.json", "storage-probe-log.json",
+                         "worker-cgroup-compose.json", "worker-cgroup-log.json", "docker_worker_cgroup.py"):
+            checks.append("observe " + q(control.path(root + "/" + filename)) + "; test \"$observed\" = absent")
     for path, sha in documents.items():
         checks.append("observe " + q(control.path(path)) + "; test \"$observed\" = " + q(sha))
     verification = "\n".join(checks)
@@ -734,6 +1013,76 @@ flock -n 9
 """ + "\n".join("publish " + q(control.path(path)) + " " + q(control.path(result_path)) for path in
         (root + "/receipt.json", phase + "/current.json", root + "/terminal.json")) + "\n" + \
         "rm -- /control/active\nsync /control\nprintf 'COMMITTED\\n'\n"
+
+
+def build_publication_request(control, source, attempt, base_attempt):
+    """Build a pinned request in the control volume; never reconcile it."""
+    import docker_volume_dev as dev
+    require(TOKEN.fullmatch(attempt) and TOKEN.fullmatch(base_attempt) and attempt != base_attempt,
+            "Distinct canonical attempt pins required")
+    root, base = "resume/attempts/" + attempt, "development/attempts/" + base_attempt
+    raw = read_raw(control, root + "/receipt.json")
+    original = json.loads(raw)
+    compose_raw = read_raw(control, base + "/compose.json")
+    document = json.loads(compose_raw)
+    ids = docker_capture("ps", "--all", "--no-trunc", "--filter",
+                         "label=com.docker.compose.project=" + control.project, "--format", "{{.ID}}").stdout.decode().split()
+    require(len(ids) == 2, "Exactly two stopped application services required")
+    actuals = json.loads(docker_capture("inspect", *ids).stdout)
+    actual = {value.get("Config", {}).get("Labels", {}).get("com.docker.compose.service"): value for value in actuals}
+    require(set(actual) == {"backend", "frontend"}, "Unexpected group resources")
+    state = Path(original["state_root"])
+    certificate_raw = dev._session_host().read_owned_regular(dev._certificate_path(state))
+    certificate = json.loads(certificate_raw)
+    receipt_raw = stopped_file(actual["backend"]["Id"], "/opt/fullmag/package/backend-build-receipt.json")
+    provenance_raw = stopped_file(actual["backend"]["Id"], "/opt/fullmag/control/backend/runtime-provenance.json")
+    receipt, provenance = json.loads(receipt_raw), json.loads(provenance_raw)
+    source_identity = receipt["source"]
+    binary = [item["sha256"] for item in receipt["artifacts"] if item.get("path") == "bin/fullmag-bin"]
+    require(len(binary) == 1, "One retained native binary required")
+    runtime = {key: stopped_file(actual["backend"]["Id"], path) for key, path in PUBLICATION_FILES.items()}
+    require(all(read_raw(control, path) == runtime[key] for key, path in PUBLICATION_CONTROL_FILES.items()),
+            "Runtime mount/control-volume binding differs")
+    def optional_digest(path):
+        value = read_raw(control, path, optional=True)
+        return digest(value) if value is not None else None
+    r = {"schema": PUBLICATION_SCHEMA, "attempt": attempt, "base_attempt": base_attempt,
+        "source_root": str(source), "source_revision": subprocess.run(
+            ["git", "-C", str(source), "rev-parse", "HEAD"], check=True, capture_output=True).stdout.decode().strip(),
+        "compose_project": control.project, "engine_id": docker_capture("info", "--format", "{{.ID}}").stdout.decode().strip(),
+        "observed_at": time.time(), "receipt_sha256": digest(raw), "compose_sha256": digest(compose_raw),
+        "active_sha256": digest(read_raw(control, "active")),
+        "current_sha256": optional_digest("resume/current.json"), "verified_sha256": optional_digest("resume/verified.json"),
+        "helper_absence_sha256": _probe_helper_absence(original["helper_container"]),
+        "backend_log_sha256": "", "controller_sha256": digest(Path(__file__).read_bytes()),
+        "storage_certificate_sha256": digest(certificate_raw),
+        "host_boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+        "storage_identity": {"root_inode": state.stat().st_ino, "retained_device": certificate["host_device"],
+                             "observed_device": dev.local_volume(state)["host_device"]},
+        "containers": {key: {"id": value["Id"], "image": value["Image"], "fingerprint": fingerprint(value),
+                              "state_sha256": digest(canonical(value["State"]))} for key, value in actual.items()},
+        "controller_inputs": {name: digest((source / "scripts" / name).read_bytes()) for name in CONTROLLERS + (
+            "docker_volume_development_interrupted.py", "docker_volume_frontend_frozen_recovery.py", "docker_development_inputs.py")},
+        "attempt_documents": {name: digest(read_raw(control, base + "/" + name)) for name in (
+            "backend-cache.json", "group-ledger.json", "frontend-seed.json", "cache-maintenance-compose.json")},
+        "failure": {"inputs_sha256": digest(read_raw(control, "frontend/development-inputs.json")),
+            "previous_receipt_sha256": digest(read_raw(control, base + "/terminal.json")),
+            "receipt_sha256": digest(receipt_raw), "provenance_sha256": digest(provenance_raw)},
+        "observation_failure": {"source_commit": source_identity["resolved_commit"],
+            "source_digest": source_identity["source_digest"], "source_snapshot_sha256": source_identity["source_snapshot_sha256"],
+            "binary_sha256": binary[0], "runtime_documents": {key: digest(value) for key, value in runtime.items()},
+            "storage_documents": {name: digest(dev._session_host().read_owned_regular(state / name)) for name in STORAGE_FILES},
+            "service_times": {key: {field: value["State"][field] for field in ("StartedAt", "FinishedAt")}
+                              for key, value in actual.items()}}}
+    logs = docker_capture("logs", actual["backend"]["Id"])
+    r["backend_log_sha256"] = digest(logs.stdout + logs.stderr)
+    validate_request(r)
+    observe(control, source, r)
+    payload = canonical(r) + b"\n"
+    path = "verification/resume-publication-interrupted/" + attempt + "/" + digest(payload) + "/request.json"
+    write_immutable(control, path, payload)
+    return {"state": "request-pinned", "request": path, "request_sha256": digest(payload),
+            "opis": "Zapisano żądanie w wolumenie control; nie zmieniono receiptów operacji ani runtime"}
 
 
 def reconcile(args):
@@ -754,6 +1103,10 @@ def reconcile(args):
     document = json.loads(read_raw(control, _compose_relative(r)))
     result = failure_result(original_raw, document, r, args.request_sha256)
     if read_raw(control, "active", optional=True) is None:
+        if r["schema"] == PUBLICATION_SCHEMA:
+            verified = read_raw(control, "resume/verified.json", optional=True)
+            require((digest(verified) if verified is not None else None) == r["verified_sha256"],
+                    "Verified pointer changed after archived reconciliation")
         require(read_raw(control, base + "/terminal.json", optional=True) == result
             and read_raw(control, base + "/receipt.json") == result, "No matching completed recovery")
         print(json.dumps({"state": "failed-confirmed", "replay": True, "services_started": False, "archived_receipt_confirmation_only": True}))
@@ -788,11 +1141,27 @@ def reconcile(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", required=True)
-    parser.add_argument("--request", required=True)
-    parser.add_argument("--request-sha256", required=True)
+    parser.add_argument("--request")
+    parser.add_argument("--request-sha256")
+    parser.add_argument("--build-publication-request", action="store_true")
+    parser.add_argument("--attempt")
+    parser.add_argument("--base-attempt")
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args(); args.preview = not args.apply
-    reconcile(args)
+    if args.build_publication_request:
+        require(args.attempt is not None and args.base_attempt is not None
+                and not args.apply and args.request is None and args.request_sha256 is None,
+                "Request builder requires only source and two attempt pins")
+        from docker_dev import _select_source, _compose_identity
+        source, layout = _select_source(Path(args.source_root).resolve(strict=True), args.source_root)
+        identity = _compose_identity(layout)
+        cfg = toolchain_configuration(source, identity)
+        control = BuildControl(identity, cfg["services"]["fem-gpu-toolchain"]["build"]["args"]["FULLMAG_CUDA_BASE_IMAGE"])
+        print(json.dumps(build_publication_request(control, source, args.attempt, args.base_attempt)))
+    else:
+        require(args.request is not None and args.request_sha256 is not None
+                and args.attempt is None and args.base_attempt is None, "Pinned request and digest required")
+        reconcile(args)
 
 if __name__ == "__main__":
     main()

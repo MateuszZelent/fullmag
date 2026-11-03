@@ -54,6 +54,7 @@ extern "C" {
 #define FULLMAG_FDM_CAPABILITY_FROZEN_SPINS_V1 (UINT64_C(1) << 0)
 #define FULLMAG_FDM_PLAN_DESC_ABI_V2 UINT32_C(2)
 #define FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1 UINT32_C(1)
+#define FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_LAYERS_ABI_V1 UINT32_C(1)
 #define FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V1 UINT32_C(1)
 #define FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V2 UINT32_C(2)
 
@@ -72,6 +73,8 @@ typedef enum {
 typedef enum {
     FULLMAG_FDM_TRANSFER_IDENTITY = 0,
     FULLMAG_FDM_TRANSFER_PUSH_PULL = 1,
+    /* Exact same-cell embed/crop with a centered XY native-grid offset. */
+    FULLMAG_FDM_TRANSFER_CENTERED_ALIGNED = 2,
 } fullmag_fdm_transfer_kind;
 
 typedef enum {
@@ -506,6 +509,22 @@ typedef struct {
     uint32_t                         reserved0;
     double                           dmi_D_rotated_interfacial; /* D_21 = D_32 (J/m^2) */
 } fullmag_fdm_rotated_interfacial_dmi_desc_v1;
+
+/* Sparse per-layer overrides; omitted layers retain their current coefficient. */
+typedef struct {
+    uint32_t                         layer_index;
+    int32_t                          has_rotated_interfacial_dmi;
+    uint32_t                         reserved0;
+    double                           dmi_D_rotated_interfacial; /* J/m^2 */
+} fullmag_fdm_rotated_interfacial_dmi_layer_v1;
+
+typedef struct {
+    uint32_t                         abi_version;
+    uint32_t                         struct_size;
+    const fullmag_fdm_rotated_interfacial_dmi_layer_v1 *layers;
+    uint32_t                         entry_count;
+    uint32_t                         reserved0;
+} fullmag_fdm_rotated_interfacial_dmi_layers_desc_v1;
 
 typedef struct {
     fullmag_fdm_grid_desc      grid;
@@ -1431,6 +1450,11 @@ int fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
     fullmag_fdm_backend *handle,
     const fullmag_fdm_rotated_interfacial_dmi_desc_v1 *descriptor);
 
+/* Apply sparse overrides by upload-order layer index, before the first step. */
+int fullmag_fdm_backend_set_rotated_interfacial_dmi_layers_v1(
+    fullmag_fdm_backend *handle,
+    const fullmag_fdm_rotated_interfacial_dmi_layers_desc_v1 *descriptor);
+
 int fullmag_fdm_backend_set_stats_policy_v1(
     fullmag_fdm_backend *handle,
     const fullmag_fdm_stats_policy_v1 *policy);
@@ -1845,6 +1869,16 @@ int fullmag_fdm_backend_upload_layer_magnetization_f32(
     uint32_t               layer_index,
     const float           *m_xyz,
     uint64_t               len);
+
+/** FP64 resident multilayer PG-BB scalar/vector operation. 20 doubles/layer.
+ * op: 0 refresh/evaluate, 1 capture accepted, 2 normalized trial, 3 restore.
+ * op 2 returns changed/invalid cell counts in slots 18/19 (others zero);
+ * invalid normalization is a backtrack request and never reaches field evaluation.
+ * No operation advances physical time or publishes an accepted solver step.
+ */
+int fullmag_fdm_backend_multilayer_bb(
+    fullmag_fdm_backend *handle, uint32_t op, double lambda,
+    double *layer_scalars, uint64_t scalar_count);
 
 /**
  * Recompute staged v2 multilayer H_DEMAG without taking a time step.

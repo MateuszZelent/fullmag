@@ -113,7 +113,7 @@
 }
 
 
-@media (max-width: 1180px) {
+@media (max-width: 1368px) {
   .fm-footer-diagnostics {
     grid-template-columns: minmax(0, 1fr);
     overflow: auto;

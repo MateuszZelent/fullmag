@@ -3617,11 +3617,83 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
     );
     assert!(terminal_scalar.study_output.is_none());
     assert!(!solution_artifact_ids.contains(terminal_scalar.artifact_id.as_str()));
+    let terminal_completion_entries = output_catalog
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.artifact_type
+                == crate::accepted_field_materialization_worker::TERMINAL_COMPLETION_ARTIFACT_TYPE
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(terminal_completion_entries.len(), 1);
+    let terminal_completion = terminal_completion_entries[0];
+    assert_eq!(terminal_completion.task_id, claim.task_id.as_str());
+    assert_eq!(terminal_completion.attempt_id, claim.attempt_id.as_str());
+    assert_eq!(
+        terminal_completion.ownership_epoch,
+        claim.ownership_epoch.value()
+    );
+    assert_eq!(
+        terminal_completion.status,
+        fullmag_session::FmsArtifactStatus::Published
+    );
+    assert!(!terminal_completion.required);
+    assert!(terminal_completion.study_output.is_none());
+    // Completion is separately pinned system evidence, not an authored output
+    // or a SolutionSet member. Validate its CAS digest and exact terminal state
+    // before excluding this specific artifact from the membership comparison.
+    let completion_record = crate::accepted_field_materialization_worker::read_terminal_completion(
+        &store,
+        terminal_completion,
+    )
+    .expect("terminal completion evidence is durably stored with a valid CAS digest");
+    assert_eq!(completion_record.run_id, accepted_run_id.as_str());
+    assert_eq!(completion_record.step_id, step.step_id);
+    assert_eq!(completion_record.source, *accepted_state_ref);
+    assert_eq!(
+        completion_record.state_object_ref,
+        output_entry.content_sha256
+    );
+    assert_eq!(
+        completion_record.input_fingerprint,
+        published_task.input_fingerprint
+    );
+    assert_eq!(
+        completion_record.resolved_input_fingerprint,
+        published_task.resolved_input_fingerprint
+    );
+    let fullmag_application::DecodedStudyArtifact::MagnetizationState(final_state) =
+        fullmag_application::decode_study_artifact_bytes(
+            "state",
+            &observation_source.state_codec_id,
+            &observation_source.state_codec_version,
+            &output_bytes,
+        )
+        .unwrap()
+    else {
+        panic!("final state must decode as accepted magnetization");
+    };
+    assert_eq!(completion_record.clock.accepted_step, final_state.step);
+    assert_eq!(
+        completion_record.clock.time_seconds.to_bits(),
+        final_state.time_s.to_bits()
+    );
+    assert_eq!(
+        completion_record.solver_dt_s.to_bits(),
+        final_state.solver_dt_s.to_bits()
+    );
+    assert_eq!(
+        completion_record.clock.dt_seconds,
+        (final_state.solver_dt_s > 0.0).then_some(final_state.solver_dt_s)
+    );
+    assert_eq!(completion_record.completion.status, "completed");
+    assert!(!solution_artifact_ids.contains(terminal_completion.artifact_id.as_str()));
     let expected_solution_artifact_ids = output_catalog
         .entries
         .iter()
         .filter(|entry| {
             entry.artifact_id != accepted_quantity_bundle.artifact_id
+                && entry.artifact_id != terminal_completion.artifact_id
                 && entry.artifact_type
                     != crate::accepted_field_materialization_worker::TERMINAL_SCALAR_ARTIFACT_TYPE
         })
