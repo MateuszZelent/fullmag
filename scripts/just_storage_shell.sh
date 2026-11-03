@@ -135,18 +135,28 @@ case "${recipe}" in
     exec "${python_cmd}" -B "${script_dir}/docker_dev_preclaim_cancel.py" "${preclaim_args[@]}"
     ;;
   *"scripts/docker_goebel_qualification.py"*)
-    goebel_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_goebel_qualification.py\" --repo-root \"[^\"]+\" --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --source-commit '([0-9a-f]{40})' --port '([0-9]{4,5})'( --terminal-run-id '([A-Za-z0-9][A-Za-z0-9._-]{0,159})')?[[:space:]]*$"
+    goebel_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_goebel_qualification.py\" --repo-root \"[^\"]+\" --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --source-commit '([0-9a-f]{40})' --port '([0-9]{4,5})'( --lane fem-periodic --mesh-sha256 '([0-9a-f]{64})' --solver-timeout-s '([0-9]{2,5})')?( --terminal-run-id '([A-Za-z0-9][A-Za-z0-9._-]{0,159})')?( --(observe|reconcile)-attempt '([0-9a-f]{32})')?[[:space:]]*$"
     if [[ ! "${recipe}" =~ ${goebel_pattern} ]]; then
-      echo "[fullmag just] invalid Goebel GPU qualification recipe" >&2
+      echo "[fullmag just] invalid Goebel qualification recipe" >&2
       exit 2
     fi
-    terminal_args=()
+    goebel_args=()
     if [[ -n "${BASH_REMATCH[7]:-}" ]]; then
-      terminal_args+=(--terminal-run-id "${BASH_REMATCH[7]}")
+      goebel_args+=(--lane fem-periodic --mesh-sha256 "${BASH_REMATCH[7]}" --solver-timeout-s "${BASH_REMATCH[8]}")
+    fi
+    if [[ -n "${BASH_REMATCH[10]:-}" ]]; then
+      goebel_args+=(--terminal-run-id "${BASH_REMATCH[10]}")
+    fi
+    if [[ -n "${BASH_REMATCH[12]:-}" ]]; then
+      if [[ -z "${BASH_REMATCH[7]:-}" ]]; then
+        echo "[fullmag just] Goebel observation requires the FEM periodic recipe" >&2
+        exit 2
+      fi
+      goebel_args+=("--${BASH_REMATCH[12]}-attempt" "${BASH_REMATCH[13]}")
     fi
     exec "${python_cmd}" -B "${script_dir}/docker_goebel_qualification.py" --repo-root "${repo_root}" \
       --attempt "${BASH_REMATCH[1]}" --config-sha256 "${BASH_REMATCH[2]}" --source-root "${BASH_REMATCH[3]}" \
-      --source-commit "${BASH_REMATCH[4]}" --port "${BASH_REMATCH[5]}" "${terminal_args[@]}"
+      --source-commit "${BASH_REMATCH[4]}" --port "${BASH_REMATCH[5]}" "${goebel_args[@]}"
     ;;
   *"scripts/docker_nf_common_volume.py"*)
     nf_volume_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_nf_common_volume.py\" --repo-root \"[^\"]+\" --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --producer-attempt '([0-9a-f]{32})' --producer-receipt-sha256 '([0-9a-f]{64})' --report-id '([0-9a-f]{32})'( --profile '(comparison|fixed-m-iterations-1248)')?$"
