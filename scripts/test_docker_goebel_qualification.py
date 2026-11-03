@@ -130,10 +130,16 @@ def test_mesh_pin_and_deadline_are_explicit():
     args.mesh_sha256 = "f" * 64
     assert q.validate_lane_args(args) > 3600
     args.solver_timeout_s = 86401
+    assert q.validate_lane_args(args) == 86401
+    args.solver_timeout_s = 604801
     with pytest.raises(ValueError, match="deadline"):
         q.validate_lane_args(args)
     args.lane = "fdm"
     with pytest.raises(ValueError, match="mesh SHA-256"):
+        q.validate_lane_args(args)
+    args.mesh_sha256 = None
+    args.solver_timeout_s = 86401
+    with pytest.raises(ValueError, match="deadline"):
         q.validate_lane_args(args)
 
 

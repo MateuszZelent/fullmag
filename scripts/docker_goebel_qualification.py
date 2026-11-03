@@ -50,6 +50,7 @@ MAX_RECORD = 8 * 1024 * 1024
 SOLVER_TIMEOUT_S = 3600
 FEM_TIMEOUT_S = 12 * 3600
 MAX_TIMEOUT_S = 24 * 3600
+MAX_FEM_TIMEOUT_S = 7 * 24 * 3600
 MAX_MESH_BYTES = 64 * 1024 * 1024
 MESH_TIMEOUT_S = 300
 TOKEN = re.compile(r"[0-9a-f]{32}")
@@ -96,7 +97,8 @@ def validate_lane_args(args):
     deadline = args.solver_timeout_s
     if deadline is None:
         return FEM_TIMEOUT_S if args.lane == FEM_LANE else SOLVER_TIMEOUT_S
-    require(type(deadline) is int and 60 <= deadline <= MAX_TIMEOUT_S, "invalid solver deadline")
+    maximum = MAX_FEM_TIMEOUT_S if args.lane == FEM_LANE else MAX_TIMEOUT_S
+    require(type(deadline) is int and 60 <= deadline <= maximum, "invalid solver deadline")
     return deadline
 
 
