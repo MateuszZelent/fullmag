@@ -434,7 +434,7 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-runtime-service orphan_teardown_
           cargo test -p fullmag-runtime-control --lib claim::host_binding_tests::fresh_v2_host_claim_receives_the_canonical_runtime_generation_binding -- --exact
           cargo test -p fullmag-runner --lib fem_gpu_execution_receipt_contract_tests
-          cargo test -p fullmag-runner --lib fem_registry_routes_periodic_rotated_dmi_to_native_gpu_for_explicit_rk
+          cargo test -p fullmag-runner --lib fem_periodic_rotated_dmi_admits_gpu_explicit_rk
           cargo test -p fullmag-plan --lib fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs
           cargo test -p fullmag-plan --lib fem_gpu_rotated_interfacial_dmi_rejects_an_incomplete_periodic_seam
           cargo test -p fullmag-session --lib host_resource_ledger

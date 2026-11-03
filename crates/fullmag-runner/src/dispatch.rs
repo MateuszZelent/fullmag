@@ -6281,9 +6281,8 @@ mod tests {
     }
 
     #[test]
-    fn fem_registry_routes_periodic_rotated_dmi_to_native_gpu_for_explicit_rk() {
+    fn fem_periodic_rotated_dmi_admits_gpu_explicit_rk() {
         let _guard = env_lock().lock().expect("env mutex");
-        let mut problem = fem_policy_problem();
         let mut fem = tiny_fem_plan();
         fem.integrator = Some(fullmag_ir::IntegratorChoice::Rk45);
         fem.rotated_interfacial_dmi = Some(3.0e-3);
@@ -6292,62 +6291,25 @@ mod tests {
             node_a: 0,
             node_b: 1,
         }];
-
-        let temp = TempDirGuard::new();
-        let runtimes = temp.path.join("runtimes");
-        for device in ["cpu", "gpu"] {
-            let family = format!("fem-{device}");
-            let root = runtimes.join(&family);
-            fs::create_dir_all(root.join("bin")).expect("create FEM runtime");
-            fs::write(root.join("bin/worker"), b"stub").expect("write FEM worker");
-            fs::write(
-                root.join("manifest.json"),
-                serde_json::json!({
-                    "family": family,
-                    "version": "0.1.0",
-                    "worker": "bin/worker",
-                    "engines": [{"backend": "fem", "device": device, "precision": "double"}]
-                })
-                .to_string(),
-            )
-            .expect("write FEM runtime manifest");
-        }
-        let registry = RuntimeRegistry::discover(&runtimes);
-
-        let execution = std::env::var_os("FULLMAG_FEM_EXECUTION");
-        let all_in_gpu = std::env::var_os("FULLMAG_FEM_ALL_IN_GPU");
-        unsafe {
-            std::env::remove_var("FULLMAG_FEM_EXECUTION");
-            std::env::remove_var("FULLMAG_FEM_ALL_IN_GPU");
-        }
-        let forced = resolve_fem_engine_with_registry(&problem, &registry, false, Some(&fem), false);
-        fem.integrator = Some(fullmag_ir::IntegratorChoice::Abm3);
-        let unsupported =
-            resolve_fem_engine_with_registry(&problem, &registry, false, Some(&fem), false);
-        problem.problem_meta.runtime_metadata.insert(
-            "runtime_selection".to_string(),
-            serde_json::json!({"device": "auto"}),
-        );
-        let auto = resolve_fem_engine_with_registry(&problem, &registry, false, Some(&fem), false);
-        for (name, value) in [
-            ("FULLMAG_FEM_EXECUTION", execution),
-            ("FULLMAG_FEM_ALL_IN_GPU", all_in_gpu),
-        ] {
-            if let Some(value) = value {
-                unsafe { std::env::set_var(name, value) };
-            }
-        }
-
-        let forced = forced.expect("forced GPU must accept periodic rDMI with RK45");
-        assert_eq!(forced.runtime_family.as_deref(), Some("fem-gpu"));
-        assert_eq!(forced.resolved_device, "gpu");
+        // Supply the already-resolved engine to test plan constraints without
+        // depending on a CUDA device on the CI host.
+        let gpu = || EngineResolution {
+            engine: FemEngine::NativeGpu,
+            fallback: None,
+        };
+        let forced = apply_fem_gpu_plan_constraints(&fem, gpu(), true, None)
+            .expect("forced GPU must accept periodic rDMI with RK45");
+        assert_eq!(forced.engine, FemEngine::NativeGpu);
         assert!(forced.fallback.is_none());
-        let error = unsupported.expect_err("forced GPU must reject periodic rDMI with ABM3");
+
+        fem.integrator = Some(fullmag_ir::IntegratorChoice::Abm3);
+        let error = apply_fem_gpu_plan_constraints(&fem, gpu(), true, None)
+            .expect_err("forced GPU must reject periodic rDMI with ABM3");
         assert!(error.message.contains("Heun, RK4, RK23, and RK45"));
-        let resolution = auto.expect("auto may choose the advertised CPU worker");
-        assert_eq!(resolution.runtime_family.as_deref(), Some("fem-cpu"));
-        assert_eq!(resolution.resolved_device, "cpu");
-        let fallback = resolution.fallback.expect("auto CPU choice must retain its reason");
+        let auto = apply_fem_gpu_plan_constraints(&fem, gpu(), false, None)
+            .expect("auto may choose CPU for ABM3");
+        assert_eq!(auto.engine, FemEngine::CpuNative);
+        let fallback = auto.fallback.expect("auto CPU choice must retain its reason");
         assert!(fallback.message.contains("Heun, RK4, RK23, and RK45"));
     }
 

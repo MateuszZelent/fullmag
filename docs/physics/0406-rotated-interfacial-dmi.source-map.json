@@ -103,6 +103,27 @@
       "evidence_status": "runtime_not_verified"
     },
     {
+      "id": "fem-cuda-periodic-projection",
+      "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu",
+      "symbol": "dmi_project_field_kernel",
+      "responsibility": "Reduce and lift the weak DMI field by node class on CUDA.",
+      "evidence_status": "runtime_not_verified"
+    },
+    {
+      "id": "periodic-poisson-source",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp",
+      "symbol": "make_periodic_cpu_magnetic_attribute_marker",
+      "responsibility": "Restrict periodic Poisson source quadrature to disjoint magnetic attributes.",
+      "evidence_status": "runtime_not_verified"
+    },
+    {
+      "id": "periodic-poisson-solve",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp",
+      "symbol": "solve_demag_periodic_poisson_reduced",
+      "responsibility": "Reuse the hierarchy and certify the residual of the reduced periodic solve.",
+      "evidence_status": "runtime_not_verified"
+    },
+    {
       "id": "fem-equilibrium-identity",
       "path": "crates/fullmag-runner/src/fem/equilibrium_identity.rs",
       "symbol": "validate_supported_relax_source",
@@ -325,7 +346,7 @@
     {
       "id": "rdmi-fem-periodic-projection",
       "symbols": ["Hrdmi", "g", "mu0", "Ms", "Mlump", "C", "b"],
-      "sources": ["fem-periodic-projection"]
+      "sources": ["fem-periodic-projection", "fem-cuda-periodic-projection"]
     }
   ],
   "public_api": {

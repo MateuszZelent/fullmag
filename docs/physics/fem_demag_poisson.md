@@ -96,17 +96,6 @@ still in `mfem_bridge.cpp`.
   and airbox Robin.
 - Periodic demag uses the extracted algebraic `P^T A P` reduction and lift
   helpers.
-- The periodic P1 Tet4 CPU optimization targets two operations with the same
-  discrete model. Domain integrals for $b_i=\int_{\Omega_m} M_s\mathbf m\cdot\nabla\phi_i\,dV$
-  restrict quadrature to magnetic attributes when these are disjoint from air
-  attributes. $M_s$ is in $\mathrm{A/m}$, $\mathbf m$ and the shape function
-  $\phi_i$ are dimensionless, $dV$ is in $\mathrm{m^3}$ and $b_i$ is in
-  $\mathrm{A\,m}$. For periodic CPU CG with AMG, the reusable Hypre hierarchy
-  acts on the same reduced matrix. The independently certified true residual
-  and the accepted reduced warm start remain the acceptance and rollback
-  contracts. Qualification must compare potential, field, energy and seam
-  continuity on identical mesh/state inputs, and measure RHS, setup and solve
-  separately. Source changes alone do not qualify the trajectory.
 - Non-periodic demag uses the extracted Hypre-backed solve helper when the MFEM
   runtime is MPI/Hypre-enabled.
 - The Hypre solve helper returns the solved workspace vector directly to

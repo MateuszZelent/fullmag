@@ -426,6 +426,17 @@ rozmiaru airboxa, charakterystyki siatki i liczby obrazów, ponieważ te
 parametry wpływają na różnicę między realizacjami magnetostatyki. Kwalifikacja
 pełnego przebiegu i porównania pozostaje `NOT VERIFIED`.
 
+Periodyczny FEM CPU ogranicza kwadraturę prawej strony Poissona
+$b_i=\int_{\Omega_m} M_s\mathbf m\cdot\nabla v_i\,dV$ do atrybutów
+magnetycznych, gdy są rozłączne z atrybutami powietrza. Jednostką $b_i$
+pozostaje $\mathrm{A\,m}$. CG z Hypre może ponownie użyć hierarchii AMG
+dla tej samej macierzy zredukowanej. O akceptacji decyduje niezależnie
+obliczona norma residualu, a odrzucone rozwiązanie nie zmienia ostatniego
+zaakceptowanego stanu startowego solvera. Porównanie obejmuje potencjał,
+odzyskane pole, energię i ciągłość szwu na tej samej siatce i przy tym samym
+stanie. Czasy składania, przygotowania hierarchii i rozwiązania mierzy się
+osobno.
+
 Siatka warstwowa dzieli każdy prostopadłościan na sześć zgodnie
 zorientowanych tetraedrów wokół tej samej przekątnej. Film i powietrze
 dzielą węzły na styku, a końce toru mają identyczne triangulacje
@@ -529,6 +540,9 @@ w macierzy wsparcia.
 | FEM planner | `crates/fullmag-plan/src/fem.rs` | `estimate_fem_exchange_stiffness` | lokalny exchange z nodal/element `A` dla warunku naturalnego | FEM CPU/GPU | implemented, source test |
 | residual FEM | `backends/fem/src/dmi_weak_residual.cpp` | `dmi_accumulate_rotated_interfacial_residual` | wspólna pierwsza wariacja | FEM CPU/GPU | implemented, source test; runtime not verified |
 | periodyczna projekcja FEM | `backends/fem/cpu/mfem/interactions/dmi_workspace.cpp` | `accumulate_dmi_periodic_residual_and_mass` | suma residualu i masy po klasie oraz podniesienie do węzłów | FEM CPU | runtime not verified |
+| periodyczna projekcja CUDA | `backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu` | `dmi_project_field_kernel` | projekcja i podniesienie pola według klas na urządzeniu | FEM GPU | runtime not verified |
+| magnetyczna dziedzina źródła Poissona | `backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp` | `make_periodic_cpu_magnetic_attribute_marker` | ograniczenie kwadratury do materiału magnetycznego | FEM CPU | implemented |
+| zredukowany solver Poissona | `backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp` | `solve_demag_periodic_poisson_reduced` | ponowne użycie hierarchii i kontrola residualu | FEM CPU | implemented |
 | FEM reference telemetry | `crates/fullmag-runner/src/fem_reference.rs` | `rotated_dmi_energy_from_magnetization` | rozdzielenie energii rDMI w live/relaxation stats | FEM CPU | implemented, source test; runtime not verified |
 | FEM equilibrium identity | `crates/fullmag-runner/src/fem/equilibrium_identity.rs` | `validate_supported_relax_source` | odrzucenie DMI poza zakresem tożsamości modalnej | FEM | implemented, source test |
 | CUDA rDMI workspace | `backends/fdm/gpu/cuda/runtime/context.cu` | `context_ensure_rotated_dmi_workspace` | transakcyjne alokacje i retry accounting | FDM GPU | implemented, managed runtime not verified |
