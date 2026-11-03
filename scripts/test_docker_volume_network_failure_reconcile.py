@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import json
 import fcntl
+import stat
 import tempfile
 from pathlib import Path
 import subprocess
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import docker_volume_network_failure_reconcile as reconcile
 from docker_build_control import BuildControlError, canonical
@@ -119,6 +120,110 @@ class NetworkFailureValidatorsTests(unittest.TestCase):
                     changed, attempt=ATTEMPT, project=PROJECT, volume="fullmag-control-volume",
                     identity=IDENTITY, network_name=NETWORK,
                 )
+
+    def test_windows_binds_require_and_retain_exact_evidence(self):
+        foreign = {**helper_doc(), "Id": "b" * 64, "Name": "/foreign", "Config": {}}
+        sources = [r"C:\git\foreign", "/run/desktop/mnt/host/e/git/foreign"]
+        foreign["Mounts"] = [{"Type": "bind", "Source": source} for source in sources]
+        args = dict(helper_id="a" * 64, helper_name="fullmag-control-" + ATTEMPT,
+                    project=PROJECT, network_name=NETWORK, identity=IDENTITY, control_volume="own-control")
+        with self.assertRaisesRegex(BuildControlError, "requires initial recovery isolation evidence"):
+            reconcile.validate_container_inventory([helper_doc(), foreign], **args)
+        proof = Mock(side_effect=lambda doc, source: (None, {"bind": source, "id": doc["Id"]}))
+        result = reconcile.validate_container_inventory([helper_doc(), foreign], qualify_desktop_bind=proof, **args)
+        self.assertEqual({entry["bind"] for entry in result if "bind" in entry}, set(sources))
+        self.assertEqual([call.args for call in proof.call_args_list], [(foreign, source) for source in sources])
+
+    def test_desktop_alias_cannot_hide_checkout_overlap(self):
+        foreign = {**helper_doc(), "Id": "b" * 64, "Name": "/foreign", "Config": {}}
+        alias = reconcile.WSL_ALIAS + "Ubuntu/" + "0" * 64
+        args = dict(helper_id="a" * 64, helper_name="fullmag-control-" + ATTEMPT,
+                    project=PROJECT, network_name=NETWORK, identity=IDENTITY, control_volume="own-control")
+        for source in (alias, "/run/desktop/mnt/host/c"):
+            foreign["Mounts"] = [{"Type": "bind", "Source": source}]
+            with self.subTest(source=source), self.assertRaisesRegex(BuildControlError, "requires initial"):
+                reconcile.validate_container_inventory([helper_doc(), foreign], **args)
+        foreign["Mounts"] = [{"Type": "bind", "Source": alias}]
+        with self.assertRaisesRegex(BuildControlError, "consumes this group"):
+            reconcile.validate_container_inventory(
+                [helper_doc(), foreign], **args,
+                qualify_desktop_bind=lambda *_: (IDENTITY["source_root"], {"source": alias}),
+            )
+
+    def test_external_junction_requires_exact_drvfs_target_and_own_proof(self):
+        source = r"C:\git\foreign"
+        target = r"E:\git\storage\target"
+        origin = {"path": "/mnt/c/git/foreign", "mode": stat.S_IFDIR, "device": 2}
+        destination = {"path": "/mnt/e/git/storage/target", "mode": stat.S_IFDIR, "device": 3}
+        native = {"candidate": {"path": source, "kind": "directory"}}
+        target_native = {"candidate": {"path": target, "kind": "directory"}}
+        record = {"tag": "0xa0000003", "target": target}
+        with (
+            patch.object(reconcile.windows, "_mapping", side_effect=lambda s: origin if s == source else destination),
+            patch.object(reconcile.windows, "_native", side_effect=lambda s, *a, **kw: native if s == source else target_native) as observe,
+            patch.object(reconcile.windows, "_link_paths", return_value=[("target", "target", record)]),
+            patch.object(reconcile.windows, "_link_parent_directories"),
+            patch.object(reconcile.windows, "_file_identity", return_value={"mode": stat.S_IFLNK, "device": 2}),
+            patch.object(reconcile.windows, "_qualify_links", return_value=[]),
+            patch.object(reconcile.os, "readlink", return_value=destination["path"]) as readlink,
+        ):
+            proof = reconcile._observe_present_windows_bind(source, "Ubuntu", 1)
+            self.assertEqual(proof["external_junctions"]["target"]["native"], target_native)
+            observe.assert_any_call(target, "Ubuntu")
+            readlink.return_value = "/home/user/protected"
+            with self.assertRaisesRegex(BuildControlError, "exact disjoint DrvFs"):
+                reconcile._observe_present_windows_bind(source, "Ubuntu", 1)
+
+    def test_publication_refresh_rejects_changed_windows_evidence(self):
+        compose = {"services": {"backend": {"volumes": [
+            {"type": "bind", "target": "/state", "source": "/state/reference"},
+        ]}}}
+        source = r"C:\git\foreign"
+        pin = {"id": "b" * 64}
+        with (
+            patch.dict(reconcile.os.environ, {"WSL_DISTRO_NAME": "Ubuntu"}),
+            patch.object(reconcile.windows, "_linux_identity", return_value={"root_device": 1, "engine_id": "engine"}),
+            patch.object(reconcile.windows, "_engine", return_value={"ID": "engine"}),
+            patch.object(reconcile.windows, "_container_pin", return_value=pin),
+            patch.object(reconcile, "_observe_windows_source",
+                         side_effect=[{"kind": "present", "inode": 12}, {"kind": "present", "inode": 13}]),
+        ):
+            qualify, verify = reconcile._initial_desktop_qualifier(IDENTITY, compose, "engine")
+            qualify({}, source)
+            with self.assertRaisesRegex(BuildControlError, "changed before failure publication"):
+                verify(refresh_windows=True)
+
+    def test_vanishing_container_retries_full_inventory(self):
+        error = BuildControlError("error: no such object: " + "c" * 64)
+        with patch.object(reconcile, "_inspect_inventory_snapshot", side_effect=[error, [helper_doc()]]) as inspect:
+            self.assertEqual(reconcile._container_inventory(), [helper_doc()])
+            self.assertEqual(inspect.call_count, 2)
+
+    def test_absent_windows_evidence_cannot_be_reused_after_container_starts(self):
+        source = r"C:\git\missing"
+        compose = {"services": {"backend": {"volumes": [
+            {"type": "bind", "target": "/state", "source": "/state/reference"},
+        ]}}}
+        stopped = {"id": "b" * 64, "state": {
+            "Status": "exited", "Running": False, "Paused": False, "Restarting": False,
+            "Dead": False, "Pid": 0,
+        }}
+        running = {"id": "c" * 64, "state": {**stopped["state"], "Status": "running", "Running": True}}
+        with (
+            patch.dict(reconcile.os.environ, {"WSL_DISTRO_NAME": "Ubuntu"}),
+            patch.object(reconcile.windows, "_linux_identity", return_value={"root_device": 1, "engine_id": "engine"}),
+            patch.object(reconcile.windows, "_engine", return_value={"ID": "engine"}),
+            patch.object(reconcile.windows, "_container_pin", side_effect=lambda value: value),
+            patch.object(reconcile.windows, "_capture", return_value=b"/mnt/c/git/missing"),
+            patch.object(reconcile.Path, "lstat", side_effect=FileNotFoundError),
+            patch.object(reconcile.absent_windows, "_native", return_value={"missing": True}) as native,
+            patch.object(reconcile.absent_windows, "_mapping", return_value={"device": 2}),
+        ):
+            qualify, _ = reconcile._initial_desktop_qualifier(IDENTITY, compose, "engine")
+            self.assertEqual(qualify(stopped, source)[1]["kind"], "absent-stopped")
+            with self.assertRaisesRegex(BuildControlError, "exactly stopped"):
+                qualify(running, source)
+            native.assert_called_once_with(source)
 
     def test_container_inventory_requires_exact_helper_and_rejects_stopped_app(self):
         helper = helper_doc()
