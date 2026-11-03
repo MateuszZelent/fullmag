@@ -284,6 +284,9 @@ pub struct FdmMultilayerPlanIR {
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct FdmLayerPlanIR {
+    /// Explicit layer coefficient; None inherits the legacy study-wide value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotated_interfacial_dmi: Option<f64>,
     pub magnet_name: String,
     /// Stable layer identity derived from the authored object identity.
     pub layer_id: String,
@@ -310,6 +313,8 @@ pub struct FdmLayerPlanIR {
 
 #[derive(Debug, Clone, Deserialize)]
 struct FdmLayerPlanWireIR {
+    #[serde(default)]
+    rotated_interfacial_dmi: Option<f64>,
     magnet_name: String,
     #[serde(default)]
     layer_id: Option<String>,
@@ -338,7 +343,11 @@ impl<'de> Deserialize<'de> for FdmLayerPlanIR {
         D: Deserializer<'de>,
     {
         let wire = FdmLayerPlanWireIR::deserialize(deserializer)?;
+        if wire.rotated_interfacial_dmi.is_some_and(|d| !d.is_finite()) {
+            return Err(serde::de::Error::custom("layer rotated_interfacial_dmi must be finite"));
+        }
         Ok(Self {
+            rotated_interfacial_dmi: wire.rotated_interfacial_dmi,
             layer_id: wire
                 .layer_id
                 .unwrap_or_else(|| format!("layer:{}", wire.magnet_name)),
@@ -995,11 +1004,10 @@ impl FdmMultilayerPlanIR {
             let mut legend_ids = BTreeSet::new();
             if let Some(legend) = layer.native_region_legend.as_deref() {
                 for entry in legend {
-                    if entry.numeric_id == 0 || entry.numeric_id > crate::MAX_FDM_REGION_IDS {
+                    if entry.numeric_id == 0 || entry.numeric_id == u32::MAX {
                         errors.push(format!(
-                            "fdm multilayer layer[{index}] native_region_legend numeric_id {} is outside 1..={}",
-                            entry.numeric_id,
-                            crate::MAX_FDM_REGION_IDS
+                            "fdm multilayer layer[{index}] native_region_legend numeric_id {} is reserved (0 = unnamed base region, u32::MAX = inactive)",
+                            entry.numeric_id
                         ));
                     }
                     if !legend_ids.insert(entry.numeric_id) {
@@ -1116,6 +1124,7 @@ mod multilayer_contract_tests {
 
     fn legacy_plan_fixture() -> FdmMultilayerPlanIR {
         let layers = vec![FdmLayerPlanIR {
+            rotated_interfacial_dmi: None,
             magnet_name: "free".to_string(),
             layer_id: "layer:free".to_string(),
             object_id: "free".to_string(),

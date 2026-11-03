@@ -430,6 +430,15 @@ fn validate_multilayer_stage_telemetry(
     inverse_fft_count: u64,
     pair_accumulation_count: u64,
 ) -> Result<FdmMultilayerStageTelemetry, RunError> {
+    validate_multilayer_stage_telemetry_impl(layer_count, refresh_count, forward_fft_count,
+        inverse_fft_count, pair_accumulation_count, false)
+}
+
+#[cfg(any(feature = "cuda", test))]
+fn validate_multilayer_stage_telemetry_impl(
+    layer_count: u64, refresh_count: u64, forward_fft_count: u64,
+    inverse_fft_count: u64, pair_accumulation_count: u64, centered_pairwise: bool,
+) -> Result<FdmMultilayerStageTelemetry, RunError> {
     if refresh_count == 0
         && forward_fft_count == 0
         && inverse_fft_count == 0
@@ -446,20 +455,23 @@ fn validate_multilayer_stage_telemetry(
         .ok_or_else(|| RunError {
             message: "d07_stage_telemetry_counter_overflow: L^2 does not fit u64".to_string(),
         })?;
+    let expected_ffts = if centered_pairwise { expected_pairs } else { layer_count };
     if refresh_count != 1
-        || forward_fft_count != layer_count
-        || inverse_fft_count != layer_count
+        || forward_fft_count != expected_ffts
+        || inverse_fft_count != expected_ffts
         || pair_accumulation_count != expected_pairs
     {
         return Err(RunError {
             message: format!(
-                "d07_stage_telemetry_counter_mismatch: expected refresh=1 forward={layer_count} inverse={layer_count} pairs={expected_pairs}, got refresh={refresh_count} forward={forward_fft_count} inverse={inverse_fft_count} pairs={pair_accumulation_count}"
+                "d07_stage_telemetry_counter_mismatch: expected refresh=1 forward={expected_ffts} inverse={expected_ffts} pairs={expected_pairs}, got refresh={refresh_count} forward={forward_fft_count} inverse={inverse_fft_count} pairs={pair_accumulation_count}"
             ),
         });
     }
     Ok(FdmMultilayerStageTelemetry {
         status: "recorded".to_string(),
-        execution_engine: "cuda_native_multilayer_demag_v2".to_string(),
+        execution_engine: if centered_pairwise {
+            "cuda_native_multilayer_demag_v2_centered_pairwise"
+        } else { "cuda_native_multilayer_demag_v2" }.to_string(),
         data_residency: "device_resident_per_refresh".to_string(),
         fft_backend: "cuFFT".to_string(),
         layer_count,
@@ -842,6 +854,8 @@ pub(crate) struct NativeFdmBackend {
     handle: *mut ffi::fullmag_fdm_backend,
     cell_count: usize,
     active_mask: Option<Vec<bool>>,
+    /// Cellwise Ms for moment-weighted average m; `None` when uniform.
+    ms_field: Option<Vec<f64>>,
     frozen_mask: Option<Vec<bool>>,
     precision: fullmag_ir::ExecutionPrecision,
     precision_policy: fullmag_ir::FdmPrecisionPolicyIR,
@@ -851,6 +865,7 @@ pub(crate) struct NativeFdmBackend {
     adaptive_timestep_enabled: bool,
     stats_policy: NativeStatsPolicy,
     rotated_dmi_only: bool,
+    centered_aligned_multilayer: bool,
 }
 
 #[cfg(feature = "cuda")]
@@ -1070,6 +1085,11 @@ impl NativeFdmBackend {
 
     pub fn create_multilayer_v2(plan: &fullmag_ir::FdmMultilayerPlanIR) -> Result<Self, RunError> {
         reject_cuda_multilayer_containment(plan.enable_demag, &plan.mode, &plan.layers)?;
+        if let Some(message) = fullmag_plan::fdm_multilayer_cuda_aligned_embedding_error(plan) {
+            return Err(RunError { message });
+        }
+        let centered_aligned_multilayer = plan.enable_demag
+            && plan.layers.iter().any(|l| l.transfer_kind == "push_pull");
         validate_multilayer_grid_budget(
             plan,
             fullmag_fdm_demag::KernelAdmissionModel::CudaAbiV2PairPayload,
@@ -1139,7 +1159,9 @@ impl NativeFdmBackend {
                 Ok(ffi::fullmag_fdm_layer_desc_v2 {
                     native_grid: ffi_grid(layer.native_grid, layer.native_cell_size),
                     convolution_grid: ffi_grid(layer.convolution_grid, layer.convolution_cell_size),
-                    transfer_kind: ffi_transfer_kind(&layer.transfer_kind)?,
+                    transfer_kind: if centered_aligned_multilayer && layer.transfer_kind == "push_pull" {
+                        ffi::fullmag_fdm_transfer_kind::FULLMAG_FDM_TRANSFER_CENTERED_ALIGNED
+                    } else { ffi_transfer_kind(&layer.transfer_kind)? },
                     layer_index: index as u32,
                     z_offset_cells,
                     material: ffi::fullmag_fdm_material_desc {
@@ -1148,7 +1170,9 @@ impl NativeFdmBackend {
                         damping: layer.material.damping,
                         gyromagnetic_ratio: plan.gyromagnetic_ratio,
                     },
-                    has_uniaxial_anisotropy: if layer.material.uniaxial_anisotropy_ku1.is_some() {
+                    has_uniaxial_anisotropy: if layer.material.uniaxial_anisotropy_ku1.is_some()
+                        || layer.material.uniaxial_anisotropy_ku2.is_some()
+                    {
                         1
                     } else {
                         0
@@ -1311,7 +1335,12 @@ impl NativeFdmBackend {
             }
         }
 
-        if let Some(dmi_d) = plan.rotated_interfacial_dmi {
+        let has_explicit_layer_dmi = plan
+            .layers
+            .iter()
+            .any(|layer| layer.rotated_interfacial_dmi.is_some());
+        if !has_explicit_layer_dmi {
+            if let Some(dmi_d) = plan.rotated_interfacial_dmi {
             let descriptor = ffi::fullmag_fdm_rotated_interfacial_dmi_desc_v1 {
                 abi_version: ffi::FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1,
                 struct_size: std::mem::size_of::<ffi::fullmag_fdm_rotated_interfacial_dmi_desc_v1>()
@@ -1328,6 +1357,59 @@ impl NativeFdmBackend {
                     let err = ffi::fullmag_fdm_backend_last_error(handle);
                     if err.is_null() {
                         "failed to configure rotated interfacial DMI on CUDA FDM multilayer backend"
+                            .to_string()
+                    } else {
+                        CStr::from_ptr(err).to_string_lossy().to_string()
+                    }
+                };
+                unsafe { ffi::fullmag_fdm_backend_destroy(handle) };
+                return Err(RunError { message });
+            }
+            }
+        }
+
+        let layer_dmi_overrides = plan
+            .layers
+            .iter()
+            .enumerate()
+            .filter_map(|(layer_index, layer)| {
+                let dmi_d = if has_explicit_layer_dmi {
+                    layer.rotated_interfacial_dmi.or(plan.rotated_interfacial_dmi)
+                } else {
+                    layer.rotated_interfacial_dmi
+                }?;
+                Some({
+                    let active = dmi_d != 0.0;
+                    ffi::fullmag_fdm_rotated_interfacial_dmi_layer_v1 {
+                        layer_index: layer_index as u32,
+                        has_rotated_interfacial_dmi: i32::from(active),
+                        reserved0: 0,
+                        dmi_d_rotated_interfacial: if active { dmi_d } else { 0.0 },
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        if !layer_dmi_overrides.is_empty() {
+            let descriptor = ffi::fullmag_fdm_rotated_interfacial_dmi_layers_desc_v1 {
+                abi_version: ffi::FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_LAYERS_ABI_V1,
+                struct_size: std::mem::size_of::<
+                    ffi::fullmag_fdm_rotated_interfacial_dmi_layers_desc_v1,
+                >() as u32,
+                layers: layer_dmi_overrides.as_ptr(),
+                entry_count: layer_dmi_overrides.len() as u32,
+                reserved0: 0,
+            };
+            let status = unsafe {
+                ffi::fullmag_fdm_backend_set_rotated_interfacial_dmi_layers_v1(
+                    handle,
+                    &descriptor,
+                )
+            };
+            if status != ffi::FULLMAG_FDM_OK {
+                let message = unsafe {
+                    let err = ffi::fullmag_fdm_backend_last_error(handle);
+                    if err.is_null() {
+                        "failed to configure per-layer rotated interfacial DMI on CUDA FDM multilayer backend"
                             .to_string()
                     } else {
                         CStr::from_ptr(err).to_string_lossy().to_string()
@@ -1367,6 +1449,8 @@ impl NativeFdmBackend {
             handle,
             cell_count,
             active_mask,
+            // Multilayer handles reject cellwise Ms (see the layer check above).
+            ms_field: None,
             frozen_mask: None,
             precision: plan.precision,
             precision_policy: plan.precision_policy.clone(),
@@ -1375,9 +1459,11 @@ impl NativeFdmBackend {
             gpu_transport_bound: false,
             adaptive_timestep_enabled: false,
             stats_policy: NativeStatsPolicy::full(1),
-            rotated_dmi_only: plan.rotated_interfacial_dmi.is_some()
+            rotated_dmi_only: (plan.rotated_interfacial_dmi.is_some()
+                || plan.layers.iter().any(|layer| layer.rotated_interfacial_dmi.is_some()))
                 && plan.interfacial_dmi.is_none()
                 && plan.bulk_dmi.is_none(),
+            centered_aligned_multilayer,
         })
     }
 
@@ -1438,14 +1524,13 @@ impl NativeFdmBackend {
         let sot_formula = ffi_prescribed_sot_formula(plan)?;
         let zhang_li_formula = ffi_zhang_li_formula(plan)?;
         let resolved_demag_boundary = crate::fdm::resolve_fdm_demag_boundary(plan)?;
-        if plan.material.ms_field.is_some()
-            || plan.material.a_field.is_some()
-            || plan.material.alpha_field.is_some()
-        {
-            return Err(RunError {
-                message: "FDM CUDA native does not yet support cellwise material fields (Ms/Aex/alpha); use FDM CPU reference or disable region material overrides".to_string(),
-            });
-        }
+        let exchange_operator = crate::fdm::exchange_operator::build_plan_exchange_operator(plan)?;
+        ensure_cuda_heterogeneous_material_supported(plan)?;
+        ensure_cuda_boundary_correction_supported(plan)?;
+        let exchange_faces = match &exchange_operator {
+            fullmag_engine::ExchangeOperator::Faces(faces) => Some(faces),
+            fullmag_engine::ExchangeOperator::Uniform => None,
+        };
         let grid = ffi::fullmag_fdm_grid_desc {
             nx: plan.grid.cells[0],
             ny: plan.grid.cells[1],
@@ -1582,11 +1667,6 @@ impl NativeFdmBackend {
         // after creation, so it must never be advertised as H_OE here.
         let uploaded_profile_flat = oersted_field_flat.as_ref();
 
-        // Current region-owned semantics keep exchange continuous by default.
-        // Explicit triples are compact pair descriptors; the native backend
-        // expands them into the low-level LUT after applying the default.
-        let exchange_pairs = build_region_exchange_pairs(plan, region_mask_flat.is_some())?;
-
         let current_sign: f64 = if has_slonczewski_stt(plan) {
             match plan.stt_fixed_layer_position.as_deref() {
                 Some("bottom") => -1.0,
@@ -1711,7 +1791,9 @@ impl NativeFdmBackend {
                 .as_ref()
                 .map_or(0, |field| field.len() as u64),
 
-            has_uniaxial_anisotropy: if plan.material.uniaxial_anisotropy_ku1.is_some() {
+            has_uniaxial_anisotropy: if plan.material.uniaxial_anisotropy_ku1.is_some()
+                || plan.material.uniaxial_anisotropy_ku2.is_some()
+            {
                 1
             } else {
                 0
@@ -1829,12 +1911,10 @@ impl NativeFdmBackend {
             exchange_lut_len: 0,
             exchange_pair_default:
                 ffi::fullmag_fdm_exchange_pair_mode::FULLMAG_FDM_EXCHANGE_PAIR_HARMONIC_MEAN,
-            exchange_pairs: exchange_pairs
-                .as_ref()
-                .map_or(std::ptr::null(), |pairs| pairs.as_ptr()),
-            exchange_pair_count: exchange_pairs
-                .as_ref()
-                .map_or(0, |pairs| pairs.len() as u64),
+            // Region exchange arrives as per-connection face coefficients in
+            // the v2 tail; the retired pair table stays empty.
+            exchange_pairs: std::ptr::null(),
+            exchange_pair_count: 0,
             // Boundary correction — wire geometry data from planner when available.
             boundary_correction: match plan.boundary_correction.as_deref() {
                 Some("volume") => ffi::fullmag_fdm_boundary_correction::FULLMAG_FDM_BOUNDARY_VOLUME,
@@ -1980,6 +2060,19 @@ impl NativeFdmBackend {
                 0
             },
             dmi_D_rotated_interfacial: plan.rotated_interfacial_dmi.unwrap_or(0.0),
+            exchange_operator_mode: if exchange_faces.is_some() {
+                ffi::FULLMAG_FDM_EXCHANGE_OPERATOR_FACES
+            } else {
+                ffi::FULLMAG_FDM_EXCHANGE_OPERATOR_UNIFORM
+            },
+            reserved_exchange_operator: 0,
+            exchange_face_x_plus: exchange_faces
+                .map_or(std::ptr::null(), |faces| faces.x_plus.as_ptr()),
+            exchange_face_y_plus: exchange_faces
+                .map_or(std::ptr::null(), |faces| faces.y_plus.as_ptr()),
+            exchange_face_z_plus: exchange_faces
+                .map_or(std::ptr::null(), |faces| faces.z_plus.as_ptr()),
+            exchange_face_len: exchange_faces.map_or(0, |faces| faces.x_plus.len() as u64),
         };
 
         let mut handle = std::ptr::null_mut();
@@ -2090,6 +2183,7 @@ impl NativeFdmBackend {
             handle,
             cell_count: m_flat.len() / 3,
             active_mask: plan.active_mask.clone(),
+            ms_field: plan.material.ms_field.clone(),
             frozen_mask: plan
                 .frozen_spins
                 .as_ref()
@@ -2104,6 +2198,7 @@ impl NativeFdmBackend {
             rotated_dmi_only: plan.rotated_interfacial_dmi.is_some()
                 && plan.interfacial_dmi.is_none()
                 && plan.bulk_dmi.is_none(),
+            centered_aligned_multilayer: false,
         })
     }
 
@@ -2436,6 +2531,7 @@ impl NativeFdmBackend {
             stats,
             &magnetization,
             self.active_mask.as_deref(),
+            self.ms_field.as_deref(),
         );
         // Keep the object-scoped telemetry synchronized with the sampled
         // magnetization. This path is also used when a scalar output is due,
@@ -3371,6 +3467,15 @@ impl NativeFdmBackend {
         Ok(())
     }
 
+    /// Resident FP64 BB operation; only the packed layer scalars cross D2H.
+    pub(crate) fn multilayer_bb_op(&mut self, op: u32, lambda: f64, scalars: &mut [[f64; 20]]) -> Result<(), RunError> {
+        let rc = unsafe { ffi::fullmag_fdm_backend_multilayer_bb(
+            self.handle, op, lambda, scalars.as_mut_ptr().cast(), (scalars.len() * 20) as u64,
+        ) };
+        if rc != ffi::FULLMAG_FDM_OK { return Err(self.last_error_or("resident multilayer BB failed")); }
+        Ok(())
+    }
+
     pub fn refresh_multilayer_demag(&mut self) -> Result<(), RunError> {
         let rc = unsafe { ffi::fullmag_fdm_backend_refresh_multilayer_demag(self.handle) };
         if rc != ffi::FULLMAG_FDM_OK {
@@ -3414,12 +3519,13 @@ impl NativeFdmBackend {
         if rc != ffi::FULLMAG_FDM_OK {
             return Err(self.last_error_or("snapshot multilayer demag telemetry failed"));
         }
-        validate_multilayer_stage_telemetry(
+        validate_multilayer_stage_telemetry_impl(
             layer_count,
             stats.multilayer_refresh_count,
             stats.multilayer_forward_fft_count,
             stats.multilayer_inverse_fft_count,
             stats.multilayer_pair_accumulation_count,
+            self.centered_aligned_multilayer,
         )
     }
 
@@ -3569,6 +3675,7 @@ impl NativeFdmBackend {
             &mut step_stats,
             &magnetization,
             self.active_mask.as_deref(),
+            self.ms_field.as_deref(),
         );
         step_stats.per_object_scalars = single_object_scalars("free", &step_stats);
         Ok(step_stats)
@@ -4081,41 +4188,34 @@ fn validate_native_snapshot_payload(
 }
 
 #[cfg(feature = "cuda")]
-fn build_region_exchange_pairs(
+/// Combinations that the CUDA lane does not yet realize with a heterogeneous
+/// material (note 0104, `material-regions-fdm-lane-realization`). Forced GPU
+/// fails here instead of falling back to the CPU reference.
+fn ensure_cuda_heterogeneous_material_supported(
     plan: &fullmag_ir::FdmPlanIR,
-    has_region_mask: bool,
-) -> Result<Option<Vec<ffi::fullmag_fdm_exchange_pair_desc>>, RunError> {
-    if !has_region_mask {
-        if plan.inter_region_exchange.is_empty() {
-            return Ok(None);
-        }
+) -> Result<(), RunError> {
+    match plan.cuda_heterogeneous_material_error() {
+        Some(message) => Err(RunError { message }),
+        None => Ok(()),
+    }
+}
+
+#[cfg(feature = "cuda")]
+/// T1 (`boundary_correction="full"`) is not qualified (note 0400, T1 consistency):
+/// its stencil over-couples grid-aligned free faces by 4/3. Fail before any
+/// allocation; the C ABI repeats the check.
+fn ensure_cuda_boundary_correction_supported(
+    plan: &fullmag_ir::FdmPlanIR,
+) -> Result<(), RunError> {
+    if plan.boundary_correction.as_deref() == Some("full") {
         return Err(RunError {
-            message:
-                "inter_region_exchange overrides require a region_mask; refusing to drop exchange pair intent"
-                    .to_string(),
+            message: "fdm_boundary_correction_t1_unqualified: T1 boundary-corrected exchange is \
+                      not consistent with the planner's boundary distances (note 0400, T1 consistency); use \
+                      boundary_correction=\"volume\" or \"none\""
+                .to_string(),
         });
     }
-    Ok(Some(
-        plan.inter_region_exchange
-            .iter()
-            .map(|&(region_i, region_j, inter_exchange)| {
-                if !inter_exchange.is_finite() || inter_exchange < 0.0 {
-                    return Err(RunError {
-                        message: format!(
-                            "inter_region_exchange ({region_i}, {region_j}) must be finite and >= 0"
-                        ),
-                    });
-                }
-                Ok(ffi::fullmag_fdm_exchange_pair_desc {
-                    region_i,
-                    region_j,
-                    mode: ffi::fullmag_fdm_exchange_pair_mode::FULLMAG_FDM_EXCHANGE_PAIR_EXPLICIT,
-                    scale: 1.0,
-                    inter_exchange,
-                })
-            })
-            .collect::<Result<Vec<_>, RunError>>()?,
-    ))
+    Ok(())
 }
 
 #[cfg(test)]
@@ -4386,6 +4486,7 @@ mod tests {
             handle: std::ptr::null_mut(),
             cell_count: 4,
             active_mask: None,
+            ms_field: None,
             frozen_mask: Some(vec![true, false, false, true]),
             precision: ExecutionPrecision::Double,
             precision_policy: fullmag_ir::FdmPrecisionPolicyIR::default(),
@@ -4594,61 +4695,34 @@ mod tests {
     }
 
     #[test]
-    fn native_fdm_region_exchange_pairs_leave_default_to_backend() {
-        let mut plan = make_relaxation_precession_test_plan();
-        plan.region_mask = vec![1, 2];
-        plan.initial_magnetization = vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
-        plan.grid = GridDimensions { cells: [2, 1, 1] };
-        let pairs = build_region_exchange_pairs(&plan, true)
-            .expect("region exchange pairs")
-            .expect("region mask should produce pair list");
-        assert!(pairs.is_empty());
-    }
-
-    #[test]
-    fn native_fdm_region_exchange_pairs_carry_explicit_overrides() {
-        let mut plan = make_relaxation_precession_test_plan();
-        plan.region_mask = vec![1, 2];
-        plan.inter_region_exchange = vec![(1, 2, 4.0e-12)];
-        let pairs = build_region_exchange_pairs(&plan, true)
-            .expect("region exchange pairs")
-            .expect("region mask should produce pair list");
-        assert_eq!(pairs.len(), 1);
-        assert_eq!(pairs[0].region_i, 1);
-        assert_eq!(pairs[0].region_j, 2);
-        assert_eq!(
-            pairs[0].mode,
-            ffi::fullmag_fdm_exchange_pair_mode::FULLMAG_FDM_EXCHANGE_PAIR_EXPLICIT
-        );
-        assert_eq!(pairs[0].scale, 1.0);
-        assert_eq!(pairs[0].inter_exchange, 4.0e-12);
-    }
-
-    #[test]
-    fn native_fdm_region_exchange_pairs_require_region_mask() {
-        let mut plan = make_relaxation_precession_test_plan();
-        plan.region_mask = Vec::new();
-        plan.inter_region_exchange = vec![(1, 2, 4.0e-12)];
-
-        let err = build_region_exchange_pairs(&plan, false)
-            .expect_err("explicit exchange overrides must not be dropped without a region mask");
-        assert!(err.message.contains("require a region_mask"));
-    }
-
-    #[test]
-    fn native_fdm_cuda_rejects_heterogeneous_ms_before_ffi() {
+    fn cuda_accepts_heterogeneous_ms_alpha_core() {
         let mut plan = make_relaxation_precession_test_plan();
         plan.material.ms_field = Some(vec![7.5e5; plan.initial_magnetization.len()]);
+        plan.material.alpha_field = Some(vec![0.05; plan.initial_magnetization.len()]);
+        ensure_cuda_heterogeneous_material_supported(&plan)
+        .expect("exchange/demag/Zeeman/LLG core accepts cellwise Ms and alpha");
+    }
 
-        let error = match NativeFdmBackend::create(&plan) {
-            Ok(_) => panic!("cellwise Ms must remain fail-closed on native FDM CUDA"),
-            Err(error) => error,
-        };
-
+    #[test]
+    fn cuda_rejects_heterogeneous_material_with_thermal_noise() {
+        let mut plan = make_relaxation_precession_test_plan();
+        plan.material.ms_field = Some(vec![7.5e5; plan.initial_magnetization.len()]);
+        plan.temperature = Some(300.0);
+        let error = ensure_cuda_heterogeneous_material_supported(&plan)
+        .expect_err("thermal noise does not yet combine with cellwise Ms on CUDA");
         assert!(error
             .message
-            .contains("does not yet support cellwise material fields"));
-        assert!(error.message.contains("FDM CPU reference"));
+            .contains("fdm_cuda_heterogeneous_material_unsupported:thermal"));
+    }
+
+    #[test]
+    fn cuda_rejects_heterogeneous_exchange_with_dmi() {
+        let mut plan = make_relaxation_precession_test_plan();
+        plan.material.a_field = Some(vec![13e-12; plan.initial_magnetization.len()]);
+        plan.interfacial_dmi = Some(1e-3);
+        let error = ensure_cuda_heterogeneous_material_supported(&plan)
+        .expect_err("DMI boundary conditions need a local A");
+        assert!(error.message.contains("dmi_variable_exchange"));
     }
 
     #[test]
@@ -4675,17 +4749,6 @@ mod tests {
         assert_eq!(policy.adaptive_safety, 0.9);
         assert_eq!(policy.adaptive_growth_limit, 2.0);
         assert_eq!(policy.adaptive_shrink_limit, 0.2);
-    }
-
-    #[test]
-    fn native_fdm_region_exchange_pairs_reject_invalid_exchange() {
-        let mut plan = make_relaxation_precession_test_plan();
-        plan.region_mask = vec![1, 2];
-        plan.inter_region_exchange = vec![(1, 2, -1.0e-12)];
-
-        let err = build_region_exchange_pairs(&plan, true)
-            .expect_err("invalid explicit exchange must be rejected before FFI");
-        assert!(err.message.contains("must be finite and >= 0"));
     }
 
     #[test]
@@ -4912,6 +4975,7 @@ mod tests {
             regional_field_drive_bases: Vec::new(),
             time_stage: Default::default(),
             inter_region_exchange: vec![],
+            region_owner: Vec::new(),
             periodicity: None,
             resolved_periodic_images: None,
             boundary_correction: None,
@@ -5009,6 +5073,7 @@ mod tests {
             regional_field_drive_bases: Vec::new(),
             time_stage: Default::default(),
             inter_region_exchange: vec![],
+            region_owner: Vec::new(),
             periodicity: None,
             resolved_periodic_images: None,
             boundary_correction: None,
@@ -5096,6 +5161,7 @@ mod tests {
             regional_field_drive_bases: Vec::new(),
             time_stage: Default::default(),
             inter_region_exchange: vec![],
+            region_owner: Vec::new(),
             periodicity: None,
             resolved_periodic_images: None,
             boundary_correction: None,
@@ -5394,9 +5460,11 @@ mod tests {
                 external_field: plan.external_field,
                 per_node_field: plan.oersted_field_xyz.clone(),
                 magnetoelastic: None,
-                uniaxial_anisotropy: plan.material.uniaxial_anisotropy_ku1.map(|ku1| {
+                uniaxial_anisotropy: (plan.material.uniaxial_anisotropy_ku1.is_some()
+                    || plan.material.uniaxial_anisotropy_ku2.is_some())
+                .then(|| {
                     UniaxialAnisotropyConfig {
-                        ku1,
+                        ku1: plan.material.uniaxial_anisotropy_ku1.unwrap_or(0.0),
                         ku2: plan.material.uniaxial_anisotropy_ku2.unwrap_or(0.0),
                         axis: plan.material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]),
                     }
@@ -7307,6 +7375,7 @@ mod exact_metric_contract_tests {
 
     fn containment_layer(name: &str, z: f64) -> fullmag_ir::FdmLayerPlanIR {
         fullmag_ir::FdmLayerPlanIR {
+            rotated_interfacial_dmi: None,
             magnet_name: name.to_string(),
             layer_id: format!("layer:{name}"),
             object_id: name.to_string(),
@@ -7344,6 +7413,7 @@ mod exact_metric_contract_tests {
 
         let mut push_pull = legal.clone();
         push_pull[1].transfer_kind = "push_pull".to_string();
+        push_pull[1].native_origin[0] += 0.5e-9;
         let push_pull = reject_cuda_multilayer_containment(true, "three_d", &push_pull)
             .expect_err("push_pull must fail before CUDA interaction");
         assert!(push_pull
@@ -7528,5 +7598,19 @@ mod exact_metric_contract_tests {
                 .contains("stats.per_object_scalars = single_object_scalars(\"free\", stats)"),
             "native average-m helper must refresh object-scoped telemetry"
         );
+    }
+}
+
+
+#[cfg(test)]
+mod centered_pairwise_stage_telemetry_tests {
+    use super::*;
+    #[test]
+    fn centered_pairwise_reports_actual_pair_fft_counts() {
+        let telemetry = validate_multilayer_stage_telemetry_impl(2, 1, 4, 4, 4, true).unwrap();
+        assert_eq!(telemetry.execution_engine, "cuda_native_multilayer_demag_v2_centered_pairwise");
+        assert!(validate_multilayer_stage_telemetry_impl(2, 1, 2, 2, 4, true).is_err());
+        assert!(validate_multilayer_stage_telemetry_impl(2, 1, 4, 3, 4, true).is_err());
+        assert!(validate_multilayer_stage_telemetry(2, 1, 4, 4, 4).is_err());
     }
 }

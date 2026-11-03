@@ -644,9 +644,16 @@ fn request_accepted_task_stop_inner(
     if reason.trim().is_empty() {
         bail!("accepted task stop reason must not be empty");
     }
+    // Contention must be retried before recovery, not only inside the Stop
+    // publisher. Hold the same writer through claim validation, recovery and
+    // commit so another stream cannot advance between them. Only acquiring
+    // this fence is retried here; after a possible publication, the callback
+    // below retries the exact same transition rather than creating a new Stop.
+    let _stop_transaction = retry_store_writer_busy(|| store.write_transaction())
+        .context("acquire accepted task Stop transaction")?;
     let claim = claim::load_current_task_claim(store, run_id, task_id)?;
     for _ in 0..8 {
-        let recovered = recover_coordinator(store, &claim)?;
+        let recovered = recover_coordinator_locked(store, &claim)?;
         if recovered.coordinator.phase() == fullmag_application::CoordinatorPhase::Stopping {
             let existing = recovered
                 .commands
@@ -898,15 +905,20 @@ mod tests {
 
     #[test]
     fn accepted_task_stop_is_durable_idempotent_and_terminal_after_stopped_event() {
-        assert_task_stop_recovery(false);
+        assert_task_stop_recovery(false, false);
     }
 
     #[test]
     fn failed_no_spawn_stop_without_start_preserves_public_stop_fence_and_replays() {
-        assert_task_stop_recovery(true);
+        assert_task_stop_recovery(true, false);
     }
 
-    fn assert_task_stop_recovery(no_spawn: bool) {
+    #[test]
+    fn accepted_task_stop_waits_for_writer_before_recovery_without_duplicating_stop() {
+        assert_task_stop_recovery(false, true);
+    }
+
+    fn assert_task_stop_recovery(no_spawn: bool, writer_contention: bool) {
         let directory = tempfile::tempdir().unwrap();
         let store = SessionStore::open(directory.path().join("store")).unwrap();
         let mut task =
@@ -1060,6 +1072,19 @@ mod tests {
             request_accepted_task_stop
         };
 
+        let competing_writer = if writer_contention {
+            let root = store.root().to_path_buf();
+            let (ready, acquired) = std::sync::mpsc::sync_channel(0);
+            let holder = std::thread::spawn(move || {
+                let competing = SessionStore::open_existing(root).unwrap();
+                let transaction = competing.write_transaction().unwrap();
+                ready.send(()).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                drop(transaction);
+            });
+            acquired.recv().unwrap();
+            Some(holder)
+        } else { None };
         let accepted = request_stop(
             &store,
             &claim.run_id,
@@ -1067,6 +1092,7 @@ mod tests {
             "operator requested cancellation",
         )
         .unwrap();
+        if let Some(holder) = competing_writer { holder.join().unwrap(); }
         assert_eq!(accepted.disposition, AcceptedTaskStopDisposition::Accepted);
         assert_eq!(accepted.catalog_revision, if no_spawn { 4 } else { 5 });
         assert_eq!(accepted.command.sequence, 2);
@@ -1096,6 +1122,8 @@ mod tests {
             load_current_task_claim(&store, &claim.run_id, claim.task_id.as_str()).unwrap();
         let recovered = recover_coordinator(&store, &current_claim).unwrap();
         assert_eq!(recovered.coordinator.phase(), CoordinatorPhase::Stopping);
+        assert_eq!(recovered.commands.iter().filter(|command|
+            matches!(&command.command, WorkerCommand::Stop { .. })).count(), 1);
         let mut stopping = DurableWorkerCoordinator::new(recovered.coordinator);
         stopping
             .commit_event(

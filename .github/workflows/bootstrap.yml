@@ -123,6 +123,7 @@ jobs:
           cargo test -p fullmag-session --lib read_transaction
           cargo test -p fullmag-runtime-control --lib accepted_task_stop_is_durable_idempotent_and_terminal_after_stopped_event
           cargo test -p fullmag-runtime-control --lib failed_no_spawn_stop_without_start_preserves_public_stop_fence_and_replays
+          cargo test --locked -p fullmag-runtime-control --lib tests::accepted_task_stop_waits_for_writer_before_recovery_without_duplicating_stop -- --exact
           cargo test -p fullmag-runtime-control --lib study_inspection_integrity
           cargo test -p fullmag-api --bin fullmag-api router_v2::handlers::data::antenna_inspection::tests
 
@@ -157,6 +158,7 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api development_accepted_restore::tests
           cargo test -p fullmag-runtime-control --lib scheduler::accepted_start_tests
           cargo test -p fullmag-api --bin fullmag-api live_accepted_projection::tests
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_run_performance::tests
           cargo test -p fullmag-api --bin fullmag-api accepted_fem_study_worker::source_contract_tests
           cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_fem_study_worker::source_contract_tests
           cargo test -p fullmag-api --bin fullmag-api live_scene_preparation::tests
@@ -242,7 +244,25 @@ jobs:
         run: |
           cargo test --locked -p fullmag-engine --lib spatial_ms_anisotropy_tests
           cargo test --locked -p fullmag-plan --lib fem_aex_field_uniformity_uses_relative_si_tolerance
+          cargo test --locked -p fullmag-plan --lib fem_planner_elementwise_material_legality_distinguishes_a_from_ms
+          cargo test --locked -p fullmag-plan --lib fem_spin_transport_ms_realization_admits_only_the_scalar_torque_coefficient
           cargo test --locked -p fullmag-runner --lib fdm::cpu::reference::tests::torque_
+
+      - name: Run FDM region exchange operator contracts
+        run: |
+          cargo test --locked -p fullmag-engine --lib fdm::shared::exchange_operator::tests
+          cargo test --locked -p fullmag-engine --lib exchange_face_tests
+          cargo test --locked -p fullmag-runner --lib fdm::cpu::reference::tests::dmi_decoupled_
+          cargo test --locked -p fullmag-plan --lib fdm_region_
+          cargo test --locked -p fullmag-plan --lib fdm_cuda_region_material_fields
+          cargo test --locked -p fullmag-plan --lib fdm_cuda_absorbing_boundary_plans_cellwise_damping
+          cargo test --locked -p fullmag-plan --lib intra_object_region_exchange_defaults_harmonic_mean
+          cargo test --locked -p fullmag-plan --lib exchange_scale_zero_disables_interface_exchange
+          cargo test --locked -p fullmag-plan --lib pure_inherited_region_preserves_parent_material_and_continuous_exchange
+          cargo test --locked -p fullmag-engine --lib magnetoelastic::tests
+          cargo test --locked -p fullmag-runner --lib scalar_metrics::tests::fdm_average_m_
+          cargo test --locked -p fullmag-engine --lib fem::tests::periodic_dmi_class_field_divides_class_residual_by_class_mass
+          cargo test --locked -p fullmag-engine --lib fem::tests::observe_evaluates_time_dependent_external_field_at_state_time
 
       - name: Run typed active eigen Stop and Pause contracts
         run: |

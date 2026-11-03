@@ -158,6 +158,8 @@ struct DeviceMultilayerLayer {
     double Ku1 = 0.0;
     double Ku2 = 0.0;
     double anisU[3] = {0.0, 0.0, 1.0};
+    bool has_rotated_interfacial_dmi = false;
+    double D_rotated_interfacial = 0.0;
     bool has_cubic_anisotropy = false;
     double Kc1 = 0.0;
     double Kc2 = 0.0;
@@ -466,6 +468,8 @@ struct Context {
     RegionalFieldDriveParams *regional_field_drive_params = nullptr;
     double *regional_field_drive_points = nullptr;
     uint32_t regional_field_drive_count = 0;
+    // True when any uploaded drive has a non-constant waveform.
+    bool regional_field_drive_time_dependent = false;
     uint64_t regional_field_drive_point_count = 0;
 
     // Execution
@@ -730,11 +734,17 @@ struct Context {
 
     uint8_t *active_mask = nullptr;
     uint32_t *region_mask = nullptr;
-    double *exchange_lut = nullptr;  // device-side, MAX_EXCHANGE_REGIONS × MAX_EXCHANGE_REGIONS
-    bool has_exchange_lut = false;
-    // Every LUT entry equals A, so the region-mask exchange field equals the
-    // uniform Laplacian up to roundoff and the field kernel may skip the LUT.
-    bool exchange_lut_uniform = false;
+    // Per-connection exchange stiffness [J/m] on the +x/+y/+z connection of
+    // each cell (note 0104, material-fdm-connection-coefficient). Null means
+    // the uniform operator: every existing connection uses A.
+    double *exchange_face_xp = nullptr;
+    double *exchange_face_yp = nullptr;
+    double *exchange_face_zp = nullptr;
+    bool has_exchange_faces = false;
+    // Optional cellwise saturation magnetization [A/m] and Gilbert damping.
+    // Null means the scalar Ms / alpha above.
+    double *ms_field = nullptr;
+    double *alpha_field = nullptr;
 
     // Periodicity: per-axis PBC flags for exchange wrapping
     bool periodic_x = false;
@@ -778,7 +788,8 @@ struct Context {
     uint64_t preview_download_scratch_len_bytes = 0;
     std::vector<uint8_t> active_mask_host;
     std::vector<uint32_t> region_mask_host;
-    std::vector<double> exchange_lut_host;
+    // x_plus, y_plus, z_plus concatenated; feeds the workspace identity.
+    std::vector<double> exchange_faces_host;
 
     // Demag FFT resources
     uint32_t fft_nx = 0;
@@ -833,6 +844,12 @@ struct Context {
     // Native FDM ABI v2 multilayer staging. These buffers are uploaded and
     // stepped separately from the legacy single-grid state.
     bool has_multilayer_plan_v2 = false;
+    // Lazily allocated once for FP64 multilayer PG-BB scalar reductions.
+    bool multilayer_bb_history_valid = false;
+    bool multilayer_bb_evaluation_valid = false;
+    double *multilayer_bb_partials = nullptr;
+    double *multilayer_bb_scalars = nullptr;
+    uint64_t multilayer_bb_partial_capacity = 0;
     std::vector<DeviceMultilayerLayer> multilayer_layers;
     std::vector<DeviceMultilayerTensorKernel> multilayer_kernels;
 
@@ -2796,8 +2813,20 @@ bool context_upload_slonczewski_active_mask(Context &ctx, const uint8_t *mask, u
 /// Upload region ids (host u32 -> device u32).
 bool context_upload_region_mask(Context &ctx, const uint32_t *mask, uint64_t len);
 
-/// Upload inter-region exchange coupling LUT (host f64, MAX_EXCHANGE_REGIONS^2 entries).
-bool context_upload_exchange_lut(Context &ctx, const double *lut, uint64_t len);
+/// Upload per-connection exchange coefficients (host f64[cell_count] per axis).
+bool context_upload_exchange_faces(
+    Context &ctx,
+    const double *x_plus,
+    const double *y_plus,
+    const double *z_plus,
+    uint64_t len);
+
+/// Upload optional cellwise Ms and alpha (host f64[cell_count]; null keeps the scalar).
+bool context_upload_material_fields(
+    Context &ctx,
+    const double *ms_field,
+    const double *alpha_field,
+    uint64_t len);
 
 /// Upload precomputed Newell tensor spectra (host f64 interleaved complex -> device complex).
 bool context_upload_demag_kernel_spectra(
@@ -2917,6 +2946,10 @@ bool context_download_scalar_f32(
     fullmag_fdm_observable observable,
     float *out_values,
     uint64_t out_len);
+
+// FP64 PG-BB: op 0 evaluates, 1 captures accepted m/g/H, 2 retracts a
+// trial from accepted state, 3 restores accepted m. Scalars are layer-major.
+bool context_multilayer_bb(Context &, uint32_t, double, double *, uint64_t);
 
 /// Download a v2 multilayer layer field observable from device to host as f64 AoS.
 bool context_download_layer_field_f64(

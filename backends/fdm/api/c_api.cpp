@@ -318,31 +318,54 @@ bool refresh_multilayer_transaction_observables(
 }
 
 struct RotatedDmiMutationSnapshot {
+    struct LayerState {
+        bool has_rotated_interfacial_dmi = false;
+        double D_rotated_interfacial = 0.0;
+    };
+
     bool has_rotated_interfacial_dmi = false;
     double D_rotated_interfacial = 0.0;
+    std::vector<LayerState> layers;
     bool observables_valid = false;
     EndpointFieldCache endpoint_field_cache{};
     MultilayerDemagStageCounters multilayer_demag_stage_counters{};
     uint64_t pending_device_operator_mask = 0;
 };
 
-RotatedDmiMutationSnapshot capture_rotated_dmi_mutation_snapshot(
-    const Context &ctx)
+bool capture_rotated_dmi_mutation_snapshot(
+    const Context &ctx,
+    RotatedDmiMutationSnapshot &snapshot,
+    std::string &error)
 {
-    RotatedDmiMutationSnapshot snapshot{};
+    snapshot = RotatedDmiMutationSnapshot{};
     snapshot.has_rotated_interfacial_dmi = ctx.has_rotated_interfacial_dmi;
     snapshot.D_rotated_interfacial = ctx.D_rotated_interfacial;
     snapshot.observables_valid = ctx.observables_valid;
     snapshot.endpoint_field_cache = ctx.endpoint_field_cache;
     snapshot.multilayer_demag_stage_counters =
         ctx.multilayer_demag_stage_counters;
+    try {
+        snapshot.layers.reserve(ctx.multilayer_layers.size());
+        for (const auto &layer : ctx.multilayer_layers) {
+            snapshot.layers.push_back({
+                layer.has_rotated_interfacial_dmi,
+                layer.D_rotated_interfacial});
+        }
+    } catch (const std::exception &exception) {
+        error = "rotated DMI mutation snapshot could not copy layer state: "
+            + std::string(exception.what());
+        return false;
+    } catch (...) {
+        error = "rotated DMI mutation snapshot could not copy layer state";
+        return false;
+    }
     if (ctx.execution_receipt) {
         const auto &receipt = *ctx.execution_receipt;
         std::lock_guard<std::mutex> lock(receipt.accounting_mutex);
         snapshot.pending_device_operator_mask =
             receipt.pending_device_operator_mask;
     }
-    return snapshot;
+    return true;
 }
 
 void restore_rotated_dmi_pending_receipt(
@@ -362,6 +385,20 @@ bool rollback_rotated_dmi_mutation(
 {
     ctx.has_rotated_interfacial_dmi = snapshot.has_rotated_interfacial_dmi;
     ctx.D_rotated_interfacial = snapshot.D_rotated_interfacial;
+    if (ctx.multilayer_layers.size() != snapshot.layers.size()) {
+        ctx.last_error = primary_error
+            + "; rotated DMI rollback layer count changed unexpectedly";
+        context_invalidate_observables(ctx);
+        restore_rotated_dmi_pending_receipt(
+            ctx, snapshot.pending_device_operator_mask);
+        return false;
+    }
+    for (std::size_t index = 0; index < snapshot.layers.size(); ++index) {
+        ctx.multilayer_layers[index].has_rotated_interfacial_dmi =
+            snapshot.layers[index].has_rotated_interfacial_dmi;
+        ctx.multilayer_layers[index].D_rotated_interfacial =
+            snapshot.layers[index].D_rotated_interfacial;
+    }
 
     // Recompute the old observable fields before restoring cache metadata.  A
     // forced DMI launch is required when the old state had no DMI: the kernel
@@ -732,7 +769,22 @@ bool valid_integrator(fullmag_fdm_integrator integrator) {
 
 bool valid_transfer_kind(fullmag_fdm_transfer_kind transfer_kind) {
     return transfer_kind == FULLMAG_FDM_TRANSFER_IDENTITY ||
-        transfer_kind == FULLMAG_FDM_TRANSFER_PUSH_PULL;
+        transfer_kind == FULLMAG_FDM_TRANSFER_PUSH_PULL ||
+        transfer_kind == FULLMAG_FDM_TRANSFER_CENTERED_ALIGNED;
+}
+
+bool valid_centered_aligned_transfer(const fullmag_fdm_layer_desc_v2 &layer) {
+    const auto &native = layer.native_grid;
+    const auto &convolution = layer.convolution_grid;
+    return native.dx == convolution.dx &&
+        native.dy == convolution.dy &&
+        native.dz == convolution.dz &&
+        native.nx <= convolution.nx &&
+        native.ny <= convolution.ny &&
+        native.nz <= convolution.nz &&
+        ((convolution.nx - native.nx) % 2u) == 0u &&
+        ((convolution.ny - native.ny) % 2u) == 0u &&
+        layer.z_offset_cells == 0;
 }
 
 bool validate_multilayer_plan_v2(
@@ -756,6 +808,7 @@ bool validate_multilayer_plan_v2(
         return false;
     }
 
+    bool has_centered_aligned_transfer = false;
     for (uint32_t i = 0; i < plan.layer_count; ++i) {
         const fullmag_fdm_layer_desc_v2 &layer = plan.layers[i];
         uint64_t native_cell_count = 0;
@@ -776,6 +829,14 @@ bool validate_multilayer_plan_v2(
             error = "unknown layer transfer_kind in v2 plan";
             return false;
         }
+        if (layer.transfer_kind == FULLMAG_FDM_TRANSFER_CENTERED_ALIGNED &&
+            !valid_centered_aligned_transfer(layer)) {
+            error =
+                "centered-aligned transfer requires equal cell sizes, a fitting native grid, even XY padding, and zero z offset";
+            return false;
+        }
+        has_centered_aligned_transfer = has_centered_aligned_transfer ||
+            layer.transfer_kind == FULLMAG_FDM_TRANSFER_CENTERED_ALIGNED;
         if (layer.material.saturation_magnetisation <= 0.0) {
             error = "layer material saturation_magnetisation must be positive";
             return false;
@@ -817,6 +878,41 @@ bool validate_multilayer_plan_v2(
                 + std::to_string(native_cell_count)
                 + ", got " + std::to_string(layer.active_mask_len);
             return false;
+        }
+    }
+
+    if (has_centered_aligned_transfer) {
+        const fullmag_fdm_grid_desc &common_convolution_grid =
+            plan.layers[0].convolution_grid;
+        for (uint32_t i = 0; i < plan.layer_count; ++i) {
+            const fullmag_fdm_layer_desc_v2 &layer = plan.layers[i];
+            const fullmag_fdm_grid_desc &native = layer.native_grid;
+            const fullmag_fdm_grid_desc &convolution = layer.convolution_grid;
+            const bool common_convolution_matches =
+                convolution.nx == common_convolution_grid.nx &&
+                convolution.ny == common_convolution_grid.ny &&
+                convolution.nz == common_convolution_grid.nz &&
+                convolution.dx == common_convolution_grid.dx &&
+                convolution.dy == common_convolution_grid.dy &&
+                convolution.dz == common_convolution_grid.dz;
+            const bool native_cell_size_matches =
+                native.dx == common_convolution_grid.dx &&
+                native.dy == common_convolution_grid.dy &&
+                native.dz == common_convolution_grid.dz;
+            const bool identity_grid_matches =
+                layer.transfer_kind != FULLMAG_FDM_TRANSFER_IDENTITY ||
+                (native.nx == convolution.nx &&
+                 native.ny == convolution.ny &&
+                 native.nz == convolution.nz);
+            const bool transfer_kind_matches_group =
+                layer.transfer_kind == FULLMAG_FDM_TRANSFER_IDENTITY ||
+                layer.transfer_kind == FULLMAG_FDM_TRANSFER_CENTERED_ALIGNED;
+            if (!common_convolution_matches || !native_cell_size_matches ||
+                !identity_grid_matches || !transfer_kind_matches_group) {
+                error =
+                    "centered-aligned transfer group requires identity or centered-aligned layers, one common convolution grid and cell size, matching native cell sizes, and identity native grids equal to that common grid";
+                return false;
+            }
         }
     }
 
@@ -873,15 +969,25 @@ bool validate_multilayer_plan_v2(
 #if FULLMAG_HAS_CUDA
 bool validate_rotated_dmi_multilayer_boundary_exchange_stiffness(
     const Context &ctx,
+    const std::vector<RotatedDmiMutationSnapshot::LayerState> &candidate_layers,
     std::string &error)
 {
-    if (ctx.multilayer_layers.empty()) {
+    if (ctx.multilayer_layers.empty() ||
+        candidate_layers.size() != ctx.multilayer_layers.size()) {
         error =
-            "RotatedInterfacialDmi boundary Aex validation requires at least one uploaded layer";
+            "RotatedInterfacialDmi boundary Aex validation requires a complete uploaded layer state";
         return false;
     }
 
-    for (const auto &layer : ctx.multilayer_layers) {
+    for (std::size_t layer_index = 0;
+         layer_index < ctx.multilayer_layers.size();
+         ++layer_index) {
+        const auto &layer = ctx.multilayer_layers[layer_index];
+        const auto &candidate = candidate_layers[layer_index];
+        if (!candidate.has_rotated_interfacial_dmi ||
+            candidate.D_rotated_interfacial == 0.0) {
+            continue;
+        }
         const auto &grid = layer.native_grid;
         uint64_t checked_cell_count = 0;
         if (grid.nx == 0 || grid.ny == 0 || grid.nz == 0 ||
@@ -1016,9 +1122,55 @@ uint64_t fullmag_fdm_capability_bits_v1(void) {
 
 /* ── Create ── */
 
+/// Realized exchange operator carried by the v2 descriptor tail. The base
+/// descriptor alone always means the uniform operator.
+struct ExchangeOperatorInput {
+    bool faces = false;
+    const double *x_plus = nullptr;
+    const double *y_plus = nullptr;
+    const double *z_plus = nullptr;
+    uint64_t len = 0;
+    // Rotated interfacial DMI with a non-zero coefficient (the workspace
+    // reservation flag alone does not mean the term couples cells).
+    bool rotated_dmi_active = false;
+};
+
+static bool valid_cellwise_values(
+    const double *values,
+    uint64_t len,
+    const uint8_t *active_mask,
+    bool require_positive)
+{
+    for (uint64_t index = 0; index < len; ++index) {
+        const double value = values[index];
+        const bool active = active_mask == nullptr || active_mask[index] != 0;
+        if (!std::isfinite(value) || value < 0.0 ||
+            (require_positive && active && value <= 0.0)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool cellwise_values_equal_scalar(
+    const double *values,
+    uint64_t len,
+    const uint8_t *active_mask,
+    double scalar)
+{
+    for (uint64_t index = 0; index < len; ++index) {
+        const bool active = active_mask == nullptr || active_mask[index] != 0;
+        if (active && values[index] != scalar) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
     const fullmag_fdm_plan_desc *plan,
-    bool reserve_rotated_dmi)
+    bool reserve_rotated_dmi,
+    const ExchangeOperatorInput &exchange_operator)
 {
 #if FULLMAG_HAS_CUDA
     if (!plan) return nullptr;
@@ -1051,6 +1203,13 @@ static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
     {
         ctx->last_error =
             "FDM FP32 sub-cell boundary correction is unavailable until field/energy parity is qualified; use double precision or boundary_correction=none";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    if (plan->boundary_correction == FULLMAG_FDM_BOUNDARY_FULL) {
+        // Note 0400 (T1 consistency): the T1 stencil over-couples grid-aligned free faces
+        // by 4/3 and counts the cut volume twice.
+        ctx->last_error =
+            "fdm_boundary_correction_t1_unqualified: T1 boundary-corrected exchange is not consistent with the planner's boundary distances (note 0400, T1 consistency); use boundary_correction=volume or none";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
     if (plan->enable_demag != 0 && plan->demag_kernel_spectrum_len == 0) {
@@ -1107,7 +1266,7 @@ static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
     ctx->has_active_mask = plan->active_mask != nullptr;
     ctx->has_frozen_mask = plan->frozen_mask != nullptr;
     ctx->has_region_mask = plan->region_mask != nullptr;
-    ctx->has_exchange_lut = ctx->has_region_mask; // always build LUT when regions are present
+    ctx->has_exchange_faces = exchange_operator.faces;
     ctx->has_demag_tensor_kernel = plan->demag_kernel_spectrum_len != 0;
     ctx->external_field[0] = plan->external_field_am[0];
     ctx->external_field[1] = plan->external_field_am[1];
@@ -1391,15 +1550,128 @@ static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
             "oersted configuration is ambiguous: provide either OerstedCylinder or oersted_field_xyz, not both";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
-    const bool has_cellwise_material_field =
-        plan->ms_field != nullptr || plan->a_field != nullptr || plan->alpha_field != nullptr
-        || plan->dind_field != nullptr || plan->dbulk_field != nullptr
-        || plan->ms_field_len != 0 || plan->a_field_len != 0 || plan->alpha_field_len != 0
+    const bool has_cellwise_dmi_field =
+        plan->dind_field != nullptr || plan->dbulk_field != nullptr
         || plan->dind_field_len != 0 || plan->dbulk_field_len != 0;
-    if (has_cellwise_material_field) {
+    if (has_cellwise_dmi_field) {
         ctx->last_error =
-            "FDM cellwise material fields reached native backend before kernel support is enabled; planner/runtime materialization must keep this path capability-gated";
+            "fdm_cuda_heterogeneous_material_unsupported:cellwise_dmi: cellwise DMI fields are not supported on native FDM CUDA";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    const struct {
+        const char *name;
+        const double *values;
+        uint64_t len;
+        bool require_positive;
+    } cellwise_material_fields[] = {
+        {"ms_field", plan->ms_field, plan->ms_field_len, true},
+        {"a_field", plan->a_field, plan->a_field_len, false},
+        {"alpha_field", plan->alpha_field, plan->alpha_field_len, false},
+    };
+    for (const auto &field : cellwise_material_fields) {
+        if ((field.values == nullptr) != (field.len == 0) ||
+            (field.values != nullptr && field.len != ctx->cell_count)) {
+            ctx->last_error = std::string(field.name) + " must be null or provide cell_count="
+                + std::to_string(ctx->cell_count) + " values, got len="
+                + std::to_string(field.len);
+            return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+        }
+        if (field.values != nullptr &&
+            !valid_cellwise_values(
+                field.values, field.len, plan->active_mask, field.require_positive)) {
+            ctx->last_error = std::string(field.name)
+                + " must be finite and >= 0"
+                + (field.require_positive ? " and > 0 on active cells" : "");
+            return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+        }
+    }
+    if (exchange_operator.faces) {
+        if (exchange_operator.len != ctx->cell_count ||
+            !exchange_operator.x_plus || !exchange_operator.y_plus || !exchange_operator.z_plus ||
+            !valid_cellwise_values(exchange_operator.x_plus, exchange_operator.len, nullptr, false) ||
+            !valid_cellwise_values(exchange_operator.y_plus, exchange_operator.len, nullptr, false) ||
+            !valid_cellwise_values(exchange_operator.z_plus, exchange_operator.len, nullptr, false)) {
+            ctx->last_error =
+                "exchange face coefficients must be three finite, non-negative arrays of cell_count values";
+            return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+        }
+        const bool interfacial_dmi =
+            (plan->has_interfacial_dmi != 0 && plan->dmi_D_interfacial != 0.0) ||
+            exchange_operator.rotated_dmi_active;
+        const bool bulk_dmi = plan->has_bulk_dmi != 0 && plan->dmi_D_bulk != 0.0;
+        if (interfacial_dmi || bulk_dmi) {
+            // Note 0104: a zero connection between two active cells is a free
+            // surface for exchange, but the DMI stencils would couple across it.
+            // Interfacial DMI couples only x/y neighbours; bulk DMI also z.
+            const bool scanned_axes[3] = {true, true, bulk_dmi};
+            const uint64_t nx = plan->grid.nx, ny = plan->grid.ny, nz = plan->grid.nz;
+            const uint64_t dims[3] = {nx, ny, nz};
+            const uint64_t strides[3] = {1u, nx, nx * ny};
+            const int periodic[3] = {plan->periodic_x, plan->periodic_y, plan->periodic_z};
+            const double *coefficients[3] = {
+                exchange_operator.x_plus, exchange_operator.y_plus, exchange_operator.z_plus};
+            const auto active = [&](uint64_t index) {
+                return plan->active_mask == nullptr || plan->active_mask[index] != 0;
+            };
+            for (uint64_t index = 0; index < ctx->cell_count; ++index) {
+                if (!active(index)) continue;
+                const uint64_t coords[3] = {index % nx, (index / nx) % ny, index / (nx * ny)};
+                for (int axis = 0; axis < 3; ++axis) {
+                    if (!scanned_axes[axis]) continue;
+                    uint64_t neighbor = 0;
+                    if (coords[axis] + 1 < dims[axis]) {
+                        neighbor = index + strides[axis];
+                    } else if (periodic[axis] != 0 && dims[axis] > 1) {
+                        neighbor = index - coords[axis] * strides[axis];
+                    } else {
+                        continue;
+                    }
+                    if (active(neighbor) && coefficients[axis][index] == 0.0) {
+                        ctx->last_error =
+                            "fdm_dmi_decoupled_exchange_connection: DMI is not supported with a zero exchange connection between two active cells (note 0104)";
+                        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+                    }
+                }
+            }
+        }
+    }
+    if (plan->enable_exchange != 0 && !exchange_operator.faces && plan->a_field != nullptr &&
+        !cellwise_values_equal_scalar(
+            plan->a_field, plan->a_field_len, plan->active_mask,
+            plan->material.exchange_stiffness)) {
+        // CUDA exchange reads A only from the face tail. A variable a_field
+        // without faces would silently run with the scalar A.
+        ctx->last_error =
+            "a_field_requires_exchange_faces: a cellwise A that differs from the scalar "
+            "exchange stiffness must be passed as FACES exchange coefficients";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    // Face coefficients only change exchange; the terms below read the scalar
+    // Ms/alpha (or a local A) and are blocked for cellwise material fields.
+    const bool cellwise_ms_or_alpha =
+        plan->ms_field != nullptr || plan->alpha_field != nullptr;
+    if (cellwise_ms_or_alpha || plan->a_field != nullptr) {
+        const char *owner = nullptr;
+        if (!cellwise_ms_or_alpha) {
+            // Only a variable A: exchange itself is fully supported.
+        } else if (plan->boundary_correction != FULLMAG_FDM_BOUNDARY_NONE) {
+            owner = "boundary_correction";
+        } else if (plan->temperature > 0.0) {
+            owner = "thermal";
+        } else if (ctx->has_zhang_li_stt || ctx->has_slonczewski_stt || ctx->has_sot) {
+            owner = "spin_torque";
+        } else if (reserve_rotated_dmi && plan->ms_field != nullptr) {
+            owner = "rotated_dmi_variable_ms";
+        }
+        if (owner == nullptr && plan->a_field != nullptr &&
+            (plan->has_interfacial_dmi != 0 || plan->has_bulk_dmi != 0 || reserve_rotated_dmi)) {
+            owner = "dmi_variable_exchange";
+        }
+        if (owner != nullptr) {
+            ctx->last_error = std::string("fdm_cuda_heterogeneous_material_unsupported:") + owner
+                + ": heterogeneous Ms/A/alpha does not yet combine with this term on native FDM CUDA";
+            return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+        }
     }
     if (has_oersted_field && plan->oersted_field_len != ctx->cell_count * 3u) {
         ctx->last_error = "oersted_field_len mismatch: expected "
@@ -1413,23 +1685,22 @@ static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
             + ", got " + std::to_string(plan->region_mask_len);
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
-    if (ctx->has_region_mask) {
-        for (uint64_t index = 0; index < plan->region_mask_len; ++index) {
-            if (plan->region_mask[index] > FULLMAG_FDM_MAX_REGION_ID) {
-                ctx->last_error = "fdm_region_lut_capacity_exceeded: requested_region_id="
-                    + std::to_string(plan->region_mask[index])
-                    + " supported_region_ids="
-                    + std::to_string(FULLMAG_FDM_MAX_REGION_ID);
-                return reinterpret_cast<fullmag_fdm_backend *>(ctx);
-            }
-        }
-    }
-    if (plan->exchange_pair_count != 0 && plan->exchange_pairs == nullptr) {
-        ctx->last_error = "exchange_pair_count is non-zero but exchange_pairs is null";
+    if (plan->exchange_lut != nullptr || plan->exchange_lut_len != 0 ||
+        plan->exchange_pairs != nullptr || plan->exchange_pair_count != 0 ||
+        (plan->exchange_pair_default != FULLMAG_FDM_EXCHANGE_PAIR_UNSPECIFIED &&
+         plan->exchange_pair_default != FULLMAG_FDM_EXCHANGE_PAIR_HARMONIC_MEAN)) {
+        ctx->last_error =
+            "fdm_exchange_lut_retired: region-pair exchange tables are retired; pass per-connection face coefficients through the fullmag_fdm_plan_desc_v2 exchange-operator tail";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
-    if (plan->exchange_pair_count != 0 && !ctx->has_region_mask) {
-        ctx->last_error = "exchange_pairs require region_mask";
+    if (plan->enable_exchange != 0 && ctx->has_region_mask && !exchange_operator.faces &&
+        plan->exchange_pair_default == FULLMAG_FDM_EXCHANGE_PAIR_UNSPECIFIED) {
+        // Historically UNSPECIFIED with a region mask and no LUT decoupled
+        // regions (A_ij = 0). The uniform operator would re-couple them, so
+        // such a descriptor must state its coupling explicitly. Without
+        // exchange the mask only serves observables and stays accepted.
+        ctx->last_error =
+            "fdm_exchange_pair_unspecified_retired: a region mask with exchange_pair_default=UNSPECIFIED historically decoupled regions; pass HARMONIC_MEAN for the uniform operator or FACES coefficients for any other coupling";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
     if (ctx->has_active_mask) {
@@ -1562,70 +1833,21 @@ static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
     {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
-    // Build or upload inter-region exchange coupling LUT
-    if (ctx->has_exchange_lut) {
-        constexpr uint64_t N = FULLMAG_FDM_MAX_EXCHANGE_REGIONS;
-        std::vector<double> lut_host(N * N, 0.0);
-        if (plan->exchange_lut != nullptr && plan->exchange_lut_len == N * N) {
-            // Use caller-provided LUT
-            std::memcpy(lut_host.data(), plan->exchange_lut, N * N * sizeof(double));
-        } else {
-            switch (plan->exchange_pair_default) {
-            case FULLMAG_FDM_EXCHANGE_PAIR_HARMONIC_MEAN:
-                // Uniform-material harmonic mean is A for every active pair.
-                std::fill(lut_host.begin(), lut_host.end(), ctx->A);
-                break;
-            case FULLMAG_FDM_EXCHANGE_PAIR_EXPLICIT:
-                ctx->last_error =
-                    "exchange_pair_default=explicit is not a valid default; use exchange_pairs for explicit overrides";
-                return reinterpret_cast<fullmag_fdm_backend *>(ctx);
-            case FULLMAG_FDM_EXCHANGE_PAIR_DISABLED:
-            case FULLMAG_FDM_EXCHANGE_PAIR_UNSPECIFIED:
-                // Legacy/free-surface default: A_ii = A, A_ij(i!=j) = 0.
-                for (uint64_t r = 0; r < N; ++r) {
-                    lut_host[r * N + r] = ctx->A;
-                }
-                break;
-            default:
-                ctx->last_error = "invalid exchange_pair_default";
-                return reinterpret_cast<fullmag_fdm_backend *>(ctx);
-            }
-            for (uint64_t index = 0; index < plan->exchange_pair_count; ++index) {
-                const fullmag_fdm_exchange_pair_desc &pair = plan->exchange_pairs[index];
-                if (pair.region_i > FULLMAG_FDM_MAX_REGION_ID ||
-                    pair.region_j > FULLMAG_FDM_MAX_REGION_ID) {
-                    ctx->last_error = "fdm_region_lut_capacity_exceeded: exchange pair region index exceeds supported_region_ids="
-                        + std::to_string(FULLMAG_FDM_MAX_REGION_ID);
-                    return reinterpret_cast<fullmag_fdm_backend *>(ctx);
-                }
-                double value = 0.0;
-                switch (pair.mode) {
-                case FULLMAG_FDM_EXCHANGE_PAIR_HARMONIC_MEAN:
-                    value = ctx->A * pair.scale;
-                    break;
-                case FULLMAG_FDM_EXCHANGE_PAIR_EXPLICIT:
-                    value = pair.inter_exchange * pair.scale;
-                    break;
-                case FULLMAG_FDM_EXCHANGE_PAIR_DISABLED:
-                    value = 0.0;
-                    break;
-                case FULLMAG_FDM_EXCHANGE_PAIR_UNSPECIFIED:
-                    ctx->last_error = "exchange pair mode must not be unspecified";
-                    return reinterpret_cast<fullmag_fdm_backend *>(ctx);
-                default:
-                    ctx->last_error = "invalid exchange pair mode";
-                    return reinterpret_cast<fullmag_fdm_backend *>(ctx);
-                }
-                lut_host[pair.region_i * N + pair.region_j] = value;
-                lut_host[pair.region_j * N + pair.region_i] = value;
-            }
-        }
-        if (!context_upload_exchange_lut(*ctx, lut_host.data(), N * N)) {
-            return reinterpret_cast<fullmag_fdm_backend *>(ctx);
-        }
-        ctx->exchange_lut_uniform = std::all_of(
-            lut_host.begin(), lut_host.end(), [ctx](double value) { return value == ctx->A; });
-        ctx->exchange_lut_host = std::move(lut_host);
+    if (ctx->has_exchange_faces &&
+        !context_upload_exchange_faces(
+            *ctx,
+            exchange_operator.x_plus,
+            exchange_operator.y_plus,
+            exchange_operator.z_plus,
+            exchange_operator.len))
+    {
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    if ((plan->ms_field != nullptr || plan->alpha_field != nullptr) &&
+        !context_upload_material_fields(
+            *ctx, plan->ms_field, plan->alpha_field, ctx->cell_count))
+    {
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
     if (plan->demag_kernel_spectrum_len != 0 &&
         !context_upload_demag_kernel_spectra(
@@ -1743,7 +1965,7 @@ static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
 fullmag_fdm_backend *fullmag_fdm_backend_create(
     const fullmag_fdm_plan_desc *plan)
 {
-    return fullmag_fdm_backend_create_impl(plan, false);
+    return fullmag_fdm_backend_create_impl(plan, false, ExchangeOperatorInput{});
 }
 
 int fullmag_fdm_backend_create_time_policy_v2_checked(
@@ -1759,9 +1981,20 @@ int fullmag_fdm_backend_create_time_policy_v2_checked(
     std::unique_ptr<fullmag_fdm_plan_ingestion_v2> ingestion(raw_ingestion);
 #if FULLMAG_HAS_CUDA
     plan = &plan_ingestion_descriptor(*ingestion);
+    ExchangeOperatorInput exchange_operator;
+    if (plan->exchange_operator_mode == FULLMAG_FDM_EXCHANGE_OPERATOR_FACES) {
+        exchange_operator.faces = true;
+        exchange_operator.x_plus = plan->exchange_face_x_plus;
+        exchange_operator.y_plus = plan->exchange_face_y_plus;
+        exchange_operator.z_plus = plan->exchange_face_z_plus;
+        exchange_operator.len = plan->exchange_face_len;
+    }
+    exchange_operator.rotated_dmi_active =
+        plan->has_rotated_interfacial_dmi != 0 && plan->dmi_D_rotated_interfacial != 0.0;
     fullmag_fdm_backend *handle = fullmag_fdm_backend_create_impl(
         &plan->base,
-        plan->has_rotated_interfacial_dmi != 0);
+        plan->has_rotated_interfacial_dmi != 0,
+        exchange_operator);
     if (!handle) return FULLMAG_FDM_ERR_CUDA;
     *out_handle = handle;
     auto *ctx = reinterpret_cast<Context *>(handle);
@@ -1995,25 +2228,54 @@ int fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
             "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition";
         return FULLMAG_FDM_ERR_INVALID;
     }
+    std::vector<RotatedDmiMutationSnapshot::LayerState> candidate_layers;
+    try {
+        candidate_layers.assign(
+            ctx->multilayer_layers.size(),
+            RotatedDmiMutationSnapshot::LayerState{
+                descriptor->has_rotated_interfacial_dmi != 0,
+                descriptor->has_rotated_interfacial_dmi != 0
+                    ? descriptor->dmi_D_rotated_interfacial
+                    : 0.0});
+    } catch (const std::exception &exception) {
+        ctx->last_error = "rotated DMI candidate state allocation failed: "
+            + std::string(exception.what());
+        return FULLMAG_FDM_ERR_INTERNAL;
+    } catch (...) {
+        ctx->last_error = "rotated DMI candidate state allocation failed";
+        return FULLMAG_FDM_ERR_INTERNAL;
+    }
     if (descriptor->has_rotated_interfacial_dmi != 0 &&
         descriptor->dmi_D_rotated_interfacial != 0.0) {
         std::string boundary_error;
         if (!validate_rotated_dmi_multilayer_boundary_exchange_stiffness(
-                *ctx, boundary_error)) {
+                *ctx, candidate_layers, boundary_error)) {
             ctx->last_error = boundary_error;
             return FULLMAG_FDM_ERR_INVALID;
         }
     }
 
-    const auto snapshot = capture_rotated_dmi_mutation_snapshot(*ctx);
+    RotatedDmiMutationSnapshot snapshot{};
+    std::string snapshot_error;
+    if (!capture_rotated_dmi_mutation_snapshot(
+            *ctx, snapshot, snapshot_error)) {
+        ctx->last_error = snapshot_error;
+        return FULLMAG_FDM_ERR_INTERNAL;
+    }
     const bool inject_refresh_failure = consume_rotated_dmi_refresh_failure_injection(*ctx);
     ctx->has_rotated_interfacial_dmi =
         descriptor->has_rotated_interfacial_dmi != 0;
     ctx->D_rotated_interfacial = descriptor->dmi_D_rotated_interfacial;
+    for (std::size_t index = 0; index < ctx->multilayer_layers.size(); ++index) {
+        ctx->multilayer_layers[index].has_rotated_interfacial_dmi =
+            candidate_layers[index].has_rotated_interfacial_dmi;
+        ctx->multilayer_layers[index].D_rotated_interfacial =
+            candidate_layers[index].D_rotated_interfacial;
+    }
     if (ctx->has_rotated_interfacial_dmi &&
         !context_ensure_rotated_dmi_workspace(*ctx)) {
-        ctx->has_rotated_interfacial_dmi = snapshot.has_rotated_interfacial_dmi;
-        ctx->D_rotated_interfacial = snapshot.D_rotated_interfacial;
+        const std::string primary_error = ctx->last_error;
+        (void)rollback_rotated_dmi_mutation(*ctx, snapshot, primary_error);
         return FULLMAG_FDM_ERR_CUDA;
     }
     context_invalidate_observables(*ctx);
@@ -2032,6 +2294,169 @@ int fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
     // The setter is a pre-step configuration boundary.  Keep the receipt's
     // DMI requirement synchronized with the post-mutation Hamiltonian rather
     // than retaining a stale bit from an earlier enable operation.
+    const bool dmi_required = ctx->has_interfacial_dmi ||
+        ctx->has_rotated_interfacial_dmi || ctx->has_bulk_dmi;
+    fullmag_fdm_set_operator_device_requirement(
+        *ctx->execution_receipt, FULLMAG_FDM_OPERATOR_DMI, dmi_required);
+    fullmag_fdm_commit_operator_residency(*ctx);
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle;
+    (void)descriptor;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_set_rotated_interfacial_dmi_layers_v1(
+    fullmag_fdm_backend *handle,
+    const fullmag_fdm_rotated_interfacial_dmi_layers_desc_v1 *descriptor)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !descriptor) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    if (descriptor->abi_version !=
+            FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_LAYERS_ABI_V1 ||
+        descriptor->struct_size != sizeof(*descriptor) ||
+        descriptor->reserved0 != 0 ||
+        (descriptor->entry_count != 0 && descriptor->layers == nullptr)) {
+        ctx->last_error = "rotated_interfacial_dmi_layers_v1_abi_mismatch";
+        return FULLMAG_FDM_ERR_ABI;
+    }
+    if (!ctx->has_multilayer_plan_v2) {
+        ctx->last_error =
+            "rotated_interfacial_dmi_layers_v1_requires_multilayer_v2_handle";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (ctx->accepted_step_pending || ctx->step_count != 0 ||
+        ctx->current_time != 0.0) {
+        ctx->last_error =
+            "rotated_interfacial_dmi_layers_v1_must_be_set_before_first_step";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (descriptor->entry_count > ctx->multilayer_layers.size()) {
+        ctx->last_error =
+            "rotated_interfacial_dmi_layers_v1_entry_count_exceeds_layer_count";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+
+    std::vector<RotatedDmiMutationSnapshot::LayerState> candidate_layers;
+    std::vector<uint8_t> seen;
+    try {
+        candidate_layers.reserve(ctx->multilayer_layers.size());
+        for (const auto &layer : ctx->multilayer_layers) {
+            candidate_layers.push_back({
+                layer.has_rotated_interfacial_dmi,
+                layer.D_rotated_interfacial});
+        }
+        seen.assign(ctx->multilayer_layers.size(), 0);
+    } catch (const std::exception &exception) {
+        ctx->last_error = "rotated DMI candidate state allocation failed: "
+            + std::string(exception.what());
+        return FULLMAG_FDM_ERR_INTERNAL;
+    } catch (...) {
+        ctx->last_error = "rotated DMI candidate state allocation failed";
+        return FULLMAG_FDM_ERR_INTERNAL;
+    }
+
+    for (uint32_t entry_index = 0;
+         entry_index < descriptor->entry_count;
+         ++entry_index) {
+        const auto &entry = descriptor->layers[entry_index];
+        if (entry.reserved0 != 0 ||
+            (entry.has_rotated_interfacial_dmi != 0 &&
+             entry.has_rotated_interfacial_dmi != 1) ||
+            !std::isfinite(entry.dmi_D_rotated_interfacial) ||
+            (entry.has_rotated_interfacial_dmi == 0 &&
+             entry.dmi_D_rotated_interfacial != 0.0)) {
+            ctx->last_error =
+                "rotated_interfacial_dmi_layers_v1_entry_is_malformed";
+            return FULLMAG_FDM_ERR_INVALID;
+        }
+        if (entry.layer_index >= ctx->multilayer_layers.size()) {
+            ctx->last_error =
+                "rotated_interfacial_dmi_layers_v1_unknown_layer_index";
+            return FULLMAG_FDM_ERR_INVALID;
+        }
+        if (seen[entry.layer_index] != 0) {
+            ctx->last_error =
+                "rotated_interfacial_dmi_layers_v1_duplicate_layer_index";
+            return FULLMAG_FDM_ERR_INVALID;
+        }
+        seen[entry.layer_index] = 1;
+        const bool active = entry.has_rotated_interfacial_dmi != 0 &&
+            entry.dmi_D_rotated_interfacial != 0.0;
+        candidate_layers[entry.layer_index] = {
+            active, active ? entry.dmi_D_rotated_interfacial : 0.0};
+    }
+
+    const bool candidate_has_rotated_dmi = std::any_of(
+        candidate_layers.begin(), candidate_layers.end(),
+        [](const auto &layer) {
+            return layer.has_rotated_interfacial_dmi &&
+                layer.D_rotated_interfacial != 0.0;
+        });
+    if (candidate_has_rotated_dmi &&
+        (ctx->has_interfacial_dmi || ctx->has_bulk_dmi)) {
+        ctx->last_error =
+            "rotated_interfacial_dmi_layers_v1_conflicts_with_conventional_dmi";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (candidate_has_rotated_dmi && !ctx->enable_exchange) {
+        ctx->last_error =
+            "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (candidate_has_rotated_dmi) {
+        std::string boundary_error;
+        if (!validate_rotated_dmi_multilayer_boundary_exchange_stiffness(
+                *ctx, candidate_layers, boundary_error)) {
+            ctx->last_error = boundary_error;
+            return FULLMAG_FDM_ERR_INVALID;
+        }
+    }
+
+    RotatedDmiMutationSnapshot snapshot{};
+    std::string snapshot_error;
+    if (!capture_rotated_dmi_mutation_snapshot(
+            *ctx, snapshot, snapshot_error)) {
+        ctx->last_error = snapshot_error;
+        return FULLMAG_FDM_ERR_INTERNAL;
+    }
+    const bool inject_refresh_failure =
+        consume_rotated_dmi_refresh_failure_injection(*ctx);
+    for (std::size_t index = 0; index < ctx->multilayer_layers.size(); ++index) {
+        ctx->multilayer_layers[index].has_rotated_interfacial_dmi =
+            candidate_layers[index].has_rotated_interfacial_dmi;
+        ctx->multilayer_layers[index].D_rotated_interfacial =
+            candidate_layers[index].D_rotated_interfacial;
+    }
+    ctx->has_rotated_interfacial_dmi = candidate_has_rotated_dmi;
+    // Multi-layer kernels read the layer-local values.  Keep the legacy scalar
+    // cleared so it cannot accidentally leak into an inactive layer path.
+    ctx->D_rotated_interfacial = 0.0;
+    // Allocate every per-layer rotated field even for an explicit all-zero
+    // descriptor.  The forced refresh may also calculate conventional DMI,
+    // whose kernel writes the rotated output channel alongside it.
+    if (!context_ensure_rotated_dmi_workspace(*ctx)) {
+        const std::string primary_error = ctx->last_error;
+        (void)rollback_rotated_dmi_mutation(*ctx, snapshot, primary_error);
+        return FULLMAG_FDM_ERR_CUDA;
+    }
+
+    context_invalidate_observables(*ctx);
+    bool refreshed = refresh_multilayer_transaction_observables(*ctx, true);
+    if (refreshed && inject_refresh_failure) {
+        ctx->last_error = "injected rotated DMI observable refresh failure";
+        refreshed = false;
+    }
+    if (!refreshed) {
+        const std::string primary_error = ctx->last_error;
+        if (!rollback_rotated_dmi_mutation(*ctx, snapshot, primary_error)) {
+            ctx->last_error += "; rollback observable refresh failed; cache invalidated";
+        }
+        return FULLMAG_FDM_ERR_CUDA;
+    }
+
     const bool dmi_required = ctx->has_interfacial_dmi ||
         ctx->has_rotated_interfacial_dmi || ctx->has_bulk_dmi;
     fullmag_fdm_set_operator_device_requirement(
@@ -2340,6 +2765,14 @@ int fullmag_fdm_context_bind_gpu_transport_v1(
     if (ctx->has_multilayer_plan_v2) {
         ctx->last_error =
             "spin transport is unsupported for v2 multilayer handles";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    // The transport torque term uses the scalar alpha (and Ms). The create-time
+    // gate cannot see a binding attached later, so reject it here as well.
+    if (ctx->ms_field != nullptr || ctx->alpha_field != nullptr) {
+        ctx->last_error =
+            "fdm_cuda_heterogeneous_material_unsupported:gpu_transport: heterogeneous "
+            "Ms/alpha does not yet combine with GPU transport torque on native FDM CUDA";
         return FULLMAG_FDM_ERR_INVALID;
     }
     if (!context_bind_gpu_transport_rhs(*ctx, *binding)) {
@@ -2984,6 +3417,27 @@ int fullmag_fdm_backend_upload_layer_magnetization_f32(
     return FULLMAG_FDM_OK;
 #else
     (void)handle; (void)layer_index; (void)m_xyz; (void)len;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_multilayer_bb(
+    fullmag_fdm_backend *handle, uint32_t op, double lambda,
+    double *layer_scalars, uint64_t scalar_count)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle) return FULLMAG_FDM_ERR_INVALID;
+    auto &ctx = *reinterpret_cast<Context *>(handle);
+    if (!ctx.has_multilayer_plan_v2 || ctx.precision != FULLMAG_FDM_PRECISION_DOUBLE || op > 3) {
+        ctx.last_error = "resident multilayer BB requires a staged FP64 plan and valid operation";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (op == 0 && !refresh_multilayer_transaction_observables(ctx, true))
+        return FULLMAG_FDM_ERR_CUDA;
+    return context_multilayer_bb(ctx, op, lambda, layer_scalars, scalar_count)
+        ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_CUDA;
+#else
+    (void)handle; (void)op; (void)lambda; (void)layer_scalars; (void)scalar_count;
     return FULLMAG_FDM_ERR_CUDA;
 #endif
 }

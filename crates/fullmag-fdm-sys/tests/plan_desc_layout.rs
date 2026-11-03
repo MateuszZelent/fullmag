@@ -1,6 +1,8 @@
 use fullmag_fdm_sys::{
     fullmag_fdm_grid_desc, fullmag_fdm_material_desc, fullmag_fdm_multilayer_plan_desc_v2,
     fullmag_fdm_plan_desc, fullmag_fdm_plan_desc_v2, fullmag_fdm_rotated_interfacial_dmi_desc_v1,
+    fullmag_fdm_rotated_interfacial_dmi_layer_v1,
+    fullmag_fdm_rotated_interfacial_dmi_layers_desc_v1,
     fullmag_fdm_time_policy_desc_v2,
 };
 
@@ -9,7 +11,7 @@ fn plan_descriptor_has_versioned_complete_layout() {
     assert_eq!(std::mem::align_of::<fullmag_fdm_plan_desc>(), 8);
     assert_eq!(std::mem::size_of::<fullmag_fdm_plan_desc>(), 1280);
     assert_eq!(std::mem::align_of::<fullmag_fdm_plan_desc_v2>(), 8);
-    assert_eq!(std::mem::size_of::<fullmag_fdm_plan_desc_v2>(), 1400);
+    assert_eq!(std::mem::size_of::<fullmag_fdm_plan_desc_v2>(), 1440);
     assert_eq!(
         std::mem::align_of::<fullmag_fdm_multilayer_plan_desc_v2>(),
         8
@@ -20,6 +22,14 @@ fn plan_descriptor_has_versioned_complete_layout() {
     );
     assert_eq!(
         std::mem::size_of::<fullmag_fdm_rotated_interfacial_dmi_desc_v1>(),
+        24
+    );
+    assert_eq!(
+        std::mem::size_of::<fullmag_fdm_rotated_interfacial_dmi_layer_v1>(),
+        24
+    );
+    assert_eq!(
+        std::mem::size_of::<fullmag_fdm_rotated_interfacial_dmi_layers_desc_v1>(),
         24
     );
 

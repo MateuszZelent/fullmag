@@ -235,13 +235,6 @@ bool context_preflight_single_grid_workspace(
         !add_product(ctx.cell_count, sizeof(uint32_t))) {
         return false;
     }
-    if (ctx.has_exchange_lut &&
-        !add_product(
-            uint64_t{FULLMAG_FDM_MAX_EXCHANGE_REGIONS} *
-                FULLMAG_FDM_MAX_EXCHANGE_REGIONS,
-            sizeof(double))) {
-        return false;
-    }
 
     if (ctx.enable_demag) {
         uint64_t fft_nx = ctx.fft_nx;
@@ -296,6 +289,9 @@ bool context_preflight_single_grid_workspace(
     }
 
     uint64_t optional_f64_fields = 0;
+    if (ctx.has_exchange_faces) optional_f64_fields += 3;
+    if (plan.ms_field != nullptr) ++optional_f64_fields;
+    if (plan.alpha_field != nullptr) ++optional_f64_fields;
     if (ctx.has_uniaxial_anisotropy) {
         if (plan.ku1_field != nullptr) ++optional_f64_fields;
         if (plan.ku2_field != nullptr) ++optional_f64_fields;
@@ -611,6 +607,7 @@ static void free_regional_field_drives(Context &ctx) {
         ctx.regional_field_drive_points = nullptr;
     }
     ctx.regional_field_drive_count = 0;
+    ctx.regional_field_drive_time_dependent = false;
     ctx.regional_field_drive_point_count = 0;
 }
 
@@ -1347,6 +1344,15 @@ static double push_map_axis_overlap(
             std::max(convolution_lo, native_lo));
 }
 
+static bool uses_multilayer_transfer_map(fullmag_fdm_transfer_kind kind) {
+    return kind == FULLMAG_FDM_TRANSFER_PUSH_PULL ||
+        kind == FULLMAG_FDM_TRANSFER_CENTERED_ALIGNED;
+}
+
+static bool uses_centered_aligned_transfer(fullmag_fdm_transfer_kind kind) {
+    return kind == FULLMAG_FDM_TRANSFER_CENTERED_ALIGNED;
+}
+
 static void build_push_map_host(
     const fullmag_fdm_grid_desc &native_grid,
     const fullmag_fdm_grid_desc &convolution_grid,
@@ -1456,6 +1462,86 @@ static void build_pull_map_host(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+static void build_centered_aligned_push_map_host(
+    const fullmag_fdm_grid_desc &native_grid,
+    const fullmag_fdm_grid_desc &convolution_grid,
+    std::vector<uint64_t> &offsets,
+    std::vector<uint64_t> &indices,
+    std::vector<double> &weights)
+{
+    const uint64_t conv_cells = grid_cell_count(convolution_grid);
+    const uint32_t offset_x = (convolution_grid.nx - native_grid.nx) / 2u;
+    const uint32_t offset_y = (convolution_grid.ny - native_grid.ny) / 2u;
+    offsets.assign(conv_cells + 1, 0);
+    indices.clear();
+    weights.clear();
+    indices.reserve(grid_cell_count(native_grid));
+    weights.reserve(grid_cell_count(native_grid));
+
+    for (uint32_t cz = 0; cz < convolution_grid.nz; ++cz) {
+        for (uint32_t cy = 0; cy < convolution_grid.ny; ++cy) {
+            for (uint32_t cx = 0; cx < convolution_grid.nx; ++cx) {
+                const uint64_t conv_idx =
+                    flatten_grid_index(cx, cy, cz, convolution_grid);
+                offsets[conv_idx] = indices.size();
+                if (cz >= native_grid.nz ||
+                    cx < offset_x || cx >= offset_x + native_grid.nx ||
+                    cy < offset_y || cy >= offset_y + native_grid.ny) {
+                    continue;
+                }
+
+                indices.push_back(flatten_grid_index(
+                    cx - offset_x,
+                    cy - offset_y,
+                    cz,
+                    native_grid));
+                // The centered-aligned descriptor is restricted to equal
+                // cell volumes, so this one-entry average is exactly the
+                // CPU volume-weighted push (coefficient one).
+                weights.push_back(1.0);
+            }
+        }
+    }
+    offsets[conv_cells] = indices.size();
+}
+
+static void build_centered_aligned_pull_map_host(
+    const fullmag_fdm_grid_desc &native_grid,
+    const fullmag_fdm_grid_desc &convolution_grid,
+    const fullmag_fdm_grid_desc &fft_grid,
+    std::vector<uint64_t> &indices,
+    std::vector<double> &weights)
+{
+    const uint64_t native_cells = grid_cell_count(native_grid);
+    const uint32_t offset_x = (convolution_grid.nx - native_grid.nx) / 2u;
+    const uint32_t offset_y = (convolution_grid.ny - native_grid.ny) / 2u;
+    indices.assign(native_cells * 8, 0);
+    weights.assign(native_cells * 8, 0.0);
+
+    for (uint32_t nz = 0; nz < native_grid.nz; ++nz) {
+        for (uint32_t ny = 0; ny < native_grid.ny; ++ny) {
+            for (uint32_t nx = 0; nx < native_grid.nx; ++nx) {
+                const uint64_t native_idx =
+                    flatten_grid_index(nx, ny, nz, native_grid);
+                const uint64_t fft_idx = flatten_grid_index(
+                    nx + offset_x,
+                    ny + offset_y,
+                    nz,
+                    fft_grid);
+                const uint64_t map_base = native_idx * 8;
+                // The pull kernel dereferences every corner even when its
+                // weight is zero. Repeating the valid aligned source index
+                // keeps all eight addresses valid while implementing an
+                // exact one-hot crop, the transpose of the push map above.
+                for (uint32_t corner = 0; corner < 8; ++corner) {
+                    indices[map_base + corner] = fft_idx;
+                }
+                weights[map_base] = 1.0;
             }
         }
     }
@@ -1783,7 +1869,7 @@ bool context_preflight_multilayer_workspace_v2(
              ++layer_index)
         {
             const fullmag_fdm_layer_desc_v2 &layer = plan.layers[layer_index];
-            if (layer.transfer_kind != FULLMAG_FDM_TRANSFER_PUSH_PULL) {
+            if (!uses_multilayer_transfer_map(layer.transfer_kind)) {
                 continue;
             }
             const uint64_t convolution_cells =
@@ -1815,7 +1901,7 @@ bool context_preflight_multilayer_workspace_v2(
                 plan.kernels[kernel_index];
             const fullmag_fdm_layer_desc_v2 &destination =
                 plan.layers[kernel.dst_layer];
-            if (destination.transfer_kind != FULLMAG_FDM_TRANSFER_PUSH_PULL) {
+            if (!uses_multilayer_transfer_map(destination.transfer_kind)) {
                 continue;
             }
             uint64_t pull_entry_count = 0;
@@ -2019,7 +2105,7 @@ bool context_preflight_multilayer_workspace_v2(
              ++layer_index)
         {
             const fullmag_fdm_layer_desc_v2 &layer = plan.layers[layer_index];
-            if (layer.transfer_kind != FULLMAG_FDM_TRANSFER_PUSH_PULL) {
+            if (!uses_multilayer_transfer_map(layer.transfer_kind)) {
                 continue;
             }
             uint64_t push_entry_count = 0;
@@ -2054,19 +2140,28 @@ static bool build_and_upload_push_map(
     Context &ctx,
     DeviceMultilayerLayer &layer)
 {
-    if (layer.transfer_kind != FULLMAG_FDM_TRANSFER_PUSH_PULL) {
+    if (!uses_multilayer_transfer_map(layer.transfer_kind)) {
         return true;
     }
 
     std::vector<uint64_t> push_offsets;
     std::vector<uint64_t> push_indices;
     std::vector<double> push_weights;
-    build_push_map_host(
-        layer.native_grid,
-        layer.convolution_grid,
-        push_offsets,
-        push_indices,
-        push_weights);
+    if (uses_centered_aligned_transfer(layer.transfer_kind)) {
+        build_centered_aligned_push_map_host(
+            layer.native_grid,
+            layer.convolution_grid,
+            push_offsets,
+            push_indices,
+            push_weights);
+    } else {
+        build_push_map_host(
+            layer.native_grid,
+            layer.convolution_grid,
+            push_offsets,
+            push_indices,
+            push_weights);
+    }
 
     layer.push_map.cell_count = layer.convolution_cell_count;
     layer.push_map.entry_count = push_indices.size();
@@ -2085,18 +2180,27 @@ static bool build_and_upload_kernel_pull_map(
     DeviceMultilayerTensorKernel &kernel,
     const DeviceMultilayerLayer &dst_layer)
 {
-    if (dst_layer.transfer_kind != FULLMAG_FDM_TRANSFER_PUSH_PULL) {
+    if (!uses_multilayer_transfer_map(dst_layer.transfer_kind)) {
         return true;
     }
 
     std::vector<uint64_t> pull_indices;
     std::vector<double> pull_weights;
-    build_pull_map_host(
-        dst_layer.native_grid,
-        dst_layer.convolution_grid,
-        kernel.fft_grid,
-        pull_indices,
-        pull_weights);
+    if (uses_centered_aligned_transfer(dst_layer.transfer_kind)) {
+        build_centered_aligned_pull_map_host(
+            dst_layer.native_grid,
+            dst_layer.convolution_grid,
+            kernel.fft_grid,
+            pull_indices,
+            pull_weights);
+    } else {
+        build_pull_map_host(
+            dst_layer.native_grid,
+            dst_layer.convolution_grid,
+            kernel.fft_grid,
+            pull_indices,
+            pull_weights);
+    }
 
     kernel.dst_pull_map.cell_count = dst_layer.cell_count;
     return upload_u64_array(
@@ -2154,6 +2258,13 @@ static bool upload_tensor_kernel_component(
 }
 
 static bool free_multilayer_plan_v2(Context &ctx) {
+    if (ctx.multilayer_bb_partials) cudaFree(ctx.multilayer_bb_partials);
+    if (ctx.multilayer_bb_scalars) cudaFree(ctx.multilayer_bb_scalars);
+    ctx.multilayer_bb_history_valid = false;
+    ctx.multilayer_bb_evaluation_valid = false;
+    ctx.multilayer_bb_partials = nullptr;
+    ctx.multilayer_bb_scalars = nullptr;
+    ctx.multilayer_bb_partial_capacity = 0;
     free_multilayer_fft_workspaces(ctx);
     bool rotated_dmi_released = true;
     for (DeviceMultilayerLayer &layer : ctx.multilayer_layers) {
@@ -2296,24 +2407,13 @@ static void free_region_mask(Context &ctx) {
     }
 }
 
-static bool alloc_exchange_lut(Context &ctx) {
-    if (!ctx.has_exchange_lut) {
-        return true;
-    }
-    constexpr uint64_t N = FULLMAG_FDM_MAX_EXCHANGE_REGIONS;
-    size_t bytes = N * N * sizeof(double);
-    cudaError_t err = cudaMalloc(reinterpret_cast<void **>(&ctx.exchange_lut), bytes);
-    if (err != cudaSuccess) {
-        set_cuda_error(ctx, "cudaMalloc(exchange_lut)", err);
-        return false;
-    }
-    return true;
-}
-
-static void free_exchange_lut(Context &ctx) {
-    if (ctx.exchange_lut) {
-        cudaFree(ctx.exchange_lut);
-        ctx.exchange_lut = nullptr;
+static void free_exchange_faces_and_material_fields(Context &ctx) {
+    for (double **ptr : {&ctx.exchange_face_xp, &ctx.exchange_face_yp,
+                         &ctx.exchange_face_zp, &ctx.ms_field, &ctx.alpha_field}) {
+        if (*ptr) {
+            cudaFree(*ptr);
+            *ptr = nullptr;
+        }
     }
 }
 
@@ -3052,7 +3152,6 @@ bool context_alloc_device(Context &ctx) {
     if (!alloc_sot_active_mask(ctx)) return false;
     if (!alloc_slonczewski_active_mask(ctx)) return false;
     if (!alloc_region_mask(ctx)) return false;
-    if (!alloc_exchange_lut(ctx)) return false;
     if (!alloc_reduction_scratch(ctx)) return false;
     if (!alloc_vector_field(ctx, ctx.m))    return false;
     if (!alloc_vector_field(ctx, ctx.h_ex)) return false;
@@ -3529,7 +3628,7 @@ void context_free_device(Context &ctx) {
     free_sot_active_mask(ctx);
     free_slonczewski_active_mask(ctx);
     free_region_mask(ctx);
-    free_exchange_lut(ctx);
+    free_exchange_faces_and_material_fields(ctx);
     free_boundary_correction(ctx);
     free_reduction_scratch(ctx);
     free_preview_download_scratch(ctx);
@@ -3676,23 +3775,49 @@ bool context_upload_region_mask(Context &ctx, const uint32_t *mask, uint64_t len
     return true;
 }
 
-bool context_upload_exchange_lut(Context &ctx, const double *lut, uint64_t len) {
-    if (!ctx.has_exchange_lut) {
+bool context_upload_exchange_faces(
+    Context &ctx,
+    const double *x_plus,
+    const double *y_plus,
+    const double *z_plus,
+    uint64_t len)
+{
+    if (!ctx.has_exchange_faces) {
         return true;
     }
-    constexpr uint64_t N = FULLMAG_FDM_MAX_EXCHANGE_REGIONS;
-    if (!lut || len != N * N) {
-        ctx.last_error = "exchange_lut length mismatch: expected "
-            + std::to_string(N * N) + ", got " + std::to_string(len);
+    if (!x_plus || !y_plus || !z_plus || len != ctx.cell_count) {
+        ctx.last_error = "exchange face coefficients must provide three arrays of cell_count="
+            + std::to_string(ctx.cell_count) + " values, got len=" + std::to_string(len);
         return false;
     }
-    cudaError_t err = cudaMemcpy(
-        ctx.exchange_lut,
-        lut,
-        N * N * sizeof(double),
-        cudaMemcpyHostToDevice);
-    if (err != cudaSuccess) {
-        set_cuda_error(ctx, "cudaMemcpy(exchange_lut)", err);
+    if (!upload_f64_array(ctx, ctx.exchange_face_xp, x_plus, len, "cudaMalloc(exchange_face_xp)") ||
+        !upload_f64_array(ctx, ctx.exchange_face_yp, y_plus, len, "cudaMalloc(exchange_face_yp)") ||
+        !upload_f64_array(ctx, ctx.exchange_face_zp, z_plus, len, "cudaMalloc(exchange_face_zp)")) {
+        return false;
+    }
+    ctx.exchange_faces_host.assign(x_plus, x_plus + len);
+    ctx.exchange_faces_host.insert(ctx.exchange_faces_host.end(), y_plus, y_plus + len);
+    ctx.exchange_faces_host.insert(ctx.exchange_faces_host.end(), z_plus, z_plus + len);
+    return true;
+}
+
+bool context_upload_material_fields(
+    Context &ctx,
+    const double *ms_field,
+    const double *alpha_field,
+    uint64_t len)
+{
+    if (len != ctx.cell_count) {
+        ctx.last_error = "cellwise material fields must have cell_count="
+            + std::to_string(ctx.cell_count) + " values, got " + std::to_string(len);
+        return false;
+    }
+    if (ms_field &&
+        !upload_f64_array(ctx, ctx.ms_field, ms_field, len, "cudaMalloc(ms_field)")) {
+        return false;
+    }
+    if (alpha_field &&
+        !upload_f64_array(ctx, ctx.alpha_field, alpha_field, len, "cudaMalloc(alpha_field)")) {
         return false;
     }
     return true;
@@ -4263,9 +4388,8 @@ bool context_prepare_multilayer_batch_fft_workspace_v2(Context &ctx) {
         return false;
     }
 
-    // push_pull is intentionally retained for the host-authoritative assisted
-    // lane.  It needs per-layer transfer maps and is not a device-resident D-07
-    // refresh, so it must not allocate or masquerade as this workspace.
+    // Map-based transfers use the pair-wise CUDA route and are not part of the
+    // D-07 batched identity workspace. Keep this allocation path identity-only.
     for (const DeviceMultilayerLayer &layer : ctx.multilayer_layers) {
         if (layer.transfer_kind != FULLMAG_FDM_TRANSFER_IDENTITY) {
             return true;
@@ -5061,6 +5185,10 @@ bool context_upload_regional_field_drives(
     ctx.regional_field_drive_params = params_device;
     ctx.regional_field_drive_points = points_device;
     ctx.regional_field_drive_count = drive_count;
+    ctx.regional_field_drive_time_dependent = std::any_of(
+        params.begin(), params.end(), [](const RegionalFieldDriveParams &drive) {
+            return drive.waveform != FULLMAG_FDM_REGIONAL_FIELD_DRIVE_CONSTANT;
+        });
     ctx.regional_field_drive_point_count = static_cast<uint64_t>(piecewise_points.size() / 2u);
     return true;
 }

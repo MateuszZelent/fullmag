@@ -539,6 +539,7 @@ pub(crate) fn execute_direct_minimizer(
             &state.magnetization,
             &state.h_eff,
             plan.active_mask.as_deref(),
+            plan.material.ms_field.as_deref(),
         );
         ensure_single_object_scalars(&mut accepted_stats, "free");
         let scalar_metrics = accepted_stats

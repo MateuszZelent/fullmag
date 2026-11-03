@@ -106,8 +106,10 @@ bool context_build_workspace_dependency_identity_v1(
         append_u32_array(
             material, plan.region_mask, plan.region_mask_len);
         append_double_array(
-            material, ctx.exchange_lut_host.data(),
-            static_cast<uint64_t>(ctx.exchange_lut_host.size()));
+            material, ctx.exchange_faces_host.data(),
+            static_cast<uint64_t>(ctx.exchange_faces_host.size()));
+        append_optional_double_field(material, plan.ms_field, ctx.cell_count);
+        append_optional_double_field(material, plan.alpha_field, ctx.cell_count);
         append_u32(material, ctx.has_uniaxial_anisotropy ? 1U : 0U);
         append_double(material, ctx.Ku1);
         append_double(material, ctx.Ku2);
@@ -123,6 +125,20 @@ bool context_build_workspace_dependency_identity_v1(
         append_optional_double_field(material, plan.kc1_field, ctx.cell_count);
         append_optional_double_field(material, plan.kc2_field, ctx.cell_count);
         append_optional_double_field(material, plan.kc3_field, ctx.cell_count);
+        if (!ctx.multilayer_layers.empty()) {
+            append_domain(
+                material, "fullmag.fdm.workspace.multilayer-rotated-dmi.v1");
+            append_u64(
+                material,
+                static_cast<uint64_t>(ctx.multilayer_layers.size()));
+            for (const auto &layer : ctx.multilayer_layers) {
+                append_u32(material, layer.layer_index);
+                append_u32(
+                    material,
+                    layer.has_rotated_interfacial_dmi ? 1U : 0U);
+                append_double(material, layer.D_rotated_interfacial);
+            }
+        }
 
         std::vector<uint8_t> spectra;
         append_domain(spectra, "fullmag.fdm.workspace.spectra.v1");

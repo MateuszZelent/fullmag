@@ -32,6 +32,7 @@ fn make_test_plan() -> FdmPlanIR {
         boundary_correction: None,
         boundary_geometry: None,
         inter_region_exchange: vec![],
+        region_owner: Vec::new(),
         enable_exchange: true,
         enable_demag: false,
         external_field: None,
@@ -268,6 +269,7 @@ fn make_relaxation_precession_test_plan() -> FdmPlanIR {
         boundary_correction: None,
         boundary_geometry: None,
         inter_region_exchange: vec![],
+        region_owner: Vec::new(),
         current_density: None,
         stt_degree: None,
         stt_beta: None,
@@ -1816,6 +1818,52 @@ fn effective_field_and_torque_due_outputs_share_direct_effective_field_cache() {
             .map(|value| [value[2], 0.0, 0.0])
             .collect::<Vec<_>>()
     );
+}
+
+/// Two objects touching along x: regions 1 and 2 have different owners, so
+/// exchange decouples them (note 0104, DMI across decoupled connections).
+fn touching_objects_plan(interfacial_dmi: Option<f64>) -> FdmPlanIR {
+    let mut plan = make_test_plan();
+    plan.region_mask = (0..16).map(|index| if index % 4 < 2 { 1 } else { 2 }).collect();
+    plan.region_owner = vec![0, 0, 1];
+    plan.interfacial_dmi = interfacial_dmi;
+    plan
+}
+
+#[test]
+fn dmi_decoupled_exchange_connection_is_rejected_before_stepping() {
+    let error = crate::fdm::exchange_operator::build_plan_exchange_operator(
+        &touching_objects_plan(Some(1.5e-3)),
+    )
+    .expect_err("DMI across a decoupled connection must be rejected");
+    assert!(
+        error.message.contains("fdm_dmi_decoupled_exchange_connection"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn dmi_decoupled_exchange_connection_is_rejected_without_exchange_field() {
+    let mut plan = touching_objects_plan(Some(1.5e-3));
+    plan.enable_exchange = false;
+    let error = crate::fdm::exchange_operator::build_plan_exchange_operator(&plan)
+        .expect_err("touching objects stay decoupled for DMI without exchange");
+    assert!(
+        error.message.contains("fdm_dmi_decoupled_exchange_connection"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn dmi_decoupled_exchange_gate_ignores_absent_or_zero_dmi() {
+    for dmi in [None, Some(0.0)] {
+        let operator =
+            crate::fdm::exchange_operator::build_plan_exchange_operator(&touching_objects_plan(dmi))
+                .expect("without DMI the decoupled operator is valid");
+        assert!(matches!(operator, fullmag_engine::ExchangeOperator::Faces(_)));
+    }
 }
 
 #[path = "tests/final_relax.rs"]

@@ -150,6 +150,14 @@ docker-dev-script-pinned attempt config_sha256 source_root script request_id="":
 docker-dev-refresh-frontend attempt config_sha256 source_root port="3197" frozen_resume="" frozen_resume_sha256="":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" refresh-frontend-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} {{if frozen_resume == "" { if frozen_resume_sha256 == "" { "" } else { error("frozen frontend recovery requires both pins") } } else if frozen_resume_sha256 == "" { error("frozen frontend recovery requires both pins") } else { "--frontend-frozen-resume " + quote(frozen_resume) + " --frontend-frozen-resume-sha256 " + quote(frozen_resume_sha256) } }}
 
+# Prepare one exact retained frontend completion; no service mutation or Solve.
+docker-dev-prepare-frontend-completion attempt base_attempt source_root port="3197":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_frontend_refresh_reconcile.py" --prepare --attempt {{quote(attempt)}} --base-attempt {{quote(base_attempt)}} --source-root {{quote(source_root)}} --port {{quote(port)}}
+
+# Complete only the reviewed control-volume request; never repeat recreation.
+docker-dev-complete-frontend-refresh request request_sha256 source_root:
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_frontend_refresh_reconcile.py" --apply --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}} --source-root {{quote(source_root)}}
+
 docker-dev-restart-idle attempt config_sha256 source_root port="3197" allow_prepared_session="false":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" restart-idle-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}}{{if allow_prepared_session == "true" { " --allow-prepared-session" } else if allow_prepared_session == "false" { "" } else { error("allow_prepared_session must be true or false") } }}
 

@@ -33,6 +33,7 @@ pub(crate) struct AcceptedFemExecution {
     pub(crate) attempt_output_dir: std::path::PathBuf,
     pub(crate) accepted_state_ref: fullmag_quantities::AcceptedStateRef,
     pub(crate) terminal_stats: Option<fullmag_runner::StepStats>,
+    pub(crate) completion: Option<fullmag_ir::StageCompletionIR>,
 }
 
 /// The solver may acknowledge an interrupt after producing a prefix of steps.
@@ -97,6 +98,14 @@ pub(crate) fn prepare_accepted_fem_execution(
         crate::accepted_study_worker::materialize_resolved_study_inputs(store, accepted_step)
             .context("materialize accepted FEM CAS inputs for the runner")?;
     let mut problem = accepted_step.problem.clone();
+    problem.problem_meta.runtime_metadata.insert("performance_execution_identity".into(),
+        serde_json::json!({
+            "run_id": accepted_step.claim.run_id.as_str(),
+            "task_id": accepted_step.claim.task_id.as_str(),
+            "step_id": accepted_step.step_id,
+            "attempt_id": accepted_step.claim.attempt_id.as_str(),
+            "ownership_epoch": accepted_step.claim.ownership_epoch.value(),
+        }));
     problem.problem_meta.runtime_metadata.insert(
         "runtime_device_override".into(),
         serde_json::json!({
@@ -266,6 +275,7 @@ pub(crate) fn execute_accepted_fem_attempt(
             attempt_output_dir: attempt_output_dir.to_path_buf(),
             accepted_state_ref,
             terminal_stats,
+            completion: result.completion,
         },
     ))
 }

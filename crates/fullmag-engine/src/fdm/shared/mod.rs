@@ -1,3 +1,4 @@
+pub mod exchange_operator;
 pub(crate) mod frozen_spins;
 pub(crate) mod observables;
 pub(crate) mod problem;

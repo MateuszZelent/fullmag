@@ -198,7 +198,7 @@ fn confirm_exact_equilibrium_aos(
     for _ in 0..2 {
         *h_eff = problem.effective_field_from_vectors_ws(magnetization, ws);
         *field_evaluations += 1;
-        let max_torque = compute_max_torque(magnetization, h_eff);
+        let max_torque = compute_max_torque_free(problem, magnetization, h_eff);
         if torque_confirmation.observe(control, energy_plateau.range(), max_torque) {
             return true;
         }
@@ -219,12 +219,82 @@ fn confirm_exact_equilibrium_soa(
     for _ in 0..2 {
         problem.effective_field_into_soa_ws(magnetization, ws, h_eff);
         *field_evaluations += 1;
-        let max_torque = compute_max_torque_soa(magnetization, h_eff);
+        let max_torque = compute_max_torque_soa_free(problem, magnetization, h_eff);
         if torque_confirmation.observe(control, energy_plateau.range(), max_torque) {
             return true;
         }
     }
     false
+}
+
+fn mask_frozen_vectors(problem: &ExchangeLlgProblem, vectors: &mut [Vector3]) {
+    if let Some(frozen) = problem.frozen_spins() {
+        for (i, v) in vectors.iter_mut().enumerate() {
+            if frozen.is_frozen(i) {
+                *v = [0.0, 0.0, 0.0];
+            }
+        }
+    }
+}
+
+fn compute_max_torque_free(
+    problem: &ExchangeLlgProblem,
+    magnetization: &[Vector3],
+    h_eff: &[Vector3],
+) -> f64 {
+    if problem.frozen_spins().is_none() {
+        return compute_max_torque(magnetization, h_eff);
+    }
+    debug_assert_eq!(magnetization.len(), h_eff.len());
+    let mut max_torque = 0.0;
+    for i in 0..magnetization.len() {
+        if problem
+            .frozen_spins()
+            .is_some_and(|frozen| frozen.is_frozen(i))
+            || problem.ms_at(i) <= 0.0
+        {
+            continue;
+        }
+        let m = magnetization[i];
+        let h = h_eff[i];
+        let cx = m[1] * h[2] - m[2] * h[1];
+        let cy = m[2] * h[0] - m[0] * h[2];
+        let cz = m[0] * h[1] - m[1] * h[0];
+        let torque = (cx * cx + cy * cy + cz * cz).sqrt();
+        if torque > max_torque {
+            max_torque = torque;
+        }
+    }
+    max_torque
+}
+
+fn compute_max_torque_soa_free(
+    problem: &ExchangeLlgProblem,
+    magnetization: &VectorFieldSoA,
+    h_eff: &VectorFieldSoA,
+) -> f64 {
+    if problem.frozen_spins().is_none() {
+        return compute_max_torque_soa(magnetization, h_eff);
+    }
+    debug_assert_eq!(magnetization.len(), h_eff.len());
+    let mut max_torque = 0.0;
+    for i in 0..magnetization.len() {
+        if problem
+            .frozen_spins()
+            .is_some_and(|frozen| frozen.is_frozen(i))
+            || problem.ms_at(i) <= 0.0
+        {
+            continue;
+        }
+        let cx = magnetization.y[i] * h_eff.z[i] - magnetization.z[i] * h_eff.y[i];
+        let cy = magnetization.z[i] * h_eff.x[i] - magnetization.x[i] * h_eff.z[i];
+        let cz = magnetization.x[i] * h_eff.y[i] - magnetization.y[i] * h_eff.x[i];
+        let torque = (cx * cx + cy * cy + cz * cz).sqrt();
+        if torque > max_torque {
+            max_torque = torque;
+        }
+    }
+    max_torque
 }
 
 fn compute_max_torque_soa(magnetization: &VectorFieldSoA, h_eff: &VectorFieldSoA) -> f64 {
@@ -408,7 +478,7 @@ fn execute_projected_gradient_bb_soa(
             numerical_error = true;
             break;
         }
-        let max_torque = compute_max_torque_soa(&m, &h_eff);
+        let max_torque = compute_max_torque_soa_free(problem, &m, &h_eff);
         let torque_below_threshold = control
             .stop
             .torque_tolerance_apm
@@ -504,6 +574,12 @@ fn execute_projected_gradient_bb_soa(
         let mut s_dot_y = 0.0;
         let mut y_dot_y = 0.0;
         for i in 0..n {
+            if problem
+                .frozen_spins()
+                .is_some_and(|frozen| frozen.is_frozen(i))
+            {
+                continue;
+            }
             let mx = m_trial.x[i];
             let my = m_trial.y[i];
             let mz = m_trial.z[i];
@@ -567,7 +643,7 @@ fn execute_projected_gradient_bb_soa(
         last_accepted_step_m_per_a = Some(trial_lambda);
 
         let energy_plateau_range = energy_plateau.record(energy);
-        let max_torque = compute_max_torque_soa(&m, &h_eff);
+        let max_torque = compute_max_torque_soa_free(problem, &m, &h_eff);
         if torque_confirmation.observe_at_accepted_step(
             control,
             energy_plateau_range,
@@ -579,7 +655,7 @@ fn execute_projected_gradient_bb_soa(
         }
     }
 
-    let final_torque = compute_max_torque_soa(&m, &h_eff);
+    let final_torque = compute_max_torque_soa_free(problem, &m, &h_eff);
 
     RelaxationResult {
         final_magnetization: m.gather_to_aos(),
@@ -613,6 +689,7 @@ fn execute_projected_gradient_bb_aos(
     // Initial gradient
     let mut h_eff = problem.effective_field_from_vectors_ws(&m, ws);
     let mut g = ExchangeLlgProblem::tangent_gradient_from_field(&m, &h_eff);
+    mask_frozen_vectors(problem, &mut g);
     let mut energy = problem.total_energy_from_vectors_ws(&m, ws);
 
     // Initial step size
@@ -639,7 +716,7 @@ fn execute_projected_gradient_bb_aos(
             numerical_error = true;
             break;
         }
-        let max_torque = compute_max_torque(&m, &h_eff);
+        let max_torque = compute_max_torque_free(problem, &m, &h_eff);
         let torque_below_threshold = control
             .stop
             .torque_tolerance_apm
@@ -735,7 +812,8 @@ fn execute_projected_gradient_bb_aos(
         // Compute gradient at new point
         let h_eff_new = problem.effective_field_from_vectors_ws(&m_trial, ws);
         field_evaluations += 1;
-        let g_new = ExchangeLlgProblem::tangent_gradient_from_field(&m_trial, &h_eff_new);
+        let mut g_new = ExchangeLlgProblem::tangent_gradient_from_field(&m_trial, &h_eff_new);
+        mask_frozen_vectors(problem, &mut g_new);
 
         // Barzilai–Borwein step selection (Boris-style signedness checks)
         // Divide by 1e6 for numerical stability on large meshes (cancels in ratio)
@@ -796,7 +874,7 @@ fn execute_projected_gradient_bb_aos(
         last_accepted_step_m_per_a = Some(trial_lambda);
 
         let energy_plateau_range = energy_plateau.record(energy);
-        let max_torque = compute_max_torque(&m, &h_eff);
+        let max_torque = compute_max_torque_free(problem, &m, &h_eff);
         if torque_confirmation.observe_at_accepted_step(
             control,
             energy_plateau_range,
@@ -809,7 +887,7 @@ fn execute_projected_gradient_bb_aos(
     }
 
     // Final torque check
-    let final_torque = compute_max_torque(&m, &h_eff);
+    let final_torque = compute_max_torque_free(problem, &m, &h_eff);
 
     RelaxationResult {
         final_magnetization: m,
@@ -891,7 +969,7 @@ fn execute_nonlinear_cg_soa(
             numerical_error = true;
             break;
         }
-        let max_torque = compute_max_torque_soa(&m, &h_eff);
+        let max_torque = compute_max_torque_soa_free(problem, &m, &h_eff);
         let torque_below_threshold = control
             .stop
             .torque_tolerance_apm
@@ -1029,7 +1107,7 @@ fn execute_nonlinear_cg_soa(
         last_accepted_step_m_per_a = Some(lambda);
 
         let energy_plateau_range = energy_plateau.record(energy);
-        let max_torque = compute_max_torque_soa(&m, &h_eff);
+        let max_torque = compute_max_torque_soa_free(problem, &m, &h_eff);
         if torque_confirmation.observe_at_accepted_step(
             control,
             energy_plateau_range,
@@ -1041,7 +1119,7 @@ fn execute_nonlinear_cg_soa(
         }
     }
 
-    let final_torque = compute_max_torque_soa(&m, &h_eff);
+    let final_torque = compute_max_torque_soa_free(problem, &m, &h_eff);
 
     RelaxationResult {
         final_magnetization: m.gather_to_aos(),
@@ -1075,6 +1153,7 @@ fn execute_nonlinear_cg_aos(
     // Initial gradient
     let mut h_eff = problem.effective_field_from_vectors_ws(&m, ws);
     let mut g = ExchangeLlgProblem::tangent_gradient_from_field(&m, &h_eff);
+    mask_frozen_vectors(problem, &mut g);
     let mut energy = problem.total_energy_from_vectors_ws(&m, ws);
 
     // Initial search direction: p = -g
@@ -1100,7 +1179,7 @@ fn execute_nonlinear_cg_aos(
             break;
         }
         // Check convergence
-        let max_torque = compute_max_torque(&m, &h_eff);
+        let max_torque = compute_max_torque_free(problem, &m, &h_eff);
         let torque_below_threshold = control
             .stop
             .torque_tolerance_apm
@@ -1203,7 +1282,8 @@ fn execute_nonlinear_cg_aos(
         // New gradient at m_new
         let h_eff_new = problem.effective_field_from_vectors_ws(&m_new, ws);
         field_evaluations += 1;
-        let g_new = ExchangeLlgProblem::tangent_gradient_from_field(&m_new, &h_eff_new);
+        let mut g_new = ExchangeLlgProblem::tangent_gradient_from_field(&m_new, &h_eff_new);
+        mask_frozen_vectors(problem, &mut g_new);
         let g_new_norm_sq = energy_directional_derivative(problem, &g_new, &g_new);
 
         // Transport old gradient to tangent space at m_new
@@ -1254,7 +1334,7 @@ fn execute_nonlinear_cg_aos(
         last_accepted_step_m_per_a = Some(lambda);
 
         let energy_plateau_range = energy_plateau.record(energy);
-        let max_torque = compute_max_torque(&m, &h_eff);
+        let max_torque = compute_max_torque_free(problem, &m, &h_eff);
         if torque_confirmation.observe_at_accepted_step(
             control,
             energy_plateau_range,
@@ -1266,7 +1346,7 @@ fn execute_nonlinear_cg_aos(
         }
     }
 
-    let final_torque = compute_max_torque(&m, &h_eff);
+    let final_torque = compute_max_torque_free(problem, &m, &h_eff);
 
     RelaxationResult {
         final_magnetization: m,

@@ -78,18 +78,30 @@ describe("Viewport3DScene scale helpers", () => {
     })).toEqual(new Set(["antenna"]));
   });
 
-  it("treats native multilayer grids as realized object geometry", () => {
+  it("treats native multilayer grids as realized only after their model is ready", () => {
     expect(
       resolveViewport3DRealizedFdmObjectIds({
         fdmNativeLayerViews: [
-          { domain: { objectId: "layer_bottom" } },
-          { domain: { objectId: "layer_top" } },
+          { domain: { objectId: "layer_bottom" }, model: { count: 12 } },
+          { domain: { objectId: "layer_top" }, model: { count: 8 } },
         ] as never,
         fdmTargetViews: [
           { ownerTarget: { id: "object:single_grid", kind: "object" } },
         ] as never,
       }),
     ).toEqual(new Set(["single_grid", "layer_bottom", "layer_top"]));
+  });
+
+  it("keeps primitive previews while native multilayer models are pending or empty", () => {
+    expect(
+      resolveViewport3DRealizedFdmObjectIds({
+        fdmNativeLayerViews: [
+          { domain: { objectId: "pending_layer" }, model: null },
+          { domain: { objectId: "empty_layer" }, model: { count: 0 } },
+        ] as never,
+        fdmTargetViews: [],
+      }),
+    ).toEqual(new Set());
   });
 
   it("wires ordinary OrbitControls into the camera registry interaction lifecycle", () => {

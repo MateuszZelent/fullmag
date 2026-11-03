@@ -1,5 +1,6 @@
 use fullmag_ir::{AutosaveFormatIR, AutosaveLayoutIR};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -83,6 +84,8 @@ pub struct ContinuousIndexEntry {
     pub target_sample_index: u64,
     pub stage_id: String,
     pub stage_index: u64,
+    /// Stage-wide ordinal within sample_kind. Field quantities share this
+    /// sequence; payload_ref carries the independent per-quantity array row.
     pub stage_sample_index: u64,
     pub sample_kind: AutosaveSampleKind,
     pub coordinate: StageSampleCoordinate,
@@ -134,6 +137,7 @@ struct ActiveStage {
     manifest: StageManifest,
     next_table_sample: u64,
     next_field_sample: u64,
+    next_field_sample_by_quantity: BTreeMap<String, u64>,
 }
 
 impl AutosaveTargetState {
@@ -241,6 +245,7 @@ impl AutosaveTargetState {
             manifest,
             next_table_sample: 0,
             next_field_sample: 0,
+            next_field_sample_by_quantity: BTreeMap::new(),
         });
         Ok(&self.active.as_ref().expect("active stage was set").manifest)
     }
@@ -298,13 +303,22 @@ impl AutosaveTargetState {
             AutosaveSampleKind::Table => active.next_table_sample,
             AutosaveSampleKind::Field => active.next_field_sample,
         };
+        // Logical field ordering is stage-wide, but numerical arrays append
+        // independently per quantity (including unequal autosave cadences).
+        let payload_sample_index = match sample_kind {
+            AutosaveSampleKind::Table => stage_sample_index,
+            AutosaveSampleKind::Field => *active
+                .next_field_sample_by_quantity
+                .get(quantity.unwrap_or(""))
+                .unwrap_or(&0),
+        };
         let payload_ref = match sample_kind {
             AutosaveSampleKind::Table => format!(
                 "stages/stage_{:04}_{}/table/{stage_sample_index}",
                 active.manifest.stage_index, active.manifest.stage_id
             ),
             AutosaveSampleKind::Field => format!(
-                "stages/stage_{:04}_{}/fields/{}/{stage_sample_index}",
+                "stages/stage_{:04}_{}/fields/{}/{payload_sample_index}",
                 active.manifest.stage_index,
                 active.manifest.stage_id,
                 quantity.unwrap_or("unknown")
@@ -333,6 +347,10 @@ impl AutosaveTargetState {
             AutosaveSampleKind::Field => {
                 active.next_field_sample += 1;
                 active.manifest.field_sample_count += 1;
+                *active
+                    .next_field_sample_by_quantity
+                    .entry(quantity.unwrap_or("").to_string())
+                    .or_default() += 1;
             }
         }
         self.next_target_sample_index += 1;
@@ -376,6 +394,7 @@ mod tests {
     #[derive(Default)]
     struct RecordingWriter {
         finished: Vec<StageManifest>,
+        fail_field_once: bool,
     }
 
     impl AutosaveTargetWriter for RecordingWriter {
@@ -391,12 +410,136 @@ mod tests {
             _: &str,
             _: &[f64],
         ) -> Result<(), String> {
+            if std::mem::take(&mut self.fail_field_once) {
+                return Err("injected field append failure".into());
+            }
             Ok(())
         }
         fn finish_stage(&mut self, manifest: &StageManifest) -> Result<(), String> {
             self.finished.push(manifest.clone());
             Ok(())
         }
+    }
+
+    #[test]
+    fn field_payload_rows_are_quantity_local_while_logical_ordinals_stay_global() {
+        let mut state = AutosaveTargetState::new("main");
+        let mut writer = RecordingWriter::default();
+        state
+            .begin_stage(
+                &mut writer,
+                "relax",
+                AutosaveLayoutIR::Continuous,
+                AutosaveFormatIR::Zarr,
+                vec!["step".into()],
+                vec!["m".into(), "H_eff".into()],
+            )
+            .unwrap();
+        state
+            .append_table_row(
+                &mut writer,
+                StageSampleCoordinate::AcceptedStep { accepted_step: 0 },
+                &[0.0],
+            )
+            .unwrap();
+        for (step, quantity) in [(0, "m"), (0, "H_eff"), (1, "m"), (2, "m"), (2, "H_eff")] {
+            state
+                .append_field_sample(
+                    &mut writer,
+                    StageSampleCoordinate::AcceptedStep {
+                        accepted_step: step,
+                    },
+                    quantity,
+                    &[1.0, 0.0, 0.0],
+                )
+                .unwrap();
+        }
+        let fields = &state.continuous_index()[1..];
+        assert_eq!(
+            fields
+                .iter()
+                .map(|e| e.stage_sample_index)
+                .collect::<Vec<_>>(),
+            [0, 1, 2, 3, 4]
+        );
+        assert_eq!(
+            fields
+                .iter()
+                .map(|e| e.target_sample_index)
+                .collect::<Vec<_>>(),
+            [1, 2, 3, 4, 5]
+        );
+        assert_eq!(
+            fields
+                .iter()
+                .map(|e| e.payload_ref.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "stages/stage_0000_relax/fields/m/0",
+                "stages/stage_0000_relax/fields/H_eff/0",
+                "stages/stage_0000_relax/fields/m/1",
+                "stages/stage_0000_relax/fields/m/2",
+                "stages/stage_0000_relax/fields/H_eff/1"
+            ]
+        );
+        let manifest = state.finish_stage(&mut writer).unwrap();
+        assert_eq!(manifest.field_sample_count, 5);
+        assert_eq!(manifest.table_sample_count, 1);
+        state
+            .begin_stage(
+                &mut writer,
+                "run",
+                AutosaveLayoutIR::Continuous,
+                AutosaveFormatIR::Zarr,
+                vec!["step".into()],
+                vec!["m".into(), "H_eff".into()],
+            )
+            .unwrap();
+        let entry = state
+            .append_field_sample(
+                &mut writer,
+                StageSampleCoordinate::PhysicalTime { time_s: 1.0 },
+                "m",
+                &[1.0, 0.0, 0.0],
+            )
+            .unwrap();
+        assert_eq!(entry.target_sample_index, 6);
+        assert_eq!(entry.stage_sample_index, 0);
+        assert_eq!(entry.payload_ref, "stages/stage_0001_run/fields/m/0");
+    }
+
+    #[test]
+    fn failed_field_append_does_not_advance_quantity_or_logical_indices() {
+        let mut state = AutosaveTargetState::new("main");
+        let mut writer = RecordingWriter {
+            fail_field_once: true,
+            ..Default::default()
+        };
+        state
+            .begin_stage(
+                &mut writer,
+                "relax",
+                AutosaveLayoutIR::Continuous,
+                AutosaveFormatIR::Zarr,
+                vec![],
+                vec!["m".into()],
+            )
+            .unwrap();
+        let coordinate = StageSampleCoordinate::AcceptedStep { accepted_step: 0 };
+        assert!(state
+            .append_field_sample(&mut writer, coordinate, "m", &[1.0])
+            .is_err());
+        assert!(state.continuous_index().is_empty());
+        let entry = state
+            .append_field_sample(&mut writer, coordinate, "m", &[1.0])
+            .unwrap();
+        assert_eq!(entry.target_sample_index, 0);
+        assert_eq!(entry.stage_sample_index, 0);
+        assert_eq!(entry.payload_ref, "stages/stage_0000_relax/fields/m/0");
+        assert_eq!(
+            state.finish_stage(&mut writer).unwrap().field_sample_count,
+            1
+        );
     }
 
     #[test]

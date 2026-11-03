@@ -285,14 +285,22 @@ impl ExchangeLlgProblem {
         let zp = neighbor_index(z, nz, 1, pbc_z);
 
         // `neighbor_index` clamps for open boundaries and wraps for PBC,
-        // matching MuMax3's hclamp/lclamp helpers.
-        let x_minus = sample(self.grid.index(xm, y, z));
-        let x_plus = sample(self.grid.index(xp, y, z));
-        let y_minus = sample(self.grid.index(x, ym, z));
-        let y_plus = sample(self.grid.index(x, yp, z));
-        let z_minus = sample(self.grid.index(x, y, zm));
-        let z_plus = sample(self.grid.index(x, y, zp));
+        // matching MuMax3's hclamp/lclamp helpers. Clamp inactive (vacuum)
+        // neighbors to `flat` so internal geometry boundaries satisfy Neumann BC.
         let [m0, m1, m2] = sample(flat);
+        let sample_active = |neighbor_flat: usize| {
+            if self.is_active(neighbor_flat) {
+                sample(neighbor_flat)
+            } else {
+                [m0, m1, m2]
+            }
+        };
+        let x_minus = sample_active(self.grid.index(xm, y, z));
+        let x_plus = sample_active(self.grid.index(xp, y, z));
+        let y_minus = sample_active(self.grid.index(x, ym, z));
+        let y_plus = sample_active(self.grid.index(x, yp, z));
+        let z_minus = sample_active(self.grid.index(x, y, zm));
+        let z_plus = sample_active(self.grid.index(x, y, zp));
 
         // MuMax3's source prefactor already contains the factor 1/2. Its
         // `deltax`/`deltay`/`deltaz` macros therefore use the unhalved
@@ -401,44 +409,56 @@ impl ExchangeLlgProblem {
 
                 if ux > 0.0 && (pbc_x || x > 0) {
                     let prev = self.grid.index(neighbor_index(x, nx, -1, pbc_x), y, z);
-                    let [p0, p1, p2] = magnetization[prev];
-                    dm0 += ux * (m0 - p0) / dx;
-                    dm1 += ux * (m1 - p1) / dx;
-                    dm2 += ux * (m2 - p2) / dx;
+                    if self.is_active(prev) {
+                        let [p0, p1, p2] = magnetization[prev];
+                        dm0 += ux * (m0 - p0) / dx;
+                        dm1 += ux * (m1 - p1) / dx;
+                        dm2 += ux * (m2 - p2) / dx;
+                    }
                 } else if ux < 0.0 && (pbc_x || x + 1 < nx) {
                     let next = self.grid.index(neighbor_index(x, nx, 1, pbc_x), y, z);
-                    let [n0, n1, n2] = magnetization[next];
-                    dm0 += ux * (n0 - m0) / dx;
-                    dm1 += ux * (n1 - m1) / dx;
-                    dm2 += ux * (n2 - m2) / dx;
+                    if self.is_active(next) {
+                        let [n0, n1, n2] = magnetization[next];
+                        dm0 += ux * (n0 - m0) / dx;
+                        dm1 += ux * (n1 - m1) / dx;
+                        dm2 += ux * (n2 - m2) / dx;
+                    }
                 }
 
                 if uy > 0.0 && (pbc_y || y > 0) {
                     let prev = self.grid.index(x, neighbor_index(y, ny, -1, pbc_y), z);
-                    let [p0, p1, p2] = magnetization[prev];
-                    dm0 += uy * (m0 - p0) / dy;
-                    dm1 += uy * (m1 - p1) / dy;
-                    dm2 += uy * (m2 - p2) / dy;
+                    if self.is_active(prev) {
+                        let [p0, p1, p2] = magnetization[prev];
+                        dm0 += uy * (m0 - p0) / dy;
+                        dm1 += uy * (m1 - p1) / dy;
+                        dm2 += uy * (m2 - p2) / dy;
+                    }
                 } else if uy < 0.0 && (pbc_y || y + 1 < ny) {
                     let next = self.grid.index(x, neighbor_index(y, ny, 1, pbc_y), z);
-                    let [n0, n1, n2] = magnetization[next];
-                    dm0 += uy * (n0 - m0) / dy;
-                    dm1 += uy * (n1 - m1) / dy;
-                    dm2 += uy * (n2 - m2) / dy;
+                    if self.is_active(next) {
+                        let [n0, n1, n2] = magnetization[next];
+                        dm0 += uy * (n0 - m0) / dy;
+                        dm1 += uy * (n1 - m1) / dy;
+                        dm2 += uy * (n2 - m2) / dy;
+                    }
                 }
 
                 if uz > 0.0 && (pbc_z || z > 0) {
                     let prev = self.grid.index(x, y, neighbor_index(z, nz, -1, pbc_z));
-                    let [p0, p1, p2] = magnetization[prev];
-                    dm0 += uz * (m0 - p0) / dz;
-                    dm1 += uz * (m1 - p1) / dz;
-                    dm2 += uz * (m2 - p2) / dz;
+                    if self.is_active(prev) {
+                        let [p0, p1, p2] = magnetization[prev];
+                        dm0 += uz * (m0 - p0) / dz;
+                        dm1 += uz * (m1 - p1) / dz;
+                        dm2 += uz * (m2 - p2) / dz;
+                    }
                 } else if uz < 0.0 && (pbc_z || z + 1 < nz) {
                     let next = self.grid.index(x, y, neighbor_index(z, nz, 1, pbc_z));
-                    let [n0, n1, n2] = magnetization[next];
-                    dm0 += uz * (n0 - m0) / dz;
-                    dm1 += uz * (n1 - m1) / dz;
-                    dm2 += uz * (n2 - m2) / dz;
+                    if self.is_active(next) {
+                        let [n0, n1, n2] = magnetization[next];
+                        dm0 += uz * (n0 - m0) / dz;
+                        dm1 += uz * (n1 - m1) / dz;
+                        dm2 += uz * (n2 - m2) / dz;
+                    }
                 }
 
                 let cx = m1 * dm2 - m2 * dm1;
@@ -567,44 +587,56 @@ impl ExchangeLlgProblem {
 
             if ux > 0.0 && (pbc_x || x > 0) {
                 let prev = grid.index(neighbor_index(x, nx, -1, pbc_x), y, z);
-                let [p0, p1, p2] = magnetization[prev];
-                dm0 += ux * (m0 - p0) / dx;
-                dm1 += ux * (m1 - p1) / dx;
-                dm2 += ux * (m2 - p2) / dx;
+                if self.is_active(prev) {
+                    let [p0, p1, p2] = magnetization[prev];
+                    dm0 += ux * (m0 - p0) / dx;
+                    dm1 += ux * (m1 - p1) / dx;
+                    dm2 += ux * (m2 - p2) / dx;
+                }
             } else if ux < 0.0 && (pbc_x || x + 1 < nx) {
                 let next = grid.index(neighbor_index(x, nx, 1, pbc_x), y, z);
-                let [n0, n1, n2] = magnetization[next];
-                dm0 += ux * (n0 - m0) / dx;
-                dm1 += ux * (n1 - m1) / dx;
-                dm2 += ux * (n2 - m2) / dx;
+                if self.is_active(next) {
+                    let [n0, n1, n2] = magnetization[next];
+                    dm0 += ux * (n0 - m0) / dx;
+                    dm1 += ux * (n1 - m1) / dx;
+                    dm2 += ux * (n2 - m2) / dx;
+                }
             }
 
             if uy > 0.0 && (pbc_y || y > 0) {
                 let prev = grid.index(x, neighbor_index(y, ny, -1, pbc_y), z);
-                let [p0, p1, p2] = magnetization[prev];
-                dm0 += uy * (m0 - p0) / dy;
-                dm1 += uy * (m1 - p1) / dy;
-                dm2 += uy * (m2 - p2) / dy;
+                if self.is_active(prev) {
+                    let [p0, p1, p2] = magnetization[prev];
+                    dm0 += uy * (m0 - p0) / dy;
+                    dm1 += uy * (m1 - p1) / dy;
+                    dm2 += uy * (m2 - p2) / dy;
+                }
             } else if uy < 0.0 && (pbc_y || y + 1 < ny) {
                 let next = grid.index(x, neighbor_index(y, ny, 1, pbc_y), z);
-                let [n0, n1, n2] = magnetization[next];
-                dm0 += uy * (n0 - m0) / dy;
-                dm1 += uy * (n1 - m1) / dy;
-                dm2 += uy * (n2 - m2) / dy;
+                if self.is_active(next) {
+                    let [n0, n1, n2] = magnetization[next];
+                    dm0 += uy * (n0 - m0) / dy;
+                    dm1 += uy * (n1 - m1) / dy;
+                    dm2 += uy * (n2 - m2) / dy;
+                }
             }
 
             if uz > 0.0 && (pbc_z || z > 0) {
                 let prev = grid.index(x, y, neighbor_index(z, nz, -1, pbc_z));
-                let [p0, p1, p2] = magnetization[prev];
-                dm0 += uz * (m0 - p0) / dz;
-                dm1 += uz * (m1 - p1) / dz;
-                dm2 += uz * (m2 - p2) / dz;
+                if self.is_active(prev) {
+                    let [p0, p1, p2] = magnetization[prev];
+                    dm0 += uz * (m0 - p0) / dz;
+                    dm1 += uz * (m1 - p1) / dz;
+                    dm2 += uz * (m2 - p2) / dz;
+                }
             } else if uz < 0.0 && (pbc_z || z + 1 < nz) {
                 let next = grid.index(x, y, neighbor_index(z, nz, 1, pbc_z));
-                let [n0, n1, n2] = magnetization[next];
-                dm0 += uz * (n0 - m0) / dz;
-                dm1 += uz * (n1 - m1) / dz;
-                dm2 += uz * (n2 - m2) / dz;
+                if self.is_active(next) {
+                    let [n0, n1, n2] = magnetization[next];
+                    dm0 += uz * (n0 - m0) / dz;
+                    dm1 += uz * (n1 - m1) / dz;
+                    dm2 += uz * (n2 - m2) / dz;
+                }
             }
 
             let cx = m1 * dm2 - m2 * dm1;
@@ -690,38 +722,50 @@ impl ExchangeLlgProblem {
 
             if ux > 0.0 && (pbc_x || x > 0) {
                 let prev = grid.index(neighbor_index(x, nx, -1, pbc_x), y, z);
-                dm0 += ux * (m0 - magnetization.x[prev]) / dx;
-                dm1 += ux * (m1 - magnetization.y[prev]) / dx;
-                dm2 += ux * (m2 - magnetization.z[prev]) / dx;
+                if self.is_active(prev) {
+                    dm0 += ux * (m0 - magnetization.x[prev]) / dx;
+                    dm1 += ux * (m1 - magnetization.y[prev]) / dx;
+                    dm2 += ux * (m2 - magnetization.z[prev]) / dx;
+                }
             } else if ux < 0.0 && (pbc_x || x + 1 < nx) {
                 let next = grid.index(neighbor_index(x, nx, 1, pbc_x), y, z);
-                dm0 += ux * (magnetization.x[next] - m0) / dx;
-                dm1 += ux * (magnetization.y[next] - m1) / dx;
-                dm2 += ux * (magnetization.z[next] - m2) / dx;
+                if self.is_active(next) {
+                    dm0 += ux * (magnetization.x[next] - m0) / dx;
+                    dm1 += ux * (magnetization.y[next] - m1) / dx;
+                    dm2 += ux * (magnetization.z[next] - m2) / dx;
+                }
             }
 
             if uy > 0.0 && (pbc_y || y > 0) {
                 let prev = grid.index(x, neighbor_index(y, ny, -1, pbc_y), z);
-                dm0 += uy * (m0 - magnetization.x[prev]) / dy;
-                dm1 += uy * (m1 - magnetization.y[prev]) / dy;
-                dm2 += uy * (m2 - magnetization.z[prev]) / dy;
+                if self.is_active(prev) {
+                    dm0 += uy * (m0 - magnetization.x[prev]) / dy;
+                    dm1 += uy * (m1 - magnetization.y[prev]) / dy;
+                    dm2 += uy * (m2 - magnetization.z[prev]) / dy;
+                }
             } else if uy < 0.0 && (pbc_y || y + 1 < ny) {
                 let next = grid.index(x, neighbor_index(y, ny, 1, pbc_y), z);
-                dm0 += uy * (magnetization.x[next] - m0) / dy;
-                dm1 += uy * (magnetization.y[next] - m1) / dy;
-                dm2 += uy * (magnetization.z[next] - m2) / dy;
+                if self.is_active(next) {
+                    dm0 += uy * (magnetization.x[next] - m0) / dy;
+                    dm1 += uy * (magnetization.y[next] - m1) / dy;
+                    dm2 += uy * (magnetization.z[next] - m2) / dy;
+                }
             }
 
             if uz > 0.0 && (pbc_z || z > 0) {
                 let prev = grid.index(x, y, neighbor_index(z, nz, -1, pbc_z));
-                dm0 += uz * (m0 - magnetization.x[prev]) / dz;
-                dm1 += uz * (m1 - magnetization.y[prev]) / dz;
-                dm2 += uz * (m2 - magnetization.z[prev]) / dz;
+                if self.is_active(prev) {
+                    dm0 += uz * (m0 - magnetization.x[prev]) / dz;
+                    dm1 += uz * (m1 - magnetization.y[prev]) / dz;
+                    dm2 += uz * (m2 - magnetization.z[prev]) / dz;
+                }
             } else if uz < 0.0 && (pbc_z || z + 1 < nz) {
                 let next = grid.index(x, y, neighbor_index(z, nz, 1, pbc_z));
-                dm0 += uz * (magnetization.x[next] - m0) / dz;
-                dm1 += uz * (magnetization.y[next] - m1) / dz;
-                dm2 += uz * (magnetization.z[next] - m2) / dz;
+                if self.is_active(next) {
+                    dm0 += uz * (magnetization.x[next] - m0) / dz;
+                    dm1 += uz * (magnetization.y[next] - m1) / dz;
+                    dm2 += uz * (magnetization.z[next] - m2) / dz;
+                }
             }
 
             let cx = m1 * dm2 - m2 * dm1;

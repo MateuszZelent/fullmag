@@ -1641,17 +1641,22 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
 
     def test_control_volume_preflight_is_read_only_and_fail_closed_when_absent(self):
         qa = self.qa
+        from docker_build_control import BuildControl
 
-        class FakeControl:
-            volume = "fullmag-control-fixture"
-            shared_labels = {"com.fullmag.compose.project": "fullmag-worktree-fixture"}
+        identity = {
+            "project_name": "fullmag-worktree-control-fixture",
+            "project_id": "fullmag-fixture",
+            "worktree_id": "fixture",
+        }
+        with patch("docker_control_namespace.resolve_namespace", return_value=None):
+            control = BuildControl(identity, "sha256:" + "d" * 64)
 
         missing = SimpleNamespace(returncode=1, stdout=b"", stderr=b"no such volume")
         with patch.object(qa, "docker_capture", return_value=missing) as daemon:
             with self.assertRaises(qa.BuildControlError):
-                qa._validate_existing_control_volume(FakeControl())
+                qa._validate_existing_control_volume(control)
         daemon.assert_called_once_with(
-            "volume", "inspect", "fullmag-control-fixture", allow_failure=True, timeout=60
+            "volume", "inspect", control.volume, allow_failure=True, timeout=60
         )
 
 
@@ -1738,6 +1743,338 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
         ):
             with self.assertRaises(qa.BuildControlError):
                 qa._validate_frontend_volume(control, volume_name, inputs)
+
+    def _private_group_fixture(self):
+        qa = self.qa
+        from docker_build_control import BuildControl
+        import docker_backend_volume_cache as backend_cache
+        import docker_group_ledger as group_ledger
+        import docker_group_storage as group_storage
+
+        identity = {
+            "project_name": "fullmag-worktree-private-group",
+            "project_id": "fullmag-fixture",
+            "worktree_id": "fixture",
+            "checkout_kind": "worktree",
+            "source_root": str(ROOT.resolve()),
+            "network_name": "fullmag-worktree-private-group_fullmag",
+        }
+        with patch("docker_control_namespace.resolve_namespace", return_value=None):
+            control = BuildControl(identity, "sha256:" + "d" * 64)
+        backend_image = "sha256:" + "a" * 64
+        frontend_image = "sha256:" + "b" * 64
+        ledger_subpath = group_storage.role_subpath(control, "ledger")
+        ledger = group_ledger.profile(
+            "e" * 64, control.project, control.volume, backend_image,
+            ledger_subpath=ledger_subpath,
+        )
+        frontend_mount = group_storage.compose_mount_descriptor(
+            control, "frontend", "/state/development", compose_name="frontend-build",
+        )
+        frontend_control_mount = {
+            "type": "volume",
+            "source": "build-control",
+            "target": "/opt/fullmag/control",
+            "read_only": True,
+            "volume": {"nocopy": True, "subpath": control.subpath("frontend")},
+        }
+        backend_mount = group_storage.compose_mount_descriptor(
+            control, "backend", backend_cache.BUILD_TARGET,
+            compose_name=backend_cache.COMPOSE_BUILD_VOLUME,
+        )
+        compose = {
+            "name": control.project,
+            "services": {
+                "backend": {
+                    "image": backend_image,
+                    "environment": dict(ledger["environment"]),
+                    "volumes": [backend_mount, *ledger["backend"]["volumes"]],
+                },
+                "frontend": {
+                    "image": frontend_image,
+                    "environment": {
+                        "FULLMAG_PRIVATE_GROUP_STORAGE": "group-volume-v1",
+                        "FULLMAG_DEVELOPMENT_INPUTS_PATH": "/opt/fullmag/control/development-inputs.json",
+                    },
+                    "volumes": [frontend_mount, frontend_control_mount],
+                },
+            },
+            "volumes": {
+                "frontend-build": {"name": control.volume, "external": True},
+                "build-control": {"name": control.volume, "external": True},
+                backend_cache.COMPOSE_BUILD_VOLUME: {"name": control.volume, "external": True},
+                group_ledger.COMPOSE_VOLUME: {"name": control.volume, "external": True},
+            },
+        }
+        attempt = "c" * 32
+        current = {
+            "attempt": attempt,
+            "private_group_storage": "group-volume-v1",
+            "config_sha256": hashlib.sha256(qa.canonical(compose)).hexdigest(),
+            "inputs": {"image_id": backend_image},
+        }
+        frontend_inputs = {
+            "schema": "fullmag.docker-development-inputs.v1",
+            "dependency_seed_sha256": "1" * 64,
+            "toolpins_sha256": "2" * 64,
+            "source_root": str(ROOT.resolve()),
+            "worktree_id": identity["worktree_id"],
+            "host_port": 3202,
+        }
+        marker = group_storage.owner_manifest(control, ROOT)
+        volume = {
+            "Name": control.volume,
+            "Driver": "local",
+            "Options": {},
+            "Labels": control.shared_labels,
+            "Mountpoint": "/var/lib/docker/volumes/" + control.volume + "/_data",
+        }
+        return {
+            "qa": qa,
+            "control": control,
+            "identity": identity,
+            "compose": compose,
+            "current": current,
+            "frontend_inputs": frontend_inputs,
+            "frontend_volume": control.volume,
+            "frontend_image": frontend_image,
+            "backend_image": backend_image,
+            "marker": marker,
+            "volume": volume,
+            "mountpoint": volume["Mountpoint"],
+        }
+
+    def test_group_volume_profile_is_pinned_and_frontend_mounts_only_role_subpaths(self):
+        case = self._private_group_fixture()
+        qa, control, identity = case["qa"], case["control"], case["identity"]
+        from docker_group_storage import role_subpath
+
+        def read(path, *, optional=False):
+            if path == "private/.owner.json":
+                return deepcopy(case["marker"])
+            if path == f"development/attempts/{case['current']['attempt']}/compose.json":
+                return deepcopy(case["compose"])
+            raise AssertionError("unexpected control read: " + path)
+
+        with patch.object(control, "read", side_effect=read), \
+             patch.object(qa, "_inspect_existing_volume", return_value=case["volume"]):
+            qa._validate_frontend_volume(
+                control, case["frontend_volume"], case["frontend_inputs"], case["current"],
+            )
+
+        state = role_subpath(control, "frontend")
+        control_subpath = control.subpath("frontend")
+        mountpoint = case["mountpoint"]
+        frontend = {
+            "Image": case["frontend_image"],
+            "State": {"Running": True},
+            "Config": {"Labels": {
+                **qa.source_labels(identity),
+                "com.docker.compose.project": control.project,
+                "com.docker.compose.service": "frontend",
+            }},
+            "HostConfig": {
+                "NetworkMode": identity["network_name"],
+                "PortBindings": {"8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": "3202"}]},
+                "Mounts": [
+                    {"Type": "volume", "Source": control.volume, "Target": "/state/development",
+                     "VolumeOptions": {"NoCopy": True, "Subpath": state}},
+                    {"Type": "volume", "Source": control.volume, "Target": "/opt/fullmag/control",
+                     "ReadOnly": True, "VolumeOptions": {"NoCopy": True, "Subpath": control_subpath}},
+                ],
+            },
+            "NetworkSettings": {"Networks": {identity["network_name"]: {}}},
+            "Mounts": [
+                {"Type": "volume", "Name": control.volume, "Destination": "/state/development",
+                 "RW": True, "Driver": "local", "Source": mountpoint},
+                {"Type": "volume", "Name": control.volume, "Destination": "/opt/fullmag/control",
+                 "RW": False, "Driver": "local", "Source": mountpoint},
+            ],
+        }
+        with patch.object(control, "read", side_effect=read), \
+             patch.object(qa, "_inspect_existing_volume", return_value=case["volume"]):
+            qa._validate_frontend(
+                frontend, control, identity, case["frontend_volume"], case["current"], 3202,
+                cache_project_id=None,
+            )
+
+        document = qa._compose_document(
+            ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, control.volume, 3202, 180,
+            control=control, private_group_storage=True,
+        )
+        helper = document["services"]["browser-qa"]
+        self.assertEqual(document["volumes"]["frontend-state"], {
+            "name": control.volume, "external": True,
+        })
+        self.assertEqual(helper["volumes"][0]["volume"], {"nocopy": True, "subpath": state})
+        self.assertEqual(helper["volumes"][0]["target"], "/state/development")
+        self.assertEqual(
+            {mount["target"] for mount in helper["volumes"]},
+            {"/state/development", "/state/development/workspace/apps/control-room/scripts"},
+        )
+        self.assertNotIn("/opt/fullmag/control", {mount["target"] for mount in helper["volumes"]})
+
+    def test_group_volume_frontend_validator_rejects_profile_mount_and_exposure_drift(self):
+        case = self._private_group_fixture()
+        qa, control, identity = case["qa"], case["control"], case["identity"]
+        attempt = case["current"]["attempt"]
+        compose = case["compose"]
+        current = case["current"]
+        state_subpath = "private/frontend"
+        control_subpath = "frontend"
+        mountpoint = case["mountpoint"]
+        document = {
+            "Image": case["frontend_image"],
+            "State": {"Running": True},
+            "Config": {"Labels": {
+                **qa.source_labels(identity),
+                "com.docker.compose.project": control.project,
+                "com.docker.compose.service": "frontend",
+            }},
+            "HostConfig": {
+                "NetworkMode": identity["network_name"],
+                "PortBindings": {"8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": "3202"}]},
+                "Mounts": [
+                    {"Type": "volume", "Source": control.volume, "Target": "/state/development",
+                     "VolumeOptions": {"NoCopy": True, "Subpath": state_subpath}},
+                    {"Type": "volume", "Source": control.volume, "Target": "/opt/fullmag/control",
+                     "ReadOnly": True, "VolumeOptions": {"NoCopy": True, "Subpath": control_subpath}},
+                ],
+            },
+            "NetworkSettings": {"Networks": {identity["network_name"]: {}}},
+            "Mounts": [
+                {"Type": "volume", "Name": control.volume, "Destination": "/state/development",
+                 "RW": True, "Driver": "local", "Source": mountpoint},
+                {"Type": "volume", "Name": control.volume, "Destination": "/opt/fullmag/control",
+                 "RW": False, "Driver": "local", "Source": mountpoint},
+            ],
+        }
+
+        def validate(actual=document, retained=compose, receipt=current):
+            pinned = {**receipt, "config_sha256": hashlib.sha256(qa.canonical(retained)).hexdigest()}
+            with patch.object(control, "read", side_effect=lambda path, **kwargs: deepcopy(retained)), \
+                 patch.object(qa, "_inspect_existing_volume", return_value=case["volume"]):
+                return qa._validate_frontend(actual, control, identity, control.volume, pinned, 3202)
+
+        validate()
+        mismatch = deepcopy(current)
+        mismatch["private_group_storage"] = "group-volume-v2"
+        with self.assertRaises(qa.BuildControlError):
+            validate(receipt=mismatch)
+        for kind in ("wrong-volume", "wrong-subpath", "missing-hostconfig", "extra-mount", "root-exposure"):
+            with self.subTest(rejected=kind):
+                bad = deepcopy(document)
+                if kind == "wrong-volume":
+                    bad["HostConfig"]["Mounts"][0]["Source"] = "fullmag-foreign-volume"
+                    bad["Mounts"][0]["Name"] = "fullmag-foreign-volume"
+                elif kind == "wrong-subpath":
+                    bad["HostConfig"]["Mounts"][0]["VolumeOptions"]["Subpath"] = "private/backend"
+                elif kind == "missing-hostconfig":
+                    del bad["HostConfig"]["Mounts"]
+                elif kind == "extra-mount":
+                    bad["HostConfig"]["Mounts"].append({
+                        "Type": "volume", "Source": control.volume, "Target": "/backend",
+                        "ReadOnly": True, "VolumeOptions": {"NoCopy": True, "Subpath": "private/backend"},
+                    })
+                    bad["Mounts"].append({
+                        "Type": "volume", "Name": control.volume, "Destination": "/backend",
+                        "RW": False, "Driver": "local", "Source": mountpoint + "/private/backend",
+                    })
+                else:
+                    bad["HostConfig"]["Mounts"][0]["VolumeOptions"]["Subpath"] = ""
+                    bad["Mounts"][0]["Source"] = mountpoint
+                with self.assertRaises(qa.BuildControlError):
+                    validate(actual=bad)
+
+    def test_private_group_browser_helper_mounts_are_subpath_scoped_and_legacy_stays_supported(self):
+        case = self._private_group_fixture()
+        qa, control, identity = case["qa"], case["control"], case["identity"]
+        document = qa._compose_document(
+            ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, control.volume, 3202, 180,
+            control=control, private_group_storage=True,
+        )
+        service = document["services"]["browser-qa"]
+        browser_id = "sha256:" + "c" * 64
+        state = service["volumes"][0]
+        mountpoint = case["mountpoint"]
+        actual = {
+            "Id": browser_id,
+            "Image": browser_id,
+            "Config": {
+                "User": "65532:65532",
+                "Cmd": service["command"],
+                "Env": [f"{key}={value}" for key, value in service["environment"].items()],
+                "Labels": {
+                    **qa.source_labels(identity),
+                    "com.docker.compose.project": control.project,
+                    "com.docker.compose.service": "browser-qa",
+                },
+            },
+            "HostConfig": {
+                "GroupAdd": qa._script_bind_groups(ROOT),
+                "ReadonlyRootfs": True,
+                "NetworkMode": identity["network_name"],
+                "PortBindings": None,
+                "Tmpfs": {"/tmp": "rw,nosuid,nodev,size=256m"},
+                "CapDrop": ["ALL"],
+                "SecurityOpt": ["no-new-privileges:true"],
+                "ExtraHosts": None,
+                "Mounts": [
+                    {"Type": "volume", "Source": control.volume, "Target": "/state/development",
+                     "ReadOnly": True, "VolumeOptions": {"NoCopy": True, "Subpath": "private/frontend"}},
+                    {"Type": "bind", "Source": str(ROOT / "apps/control-room/scripts"),
+                     "Target": "/state/development/workspace/apps/control-room/scripts", "ReadOnly": True},
+                ],
+            },
+            "State": {"Running": False, "ExitCode": 0},
+            "NetworkSettings": {"Networks": {identity["network_name"]: {}}, "Ports": {}},
+            "Mounts": [
+                {"Type": "volume", "Name": control.volume, "Destination": "/state/development",
+                 "RW": False, "Driver": "local", "Source": mountpoint},
+                {"Type": "bind", "Source": str(ROOT / "apps/control-room/scripts"),
+                 "Destination": "/state/development/workspace/apps/control-room/scripts", "RW": False},
+            ],
+        }
+        with patch.object(qa, "_inspect_existing_volume", return_value=case["volume"]):
+            qa._validate_browser_helper(
+                actual, control, identity, control.volume, browser_id, 0, ROOT,
+                private_group_storage=True,
+            )
+            missing = deepcopy(actual)
+            del missing["HostConfig"]["Mounts"]
+            with self.assertRaises(qa.ControlOutcomeUnknown):
+                qa._validate_browser_helper(
+                    missing, control, identity, control.volume, browser_id, 0, ROOT,
+                    private_group_storage=True,
+                )
+            root_mount = deepcopy(actual)
+            root_mount["HostConfig"]["Mounts"][0]["VolumeOptions"]["Subpath"] = ""
+            root_mount["Mounts"][0]["Source"] = mountpoint
+            with self.assertRaises(qa.ControlOutcomeUnknown):
+                qa._validate_browser_helper(
+                    root_mount, control, identity, control.volume, browser_id, 0, ROOT,
+                    private_group_storage=True,
+                )
+            extra = deepcopy(actual)
+            extra["HostConfig"]["Mounts"].append({
+                "Type": "volume", "Source": control.volume, "Target": "/backend",
+                "ReadOnly": True, "VolumeOptions": {"NoCopy": True, "Subpath": "private/backend"},
+            })
+            extra["Mounts"].append({
+                "Type": "volume", "Name": control.volume, "Destination": "/backend",
+                "RW": False, "Driver": "local", "Source": mountpoint + "/private/backend",
+            })
+            with self.assertRaises(qa.ControlOutcomeUnknown):
+                qa._validate_browser_helper(
+                    extra, control, identity, control.volume, browser_id, 0, ROOT,
+                    private_group_storage=True,
+                )
+
+        legacy = qa._compose_document(
+            ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-dev-frontend-v1-legacy", 3202, 180,
+        )
+        self.assertEqual(legacy["volumes"]["frontend-state"]["name"], "fullmag-dev-frontend-v1-legacy")
+        self.assertEqual(legacy["services"]["browser-qa"]["volumes"][0]["volume"], {"nocopy": True})
 
     def test_browser_image_reuses_compatible_local_digest_without_pull(self):
         qa = self.qa

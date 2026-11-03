@@ -107,6 +107,10 @@ void c_header_exposes_multilayer_plan_shape() {
             header.find("FULLMAG_FDM_TRANSFER_PUSH_PULL = 1") != std::string::npos,
         "C ABI must expose explicit multilayer transfer kinds");
     check(
+        header.find("FULLMAG_FDM_TRANSFER_CENTERED_ALIGNED = 2") !=
+            std::string::npos,
+        "C ABI must expose the additive centered-aligned transfer kind");
+    check(
         header.find("typedef struct {\n    double re;\n    double im;\n} fullmag_fdm_complex64;") !=
             std::string::npos,
         "C ABI must expose f64 complex values for precomputed tensor kernels");
@@ -175,7 +179,9 @@ void rust_ffi_mirrors_multilayer_plan_shape() {
     check(
         rust.find("pub enum fullmag_fdm_transfer_kind") != std::string::npos &&
             rust.find("FULLMAG_FDM_TRANSFER_IDENTITY = 0") != std::string::npos &&
-            rust.find("FULLMAG_FDM_TRANSFER_PUSH_PULL = 1") != std::string::npos,
+            rust.find("FULLMAG_FDM_TRANSFER_PUSH_PULL = 1") != std::string::npos &&
+            rust.find("FULLMAG_FDM_TRANSFER_CENTERED_ALIGNED = 2") !=
+                std::string::npos,
         "Rust FFI must mirror fullmag_fdm_transfer_kind");
     check(
         rust.find("pub struct fullmag_fdm_complex64") != std::string::npos &&
@@ -475,11 +481,13 @@ void native_multilayer_push_pull_transfer_has_cuda_boundary() {
                 std::string::npos,
         "native demag refresh must define fp64/fp32 push_pull pull_h kernels");
     check(
-        multilayer_source.find("src.transfer_kind == FULLMAG_FDM_TRANSFER_PUSH_PULL") !=
+        multilayer_source.find("uses_multilayer_transfer_map(src.transfer_kind)") !=
                 std::string::npos &&
-            multilayer_source.find("dst.transfer_kind == FULLMAG_FDM_TRANSFER_PUSH_PULL") !=
+            multilayer_source.find("uses_multilayer_transfer_map(dst.transfer_kind)") !=
+                std::string::npos &&
+            multilayer_source.find("FULLMAG_FDM_TRANSFER_CENTERED_ALIGNED") !=
                 std::string::npos,
-        "native demag refresh must route push_pull through explicit transfer kernels");
+        "native demag refresh must route both mapped kinds through explicit transfer kernels");
     check(
         multilayer_source.find("native multilayer transfer maps are not implemented") ==
             std::string::npos,
@@ -512,6 +520,10 @@ void native_multilayer_push_pull_transfer_uses_staged_maps() {
         context_source.find("build_and_upload_push_map") !=
                 std::string::npos &&
             context_source.find("build_and_upload_kernel_pull_map") !=
+                std::string::npos &&
+            context_source.find("build_centered_aligned_push_map_host") !=
+                std::string::npos &&
+            context_source.find("build_centered_aligned_pull_map_host") !=
                 std::string::npos &&
             context_source.find("cudaMemcpy(multilayer_push_map_offsets)") !=
                 std::string::npos &&

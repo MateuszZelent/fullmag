@@ -619,6 +619,7 @@ fn validate_direct_minimizer_realization(
 ) -> std::io::Result<()> {
     let relaxation = match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => fdm.relaxation.as_ref(),
+        BackendPlanIR::FdmMultilayer(fdm) => fdm.relaxation.as_ref(),
         BackendPlanIR::Fem(fem) => fem.relaxation.as_ref(),
         _ => None,
     };
@@ -649,8 +650,18 @@ fn validate_direct_minimizer_realization(
     }
 
     let expected_realization = match &plan.backend_plan {
+        BackendPlanIR::FdmMultilayer(_) if resolved_device == "cpu"
+            && control.algorithm == fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb => {
+            Some("cpu_reference_multilayer_projected_gradient_bb")
+        }
+        BackendPlanIR::FdmMultilayer(_) if resolved_device == "gpu"
+            && control.algorithm == fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb => {
+            crate::relaxation::native_direct_minimizer_realization(control.algorithm, true)
+        }
         BackendPlanIR::Fdm(_) if resolved_device == "cpu" => {
-            Some(crate::relaxation::CPU_SOA_DIRECT_MINIMIZER_REALIZATION)
+            Some(crate::relaxation::expected_cpu_direct_minimizer_realization(
+                provenance.fdm_cpu_state_layout.as_ref(),
+            ))
         }
         BackendPlanIR::Fdm(_) if resolved_device == "gpu" => {
             Some(crate::relaxation::CUDA_FDM_HOST_DIRECT_MINIMIZER_REALIZATION)
@@ -6605,6 +6616,7 @@ mod tests {
                 boundary_correction: None,
                 boundary_geometry: None,
                 inter_region_exchange: vec![],
+                region_owner: Vec::new(),
                 current_density: None,
                 stt_degree: None,
                 stt_beta: None,
@@ -6953,6 +6965,7 @@ mod tests {
                 resolved_periodic_images: None,
                 layers: vec![
                     FdmLayerPlanIR {
+                        rotated_interfacial_dmi: None,
                         magnet_name: "bottom".to_string(),
                         layer_id: "layer:bottom".to_string(),
                         object_id: "bottom".to_string(),
@@ -6970,6 +6983,7 @@ mod tests {
                         transfer_kind: "identity".to_string(),
                     },
                     FdmLayerPlanIR {
+                        rotated_interfacial_dmi: None,
                         magnet_name: "top".to_string(),
                         layer_id: "layer:top".to_string(),
                         object_id: "top".to_string(),
@@ -9004,6 +9018,35 @@ mod tests {
             resolution["fallback_reason"],
             "fem_gpu_relaxation_algorithm_cpu_only"
         );
+    }
+
+    #[test]
+    fn multilayer_bb_metadata_validates_algorithm_and_realization() {
+        let mut plan = test_multilayer_execution_plan();
+        let BackendPlanIR::FdmMultilayer(multilayer) = &mut plan.backend_plan else {
+            panic!("expected multilayer test plan");
+        };
+        multilayer.relaxation = Some(fullmag_ir::RelaxationControlIR {
+            algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            stop: fullmag_ir::RelaxStopIR {
+                torque_tolerance_apm: Some(1e-3), energy_tolerance_j: None,
+                max_steps: Some(1), max_relaxation_time_s: None,
+            },
+        });
+        let mut provenance = ExecutionProvenance {
+            execution_engine: "cpu_reference_multilayer".into(),
+            requested_energy_minimizer: Some("projected_gradient_bb".into()),
+            resolved_energy_minimizer: Some("projected_gradient_bb".into()),
+            energy_minimizer_realization: Some("cpu_reference_multilayer_projected_gradient_bb".into()),
+            ..ExecutionProvenance::default()
+        };
+        assert!(validate_direct_minimizer_realization(&plan, &provenance, "cpu").is_ok());
+        provenance.energy_minimizer_realization = Some("native_cuda_pgbb".into());
+        assert!(validate_direct_minimizer_realization(&plan, &provenance, "cpu").is_err());
+        provenance.execution_engine = "cuda_native_multilayer_convolution".into();
+        assert!(validate_direct_minimizer_realization(&plan, &provenance, "gpu").is_ok());
+        provenance.requested_energy_minimizer = Some("nonlinear_cg".into());
+        assert!(validate_direct_minimizer_realization(&plan, &provenance, "gpu").is_err());
     }
 
     #[test]

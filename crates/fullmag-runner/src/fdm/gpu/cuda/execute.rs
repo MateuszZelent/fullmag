@@ -351,6 +351,13 @@ fn apply_regional_drive_energy(
     magnetization: &[[f64; 3]],
 ) {
     let cell_volume = plan.cell_size[0] * plan.cell_size[1] * plan.cell_size[2];
+    // A cellwise Ms field weights each cell like the device energy reductions do.
+    let saturation_magnetisation = |index: usize| {
+        plan.material
+            .ms_field
+            .as_ref()
+            .map_or(plan.material.saturation_magnetisation, |ms| ms[index])
+    };
     let mut magnetization_dot_field = 0.0;
     for resolved in &plan.regional_field_drive_bases {
         if !resolved.drive.enabled {
@@ -367,7 +374,7 @@ fn apply_regional_drive_energy(
                 continue;
             }
             magnetization_dot_field += multiplier
-                * plan.material.saturation_magnetisation
+                * saturation_magnetisation(index)
                 * (m[0] * field[0] + m[1] * field[1] + m[2] * field[2]);
         }
     }
@@ -394,7 +401,7 @@ fn apply_regional_drive_energy(
             }
             magnetization_dot_field += multiplier
                 * resolved.drive.peak_current_a
-                * plan.material.saturation_magnetisation
+                * saturation_magnetisation(index)
                 * (m[0] * field[0] + m[1] * field[1] + m[2] * field[2]);
         }
     }
@@ -414,10 +421,28 @@ fn public_gpu_device_ordinal() -> Result<i32, RunError> {
 
 #[cfg(feature = "cuda")]
 fn adaptive_batch_execution_eligible(plan: &FdmPlanIR, live: bool) -> bool {
+    // The batch ABI runs only through the adaptive CUDA graph, which bakes
+    // stage times into its capture and rejects time-dependent drives.
     plan.adaptive_timestep.is_some()
         && plan.relaxation.is_none()
         && plan.spin_transport_plans.is_empty()
+        && !plan_uploads_time_dependent_drive(plan)
         && !live
+}
+
+#[cfg(feature = "cuda")]
+/// Mirrors the drives `native.rs` uploads, enabled or not.
+fn plan_uploads_time_dependent_drive(plan: &FdmPlanIR) -> bool {
+    let dynamic = |waveform: &fullmag_ir::TimeDependenceIR| {
+        !matches!(waveform, fullmag_ir::TimeDependenceIR::Constant)
+    };
+    plan.regional_field_drive_bases
+        .iter()
+        .any(|basis| dynamic(&basis.drive.waveform))
+        || plan
+            .solved_antenna_drive_bases
+            .iter()
+            .any(|basis| dynamic(&basis.drive.waveform))
 }
 
 #[cfg(feature = "cuda")]
@@ -923,6 +948,7 @@ pub(crate) fn execute_cuda_fdm(
                     &mut sampled_stats,
                     &magnetization,
                     plan.active_mask.as_deref(),
+                    plan.material.ms_field.as_deref(),
                 );
                 apply_regional_drive_energy(plan, &mut sampled_stats, &magnetization);
                 record_cuda_due_outputs(
@@ -1078,6 +1104,7 @@ pub(crate) fn execute_cuda_fdm(
                         .as_deref()
                         .expect("magnetization cache initialized"),
                     plan.active_mask.as_deref(),
+                    plan.material.ms_field.as_deref(),
                 );
                 apply_regional_drive_energy(
                     plan,
@@ -1099,6 +1126,7 @@ pub(crate) fn execute_cuda_fdm(
                             .as_deref()
                             .expect("magnetization cache initialized"),
                         plan.active_mask.as_deref(),
+                        plan.material.ms_field.as_deref(),
                     );
                     apply_regional_drive_energy(
                         plan,
@@ -1137,6 +1165,7 @@ pub(crate) fn execute_cuda_fdm(
                             .as_deref()
                             .expect("magnetization cache initialized"),
                         plan.active_mask.as_deref(),
+                        plan.material.ms_field.as_deref(),
                     );
                     apply_regional_drive_energy(
                         plan,
@@ -1315,6 +1344,7 @@ pub(crate) fn execute_cuda_fdm(
             final_stats,
             &final_magnetization,
             plan.active_mask.as_deref(),
+            plan.material.ms_field.as_deref(),
         );
         apply_regional_drive_energy(plan, final_stats, &final_magnetization);
     }

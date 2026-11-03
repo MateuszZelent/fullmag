@@ -33,6 +33,7 @@ extern double launch_external_energy_fp32(Context &ctx);
 extern double reduce_uniaxial_anisotropy_energy_fp32(Context &ctx);
 extern double reduce_cubic_anisotropy_energy_fp32(Context &ctx);
 extern double reduce_dmi_energy_fp32(Context &ctx);
+extern double reduce_magnetoelastic_energy_fp32(Context &ctx);
 extern double reduce_max_norm_fp32(Context &ctx, const void *vx, const void *vy, const void *vz, uint64_t n);
 extern double reduce_max_cross_norm_fp32(Context &ctx,
     const void *ax, const void *ay, const void *az,
@@ -50,7 +51,8 @@ extern __global__ void llg_rhs_fp32_kernel(
     const float * __restrict__ mx, const float * __restrict__ my, const float * __restrict__ mz,
     const float * __restrict__ hx, const float * __restrict__ hy, const float * __restrict__ hz,
     float * __restrict__ out_x, float * __restrict__ out_y, float * __restrict__ out_z,
-    int n, float gamma_bar, float alpha, int disable_precession, SttParams stt, SotParams sot);
+    int n, float gamma_bar, float alpha, int disable_precession, SttParams stt, SotParams sot,
+    const double * __restrict__ alpha_field, double gamma);
 
 constexpr float A21 = 1.0f / 5.0f;
 constexpr float A31 = 3.0f / 40.0f;
@@ -262,7 +264,8 @@ static bool compute_rhs_into_fp32(Context &ctx, DeviceVectorField &rhs_out,
             static_cast<const float*>(ctx.work.x), static_cast<const float*>(ctx.work.y), static_cast<const float*>(ctx.work.z),
             static_cast<float*>(rhs_out.x), static_cast<float*>(rhs_out.y), static_cast<float*>(rhs_out.z),
             n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
-            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx),
+            ctx.alpha_field, ctx.gamma);
         context_note_local_pipeline_unfused_rhs(ctx);
         fullmag_fdm_note_llg_rhs_torque_device_launch(
             ctx, "DP45 fp32 LLG RHS launch");
@@ -300,6 +303,7 @@ static void finish_dp45_accepted_step_fp32(
     const double e_aniso = reduce_uniaxial_anisotropy_energy_fp32(ctx);
     const double e_cubic = reduce_cubic_anisotropy_energy_fp32(ctx);
     const double e_dmi = reduce_dmi_energy_fp32(ctx);
+    const double e_mel = reduce_magnetoelastic_energy_fp32(ctx);
     const double max_h_eff = reduce_max_norm_fp32(
         ctx, ctx.work.x, ctx.work.y, ctx.work.z, ctx.cell_count);
     const double max_h_demag = ctx.enable_demag
@@ -325,7 +329,7 @@ static void finish_dp45_accepted_step_fp32(
     stats->cubic_energy_joules = e_cubic;
     stats->dmi_energy_joules = e_dmi;
     stats->total_energy_joules =
-        e_ex + e_demag + e_ext + e_aniso + e_cubic + e_dmi;
+        e_ex + e_demag + e_ext + e_aniso + e_cubic + e_dmi + e_mel;
     stats->max_effective_field_amplitude = max_h_eff;
     stats->max_demag_field_amplitude = max_h_demag;
     stats->max_rhs_amplitude = max_dm_dt;
@@ -833,6 +837,7 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     double e_aniso = reduce_uniaxial_anisotropy_energy_fp32(ctx);
     double e_cubic = reduce_cubic_anisotropy_energy_fp32(ctx);
     double e_dmi = reduce_dmi_energy_fp32(ctx);
+    double e_mel = reduce_magnetoelastic_energy_fp32(ctx);
             double max_h_eff = reduce_max_norm_fp32(ctx, ctx.work.x, ctx.work.y, ctx.work.z, ctx.cell_count);
             double max_h_demag = ctx.enable_demag
                 ? reduce_max_norm_fp32(ctx, ctx.h_demag.x, ctx.h_demag.y, ctx.h_demag.z, ctx.cell_count)
@@ -850,7 +855,7 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             stats->anisotropy_energy_joules = e_aniso;
     stats->cubic_energy_joules = e_cubic;
     stats->dmi_energy_joules = e_dmi;
-            stats->total_energy_joules = e_ex + e_demag + e_ext + e_aniso + e_cubic + e_dmi;
+            stats->total_energy_joules = e_ex + e_demag + e_ext + e_aniso + e_cubic + e_dmi + e_mel;
             stats->max_effective_field_amplitude = max_h_eff;
             stats->max_demag_field_amplitude = max_h_demag;
             stats->max_rhs_amplitude = max_dm_dt;

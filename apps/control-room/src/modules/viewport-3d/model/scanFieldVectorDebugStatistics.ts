@@ -27,7 +27,7 @@ export function buildFieldVectorDebugSamples({
   nComp: number;
   nodeIndices?: readonly number[] | Uint32Array | null;
   pointCount: number;
-  values: Float64Array;
+  values: Float32Array | Float64Array;
 }): { issues: readonly VisualizationDebugIssue[]; samples: readonly VisualizationDebugSample[] } {
   const shownComponents = Math.min(Math.max(0, nComp), MAX_VISUALIZATION_DEBUG_SAMPLE_COMPONENTS);
   const samples = selectFieldVectorDebugSampleIndices(pointCount).map((pointIndex) => {
@@ -64,7 +64,7 @@ function normalizeNodeIndex(value: number | null | undefined): number | null {
 }
 
 export async function scanFieldVectorDebugStatistics(
-  values: Float64Array,
+  values: Float32Array | Float64Array,
   options: { signal?: AbortSignal; yieldToMain?: () => Promise<void> } = {},
 ): Promise<VisualizationDebugNumericStats> {
   let finiteCount = 0;

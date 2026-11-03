@@ -320,6 +320,21 @@ case "${recipe}" in
     if [[ -n "${BASH_REMATCH[5]:-}" ]]; then readmission_args+=(--apply); fi
     exec "${python_cmd}" -B "${script_dir}/docker_linux_native_readmission.py" "${readmission_args[@]}"
     ;;
+  *"scripts/docker_volume_frontend_refresh_reconcile.py"*)
+    frontend_completion_prepare_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_frontend_refresh_reconcile.py\" --prepare --attempt '([0-9a-f]{32})' --base-attempt '([0-9a-f]{32})' --source-root '(/[^']+)' --port '([0-9]{4,5})'[[:space:]]*$"
+    frontend_completion_apply_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_frontend_refresh_reconcile.py\" --apply --request '(verification/frontend-refresh-completion/[0-9a-f]{64}/request.json)' --request-sha256 '([0-9a-f]{64})' --source-root '(/[^']+)'[[:space:]]*$"
+    if [[ "${recipe}" =~ ${frontend_completion_prepare_pattern} ]]; then
+      frontend_completion_args=(--prepare --attempt "${BASH_REMATCH[1]}" --base-attempt "${BASH_REMATCH[2]}"
+        --source-root "${BASH_REMATCH[3]}" --port "${BASH_REMATCH[4]}")
+    elif [[ "${recipe}" =~ ${frontend_completion_apply_pattern} ]]; then
+      frontend_completion_args=(--apply --request "${BASH_REMATCH[1]}" --request-sha256 "${BASH_REMATCH[2]}"
+        --source-root "${BASH_REMATCH[3]}")
+    else
+      echo "[fullmag just] invalid frontend refresh completion recipe" >&2
+      exit 2
+    fi
+    exec "${python_cmd}" -B "${script_dir}/docker_volume_frontend_refresh_reconcile.py" "${frontend_completion_args[@]}"
+    ;;
   *"scripts/docker_volume_development_interrupted.py"*)
     development_reconcile_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_development_interrupted.py\" --request '([a-zA-Z0-9_./-]+)' --request-sha256 '([0-9a-f]{64})' --source-root '([^']+)'( --apply)?[[:space:]]*$"
     if [[ ! "${recipe}" =~ ${development_reconcile_pattern} ]]; then
@@ -369,7 +384,7 @@ case "${recipe}" in
     exec "${bash_executable}" -euo pipefail -c "${recipe}"
     ;;
   *"scripts/docker_volume_checks.py"*)
-    volume_checks_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_checks.py\" --source-root '([^']+)'( --scope '(all|source-capture|frontend-import|frontend-antenna|frontend-visualization|frontend-tools|field-only)')?( --oracle-wheel '([^']+)')?[[:space:]]*$"
+    volume_checks_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_checks.py\" --source-root '([^']+)'( --scope '(all|source-capture|frontend-import|frontend-antenna|frontend-visualization|frontend-tools|field-only|frontend-telemetry-source|frontend-performance-source|frontend-performance)')?( --oracle-wheel '([^']+)')?[[:space:]]*$"
     volume_offline_checks_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_checks.py\" --source-root '([^']+)' --offline --modules '(test_[A-Za-z0-9_]+)'[[:space:]]*$"
     if [[ "${recipe}" =~ ${volume_offline_checks_pattern} ]]; then
       volume_checks_args=(--source-root "${BASH_REMATCH[1]}" --offline --modules "${BASH_REMATCH[2]}")

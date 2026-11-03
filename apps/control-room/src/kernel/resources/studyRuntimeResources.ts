@@ -48,6 +48,7 @@ import {
   DIAGNOSTICS_CPU_PATH,
   DIAGNOSTICS_ENGINE_LOG_PATH,
   DIAGNOSTICS_GPU_PATH,
+  DIAGNOSTICS_RUN_PERFORMANCE_PATH,
   DIAGNOSTICS_SOLVER_PROFILE_PATH,
   MESHING_PERIODIC_PAIRS_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
@@ -100,6 +101,7 @@ import type {
   FieldMetaQuery,
   CpuTelemetryResource,
   GpuTelemetryResource,
+  RunPerformanceResource,
   LiveStatusResource,
   FrequencyDomainFieldResource,
   FrequencyDomainJsonArtifactResource,
@@ -226,6 +228,7 @@ interface SessionScopedResourceOptions<TData> {
   enabled?: boolean;
   load: (context: { sessionScopeKey?: string; signal: AbortSignal }) => Promise<TData>;
   minRefetchIntervalMs?: number;
+  notifyOnError?: boolean | ((error: unknown) => boolean);
   pauseLoad?: boolean;
   retryPolicy?: ResourceRetryPolicy | null;
   resolveRevision?: (data: TData) => ResourceRevision | null;
@@ -2900,6 +2903,37 @@ export function useSolverProfileResource({
     [resource.data],
   );
   return { ...resource, data: mergedProfile };
+}
+
+export function useRunPerformanceResource({
+  enabled = true,
+}: RuntimeResourceOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
+      api.diagnostics.runPerformance({ sessionScopeKey, signal }),
+    [api],
+  );
+
+  return useSessionScopedResource<RunPerformanceResource>({
+    enabled,
+    load,
+    notifyOnError: shouldNotifyRunPerformanceResourceError,
+    resolveRevision: (data) => data.revision,
+    resourceKey: DIAGNOSTICS_RUN_PERFORMANCE_PATH,
+  });
+}
+
+export function isRunPerformanceObservationBusyError(error: unknown): boolean {
+  return (
+    error instanceof ControlRoomApiError &&
+    error.status === 409 &&
+    error.code === "performance_observation_busy"
+  );
+}
+
+export function shouldNotifyRunPerformanceResourceError(error: unknown): boolean {
+  return !isRunPerformanceObservationBusyError(error);
 }
 
 export function useModelReadinessResource({
