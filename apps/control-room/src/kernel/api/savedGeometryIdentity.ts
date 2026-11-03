@@ -33,7 +33,10 @@ export function isSavedOwnedSampleGeometry(value: SavedFieldGeometryResource): b
     : field.quantity_id === "J_charge" ? ["A/m^2", "3", "tet4_cell_local_nodes"]
     : field.quantity_id === "H_ant" ? ["A/m", "3", "sample_nodes"] : null;
   if (!role) return false;
-  return value.producer_id === "fullmag.closed-loop-inspection" && value.producer_version === "2"
+  const supportedProducer = (value.producer_id === "fullmag.closed-loop-inspection" && value.producer_version === "2")
+    || (value.producer_id === "fullmag.retained-current-field" && value.producer_version === "1"
+      && field.quantity_id === "H_ant");
+  return supportedProducer
     && value.tensor_artifact.accepted_state == null && value.geometry_manifest.accepted_state == null
     && field.tensor_rank === (role[1] === "1" ? "0" : "1")
     && field.unit === role[0] && field.normalization === "none" && field.complex_encoding === "real"
