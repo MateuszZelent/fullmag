@@ -366,7 +366,9 @@ $500\times40\times0.5\,\mathrm{nm^3}$ z PBC w osi $x$ i demagnetyzacją
 `truncated_images`. Parametry materiału i dynamiki to
 $M_s=0.58\,\mathrm{MA\,m^{-1}}$, $A=15\,\mathrm{pJ\,m^{-1}}$,
 $D=3\,\mathrm{mJ\,m^{-2}}$, $K_x=0.8\,\mathrm{MJ\,m^{-3}}$,
-$\alpha=0.3$ i $T=0\,\mathrm K$. FDM używa komórek
+$\alpha=0.3$ i $T=0\,\mathrm K$. Scenariusz FDM przekazuje do LLG
+$\gamma_H=\mu_0\gamma_e$, gdzie $\gamma_e=1.760\times10^{11}\,\mathrm{T^{-1}\,s^{-1}}$
+z równania (4) suplementu. FDM używa komórek
 $0.5\times0.5\times0.5\,\mathrm{nm^3}$; siatka 1 nm nie zachowuje bariery
 topologicznej dla relaksującego rdzenia o średnicy kilku nanometrów i nie jest
 dopuszczona do tego benchmarku. Zgodna z obróconym Néelowskim skyrmionem

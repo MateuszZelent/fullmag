@@ -11,6 +11,7 @@ from tests.standard_problems.bimeron.goebel_2019.common import (
     BIMERON_WALL_WIDTH,
     CELL,
     D_ROTATED,
+    GAMMA_H,
     HOLD_SAMPLE_PERIOD,
     HOLD_TIME,
     KU_X,
@@ -50,7 +51,7 @@ film.m = fm.texture.bimeron(
 
 study.terms.add(fm.RotatedInterfacialDMI(D=D_ROTATED))
 study.demag(realization="auto")
-study.solver(fix_dt=LLG_DT, integrator="rk45")
+study.solver(fix_dt=LLG_DT, integrator="rk45", gamma=GAMMA_H)
 
 relax = study.stages.add_relax(
     stage_id="relax",

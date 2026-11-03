@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import json
+import math
 from pathlib import Path
 
 
@@ -49,6 +50,9 @@ def test_common_parameters_match_goebel_2019_supplement_table_i() -> None:
     assert values["KU_X"] == 0.8e6
     assert values["ALPHA"] == 0.3
     assert values["TEMPERATURE"] == 0.0
+    from tests.standard_problems.bimeron.goebel_2019.common import GAMMA_H
+
+    assert math.isclose(GAMMA_H / (4e-7 * math.pi), 1.760e11, rel_tol=1e-15)
     assert values["CELL"] == (0.5e-9, 0.5e-9, 0.5e-9)
     assert values["BIMERON_RADIUS"] == 10e-9
     assert values["BIMERON_WALL_WIDTH"] == 3e-9
@@ -97,6 +101,7 @@ def test_fdm_scenario_is_strict_fp64_periodic_x_with_relax_and_hold() -> None:
     assert len(_calls(module, "add_relax")) == 1
     assert "algorithm='llg_overdamped'" in source
     assert "fix_dt=LLG_DT" in source
+    assert "gamma=GAMMA_H" in source
     assert "dt=LLG_DT" in source
     assert "vorticity=-1" in source
     assert "max_physical_time_s=RELAX_TIME" in source
