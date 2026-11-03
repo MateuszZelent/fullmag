@@ -286,7 +286,8 @@ def _run_worker(token, inputs, binary_sha, terminal_run_id):
     with log.open("xb") as output:
         command = ["/usr/bin/timeout", "--signal=TERM", "--kill-after=15s",
                    str(SOLVER_TIMEOUT_S), *solver_arguments(token)]
-        with subprocess.Popen(command, cwd=RUNTIME_SOURCE, env=env,
+        # Python puts its working directory ahead of PYTHONPATH for -m.
+        with subprocess.Popen(command, cwd=input_root, env=env,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as process:
             assert process.stdout is not None
             for block in iter(lambda: process.stdout.read1(65536), b""):
