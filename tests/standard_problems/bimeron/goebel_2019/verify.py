@@ -375,7 +375,12 @@ def verify_bundle(
     # is the only associated artifact carrying the initial energy and becomes
     # the baseline instead of being compared to a post-relaxation row.
     relax_initial_scalars = _explicit_initial_scalar(relax / "scalars.csv")
-    runtime_log_initial_energy = _initial_energy_from_log(runtime_log)
+    try:
+        runtime_log_initial_energy = _initial_energy_from_log(runtime_log)
+    except ValueError:
+        # Headless runs can omit the step-zero telemetry. Keep the energy gate
+        # closed while evaluating the independent checks on the stored states.
+        runtime_log_initial_energy = None
     initial_energy = (
         relax_initial_scalars["E_total"]
         if relax_initial_scalars is not None
@@ -486,7 +491,9 @@ def verify_bundle(
             and hold_receipt["executed_unknown_operator_mask"] == 0
         ),
         "energy_decreased": (
-            (
+            runtime_log_initial_energy is not None
+            and initial_energy is not None
+            and (
                 relax_initial_scalars is None
                 or math.isclose(
                     runtime_log_initial_energy,
@@ -538,8 +545,9 @@ def verify_bundle(
         "initial_energy_source": (
             "relax_scalars_step_0"
             if relax_initial_scalars is not None
-            else "runtime_log_stage_0"
+            else "runtime_log_stage_0" if runtime_log_initial_energy is not None else "unavailable"
         ),
+        "runtime_log_initial_energy_available": runtime_log_initial_energy is not None,
         "relaxed_energy_j": relax_scalars["E_total"],
         "held_energy_j": hold_scalars["E_total"],
         "relax_duration_s": relax_duration_s,

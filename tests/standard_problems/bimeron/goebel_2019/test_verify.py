@@ -283,6 +283,20 @@ def test_verify_bundle_reports_short_relaxation_gate_failure(tmp_path: Path) -> 
     assert geometry_report["checks"]["source_geometry"] is False
 
 
+    runtime_log.write_text(
+        "stage 1/4 (flat_relax) heartbeat step 0 E_total=0.0000e0\n",
+        encoding="utf-8",
+    )
+    missing_energy_report = verify_bundle(bundle, runtime_log, raise_on_failure=False)
+    assert missing_energy_report["check_count"] == 19
+    assert missing_energy_report["initial_energy_j"] is None
+    assert missing_energy_report["initial_energy_source"] == "unavailable"
+    assert missing_energy_report["runtime_log_initial_energy_available"] is False
+    assert missing_energy_report["checks"] == {
+        **geometry_report["checks"], "energy_decreased": False,
+    }
+
+
 def test_dmi_receipt_requires_operator_bit_in_required_and_executed_masks() -> None:
     base = {
         "required_operator_mask": 159,
