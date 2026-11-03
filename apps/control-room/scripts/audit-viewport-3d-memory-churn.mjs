@@ -1400,25 +1400,40 @@ async function assertColdFdmMultilayerVectorOnlyRendered(
     revision: fixture.visualizationState.revision + 1,
   });
   fixture.status.resources.visualization_state_revision = fixture.visualizationState.revision;
-  await publishVisualizationStateAndWait(
-    page,
-    fixture,
-    viewport,
-    expectedField.quantityId,
-    gpuAfter,
-  );
+  await page.evaluate((state) => {
+    window.__FULLMAG_CONTROL_ROOM_AUDIT__.publishVisualizationState(state);
+  }, fixture.visualizationState);
   const modelCountAttribute = targetKind === "native"
     ? "data-fdm-model-count"
     : "data-fdm-airbox-model-count";
+  let surfaceEvidence = null;
+  // Multilayer fields are target-scoped: the primary-field HUD legitimately
+  // says field:none. Qualify this transition with the target model and draw.
   await waitForCondition(
-    async () => Number(await viewport.getAttribute(modelCountAttribute)) > 0,
+    async () => {
+      const [modelCount, runtime, gpu] = await Promise.all([
+        viewport.getAttribute(modelCountAttribute),
+        readViewportAuditRuntime(page),
+        readBrowserAuditCounters(page),
+      ]);
+      surfaceEvidence = {
+        modelCount: Number(modelCount),
+        visualizationRevision: runtime.visualizationRevision,
+        workerJobs: Number(runtime.workers?.jobs ?? -1),
+        drawCalls: gpu.drawCalls - gpuAfter.drawCalls,
+      };
+      return surfaceEvidence.modelCount > 0 &&
+        String(surfaceEvidence.visualizationRevision) === String(fixture.visualizationState.revision) &&
+        surfaceEvidence.workerJobs === 0 && surfaceEvidence.drawCalls > 0;
+    },
     15_000,
     `Cold ${targetKind} vector-only job prevented the subsequent surface build.`,
   );
-  const surfaceModelCount = Number(await viewport.getAttribute(modelCountAttribute));
+  const surfaceModelCount = surfaceEvidence.modelCount;
 
   return {
     surfaceModelCount,
+    surfaceEvidence,
     fieldResponse,
     glyphBuild,
     gpu: {
