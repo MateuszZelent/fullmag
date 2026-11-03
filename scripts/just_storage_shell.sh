@@ -135,7 +135,7 @@ case "${recipe}" in
     exec "${python_cmd}" -B "${script_dir}/docker_dev_preclaim_cancel.py" "${preclaim_args[@]}"
     ;;
   *"scripts/docker_goebel_qualification.py"*)
-    goebel_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_goebel_qualification.py\" --repo-root \"[^\"]+\" --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --source-commit '([0-9a-f]{40})' --port '([0-9]{4,5})'( --lane fem-periodic --mesh-sha256 '([0-9a-f]{64})' --solver-timeout-s '([0-9]{2,6})')?( --terminal-run-id '([A-Za-z0-9][A-Za-z0-9._-]{0,159})')?( --(observe|reconcile)-attempt '([0-9a-f]{32})')?[[:space:]]*$"
+    goebel_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_goebel_qualification.py\" --repo-root \"[^\"]+\" --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --source-commit '([0-9a-f]{40})' --port '([0-9]{4,5})'( --lane fem-periodic --mesh-sha256 '([0-9a-f]{64})' --solver-timeout-s '([0-9]{2,6})')?( --terminal-run-id '([A-Za-z0-9][A-Za-z0-9._-]{0,159})')?( --(observe|reconcile)-attempt '([0-9a-f]{32})')?( --fdm-attempt '([0-9a-f]{32})' --fdm-input-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
     if [[ ! "${recipe}" =~ ${goebel_pattern} ]]; then
       echo "[fullmag just] invalid Goebel qualification recipe" >&2
       exit 2
@@ -153,6 +153,13 @@ case "${recipe}" in
         exit 2
       fi
       goebel_args+=("--${BASH_REMATCH[12]}-attempt" "${BASH_REMATCH[13]}")
+    fi
+    if [[ -n "${BASH_REMATCH[15]:-}" ]]; then
+      if [[ -z "${BASH_REMATCH[7]:-}" ]]; then
+        echo "[fullmag just] FDM comparison requires the FEM periodic recipe" >&2
+        exit 2
+      fi
+      goebel_args+=(--fdm-attempt "${BASH_REMATCH[15]}" --fdm-input-sha256 "${BASH_REMATCH[16]}")
     fi
     exec "${python_cmd}" -B "${script_dir}/docker_goebel_qualification.py" --repo-root "${repo_root}" \
       --attempt "${BASH_REMATCH[1]}" --config-sha256 "${BASH_REMATCH[2]}" --source-root "${BASH_REMATCH[3]}" \

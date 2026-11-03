@@ -146,10 +146,10 @@ def test_mesh_pin_and_deadline_are_explicit():
 def test_worker_terminal_is_published_once(tmp_path):
     path = tmp_path / "worker-terminal.json"
     record = {"schema": q.WORKER_SCHEMA, "attempt": "a" * 32}
-    q.publish_worker_terminal(path, record)
+    q.publish_json_once(path, record)
     assert q._regular_json(path) == record
     with pytest.raises(FileExistsError):
-        q.publish_worker_terminal(path, {**record, "attempt": "b" * 32})
+        q.publish_json_once(path, {**record, "attempt": "b" * 32})
     assert q._regular_json(path) == record
 
 
@@ -182,3 +182,99 @@ def test_terminal_observation_binds_worker_to_the_exact_mesh_and_inputs():
         q.validate_worker_terminal({**record, "mesh_sha256": "f" * 64}, execution)
     with pytest.raises(ValueError, match="no terminal completion evidence"):
         q.validate_worker_terminal(None, execution)
+
+
+def test_comparison_reference_flags_are_paired_and_fem_only():
+    assert q.comparison_reference("fdm", None, None) is None
+    assert q.comparison_reference(q.FEM_LANE, "a" * 32, "b" * 64) == {
+        "attempt": "a" * 32, "input_sha256": "b" * 64,
+    }
+    with pytest.raises(ValueError, match="paired"):
+        q.comparison_reference(q.FEM_LANE, "a" * 32, None)
+    with pytest.raises(ValueError, match="FEM-only"):
+        q.comparison_reference("fdm", "a" * 32, "b" * 64)
+    with pytest.raises(ValueError, match="exact"):
+        q.comparison_reference(q.FEM_LANE, "../foreign", "b" * 64)
+
+
+def fdm_reference_bundle(root):
+    for stage in ("stage_00_flat_relax", "stage_02_flat_run"):
+        directory = root / "stages" / stage
+        directory.mkdir(parents=True)
+        for name in ("m_initial.json", "m_final.json", "metadata.json"):
+            (directory / name).write_text(f"{stage}/{name}", encoding="utf-8")
+    return root
+
+
+def test_reference_digest_pins_all_six_files(tmp_path):
+    import hashlib
+    import json
+
+    root = fdm_reference_bundle(tmp_path / "output.zarr")
+    files = {
+        f"stages/{stage}/{name}": hashlib.sha256(f"{stage}/{name}".encode()).hexdigest()
+        for stage in ("stage_00_flat_relax", "stage_02_flat_run")
+        for name in ("m_initial.json", "m_final.json", "metadata.json")
+    }
+    expected = hashlib.sha256(json.dumps(files, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    assert q.fdm_input_digest(root) == expected
+    state = root / "stages/stage_02_flat_run/m_initial.json"
+    state.write_text("changed", encoding="utf-8")
+    assert q.fdm_input_digest(root) != expected
+
+
+def test_report_failure_keeps_native_success_and_records_reference_drift(tmp_path, monkeypatch):
+    import json
+    import subprocess
+
+    root = fdm_reference_bundle(tmp_path / "fdm")
+    results = tmp_path / "fem"
+    results.mkdir()
+    pin = {"attempt": "a" * 32, "input_sha256": q.fdm_input_digest(root)}
+
+    def run(argv, **kwargs):
+        assert argv[3] == q.FEM_COMPARISON_MODULE
+        (root / "stages/stage_02_flat_run/m_initial.json").write_text("changed", encoding="utf-8")
+        return subprocess.CompletedProcess(
+            argv, 0, stdout=b'{"schema_version":"goebel_fem_fdm_midplane_comparison.v1"}', stderr=b"",
+        )
+
+    monkeypatch.setattr(q.subprocess, "run", run)
+    report = q.compare_fem_reference(results, root, tmp_path, {}, pin)
+    assert report["state"] == "not_verified"
+    assert "FDM comparison inputs differ" in report["error"]
+    saved = json.loads((results / q.FEM_COMPARISON_FILE).read_text(encoding="utf-8"))
+    assert saved["fdm_reference"] == pin
+    assert saved["status"] == "not_verified"
+
+
+def test_comparison_report_uses_the_pinned_modules_and_both_endpoints(tmp_path, monkeypatch):
+    import json
+    import subprocess
+
+    root = fdm_reference_bundle(tmp_path / "fdm")
+    results = tmp_path / "fem"
+    results.mkdir()
+    pin = {"attempt": "a" * 32, "input_sha256": q.fdm_input_digest(root)}
+    assert q.lane_inputs(q.FEM_LANE, pin) == (
+        *q.lane_inputs(q.FEM_LANE),
+        f"{q.SOURCE}/compare_fem_fdm.py",
+        f"{q.SOURCE}/verify.py",
+    )
+    payload = {
+        "schema_version": q.FEM_COMPARISON_SCHEMA,
+        "stages": {"relaxed": {"q": -1}, "held": {"q": -1}},
+    }
+
+    def run(argv, **kwargs):
+        assert argv[-2:] == [str(results / "output.zarr"), str(root)]
+        assert kwargs["cwd"] == tmp_path
+        assert kwargs["check"] is True
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(payload).encode(), stderr=b"")
+
+    monkeypatch.setattr(q.subprocess, "run", run)
+    report = q.compare_fem_reference(results, root, tmp_path, {}, pin)
+    assert report["state"] == "compared"
+    path = results / q.FEM_COMPARISON_FILE
+    assert report["sha256"] == q._file_sha(path)
+    assert json.loads(path.read_bytes()) == {**payload, "fdm_reference": pin, "status": "compared"}

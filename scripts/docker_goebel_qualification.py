@@ -41,6 +41,16 @@ FEM_SCENARIO = f"{SOURCE}/scenario_fem_periodic.py"
 FEM_MESH_MODULE = "tests.standard_problems.bimeron.goebel_2019.periodic_tet4_mesh"
 FEM_MESH = f"{SOURCE}/goebel_periodic_tet4.mesh.json"
 FEM_INPUTS = (*INPUTS[:4], FEM_SCENARIO, f"{SOURCE}/periodic_tet4_mesh.py")
+FEM_COMPARISON_MODULE = "tests.standard_problems.bimeron.goebel_2019.compare_fem_fdm"
+FEM_COMPARISON_INPUTS = (f"{SOURCE}/compare_fem_fdm.py", f"{SOURCE}/verify.py")
+FEM_COMPARISON_FILE = "fem-fdm-comparison.json"
+FEM_COMPARISON_SCHEMA = "goebel_fem_fdm_midplane_comparison.v1"
+FEM_COMPARISON_TIMEOUT_S = 300
+FDM_COMPARISON_FILES = tuple(
+    f"stages/{stage}/{name}"
+    for stage in ("stage_00_flat_relax", "stage_02_flat_run")
+    for name in ("m_initial.json", "m_final.json", "metadata.json")
+)
 SOLVER = "/opt/fullmag/package/bin/fullmag-bin"
 CONTROL = Path("/opt/fullmag/control")
 RUNTIME_SOURCE = Path("/opt/fullmag/source")
@@ -82,9 +92,24 @@ def result_root(token):
     return Path("/state/runs/goebel-reference") / token
 
 
-def lane_inputs(lane):
+def lane_inputs(lane, fdm_reference=None):
     require(lane in {"fdm", FEM_LANE}, "unknown qualification lane")
+    if fdm_reference is not None:
+        require(lane == FEM_LANE, "FDM comparison is FEM-only")
+        return (*FEM_INPUTS, *FEM_COMPARISON_INPUTS)
     return FEM_INPUTS if lane == FEM_LANE else INPUTS
+
+
+def comparison_reference(lane, attempt, input_sha256):
+    if attempt is None and input_sha256 is None:
+        return None
+    require(attempt is not None and input_sha256 is not None,
+            "FDM comparison attempt and input SHA-256 must be paired")
+    require(lane == FEM_LANE, "FDM comparison is FEM-only")
+    require(isinstance(attempt, str) and TOKEN.fullmatch(attempt)
+            and isinstance(input_sha256, str) and SHA.fullmatch(input_sha256),
+            "FDM comparison requires an exact attempt and input SHA-256")
+    return {"attempt": attempt, "input_sha256": input_sha256}
 
 
 def validate_lane_args(args):
@@ -174,10 +199,10 @@ def _git(root, *args):
     )
 
 
-def _reference_inputs(repo, commit, lane="fdm"):
+def _reference_inputs(repo, commit, lane="fdm", fdm_reference=None):
     require(_git(repo, "rev-parse", "HEAD").decode().strip() == commit,
             "reference checkout HEAD differs from the full source commit pin")
-    data = {relative: _git(repo, "show", f"{commit}:{relative}") for relative in lane_inputs(lane)}
+    data = {relative: _git(repo, "show", f"{commit}:{relative}") for relative in lane_inputs(lane, fdm_reference)}
     require(all(raw and len(raw) <= MAX_RECORD for raw in data.values()),
             "scientific source file is absent or exceeds the input bound")
     return data
@@ -313,13 +338,14 @@ def _generate_mesh(operation, input_root, env, mesh_sha):
     return path
 
 
-def publish_worker_terminal(path, record):
-    """Publish one complete worker observation before writing its stdout."""
-    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".worker-terminal-", delete=False) as stream:
+def publish_json_once(path, record, *, mode=0o600):
+    """Publish a complete, durable record without replacing an existing one."""
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}-", delete=False) as stream:
         temporary = Path(stream.name)
         try:
             stream.write(canonical(record) + b"\n")
             stream.flush()
+            os.fchmod(stream.fileno(), mode)
             os.fsync(stream.fileno())
             os.link(temporary, path, follow_symlinks=False)
             directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
@@ -331,30 +357,84 @@ def publish_worker_terminal(path, record):
             temporary.unlink()
 
 
-def _worker_entry(token, inputs, binary_sha, terminal_run_id, lane, mesh_sha, timeout):
+def fdm_input_digest(bundle):
+    """Hash the fixed FDM endpoint input manifest from the six exact file bytes."""
+    return digest(canonical({relative: _file_sha(bundle / relative)
+                             for relative in FDM_COMPARISON_FILES}))
+
+
+def require_fdm_reference(bundle, reference):
+    require(fdm_input_digest(bundle) == reference["input_sha256"],
+            "FDM comparison inputs differ from the pinned SHA-256")
+
+
+def compare_fem_reference(results, fdm_bundle, input_root, env, reference):
+    """Report comparison outcomes independently of native solver completion."""
+    verification = {"state": "not_verified", "fdm_reference": reference}
+    try:
+        require_fdm_reference(fdm_bundle, reference)
+        try:
+            completed = subprocess.run(
+                ["/usr/local/bin/python3", "-B", "-m", FEM_COMPARISON_MODULE,
+                 str(results / "output.zarr"), str(fdm_bundle)],
+                cwd=input_root, env=env, capture_output=True, check=True,
+                timeout=FEM_COMPARISON_TIMEOUT_S,
+            )
+        finally:
+            require_fdm_reference(fdm_bundle, reference)
+        report = codegen._read_json_bytes(completed.stdout, "Göbel FEM–FDM comparison", MAX_RECORD)
+        require(report.get("schema_version") == FEM_COMPARISON_SCHEMA
+                and set(report.get("stages", {})) == {"relaxed", "held"},
+                "FEM–FDM comparison did not produce both endpoint stages")
+    except Exception as error:
+        verification["error"] = f"{type(error).__name__}: {error}"
+        if isinstance(error, subprocess.CalledProcessError) and error.stderr:
+            verification["error"] += ": " + error.stderr[-2048:].decode(errors="replace").strip()
+        report = {"schema_version": "fullmag.goebel.fem-fdm-comparison-failure.v1",
+                  "status": "not_verified", "error": verification["error"]}
+    else:
+        verification["state"] = "compared"
+        report["status"] = "compared"
+
+    try:
+        path = results / FEM_COMPARISON_FILE
+        publish_json_once(path, {**report, "fdm_reference": reference}, mode=0o644)
+        verification.update(path=path.name, sha256=_file_sha(path))
+    except (OSError, ValueError, TypeError) as error:
+        return {**verification, "state": "not_verified",
+                "error": f"comparison report publication failed: {error}"}
+    return verification
+
+
+def _worker_entry(token, inputs, binary_sha, terminal_run_id, lane, mesh_sha, timeout, fdm_reference=None):
     operation = CONTROL / operation_root(token)
     require(operation.resolve(strict=True) == operation
             and (CONTROL / "active").read_text().strip() == token,
             "worker cannot publish outside its managed attempt")
     try:
-        result = _run_worker(token, inputs, binary_sha, terminal_run_id, lane, mesh_sha, timeout)
+        result = _run_worker(
+            token, inputs, binary_sha, terminal_run_id, lane, mesh_sha, timeout, fdm_reference,
+        )
     except Exception as error:
         result = {"worker_error": f"{type(error).__name__}: {error}"}
     terminal = {"schema": WORKER_SCHEMA, "attempt": token, "lane": lane,
                 "inputs": inputs, "binary_sha256": binary_sha, "mesh_sha256": mesh_sha,
                 "solver_timeout_s": timeout, "result": result}
-    publish_worker_terminal(operation / "worker-terminal.json", terminal)
+    if fdm_reference is not None:
+        terminal["fdm_reference"] = fdm_reference
+    publish_json_once(operation / "worker-terminal.json", terminal)
     return terminal
 
 
 def _run_worker(token, inputs, binary_sha, terminal_run_id, lane="fdm", mesh_sha=None,
-                timeout=SOLVER_TIMEOUT_S):
+                timeout=SOLVER_TIMEOUT_S, fdm_reference=None):
     relative = operation_root(token)
     operation = CONTROL / relative
     require(operation.resolve(strict=True) == operation
             and (CONTROL / "active").read_text().strip() == token,
             "qualification worker lacks the exact managed operation lease")
-    require(set(inputs) == set(lane_inputs(lane)) and all(SHA.fullmatch(value) for value in inputs.values()),
+    require(set(inputs) == set(lane_inputs(lane, fdm_reference))
+            and all(SHA.fullmatch(value) for value in inputs.values()),
             "scientific input set is not exactly the pinned canonical bundle")
     require(_file_sha(Path(SOLVER)) == binary_sha, "installed CLI changed after host admission")
     input_root = operation / "inputs"
@@ -369,6 +449,12 @@ def _run_worker(token, inputs, binary_sha, terminal_run_id, lane="fdm", mesh_sha
         require(isinstance(mesh_sha, str) and SHA.fullmatch(mesh_sha),
                 "missing exact FEM mesh pin")
 
+    fdm_bundle = None
+    if fdm_reference is not None:
+        require(fdm_reference == comparison_reference(
+            lane, fdm_reference.get("attempt"), fdm_reference.get("input_sha256"),
+        ) and fdm_reference["attempt"] != token, "worker has invalid FDM comparison pins")
+        fdm_bundle = result_root(fdm_reference["attempt"]) / "output.zarr"
     before = _idle_probe(terminal_run_id)
     results = result_root(token)
     require(results.resolve() == results, "result directory contains an alias")
@@ -392,6 +478,8 @@ def _run_worker(token, inputs, binary_sha, terminal_run_id, lane="fdm", mesh_sha
             output.flush()
             os.fsync(output.fileno())
         require(_file_sha(retained_mesh) == mesh_sha, "retained FEM mesh does not match the pinned input")
+    if fdm_bundle is not None:
+        require_fdm_reference(fdm_bundle, fdm_reference)
     log = operation / "runtime.log"
     total = 0
     with log.open("xb") as output:
@@ -439,7 +527,12 @@ def _run_worker(token, inputs, binary_sha, terminal_run_id, lane="fdm", mesh_sha
                 and runtime.get("engine_id") == "fem_cpu_native" and runtime.get("fallback") is None,
                 "FEM launch receipt does not attest strict FP64 native CPU without fallback")
         result["resolved_execution"] = runtime
-        result["verification"] = {"state": "not_verified", "reason": "FEM comparison pending"}
+        if fdm_bundle is not None:
+            result["verification"] = compare_fem_reference(
+                results, fdm_bundle, input_root, env, fdm_reference,
+            )
+        else:
+            result["verification"] = {"state": "not_verified", "reason": "FEM comparison pending"}
         return result
 
     # The published validator and thresholds come from the exact reference
@@ -479,7 +572,8 @@ def validate_worker_terminal(record, execution):
         "mesh_sha256": execution["mesh_sha256"],
         "solver_timeout_s": execution["solver_timeout_s"],
     }
-    require(all(record.get(key) == value for key, value in expected.items()),
+    require(all(record.get(key) == value for key, value in expected.items())
+            and record.get("fdm_reference") == execution.get("fdm_reference"),
             "worker completion differs from the exact admitted operation")
     result = record.get("result")
     require(isinstance(result, dict) and (
@@ -488,6 +582,9 @@ def validate_worker_terminal(record, execution):
             and SHA.fullmatch(result.get("runtime_log_sha256") or "")
             and isinstance(result.get("verification"), dict))),
         "qualification worker has no terminal completion evidence")
+    if execution.get("fdm_reference") is not None and result.get("runtime_exit_code") == 0:
+        require(result["verification"].get("fdm_reference") == execution["fdm_reference"],
+                "worker verification differs from the exact FDM comparison pins")
     return result
 
 
@@ -502,11 +599,16 @@ def read_worker_terminal(backend_id, token):
         "expected=result.get('runtime_log_sha256'); "
         "actual=_file_sha(root/'runtime.log') if expected is not None else None; "
         "require(actual==expected,'durable worker runtime log differs'); "
+        "comparison=(result.get('verification') or {}).get('sha256') "
+        "if (record or {}).get('fdm_reference') is not None else None; "
+        "require(comparison is None or _file_sha(Path(sys.argv[2]))==comparison,"
+        "'durable FEM–FDM comparison report differs'); "
         "print(json.dumps({'terminal':record}))"
     )
     root = CONTROL / operation_root(token)
     stdout, _ = codegen._exec(
-        backend_id, ("/usr/local/bin/python3", "-B", "-c", command, str(root)), timeout=90,
+        backend_id, ("/usr/local/bin/python3", "-B", "-c", command, str(root),
+                     str(result_root(token) / FEM_COMPARISON_FILE)), timeout=90,
         environment={"PYTHONPATH": str(root / "controller") + ":/opt/fullmag/source/scripts"},
     )
     return codegen._read_json_bytes(stdout, "Göbel durable worker completion")["terminal"]
@@ -541,7 +643,7 @@ ln "$temp" "$root/terminal.json"; sync "$root"
 """
 
 
-def observe_attempt(args, control, pins, hashes, timeout):
+def observe_attempt(args, control, pins, hashes, timeout, fdm_reference=None):
     token = args.observe_attempt or args.reconcile_attempt
     root = operation_root(token)
     raw = control.read_bytes(root + "/receipt.json")
@@ -559,6 +661,8 @@ def observe_attempt(args, control, pins, hashes, timeout):
         "mesh_sha256": args.mesh_sha256,
         "solver_timeout_s": timeout,
     }
+    if fdm_reference is not None:
+        expected_inputs["fdm_reference"] = fdm_reference
     require(receipt.get("attempt") == token and receipt.get("phase") == PHASE
             and receipt.get("compose_project") == control.project
             and receipt.get("inputs") == expected_inputs, "retained attempt does not match the explicit pins")
@@ -625,11 +729,12 @@ def observe_attempt(args, control, pins, hashes, timeout):
 
 def run(args):
     timeout = validate_lane_args(args)
+    fdm_reference = comparison_reference(args.lane, args.fdm_attempt, args.fdm_input_sha256)
     require(TOKEN.fullmatch(args.attempt) and SHA.fullmatch(args.config_sha256)
             and COMMIT.fullmatch(args.source_commit), "exact attempt, configuration and source pins required")
     require(args.terminal_run_id is None or RUN_ID.fullmatch(args.terminal_run_id), "invalid terminal run pin")
     repo = args.repo_root.resolve(strict=True)
-    data = _reference_inputs(repo, args.source_commit, args.lane)
+    data = _reference_inputs(repo, args.source_commit, args.lane, fdm_reference)
     defaults = resolve_defaults(repo, source_root=args.source_root, port=args.port)
     pin_args = {"requested_port": args.port, "expected_attempt": args.attempt,
                 "expected_config_sha256": args.config_sha256}
@@ -656,15 +761,23 @@ def run(args):
             "retained /state bind does not match the resolved qualification state root")
     hashes = {name: digest(raw) for name, raw in data.items()}
     if args.observe_attempt or args.reconcile_attempt:
-        return observe_attempt(args, control, pins, hashes, timeout)
+        return observe_attempt(args, control, pins, hashes, timeout, fdm_reference)
+    if fdm_reference is not None:
+        fdm_path = state / "runs/goebel-reference" / fdm_reference["attempt"] / "output.zarr"
+        require(validate_path(fdm_path, state, "FDM comparison bundle") == fdm_path,
+                "FDM comparison bundle contains a path alias")
+        require_fdm_reference(fdm_path, fdm_reference)
 
-    with control.operation(PHASE, {
+    operation_inputs = {
         "development_attempt": pins.attempt, "config_sha256": pins.config_sha256,
         "reference_source_commit": args.source_commit, "runtime_source_root": str(selected),
         "backend_container_id": pins.backend_container_id, "frontend_container_id": pins.frontend_container_id,
         "terminal_run_id": args.terminal_run_id, "source_inputs_sha256": hashes,
         "lane": args.lane, "mesh_sha256": args.mesh_sha256, "solver_timeout_s": timeout,
-    }) as operation:
+    }
+    if fdm_reference is not None:
+        operation_inputs["fdm_reference"] = fdm_reference
+    with control.operation(PHASE, operation_inputs) as operation:
         require(_discover_pins(repo, defaults, **pin_args) == pins
                 and control.read(retained + "/terminal.json") == terminal
                 and control.read(retained + "/compose.json") == document, "DEV admission changed under operation lease")
@@ -704,6 +817,8 @@ def run(args):
             "output_root": str(host_output), "command": solver_arguments(token, args.lane),
             "lane": args.lane, "mesh_sha256": args.mesh_sha256, "solver_timeout_s": timeout,
         }
+        if fdm_reference is not None:
+            result["fdm_reference"] = fdm_reference
         operation["receipt"]["scientific_execution"] = result
         operation["receipt"]["helper_container_id"] = operation["helper_container_id"]
         control.write(operation["root"] + "/receipt.json", operation["receipt"])
@@ -711,7 +826,7 @@ def run(args):
             "import json,sys\n"
             "from docker_goebel_qualification import _worker_entry\n"
             "record = _worker_entry(sys.argv[1], json.loads(sys.argv[2]), sys.argv[3], "
-            "sys.argv[4] or None, sys.argv[5], sys.argv[6] or None, int(sys.argv[7]))\n"
+            "sys.argv[4] or None, sys.argv[5], sys.argv[6] or None, int(sys.argv[7]), json.loads(sys.argv[8]))\n"
             "print(json.dumps(record))"
         )
         # The worker controller is copied from the verified reference commit,
@@ -726,8 +841,8 @@ def run(args):
         stdout, _ = codegen._exec(
             backend_id, ("/usr/local/bin/python3", "-B", "-c", worker, token,
                          canonical(hashes).decode(), binary_sha, args.terminal_run_id or "",
-                         args.lane, args.mesh_sha256 or "", str(timeout)),
-            timeout=timeout + MESH_TIMEOUT_S + 300, stdout_limit=MAX_RECORD,
+                         args.lane, args.mesh_sha256 or "", str(timeout), canonical(fdm_reference).decode()),
+            timeout=timeout + MESH_TIMEOUT_S + 300 + (FEM_COMPARISON_TIMEOUT_S if fdm_reference else 0), stdout_limit=MAX_RECORD,
             environment={"PYTHONPATH": str(CONTROL / operation["root"] / "controller")
                          + ":/opt/fullmag/source/scripts"},
         )
@@ -760,7 +875,7 @@ def run(args):
         control.write(operation["root"] + "/scientific-result.json", result)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return (2 if completed["runtime_exit_code"] else
-                0 if completed["verification"].get("state") == "passed" else 3)
+                0 if completed["verification"].get("state") in {"passed", "compared"} else 3)
 
 
 def parser():
@@ -774,6 +889,8 @@ def parser():
     result.add_argument("--terminal-run-id")
     result.add_argument("--lane", choices=("fdm", FEM_LANE), default="fdm")
     result.add_argument("--mesh-sha256")
+    result.add_argument("--fdm-attempt")
+    result.add_argument("--fdm-input-sha256")
     result.add_argument("--solver-timeout-s", type=int)
     recovery = result.add_mutually_exclusive_group()
     recovery.add_argument("--observe-attempt")
