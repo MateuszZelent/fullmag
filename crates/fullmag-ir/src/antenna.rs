@@ -466,6 +466,7 @@ pub enum AntennaOerstedRealizationIR {
 }
 
 pub const ANTENNA_SURFACE_FIELD_POLICY_VERSION: &str = "caller_supplied_rt0_surface.inspection.v1";
+pub const ANTENNA_GSG_UNIVERSE_SURFACE_FIELD_POLICY_VERSION: &str = "caller_supplied_rt0_surface.gsg_universe_275.v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -507,7 +508,8 @@ pub struct AntennaSurfaceFieldPolicyIR {
 impl AntennaSurfaceFieldPolicyIR {
     pub fn validation_errors(&self, path: &str) -> Vec<String> {
         let mut errors = Vec::new();
-        if self.policy_version != ANTENNA_SURFACE_FIELD_POLICY_VERSION {
+        if !matches!(self.policy_version.as_str(), ANTENNA_SURFACE_FIELD_POLICY_VERSION
+            | ANTENNA_GSG_UNIVERSE_SURFACE_FIELD_POLICY_VERSION) {
             errors.push(format!("{path}.policy_version is unsupported"));
         }
         let limits = &self.limits;

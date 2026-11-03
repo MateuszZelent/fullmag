@@ -8995,6 +8995,34 @@
       "symbol": "test_old_sampling_slab_is_rejected_before_field_comparison",
       "responsibility": "Odmowa dawnego zakresu z; nie dowód wykonania solvera.",
       "evidence_status": "implementation_unqualified"
+    },
+    {
+      "id": "surface-gsg-policy-python-version",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "ANTENNA_GSG_UNIVERSE_SURFACE_FIELD_POLICY_VERSION",
+      "responsibility": "Drugi dokładny identyfikator jawnej polityki; wspólne bramki bez zmiany, bez wyboru limitów.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "surface-gsg-policy-ir-version",
+      "path": "crates/fullmag-ir/src/antenna.rs",
+      "symbol": "ANTENNA_GSG_UNIVERSE_SURFACE_FIELD_POLICY_VERSION",
+      "responsibility": "Addytywny identyfikator ProblemIR; źródło, managed runtime nowego tokenu jeszcze niewykonany.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "surface-gsg-policy-roundtrip",
+      "path": "packages/fullmag-py/tests/test_antenna_surface_policy.py",
+      "symbol": "test_gsg_universe_profile_preserves_explicit_limits_and_round_trip",
+      "responsibility": "Dokładne parametry zatwierdzonego profilu i Python/scene round-trip bez Solve; RED przed poprawką, GREEN po.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "surface-gsg-policy-refusals",
+      "path": "packages/fullmag-py/tests/test_antenna_surface_policy.py",
+      "symbol": "test_gsg_version_does_not_admit_unknown_versions_or_weaken_guards",
+      "responsibility": "Nieznane tokeny i wspólne odmowy niewłaściwych limitów/tolerancji dla obu wersji; test interpretowany.",
+      "evidence_status": "interpreted_tests_passed"
     }
   ],
   "public_api": {
@@ -10514,7 +10542,7 @@
         "type": "str",
         "default": "required",
         "si_unit": "$1$",
-        "validation": "dokładnie caller_supplied_rt0_surface.inspection.v1",
+        "validation": "dokładnie caller_supplied_rt0_surface.inspection.v1 albo caller_supplied_rt0_surface.gsg_universe_275.v1; pozostałe identyfikatory odrzucane, bez domyślnych limitów",
         "meaning": "jawna wersja parametrów bez ukrytych defaults",
         "backend_support": "prepared FEM CPU double strict inspection; GPU/FDM unsupported",
         "problem_ir": "surface_field_policy.policy_version"

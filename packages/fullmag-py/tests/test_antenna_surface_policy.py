@@ -70,6 +70,65 @@ class SurfacePolicyTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.tmp_path = Path(self.temporary.name)
 
+    def test_gsg_universe_profile_preserves_explicit_limits_and_round_trip(self):
+        payload = policy_payload()
+        payload["policy_version"] = "caller_supplied_rt0_surface.gsg_universe_275.v1"
+        payload["limits"] = {
+            "total": [4000000, 48000000, 48000000, 144000000, 200000000000,
+                800000000000, 200000000000, 20000000000, 16777216, 134217728,
+                613644625, 125000000, 141609600, 188813625],
+            "per_target": [40000, 480000, 480000, 1440000, 2000000000,
+                8000000000, 2000000000, 200000000, 4194304, 4194304,
+                2231435, 1250000, 1250000, 1250000],
+            "maximum_raw_integer_bits": 8192, "maximum_reduced_fraction_bits": 8192,
+            "maximum_lifetime_peak_rss_bytes": 2147483648, "guard_interval_events": 256,
+            "maximum_total_seconds": 25200.0, "maximum_target_seconds": 90.0,
+        }
+        policy = fm.AntennaSurfaceFieldPolicy(**payload)
+        self.assertEqual(policy.to_ir(), payload)
+        self.assertEqual(policy.to_ir()["tolerances"], policy_payload()["tolerances"])
+        from fullmag.runtime.loader import LoadedProblem, load_problem_from_script
+        from fullmag.runtime.script_builder import export_builder_draft, render_loaded_problem_as_script, render_scene_document_as_script
+        from fullmag.runtime.scene_document import build_scene_document_from_builder
+        stage = replace(surface_stage(), surface_field_policy=policy)
+        problem = replace(authored_problem(), antenna_field_solve_stages=[stage])
+        loaded = LoadedProblem(problem=problem, source_path=self.tmp_path / "source.py",
+            script_source="", entrypoint_kind="flat_workspace")
+        scene = build_scene_document_from_builder(export_builder_draft(loaded))
+        for index, script in enumerate([render_loaded_problem_as_script(loaded), render_scene_document_as_script(scene)]):
+            path = self.tmp_path / f"gsg-roundtrip-{index}.py"
+            path.write_text(script, encoding="utf-8")
+            replay = load_problem_from_script(path, lightweight_assets=True)
+            authored = replay.workspace_problem or replay.problem
+            self.assertEqual(authored.antenna_field_solve_stages[0].to_ir(), stage.to_ir())
+
+    def test_gsg_version_does_not_admit_unknown_versions_or_weaken_guards(self):
+        for version in ("", "volume_inspection_v1", "caller_supplied_rt0_surface.gsg_universe_275.v2",
+                "caller_supplied_rt0_surface.gsg_universe_275.v1.extra",
+                " caller_supplied_rt0_surface.gsg_universe_275.v1"):
+            with self.subTest(version=version):
+                payload = policy_payload()
+                payload["policy_version"] = version
+                with self.assertRaisesRegex(ValueError, "unsupported surface field policy_version"):
+                    fm.AntennaSurfaceFieldPolicy(**payload)
+        for version in ("caller_supplied_rt0_surface.inspection.v1",
+                "caller_supplied_rt0_surface.gsg_universe_275.v1"):
+            valid = policy_payload()
+            valid["policy_version"] = version
+            self.assertEqual(fm.AntennaSurfaceFieldPolicy(**valid).to_ir(), valid)
+            for section, key, value in (
+                    ("limits", "total", [4000001] + [1] * 13),
+                    ("limits", "per_target", [True] * 14),
+                    ("limits", "maximum_raw_integer_bits", 2**64),
+                    ("limits", "maximum_total_seconds", float("inf")),
+                    ("tolerances", "relative_field", 1.01e-5),
+                    ("tolerances", "binary_roundoff_epsilon_factor", 63.0)):
+                with self.subTest(version=version, section=section, key=key):
+                    payload = copy.deepcopy(valid)
+                    payload[section][key] = value
+                    with self.assertRaises(ValueError):
+                        fm.AntennaSurfaceFieldPolicy(**payload)
+
     def test_surface_policy_is_explicit_frozen_and_exact_in_ir(self):
         payload = policy_payload()
         policy = fm.AntennaSurfaceFieldPolicy(**payload)

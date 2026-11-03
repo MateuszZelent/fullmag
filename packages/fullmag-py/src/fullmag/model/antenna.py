@@ -375,6 +375,7 @@ class AntennaNamedOutput:
 
 
 ANTENNA_SURFACE_FIELD_POLICY_VERSION = "caller_supplied_rt0_surface.inspection.v1"
+ANTENNA_GSG_UNIVERSE_SURFACE_FIELD_POLICY_VERSION = "caller_supplied_rt0_surface.gsg_universe_275.v1"
 _SURFACE_INTEGER_LIMITS = (
     "maximum_raw_integer_bits", "maximum_reduced_fraction_bits",
     "maximum_lifetime_peak_rss_bytes", "guard_interval_events",
@@ -397,7 +398,8 @@ class AntennaSurfaceFieldPolicy:
     tolerances: Mapping[str, float]
 
     def __post_init__(self) -> None:
-        if self.policy_version != ANTENNA_SURFACE_FIELD_POLICY_VERSION:
+        if self.policy_version not in (ANTENNA_SURFACE_FIELD_POLICY_VERSION,
+                ANTENNA_GSG_UNIVERSE_SURFACE_FIELD_POLICY_VERSION):
             raise ValueError("unsupported surface field policy_version")
         if not isinstance(self.limits, Mapping) or set(self.limits) != {
             "total", "per_target", *_SURFACE_INTEGER_LIMITS, *_SURFACE_TIME_LIMITS

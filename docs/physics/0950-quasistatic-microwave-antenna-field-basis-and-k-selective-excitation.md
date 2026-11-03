@@ -12020,7 +12020,7 @@ nie nadaje wynikowi statusu kwalifikowanego. Zmiana polityki nie uruchamia Solve
 |---|---|---|---|
 | AntennaFieldSolveStage.oersted_realization | str / direct_tetra_quadrature | $1$ | Addytywny analytic_rt0_surface tylko dla prepared inspekcji; ProblemIR.antenna_field_solve_stages[].oersted_realization. |
 | AntennaFieldSolveStage.surface_field_policy | AntennaSurfaceFieldPolicy lub None / None | $1$ | Wymagany tylko dla analytic_rt0_surface i zabroniony dla pozostałych metod; pole pomijane dla None, bez zmiany dawnych dokumentów. Destination: ten sam stage.surface_field_policy. |
-| AntennaSurfaceFieldPolicy.policy_version | str / wymagane | $1$ | Dokładnie caller_supplied_rt0_surface.inspection.v1, bez ukrytego wyboru limitów. Destination: stage.surface_field_policy.policy_version. |
+| AntennaSurfaceFieldPolicy.policy_version | str / wymagane | $1$ | Dokładnie caller_supplied_rt0_surface.inspection.v1 albo caller_supplied_rt0_surface.gsg_universe_275.v1, bez ukrytego wyboru limitów. Destination: stage.surface_field_policy.policy_version. |
 | AntennaSurfaceFieldPolicy.limits | closed mapping / wymagane | mieszane według pełnych tabel native powyżej | Wszystkie klucze SurfaceRt0WorkLimits, total/per_target jako dokładnie 14 dodatnich uint64 w zarejestrowanej kolejności SurfaceRt0WorkKind; bool, brakujące i obce pola odrzucane. Destination: stage.surface_field_policy.limits, bez utraty int przez float. |
 | AntennaSurfaceFieldPolicy.tolerances | closed mapping / wymagane | mieszane według pełnej tabeli native powyżej | Dokładnie 11 pól SurfaceRt0Tolerances, dodatnie skończone liczby bez bool; dalsze nieprzekraczalne bramki poniżej. Destination: stage.surface_field_policy.tolerances. |
 
@@ -12125,7 +12125,7 @@ report SHA256 `a1a50887b0beced4378ea421dad7dabf860b9b2b9943fb051db256879b10e9f7`
 
 | Publiczny parametr | Typ | Domyślnie | SI | Walidacja | Znaczenie | Lane | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| AntennaSurfaceFieldPolicy.policy_version | str | required | $1$ | dokładnie caller_supplied_rt0_surface.inspection.v1 | jawna wersja parametrów bez ukrytych defaults | prepared FEM CPU double strict inspection; GPU/FDM unsupported | surface_field_policy.policy_version |
+| AntennaSurfaceFieldPolicy.policy_version | str | required | $1$ | dokładnie caller_supplied_rt0_surface.inspection.v1 albo caller_supplied_rt0_surface.gsg_universe_275.v1; pozostałe identyfikatory odrzucane, bez domyślnych limitów | jawna wersja parametrów bez ukrytych defaults | prepared FEM CPU double strict inspection; GPU/FDM unsupported | surface_field_policy.policy_version |
 | AntennaSurfaceFieldPolicy.limits | Mapping[str,object] | required | mieszane; pełne tabele limits w sekcji private native | closed mapping; wszystkie dodatnie uint64 i finite seconds; totalpairs<=4000000 | jawny bounded koszt pracy | prepared FEM CPU double strict inspection; GPU/FDM unsupported | surface_field_policy.limits |
 | AntennaSurfaceFieldPolicy.tolerances | Mapping[str,float] | required | mieszane; A/m i1 jak pełne tabele tolerances | closed mapping 11 pól; finite positive oraz nieprzekraczalne bramki | jawna dokładność inspekcji | prepared FEM CPU double strict inspection; GPU/FDM unsupported | surface_field_policy.tolerances |
 | AntennaFieldSolveStage.surface_field_policy | Optional[AntennaSurfaceFieldPolicy] | None | $1$ | wymagane iff analytic_rt0_surface; dla innychmetod forbidden | polityka zaawansowanej metody wykonania | prepared FEM CPU double strict inspection; GPU/FDM unsupported | antenna_field_solve_stages[].surface_field_policy |
@@ -12413,3 +12413,38 @@ Kandydat nie został promowany ani uruchomiony; to dowód kompilacji, nie
 nowego V/J/H. Nie kompilujemy natywnych testów jednostkowych. Podstawą naukową
 pozostają definicja RT0 i bibliografia kanonicznego rozdziału wyżej; nowa
 kontrola nie dodaje aproksymacji modelu.
+
+
+(antenna-gsg-universe-surface-policy-version)=
+### Jawny identyfikator polityki GSG Universe — 03.11.2026
+
+Addytywny identyfikator `caller_supplied_rt0_surface.gsg_universe_275.v1`
+przechodzi te same walidatory Python i `ProblemIR` co dotychczasowy
+`caller_supplied_rt0_surface.inspection.v1`. Stary identyfikator, jego producenci
+oraz domyślna metoda pola pozostają bez zmian. Dopuszczone są wyłącznie te dwa
+dokładne tokeny; nieznane wersje, sufiksy i whitespace są odrzucane.
+
+Identyfikator nie wybiera ani nie podnosi limitów. Pełne `limits` i `tolerances`
+pozostają wymagane, jawne i zachowywane bez zmian w `surface_field_policy`.
+Wspólne kontrole dodatnich liczników uint64, skończonych dodatnich czasów,
+4 mln par i wszystkich bramek dokładności obowiązują także nowy token.
+Konkretny zatwierdzony profil zadania jest dodatkowo przypięty SHA256
+`012d463f1672c22ac803499b240c2721628a6b5aa693416b01e050d5d14d2bf9`;
+sam token nie potwierdza zgodności dowolnych parametrów z tym profilem ani
+liczby punktów. Siedem godzin to limit czasu tego profilu, nie prognoza.
+
+Realizacja pozostaje inspekcją FEM CPU / double / strict. Nowy token nie
+udostępnia FDM CPU, FDM GPU ani FEM GPU i nie kwalifikuje bazy dla LLG.
+Nie zmienia równań, siatki, prądu ani tolerancji; nie uruchamia Solve.
+Mapowanie: `packages/fullmag-py/src/fullmag/model/antenna.py` +
+`ANTENNA_GSG_UNIVERSE_SURFACE_FIELD_POLICY_VERSION` oraz
+`AntennaSurfaceFieldPolicy.__post_init__`; `crates/fullmag-ir/src/antenna.rs` +
+`AntennaSurfaceFieldPolicyIR::validation_errors`.
+
+Dowód interpretowany: `packages/fullmag-py/tests/test_antenna_surface_policy.py` +
+`test_gsg_universe_profile_preserves_explicit_limits_and_round_trip` sprawdza
+pełne zatwierdzone limity oraz script/scene round-trip bez Solve;
+`test_gsg_version_does_not_admit_unknown_versions_or_weaken_guards` sprawdza
+odmowy i wspólne bramki obu wersji. Dwie nowe regresje przed poprawką odtwarzały
+odmowę; po poprawce cały plik przechodzi 8/8 testów. Wykonanie nowego tokenu
+przez zbudowany Rust, publiczne Prepare/plan i H-only pozostaje **NOT VERIFIED**.
