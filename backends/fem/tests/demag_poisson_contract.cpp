@@ -488,10 +488,17 @@ void periodic_p1_rhs_attribute_selection_preserves_the_magnetic_load() {
         const mfem::Vector expected(*rhs);
         fullmag::fem::destroy_demag_poisson_rhs_workspace(ctx);
 
-        // Only the existence of an initialized reduction is needed by RHS
-        // admission. The RHS workspace never reads the reduction object.
-        int periodic_workspace = 0;
-        ctx.poisson_demag.periodic_workspace = &periodic_workspace;
+        mfem::SparseMatrix op = nontrivial_spd_matrix(5);
+        ctx.demag.enabled = true;
+        ctx.demag.solver.preconditioner = FULLMAG_FEM_PRECONDITIONER_NONE;
+        ctx.mesh.n_nodes = 5;
+        ctx.mesh.periodic_node_pairs = {3u, 4u};
+        ctx.mesh.periodic_reduced_node = {0u, 1u, 2u, 3u, 3u};
+        ctx.mesh.periodic_representative_nodes = {0u, 1u, 2u, 3u};
+        ctx.mesh.periodic_reduced_node_count = 4;
+        ctx.poisson_demag.poisson_bc_op = &op;
+        check_result(fullmag::fem::initialize_demag_periodic_poisson_reduction(ctx, error),
+                     error, "initialize reduction before periodic RHS");
         check_result(fullmag::fem::initialize_demag_poisson_rhs_workspace(ctx, fes, error),
                      error, "initialize periodic RHS");
         const auto *markers = static_cast<mfem::LinearForm *>(
@@ -504,7 +511,8 @@ void periodic_p1_rhs_attribute_selection_preserves_the_magnetic_load() {
             check_near((*rhs)(node), expected(node), 1.0e-10, "periodic magnetic load parity");
         }
         fullmag::fem::destroy_demag_poisson_rhs_workspace(ctx);
-        ctx.poisson_demag.periodic_workspace = nullptr;
+        fullmag::fem::destroy_demag_periodic_poisson_reduction(ctx);
+        ctx.poisson_demag.poisson_bc_op = nullptr;
         ctx.mfem_context.fes = nullptr;
     }
 }
@@ -3934,6 +3942,10 @@ void demag_recovered_field_finalize_projects_periodic_and_syncs_visual() {
 
 int main() {
     demag_amg_policy_resolves_defaults_overrides_and_invalid_values();
+#if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+    // The CPU fixture must bind the process-wide Hypre policy before CUDA tests.
+    periodic_hypre_amg_matches_serial_cg_and_reuses_setup();
+#endif
     demag_linear_solve_validation_rejects_invalid_results();
     poisson_runtime_wrappers_are_owned_by_separate_modules();
     poisson_aggregate_header_documents_submodule_boundaries();
@@ -3979,9 +3991,6 @@ int main() {
     periodic_demag_rejects_one_iteration_candidate();
     periodic_demag_reuses_warm_start_and_resets_after_failure();
     periodic_p1_rhs_attribute_selection_preserves_the_magnetic_load();
-#ifdef MFEM_USE_MPI
-    periodic_hypre_amg_matches_serial_cg_and_reuses_setup();
-#endif
 #endif
     demag_boundary_operator_is_owned_by_poisson_boundary_module();
     demag_periodic_reduction_is_owned_by_poisson_periodic_module();
