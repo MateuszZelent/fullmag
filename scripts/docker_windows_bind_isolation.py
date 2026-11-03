@@ -646,9 +646,14 @@ def _capture(command, data=None):
     return result.stdout
 
 
-def _native(source, distro):
+def _native(source, distro, *, allow_external_junctions=False):
     powershell = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
-    raw = _capture([powershell, "-NoProfile", "-NonInteractive", "-Command", WINDOWS_PROVIDER],
+    provider = WINDOWS_PROVIDER
+    if allow_external_junctions:
+        refusal = "throw 'junction target escapes candidate root'"
+        require(provider.count(refusal) == 1, "Initial recovery junction policy template changed")
+        provider = provider.replace(refusal, "# Initial recovery independently qualifies this target.")
+    raw = _capture([powershell, "-NoProfile", "-NonInteractive", "-Command", provider],
                    canonical({"path": _windows_source_path(source), "distro": distro}))
     return _validate_native(_json(raw), source, distro)
 
@@ -917,8 +922,8 @@ def _link_parent_directories(root, path, device):
                 "File link has a symlink, non-directory or external-filesystem parent")
 
 
-def _validate_link_evidence(value, mapping, native):
-    expected = _link_paths(native)
+def _validate_link_evidence(value, mapping, native, *, external_junctions=()):
+    expected = [row for row in _link_paths(native) if row[1] not in external_junctions]
     require(isinstance(value, list) and len(value) == len(expected),
             "Qualified file-link list does not cover the exact native inventory")
     allowed = {relative: record for _, relative, record in expected}
@@ -958,8 +963,8 @@ def _validate_link_evidence(value, mapping, native):
     return value
 
 
-def _qualify_links(mapping, native):
-    expected = _link_paths(native)
+def _qualify_links(mapping, native, *, external_junctions=()):
+    expected = [row for row in _link_paths(native) if row[1] not in external_junctions]
     allowed = {relative: record for _, relative, record in expected}
     root = Path(mapping["path"])
     deadline = time.monotonic() + DESCENDANT_BUDGET_MS / 1000
@@ -1000,7 +1005,7 @@ def _qualify_links(mapping, native):
             raise BuildControlError("Relative file-link chain exceeds its fixed hop bound")
     require(not expected or time.monotonic() < deadline,
             "Relative file-link qualification exceeded its time bound")
-    return _validate_link_evidence(result, mapping, native)
+    return _validate_link_evidence(result, mapping, native, external_junctions=external_junctions)
 
 
 def _observation(context, backend, foreign, source):
