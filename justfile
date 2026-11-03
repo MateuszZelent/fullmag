@@ -145,6 +145,15 @@ docker-dev-script script source_root="" port="" request_id="":
 docker-dev-script-pinned attempt config_sha256 source_root script request_id="":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" run-script --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --script {{quote(script)}} {{if request_id == "" { "" } else { "--request-id " + quote(request_id) } }}
 
+# Submit a prepared accepted request once in the pinned current backend.
+# A durable per-run fence forbids replay after a lost HTTP response.
+docker-dev-submit-accepted attempt config_sha256 source_root source_snapshot_sha256 request_relative request_sha256:
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev_submit_accepted.py" --repo-root "{{repo_root}}" --source-root {{quote(source_root)}} --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-snapshot-sha256 {{quote(source_snapshot_sha256)}} --request-relative {{quote(request_relative)}} --request-sha256 {{quote(request_sha256)}}
+
+# Reconcile an accepted run and materialize only its missing task catalog.
+docker-dev-materialize-accepted attempt config_sha256 source_root source_snapshot_sha256 request_relative request_sha256 payload_fingerprint:
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev_submit_accepted.py" --repo-root "{{repo_root}}" --source-root {{quote(source_root)}} --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-snapshot-sha256 {{quote(source_snapshot_sha256)}} --request-relative {{quote(request_relative)}} --request-sha256 {{quote(request_sha256)}} --operation 'materialize' --payload-fingerprint {{quote(payload_fingerprint)}}
+
 # Restart a pinned healthy backend only when its API confirms no active session.
 # Replace only the frontend generation; backend/source correspondence is required.
 docker-dev-refresh-frontend attempt config_sha256 source_root port="3197" frozen_resume="" frozen_resume_sha256="":

@@ -85,6 +85,26 @@ if is_windows_shell && command -v cygpath >/dev/null 2>&1; then
   fi
 fi
 
+# The prepared accepted request uses its validated running group's volume boundary.
+case "${recipe}" in
+  *"scripts/docker_dev_submit_accepted.py"*)
+    accepted_submit_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev_submit_accepted.py\" --repo-root \"[^\"]+\" --source-root '([^']+)' --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-snapshot-sha256 '([0-9a-f]{64})' --request-relative '(verification/[A-Za-z0-9._/-]+)' --request-sha256 '([0-9a-f]{64})'( --operation 'materialize' --payload-fingerprint '([0-9a-f]{64})')?[[:space:]]*$"
+    if [[ ! "${recipe}" =~ ${accepted_submit_pattern} ]]; then
+      echo "[fullmag just] invalid accepted submission recipe" >&2
+      exit 2
+    fi
+    accepted_submit_args=(--repo-root "${repo_root}" --source-root "${BASH_REMATCH[1]}"
+      --attempt "${BASH_REMATCH[2]}" --config-sha256 "${BASH_REMATCH[3]}"
+      --source-snapshot-sha256 "${BASH_REMATCH[4]}" --request-relative "${BASH_REMATCH[5]}"
+      --request-sha256 "${BASH_REMATCH[6]}")
+    if [[ -n "${BASH_REMATCH[7]:-}" ]]; then
+      accepted_submit_args+=(--operation materialize --payload-fingerprint "${BASH_REMATCH[8]}")
+    fi
+    exec "${python_cmd}" -B "${script_dir}/docker_dev_submit_accepted.py" "${accepted_submit_args[@]}"
+
+    ;;
+esac
+
 # Closed scientific route, before diagnostic/storage shortcuts; never eval argv.
 case "${recipe}" in
   *"scripts/docker_volume_no_spawn_cancellation.py"*)
