@@ -7715,6 +7715,10 @@ docker-dev-boris-reference attempt config_sha256 source_root reference_asset_ima
 docker-dev-nf-common-qualify attempt config_sha256 source_root producer_attempt producer_receipt_sha256 report_id profile="comparison":
     @{{storage_python}} "{{repo_root}}/scripts/docker_nf_common_volume.py" --repo-root "{{repo_root}}" --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --producer-attempt {{quote(producer_attempt)}} --producer-receipt-sha256 {{quote(producer_receipt_sha256)}} --report-id {{quote(report_id)}} --profile {{quote(profile)}}
 
+# Scientific headless reference for one isolated, idle DEV GPU package.
+docker-dev-goebel-qualification attempt config_sha256 source_root source_commit port terminal_run_id="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_goebel_qualification.py" --repo-root "{{repo_root}}" --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --source-commit {{quote(source_commit)}} --port {{quote(port)}}{{if terminal_run_id == "" { "" } else { " --terminal-run-id " + quote(terminal_run_id) } }}
+
 # Preview/apply the pinned native preclaim fallback; matching fingerprints always refuse apply.
 docker-dev-cancel-preclaim source_root backend_container_id image_id candidate_basename candidate_receipt_sha256 request request_sha256 apply="false":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev_preclaim_cancel.py" --source-root {{quote(source_root)}} --backend-container-id {{quote(backend_container_id)}} --image-id {{quote(image_id)}} --candidate-basename {{quote(candidate_basename)}} --candidate-receipt-sha256 {{quote(candidate_receipt_sha256)}} --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}}{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}
