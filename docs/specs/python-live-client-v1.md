@@ -219,7 +219,32 @@ przez `fullmag skrypt.py` jak dziś (`capture`).
   `energy_tolerance_j`, `max_steps`, `max_relaxation_time_s`,
   `relax_algorithm`, `relax_alpha`, `fixed_timestep`, `max_error`);
   `fm.minimize` deleguje do `relax`; `until_seconds` w `run` to długość
-  odcinka. Komenda ma warunek `scene_revision` równy rewizji zbudowanej przez
+  odcinka. A captured stage runs in the world state it saw when the script
+  called it, like mumax3. Pipeline materialization starts each stage from the
+  end-of-script problem, so a `relax`/`run` payload whose uniform `b_ext`
+  differs from that problem carries it as `external_field` (tesla, 3 numbers;
+  `[0, 0, 0]` when no field was set yet). The override applies to that stage only.
+  Changing `b_ext` before an eigenmodes or frequency-response stage, or
+  changing material parameters between stages beyond a representable
+  `relax_alpha` override, is
+  rejected at export instead of silently using the end-of-script values.
+  An `llg_overdamped` relax stage can carry a positive scalar `relax_alpha` only when
+  it exactly matches every magnet's damping in that stage. The scalar is
+  omitted only when it also matches every magnet's end-of-script damping.
+  `relax_alpha=None` keeps call-time material damping; nonuniform damping
+  that differs from the end-of-script values is rejected with the magnet
+  name and `alpha` in the error. Missing or null pipeline `relax_alpha`
+  keeps material damping. Python export preserves this behavior, including
+  explicit `relax_alpha=None` when needed because the DSL default is `1.0`.
+  Uniform zero material damping also requires `None`; a scalar zero override
+  is not supported. Direct Python export applies the same world-state checks
+  as pipeline export. Both Python render paths preserve the scalar's full
+  floating-point value.
+  Rendering a SceneDocument or a loaded problem back to Python (workspace
+  capture, canonical export) emits `fm.b_ext(...)` before each stage whose
+  field differs and restores the end-of-script field after the last stage, so
+  the round trip keeps every stage's `external_field`.
+  Komenda ma warunek `scene_revision` równy rewizji zbudowanej przez
   skrypt, czeka na stan końcowy i zwraca `LiveCommandResult`. Odrzucona,
   nieudana lub anulowana komenda zgłasza `CommandFailedError`.
 - `fm.pause()`, `fm.resume()`, `fm.stop()`, `fm.skip()` wysyłają komendy o

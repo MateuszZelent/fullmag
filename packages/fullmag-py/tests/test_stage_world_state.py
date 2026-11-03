@@ -1,0 +1,268 @@
+"""Script stages keep the b_ext they saw when called, like mumax3 (not the last one)."""
+
+import json
+import textwrap
+
+import pytest
+
+from fullmag.runtime.loader import load_problem_from_script
+from fullmag.runtime.scene_document import build_scene_document_from_builder
+from fullmag.runtime.script_builder import (
+    export_builder_draft,
+    export_study_pipeline_document,
+    render_loaded_problem_as_script,
+    render_scene_document_as_script,
+)
+
+HEADER = """
+import fullmag as fm
+
+study = fm.study("stages")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.universe(mode="manual", size=(8e-9, 4e-9, 2e-9), center=(0.0, 0.0, 0.0))
+study.cell(2e-9, 2e-9, 2e-9)
+film = study.geometry(fm.Box(size=(8e-9, 4e-9, 2e-9), name="film"), name="film")
+film.Ms = 800e3
+film.Aex = 13e-12
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.exchange()
+study.solver(integrator="rk45", fix_dt=1e-13)
+"""
+
+SECOND_MAGNET = """
+study.universe(mode="manual", size=(16e-9, 4e-9, 2e-9), center=(4e-9, 0.0, 0.0))
+other = study.geometry(
+    fm.Translate(fm.Box(size=(8e-9, 4e-9, 2e-9)), (8e-9, 0.0, 0.0)), name="other"
+)
+other.Ms = 800e3
+other.Aex = 13e-12
+other.alpha = 0.05
+other.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+"""
+
+
+def _pipeline(tmp_path, body: str) -> dict[str, dict[str, object]]:
+    script = tmp_path / "stages.py"
+    script.write_text(textwrap.dedent(HEADER) + textwrap.dedent(body), encoding="utf-8")
+    document = export_study_pipeline_document(load_problem_from_script(script))
+    assert document is not None
+    return {node["stage_kind"]: node["payload"] for node in document["nodes"]}
+
+
+def test_relax_before_a_field_sweep_keeps_zero_field(tmp_path):
+    # mumax3 example 3: relax() at B=0; the sweep's last b_ext must not leak into it.
+    payloads = _pipeline(
+        tmp_path,
+        """
+        fm.relax(tolT=1e-5, max_steps=1000)
+        for B in (0.0, 1e-3, 2e-3):
+            fm.b_ext(B, 0, 0)
+            fm.minimize(tolA=1.0)
+            fm.tablesave()
+        """,
+    )
+    assert payloads["relax"]["external_field"] == [0.0, 0.0, 0.0]
+    assert "external_field" not in payloads["hysteresis"]
+
+
+def test_run_keeps_the_field_set_before_it(tmp_path):
+    payloads = _pipeline(
+        tmp_path,
+        """
+        fm.b_ext(0.0, 0.0, 5e-3)
+        fm.relax(tolT=1e-5, max_steps=1000)
+        fm.b_ext(1e-2, 0.0, 0.0)
+        fm.run(1e-12)
+        fm.b_ext(0.0, 2e-2, 0.0)
+        """,
+    )
+    assert payloads["relax"]["external_field"] == [0.0, 0.0, 5e-3]
+    assert payloads["run"]["external_field"] == [1e-2, 0.0, 0.0]
+
+
+def test_constant_field_adds_no_stage_override(tmp_path):
+    payloads = _pipeline(
+        tmp_path,
+        """
+        fm.b_ext(1e-2, 0.0, 0.0)
+        fm.relax(tolT=1e-5, max_steps=1000)
+        fm.run(1e-12)
+        """,
+    )
+    assert "external_field" not in payloads["relax"]
+    assert "external_field" not in payloads["run"]
+
+
+def test_relax_alpha_is_not_a_material_change(tmp_path):
+    payloads = _pipeline(
+        tmp_path,
+        """
+        fm.relax(relax_alpha=1.0, tolT=1e-5, max_steps=1000)
+        fm.run(1e-12)
+        """,
+    )
+    assert payloads["relax"]["relax_alpha"] == "1"
+
+
+@pytest.mark.parametrize(
+    ("changes", "magnet"),
+    [
+        ("film.alpha = 0.03", "film"),
+        ("other.alpha = 0.07", "other"),
+        ("film.alpha = 0.03\nother.alpha = 0.07", "film"),
+    ],
+)
+@pytest.mark.parametrize("exporter", [export_study_pipeline_document, render_loaded_problem_as_script])
+def test_nonuniform_relax_material_damping_changes_are_rejected(tmp_path, changes, magnet, exporter):
+    script = tmp_path / "stages.py"
+    script.write_text(
+        textwrap.dedent(HEADER)
+        + SECOND_MAGNET
+        + 'fm.relax(relax_alpha=None, solver="rk45", dt=1e-13, tolT=1e-5, max_steps=1000)\n'
+        + changes
+        + "\nfm.run(1e-12)\n",
+        encoding="utf-8",
+    )
+    loaded = load_problem_from_script(script)
+    with pytest.raises(ValueError, match=rf"material parameters of '{magnet}' \(alpha\)"):
+        exporter(loaded)
+
+
+@pytest.mark.parametrize("relax_alpha", [0.3, 0.123456789012345])
+def test_uniform_relax_alpha_survives_later_material_damping_changes(tmp_path, relax_alpha):
+    payloads = _pipeline(
+        tmp_path,
+        SECOND_MAGNET
+        + f'fm.relax(relax_alpha={relax_alpha!r}, solver="rk45", dt=1e-13, tolT=1e-5, max_steps=1000)\n'
+        + "film.alpha = 0.03\nother.alpha = 0.07\nfm.run(1e-12)\n",
+    )
+    assert float(payloads["relax"]["relax_alpha"]) == relax_alpha
+    assert "relax_alpha" not in payloads["run"]
+    loaded = load_problem_from_script(tmp_path / "stages.py")
+    rendered = tmp_path / "rendered.py"
+    rendered.write_text(render_loaded_problem_as_script(loaded), encoding="utf-8")
+    reloaded = load_problem_from_script(rendered)
+    assert {magnet.material.alpha for magnet in reloaded.stages[0].problem.magnets} == {relax_alpha}
+    assert {
+        magnet.name: magnet.material.alpha for magnet in reloaded.stages[1].problem.magnets
+    } == {"film": 0.03, "other": 0.07}
+
+
+def test_run_material_damping_change_after_relax_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match=r"material parameters of 'film' \(alpha\)"):
+        _pipeline(
+            tmp_path,
+            SECOND_MAGNET
+            + textwrap.dedent(
+                """
+                fm.relax(relax_alpha=0.3, tolT=1e-5, max_steps=1000)
+                fm.run(1e-12)
+                film.alpha = 0.03
+                """
+            ),
+        )
+
+
+@pytest.mark.parametrize("exporter", [export_study_pipeline_document, render_loaded_problem_as_script])
+def test_zero_relax_material_damping_changes_are_rejected(tmp_path, exporter):
+    script = tmp_path / "stages.py"
+    script.write_text(
+        textwrap.dedent(HEADER)
+        + SECOND_MAGNET
+        + "film.alpha = 0.0\nother.alpha = 0.0\n"
+        + 'fm.relax(relax_alpha=None, solver="rk45", dt=1e-13, tolT=1e-5, max_steps=1000)\n'
+        + "film.alpha = 0.03\nother.alpha = 0.07\nfm.run(1e-12)\n",
+        encoding="utf-8",
+    )
+    loaded = load_problem_from_script(script)
+    with pytest.raises(ValueError, match=r"material parameters of 'film' \(alpha\)"):
+        exporter(loaded)
+
+
+def test_relax_alpha_equal_to_the_material_damping_exports_no_override(tmp_path):
+    # relax() defaults to relax_alpha=1.0; only a damping that differs travels.
+    payloads = _pipeline(tmp_path, "fm.relax(relax_alpha=0.02, tolT=1e-5, max_steps=1000)\n")
+    assert "relax_alpha" not in payloads["relax"]
+    assert _pipeline(tmp_path, "fm.relax(tolT=1e-5, max_steps=1000)\n")["relax"]["relax_alpha"] == "1"
+
+
+def test_relax_alpha_survives_the_scene_round_trip(tmp_path):
+    script = tmp_path / "stages.py"
+    script.write_text(
+        textwrap.dedent(HEADER)
+        + 'fm.relax(relax_alpha=1.0, solver="rk45", dt=1e-13, tolT=1e-5, max_steps=1000)\n',
+        encoding="utf-8",
+    )
+    loaded = load_problem_from_script(script, lightweight_assets=True)
+    scene = json.loads(json.dumps(build_scene_document_from_builder(export_builder_draft(loaded))))
+    rendered = tmp_path / "rendered.py"
+    rendered.write_text(render_scene_document_as_script(scene), encoding="utf-8")
+    reloaded = load_problem_from_script(rendered, lightweight_assets=True)
+    (relax,) = reloaded.stages
+    assert {magnet.material.alpha for magnet in relax.problem.magnets} == {1.0}
+
+
+def test_material_change_between_stages_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match=r"material parameters of 'film' \(Ms\)"):
+        _pipeline(
+            tmp_path,
+            """
+            fm.relax(tolT=1e-5, max_steps=1000)
+            film.Ms = 600e3
+            fm.run(1e-12)
+            """,
+        )
+
+
+def _scene_round_trip(tmp_path, body: str):
+    script = tmp_path / "stages.py"
+    script.write_text(textwrap.dedent(HEADER) + textwrap.dedent(body), encoding="utf-8")
+    loaded = load_problem_from_script(script, lightweight_assets=True)
+    scene = json.loads(json.dumps(build_scene_document_from_builder(export_builder_draft(loaded))))
+    rendered = tmp_path / "rendered.py"
+    rendered.write_text(render_scene_document_as_script(scene), encoding="utf-8")
+    return loaded, load_problem_from_script(rendered, lightweight_assets=True)
+
+
+def _stage_payloads(loaded) -> list[tuple[str, object]]:
+    document = export_study_pipeline_document(loaded)
+    assert document is not None
+    return [
+        (node["stage_kind"], node["payload"].get("external_field"))
+        for node in document["nodes"]
+    ]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # mumax3 example 3: relax at B=0 before a sweep that ends at 2 mT.
+        """
+        fm.relax(solver="rk45", dt=1e-13, tolT=1e-5, max_steps=1000)
+        for B in (0.0, 1e-3, 2e-3):
+            fm.b_ext(B, 0, 0)
+            fm.minimize(tolA=1.0)
+            fm.tablesave()
+        """,
+        """
+        fm.b_ext(0.0, 0.0, 5e-3)
+        fm.relax(solver="rk45", dt=1e-13, tolT=1e-5, max_steps=1000)
+        fm.b_ext(1e-2, 0.0, 0.0)
+        fm.run(1e-12)
+        fm.b_ext(0.0, 2e-2, 0.0)
+        """,
+    ],
+)
+def test_stage_fields_survive_the_scene_round_trip(tmp_path, body):
+    # Retiring a live workspace renders its SceneDocument back to a script.
+    loaded, reloaded = _scene_round_trip(tmp_path, body)
+    assert _stage_payloads(reloaded) == _stage_payloads(loaded)
+    assert _end_of_script_field(reloaded) == _end_of_script_field(loaded)
+
+
+def _end_of_script_field(loaded):
+    from fullmag.runtime.script_builder import _builder_base_problem, _problem_external_field
+
+    return _problem_external_field(_builder_base_problem(loaded))
