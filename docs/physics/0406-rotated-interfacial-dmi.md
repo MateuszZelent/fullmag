@@ -335,8 +335,17 @@ lub libCEED. Bieżący wykonywalny zakres rDMI na GPU jest ograniczony do P1
 `tet4`. `prism6`, `pyramid5` i topologie mieszane są odrzucane przed startem,
 dopóki osobne kernele i testy pochodnej energii nie zostaną zakwalifikowane.
 Brak kernela lub bufora kończy krok błędem bez delegacji elementów na CPU.
-FEM GPU z periodycznymi klasami węzłów odrzuca rDMI do czasu wdrożenia
-redukcji residualu i projekcji masy na urządzeniu.
+Periodyczny wariant P1 `tet4` wykorzystuje projekcję
+{eq}`rdmi-fem-periodic-projection` w jawnej integracji CUDA FP64. Etapy RK
+używają wspólnej magnetyzacji klasy i wymagają pełnych map redukcji na
+urządzeniu. rDMI i wymiana pomijają stopnie swobody znajdujące się wyłącznie
+w powietrzu. Poisson zachowuje te stopnie swobody w dziedzinie potencjału.
+Kwalifikacja przypadku Göbela wymaga porównania z CPU na tej samej siatce,
+pomiaru czasu kroku i potwierdzenia rozwiązania Poissona na urządzeniu.
+Test natywnego operatora `fem_dmi_weak_residual --periodic-cuda` sprawdza
+pochodną energii, równość pola na szwie oraz wykonanie zaakceptowanego kroku
+na CUDA.
+Periodyczny przebieg Göbela na GPU pozostaje `NOT VERIFIED`.
 
 ### Macierz wsparcia i kwalifikacji
 
@@ -405,7 +414,7 @@ benchmarku FDM ani dowód równoważności PBC. Wspólne parametry pozwalają na
 porównanie jakościowe tekstury, natomiast warunki brzegowe, operator
 demagnetyzacji i siatka pozostają lane-specific.
 
-#### Periodyczny wariant FEM CPU
+#### Periodyczny wariant FEM
 
 Wariant periodyczny używa wspólnych parametrów materiału, $\gamma_H$,
 inicjalizacji oraz tych samych czasów etapów co FDM. Siatka P1 `tet4` obejmuje
@@ -423,6 +432,12 @@ dzielą węzły na styku, a końce toru mają identyczne triangulacje
 po translacji. Film ma jedną warstwę 0,5 nm. W płaszczyźnie filmu krok
 wynosi 0,5 nm w obszarze rdzeni i rośnie poza nim. Wpływ rozkładu
 rozdzielczości na rdzenie wymaga osobnego testu zagęszczenia siatki.
+Opcjonalny profil `light-airbox` zmienia wyłącznie siatkę powietrza poza
+pierwszymi 7 nm od otwartych ścian filmu. Zachowuje rozmiar airboxa, siatkę
+filmu i sparowanie szwu. Dla tych samych parametrów generatora daje 757 680
+zamiast 921 024 elementów. Walidacja topologii potwierdza poprawny szew.
+Wpływ rzadszej siatki na pole demagnetyzacji, zbieżność i czas kroku wymaga
+pomiaru na obydwu siatkach.
 
 Akceptacja wymaga co najmniej 20 ps relaksacji i 100 ps bezprądowego hold,
 liczonych z czasów stanów w artefaktach, oraz spadku energii, skończonych pól, zachowania normy, dwóch

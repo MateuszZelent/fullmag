@@ -79,9 +79,6 @@ pub(crate) fn has_periodic_rotated_dmi(plan: &FemPlanIR) -> bool {
 /// uploaded geometry, and hypre-device workspace are still checked by the
 /// native `gpu_rk_plan_device_resident` contract before provenance is built.
 pub(crate) fn gpu_rk_plan_preflight_block_reason(plan: &FemPlanIR) -> Option<&'static str> {
-    if has_periodic_rotated_dmi(plan) {
-        return Some("periodic rotated interfacial DMI requires native FEM CPU");
-    }
     if !plan.enable_exchange {
         return Some("GPU RK device-resident path requires enable_exchange=true");
     }

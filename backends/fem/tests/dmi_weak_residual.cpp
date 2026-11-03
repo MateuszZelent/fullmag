@@ -876,7 +876,7 @@ void check_native_fem(bool condition, fullmag_fem_backend *backend, const char *
     }
 }
 
-void run_periodic_rotated_interfacial_cpu_abi_fixture()
+void run_periodic_rotated_interfacial_abi_fixture(bool cuda)
 {
     // The algebraic x-edge pairing exercises the same P1 class reduction as
     // the periodic Zeeman tet4 fixture. It isolates rDMI from demagnetization.
@@ -971,41 +971,42 @@ void run_periodic_rotated_interfacial_cpu_abi_fixture()
     base.fe_order = 1;
     base.hmax = edge;
     base.precision = FULLMAG_FEM_PRECISION_DOUBLE;
-    base.integrator = FULLMAG_FEM_INTEGRATOR_HEUN;
+    base.integrator = cuda ? FULLMAG_FEM_INTEGRATOR_RK45_DP54 : FULLMAG_FEM_INTEGRATOR_HEUN;
     base.enable_exchange = 1;
     base.initial_magnetization_xyz = initial_xyz.data();
     base.initial_magnetization_len = initial_xyz.size();
     base.dt_seconds = 1.0e-15;
     base.gpu_device_index = -1;
 
-    base.mfem_device_string = "cuda";
-    std::unique_ptr<fullmag_fem_backend, decltype(&fullmag_fem_backend_destroy)> rejected_gpu(
-        fullmag_fem_backend_create_v3(&plan, nullptr), &fullmag_fem_backend_destroy);
-    check(rejected_gpu == nullptr, "periodic rDMI must reject the native GPU ABI lane");
-    const char *gpu_error = fullmag_fem_backend_last_error(nullptr);
-    check(gpu_error != nullptr && std::strstr(gpu_error, "requires native FEM CPU") != nullptr,
-          "GPU ABI rejection must report the periodic rDMI CPU requirement");
-
-    base.mfem_device_string = "cpu";
+    base.mfem_device_string = cuda ? "cuda" : "cpu";
 
     std::unique_ptr<fullmag_fem_backend, decltype(&fullmag_fem_backend_destroy)> handle(
         fullmag_fem_backend_create_v3(&plan, nullptr), &fullmag_fem_backend_destroy);
     auto *backend = handle.get();
-    check_native_fem(backend != nullptr, nullptr, "create periodic rDMI CPU ABI context");
+    check_native_fem(backend != nullptr, nullptr, "create periodic rDMI ABI context");
 
     fullmag_fem_device_info device{};
     check_native_fem(fullmag_fem_backend_get_device_info(backend, &device) == FULLMAG_FEM_OK,
-                     backend, "query periodic rDMI CPU ABI device");
-    check(device.is_gpu_enabled == 0, "periodic rDMI fixture must execute on FEM CPU");
+                     backend, "query periodic rDMI ABI device");
+    check((device.is_gpu_enabled != 0) == cuda, "periodic rDMI fixture must use the requested device");
+    if (cuda) {
+        fullmag_fem_gpu_state_info state{};
+        check_native_fem(
+            fullmag_fem_backend_get_gpu_state_info(backend, &state) == FULLMAG_FEM_OK &&
+                state.allocated != 0,
+            backend, "periodic rDMI snapshot requires allocated GPU state");
+        check_native_fem(fullmag_fem_backend_validate_strict_gpu_rk_plan(backend) == FULLMAG_FEM_OK,
+                         backend, "validate periodic rDMI device-resident RK plan");
+    }
 
     fullmag_fem_step_stats stats{};
     check_native_fem(fullmag_fem_backend_snapshot_stats(backend, &stats) == FULLMAG_FEM_OK,
-                     backend, "evaluate periodic rDMI CPU ABI state");
+                     backend, "evaluate periodic rDMI ABI state");
     double h_xyz[12]{};
     check_native_fem(
         fullmag_fem_backend_copy_field_f64(
             backend, FULLMAG_FEM_OBSERVABLE_H_DMI, h_xyz, std::size(h_xyz)) == FULLMAG_FEM_OK,
-        backend, "copy periodic rDMI CPU ABI field");
+        backend, "copy periodic rDMI ABI field");
     for (int component = 0; component < 3; ++component) {
         check(std::isfinite(h_xyz[component]) && h_xyz[component] == h_xyz[3 + component],
               "periodic rDMI field must lift one value to both seam nodes");
@@ -1037,7 +1038,20 @@ void run_periodic_rotated_interfacial_cpu_abi_fixture()
                          "lifted periodic rDMI field must match the compatible energy derivative");
 
     check_native_fem(fullmag_fem_backend_step(backend, base.dt_seconds, &stats) == FULLMAG_FEM_OK,
-                     backend, "advance periodic rDMI CPU ABI state");
+                     backend, "advance periodic rDMI ABI state");
+    if (cuda) {
+        fullmag_fem_gpu_execution_receipt_v1 receipt{};
+        receipt.abi_version = FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1;
+        receipt.struct_size = sizeof(receipt);
+        check_native_fem(
+            fullmag_fem_backend_gpu_execution_receipt_v1(backend, &receipt) == FULLMAG_FEM_OK,
+            backend, "query periodic rDMI GPU execution receipt");
+        check(receipt.accepted_step_count == 1u &&
+                  receipt.execution_class == FULLMAG_FEM_GPU_EXECUTION_DEVICE_RESIDENT &&
+                  (receipt.executed_device_operator_mask & FULLMAG_FEM_GPU_OPERATOR_LOCAL_FIELDS) != 0u &&
+                  receipt.executed_host_operator_mask == 0u && receipt.fallback_count == 0u,
+              "periodic rDMI local field must execute on CUDA");
+    }
     double stepped_xyz[12]{};
     check_native_fem(
         fullmag_fem_backend_copy_field_f64(
@@ -1053,8 +1067,10 @@ void run_periodic_rotated_interfacial_cpu_abi_fixture()
 
 } // namespace
 
-int main()
+int main(int argc, char **argv)
 {
+    const bool cuda = argc == 2 && std::strcmp(argv[1], "--periodic-cuda") == 0;
+    check(argc == 1 || cuda, "usage: fem_dmi_weak_residual [--periodic-cuda]");
     run_interfacial_fixture();
     run_interfacial_directional_derivative_fixture();
     run_interfacial_tilted_normal_directional_derivative_fixture();
@@ -1065,8 +1081,9 @@ int main()
     run_bulk_spiral_pitch_fixture();
     run_rotated_interfacial_directional_derivative_fixture();
 #if FULLMAG_HAS_MFEM_STACK
-    run_periodic_rotated_interfacial_cpu_abi_fixture();
+    run_periodic_rotated_interfacial_abi_fixture(cuda);
 #else
+    check(!cuda, "periodic rDMI CUDA ABI requires the native MFEM stack");
     std::printf("SKIP periodic rDMI CPU ABI: MFEM stack unavailable\n");
 #endif
     std::printf("FEM dmi_weak_residual smoke PASS\n");

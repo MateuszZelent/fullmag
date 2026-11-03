@@ -751,7 +751,9 @@ bool gpu_state_upload_exchange_legacy_sparse(
     uint64_t periodic_reduced_node_len,
     const uint32_t *periodic_representative_nodes,
     uint64_t periodic_representative_nodes_len,
-    uint64_t periodic_reduced_node_count)
+    uint64_t periodic_reduced_node_count,
+    const uint8_t *host_magnetic_node_mask,
+    uint64_t host_magnetic_node_mask_len)
 {
     const bool uploaded = gpu_exchange_upload_legacy_sparse(
         state.lifecycle,
@@ -775,7 +777,9 @@ bool gpu_state_upload_exchange_legacy_sparse(
         periodic_reduced_node_len,
         periodic_representative_nodes,
         periodic_representative_nodes_len,
-        periodic_reduced_node_count);
+        periodic_reduced_node_count,
+        host_magnetic_node_mask,
+        host_magnetic_node_mask_len);
     if (uploaded) {
         state.rk.fsal_valid = false;
         invalidate_rk_endpoint(state);

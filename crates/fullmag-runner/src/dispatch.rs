@@ -6281,10 +6281,11 @@ mod tests {
     }
 
     #[test]
-    fn fem_registry_routes_periodic_rotated_dmi_to_cpu_only() {
+    fn fem_registry_routes_periodic_rotated_dmi_to_native_gpu_for_explicit_rk() {
         let _guard = env_lock().lock().expect("env mutex");
         let mut problem = fem_policy_problem();
         let mut fem = tiny_fem_plan();
+        fem.integrator = Some(fullmag_ir::IntegratorChoice::Rk45);
         fem.rotated_interfacial_dmi = Some(3.0e-3);
         fem.mesh.periodic_node_pairs = vec![fullmag_ir::MeshPeriodicNodePairIR {
             pair_id: "x_faces".to_string(),
@@ -6320,6 +6321,9 @@ mod tests {
             std::env::remove_var("FULLMAG_FEM_ALL_IN_GPU");
         }
         let forced = resolve_fem_engine_with_registry(&problem, &registry, false, Some(&fem), false);
+        fem.integrator = Some(fullmag_ir::IntegratorChoice::Abm3);
+        let unsupported =
+            resolve_fem_engine_with_registry(&problem, &registry, false, Some(&fem), false);
         problem.problem_meta.runtime_metadata.insert(
             "runtime_selection".to_string(),
             serde_json::json!({"device": "auto"}),
@@ -6334,13 +6338,17 @@ mod tests {
             }
         }
 
-        let error = forced.expect_err("forced GPU must reject periodic rDMI");
-        assert!(error.message.contains("periodic rotated interfacial DMI"));
+        let forced = forced.expect("forced GPU must accept periodic rDMI with RK45");
+        assert_eq!(forced.runtime_family.as_deref(), Some("fem-gpu"));
+        assert_eq!(forced.resolved_device, "gpu");
+        assert!(forced.fallback.is_none());
+        let error = unsupported.expect_err("forced GPU must reject periodic rDMI with ABM3");
+        assert!(error.message.contains("Heun, RK4, RK23, and RK45"));
         let resolution = auto.expect("auto may choose the advertised CPU worker");
         assert_eq!(resolution.runtime_family.as_deref(), Some("fem-cpu"));
         assert_eq!(resolution.resolved_device, "cpu");
         let fallback = resolution.fallback.expect("auto CPU choice must retain its reason");
-        assert!(fallback.message.contains("periodic rotated interfacial DMI"));
+        assert!(fallback.message.contains("Heun, RK4, RK23, and RK45"));
     }
 
     #[test]

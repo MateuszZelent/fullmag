@@ -124,7 +124,8 @@ def test_periodic_fem_has_fixed_cpu_scenario_and_mesh_contract():
 def test_mesh_pin_and_deadline_are_explicit():
     from argparse import Namespace
 
-    args = Namespace(lane="fem-periodic", mesh_sha256=None, solver_timeout_s=None)
+    args = Namespace(lane="fem-periodic", mesh_sha256=None, solver_timeout_s=None,
+                     mesh_profile="reference")
     with pytest.raises(ValueError, match="mesh SHA-256"):
         q.validate_lane_args(args)
     args.mesh_sha256 = "f" * 64
@@ -138,9 +139,29 @@ def test_mesh_pin_and_deadline_are_explicit():
     with pytest.raises(ValueError, match="mesh SHA-256"):
         q.validate_lane_args(args)
     args.mesh_sha256 = None
+    args.mesh_profile = "light-airbox"
+    with pytest.raises(ValueError, match="light airbox applies only"):
+        q.validate_lane_args(args)
+    args.mesh_profile = "reference"
     args.solver_timeout_s = 86401
     with pytest.raises(ValueError, match="deadline"):
         q.validate_lane_args(args)
+
+
+def test_light_airbox_generation_is_explicit_and_hash_bound(tmp_path, monkeypatch):
+    inputs = tmp_path / "inputs"
+    mesh = inputs / q.FEM_MESH
+    mesh.parent.mkdir(parents=True)
+    data = b"light mesh"
+
+    def generate(command, **kwargs):
+        assert command[-2:] == [str(mesh), "--light-airbox"]
+        mesh.write_bytes(data)
+
+    monkeypatch.setattr(q.subprocess, "run", generate)
+    assert q._generate_mesh(tmp_path, inputs, {}, q.digest(data), "light-airbox") == mesh
+    assert q.mesh_profile_pins("reference") == {}
+    assert q.mesh_profile_pins("light-airbox") == {"mesh_profile": "light-airbox"}
 
 
 def test_worker_terminal_is_published_once(tmp_path):
@@ -180,6 +201,10 @@ def test_terminal_observation_binds_worker_to_the_exact_mesh_and_inputs():
     assert q.validate_worker_terminal(record, execution) == result
     with pytest.raises(ValueError, match="differs from the exact admitted operation"):
         q.validate_worker_terminal({**record, "mesh_sha256": "f" * 64}, execution)
+    light = {"mesh_profile": "light-airbox"}
+    with pytest.raises(ValueError, match="differs from the exact admitted operation"):
+        q.validate_worker_terminal(record, {**execution, **light})
+    assert q.validate_worker_terminal({**record, **light}, {**execution, **light}) == result
     with pytest.raises(ValueError, match="no terminal completion evidence"):
         q.validate_worker_terminal(None, execution)
 
@@ -278,3 +303,101 @@ def test_comparison_report_uses_the_pinned_modules_and_both_endpoints(tmp_path, 
     path = results / q.FEM_COMPARISON_FILE
     assert report["sha256"] == q._file_sha(path)
     assert json.loads(path.read_bytes()) == {**payload, "fdm_reference": pin, "status": "compared"}
+
+
+def test_periodic_fem_gpu_requires_explicit_cuda_strict_environment():
+    from argparse import Namespace
+
+    lane = "fem-periodic-gpu"
+    args = Namespace(lane=lane, mesh_sha256="f" * 64, solver_timeout_s=86400)
+    assert q.validate_lane_args(args) == 86400
+    args.solver_timeout_s += 1
+    with pytest.raises(ValueError, match="deadline"):
+        q.validate_lane_args(args)
+    assert q.solver_arguments("a" * 32, lane) == q.solver_arguments("a" * 32, "fem-periodic")
+    ref = q.comparison_reference(lane, "b" * 32, "c" * 64)
+    assert q.lane_inputs(lane, ref) == q.lane_inputs("fem-periodic", ref)
+    env = q.solver_environment({"FULLMAG_FEM_EXECUTION": "cpu", "CUDA_VISIBLE_DEVICES": "0"}, lane)
+    assert {key: env[key] for key in (
+        "FULLMAG_FEM_EXECUTION", "FULLMAG_GOEBEL_FEM_DEVICE", "FULLMAG_RELAX_DEVICE",
+        "FULLMAG_FEM_MFEM_DEVICE", "FULLMAG_FEM_GPU_DEMAG_MODE", "CUDA_VISIBLE_DEVICES",
+    )} == {
+        "FULLMAG_FEM_EXECUTION": "gpu", "FULLMAG_GOEBEL_FEM_DEVICE": "gpu",
+        "FULLMAG_RELAX_DEVICE": "gpu", "FULLMAG_FEM_MFEM_DEVICE": "cuda",
+        "FULLMAG_FEM_GPU_DEMAG_MODE": "device_hypre_poisson", "CUDA_VISIBLE_DEVICES": "0",
+    }
+    with pytest.raises(ValueError, match="CUDA_VISIBLE_DEVICES"):
+        q.solver_environment({"CUDA_VISIBLE_DEVICES": ""}, lane)
+
+
+def _gpu_stage_metadata():
+    return {
+        "status": "completed",
+        "requested_execution": {
+            "backend": "fem", "device": "gpu", "precision": "double",
+            "mode": "strict", "fallback_policy": "forbidden",
+        },
+        "pbc": {"axes": ["periodic", "open", "open"], "demag": "periodic_airbox_k0"},
+        "execution_plan": {
+            "backend_plan": {"rotated_interfacial_dmi": 3e-3, "enable_demag": True},
+        },
+        "execution_provenance": {
+            "execution_engine": "fem_native_gpu", "precision": "double",
+            "lossy_fallback_used": False,
+            "execution_resolution": {"fallback_occurred": False},
+            "fem_data_residency": "device_source_of_truth",
+            "uses_cuda_kernels": True, "uses_gpu_poisson": True,
+            "fem_demag_operator_mode": "device_hypre_poisson",
+            "hypre_execution_policy": "device", "demag_residency": "device",
+            "fem_gpu_state_allocated": True, "fem_gpu_rk_uses_cuda_kernels": True,
+            "fem_gpu_rk_stage_exchange_device_resident": True,
+            "fem_gpu_rk_allows_exchange_host_sync": False,
+            "fem_gpu_execution_receipt": {
+                "requested": "strict_device", "resolved": "device_resident",
+                "executed": "cuda_fem", "execution_class": "device_resident",
+                "precision": "double", "integrator": "rk45", "accounting_valid": True,
+                "required_operator_mask": 991, "resolved_device_operator_mask": 991,
+                "executed_device_operator_mask": 991,
+                "resolved_host_operator_mask": 0, "resolved_unknown_operator_mask": 0,
+                "executed_host_operator_mask": 0, "executed_unknown_operator_mask": 0,
+                "fallback_count": 0, "hot_loop_compute_h2d_bytes": 0,
+                "hot_loop_compute_d2h_bytes": 0, "hot_loop_compute_host_sync_count": 0,
+                "accepted_step_count": 20,
+            },
+        },
+    }
+
+
+@pytest.mark.parametrize(("scope", "field", "value", "error"), [
+    (None, None, None, None),
+    ("receipt", "executed_device_operator_mask", 989, "required operators"),
+    ("receipt", "integrator", "heun", "integrator"),
+    ("receipt", "fallback_count", 1, "fallback_count"),
+    ("receipt", "accepted_step_count", 0, "no accepted CUDA RK45 step"),
+    ("receipt", "hot_loop_compute_h2d_bytes", 16, "hot_loop_compute_h2d_bytes"),
+    ("provenance", "hypre_execution_policy", "host", "hypre_execution_policy"),
+    ("provenance", "fem_gpu_execution_receipt", None, "missing native FEM GPU receipt"),
+])
+def test_cuda_attestation_requires_native_execution_on_both_stages(tmp_path, scope, field, value, error):
+    relaxed = "stage_00_flat_relax"
+    held = "stage_02_flat_run"
+    for stage in (relaxed, held):
+        path = tmp_path / "stages" / stage / "metadata.json"
+        path.parent.mkdir(parents=True)
+        metadata = _gpu_stage_metadata()
+        if stage == held and scope:
+            provenance = metadata["execution_provenance"]
+            evidence = provenance["fem_gpu_execution_receipt"] if scope == "receipt" else provenance
+            evidence[field] = value
+        q.publish_json_once(path, metadata)
+
+    if error:
+        with pytest.raises(ValueError, match=f"{held}: .*{error}"):
+            q.attest_fem_gpu(tmp_path)
+    else:
+        attestation = q.attest_fem_gpu(tmp_path)
+        assert attestation["state"] == "attested"
+        assert set(attestation["stages"]) == {relaxed, held}
+        assert attestation["stages"][held]["metadata_sha256"] == (
+            q._file_sha(tmp_path / "stages" / held / "metadata.json")
+        )

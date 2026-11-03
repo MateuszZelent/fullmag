@@ -44,6 +44,8 @@ bool gpu_exchange_upload_legacy_sparse(
     uint64_t periodic_reduced_node_len = 0,
     const uint32_t *periodic_representative_nodes = nullptr,
     uint64_t periodic_representative_nodes_len = 0,
-    uint64_t periodic_reduced_node_count = 0);
+    uint64_t periodic_reduced_node_count = 0,
+    const uint8_t *host_magnetic_node_mask = nullptr,
+    uint64_t host_magnetic_node_mask_len = 0);
 
 } // namespace fullmag::fem

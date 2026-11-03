@@ -4972,6 +4972,19 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
     assert!(fem.enable_demag);
     assert_eq!(fem.mesh.periodic_node_pairs.len(), 3);
 
+    rotated_periodic.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "gpu", "precision": "double"}),
+    );
+    let gpu_plan = plan(&rotated_periodic)
+        .expect("native FEM GPU should plan periodic P1 rDMI and periodic airbox demag");
+    let BackendPlanIR::Fem(fem) = gpu_plan.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    assert_eq!(fem.rotated_interfacial_dmi, Some(3.0e-3));
+    assert!(fem.enable_demag);
+    assert_eq!(fem.mesh.periodic_node_pairs.len(), 3);
+
     let mut z_demag_ir = demag_ir.clone();
     z_demag_ir.pbc = Some(fullmag_ir::FdmPeriodicityIR {
         axes: [
@@ -7402,7 +7415,7 @@ fn fem_zero_rotated_interfacial_dmi_is_preserved_without_exchange() {
 }
 
 #[test]
-fn fem_gpu_rotated_interfacial_dmi_rejects_periodic_node_pairs() {
+fn fem_gpu_rotated_interfacial_dmi_rejects_an_incomplete_periodic_seam() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;
     ir.problem_meta.runtime_metadata.insert(
@@ -7449,12 +7462,8 @@ fn fem_gpu_rotated_interfacial_dmi_rejects_periodic_node_pairs() {
         EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None },
     ];
 
-    let error = plan(&ir).expect_err("periodic FEM GPU rotated DMI must fail closed");
-    assert!(error.reasons.iter().any(|reason| {
-        reason.contains("FEM RotatedInterfacialDmi")
-            && reason.contains("periodic")
-            && reason.contains("native FEM CPU")
-    }));
+    let error = plan(&ir).expect_err("periodic FEM GPU rotated DMI requires a complete seam");
+    assert!(error.reasons.iter().any(|reason| reason.contains("periodic mesh certificate v6")));
 }
 
 #[test]

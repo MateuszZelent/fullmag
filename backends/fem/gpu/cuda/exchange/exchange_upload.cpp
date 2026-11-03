@@ -104,7 +104,9 @@ bool gpu_exchange_upload_legacy_sparse(
     uint64_t periodic_reduced_node_len,
     const uint32_t *periodic_representative_nodes,
     uint64_t periodic_representative_nodes_len,
-    uint64_t periodic_reduced_node_count)
+    uint64_t periodic_reduced_node_count,
+    const uint8_t *host_magnetic_node_mask,
+    uint64_t host_magnetic_node_mask_len)
 {
     if (!lifecycle.allocated) {
         return true;
@@ -129,6 +131,11 @@ bool gpu_exchange_upload_legacy_sparse(
         lumped_mass_len != rows ||
         inv_lumped_mass_len != rows) {
         error = "FemGpuState exchange CSR upload length mismatch";
+        return false;
+    }
+    if (host_magnetic_node_mask_len != 0u &&
+        (host_magnetic_node_mask == nullptr || host_magnetic_node_mask_len != rows)) {
+        error = "FemGpuState exchange CSR upload magnetic node mask length mismatch";
         return false;
     }
 
@@ -162,12 +169,19 @@ bool gpu_exchange_upload_legacy_sparse(
         const std::vector<double> host_lumped_mass(
             lumped_mass,
             lumped_mass + lumped_mass_len);
+        std::vector<uint8_t> host_magnetic_node_mask_values;
+        if (host_magnetic_node_mask_len > 0u) {
+            host_magnetic_node_mask_values.assign(
+                host_magnetic_node_mask,
+                host_magnetic_node_mask + host_magnetic_node_mask_len);
+        }
         if (!build_gpu_exchange_periodic_reduced_csr(
                 static_cast<uint32_t>(rows),
                 host_row_offsets,
                 host_col_indices,
                 host_values,
                 host_lumped_mass,
+                host_magnetic_node_mask_values,
                 reduced_node,
                 representative_nodes,
                 static_cast<uint32_t>(periodic_reduced_node_count),

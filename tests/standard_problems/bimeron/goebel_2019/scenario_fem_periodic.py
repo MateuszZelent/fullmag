@@ -1,7 +1,8 @@
-"""Göbel 2019 bimeron relaxation and hold with x-periodic FEM CPU."""
+"""Göbel 2019 bimeron relaxation and hold with x-periodic FEM CPU or strict CUDA."""
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import fullmag as fm
@@ -29,9 +30,13 @@ from tests.standard_problems.bimeron.goebel_2019.periodic_tet4_mesh import (
 )
 
 
+device = os.environ.get("FULLMAG_GOEBEL_FEM_DEVICE", "cpu")
+if device not in {"cpu", "gpu"}:
+    raise ValueError("FULLMAG_GOEBEL_FEM_DEVICE must be cpu or gpu")
+
 study = fm.study("goebel_2019_bimeron_fem_periodic")
 study.engine("fem")
-study.device("cpu", precision="double")
+study.device(device, precision="double")
 study.mode("strict")
 
 # Match the film length at the x seam and allow 40 nm of air on each

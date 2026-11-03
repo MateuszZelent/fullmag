@@ -37,6 +37,9 @@ INPUTS = (
     f"{SOURCE}/thresholds.v1.json",
 )
 FEM_LANE = "fem-periodic"
+FEM_GPU_LANE = "fem-periodic-gpu"
+FEM_LANES = (FEM_LANE, FEM_GPU_LANE)
+LANES = ("fdm", *FEM_LANES)
 FEM_SCENARIO = f"{SOURCE}/scenario_fem_periodic.py"
 FEM_MESH_MODULE = "tests.standard_problems.bimeron.goebel_2019.periodic_tet4_mesh"
 FEM_MESH = f"{SOURCE}/goebel_periodic_tet4.mesh.json"
@@ -62,6 +65,8 @@ FEM_TIMEOUT_S = 12 * 3600
 MAX_TIMEOUT_S = 24 * 3600
 MAX_FEM_TIMEOUT_S = 7 * 24 * 3600
 MAX_MESH_BYTES = 64 * 1024 * 1024
+# Stage metadata embeds the mesh in a pretty-printed execution plan.
+MAX_FEM_STAGE_RECORD = 4 * MAX_MESH_BYTES
 MESH_TIMEOUT_S = 300
 TOKEN = re.compile(r"[0-9a-f]{32}")
 SHA = re.compile(r"[0-9a-f]{64}")
@@ -93,11 +98,11 @@ def result_root(token):
 
 
 def lane_inputs(lane, fdm_reference=None):
-    require(lane in {"fdm", FEM_LANE}, "unknown qualification lane")
+    require(lane in LANES, "unknown qualification lane")
     if fdm_reference is not None:
-        require(lane == FEM_LANE, "FDM comparison is FEM-only")
+        require(lane in FEM_LANES, "FDM comparison is FEM-only")
         return (*FEM_INPUTS, *FEM_COMPARISON_INPUTS)
-    return FEM_INPUTS if lane == FEM_LANE else INPUTS
+    return FEM_INPUTS if lane in FEM_LANES else INPUTS
 
 
 def comparison_reference(lane, attempt, input_sha256):
@@ -105,7 +110,7 @@ def comparison_reference(lane, attempt, input_sha256):
         return None
     require(attempt is not None and input_sha256 is not None,
             "FDM comparison attempt and input SHA-256 must be paired")
-    require(lane == FEM_LANE, "FDM comparison is FEM-only")
+    require(lane in FEM_LANES, "FDM comparison is FEM-only")
     require(isinstance(attempt, str) and TOKEN.fullmatch(attempt)
             and isinstance(input_sha256, str) and SHA.fullmatch(input_sha256),
             "FDM comparison requires an exact attempt and input SHA-256")
@@ -114,14 +119,15 @@ def comparison_reference(lane, attempt, input_sha256):
 
 def validate_lane_args(args):
     lane_inputs(args.lane)
-    if args.lane == FEM_LANE:
+    if args.lane in FEM_LANES:
         require(isinstance(args.mesh_sha256, str) and SHA.fullmatch(args.mesh_sha256),
                 "FEM periodic lane requires the exact generated mesh SHA-256")
     else:
         require(args.mesh_sha256 is None, "mesh SHA-256 applies only to the FEM periodic lane")
+        require(args.mesh_profile == "reference", "light airbox applies only to a FEM periodic lane")
     deadline = args.solver_timeout_s
     if deadline is None:
-        return FEM_TIMEOUT_S if args.lane == FEM_LANE else SOLVER_TIMEOUT_S
+        return FEM_TIMEOUT_S if args.lane in FEM_LANES else SOLVER_TIMEOUT_S
     maximum = MAX_FEM_TIMEOUT_S if args.lane == FEM_LANE else MAX_TIMEOUT_S
     require(type(deadline) is int and 60 <= deadline <= maximum, "invalid solver deadline")
     return deadline
@@ -130,10 +136,17 @@ def validate_lane_args(args):
 def solver_environment(environment, lane):
     lane_inputs(lane)
     env = dict(environment)
-    if lane == FEM_LANE:
+    if lane in FEM_LANES:
         env.pop("FULLMAG_FDM_EXECUTION", None)
         env.pop("FULLMAG_FEM_ALL_IN_GPU", None)
-        env.update(FULLMAG_FEM_EXECUTION="cpu", FULLMAG_RELAX_DEVICE="cpu", CUDA_VISIBLE_DEVICES="")
+        if lane == FEM_GPU_LANE:
+            require(env.get("CUDA_VISIBLE_DEVICES", "0").strip() not in {"", "-1"},
+                    "CUDA_VISIBLE_DEVICES masks the required GPU")
+            env.update(FULLMAG_FEM_EXECUTION="gpu", FULLMAG_RELAX_DEVICE="gpu",
+                       FULLMAG_FEM_MFEM_DEVICE="cuda", FULLMAG_FEM_GPU_DEMAG_MODE="device_hypre_poisson",
+                       FULLMAG_GOEBEL_FEM_DEVICE="gpu")
+        else:
+            env.update(FULLMAG_FEM_EXECUTION="cpu", FULLMAG_RELAX_DEVICE="cpu", CUDA_VISIBLE_DEVICES="")
     else:
         env["FULLMAG_FDM_EXECUTION"] = "gpu"
     return env
@@ -143,8 +156,8 @@ def solver_arguments(token, lane="fdm"):
     operation = CONTROL / operation_root(token)
     results = result_root(token)
     lane_inputs(lane)
-    scenario = FEM_SCENARIO if lane == FEM_LANE else f"{SOURCE}/scenario_fdm.py"
-    backend = "fem" if lane == FEM_LANE else "fdm"
+    scenario = FEM_SCENARIO if lane in FEM_LANES else f"{SOURCE}/scenario_fdm.py"
+    backend = "fem" if lane in FEM_LANES else "fdm"
     return [
         SOLVER, str(operation / "inputs" / scenario),
         "--backend", backend, "--precision", "double", "--mode", "strict",
@@ -230,12 +243,16 @@ def _runtime_source_binding(selected, probe, backend):
     return mounted, changed
 
 
-def _regular_json(path):
+def _regular_record_bytes(path, max_bytes):
     require(path.resolve(strict=True) == path and path.is_file(), f"unsafe record {path.name}")
     with path.open("rb") as stream:
-        raw = stream.read(MAX_RECORD + 1)
-    require(len(raw) <= MAX_RECORD, f"record exceeds byte bound: {path.name}")
-    return json.loads(raw)
+        raw = stream.read(max_bytes + 1)
+    require(len(raw) <= max_bytes, f"record exceeds byte bound: {path.name}")
+    return raw
+
+
+def _regular_json(path):
+    return json.loads(_regular_record_bytes(path, MAX_RECORD))
 
 
 def _idle_probe(terminal_run_id):
@@ -321,13 +338,16 @@ def _file_sha(path):
     return value.hexdigest()
 
 
-def _generate_mesh(operation, input_root, env, mesh_sha):
+def _generate_mesh(operation, input_root, env, mesh_sha, mesh_profile):
     path = input_root / FEM_MESH
     require(not path.exists() and path.parent.resolve(strict=True) == path.parent,
             "generated mesh path already exists or has an alias")
+    command = ["/usr/local/bin/python3", "-B", "-m", FEM_MESH_MODULE, str(path)]
+    if mesh_profile == "light-airbox":
+        command.append("--light-airbox")
     with (operation / "mesh-generation.log").open("xb") as log:
         subprocess.run(
-            ["/usr/local/bin/python3", "-B", "-m", FEM_MESH_MODULE, str(path)],
+            command,
             cwd=input_root, env=env, stdout=log, stderr=subprocess.STDOUT,
             timeout=MESH_TIMEOUT_S, check=True,
         )
@@ -368,15 +388,87 @@ def require_fdm_reference(bundle, reference):
             "FDM comparison inputs differ from the pinned SHA-256")
 
 
-def compare_fem_reference(results, fdm_bundle, input_root, env, reference):
+def attest_fem_gpu(bundle):
+    """Validate the native executed-operator receipt on each scientific endpoint."""
+    required_execution = {
+        "backend": "fem", "device": "gpu", "precision": "double",
+        "mode": "strict", "fallback_policy": "forbidden",
+    }
+    required_provenance = {
+        "execution_engine": "fem_native_gpu",
+        "precision": "double",
+        "lossy_fallback_used": False,
+        "fem_data_residency": "device_source_of_truth",
+        "uses_cuda_kernels": True,
+        "uses_gpu_poisson": True,
+        "fem_demag_operator_mode": "device_hypre_poisson",
+        "hypre_execution_policy": "device",
+        "demag_residency": "device",
+        "fem_gpu_state_allocated": True,
+        "fem_gpu_rk_uses_cuda_kernels": True,
+        "fem_gpu_rk_stage_exchange_device_resident": True,
+        "fem_gpu_rk_allows_exchange_host_sync": False,
+    }
+    required_receipt = {
+        "requested": "strict_device", "resolved": "device_resident",
+        "executed": "cuda_fem", "execution_class": "device_resident",
+        "precision": "double", "integrator": "rk45", "accounting_valid": True,
+        "resolved_host_operator_mask": 0, "resolved_unknown_operator_mask": 0,
+        "executed_host_operator_mask": 0, "executed_unknown_operator_mask": 0,
+        "fallback_count": 0, "hot_loop_compute_h2d_bytes": 0,
+        "hot_loop_compute_d2h_bytes": 0, "hot_loop_compute_host_sync_count": 0,
+    }
+    # Native FEM receipt ABI v1: exchange, demag RHS/solve/recovery,
+    # local fields, LLG RHS, RK stepper, reductions and preconditioner.
+    goebel_operator_mask = 0x3DF
+    stages = {}
+    for stage in ("stage_00_flat_relax", "stage_02_flat_run"):
+        path = bundle / "stages" / stage / "metadata.json"
+        raw = _regular_record_bytes(path, MAX_FEM_STAGE_RECORD)
+        metadata = json.loads(raw)
+        metadata_sha256 = digest(raw)
+        del raw
+        require(isinstance(metadata, dict) and metadata.get("status") == "completed" and
+                metadata.get("requested_execution") == required_execution,
+                f"{stage}: missing completed strict FP64 GPU stage")
+        require(metadata.get("pbc") == {"axes": ["periodic", "open", "open"],
+                                       "demag": "periodic_airbox_k0"},
+                f"{stage}: missing x-periodic airbox demagnetization")
+        plan = metadata["execution_plan"]["backend_plan"]
+        require(plan.get("rotated_interfacial_dmi") == 3e-3 and plan.get("enable_demag") is True,
+                f"{stage}: missing Göbel rDMI or demagnetization in the executed plan")
+        provenance = metadata["execution_provenance"]
+        require(provenance["execution_resolution"]["fallback_occurred"] is False,
+                f"{stage}: unexpected execution fallback")
+        receipt = provenance["fem_gpu_execution_receipt"]
+        require(isinstance(receipt, dict), f"{stage}: missing native FEM GPU receipt")
+        for observed, expected in ((provenance, required_provenance), (receipt, required_receipt)):
+            for field, value in expected.items():
+                require(type(observed.get(field)) is type(value) and observed[field] == value,
+                        f"{stage}: invalid GPU evidence for {field}")
+        mask = receipt["required_operator_mask"]
+        require(type(mask) is int and mask & goebel_operator_mask == goebel_operator_mask
+                and receipt["resolved_device_operator_mask"] == mask
+                and receipt["executed_device_operator_mask"] == mask,
+                f"{stage}: required operators did not all execute on CUDA")
+        accepted = receipt["accepted_step_count"]
+        require(type(accepted) is int and accepted > 0, f"{stage}: no accepted CUDA RK45 step")
+        stages[stage] = {"metadata_sha256": metadata_sha256, "native_receipt": receipt}
+        del metadata, plan
+    return {"state": "attested", "stages": stages}
+
+
+def compare_fem_reference(results, fdm_bundle, input_root, env, reference, *, fem_device="cpu"):
     """Report comparison outcomes independently of native solver completion."""
     verification = {"state": "not_verified", "fdm_reference": reference}
     try:
         require_fdm_reference(fdm_bundle, reference)
         try:
+            command = ["/usr/local/bin/python3", "-B", "-m", FEM_COMPARISON_MODULE]
+            if fem_device == "gpu":
+                command.extend(("--fem-device", fem_device))
             completed = subprocess.run(
-                ["/usr/local/bin/python3", "-B", "-m", FEM_COMPARISON_MODULE,
-                 str(results / "output.zarr"), str(fdm_bundle)],
+                [*command, str(results / "output.zarr"), str(fdm_bundle)],
                 cwd=input_root, env=env, capture_output=True, check=True,
                 timeout=FEM_COMPARISON_TIMEOUT_S,
             )
@@ -406,7 +498,14 @@ def compare_fem_reference(results, fdm_bundle, input_root, env, reference):
     return verification
 
 
-def _worker_entry(token, inputs, binary_sha, terminal_run_id, lane, mesh_sha, timeout, fdm_reference=None):
+def mesh_profile_pins(mesh_profile):
+    require(mesh_profile in ("reference", "light-airbox"), "invalid FEM mesh profile")
+    # Reference receipts written before the optional profile have no profile key.
+    return {} if mesh_profile == "reference" else {"mesh_profile": mesh_profile}
+
+
+def _worker_entry(token, inputs, binary_sha, terminal_run_id, lane, mesh_sha, timeout,
+                  fdm_reference=None, mesh_profile="reference"):
     operation = CONTROL / operation_root(token)
     require(operation.resolve(strict=True) == operation
             and (CONTROL / "active").read_text().strip() == token,
@@ -414,12 +513,13 @@ def _worker_entry(token, inputs, binary_sha, terminal_run_id, lane, mesh_sha, ti
     try:
         result = _run_worker(
             token, inputs, binary_sha, terminal_run_id, lane, mesh_sha, timeout, fdm_reference,
+            mesh_profile,
         )
     except Exception as error:
         result = {"worker_error": f"{type(error).__name__}: {error}"}
     terminal = {"schema": WORKER_SCHEMA, "attempt": token, "lane": lane,
                 "inputs": inputs, "binary_sha256": binary_sha, "mesh_sha256": mesh_sha,
-                "solver_timeout_s": timeout, "result": result}
+                "solver_timeout_s": timeout, "result": result, **mesh_profile_pins(mesh_profile)}
     if fdm_reference is not None:
         terminal["fdm_reference"] = fdm_reference
     publish_json_once(operation / "worker-terminal.json", terminal)
@@ -427,7 +527,7 @@ def _worker_entry(token, inputs, binary_sha, terminal_run_id, lane, mesh_sha, ti
 
 
 def _run_worker(token, inputs, binary_sha, terminal_run_id, lane="fdm", mesh_sha=None,
-                timeout=SOLVER_TIMEOUT_S, fdm_reference=None):
+                timeout=SOLVER_TIMEOUT_S, fdm_reference=None, mesh_profile="reference"):
     relative = operation_root(token)
     operation = CONTROL / relative
     require(operation.resolve(strict=True) == operation
@@ -442,10 +542,10 @@ def _run_worker(token, inputs, binary_sha, terminal_run_id, lane="fdm", mesh_sha
             "staged scientific input bytes differ")
     require(not any(key.startswith("FULLMAG_GOEBEL_") for key in os.environ),
             "an inherited environment variable would change the reference scenario")
-    if lane == "fdm":
+    if lane != FEM_LANE:
         require(os.environ.get("FULLMAG_DOCKER_DEVICE_ACCESS") == "gpu",
                 "fixed backend has no admitted GPU access")
-    else:
+    if lane in FEM_LANES:
         require(isinstance(mesh_sha, str) and SHA.fullmatch(mesh_sha),
                 "missing exact FEM mesh pin")
 
@@ -470,7 +570,9 @@ def _run_worker(token, inputs, binary_sha, terminal_run_id, lane="fdm", mesh_sha
            "HOME": str(private_state)}
     env.pop("FULLMAG_RUNTIME_SERVICE_CONFIG", None)
     env.pop("FULLMAG_RUNTIME_SERVICES_ROOT", None)
-    mesh = _generate_mesh(operation, input_root, env, mesh_sha) if lane == FEM_LANE else None
+    mesh = None
+    if lane in FEM_LANES:
+        mesh = _generate_mesh(operation, input_root, env, mesh_sha, mesh_profile)
     if mesh is not None:
         retained_mesh = results / "goebel_periodic_tet4.mesh.json"
         with mesh.open("rb") as source, retained_mesh.open("xb") as output:
@@ -510,27 +612,41 @@ def _run_worker(token, inputs, binary_sha, terminal_run_id, lane="fdm", mesh_sha
         require(_file_sha(mesh) == _file_sha(retained_mesh) == mesh_sha,
                 "generated or retained FEM mesh changed during solve")
         result["mesh"] = {"control_path": str(mesh), "result_relative_path": retained_mesh.name,
-                          "sha256": mesh_sha, "bytes": mesh.stat().st_size}
+                          "sha256": mesh_sha, "bytes": mesh.stat().st_size,
+                          **mesh_profile_pins(mesh_profile)}
     script_receipt = operation / "script-launch.json"
     if script_receipt.is_file():
         result["script_launch_receipt_sha256"] = _file_sha(script_receipt)
     if code:
         return result
-    if lane == FEM_LANE:
+    if lane in FEM_LANES:
         require(script_receipt.is_file(), "FEM process completed without its managed launch receipt")
         launch = _regular_json(script_receipt)
         require(launch.get("outcome", {}).get("exit_code") == 0,
                 "FEM launch receipt differs from the completed process")
         runtime = launch.get("resolved", {})
-        require(runtime.get("backend") == "fem" and runtime.get("device") == "cpu"
+        fem_device, engine = (("gpu", "fem_native_gpu") if lane == FEM_GPU_LANE
+                              else ("cpu", "fem_cpu_native"))
+        require(runtime.get("backend") == "fem" and runtime.get("device") == fem_device
                 and runtime.get("precision") == "double" and runtime.get("mode") == "strict"
-                and runtime.get("engine_id") == "fem_cpu_native" and runtime.get("fallback") is None,
-                "FEM launch receipt does not attest strict FP64 native CPU without fallback")
+                and runtime.get("engine_id") == engine and runtime.get("fallback") is None,
+                f"FEM launch receipt does not attest strict FP64 native {fem_device.upper()} without fallback")
         result["resolved_execution"] = runtime
+        if lane == FEM_GPU_LANE:
+            try:
+                result["fem_gpu_attestation"] = attest_fem_gpu(results / "output.zarr")
+            except (OSError, ValueError, TypeError, KeyError) as error:
+                result["verification"] = {"state": "not_verified",
+                                          "error": f"strict FEM GPU attestation failed: {error}"}
+                if fdm_reference is not None:
+                    result["verification"]["fdm_reference"] = fdm_reference
+                return result
         if fdm_bundle is not None:
             result["verification"] = compare_fem_reference(
-                results, fdm_bundle, input_root, env, fdm_reference,
+                results, fdm_bundle, input_root, env, fdm_reference, fem_device=fem_device,
             )
+        elif lane == FEM_GPU_LANE:
+            result["verification"] = {"state": "attested", "reason": "FEM comparison was not requested"}
         else:
             result["verification"] = {"state": "not_verified", "reason": "FEM comparison pending"}
         return result
@@ -573,7 +689,8 @@ def validate_worker_terminal(record, execution):
         "solver_timeout_s": execution["solver_timeout_s"],
     }
     require(all(record.get(key) == value for key, value in expected.items())
-            and record.get("fdm_reference") == execution.get("fdm_reference"),
+            and record.get("fdm_reference") == execution.get("fdm_reference")
+            and record.get("mesh_profile") == execution.get("mesh_profile"),
             "worker completion differs from the exact admitted operation")
     result = record.get("result")
     require(isinstance(result, dict) and (
@@ -582,9 +699,15 @@ def validate_worker_terminal(record, execution):
             and SHA.fullmatch(result.get("runtime_log_sha256") or "")
             and isinstance(result.get("verification"), dict))),
         "qualification worker has no terminal completion evidence")
-    if execution.get("fdm_reference") is not None and result.get("runtime_exit_code") == 0:
-        require(result["verification"].get("fdm_reference") == execution["fdm_reference"],
-                "worker verification differs from the exact FDM comparison pins")
+    if result.get("runtime_exit_code") == 0:
+        verification = result["verification"]
+        if execution.get("fdm_reference") is not None:
+            require(verification.get("fdm_reference") == execution["fdm_reference"],
+                    "worker verification differs from the exact FDM comparison pins")
+        if execution["lane"] == FEM_GPU_LANE and verification.get("state") in {"attested", "compared"}:
+            attestation = result.get("fem_gpu_attestation")
+            require(isinstance(attestation, dict) and attestation.get("state") == "attested",
+                    "worker qualification lacks strict FEM GPU evidence")
     return result
 
 
@@ -660,6 +783,7 @@ def observe_attempt(args, control, pins, hashes, timeout, fdm_reference=None):
         "lane": args.lane,
         "mesh_sha256": args.mesh_sha256,
         "solver_timeout_s": timeout,
+        **mesh_profile_pins(args.mesh_profile),
     }
     if fdm_reference is not None:
         expected_inputs["fdm_reference"] = fdm_reference
@@ -774,6 +898,7 @@ def run(args):
         "backend_container_id": pins.backend_container_id, "frontend_container_id": pins.frontend_container_id,
         "terminal_run_id": args.terminal_run_id, "source_inputs_sha256": hashes,
         "lane": args.lane, "mesh_sha256": args.mesh_sha256, "solver_timeout_s": timeout,
+        **mesh_profile_pins(args.mesh_profile),
     }
     if fdm_reference is not None:
         operation_inputs["fdm_reference"] = fdm_reference
@@ -796,7 +921,7 @@ def run(args):
         token = operation["receipt"]["attempt"]
         probe, _ = codegen._probe_source(backend_id, token)
         mounted_commit, excluded = _runtime_source_binding(selected, probe, backend)
-        if args.lane == FEM_LANE:
+        if args.lane in FEM_LANES:
             require(mounted_commit == backend["commit"],
                     "FEM periodic lane requires an exact rebuilt runtime package")
         host_output = validate_path(state / "runs/goebel-reference" / token, state, "qualification output")
@@ -816,6 +941,7 @@ def run(args):
             "fullmag_binary_sha256": binary_sha, "runtime_log": technical_log,
             "output_root": str(host_output), "command": solver_arguments(token, args.lane),
             "lane": args.lane, "mesh_sha256": args.mesh_sha256, "solver_timeout_s": timeout,
+            **mesh_profile_pins(args.mesh_profile),
         }
         if fdm_reference is not None:
             result["fdm_reference"] = fdm_reference
@@ -826,7 +952,8 @@ def run(args):
             "import json,sys\n"
             "from docker_goebel_qualification import _worker_entry\n"
             "record = _worker_entry(sys.argv[1], json.loads(sys.argv[2]), sys.argv[3], "
-            "sys.argv[4] or None, sys.argv[5], sys.argv[6] or None, int(sys.argv[7]), json.loads(sys.argv[8]))\n"
+            "sys.argv[4] or None, sys.argv[5], sys.argv[6] or None, int(sys.argv[7]), "
+            "json.loads(sys.argv[8]), sys.argv[9])\n"
             "print(json.dumps(record))"
         )
         # The worker controller is copied from the verified reference commit,
@@ -841,7 +968,8 @@ def run(args):
         stdout, _ = codegen._exec(
             backend_id, ("/usr/local/bin/python3", "-B", "-c", worker, token,
                          canonical(hashes).decode(), binary_sha, args.terminal_run_id or "",
-                         args.lane, args.mesh_sha256 or "", str(timeout), canonical(fdm_reference).decode()),
+                         args.lane, args.mesh_sha256 or "", str(timeout),
+                         canonical(fdm_reference).decode(), args.mesh_profile),
             timeout=timeout + MESH_TIMEOUT_S + 300 + (FEM_COMPARISON_TIMEOUT_S if fdm_reference else 0), stdout_limit=MAX_RECORD,
             environment={"PYTHONPATH": str(CONTROL / operation["root"] / "controller")
                          + ":/opt/fullmag/source/scripts"},
@@ -875,7 +1003,7 @@ def run(args):
         control.write(operation["root"] + "/scientific-result.json", result)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return (2 if completed["runtime_exit_code"] else
-                0 if completed["verification"].get("state") in {"passed", "compared"} else 3)
+                0 if completed["verification"].get("state") in {"passed", "compared", "attested"} else 3)
 
 
 def parser():
@@ -887,8 +1015,9 @@ def parser():
     result.add_argument("--source-commit", required=True)
     result.add_argument("--port", type=int, required=True)
     result.add_argument("--terminal-run-id")
-    result.add_argument("--lane", choices=("fdm", FEM_LANE), default="fdm")
+    result.add_argument("--lane", choices=LANES, default="fdm")
     result.add_argument("--mesh-sha256")
+    result.add_argument("--mesh-profile", choices=("reference", "light-airbox"), default="reference")
     result.add_argument("--fdm-attempt")
     result.add_argument("--fdm-input-sha256")
     result.add_argument("--solver-timeout-s", type=int)

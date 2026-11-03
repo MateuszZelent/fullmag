@@ -131,3 +131,18 @@ def test_rejects_mismatched_physical_time(tmp_path: Path) -> None:
             fem_bundle=_make_bundle(tmp_path / "fem", "fem", hold_time_s=80e-12),
             fdm_bundle=_make_bundle(tmp_path / "fdm", "fdm"),
         )
+
+
+def test_gpu_fem_comparison_requires_the_requested_native_engine(tmp_path: Path) -> None:
+    fem = _make_bundle(tmp_path / "fem", "fem")
+    fdm = _make_bundle(tmp_path / "fdm", "fdm")
+    for path in (fem / "stages").glob("*/metadata.json"):
+        metadata = json.loads(path.read_text())
+        metadata["execution_provenance"]["execution_engine"] = "fem_native_gpu"
+        _write_json(path, metadata)
+
+    with pytest.raises(ValueError, match="fem_cpu_native"):
+        compare_bundles(fem_bundle=fem, fdm_bundle=fdm)
+    result = compare_bundles(fem_bundle=fem, fdm_bundle=fdm, fem_device="gpu")
+    assert all(stage["fem"]["execution_engine"] == "fem_native_gpu"
+               for stage in result["stages"].values())

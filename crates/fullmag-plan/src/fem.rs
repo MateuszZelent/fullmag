@@ -4241,20 +4241,14 @@ pub(crate) fn plan_fem(
     }
     let periodic_rotated_dmi = rotated_interfacial_dmi.is_some_and(|d| d != 0.0)
         && !mesh.periodic_node_pairs.is_empty();
-    if periodic_rotated_dmi {
-        if runtime_requests_cuda(problem) {
-            return Err(PlanError {
-                reasons: vec!["FEM RotatedInterfacialDmi with periodic node pairs currently requires native FEM CPU".to_string()],
-            });
-        }
-        if relaxation
+    if periodic_rotated_dmi
+        && relaxation
             .as_ref()
             .is_some_and(|control| is_direct_relaxation_minimizer(control.algorithm))
-        {
-            return Err(PlanError {
-                reasons: vec!["FEM RotatedInterfacialDmi with periodic node pairs requires time integration or llg_overdamped relaxation".to_string()],
-            });
-        }
+    {
+        return Err(PlanError {
+            reasons: vec!["FEM RotatedInterfacialDmi with periodic node pairs requires time integration or llg_overdamped relaxation".to_string()],
+        });
     }
     if requested_static_pbc && mesh.periodic_node_pairs.is_empty() {
         return Err(PlanError {

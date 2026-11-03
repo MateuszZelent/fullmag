@@ -76,7 +76,7 @@ def _time_matches(actual: float, expected: float) -> bool:
     return math.isclose(actual, expected, rel_tol=0.0, abs_tol=_TIME_ATOL_S)
 
 
-def _load_endpoint(bundle: Path, directory: str, backend: str) -> _Endpoint:
+def _load_endpoint(bundle: Path, directory: str, backend: str, *, fem_device: str = "cpu") -> _Endpoint:
     path = bundle / "stages" / directory
     metadata_bytes = (path / "metadata.json").read_bytes()
     state_bytes = (path / "m_final.json").read_bytes()
@@ -85,7 +85,7 @@ def _load_endpoint(bundle: Path, directory: str, backend: str) -> _Endpoint:
     plan = metadata["execution_plan"]["backend_plan"]
     execution = metadata["execution_provenance"]
     expected_engine, expected_demag = (
-        ("fem_cpu_native", "periodic_airbox_k0")
+        ("fem_native_gpu" if fem_device == "gpu" else "fem_cpu_native", "periodic_airbox_k0")
         if backend == "fem"
         else ("cuda_fdm", "truncated_images")
     )
@@ -215,12 +215,14 @@ def _sample_fem(endpoint: _Endpoint, grid: CartesianGrid) -> tuple[np.ndarray, d
     }
 
 
-def compare_bundles(*, fem_bundle: Path, fdm_bundle: Path) -> dict:
+def compare_bundles(*, fem_bundle: Path, fdm_bundle: Path, fem_device: str = "cpu") -> dict:
     """Report paired signed Q and core separation at the two reference endpoints."""
+    if fem_device not in {"cpu", "gpu"}:
+        raise ValueError("fem_device must be cpu or gpu")
     stages = {}
     reference_grid = None
     for name, directory, stage_id, start_s, duration_s in _STAGES:
-        fem = _load_endpoint(fem_bundle, directory, "fem")
+        fem = _load_endpoint(fem_bundle, directory, "fem", fem_device=fem_device)
         fdm = _load_endpoint(fdm_bundle, directory, "fdm")
         _validate_timing(fem, stage_id, start_s, duration_s)
         _validate_timing(fdm, stage_id, start_s, duration_s)
@@ -279,10 +281,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("fem_bundle", type=Path)
     parser.add_argument("fdm_bundle", type=Path)
+    parser.add_argument("--fem-device", choices=("cpu", "gpu"), default="cpu")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     report = compare_bundles(
-        fem_bundle=args.fem_bundle.resolve(), fdm_bundle=args.fdm_bundle.resolve()
+        fem_bundle=args.fem_bundle.resolve(), fdm_bundle=args.fdm_bundle.resolve(),
+        fem_device=args.fem_device,
     )
     serialized = json.dumps(report, indent=2, allow_nan=False) + "\n"
     if args.output is None:
