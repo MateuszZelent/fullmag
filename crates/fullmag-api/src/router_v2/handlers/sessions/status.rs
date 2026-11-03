@@ -244,6 +244,7 @@ pub(crate) fn build_live_status(
         ),
     };
 
+    let current_accepted_scalar = accepted_live_scalar_row(snapshot, request_scope_epoch);
     let run = snapshot.run.as_ref().map(|r| {
         let stage_exec = snapshot.stage_execution.as_ref();
         let crossover = snapshot.session.fem_crossover_decision.as_ref();
@@ -256,12 +257,15 @@ pub(crate) fn build_live_status(
             stage_count: stage_exec.map(|se| se.total_stages as u32).unwrap_or(0),
             started_at: snapshot.session.started_at_unix_ms.to_string(),
             solver_steps: if crate::live_accepted_execution::docker_api_only_runtime() {
-                accepted_solver_steps(snapshot, &r.run_id)
+                current_accepted_scalar
+                    .map(|row| row.step)
+                    .unwrap_or_else(|| accepted_solver_steps(snapshot, &r.run_id))
             } else {
                 r.total_steps as u64
             },
-            solver_time: r
-                .final_time
+            solver_time: current_accepted_scalar
+                .map(|row| row.time)
+                .or(r.final_time)
                 .or_else(|| snapshot.live_state.as_ref().map(|ls| ls.latest_step.time))
                 .unwrap_or(0.0),
             requested_device: snapshot.session.requested_device.clone(),
@@ -459,6 +463,87 @@ pub(crate) fn lifecycle_contract(
             crate::schemas::status::SessionCommandability::Forbidden
         },
     }
+}
+
+/// The accepted scalar pin is current only when it belongs to the exact active
+/// run scope and the sole active accepted stage reports the same worker stats
+/// clock. This prevents a prepared-state row or a previous stage's reused
+/// (step, time) pair from overriding a live solver clock.
+pub(crate) fn accepted_live_scalar_row<'a>(
+    snapshot: &'a SessionStateResponse,
+    request_scope_epoch: &str,
+) -> Option<&'a crate::types::ScalarRow> {
+    let run = snapshot.run.as_ref()?;
+    select_current_accepted_scalar_row(
+        &snapshot.session.session_id,
+        &run.session_id,
+        &run.run_id,
+        snapshot.scalar_revision,
+        &snapshot.scalar_rows,
+        snapshot.latest_scalar_source.as_ref(),
+        snapshot.stage_execution.as_ref(),
+        request_scope_epoch,
+        crate::session::effective_runtime_status_code(snapshot) == "running",
+    )
+}
+
+fn select_current_accepted_scalar_row<'a>(
+    session_id: &str,
+    run_session_id: &str,
+    run_id: &str,
+    scalar_revision: u64,
+    scalar_rows: &'a [crate::types::ScalarRow],
+    source_state: Option<&crate::types::CurrentScalarSourceState>,
+    stage_execution: Option<&crate::types::StageExecutionState>,
+    request_scope_epoch: &str,
+    runtime_is_running: bool,
+) -> Option<&'a crate::types::ScalarRow> {
+    if !runtime_is_running || run_session_id != session_id {
+        return None;
+    }
+    let source_state = source_state?;
+    let source = source_state.public_source.as_ref()?;
+    let accepted_live_identity = source_state.accepted_live_identity.as_ref()?;
+    let active_live_identity = source_state.active_live_identity.as_ref()?;
+    if accepted_live_identity != active_live_identity
+        || accepted_live_identity.run_id != run_id
+        || source.session_id != session_id
+        || source.run_id != run_id
+        || source.request_scope_epoch != request_scope_epoch
+        || source.scalar_revision != scalar_revision
+    {
+        return None;
+    }
+    let row = scalar_rows.last()?;
+    if !row.is_physical_observation()
+        || row.step != source.source_step
+        || !row.time.is_finite()
+        || row.time < 0.0
+    {
+        return None;
+    }
+
+    let execution = stage_execution?;
+    if execution.runtime_state != crate::types::RuntimeLifecycleState::Running
+        || execution
+            .stages
+            .iter()
+            .filter(|stage| stage.status == crate::types::StageLifecycleState::Running)
+            .count()
+            != 1
+    {
+        return None;
+    }
+    let active_index = execution.active_stage_index?;
+    let stage = execution.stages.get(active_index)?;
+    if stage.status != crate::types::StageLifecycleState::Running
+        || stage.stage_id.as_deref() != Some(accepted_live_identity.step_id.as_str())
+        || stage.applied_step != Some(row.step)
+        || stage.applied_time_seconds != Some(row.time)
+    {
+        return None;
+    }
+    Some(row)
 }
 
 fn accepted_solver_steps(snapshot: &SessionStateResponse, run_id: &str) -> u64 {
@@ -1642,12 +1727,194 @@ fn compat_end_to_end_steps_per_second(
 mod tests {
     use super::{
         compat_end_to_end_steps_per_second, connectivity_from_liveness_at, lifecycle_contract,
-        relaxation_algorithms_available, session_epoch, solver_completion_record,
-        CONNECTIVITY_DEGRADED_AFTER_MS, CONNECTIVITY_DISCONNECTED_AFTER_MS,
+        relaxation_algorithms_available, select_current_accepted_scalar_row, session_epoch,
+        solver_completion_record, CONNECTIVITY_DEGRADED_AFTER_MS,
+        CONNECTIVITY_DISCONNECTED_AFTER_MS,
     };
     use crate::schemas::status::{
         SessionCommandability, SessionConnectivity, SessionResourceLifecycle,
     };
+
+    fn scalar_row(step: u64, time: f64) -> crate::types::ScalarRow {
+        serde_json::from_value(serde_json::json!({
+            "kind": "physical_observation",
+            "step": step,
+            "time": time,
+            "solver_dt": 1.0e-15,
+            "mx": 0.1,
+            "my": 0.0,
+            "mz": 0.9,
+            "e_ex": 11.0,
+            "e_demag": 22.0,
+            "e_ext": 33.0,
+            "e_total": 66.0,
+            "max_dm_dt": 7.0,
+            "max_h_eff": 8.0,
+            "max_h_demag": 9.0
+        }))
+        .expect("physical scalar row fixture")
+    }
+
+    fn stage_execution(
+        records: Vec<crate::types::StageExecutionRecord>,
+        active_stage_index: Option<usize>,
+        runtime_state: crate::types::RuntimeLifecycleState,
+    ) -> crate::types::StageExecutionState {
+        crate::types::StageExecutionState {
+            total_stages: records.len(),
+            completed_stage_indexes: Vec::new(),
+            stage_statuses: records.iter().map(|record| record.status).collect(),
+            stages: records,
+            active_stage_index,
+            active_stage_kind: Some("relax".into()),
+            runtime_state,
+        }
+    }
+
+    fn stage_record(
+        stage_id: Option<&str>,
+        status: &str,
+        step: Option<u64>,
+        time: Option<f64>,
+    ) -> crate::types::StageExecutionRecord {
+        serde_json::from_value(serde_json::json!({
+            "stage_id": stage_id,
+            "status": status,
+            "applied_step": step,
+            "applied_time_seconds": time
+        }))
+        .expect("stage record fixture")
+    }
+
+    fn scalar_source(
+        step: u64,
+        task_id: &str,
+        attempt_id: &str,
+    ) -> crate::types::CurrentScalarSourceState {
+        let identity = crate::types::AcceptedLiveScalarIdentity {
+            run_id: "run".into(),
+            task_id: task_id.into(),
+            step_id: "relax-stage".into(),
+            attempt_id: attempt_id.into(),
+            ownership_epoch: 5,
+        };
+        crate::types::CurrentScalarSourceState {
+            public_source: Some(crate::schemas::scalars::ScalarObservationSource {
+                session_id: "session".into(),
+                run_id: "run".into(),
+                request_scope_epoch: "instance:7".into(),
+                source_step: step,
+                scalar_revision: 23,
+            }),
+            accepted_live_identity: Some(identity.clone()),
+            active_live_identity: Some(identity),
+        }
+    }
+
+    fn select<'a>(
+        rows: &'a [crate::types::ScalarRow],
+        source: Option<&crate::types::CurrentScalarSourceState>,
+        execution: Option<&crate::types::StageExecutionState>,
+        request_scope_epoch: &str,
+        scalar_revision: u64,
+        running: bool,
+    ) -> Option<&'a crate::types::ScalarRow> {
+        select_current_accepted_scalar_row(
+            "session",
+            "session",
+            "run",
+            scalar_revision,
+            rows,
+            source,
+            execution,
+            request_scope_epoch,
+            running,
+        )
+    }
+
+    #[test]
+    fn current_accepted_stage_pin_uses_step_even_when_physical_time_is_zero() {
+        let rows = vec![scalar_row(0, 0.0), scalar_row(1_567, 0.0)];
+        let source = scalar_source(1_567, "task-a", "attempt-a");
+        let execution = stage_execution(
+            vec![stage_record(Some("relax-stage"), "running", Some(1_567), Some(0.0))],
+            Some(0),
+            crate::types::RuntimeLifecycleState::Running,
+        );
+
+        let selected = select(&rows, Some(&source), Some(&execution), "instance:7", 23, true)
+            .expect("pinned accepted step N is current at t=0");
+        assert_eq!(selected.step, 1_567);
+        assert_eq!(selected.time, 0.0);
+    }
+
+    #[test]
+    fn current_accepted_stage_pin_rejects_stale_scope_run_revision_step_and_stage() {
+        let rows = vec![scalar_row(1_567, 0.0)];
+        let source = scalar_source(1_567, "task-a", "attempt-a");
+        let execution = stage_execution(
+            vec![stage_record(Some("relax-stage"), "running", Some(1_567), Some(0.0))],
+            Some(0),
+            crate::types::RuntimeLifecycleState::Running,
+        );
+        assert!(select(&rows, Some(&source), Some(&execution), "instance:8", 23, true).is_none());
+        assert!(select(&rows, Some(&source), Some(&execution), "instance:7", 22, true).is_none());
+        assert!(select(&rows, Some(&source), Some(&execution), "instance:7", 23, false).is_none());
+
+        let mut stale_run = source.clone();
+        stale_run.public_source.as_mut().unwrap().run_id = "older-run".into();
+        assert!(select(&rows, Some(&stale_run), Some(&execution), "instance:7", 23, true).is_none());
+
+        let mut stale_attempt = source.clone();
+        stale_attempt.active_live_identity.as_mut().unwrap().attempt_id = "attempt-b".into();
+        assert!(select(&rows, Some(&stale_attempt), Some(&execution), "instance:7", 23, true).is_none());
+
+        let wrong_row = vec![scalar_row(0, 0.0)];
+        assert!(select(&wrong_row, Some(&source), Some(&execution), "instance:7", 23, true).is_none());
+
+        let stale_stage = stage_execution(
+            vec![stage_record(Some("relax-stage"), "running", Some(1_566), Some(0.0))],
+            Some(0),
+            crate::types::RuntimeLifecycleState::Running,
+        );
+        assert!(select(&rows, Some(&source), Some(&stale_stage), "instance:7", 23, true).is_none());
+
+        let mismatched_stage_time = stage_execution(
+            vec![stage_record(Some("relax-stage"), "running", Some(1_567), Some(1.0e-15))],
+            Some(0),
+            crate::types::RuntimeLifecycleState::Running,
+        );
+        assert!(select(&rows, Some(&source), Some(&mismatched_stage_time), "instance:7", 23, true).is_none());
+    }
+
+    #[test]
+    fn current_accepted_stage_pin_rejects_ambiguous_or_terminal_stage_state() {
+        let rows = vec![scalar_row(1_567, 0.0)];
+        let source = scalar_source(1_567, "task-a", "attempt-a");
+        let ambiguous = stage_execution(
+            vec![
+                stage_record(Some("relax-a"), "running", Some(1_567), Some(0.0)),
+                stage_record(Some("relax-b"), "running", Some(1_567), Some(0.0)),
+            ],
+            Some(0),
+            crate::types::RuntimeLifecycleState::Running,
+        );
+        assert!(select(&rows, Some(&source), Some(&ambiguous), "instance:7", 23, true).is_none());
+
+        let terminal = stage_execution(
+            vec![stage_record(Some("relax-stage"), "completed", Some(1_567), Some(0.0))],
+            None,
+            crate::types::RuntimeLifecycleState::Completed,
+        );
+        assert!(select(&rows, Some(&source), Some(&terminal), "instance:7", 23, false).is_none());
+
+        let unidentified_stage = stage_execution(
+            vec![stage_record(None, "running", Some(1_567), Some(0.0))],
+            Some(0),
+            crate::types::RuntimeLifecycleState::Running,
+        );
+        assert!(select(&rows, Some(&source), Some(&unidentified_stage), "instance:7", 23, true).is_none());
+    }
 
     #[test]
     fn awaiting_command_is_an_active_commandable_session_resource() {

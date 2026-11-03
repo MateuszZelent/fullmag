@@ -822,6 +822,45 @@ impl StepUpdateView {
     }
 }
 
+/// Identity of one accepted worker attempt's live observation. The worker
+/// sequence is intentionally excluded: progress-only header revisions do not
+/// create a new physical scalar sample.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AcceptedLiveScalarIdentity {
+    pub run_id: String,
+    pub task_id: String,
+    pub step_id: String,
+    pub attempt_id: String,
+    pub ownership_epoch: u64,
+}
+
+impl AcceptedLiveScalarIdentity {
+    pub(crate) fn from_header(
+        header: &crate::accepted_study_worker::AcceptedLiveObservationHeader,
+    ) -> Self {
+        Self {
+            run_id: header.run_id.clone(),
+            task_id: header.task_id.clone(),
+            step_id: header.step_id.clone(),
+            attempt_id: header.attempt_id.clone(),
+            ownership_epoch: header.ownership_epoch,
+        }
+    }
+}
+
+/// Process-local scalar pin state. Only public_source is serialized into the
+/// existing ScalarObservationSource wire shape by the scalars handler.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CurrentScalarSourceState {
+    pub public_source: Option<crate::schemas::scalars::ScalarObservationSource>,
+    /// Identity of the worker source from which the current physical scalar row
+    /// was published, with the scalar revision bound by public_source.
+    pub accepted_live_identity: Option<AcceptedLiveScalarIdentity>,
+    /// Most recent active accepted header identity. None means the projector
+    /// cannot currently authenticate a live worker observation.
+    pub active_live_identity: Option<AcceptedLiveScalarIdentity>,
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub(crate) struct SessionStateResponse {
     pub session_protocol_version: String,
@@ -847,10 +886,10 @@ pub(crate) struct SessionStateResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scene_document: Option<SceneDocument>,
     pub scalar_rows: Vec<ScalarRow>,
-    /// Bound at accepted scalar publication, never inferred by read handlers
-    /// or deserialized from imported snapshots.
+    /// Process-local source binding; never inferred by read handlers or
+    /// deserialized from imported snapshots.
     #[serde(skip)]
-    pub latest_scalar_source: Option<crate::schemas::scalars::ScalarObservationSource>,
+    pub latest_scalar_source: Option<CurrentScalarSourceState>,
     pub engine_log: Vec<EngineLogEntry>,
     pub solver_profile: SolverProfileResource,
     pub quantities: Vec<QuantityDescriptor>,
