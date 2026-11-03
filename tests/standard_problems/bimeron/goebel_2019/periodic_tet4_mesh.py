@@ -45,14 +45,18 @@ def _plane_triangles(plane: np.ndarray, axis: int, positive: bool) -> np.ndarray
     return faces
 
 
-def build_mesh() -> dict:
+def build_mesh(*, light_airbox: bool = False) -> dict:
     # Fine spacing covers the initial bimeron and its wall. Away from it,
     # x is graded along the track and the air is graded away from the film.
     x = _symmetric_axis(0, [(16, 0.5), (28, 1), (44, 2), (76, 4), (250, 8)])
-    y = _symmetric_axis(0, [(10, 0.5), (20, 1), (21, 1), (23, 2), (27, 4),
-                            (35, 8), (45, 10), (60, 15)])
-    z = _symmetric_axis(0.25, [(1.25, 1), (3.25, 2), (7.25, 4),
-                              (15.25, 8), (26.25, 11), (40.25, 14)])
+    # Keep the first 7 nm of air on each open film face. The light profile
+    # removes only one outer interval per side, retaining the same box.
+    y_outer = [(39, 12), (60, 21)] if light_airbox else [(35, 8), (45, 10), (60, 15)]
+    z_outer = [(19.25, 12), (40.25, 21)] if light_airbox else [
+        (15.25, 8), (26.25, 11), (40.25, 14)
+    ]
+    y = _symmetric_axis(0, [(10, 0.5), (20, 1), (21, 1), (23, 2), (27, 4), *y_outer])
+    z = _symmetric_axis(0.25, [(1.25, 1), (3.25, 2), (7.25, 4), *z_outer])
     ymin, ymax = np.flatnonzero(np.isclose(np.abs(y), TRACK_SIZE[1] / 2, atol=1e-15))
     zmin, zmax = np.flatnonzero(np.isclose(np.abs(z), TRACK_SIZE[2] / 2, atol=1e-15))
     coordinates = np.stack(np.meshgrid(x, y, z, indexing="ij"), axis=-1)
@@ -94,7 +98,9 @@ def build_mesh() -> dict:
         facet_roles.extend([roles[marker]] * len(triangles))
 
     return {
-        "mesh_name": "goebel_periodic_tet4",
+        "mesh_name": (
+            "goebel_periodic_tet4_light_airbox" if light_airbox else "goebel_periodic_tet4"
+        ),
         "nodes": nodes.tolist(),
         "cells": {
             "types": ["tet4"] * len(elements),
@@ -125,8 +131,13 @@ def build_mesh() -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("destination", type=Path)
+    parser.add_argument(
+        "--light-airbox",
+        action="store_true",
+        help="coarsen the outer air beyond the unchanged 7 nm collar around the film",
+    )
     args = parser.parse_args()
-    mesh = build_mesh()
+    mesh = build_mesh(light_airbox=args.light_airbox)
     with args.destination.open("x", encoding="utf-8") as output:
         json.dump(mesh, output, separators=(",", ":"), allow_nan=False)
 
