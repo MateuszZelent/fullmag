@@ -96,6 +96,13 @@
       "evidence_status": "implemented_source_test; runtime_not_verified"
     },
     {
+      "id": "fem-periodic-projection",
+      "path": "backends/fem/cpu/mfem/interactions/dmi_workspace.cpp",
+      "symbol": "accumulate_dmi_periodic_residual_and_mass",
+      "responsibility": "Reduce the assembled residual and lumped mass by periodic node classes and lift to local nodes.",
+      "evidence_status": "runtime_not_verified"
+    },
+    {
       "id": "fem-equilibrium-identity",
       "path": "crates/fullmag-runner/src/fem/equilibrium_identity.rs",
       "symbol": "validate_supported_relax_source",
@@ -230,6 +237,18 @@
       "latex": "$M_a^{\\mathrm{lump}}$",
       "meaning": "lumped mass węzła FEM a",
       "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "C",
+      "latex": "$C$",
+      "meaning": "periodyczna klasa węzłów FEM",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "b",
+      "latex": "$b$",
+      "meaning": "indeks węzła w klasie",
+      "si_unit": "$1$"
     }
   ],
   "equations": [
@@ -302,6 +321,11 @@
       "sources": [
         "fem-weak"
       ]
+    },
+    {
+      "id": "rdmi-fem-periodic-projection",
+      "symbols": ["Hrdmi", "g", "mu0", "Ms", "Mlump", "C", "b"],
+      "sources": ["fem-periodic-projection"]
     }
   ],
   "public_api": {

@@ -1,8 +1,13 @@
 #include "dmi_weak_residual.hpp"
+#include "fullmag_fem.h"
 
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <iterator>
+#include <memory>
 #include <string>
 
 namespace {
@@ -860,6 +865,192 @@ void run_rotated_interfacial_directional_derivative_fixture()
         "rotated interfacial DMI field action must match dE/deps");
 }
 
+#if FULLMAG_HAS_MFEM_STACK
+void check_native_fem(bool condition, fullmag_fem_backend *backend, const char *operation)
+{
+    if (!condition) {
+        const char *error = fullmag_fem_backend_last_error(backend);
+        std::fprintf(stderr, "FAIL: %s: %s\n", operation,
+                     error != nullptr ? error : "unknown native FEM error");
+        std::exit(1);
+    }
+}
+
+void run_periodic_rotated_interfacial_cpu_abi_fixture()
+{
+    // The algebraic x-edge pairing exercises the same P1 class reduction as
+    // the periodic Zeeman tet4 fixture. It isolates rDMI from demagnetization.
+    constexpr double edge = 12.0e-9;
+    const double nodes[] = {
+        0.0, 0.0, 0.0, edge, 0.0, 0.0,
+        0.0, edge, 0.0, 0.0, 0.0, edge,
+    };
+    const uint32_t cell_types[] = {FULLMAG_FEM_CELL_TET4};
+    const uint32_t cell_offsets[] = {0, 4};
+    const uint32_t cell_nodes[] = {0, 1, 2, 3};
+    const uint64_t cell_ordinals[] = {0};
+    const uint32_t cell_markers[] = {1};
+    const uint32_t facet_types[] = {
+        FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3,
+        FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3,
+    };
+    const uint32_t facet_roles[] = {
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR, FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR, FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+    };
+    const uint32_t facet_offsets[] = {0, 3, 6, 9, 12};
+    const uint32_t facet_nodes[] = {0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3};
+    const uint64_t facet_ordinals[] = {0, 1, 2, 3};
+    const uint32_t facet_markers[] = {1, 1, 1, 1};
+    const uint32_t periodic_pairs[] = {0, 1};
+
+    double magnetization[4][3] = {
+        {1.0, 0.1, 0.2}, {1.0, 0.1, 0.2}, {0.2, 0.9, 0.3}, {0.1, 0.3, 0.95},
+    };
+    double tangent[4][3] = {
+        {0.10, -0.03, 0.02}, {0.10, -0.03, 0.02}, {0.05, 0.02, -0.07}, {-0.02, -0.06, 0.09},
+    };
+    for (int node = 0; node < 4; ++node) {
+        normalize(magnetization[node]);
+        const double parallel = dot3(magnetization[node], tangent[node]);
+        for (int component = 0; component < 3; ++component) {
+            tangent[node][component] -= parallel * magnetization[node][component];
+        }
+    }
+
+    const auto flattened = [](const double state[4][3]) {
+        std::array<double, 12> xyz{};
+        for (int node = 0; node < 4; ++node) {
+            for (int component = 0; component < 3; ++component) {
+                xyz[3 * node + component] = state[node][component];
+            }
+        }
+        return xyz;
+    };
+    const auto initial_xyz = flattened(magnetization);
+
+    fullmag_fem_plan_desc_v2 plan{};
+    plan.abi_version = FULLMAG_FEM_PLAN_DESC_V2_ABI_VERSION;
+    plan.struct_size = sizeof(plan);
+    plan.has_rotated_interfacial_dmi = 1;
+    plan.rotated_interfacial_dmi_constant = 3.0e-3;
+    auto &base = plan.base;
+    auto &mesh = base.mesh;
+    mesh.abi_version = FULLMAG_FEM_MESH_DESC_ABI_VERSION;
+    mesh.struct_size = sizeof(mesh);
+    mesh.nodes_xyz = nodes;
+    mesh.nodes_xyz_len = std::size(nodes);
+    mesh.cell_types = cell_types;
+    mesh.cell_types_len = std::size(cell_types);
+    mesh.cell_offsets = cell_offsets;
+    mesh.cell_offsets_len = std::size(cell_offsets);
+    mesh.cell_nodes = cell_nodes;
+    mesh.cell_nodes_len = std::size(cell_nodes);
+    mesh.cell_global_ordinals = cell_ordinals;
+    mesh.cell_global_ordinals_len = std::size(cell_ordinals);
+    mesh.cell_markers = cell_markers;
+    mesh.cell_markers_len = std::size(cell_markers);
+    mesh.facet_types = facet_types;
+    mesh.facet_types_len = std::size(facet_types);
+    mesh.facet_roles = facet_roles;
+    mesh.facet_roles_len = std::size(facet_roles);
+    mesh.facet_offsets = facet_offsets;
+    mesh.facet_offsets_len = std::size(facet_offsets);
+    mesh.facet_nodes = facet_nodes;
+    mesh.facet_nodes_len = std::size(facet_nodes);
+    mesh.facet_global_ordinals = facet_ordinals;
+    mesh.facet_global_ordinals_len = std::size(facet_ordinals);
+    mesh.facet_markers = facet_markers;
+    mesh.facet_markers_len = std::size(facet_markers);
+    mesh.periodic_node_pairs = periodic_pairs;
+    mesh.periodic_node_pairs_len = std::size(periodic_pairs);
+    base.material.saturation_magnetisation = kMs;
+    base.material.exchange_stiffness = 1.3e-11;
+    base.material.damping = 0.3;
+    base.material.gyromagnetic_ratio = 2.211e5;
+    base.fe_order = 1;
+    base.hmax = edge;
+    base.precision = FULLMAG_FEM_PRECISION_DOUBLE;
+    base.integrator = FULLMAG_FEM_INTEGRATOR_HEUN;
+    base.enable_exchange = 1;
+    base.initial_magnetization_xyz = initial_xyz.data();
+    base.initial_magnetization_len = initial_xyz.size();
+    base.dt_seconds = 1.0e-15;
+    base.gpu_device_index = -1;
+
+    base.mfem_device_string = "cuda";
+    std::unique_ptr<fullmag_fem_backend, decltype(&fullmag_fem_backend_destroy)> rejected_gpu(
+        fullmag_fem_backend_create_v3(&plan, nullptr), &fullmag_fem_backend_destroy);
+    check(rejected_gpu == nullptr, "periodic rDMI must reject the native GPU ABI lane");
+    const char *gpu_error = fullmag_fem_backend_last_error(nullptr);
+    check(gpu_error != nullptr && std::strstr(gpu_error, "requires native FEM CPU") != nullptr,
+          "GPU ABI rejection must report the periodic rDMI CPU requirement");
+
+    base.mfem_device_string = "cpu";
+
+    std::unique_ptr<fullmag_fem_backend, decltype(&fullmag_fem_backend_destroy)> handle(
+        fullmag_fem_backend_create_v3(&plan, nullptr), &fullmag_fem_backend_destroy);
+    auto *backend = handle.get();
+    check_native_fem(backend != nullptr, nullptr, "create periodic rDMI CPU ABI context");
+
+    fullmag_fem_device_info device{};
+    check_native_fem(fullmag_fem_backend_get_device_info(backend, &device) == FULLMAG_FEM_OK,
+                     backend, "query periodic rDMI CPU ABI device");
+    check(device.is_gpu_enabled == 0, "periodic rDMI fixture must execute on FEM CPU");
+
+    fullmag_fem_step_stats stats{};
+    check_native_fem(fullmag_fem_backend_snapshot_stats(backend, &stats) == FULLMAG_FEM_OK,
+                     backend, "evaluate periodic rDMI CPU ABI state");
+    double h_xyz[12]{};
+    check_native_fem(
+        fullmag_fem_backend_copy_field_f64(
+            backend, FULLMAG_FEM_OBSERVABLE_H_DMI, h_xyz, std::size(h_xyz)) == FULLMAG_FEM_OK,
+        backend, "copy periodic rDMI CPU ABI field");
+    for (int component = 0; component < 3; ++component) {
+        check(std::isfinite(h_xyz[component]) && h_xyz[component] == h_xyz[3 + component],
+              "periodic rDMI field must lift one value to both seam nodes");
+    }
+    check(dot3(h_xyz, h_xyz) > 0.0, "periodic rDMI seam field must be nontrivial");
+
+    const auto endpoint_energy = [&](double epsilon) {
+        double trial[4][3];
+        add_scaled_field(magnetization, tangent, epsilon, trial);
+        for (auto &m : trial) normalize(m);
+        const auto trial_xyz = flattened(trial);
+        check_native_fem(
+            fullmag_fem_backend_upload_magnetization_f64(
+                backend, trial_xyz.data(), trial_xyz.size()) == FULLMAG_FEM_OK,
+            backend, "upload compatible periodic rDMI perturbation");
+        fullmag_fem_step_stats endpoint{};
+        check_native_fem(fullmag_fem_backend_snapshot_stats(backend, &endpoint) == FULLMAG_FEM_OK,
+                         backend, "evaluate periodic rDMI energy endpoint");
+        return endpoint.dmi_energy_joules;
+    };
+    constexpr double eps = 1.0e-4;
+    const double plus_energy = endpoint_energy(eps);
+    const double minus_energy = endpoint_energy(-eps);
+    const double derivative = (plus_energy - minus_energy) / (2.0 * eps);
+    const double projected = projected_action(h_xyz, tangent) * edge * edge * edge;
+    check(std::isfinite(derivative) && std::fabs(derivative) > 1.0e-24,
+          "periodic rDMI energy derivative must be nontrivial");
+    check_relative_close(projected, derivative, 2.0e-7,
+                         "lifted periodic rDMI field must match the compatible energy derivative");
+
+    check_native_fem(fullmag_fem_backend_step(backend, base.dt_seconds, &stats) == FULLMAG_FEM_OK,
+                     backend, "advance periodic rDMI CPU ABI state");
+    double stepped_xyz[12]{};
+    check_native_fem(
+        fullmag_fem_backend_copy_field_f64(
+            backend, FULLMAG_FEM_OBSERVABLE_M, stepped_xyz, std::size(stepped_xyz)) == FULLMAG_FEM_OK,
+        backend, "copy accepted periodic rDMI magnetization");
+    for (int component = 0; component < 3; ++component) {
+        check(std::isfinite(stepped_xyz[component]) &&
+                  stepped_xyz[component] == stepped_xyz[3 + component],
+              "an accepted rDMI step must preserve periodic magnetization");
+    }
+}
+#endif
+
 } // namespace
 
 int main()
@@ -873,6 +1064,11 @@ int main()
     run_bulk_directional_derivative_fixture();
     run_bulk_spiral_pitch_fixture();
     run_rotated_interfacial_directional_derivative_fixture();
+#if FULLMAG_HAS_MFEM_STACK
+    run_periodic_rotated_interfacial_cpu_abi_fixture();
+#else
+    std::printf("SKIP periodic rDMI CPU ABI: MFEM stack unavailable\n");
+#endif
     std::printf("FEM dmi_weak_residual smoke PASS\n");
     return 0;
 }

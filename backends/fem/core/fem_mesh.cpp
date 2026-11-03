@@ -9,6 +9,7 @@
 #include "core/fem_mesh.hpp"
 
 #include "context.hpp"
+#include "cpu/mfem/runtime/mfem_device.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1016,6 +1017,11 @@ bool validate_periodic_plan_compatibility(Context &ctx, std::string &error)
 {
     if (ctx.mesh.periodic_node_pairs.empty()) {
         return true;
+    }
+    if (ctx.dmi.rotated_interfacial_enabled && ctx.dmi.rotated_interfacial_D != 0.0 &&
+        (!FULLMAG_HAS_MFEM_STACK || mfem_device_requests_gpu(ctx))) {
+        error = "FEM RotatedInterfacialDmi with periodic node pairs currently requires native FEM CPU";
+        return false;
     }
     if (!ctx.exchange.enabled) {
         error = "native FEM periodic_node_pairs require enable_exchange=true";

@@ -88,6 +88,8 @@ DMI.
 | $\mathbf v$ | dopuszczalna wariacja lub funkcja testowa | $1$ |
 | $\partial_i$ | pochodna względem współrzędnej $i$ | $\mathrm{m^{-1}}$ |
 | $\mathbf H_{\mathrm{rDMI}}$ | pole efektywne interakcji | $\mathrm{A\,m^{-1}}$ |
+| $C$ | periodyczna klasa węzłów FEM | $1$ |
+| $b$ | indeks węzła w klasie | $1$ |
 | $\mu_0$ | przenikalność magnetyczna próżni | $\mathrm{N\,A^{-2}}$ |
 | $M_s$ | magnetyzacja nasycenia | $\mathrm{A\,m^{-1}}$ |
 | $A$ | stała wymiany | $\mathrm{J\,m^{-1}}$ |
@@ -293,9 +295,10 @@ wymiany do tej ścieżki.
 Właścicielem jest osobny moduł interakcji w `backends/fem/cpu/mfem`, a nie
 `Context` ani `mfem_bridge.cpp`. MFEM składa równanie
 {eq}`rdmi-first-variation` w P1 dla `tet4`, `prism6` i `pyramid5`, wykorzystując
-tę samą kwadraturę do residualu i energii. Airbox jest pomijany. Niezerowe rDMI z PBC
-jest obecnie odrzucane przez planner i natywne ABI: redukcja residualu oraz
-projekcji masy do periodycznych true DOF nie jest jeszcze zaimplementowana.
+tę samą kwadraturę do residualu i energii. Airbox jest pomijany przy składaniu
+rDMI. Zakres periodyczny obejmuje statyczne sklejenie węzłów P1 `tet4` w
+dynamice i relaksacji natywnego FEM CPU. Magnetyzacja na klasie węzłów jest
+wspólna, a $M_s$ jest na niej stałe.
 
 Jeśli $g_a=\partial E/\partial\mathbf m_a$ jest residualem węzłowym, pole jest
 projekcją z lumped mass:
@@ -306,6 +309,25 @@ projekcją z lumped mass:
 {\mu_0M_{s,a}M_a^{\mathrm{lump}}}.
 ```
 
+Dla każdego węzła $a$ w periodycznej klasie $C$ stosujemy to samo pole
+obliczone z sumy residuali i masy na tej klasie:
+
+```{math}
+:label: rdmi-fem-periodic-projection
+\mathbf H_{\mathrm{rDMI},a}=-\frac{\sum_{b\in C}\mathbf g_b}
+{\mu_0M_{s,a}\sum_{b\in C}M_b^{\mathrm{lump}}},\qquad a\in C.
+```
+
+Suma wynika z wariacji energii w jednym wspólnym stopniu swobody. Energia
+pozostaje całką po elementach jednej domeny fizycznej. Na otwartych brzegach
+pozostaje sprzężony warunek naturalny z wymianą. Regresja numeryczna sprawdza
+pochodną energii przy wspólnym zaburzeniu węzłów klasy i równość pola po obu
+stronach szwu. Planner wymaga certyfikatu pełnego sparowania szwu v6.
+Periodyczna ścieżka rDMI składa operator szeregowo, ponieważ pętla elementowa
+używa mutowalnej transformacji MFEM. Zakres obejmuje integrację LLG i
+`llg_overdamped`. Bezpośrednie minimizatory wymagają osobnej weryfikacji
+metryki i pozostają zablokowane dla niezerowego periodycznego rDMI.
+
 ### FEM GPU/CUDA
 
 FEM GPU używa tego samego residualu elementowego, ale osobnego operatora CUDA
@@ -313,9 +335,8 @@ lub libCEED. Bieżący wykonywalny zakres rDMI na GPU jest ograniczony do P1
 `tet4`. `prism6`, `pyramid5` i topologie mieszane są odrzucane przed startem,
 dopóki osobne kernele i testy pochodnej energii nie zostaną zakwalifikowane.
 Brak kernela lub bufora kończy krok błędem bez delegacji elementów na CPU.
-FEM z periodycznymi klasami węzłów odrzuca rDMI, dopóki residual i projekcja
-masy nie zostaną zredukowane po tych klasach; periodyczna kwalifikacja Göbela
-pozostaje dlatego wyłącznie ścieżką FDM.
+FEM GPU z periodycznymi klasami węzłów odrzuca rDMI do czasu wdrożenia
+redukcji residualu i projekcji masy na urządzeniu.
 
 ### Macierz wsparcia i kwalifikacji
 
@@ -383,6 +404,25 @@ magnetyczną warstwę `prism6` przez grubość. Nie jest to okresowa reprodukcja
 benchmarku FDM ani dowód równoważności PBC. Wspólne parametry pozwalają na
 porównanie jakościowe tekstury, natomiast warunki brzegowe, operator
 demagnetyzacji i siatka pozostają lane-specific.
+
+#### Periodyczny wariant FEM CPU
+
+Wariant periodyczny używa wspólnych parametrów materiału, $\gamma_H$,
+inicjalizacji oraz tych samych czasów etapów co FDM. Siatka P1 `tet4` obejmuje
+tor i powietrze. Klasy węzłów są sklejone w osi $x$, a kierunki $y$ i $z$
+pozostają otwarte. Model demagnetyzacji FEM `periodic_airbox_k0` rozwiązuje
+periodyczny problem Poissona z zewnętrznym warunkiem Robina. W FDM
+`truncated_images` sumuje skończoną liczbę obrazów. Porównanie wymaga zapisu
+rozmiaru airboxa, charakterystyki siatki i liczby obrazów, ponieważ te
+parametry wpływają na różnicę między realizacjami magnetostatyki. Kwalifikacja
+pełnego przebiegu i porównania pozostaje `NOT VERIFIED`.
+
+Siatka warstwowa dzieli każdy prostopadłościan na sześć zgodnie
+zorientowanych tetraedrów wokół tej samej przekątnej. Film i powietrze
+dzielą węzły na styku, a końce toru mają identyczne triangulacje
+po translacji. Film ma jedną warstwę 0,5 nm. W płaszczyźnie filmu krok
+wynosi 0,5 nm w obszarze rdzeni i rośnie poza nim. Wpływ rozkładu
+rozdzielczości na rdzenie wymaga osobnego testu zagęszczenia siatki.
 
 Akceptacja wymaga co najmniej 20 ps relaksacji i 100 ps bezprądowego hold,
 liczonych z czasów stanów w artefaktach, oraz spadku energii, skończonych pól, zachowania normy, dwóch
@@ -473,6 +513,7 @@ w macierzy wsparcia.
 | FEM exact-term activity | `crates/fullmag-engine/src/fem.rs` | `dmi_energy_from_vectors_selected` | exact-nonzero aktywność kanałów DMI współdzielona przez energię i pole (`dmi_fields_compute_into_selected`) | FEM CPU | implemented, source test |
 | FEM planner | `crates/fullmag-plan/src/fem.rs` | `estimate_fem_exchange_stiffness` | lokalny exchange z nodal/element `A` dla warunku naturalnego | FEM CPU/GPU | implemented, source test |
 | residual FEM | `backends/fem/src/dmi_weak_residual.cpp` | `dmi_accumulate_rotated_interfacial_residual` | wspólna pierwsza wariacja | FEM CPU/GPU | implemented, source test; runtime not verified |
+| periodyczna projekcja FEM | `backends/fem/cpu/mfem/interactions/dmi_workspace.cpp` | `accumulate_dmi_periodic_residual_and_mass` | suma residualu i masy po klasie oraz podniesienie do węzłów | FEM CPU | runtime not verified |
 | FEM reference telemetry | `crates/fullmag-runner/src/fem_reference.rs` | `rotated_dmi_energy_from_magnetization` | rozdzielenie energii rDMI w live/relaxation stats | FEM CPU | implemented, source test; runtime not verified |
 | FEM equilibrium identity | `crates/fullmag-runner/src/fem/equilibrium_identity.rs` | `validate_supported_relax_source` | odrzucenie DMI poza zakresem tożsamości modalnej | FEM | implemented, source test |
 | CUDA rDMI workspace | `backends/fdm/gpu/cuda/runtime/context.cu` | `context_ensure_rotated_dmi_workspace` | transakcyjne alokacje i retry accounting | FDM GPU | implemented, managed runtime not verified |

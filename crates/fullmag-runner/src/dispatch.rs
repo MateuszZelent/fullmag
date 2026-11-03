@@ -1326,9 +1326,23 @@ fn resolve_fem_engine_with_registry(
         }
 
         if let Some(fem_plan) = plan {
-            if let Some(algorithm) = fem_gpu_cpu_only_relaxation_algorithm(fem_plan) {
+            let cpu_only = if let Some(algorithm) = fem_gpu_cpu_only_relaxation_algorithm(fem_plan) {
+                Some((
+                    FEM_GPU_RELAXATION_CPU_ONLY_FALLBACK_REASON,
+                    fem_gpu_relaxation_cpu_only_fallback_message(algorithm),
+                    fem_gpu_relaxation_cpu_only_error(algorithm),
+                ))
+            } else if crate::fem::engine::has_periodic_rotated_dmi(fem_plan) {
+                fem_gpu_rk_plan_ineligible_message(fem_plan).map(|message| {
+                    let error = fem_gpu_rk_plan_ineligible_error(message.clone());
+                    (FEM_GPU_RK_PLAN_INELIGIBLE_FALLBACK_REASON, message, error)
+                })
+            } else {
+                None
+            };
+            if let Some((reason, message, error)) = cpu_only {
                 if forced_device {
-                    return Err(fem_gpu_relaxation_cpu_only_error(algorithm));
+                    return Err(error);
                 }
                 let cpu_resolved = resolve_registry_runtime_for_backend(
                     registry,
@@ -1341,11 +1355,10 @@ fn resolve_fem_engine_with_registry(
                         "FEM GPU runtime cannot fall back because no CPU FEM runtime is advertised"
                             .to_string(),
                 })?;
-                let message = fem_gpu_relaxation_cpu_only_fallback_message(algorithm);
                 fallback = Some(runtime_fallback(
                     fem_engine_id(FemEngine::NativeGpu),
                     fem_engine_id(FemEngine::CpuNative),
-                    FEM_GPU_RELAXATION_CPU_ONLY_FALLBACK_REASON,
+                    reason,
                     message,
                 ));
                 let fem_crossover_decision = reconcile_pinned_fem_crossover_decision(
@@ -2006,6 +2019,7 @@ fn fem_static_periodic_decision(plan: &FemPlanIR) -> FemStaticPbcDecision {
     // Terms that require Rust reference algebraic reduction (P^T A P).
     let has_demag = plan.enable_demag;
     let has_dmi = plan.interfacial_dmi.is_some()
+        || crate::fem::engine::has_periodic_rotated_dmi(plan)
         || plan.bulk_dmi.is_some()
         || plan.dind_field.as_ref().map_or(false, |v| !v.is_empty())
         || plan.dbulk_field.as_ref().map_or(false, |v| !v.is_empty());
@@ -6264,6 +6278,69 @@ mod tests {
         assert!(err
             .message
             .contains("no advertised FEM runtime matches device=gpu"));
+    }
+
+    #[test]
+    fn fem_registry_routes_periodic_rotated_dmi_to_cpu_only() {
+        let _guard = env_lock().lock().expect("env mutex");
+        let mut problem = fem_policy_problem();
+        let mut fem = tiny_fem_plan();
+        fem.rotated_interfacial_dmi = Some(3.0e-3);
+        fem.mesh.periodic_node_pairs = vec![fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "x_faces".to_string(),
+            node_a: 0,
+            node_b: 1,
+        }];
+
+        let temp = TempDirGuard::new();
+        let runtimes = temp.path.join("runtimes");
+        for device in ["cpu", "gpu"] {
+            let family = format!("fem-{device}");
+            let root = runtimes.join(&family);
+            fs::create_dir_all(root.join("bin")).expect("create FEM runtime");
+            fs::write(root.join("bin/worker"), b"stub").expect("write FEM worker");
+            fs::write(
+                root.join("manifest.json"),
+                serde_json::json!({
+                    "family": family,
+                    "version": "0.1.0",
+                    "worker": "bin/worker",
+                    "engines": [{"backend": "fem", "device": device, "precision": "double"}]
+                })
+                .to_string(),
+            )
+            .expect("write FEM runtime manifest");
+        }
+        let registry = RuntimeRegistry::discover(&runtimes);
+
+        let execution = std::env::var_os("FULLMAG_FEM_EXECUTION");
+        let all_in_gpu = std::env::var_os("FULLMAG_FEM_ALL_IN_GPU");
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+            std::env::remove_var("FULLMAG_FEM_ALL_IN_GPU");
+        }
+        let forced = resolve_fem_engine_with_registry(&problem, &registry, false, Some(&fem), false);
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({"device": "auto"}),
+        );
+        let auto = resolve_fem_engine_with_registry(&problem, &registry, false, Some(&fem), false);
+        for (name, value) in [
+            ("FULLMAG_FEM_EXECUTION", execution),
+            ("FULLMAG_FEM_ALL_IN_GPU", all_in_gpu),
+        ] {
+            if let Some(value) = value {
+                unsafe { std::env::set_var(name, value) };
+            }
+        }
+
+        let error = forced.expect_err("forced GPU must reject periodic rDMI");
+        assert!(error.message.contains("periodic rotated interfacial DMI"));
+        let resolution = auto.expect("auto may choose the advertised CPU worker");
+        assert_eq!(resolution.runtime_family.as_deref(), Some("fem-cpu"));
+        assert_eq!(resolution.resolved_device, "cpu");
+        let fallback = resolution.fallback.expect("auto CPU choice must retain its reason");
+        assert!(fallback.message.contains("periodic rotated interfacial DMI"));
     }
 
     #[test]

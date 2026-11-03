@@ -170,3 +170,97 @@ def test_source_physics_rejects_extra_uniaxial_and_cubic_channels() -> None:
     for extra_key in ("uniaxial_anisotropy_ku2", "cubic_anisotropy_kc1"):
         with_extra = {**material, extra_key: 1.0}
         assert not _goebel_material_has_only_expected_physics(with_extra)
+
+
+def test_periodic_fem_lowers_same_physics_and_stages_as_fdm(monkeypatch) -> None:
+    from fullmag.runtime.loader import load_problem_from_script
+    from fullmag.runtime.run_config_export import RunConfigExportOptions, export_run_config
+
+    for name in (
+        "DEVICE",
+        "RELAX_MAX_STEPS",
+        "RELAX_TIME",
+        "HOLD_TIME",
+        "DT",
+        "RELAX_FIELD_EVERY_STEPS",
+        "HOLD_SAMPLE_PERIOD",
+    ):
+        monkeypatch.delenv("FULLMAG_GOEBEL_" + name, raising=False)
+
+    def export(scenario):
+        loaded = load_problem_from_script(ROOT / scenario, lightweight_assets=True)
+        return export_run_config(
+            loaded,
+            loaded.to_ir(
+                requested_backend=None,
+                execution_mode=None,
+                execution_precision=None,
+                include_geometry_assets=False,
+            ),
+            options=RunConfigExportOptions(include_geometry_assets=False),
+        )
+
+    fem = export("scenario_fem_periodic.py")
+    fdm = export("scenario_fdm.py")
+    fem_ir = fem["ir"]
+    fdm_ir = fdm["ir"]
+    assert fem_ir["pbc"] == {
+        "axes": ["periodic", "open", "open"],
+        "demag": "periodic_airbox_k0",
+    }
+    assert fem_ir["geometry"] == fdm_ir["geometry"]
+    assert fem_ir["materials"] == fdm_ir["materials"]
+    assert fem_ir["magnets"][0]["initial_magnetization"] == (
+        fdm_ir["magnets"][0]["initial_magnetization"]
+    )
+    assert fem_ir["energy_terms"] == [
+        {"kind": "exchange"},
+        {"kind": "demag", "realization": "poisson_robin"},
+        {"kind": "rotated_interfacial_dmi", "D": 3e-3},
+    ]
+    metadata = fem_ir["problem_meta"]["runtime_metadata"]
+    runtime = metadata["runtime_selection"]
+    assert (runtime["backend"], runtime["device"]) == ("fem", "cpu")
+    assert (runtime["execution_mode"], runtime["execution_precision"]) == ("strict", "double")
+    mesh = metadata["mesh_workflow"]
+    assert mesh["default_mesh"]["periodic_pair_ids"] == ["x_faces"]
+    assert mesh["per_geometry"][0]["order"] == 1
+    assert metadata["domain_frame"]["declared_universe"]["size"] == [500e-9, 120e-9, 80.5e-9]
+
+    def stage_signature(config):
+        return [
+            (
+                stage["entrypoint_kind"],
+                stage["default_until_seconds"],
+                stage["action"],
+                stage["ir"]["study"],
+            )
+            for stage in config["stages"]
+        ]
+
+    assert stage_signature(fem) == stage_signature(fdm)
+
+
+def test_x_periodic_airbox_authoring_stays_within_fem_time_domain() -> None:
+    from dataclasses import replace
+
+    import fullmag as fm
+    import pytest
+    from fullmag.model import BackendTarget
+    from fullmag.runtime.loader import load_problem_from_script
+
+    with pytest.raises(ValueError, match="requires x/y periodic axes and open z"):
+        fm.FdmPbc(axes=(False, True, False), demag="periodic_airbox_k0")
+    with pytest.raises(ValueError, match="requires x/y periodic axes and open z"):
+        fm.FdmPbc(axes=(True, True, True), demag="periodic_airbox_k0")
+
+    loaded = load_problem_from_script(ROOT / "scenario_fem_periodic.py", lightweight_assets=True)
+    with pytest.raises(ValueError, match="periodic_airbox_k0.*FEM-only"):
+        loaded.problem.to_ir(
+            requested_backend=BackendTarget.FDM,
+            include_geometry_assets=False,
+        )
+
+    modal = replace(loaded.problem, study=fm.Eigenmodes(count=1, outputs=(fm.SaveSpectrum(),)))
+    with pytest.raises(ValueError, match="requires FEM relaxation or time evolution"):
+        modal.to_ir(include_geometry_assets=False)

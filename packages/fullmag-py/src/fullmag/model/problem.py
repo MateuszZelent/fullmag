@@ -233,9 +233,10 @@ class FdmPbc:
             )
         object.__setattr__(self, "demag", demag)
 
-        if demag == "periodic_airbox_k0" and axes != (True, True, False):
+        if demag == "periodic_airbox_k0" and axes not in {(True, True, False), (True, False, False)}:
             raise ValueError(
-                "FdmPbc.demag='periodic_airbox_k0' requires x/y periodic axes and open z"
+                "FdmPbc.demag='periodic_airbox_k0' requires x/y periodic axes and open z, "
+                "or x-only for FEM relaxation or time evolution"
             )
 
         if demag != "truncated_images" and self.image_counts is not None:
@@ -3132,15 +3133,19 @@ class Problem:
         ]
         discretization = self._resolve_discretization(runtime.backend_target)
         pbc_ir = _pbc_to_ir(self.pbc)
-        if (
-            runtime.backend_target == BackendTarget.FDM
-            and pbc_ir is not None
-            and pbc_ir.get("demag") == "periodic_airbox_k0"
-        ):
-            raise ValueError(
-                "pbc.demag='periodic_airbox_k0' is FEM-only; FDM supports "
-                "'open' and 'truncated_images' demag policies"
-            )
+        if pbc_ir is not None and pbc_ir.get("demag") == "periodic_airbox_k0":
+            if runtime.backend_target == BackendTarget.FDM:
+                raise ValueError(
+                    "pbc.demag='periodic_airbox_k0' is FEM-only; FDM supports "
+                    "'open' and 'truncated_images' demag policies"
+                )
+            if pbc_ir["axes"] == ["periodic", "open", "open"] and (
+                runtime.backend_target != BackendTarget.FEM
+                or not isinstance(self.study, (Relaxation, TimeEvolution))
+            ):
+                raise ValueError(
+                    "x-only pbc.demag='periodic_airbox_k0' requires FEM relaxation or time evolution"
+                )
         source_hash = sha256(script_source.encode("utf-8")).hexdigest() if script_source else None
         effective_asset_cache = asset_cache if asset_cache is not None else self.geometry_asset_cache
         runtime_metadata = dict(self.runtime_metadata)

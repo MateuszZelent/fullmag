@@ -67,6 +67,11 @@ pub fn availability() -> GpuAvailability {
     native_availability()
 }
 
+pub(crate) fn has_periodic_rotated_dmi(plan: &FemPlanIR) -> bool {
+    !plan.mesh.periodic_node_pairs.is_empty()
+        && plan.rotated_interfacial_dmi.is_some_and(|d| d != 0.0)
+}
+
 /// Returns the first plan-level reason why the native device-resident explicit
 /// RK path cannot execute `plan`.
 ///
@@ -74,6 +79,9 @@ pub fn availability() -> GpuAvailability {
 /// uploaded geometry, and hypre-device workspace are still checked by the
 /// native `gpu_rk_plan_device_resident` contract before provenance is built.
 pub(crate) fn gpu_rk_plan_preflight_block_reason(plan: &FemPlanIR) -> Option<&'static str> {
+    if has_periodic_rotated_dmi(plan) {
+        return Some("periodic rotated interfacial DMI requires native FEM CPU");
+    }
     if !plan.enable_exchange {
         return Some("GPU RK device-resident path requires enable_exchange=true");
     }
