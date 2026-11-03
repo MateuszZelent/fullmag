@@ -256,7 +256,14 @@ Po sprawdzeniu dowodów końcowy argument `true` wykonuje failure-only CAS.
 Wymagane są: dokładny błąd puli, brak usług (także zatrzymanych) i sieci tej
 próby oraz zgodny oryginalny helper z potwierdzonym `LOGGED`, nadal trzymający
 `operation.lock`. Pełny spis kontenerów wyklucza obcych konsumentów wolumenu
-kontrolnego i checkoutu tej grupy. Dowody są ponownie sprawdzane przed publikacją.
+kontrolnego i checkoutu tej grupy. Dla początkowej próby WSL ext4 punktem
+odniesienia jest marker hosta w przypiętym bindzie `/state` z Compose. Alias
+WSL wymaga zgodności korzenia montowania i inode. Montowanie Windows wymaga
+dowodu natywnego Windows i mapowania DrvFs. Brakującą ścieżkę można
+zakwalifikować wyłącznie dla kontenera w stanie `exited` z PID 0. Junction
+wychodzący poza montowany katalog wymaga zgodnego odsyłacza w DrvFs i pełnego
+dowodu dla jego celu. Zagnieżdżone zewnętrzne junctiony kończą się odmową.
+Dowody i stan kontenerów są ponownie sprawdzane przed publikacją.
 Ta początkowa procedura failure-only jest lokalna dla grupy (ADR 0067); nie
 wymaga zatrzymania procesów innych grup. Starsze procedury odzyskiwania
 BuildKit zachowują własne, globalne kontrole.

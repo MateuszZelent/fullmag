@@ -78,6 +78,47 @@ describe("FDM multilayer Airbox target field", () => {
     ).toBe(false);
   });
 
+  it("does not request fields or accept field buffers for geometry-only previews", () => {
+    const geometryOnlyDomain = {
+      ...domain,
+      carrierFingerprint: null,
+      geometryOnly: true,
+    };
+    expect(
+      buildFdmMultilayerAirboxFieldRequest(geometryOnlyDomain as never, 1200),
+    ).toBeNull();
+    expect(
+      shouldRequestFdmMultilayerAirboxField(
+        {
+          activeQuantityId: "H_demag",
+          shaderVisible: true,
+          vectorsVisible: true,
+          visible: true,
+        },
+        "H_demag",
+        geometryOnlyDomain as never,
+      ),
+    ).toBe(false);
+    expect(
+      resolveFdmMultilayerAirboxFieldVector(
+        geometryOnlyDomain as never,
+        field(),
+      ),
+    ).toBeNull();
+    expect(
+      shouldRequestFdmMultilayerAirboxField(
+        {
+          activeQuantityId: "H_demag",
+          shaderVisible: true,
+          vectorsVisible: true,
+          visible: true,
+        },
+        "H_demag",
+        { ...geometryOnlyDomain, geometryOnly: false } as never,
+      ),
+    ).toBe(false);
+  });
+
   it("accepts a matching FMVP v3 target grid with explicit index coverage", () => {
     expect(resolveFdmMultilayerAirboxFieldVector(domain as never, field())).toBeTruthy();
   });

@@ -1664,6 +1664,50 @@ def _stage_study_ir(loaded: object) -> list[dict[str, object]]:
 class SceneRoundTripFidelityTests(unittest.TestCase):
     """The scene renderer must reproduce the physics the original script means."""
 
+    def test_bb_stage_does_not_inherit_global_llg_timestep_controls(self) -> None:
+        for solver in (
+            'study.solver(fix_dt=1e-14, integrator="heun")',
+            'study.solver(dt_initial=1e-14, max_err=1e-6, integrator="rk23")',
+        ):
+            with self.subTest(solver=solver), TemporaryDirectory() as tmp_dir:
+                loaded, rendered, source = _scene_round_trip(
+                    'import fullmag as fm\nstudy = fm.study("bb-global-solver")\n'
+                    'study.engine("fdm")\nstudy.cell(5e-9, 5e-9, 5e-9)\n'
+                    + textwrap.dedent(_SCENE_BODY) + '\n' + solver + '\n'
+                    'study.stages.add_relax(stage_id="bb", algorithm="projected_gradient_bb", '
+                    'max_steps=5, tolA=1e-5)\n', Path(tmp_dir),
+                )
+                self.assertStagesAgree(rendered, loaded)
+                self.assertIsNone(rendered.stages[0].problem.study.dynamics)
+                solver_draft = export_builder_draft(rendered)['solver']
+                if 'rk23' in solver:
+                    self.assertEqual(solver_draft['integrator'], 'rk23')
+                    self.assertAlmostEqual(float(solver_draft['dt_initial']) / 1e-14, 1.0)
+                    self.assertAlmostEqual(float(solver_draft['max_err']) / 1e-6, 1.0)
+                else:
+                    self.assertAlmostEqual(float(solver_draft['fixed_timestep']) / 1e-14, 1.0)
+                stage_lines = [line for line in source.splitlines() if 'study.stages.add_relax(' in line]
+                self.assertEqual(len(stage_lines), 1)
+                for key in ('dt=', 'solver=', 'max_err=', 'dt_initial=', 'dt_min='):
+                    self.assertNotIn(key, stage_lines[0])
+
+    def test_bb_explicit_stage_timestep_is_still_rejected(self) -> None:
+        from fullmag.runtime.script_builder import _render_scene_stage_bootstrap
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            stage_lines = _render_scene_stage_bootstrap(
+                {'kind': 'relax', 'algorithm': 'projected_gradient_bb',
+                 'max_steps': 5, 'fixed_timestep': 1e-14},
+                index=0, solver={}, magnet_vars={},
+            )
+            source = (
+                'import fullmag as fm\nstudy = fm.study("invalid-bb-stage-time")\n'
+                + textwrap.dedent(_SCENE_BODY) + '\n'
+                + '\n'.join(stage_lines) + '\n'
+            )
+            with self.assertRaisesRegex(TypeError, "supported only for algorithm='llg_overdamped'"):
+                _load_text(source, root, 'invalid.py')
+
     def assertStagesAgree(self, rendered: object, loaded: object) -> None:
         def close(a: object, b: object, path: str) -> None:
             if isinstance(a, dict) and isinstance(b, dict):

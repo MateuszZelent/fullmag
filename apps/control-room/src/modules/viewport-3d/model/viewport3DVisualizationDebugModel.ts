@@ -272,7 +272,7 @@ function buildCarrier(
       memory,
       payload: decoded ? Object.freeze({
         component: null,
-        dtype: "float64",
+        dtype: decoded.dtype,
         formatVersion: decoded.formatVersion === 2 || decoded.formatVersion === 3 ? decoded.formatVersion : null,
         grid: Object.freeze(decoded.grid.map(safeCount)) as unknown as readonly [number, number, number],
         indexing: boundText(decoded.indexing ?? "legacy_count_only"),

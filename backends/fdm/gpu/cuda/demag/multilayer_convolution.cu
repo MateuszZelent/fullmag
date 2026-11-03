@@ -601,6 +601,11 @@ bool same_grid_cell_size(
     return lhs.dx == rhs.dx && lhs.dy == rhs.dy && lhs.dz == rhs.dz;
 }
 
+bool uses_multilayer_transfer_map(fullmag_fdm_transfer_kind kind) {
+    return kind == FULLMAG_FDM_TRANSFER_PUSH_PULL ||
+        kind == FULLMAG_FDM_TRANSFER_CENTERED_ALIGNED;
+}
+
 bool identity_transfer_supported(
     Context &ctx,
     const DeviceMultilayerLayer &src,
@@ -708,7 +713,7 @@ bool classify_multilayer_batch_plan(
 
     bool has_push_pull = false;
     for (const DeviceMultilayerLayer &layer : ctx.multilayer_layers) {
-        if (layer.transfer_kind == FULLMAG_FDM_TRANSFER_PUSH_PULL) {
+        if (uses_multilayer_transfer_map(layer.transfer_kind)) {
             has_push_pull = true;
         } else if (layer.transfer_kind != FULLMAG_FDM_TRANSFER_IDENTITY) {
             ctx.last_error = std::string(operation) +
@@ -717,8 +722,9 @@ bool classify_multilayer_batch_plan(
         }
     }
     if (has_push_pull) {
-        // The existing pair-wise path is kept for the explicit assisted
-        // transfer lane.  It is never labelled device-resident by the runner.
+        // Map-based transfers use the pair-wise CUDA path, not the D-07
+        // batched identity-only workspace. The runner separately qualifies
+        // centered-aligned descriptors before selecting its resident lane.
         return true;
     }
 
@@ -902,22 +908,22 @@ bool transfer_supported(
 {
     const bool src_supported =
         src.transfer_kind == FULLMAG_FDM_TRANSFER_IDENTITY ||
-        src.transfer_kind == FULLMAG_FDM_TRANSFER_PUSH_PULL;
+        uses_multilayer_transfer_map(src.transfer_kind);
     const bool dst_supported =
         dst.transfer_kind == FULLMAG_FDM_TRANSFER_IDENTITY ||
-        dst.transfer_kind == FULLMAG_FDM_TRANSFER_PUSH_PULL;
+        uses_multilayer_transfer_map(dst.transfer_kind);
     if (!src_supported || !dst_supported)
     {
         ctx.last_error = std::string(operation)
             + ": unsupported native multilayer transfer kind";
         return false;
     }
-    if (src.transfer_kind == FULLMAG_FDM_TRANSFER_PUSH_PULL &&
+    if (uses_multilayer_transfer_map(src.transfer_kind) &&
         !source_push_map_supported(ctx, src, operation))
     {
         return false;
     }
-    if (dst.transfer_kind == FULLMAG_FDM_TRANSFER_PUSH_PULL &&
+    if (uses_multilayer_transfer_map(dst.transfer_kind) &&
         !destination_pull_map_supported(ctx, dst, kernel, operation))
     {
         return false;
@@ -1307,6 +1313,17 @@ static void launch_multilayer_demag_field_fp64_assisted(Context &ctx) {
     }
 
     cudaStream_t stream = context_compute_stream(ctx);
+    bool track_centered_pairwise_counts = false;
+    for (const DeviceMultilayerLayer &layer : ctx.multilayer_layers) {
+        if (layer.transfer_kind == FULLMAG_FDM_TRANSFER_CENTERED_ALIGNED) {
+            track_centered_pairwise_counts = true;
+            break;
+        }
+    }
+    const uint64_t layer_count = ctx.multilayer_layers.size();
+    if (track_centered_pairwise_counts) {
+        ctx.multilayer_demag_stage_counters.begin_refresh(layer_count);
+    }
     if (!zero_layer_h_demag_fp64(ctx, stream)) {
         context_end_compute_stream_work(ctx, "launch_multilayer_demag_field_fp64");
         return;
@@ -1337,7 +1354,7 @@ static void launch_multilayer_demag_field_fp64_assisted(Context &ctx) {
         const int grid_dst =
             static_cast<int>((dst.cell_count + BLOCK_SIZE - 1) / BLOCK_SIZE);
 
-        if (src.transfer_kind == FULLMAG_FDM_TRANSFER_PUSH_PULL) {
+        if (uses_multilayer_transfer_map(src.transfer_kind)) {
             push_multilayer_m_transfer_fp64_kernel<<<grid_padded, BLOCK_SIZE, 0, stream>>>(
                 static_cast<const double*>(src.m.x),
                 static_cast<const double*>(src.m.y),
@@ -1358,6 +1375,10 @@ static void launch_multilayer_demag_field_fp64_assisted(Context &ctx) {
                 src.push_map.cell_count,
                 src.has_active_mask ? 1 : 0,
                 src.material.saturation_magnetisation);
+            if (!check_kernel_launch(
+                    ctx, "launch_multilayer_demag_field_fp64(push transfer)")) {
+                break;
+            }
         } else {
             push_multilayer_m_identity_fp64_kernel<<<grid_padded, BLOCK_SIZE, 0, stream>>>(
                 static_cast<const double*>(src.m.x),
@@ -1375,7 +1396,12 @@ static void launch_multilayer_demag_field_fp64_assisted(Context &ctx) {
                 kernel.fft_grid.nz,
                 src.has_active_mask ? 1 : 0,
                 src.material.saturation_magnetisation);
+            if (!check_kernel_launch(
+                    ctx, "launch_multilayer_demag_field_fp64(push identity)")) {
+                break;
+            }
         }
+        if (!ctx.last_error.empty()) break;
 
         cufftResult fft_err = cufftExecZ2Z(
             ctx.fft_plan,
@@ -1385,6 +1411,9 @@ static void launch_multilayer_demag_field_fp64_assisted(Context &ctx) {
         if (fft_err != CUFFT_SUCCESS) {
             set_cufft_error(ctx, "cufftExecZ2Z(multilayer batch forward)", fft_err);
             break;
+        }
+        if (track_centered_pairwise_counts) {
+            ctx.multilayer_demag_stage_counters.note_forward_fft();
         }
 
         multiply_demag_tensor_kernel_fp64<<<grid_padded, BLOCK_SIZE, 0, stream>>>(
@@ -1398,6 +1427,13 @@ static void launch_multilayer_demag_field_fp64_assisted(Context &ctx) {
             static_cast<const cufftDoubleComplex*>(kernel.tensor.xz),
             static_cast<const cufftDoubleComplex*>(kernel.tensor.yz),
             kernel.kernel_len);
+        if (!check_kernel_launch(
+                ctx, "launch_multilayer_demag_field_fp64(tensor multiply)")) {
+            break;
+        }
+        if (track_centered_pairwise_counts) {
+            ctx.multilayer_demag_stage_counters.note_pair_accumulation();
+        }
 
         fft_err = cufftExecZ2Z(
             ctx.fft_plan,
@@ -1408,8 +1444,11 @@ static void launch_multilayer_demag_field_fp64_assisted(Context &ctx) {
             set_cufft_error(ctx, "cufftExecZ2Z(multilayer batch inverse)", fft_err);
             break;
         }
+        if (track_centered_pairwise_counts) {
+            ctx.multilayer_demag_stage_counters.note_inverse_fft();
+        }
 
-        if (dst.transfer_kind == FULLMAG_FDM_TRANSFER_PUSH_PULL) {
+        if (uses_multilayer_transfer_map(dst.transfer_kind)) {
             pull_multilayer_h_transfer_fp64_kernel<<<grid_dst, BLOCK_SIZE, 0, stream>>>(
                 static_cast<const cufftDoubleComplex*>(ctx.fft_x),
                 static_cast<const cufftDoubleComplex*>(ctx.fft_y),
@@ -1426,6 +1465,10 @@ static void launch_multilayer_demag_field_fp64_assisted(Context &ctx) {
                 kernel.dst_pull_map.cell_count,
                 dst.has_active_mask ? 1 : 0,
                 1.0 / static_cast<double>(kernel.kernel_len));
+            if (!check_kernel_launch(
+                    ctx, "launch_multilayer_demag_field_fp64(pull transfer)")) {
+                break;
+            }
         } else {
             pull_multilayer_h_identity_fp64_kernel<<<grid_dst, BLOCK_SIZE, 0, stream>>>(
                 static_cast<const cufftDoubleComplex*>(ctx.fft_x),
@@ -1442,6 +1485,20 @@ static void launch_multilayer_demag_field_fp64_assisted(Context &ctx) {
                 kernel.fft_grid.ny,
                 dst.has_active_mask ? 1 : 0,
                 1.0 / static_cast<double>(kernel.kernel_len));
+            if (!check_kernel_launch(
+                    ctx, "launch_multilayer_demag_field_fp64(pull identity)")) {
+                break;
+            }
+        }
+    }
+
+    if (track_centered_pairwise_counts && ctx.last_error.empty()) {
+        const uint64_t pair_count = ctx.multilayer_kernels.size();
+        const MultilayerBatchCounts expected{
+            layer_count, pair_count, pair_count, pair_count, 0, 0};
+        if (!ctx.multilayer_demag_stage_counters.matches(expected)) {
+            ctx.last_error =
+                "launch_multilayer_demag_field_fp64: centered pairwise stage counter mismatch";
         }
     }
 
@@ -1495,7 +1552,7 @@ static void launch_multilayer_demag_field_fp32_assisted(Context &ctx) {
         const int grid_dst =
             static_cast<int>((dst.cell_count + BLOCK_SIZE - 1) / BLOCK_SIZE);
 
-        if (src.transfer_kind == FULLMAG_FDM_TRANSFER_PUSH_PULL) {
+        if (uses_multilayer_transfer_map(src.transfer_kind)) {
             push_multilayer_m_transfer_fp32_kernel<<<grid_padded, BLOCK_SIZE, 0, stream>>>(
                 static_cast<const float*>(src.m.x),
                 static_cast<const float*>(src.m.y),
@@ -1567,7 +1624,7 @@ static void launch_multilayer_demag_field_fp32_assisted(Context &ctx) {
             break;
         }
 
-        if (dst.transfer_kind == FULLMAG_FDM_TRANSFER_PUSH_PULL) {
+        if (uses_multilayer_transfer_map(dst.transfer_kind)) {
             pull_multilayer_h_transfer_fp32_kernel<<<grid_dst, BLOCK_SIZE, 0, stream>>>(
                 static_cast<const cufftComplex*>(ctx.fft_x),
                 static_cast<const cufftComplex*>(ctx.fft_y),

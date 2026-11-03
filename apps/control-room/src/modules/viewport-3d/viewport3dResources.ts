@@ -1639,7 +1639,7 @@ export function useViewport3DFieldVectorRequest(
           preferCached: cachedBinaryResourceMatchesRevision(
             fieldVectorCache,
             requestKey,
-            resources.getRevision(unscopedRequestKey),
+            resources.getRevision(requestKey),
           ),
           retainCachedOnNotApplicable: true,
           signal,
@@ -1656,7 +1656,7 @@ export function useViewport3DFieldVectorRequest(
         ? null
         : resolveCachedFieldVectorEnvelope(fieldVectorCache, requestKey, data);
     },
-    [api, quantityId, query, requestKey, resources, unscopedRequestKey],
+    [api, quantityId, query, requestKey, resources],
   );
   const resolveRevision = useCallback(
     () => fieldVectorCache.peek(requestKey)?.etag ?? null,

@@ -53,6 +53,7 @@ from fullmag.model.energy import (
     OerstedField,
     PiecewiseLinear as OerstedPiecewiseLinear,
     Pulse as OerstedPulse,
+    RotatedInterfacialDMI,
     SincPulse as OerstedSincPulse,
     Sinusoidal as OerstedSinusoidal,
 )
@@ -1600,8 +1601,45 @@ def _validate_rotated_dmi_exchange_requirement(
             )
 
 
+def _validated_rotated_dmi_object_ids(
+    raw_object_ids: object,
+    rotated_interfacial_dmi: object,
+    objects: object,
+) -> list[str] | None:
+    if raw_object_ids is None:
+        return None
+    d = _number_or_none(rotated_interfacial_dmi)
+    if d is None:
+        raise ValueError(
+            "rotated_interfacial_dmi_object_ids requires a rotated_interfacial_dmi value"
+        )
+    term = RotatedInterfacialDMI(D=d, object_ids=raw_object_ids)
+    magnetic_object_ids: set[str] = set()
+    if isinstance(objects, Sequence) and not isinstance(objects, (str, bytes)):
+        for obj in objects:
+            if not isinstance(obj, Mapping):
+                continue
+            if str(obj.get("role") or "magnet") != "magnet":
+                continue
+            object_id = obj.get("object_id") or obj.get("id") or obj.get("name")
+            if object_id is not None:
+                magnetic_object_ids.add(str(object_id))
+    unknown_object_ids = sorted(set(term.object_ids or ()) - magnetic_object_ids)
+    if unknown_object_ids:
+        raise ValueError(
+            "rotated_interfacial_dmi references unknown magnetic object_id(s): "
+            + ", ".join(unknown_object_ids)
+        )
+    return list(term.object_ids or ())
+
+
 def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]:
     geometries = builder.get("geometries") or []
+    rotated_dmi_object_ids = _validated_rotated_dmi_object_ids(
+        builder.get("rotated_interfacial_dmi_object_ids"),
+        builder.get("rotated_interfacial_dmi"),
+        geometries,
+    )
     objects: list[dict[str, Any]] = []
     materials: list[dict[str, Any]] = []
     magnetization_assets: list[dict[str, Any]] = []
@@ -1816,6 +1854,8 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "active_transform_scope": None,
         },
     }
+    if rotated_dmi_object_ids is not None:
+        document["study"]["rotated_interfacial_dmi_object_ids"] = rotated_dmi_object_ids
     if "pbc" in builder:
         document["study"]["pbc"] = _scene_pbc_to_ir(builder["pbc"])
     for collection in (
@@ -1858,6 +1898,15 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
 
 def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
     raw_study = scene.get("study")
+    rotated_dmi_object_ids = _validated_rotated_dmi_object_ids(
+        raw_study.get("rotated_interfacial_dmi_object_ids")
+        if isinstance(raw_study, Mapping)
+        else None,
+        raw_study.get("rotated_interfacial_dmi")
+        if isinstance(raw_study, Mapping)
+        else None,
+        scene.get("objects"),
+    )
     materials = {
         str(material.get("id", "")): dict(material.get("properties") or {})
         for material in (scene.get("materials") or [])
@@ -2139,6 +2188,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "demag_realization": study.get("demag_realization"),
         "external_field": study.get("external_field"),
         "rotated_interfacial_dmi": study.get("rotated_interfacial_dmi"),
+        "rotated_interfacial_dmi_object_ids": rotated_dmi_object_ids,
         "solver": study.get("solver") or {},
         "mesh": study.get("shared_domain_mesh") or study.get("mesh_defaults") or {},
         "universe": study.get("universe_mesh") or scene.get("universe"),
@@ -2383,6 +2433,9 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
             else None
         ),
         "rotated_interfacial_dmi": builder.get("rotated_interfacial_dmi"),
+        "rotated_interfacial_dmi_object_ids": builder.get(
+            "rotated_interfacial_dmi_object_ids"
+        ),
         "solver": solver_override,
         "mesh": {
             "algorithm_2d": mesh.get("algorithm_2d"),

@@ -3685,6 +3685,12 @@ pub(crate) fn plan_fem(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
 ) -> Result<ExecutionPlanIR, PlanError> {
+    if problem.energy_terms.iter().any(|term| matches!(term,
+        EnergyTermIR::RotatedInterfacialDmi { object_ids: Some(_), .. })) {
+        return Err(PlanError { reasons: vec![
+            "object-scoped RotatedInterfacialDmi is not implemented for FEM CPU/GPU; use FDM or global rDMI".to_string()
+        ] });
+    }
     let mut errors = Vec::new();
 
     let fem_hints = match &problem.backend_policy.discretization_hints {
@@ -3963,7 +3969,7 @@ pub(crate) fn plan_fem(
                 }
                 bulk_dmi = Some(*d);
             }
-            fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { d } => {
+            fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { d, .. } => {
                 if rotated_interfacial_dmi.replace(*d).is_some() {
                     errors.push("RotatedInterfacialDmi is declared more than once".to_string());
                 }

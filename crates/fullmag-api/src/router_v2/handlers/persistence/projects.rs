@@ -2888,7 +2888,8 @@ fn known_omitted_scene_default(path: &[&str], value: &Value) -> bool {
         ["study"] => (value.is_null() && matches!(*field,
             "backend" | "requested_cpu_threads" | "fem_demag_solver_policy"
             | "fem_demag_accuracy_contract" | "demag_realization"
-            | "fdm" | "external_field" | "rotated_interfacial_dmi" | "universe_mesh"
+            | "fdm" | "external_field" | "rotated_interfacial_dmi"
+            | "rotated_interfacial_dmi_object_ids" | "universe_mesh"
             | "study_pipeline" | "table_autosave" | "output_storage" | "execution_profile"
             | "initial_state")) || (empty_array && matches!(*field,
                 "mesh_interfaces" | "stages" | "execution_layers")),

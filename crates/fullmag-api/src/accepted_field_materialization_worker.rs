@@ -52,6 +52,29 @@ pub(crate) struct TerminalScalarStatsRecord {
 const TERMINAL_SCALAR_STATS_SCHEMA: &str = "accepted_terminal_scalar_stats.v1";
 const MAX_TERMINAL_SCALAR_STATS_BYTES: u64 = 256 * 1024;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TerminalCompletionRecord {
+    pub(crate) schema_version: String,
+    pub(crate) run_id: String,
+    pub(crate) task_id: String,
+    pub(crate) step_id: String,
+    pub(crate) attempt_id: String,
+    pub(crate) ownership_epoch: u64,
+    pub(crate) source: fullmag_quantities::AcceptedStateRef,
+    pub(crate) state_object_ref: String,
+    pub(crate) clock: fullmag_quantities::ObservationClock,
+    pub(crate) solver_dt_s: f64,
+    pub(crate) completion: fullmag_ir::StageCompletionIR,
+    pub(crate) input_fingerprint: String,
+    pub(crate) resolved_input_fingerprint: Option<String>,
+}
+
+const TERMINAL_COMPLETION_SCHEMA: &str = "accepted_terminal_completion.v1";
+const MAX_TERMINAL_COMPLETION_BYTES: u64 = 256 * 1024;
+
+pub(crate) const TERMINAL_COMPLETION_ARTIFACT_TYPE: &str = "accepted_terminal_completion";
+
 /// Runs only inside the admitted worker, before Completing releases its lease.
 /// Unsupported postprocessing is recorded without changing a completed Solve
 /// into a failure. A storage/ownership failure still prevents false publication.
@@ -61,6 +84,7 @@ pub(crate) fn prepare_and_publish(
     step: &AcceptedWorkerStep,
     execution: &crate::accepted_study_worker::AcceptedRunnerExecution,
 ) -> Result<()> {
+    if execution.status != fullmag_runner::RunStatus::Completed { return Ok(()); }
     let Some(source) = execution.accepted_state_ref.as_ref() else { return Ok(()); };
     let study_step = accepted.study.steps.iter().find(|candidate| candidate.step_id == step.step_id)
         .context("materialization study step missing")?;
@@ -81,7 +105,7 @@ pub(crate) fn prepare_and_publish(
     let field_budget = step.claim.lease.budget.memory_bytes / 16;
     let legacy_budget = storage_budget.min(MAX_BUNDLE_BYTES / 2)
         .min(step.claim.lease.budget.memory_bytes / 16);
-    if budget < 4096 && execution.terminal_stats.is_none() {
+    if budget < 4096 && execution.terminal_stats.is_none() && execution.completion.is_none() {
         tracing::warn!(task_id = %step.claim.task_id.as_str(),
             "accepted quantities omitted: no observation storage budget after declared outputs");
         return Ok(());
@@ -112,7 +136,12 @@ pub(crate) fn prepare_and_publish(
     } else {
         0
     };
-    let quantity_budget = budget.saturating_sub(terminal_stats_bytes);
+    let completion_bytes = if let Some(completion) = execution.completion.as_ref() {
+        let record = build_terminal_completion(store, step, source, &state_object_ref, completion, &state)?;
+        publish_terminal_completion(store, step, &record, budget.saturating_sub(terminal_stats_bytes))?
+            .unwrap_or(0)
+    } else { 0 };
+    let quantity_budget = budget.saturating_sub(terminal_stats_bytes).saturating_sub(completion_bytes);
     let can_materialize_quantities = quantity_budget >= 4096;
     if !can_materialize_quantities && terminal_stats_bytes == 0 {
         tracing::warn!(task_id = %step.claim.task_id.as_str(),
@@ -649,6 +678,199 @@ fn publish_terminal_scalar_stats(
     Ok(Some(bytes.len() as u64))
 }
 
+fn build_terminal_completion(
+    store: &SessionStore,
+    step: &AcceptedWorkerStep,
+    source: &fullmag_quantities::AcceptedStateRef,
+    state_object_ref: &str,
+    completion: &fullmag_ir::StageCompletionIR,
+    state: &fullmag_application::MagnetizationStateArtifact,
+) -> Result<TerminalCompletionRecord> {
+    source.validate().map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    validate_completion(completion)?;
+    let clock = fullmag_quantities::ObservationClock {
+        accepted_step: state.step,
+        time_seconds: state.time_s,
+        dt_seconds: (state.solver_dt_s > 0.0).then_some(state.solver_dt_s),
+    };
+    clock.validate().map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    if source.id.run_id != step.claim.run_id.as_str()
+        || source.id.stage_id.as_deref() != Some(step.step_id.as_str())
+        || source.generation.runtime_epoch != step.claim.ownership_epoch.value()
+        || source.id.accepted_step != state.step
+        || source.id.clock_digest != clock.digest().map_err(|error| anyhow::anyhow!(error.to_string()))?
+        || !state.solver_dt_s.is_finite() || state.solver_dt_s < 0.0
+    {
+        bail!("terminal completion clock or state identity differs from the accepted final state");
+    }
+    let catalog = store.read_run_catalog(step.claim.run_id.as_str())?
+        .context("completion publication run catalog missing")?;
+    let task = catalog.tasks.iter().find(|task| task.task_id == step.claim.task_id.as_str()
+        && task.attempt_id.as_deref() == Some(step.claim.attempt_id.as_str())
+        && task.ownership_epoch == Some(step.claim.ownership_epoch.value()))
+        .context("completion publication task attempt missing")?;
+    let record = TerminalCompletionRecord {
+        schema_version: TERMINAL_COMPLETION_SCHEMA.into(),
+        run_id: step.claim.run_id.as_str().into(),
+        task_id: step.claim.task_id.as_str().into(),
+        step_id: step.step_id.clone(),
+        attempt_id: step.claim.attempt_id.as_str().into(),
+        ownership_epoch: step.claim.ownership_epoch.value(),
+        source: source.clone(),
+        state_object_ref: state_object_ref.to_owned(),
+        clock,
+        solver_dt_s: state.solver_dt_s,
+        completion: completion.clone(),
+        input_fingerprint: task.input_fingerprint.clone(),
+        resolved_input_fingerprint: task.resolved_input_fingerprint.clone(),
+    };
+    if serde_json::to_vec(&record)?.len() as u64 > MAX_TERMINAL_COMPLETION_BYTES {
+        bail!("terminal completion record exceeds its bounded storage budget");
+    }
+    Ok(record)
+}
+
+fn validate_terminal_completion_record(
+    stats: &TerminalCompletionRecord,
+    entry: &FmsArtifactCatalogEntry,
+) -> Result<()> {
+    stats.source.validate().map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    validate_completion(&stats.completion)?;
+    let clock = &stats.clock;
+    clock.validate().map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    if stats.schema_version != TERMINAL_COMPLETION_SCHEMA
+        || stats.run_id != stats.source.id.run_id
+        || stats.task_id != entry.task_id
+        || stats.attempt_id != entry.attempt_id
+        || stats.ownership_epoch != entry.ownership_epoch
+        || stats.source.generation.runtime_epoch != entry.ownership_epoch
+        || stats.step_id != stats.source.id.stage_id.as_deref().unwrap_or_default()
+        || stats.state_object_ref.len() != 64
+        || !stats.state_object_ref.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        || stats.source.id.accepted_step != clock.accepted_step
+        || !stats.solver_dt_s.is_finite() || stats.solver_dt_s < 0.0
+        || clock.dt_seconds != (stats.solver_dt_s > 0.0).then_some(stats.solver_dt_s)
+        || stats.source.id.clock_digest != clock.digest().map_err(|error| anyhow::anyhow!(error.to_string()))?
+        || stats.input_fingerprint.len() != 64
+        || entry.artifact_id != terminal_completion_artifact_id(stats)
+        || entry.logical_path != terminal_completion_logical_path(stats)
+        || entry.required
+        || entry.study_output.is_some()
+    {
+        bail!("accepted terminal completion record identity or clock differs from its artifact pin");
+    }
+    Ok(())
+}
+
+fn terminal_completion_artifact_id(stats: &TerminalCompletionRecord) -> String {
+    format!("accepted-terminal-completion-{}", fullmag_session::canonical_json_sha256(&json!({
+        "run": stats.run_id, "task": stats.task_id, "step": stats.step_id,
+        "attempt": stats.attempt_id, "epoch": stats.ownership_epoch,
+        "source": stats.source, "state": stats.state_object_ref,
+        "input": stats.input_fingerprint, "resolved_input": stats.resolved_input_fingerprint,
+    })))
+}
+
+fn terminal_completion_logical_path(stats: &TerminalCompletionRecord) -> String {
+    format!("outputs/{}/{}/accepted-terminal-completion.v1.json", stats.task_id, stats.attempt_id)
+}
+
+pub(crate) fn read_terminal_completion(
+    store: &SessionStore,
+    entry: &FmsArtifactCatalogEntry,
+) -> Result<TerminalCompletionRecord> {
+    if entry.artifact_type != TERMINAL_COMPLETION_ARTIFACT_TYPE
+        || entry.status != FmsArtifactStatus::Published
+        || entry.object_ref.as_deref() != Some(entry.content_sha256.as_str())
+        || entry.study_output.is_some()
+    {
+        bail!("accepted terminal completion artifact binding is invalid");
+    }
+    let bytes = store.cas().get_bounded(&entry.content_sha256, MAX_TERMINAL_COMPLETION_BYTES)?
+        .context("accepted terminal completion CAS object missing")?;
+    if bytes.len() as u64 > MAX_TERMINAL_COMPLETION_BYTES
+        || fullmag_application::study_artifact_content_sha256(&bytes) != entry.content_sha256
+    {
+        bail!("accepted terminal completion CAS digest or size differs");
+    }
+    let stats: TerminalCompletionRecord = serde_json::from_slice(&bytes)?;
+    validate_terminal_completion_record(&stats, entry)?;
+    Ok(stats)
+}
+
+fn publish_terminal_completion(
+    store: &SessionStore,
+    step: &AcceptedWorkerStep,
+    stats: &TerminalCompletionRecord,
+    budget: u64,
+) -> Result<Option<u64>> {
+    let bytes = serde_json::to_vec(stats)?;
+    if bytes.len() as u64 > MAX_TERMINAL_COMPLETION_BYTES {
+        bail!("accepted terminal completion artifact exceeds its bounded storage limit");
+    }
+    let artifact_id = terminal_completion_artifact_id(stats);
+    let logical_path = terminal_completion_logical_path(stats);
+    if let Some(catalog) = store.read_artifact_catalog(step.claim.run_id.as_str())? {
+        let matching = catalog.entries.iter().filter(|entry| {
+            entry.artifact_type == TERMINAL_COMPLETION_ARTIFACT_TYPE
+                && entry.task_id == step.claim.task_id.as_str()
+                && entry.attempt_id == step.claim.attempt_id.as_str()
+                && entry.ownership_epoch == step.claim.ownership_epoch.value()
+        }).collect::<Vec<_>>();
+        if matching.len() > 1 {
+            bail!("accepted terminal completion artifact pin is ambiguous for this task attempt");
+        }
+        if let Some(existing_entry) = matching.first() {
+            if existing_entry.artifact_id != artifact_id {
+                bail!("accepted terminal completion replay identity differs from its immutable artifact");
+            }
+            let existing = read_terminal_completion(store, existing_entry)?;
+            if fullmag_session::canonical_json_sha256(&serde_json::to_value(&existing)?)
+                != fullmag_session::canonical_json_sha256(&serde_json::to_value(stats)?)
+            {
+                bail!("accepted terminal completion replay differs from its immutable artifact");
+            }
+            return Ok(Some(bytes.len() as u64));
+        }
+        if catalog.entries.iter().any(|entry| {
+            entry.task_id == step.claim.task_id.as_str()
+                && entry.attempt_id == step.claim.attempt_id.as_str()
+                && entry.ownership_epoch == step.claim.ownership_epoch.value()
+                && entry.artifact_type == "study_output_manifest"
+        }) {
+            tracing::warn!(task_id = %step.claim.task_id.as_str(),
+                "accepted terminal completion artifact omitted after immutable output manifest publication");
+            return Ok(None);
+        }
+    }
+    if bytes.len() as u64 > budget {
+        tracing::warn!(task_id = %step.claim.task_id.as_str(),
+            "accepted terminal completion artifact omitted: bounded storage budget exhausted");
+        return Ok(None);
+    }
+    let object_ref = retry_worker_store_writer_busy(|| store.cas().put(&bytes))?;
+    let lease = store.read_resource_lease(step.claim.run_id.as_str(),
+        step.claim.lease.resource_id.as_str(), step.claim.lease.lease_token.as_str())?
+        .context("terminal completion publication resource lease missing")?;
+    let entry = FmsArtifactCatalogEntry {
+        artifact_id,
+        task_id: stats.task_id.clone(),
+        attempt_id: stats.attempt_id.clone(),
+        ownership_epoch: stats.ownership_epoch,
+        logical_path,
+        artifact_type: TERMINAL_COMPLETION_ARTIFACT_TYPE.into(),
+        content_sha256: object_ref.clone(),
+        object_ref: Some(object_ref),
+        status: FmsArtifactStatus::Published,
+        required: false,
+        study_output: None,
+    };
+    retry_worker_store_writer_busy(|| {
+        store.append_artifact_catalog_entries_for_lease(&lease, std::slice::from_ref(&entry))
+    })?;
+    Ok(Some(bytes.len() as u64))
+}
+
 pub(crate) fn validate_scalar_row_stats(stats: &fullmag_runner::StepStats) -> Result<()> {
     if !stats.is_physical_observation() {
         bail!("terminal scalar statistics are not a physical observation");
@@ -781,4 +1003,170 @@ pub(crate) fn load_latest_bundle(store_root: &std::path::Path, run_id: &str) -> 
         selected = Some(record);
     }
     selected.flatten().context("latest accepted state has no quantity bundle; rerun with this worker version")
+}
+
+/// Validate the runner's completion vocabulary and internal consistency only.
+/// Scientific confirmations remain owned by the runner. Canonical metric names
+/// follow relaxation/convergence.rs and native_fem/runtime_info.rs; the physical
+/// bounds match the session time-to-tolerance projection.
+pub(crate) fn validate_completion(completion: &fullmag_ir::StageCompletionIR) -> Result<()> {
+    use fullmag_ir::{StageMetricKind as Metric, StageStopReason as Reason};
+    if completion.status != "completed"
+        || completion.metric_value.is_some_and(|value| !value.is_finite() || value < 0.0)
+        || completion.threshold.is_some_and(|value| !value.is_finite() || value < 0.0)
+        || serde_json::to_vec(completion)?.len() > 4096 {
+        bail!("invalid or unbounded runner completion evidence");
+    }
+    let pair = completion.metric_value.zip(completion.threshold);
+    let consistent = match (completion.reason, completion.metric, completion.metric_name.as_deref()) {
+        (Some(Reason::Torque), Some(Metric::MaxTorqueApm), Some("max_torque_apm"))
+        | (Some(Reason::Energy), Some(Metric::TotalEnergyPlateauRangeJ), Some("total_energy_plateau_range_J")) => {
+            completion.converged && pair.is_some_and(|(value, threshold)| value <= threshold)
+        }
+        (Some(Reason::MaxSteps), Some(Metric::Steps), Some("steps")) => {
+            !completion.converged && pair.is_some_and(|(value, threshold)|
+                value >= threshold && value.fract() == 0.0 && threshold.fract() == 0.0)
+        }
+        (Some(Reason::MaxPseudotime | Reason::MaxPhysicalTime),
+            Some(Metric::RelaxationTimeS), Some("relaxation_time_s")) => {
+            !completion.converged && pair.is_some_and(|(value, threshold)| value >= threshold)
+        }
+        // Native FEM's representability stop is completed but not converged.
+        // Ordinary numerical_stagnation has status=failed and is rejected above.
+        (Some(Reason::Gradient), Some(Metric::NumericalStagnation), Some("representability_stationary")) => {
+            !completion.converged && (pair.is_some()
+                || (completion.metric_value.is_none() && completion.threshold.is_none()))
+        }
+        // The runner explicitly reports these frozen-domain outcomes without
+        // a relaxation metric; retain them without inventing a torque proof.
+        (None, None, Some("all_active_dofs_frozen_relaxation" | "all_active_dofs_frozen_time_advance")) => {
+            completion.converged && completion.metric_value == Some(0.0) && completion.threshold.is_none()
+        }
+        // A completed time advance need not carry relaxation evidence.
+        (None, None, None) => !completion.converged
+            && completion.metric_value.is_none() && completion.threshold.is_none(),
+        _ => false,
+    };
+    if !consistent { bail!("runner completion reason, convergence, metric or threshold are inconsistent"); }
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) mod completion_tests {
+    use super::*;
+
+    pub(crate) fn fixture(reason: fullmag_ir::StageStopReason, converged: bool)
+        -> (TerminalCompletionRecord, FmsArtifactCatalogEntry) {
+        let clock = fullmag_quantities::ObservationClock {
+            accepted_step: 7, time_seconds: 0.0, dt_seconds: None,
+        };
+        let record = TerminalCompletionRecord {
+            schema_version: TERMINAL_COMPLETION_SCHEMA.into(),
+            run_id: "run-completion".into(), task_id: "task".into(), step_id: "step".into(),
+            attempt_id: "attempt".into(), ownership_epoch: 1,
+            source: fullmag_quantities::AcceptedStateRef {
+                id: fullmag_quantities::AcceptedStateId {
+                    run_id: "run-completion".into(), stage_id: Some("step".into()), accepted_step: 7,
+                    clock_digest: clock.digest().unwrap(),
+                    state_digest: format!("sha256:{}", "b".repeat(64)),
+                    domain_digest: format!("sha256:{}", "c".repeat(64)),
+                    plan_digest: format!("sha256:{}", "d".repeat(64)),
+                },
+                generation: fullmag_quantities::AcceptedStateGeneration { runtime_epoch: 1, accepted_revision: 7 },
+            },
+            state_object_ref: "b".repeat(64), clock, solver_dt_s: 0.0,
+            input_fingerprint: "a".repeat(64), resolved_input_fingerprint: Some("e".repeat(64)),
+            completion: fullmag_ir::StageCompletionIR {
+                status: "completed".into(), converged, reason: Some(reason),
+                metric: Some(if reason == fullmag_ir::StageStopReason::Energy {
+                    fullmag_ir::StageMetricKind::TotalEnergyPlateauRangeJ
+                } else if reason == fullmag_ir::StageStopReason::MaxSteps {
+                    fullmag_ir::StageMetricKind::Steps
+                } else { fullmag_ir::StageMetricKind::MaxTorqueApm }),
+                metric_name: Some(if reason == fullmag_ir::StageStopReason::Energy {
+                    "total_energy_plateau_range_J"
+                } else if reason == fullmag_ir::StageStopReason::MaxSteps {
+                    "steps"
+                } else { "max_torque_apm" }.into()),
+                metric_value: Some(if converged { 0.125 } else { 7.0 }),
+                threshold: Some(if converged { 0.25 } else { 7.0 }),
+            },
+        };
+        let digest = fullmag_application::study_artifact_content_sha256(&serde_json::to_vec(&record).unwrap());
+        let entry = FmsArtifactCatalogEntry {
+            artifact_id: terminal_completion_artifact_id(&record), task_id: record.task_id.clone(),
+            attempt_id: record.attempt_id.clone(), ownership_epoch: record.ownership_epoch,
+            logical_path: terminal_completion_logical_path(&record),
+            artifact_type: TERMINAL_COMPLETION_ARTIFACT_TYPE.into(),
+            content_sha256: digest.clone(), object_ref: Some(digest),
+            status: FmsArtifactStatus::Published, required: false, study_output: None,
+        };
+        (record, entry)
+    }
+
+    #[test]
+    fn completion_validation_rejects_inconsistent_scientific_labels_without_recomputing_physics() {
+        use fullmag_ir::{StageStopReason as Reason, StageMetricKind as Metric};
+        let (record, _) = fixture(Reason::Torque, true);
+        for change in 0..11 {
+            let mut completion = record.completion.clone();
+            match change {
+                0 => completion.reason = Some(Reason::MaxSteps),
+                1 => completion.metric = Some(Metric::Steps),
+                2 => completion.metric = None,
+                3 => completion.metric_name = Some("other".into()),
+                4 => completion.metric_value = None,
+                5 => completion.threshold = None,
+                6 => completion.metric_value = Some(0.5),
+                7 => completion.metric_value = Some(-0.1),
+                8 => completion.threshold = Some(-0.1),
+                9 => completion.metric_value = Some(f64::NAN),
+                _ => completion.threshold = Some(f64::INFINITY),
+            }
+            assert!(validate_completion(&completion).is_err(), "inconsistent variant {change}");
+        }
+        let (mut budget, _) = fixture(Reason::MaxSteps, false);
+        assert!(validate_completion(&budget.completion).is_ok());
+        budget.completion.converged = true;
+        assert!(validate_completion(&budget.completion).is_err());
+        let mut no_relaxation = fullmag_ir::StageCompletionIR {
+            status: "completed".into(), converged: false, reason: None, metric: None,
+            metric_name: None, metric_value: None, threshold: None,
+        };
+        assert!(validate_completion(&no_relaxation).is_ok());
+        no_relaxation.converged = true;
+        assert!(validate_completion(&no_relaxation).is_err());
+        let stagnation = fullmag_ir::StageCompletionIR {
+            status: "failed".into(), converged: false, reason: Some(Reason::Gradient),
+            metric: Some(Metric::NumericalStagnation), metric_name: Some("numerical_stagnation".into()),
+            metric_value: Some(1.0), threshold: Some(0.0),
+        };
+        assert!(validate_completion(&stagnation).is_err());
+    }
+
+    #[test]
+    fn completion_cas_roundtrip_preserves_runner_truth_and_rejects_foreign_bindings() {
+        use fullmag_ir::StageStopReason::{Torque, Energy, MaxSteps};
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        for (reason, converged) in [(Torque, true), (Energy, true), (MaxSteps, false)] {
+            let (record, entry) = fixture(reason, converged);
+            store.cas().put(&serde_json::to_vec(&record).unwrap()).unwrap();
+            assert_eq!(read_terminal_completion(&store, &entry).unwrap().completion, record.completion);
+            for change in 0..5 {
+                let mut foreign = record.clone();
+                match change {
+                    0 => foreign.attempt_id = "foreign".into(),
+                    1 => foreign.ownership_epoch += 1,
+                    2 => foreign.state_object_ref = "f".repeat(64),
+                    3 => foreign.clock.accepted_step += 1,
+                    _ => foreign.source.id.plan_digest = format!("sha256:{}", "f".repeat(64)),
+                }
+                assert!(validate_terminal_completion_record(&foreign, &entry).is_err());
+            }
+            let mut corrupt = entry.clone();
+            corrupt.content_sha256 = "f".repeat(64);
+            assert!(read_terminal_completion(&store, &corrupt).is_err());
+        }
+    }
 }

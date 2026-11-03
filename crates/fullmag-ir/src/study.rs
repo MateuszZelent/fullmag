@@ -628,6 +628,9 @@ pub enum EnergyTermIR {
     RotatedInterfacialDmi {
         #[serde(rename = "D")]
         d: f64,
+        /// Stable magnet identities; absent preserves historical global scope.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        object_ids: Option<Vec<String>>,
     },
     BulkDmi {
         #[serde(rename = "D")]

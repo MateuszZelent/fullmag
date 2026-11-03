@@ -9733,6 +9733,8 @@ def _build_problem(
     if not s._magnets and study_kind != "antenna_field_solve" and not (field_only and s._auxiliary_geometries):
         raise ValueError("No magnets defined — call fm.geometry(...) first")
 
+    dind = _uniform_material_dmi_coefficient(s._magnets, "Dind")
+    dbulk = _uniform_material_dmi_coefficient(s._magnets, "Dbulk")
     # Convert handles to Ferromagnet objects
     magnets = [h._to_ferromagnet() for h in s._magnets]
 
@@ -9743,15 +9745,12 @@ def _build_problem(
         energy.append(Exchange())
     if s._magnets and s._demag_enabled:
         energy.append(Demag(realization=s._demag_realization))
-    # Check if any magnet has DMI
-    for h in s._magnets:
-        if h.Dind is not None:
-            energy.append(InterfacialDMI(D=h.Dind))
-            break
-    for h in s._magnets:
-        if h.Dbulk is not None:
-            energy.append(BulkDMI(D=h.Dbulk))
-            break
+    # The legacy study surface lowers uniform material DMI to one explicit
+    # global term. Mixed per-object values cannot be represented that way.
+    if dind is not None:
+        energy.append(InterfacialDMI(D=dind))
+    if dbulk is not None:
+        energy.append(BulkDMI(D=dbulk))
     energy.extend(s._explicit_energy_terms)
     if s._b_ext is not None:
         energy.append(Zeeman(B=s._b_ext))
@@ -10029,6 +10028,29 @@ def _build_problem(
         pbc=s._pbc,
         parameters=s._parameters if s._parameters.names else None,
     )
+
+
+def _uniform_material_dmi_coefficient(
+    magnets: Sequence[MagnetHandle],
+    parameter: str,
+) -> float | None:
+    """Return a legacy global DMI coefficient only when all objects agree."""
+    if not magnets:
+        return None
+    values = [getattr(magnet, parameter) for magnet in magnets]
+    effective_values = [0.0 if value is None else value for value in values]
+    if any(value != effective_values[0] for value in effective_values[1:]):
+        details = ", ".join(
+            f"{magnet._object_id or magnet._name}={getattr(magnet, parameter)!r}"
+            for magnet in magnets
+        )
+        raise ValueError(
+            f"legacy study-level {parameter} lowering requires the same value for every "
+            f"magnetic object; per-object values: {details}"
+        )
+    if all(value is None for value in values):
+        return None
+    return effective_values[0]
 
 
 # ---------------------------------------------------------------------------

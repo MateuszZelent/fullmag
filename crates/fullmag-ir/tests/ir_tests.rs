@@ -7159,7 +7159,7 @@ fn validation_rejects_invalid_dmi_energy_terms() {
 
 #[test]
 fn rotated_interfacial_dmi_round_trips_and_preserves_signed_d() {
-    let term = EnergyTermIR::RotatedInterfacialDmi { d: -3.0e-3 };
+    let term = EnergyTermIR::RotatedInterfacialDmi { d: -3.0e-3, object_ids: None };
     let json = serde_json::to_value(&term).unwrap();
     assert_eq!(
         json,
@@ -7173,7 +7173,7 @@ fn rotated_interfacial_dmi_rejects_non_finite_d_and_duplicates() {
     let mut non_finite = ProblemIR::bootstrap_example();
     non_finite
         .energy_terms
-        .push(EnergyTermIR::RotatedInterfacialDmi { d: f64::NAN });
+        .push(EnergyTermIR::RotatedInterfacialDmi { d: f64::NAN, object_ids: None });
     let errors = non_finite
         .validate()
         .expect_err("non-finite rotated interfacial DMI must fail validation");
@@ -7183,8 +7183,8 @@ fn rotated_interfacial_dmi_rejects_non_finite_d_and_duplicates() {
 
     let mut duplicate = ProblemIR::bootstrap_example();
     duplicate.energy_terms.extend([
-        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
-        EnergyTermIR::RotatedInterfacialDmi { d: -3.0e-3 },
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None },
+        EnergyTermIR::RotatedInterfacialDmi { d: -3.0e-3, object_ids: None },
     ]);
     let errors = duplicate
         .validate()
@@ -7195,7 +7195,7 @@ fn rotated_interfacial_dmi_rejects_non_finite_d_and_duplicates() {
 
     let mut mixed = ProblemIR::bootstrap_example();
     mixed.energy_terms.extend([
-        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None },
         EnergyTermIR::BulkDmi { d: 1.0e-3 },
     ]);
     let errors = mixed
@@ -7209,7 +7209,7 @@ fn rotated_interfacial_dmi_rejects_non_finite_d_and_duplicates() {
     let mut material_mixed = ProblemIR::bootstrap_example();
     material_mixed
         .energy_terms
-        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 });
+        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None });
     material_mixed.materials[0].interfacial_dmi = Some(1.0e-3);
     let errors = material_mixed
         .validate()
@@ -7222,7 +7222,7 @@ fn rotated_interfacial_dmi_rejects_non_finite_d_and_duplicates() {
     let mut dormant_material = ProblemIR::bootstrap_example();
     dormant_material
         .energy_terms
-        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 });
+        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None });
     let mut unused_material = dormant_material.materials[0].clone();
     unused_material.name = "unused".to_string();
     unused_material.interfacial_dmi = Some(1.0e-3);
@@ -7237,7 +7237,7 @@ fn rotated_interfacial_dmi_rejects_non_finite_d_and_duplicates() {
 fn empty_material_dmi_fields_do_not_conflict_with_rotated_dmi() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.energy_terms
-        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 });
+        .push(EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3, object_ids: None });
     ir.materials[0].dind_field = Some(Vec::new());
     ir.materials[0].dbulk_field = Some(Vec::new());
 
@@ -9124,4 +9124,21 @@ fn eigen_spectrum_scope_is_typed_and_legacy_wire_defaults_to_per_sample() {
         error.to_string().contains("unknown variant"),
         "expected an enum deserialization error, got {error}"
     );
+}
+
+#[test]
+fn rotated_dmi_object_scope_roundtrip_and_validation() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.magnets[0].object_id = Some("film-id".into());
+    for ids in [vec![], vec!["unknown".into()], vec!["film-id".into(), "film-id".into()], vec!["".into()]] {
+        ir.energy_terms = vec![EnergyTermIR::RotatedInterfacialDmi { d: 0.0, object_ids: Some(ids) }];
+        let errors = ir.validate().expect_err("invalid scope must not become global, including D=0");
+        assert!(errors.iter().any(|e| e.contains("object_id")), "{errors:?}");
+    }
+    let term = EnergyTermIR::RotatedInterfacialDmi { d: -0.004, object_ids: Some(vec!["film-id".into()]) };
+    let value = serde_json::to_value(&term).unwrap();
+    assert_eq!(value["object_ids"], serde_json::json!(["film-id"]));
+    assert_eq!(serde_json::from_value::<EnergyTermIR>(value).unwrap(), term);
+    ir.energy_terms = vec![EnergyTermIR::Exchange, term];
+    ir.validate().expect("existing explicit magnet ID is legal");
 }

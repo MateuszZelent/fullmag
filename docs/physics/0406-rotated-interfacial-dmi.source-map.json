@@ -3,7 +3,7 @@
     "path": "docs/physics/0406-rotated-interfacial-dmi.md",
     "title": "Rotated interfacial Dzyaloshinskii-Moriya interaction",
     "interaction": "rotated interfacial DMI for bimeron stabilization",
-    "audited_source_revision": "812ce1fe1efa6d2a7a951f6e8d45f48a4134a6dc"
+    "audited_source_revision": "e6a58cc7b12bc92b96c271cacb4cd1e19118659e"
   },
   "backend_matrix": [
     {
@@ -62,7 +62,7 @@
     },
     {
       "id": "fdm-shared",
-      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields/dmi.rs",
       "symbol": "rotated_interfacial_dmi_field",
       "responsibility": "Define the reference discrete FDM field and energy algebra.",
       "evidence_status": "implemented_source_test"
@@ -136,6 +136,20 @@
       "symbol": "_goebel_material_has_only_expected_physics",
       "responsibility": "Keep the Göbel source-physics gate closed to extra anisotropy channels.",
       "evidence_status": "implemented_source_test; runtime_not_verified"
+    },
+    {
+      "id": "object-scope-layer",
+      "path": "crates/fullmag-ir/src/mesh_hints.rs",
+      "symbol": "FdmLayerPlanIR",
+      "responsibility": "Preserve explicit per-object rotated DMI including zero and legacy inheritance.",
+      "evidence_status": "not_verified"
+    },
+    {
+      "id": "object-scope-plan",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "object_rotated_dmi",
+      "responsibility": "Resolve stable object scope to one whole FDM magnet.",
+      "evidence_status": "not_verified"
     }
   ],
   "symbols": [
@@ -221,28 +235,73 @@
   "equations": [
     {
       "id": "rdmi-energy",
-      "symbols": ["Erdmi", "D", "Omega", "m", "partial"],
-      "sources": ["fdm-shared", "fem-weak", "fem-exact-term-activity"]
+      "symbols": [
+        "Erdmi",
+        "D",
+        "Omega",
+        "m",
+        "partial"
+      ],
+      "sources": [
+        "fdm-shared",
+        "fem-weak",
+        "fem-exact-term-activity"
+      ]
     },
     {
       "id": "rdmi-field",
-      "symbols": ["Hrdmi", "D", "mu0", "Ms", "m", "partial"],
-      "sources": ["fdm-shared", "fem-weak", "fem-exact-term-activity"]
+      "symbols": [
+        "Hrdmi",
+        "D",
+        "mu0",
+        "Ms",
+        "m",
+        "partial"
+      ],
+      "sources": [
+        "fdm-shared",
+        "fem-weak",
+        "fem-exact-term-activity"
+      ]
     },
     {
       "id": "rdmi-first-variation",
-      "symbols": ["Erdmi", "D", "Omega", "m", "v", "partial"],
-      "sources": ["fem-weak"]
+      "symbols": [
+        "Erdmi",
+        "D",
+        "Omega",
+        "m",
+        "v",
+        "partial"
+      ],
+      "sources": [
+        "fem-weak"
+      ]
     },
     {
       "id": "rdmi-natural-bc",
-      "symbols": ["A", "D", "n", "m"],
-      "sources": ["fem-weak"]
+      "symbols": [
+        "A",
+        "D",
+        "n",
+        "m"
+      ],
+      "sources": [
+        "fem-weak"
+      ]
     },
     {
       "id": "rdmi-fem-projection",
-      "symbols": ["Hrdmi", "g", "mu0", "Ms", "Mlump"],
-      "sources": ["fem-weak"]
+      "symbols": [
+        "Hrdmi",
+        "g",
+        "mu0",
+        "Ms",
+        "Mlump"
+      ],
+      "sources": [
+        "fem-weak"
+      ]
     }
   ],
   "public_api": {
@@ -256,6 +315,16 @@
         "meaning": "siła i chiralność rDMI",
         "backend_support": "FDM/FEM CPU/GPU po przejściu capability i qualification",
         "problem_ir": "energy_terms[].D"
+      },
+      {
+        "python": "RotatedInterfacialDMI.object_ids",
+        "type": "Sequence[str] lub None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "niepusta lista unikalnych, istniejących identyfikatorów magnetyków; puste i nieznane ID są błędem",
+        "meaning": "wybór pełnych obiektów; brak pola zachowuje zakres globalny",
+        "backend_support": "FDM CPU/GPU; FEM odrzuca zakres jawny",
+        "problem_ir": "energy_terms[].object_ids"
       }
     ]
   }

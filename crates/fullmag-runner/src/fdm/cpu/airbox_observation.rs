@@ -934,6 +934,7 @@ mod tests {
 
     fn tiny_plan() -> FdmMultilayerPlanIR {
         let layer = FdmLayerPlanIR {
+            rotated_interfacial_dmi: None,
             magnet_name: "layer".to_string(),
             layer_id: "layer:layer".to_string(),
             object_id: "layer".to_string(),

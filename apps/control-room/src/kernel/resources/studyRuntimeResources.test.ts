@@ -52,6 +52,7 @@ import { activeLaneCapabilityFixture } from "./activeLaneCapabilityFixture.testS
 import {
   STUDY_RUNTIME_CONTROL_RESOURCE_KEYS,
   hasPublishedFemMeshEvidence,
+  isRunPerformanceObservationBusyError,
   readyCommandResourceData,
   frequencyDomainJsonArtifactRevision,
   frequencyDomainManifestRevision,
@@ -71,6 +72,7 @@ import {
   shouldLoadRuntimeMeshSummary,
   shouldLoadRuntimeScalars,
   shouldLoadRuntimeStageExecution,
+  shouldNotifyRunPerformanceResourceError,
   selectStageExecutionSessionIdentity,
   stageExecutionMatchesSessionIdentity,
   stageExecutionSessionIdentityEquals,
@@ -331,6 +333,27 @@ describe("study runtime command resource bundles", () => {
         new ControlRoomApiError("frequency-domain artifact failed", 500),
       ),
     ).toThrow("frequency-domain artifact failed");
+  });
+
+  it("suppresses notifications only for the run-performance observation busy conflict", () => {
+    const busy = new ControlRoomApiError(
+      "Performance observation is temporarily busy",
+      409,
+      null,
+      "performance_observation_busy",
+    );
+
+    expect(isRunPerformanceObservationBusyError(busy)).toBe(true);
+    expect(shouldNotifyRunPerformanceResourceError(busy)).toBe(false);
+    expect(isRunPerformanceObservationBusyError(
+      new ControlRoomApiError("Different conflict", 409, null, "other_conflict"),
+    )).toBe(false);
+    expect(shouldNotifyRunPerformanceResourceError(
+      new ControlRoomApiError("Different conflict", 409, null, "other_conflict"),
+    )).toBe(true);
+    expect(shouldNotifyRunPerformanceResourceError(
+      new ControlRoomApiError("Server failure", 500, null, "performance_observation_busy"),
+    )).toBe(true);
   });
 
   it("measures the sampled solver trace at load and commit without polling", () => {

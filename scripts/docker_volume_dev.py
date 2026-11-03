@@ -16,9 +16,10 @@ import shlex
 import stat
 import sys
 import time
+from types import MappingProxyType
 
 import fullmag_storage as storage
-from docker_build_control import (BuildControl, BuildControlError, canonical, control_read_script, docker_capture,
+from docker_build_control import (BuildControl, BuildControlError, DockerObservationBudgetExceeded, canonical, control_read_script, docker_capture,
                                   compose_capture, build_volume_toolchain, build_volume_runtime_images, bounded_capture,
                                   mirror_console)
 from docker_dev_host import docker_argv, require_host, local_volume, validate_host_path
@@ -1091,6 +1092,65 @@ def _retained_ledger_profile(control, previous_root, document, image):
         "backing_image": environment["FULLMAG_HOST_LEDGER_BACKING_IMAGE"],
         "host_receipt": control.read(previous_root + "/host-ledger.json"),
         "maintenance_document": control.read(previous_root + "/ledger-maintenance-compose.json")}
+
+
+def _frontend_refresh_carry_documents(control, previous_root, document, image):
+    """Preflight and freeze the retained documents copied by a frontend refresh."""
+    import docker_group_ledger as group_ledger
+
+    try:
+        environment = document["services"]["backend"]["environment"]
+        volumes = document["volumes"]
+    except (KeyError, TypeError) as error:
+        raise BuildControlError("Retained Compose has no complete ledger binding") from error
+    if not isinstance(environment, Mapping) or not isinstance(volumes, Mapping):
+        raise BuildControlError("Retained Compose ledger binding is malformed")
+
+    marker = environment.get("FULLMAG_HOST_LEDGER_PROFILE")
+    group_profile = group_ledger.is_group_ledger_backend(environment)
+    group_binding_present = (group_ledger.COMPOSE_VOLUME in volumes
+                             or group_ledger.HOST_ID_ENV in environment)
+    if marker not in (None, group_ledger.PROFILE, "host-ledger-v1"):
+        raise BuildControlError("Retained ledger profile marker is unsupported")
+    if group_binding_present and not group_profile:
+        raise BuildControlError("Retained group ledger binding disagrees with its backend environment")
+
+    try:
+        profile = _retained_ledger_profile(control, previous_root, document, image)
+    except (KeyError, TypeError) as error:
+        raise BuildControlError("Retained ledger profile binding is incomplete") from error
+    expected_profile = group_ledger.PROFILE if group_profile else "host-ledger-v1"
+    if not isinstance(profile, Mapping) or profile.get("profile") != expected_profile:
+        raise BuildControlError("Retained ledger profile differs from its Compose binding")
+
+    documents = {}
+
+    def require_document(name, value):
+        if not isinstance(value, Mapping):
+            raise BuildControlError("Retained frontend refresh document is missing or malformed: " + name)
+        documents[name] = value
+
+    require_document("backend-cache.json", control.read(previous_root + "/backend-cache.json"))
+    if group_profile:
+        record = control.read(previous_root + "/group-ledger.json")
+        if (not isinstance(record, Mapping)
+                or record.get("schema") != "fullmag.docker-group-ledger.v1"
+                or record.get("profile") != group_ledger.PROFILE
+                or record.get("daemon_id_sha256") != profile.get("environment", {}).get("FULLMAG_DOCKER_HOST_ID")
+                or record.get("compose_project") != profile.get("compose_project")
+                or record.get("volume_name") != profile.get("volume_name")
+                or record.get("host_id") != profile.get("environment", {}).get(group_ledger.HOST_ID_ENV)):
+            raise BuildControlError("Retained group ledger record differs from its Compose render")
+        require_document("group-ledger.json", record)
+        require_document("cache-maintenance-compose.json",
+                         control.read(previous_root + "/cache-maintenance-compose.json"))
+        attestation = control.read(previous_root + "/group-ledger-attestation.json", optional=True)
+        if attestation is not None:
+            require_document("group-ledger-attestation.json", attestation)
+    else:
+        require_document("host-ledger.json", profile.get("host_receipt"))
+        require_document("ledger-maintenance-compose.json", profile.get("maintenance_document"))
+    return MappingProxyType(documents)
 
 
 def _host_ledger(control, operation, layout, selected, image, *, new_render=False,
@@ -2566,6 +2626,29 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
 
 
 
+def _read_publication_observation(read, *, deadline):
+    """Retry only a bounded, side-effect-free read of the same startup.
+
+    Callers must never pass start/stop, publication, cgroup or Solve actions.
+    Ownership/integrity errors retain their normal fail-closed behavior.
+    """
+    for attempt in range(3):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise DockerObservationBudgetExceeded(
+                "Backend publication read observation timed out; resources retained"
+            )
+        try:
+            return read(min(90, remaining))
+        except DockerObservationBudgetExceeded:
+            if attempt == 2:
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            time.sleep(min(attempt + 1, remaining))
+
+
 def _wait_for_publication(control, operation, backend_id, *, timeout=14400, publication_pins=None):
     """A previous succeeded package is not evidence that this start finished."""
     import fullmag_docker_runtime as runtime
@@ -2574,7 +2657,8 @@ def _wait_for_publication(control, operation, backend_id, *, timeout=14400, publ
     handoff_seen = False
     last_report = 0.0
     while time.monotonic() < deadline:
-        actual = json.loads(docker_text("inspect", backend_id))[0]
+        actual = json.loads(_read_publication_observation(
+            lambda budget: docker_text("inspect", backend_id, timeout=budget), deadline=deadline))[0]
         current_start = actual.get("State", {}).get("StartedAt")
         if started_at is None:
             started_at = current_start
@@ -2582,19 +2666,24 @@ def _wait_for_publication(control, operation, backend_id, *, timeout=14400, publ
         elif current_start != started_at:
             raise BuildControlError("Backend incarnation changed during build observation")
         if not actual["State"]["Running"]:
-            logs = docker_text("logs", "--since", started_at, "--tail", "200", backend_id, combined=True)
+            logs = _read_publication_observation(lambda budget: docker_text(
+                "logs", "--since", started_at, "--tail", "200", backend_id,
+                combined=True, timeout=budget), deadline=deadline)
             control.write(operation["root"] + "/backend-failure-log.json",
                           {"started_at": started_at, "log": logs})
             raise BuildControlError("Backend exited during build; logs and volumes retained: " + logs[-4000:])
         if not handoff_seen:
-            logs = docker_text("logs", "--since", started_at, "--tail", "200", backend_id, combined=True)
+            logs = _read_publication_observation(lambda budget: docker_text(
+                "logs", "--since", started_at, "--tail", "200", backend_id,
+                combined=True, timeout=budget), deadline=deadline)
             handoff_seen = "phase=start state=handoff" in logs
             if handoff_seen:
                 operation["receipt"]["backend_package_cache_hit"] = "phase=start state=cache-hit" in logs
                 control.write(operation["root"] + "/handoff-log.json", {"started_at": started_at, "log": logs})
         if handoff_seen:
-            raw = docker_capture("exec", backend_id, "/usr/local/bin/python3", "-c",
-                runtime._BACKEND_BUILD_DOCUMENTS_SCRIPT)
+            raw = _read_publication_observation(lambda budget: docker_capture(
+                "exec", backend_id, "/usr/local/bin/python3", "-c",
+                runtime._BACKEND_BUILD_DOCUMENTS_SCRIPT, timeout=budget), deadline=deadline)
             observed = json.loads(raw.stdout)
             receipt, provenance = observed["receipt"]["value"], observed["provenance"]["value"]
             if (receipt.get("state") != "succeeded" or provenance.get("state") != "succeeded"
@@ -2608,7 +2697,7 @@ def _wait_for_publication(control, operation, backend_id, *, timeout=14400, publ
             mirror_console("Backend startup is in progress (build, package validation or runtime handoff); see backend service logs. Docker data retained.\n")
             last_report = time.monotonic()
         time.sleep(3)
-    raise BuildControlError("Backend publication observation timed out; services and volumes retained")
+    raise DockerObservationBudgetExceeded("Backend publication observation timed out; services and volumes retained")
 
 
 def _finish(control, operation, document, backend_id, frontend_id, selected, state,
@@ -6360,6 +6449,109 @@ def _frontend_refresh_document(document, volume, inputs, *, frontend_image=None)
     return refreshed
 
 
+def _frontend_refresh_bind_reconciler(document):
+    """Load the read-only source witness before any frontend service mutation."""
+    if os.name == 'nt':
+        return None
+    services = document.get('services')
+    frontend = services.get('frontend') if isinstance(services, Mapping) else None
+    volumes = frontend.get('volumes') if isinstance(frontend, Mapping) else None
+    if not isinstance(volumes, list):
+        raise BuildControlError('Retained frontend source bind inventory is malformed')
+    if not any(isinstance(mount, Mapping) and mount.get('type') == 'bind' for mount in volumes):
+        return None
+    try:
+        import docker_volume_frontend_refresh_reconcile as reconcile
+    except ImportError as error:
+        raise BuildControlError(
+            'Frontend bind identity reconciler is required before refresh can mutate services'
+        ) from error
+    if not callable(getattr(reconcile, 'derive_document', None)):
+        raise BuildControlError('Frontend bind identity reconciler has no supported derive_document contract')
+    return reconcile
+
+
+def _repin_frontend_daemon_binds(document, actual, selected, reconcile):
+    """Repin changed frontend aliases only through the independent source witness."""
+    if reconcile is None:
+        return document, None
+    frontend = document['services']['frontend']
+    if not isinstance(frontend.get('volumes'), list):
+        raise BuildControlError('Retained frontend bind inventory is malformed')
+    pins = frontend.get('x-fullmag-daemon-binds', {})
+    if not isinstance(pins, Mapping):
+        raise BuildControlError('Retained frontend daemon bind pins are malformed')
+    frontend_actual = actual.get('frontend')
+    inspected = frontend_actual.get('Mounts') if isinstance(frontend_actual, Mapping) else None
+    if not isinstance(inspected, list):
+        raise BuildControlError('Recreated frontend has no explicit bind inventory')
+    mounts = {}
+    for mount in inspected:
+        if not isinstance(mount, Mapping) or not isinstance(mount.get('Destination'), str):
+            raise BuildControlError('Recreated frontend bind inventory is malformed')
+        if mount['Destination'] in mounts:
+            raise BuildControlError('Recreated frontend has duplicate mount destinations')
+        mounts[mount['Destination']] = mount
+    changed = {}
+    for expected in frontend.get('volumes', []):
+        if expected.get('type') != 'bind':
+            continue
+        target = expected.get('target')
+        if not isinstance(target, str):
+            raise BuildControlError('Retained frontend bind target is malformed')
+        observed = mounts.get(target)
+        source = observed.get('Source') if isinstance(observed, Mapping) else None
+        if source != pins.get(target):
+            changed[target] = source
+    if not changed:
+        return document, None
+    source_target = '/opt/fullmag/source'
+    if not any(isinstance(expected, Mapping) and expected.get('type') == 'bind'
+               and expected.get('target') == source_target
+               for expected in frontend.get('volumes', [])):
+        raise BuildControlError('Changed frontend binds require the retained source-root bind')
+    proof_targets = set(changed)
+    proof_document = document
+    if source_target not in changed:
+        # The reconciler requires an explicit root-repair witness. If the root
+        # pin already matches, remove it only from the proof input so the
+        # reconciler revalidates that same root against the backend and host.
+        import copy
+        proof_document = copy.deepcopy(document)
+        proof_pins = proof_document['services']['frontend'].setdefault('x-fullmag-daemon-binds', {})
+        proof_pins.pop(source_target, None)
+        proof_targets.add(source_target)
+    try:
+        derived, witness = reconcile.derive_document(proof_document, actual, Path(selected))
+    except (BuildControlError, OSError, KeyError, TypeError) as error:
+        raise BuildControlError('Recreated frontend source bind identity could not be proven') from error
+    if not isinstance(derived, Mapping) or not isinstance(witness, Mapping):
+        raise BuildControlError('Frontend source identity reconciler returned malformed evidence')
+    if derived.get('services', {}).get('backend') != document['services']['backend']:
+        raise BuildControlError('Frontend source identity reconciliation changed the retained backend')
+    derived_frontend = derived.get('services', {}).get('frontend')
+    if not isinstance(derived_frontend, Mapping):
+        raise BuildControlError('Frontend source identity reconciliation removed the frontend service')
+    before = dict(frontend)
+    after = dict(derived_frontend)
+    before_pins = before.pop('x-fullmag-daemon-binds', {})
+    after_pins = after.pop('x-fullmag-daemon-binds', {})
+    if before != after or not isinstance(after_pins, Mapping):
+        raise BuildControlError('Frontend source identity reconciliation changed unrelated service fields')
+    if set(witness) != proof_targets:
+        raise BuildControlError('Frontend source identity witness does not cover exactly the changed binds and root anchor')
+    expected_pins = dict(pins)
+    for target, source in changed.items():
+        row = witness.get(target)
+        if (not isinstance(source, str) or not isinstance(row, Mapping)
+                or row.get('daemon_source') != source):
+            raise BuildControlError('Frontend source identity witness differs from observed daemon binds')
+        expected_pins[target] = source
+    if dict(after_pins) != expected_pins:
+        raise BuildControlError('Frontend source identity reconciliation changed unrelated bind pins')
+    return derived, dict(witness)
+
+
 def _refresh_frontend_services(control, args, previous_root, previous, document, selected,
                                layout, actual, ids, image, operator_probe_record, *, recover_oom=False, frozen_context=None):
     """Create a new DEV handoff by replacing only the frontend generation."""
@@ -6447,6 +6639,8 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
         inputs['helper_transition'] = frozen_context['request']['source_transition']
     inputs.pop('attempt', None)
     inputs.pop('config_sha256', None)
+    carry_documents = _frontend_refresh_carry_documents(control, previous_root, document, image)
+    bind_reconcile = _frontend_refresh_bind_reconciler(document)
     with control.operation('development', inputs) as operation:
         _pin_private_group_storage(control, operation, new_render=False, previous=previous)
         operation['receipt'].update(operator_probe_record)
@@ -6474,12 +6668,8 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
         control.write(operation['root'] + '/rollback-compose.json', document)
         control.write(operation['root'] + '/rollback-development-inputs.json',
                       control.read('frontend/development-inputs.json'))
-        for name in ('backend-cache.json', 'group-ledger.json', 'host-ledger.json', 'ledger-maintenance-compose.json'):
-            record = control.read(previous_root + '/' + name, optional=True)
-            if record is not None:
-                control.write(operation['root'] + '/' + name, record)
-            elif name == 'backend-cache.json':
-                raise BuildControlError('Frontend refresh has no retained backend cache proof')
+        for name, value in carry_documents.items():
+            control.write(operation['root'] + '/' + name, value)
         # Quiesce the sole browser admission route before the final empty-API
         # fence. Unknown stop/seed outcomes retain this exact control lease.
         operation['daemon_pending'] = True
@@ -6498,7 +6688,6 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
             raise BuildControlError('Frontend seed changed during refresh')
         refreshed = _frontend_refresh_document(document, volume, seeded,
             frontend_image=frontend_image if recover_oom else None)
-        new_config_sha = hashlib.sha256(canonical(refreshed)).hexdigest()
         control.write(operation['root'] + '/compose.json', refreshed)
         control.write(operation['root'] + '/backend-build-receipt.json', package)
         control.write(operation['root'] + '/provenance.json', provenance)
@@ -6514,12 +6703,17 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
         if not re.fullmatch('[0-9a-f]{64}', frontend_id) or frontend_id == ids['frontend']:
             raise BuildControlError('Frontend refresh did not produce one new owned incarnation')
         deadline = time.monotonic() + 3900
+        frontend_bind_witness = None
         while time.monotonic() < deadline:
             current = inspect_services(frontend_id)
             if current['frontend'].get('HostConfig', {}).get('Memory') != int(refreshed['services']['frontend']['mem_limit']):
                 raise BuildControlError('Recreated frontend memory limit differs from the retained configuration')
             if current['frontend'].get('Id') != frontend_id or current['frontend'].get('Image') != frontend_image:
                 raise BuildControlError('New frontend image/incarnation differs')
+            refreshed, bind_witness = _repin_frontend_daemon_binds(
+                refreshed, current, selected, bind_reconcile)
+            if bind_witness is not None:
+                frontend_bind_witness = bind_witness
             _validate_retained_service(refreshed, current['frontend'], 'frontend',
                                       json.loads(docker_text('image', 'inspect', frontend_image))[0]['Config'])
             if not current['frontend']['State'].get('Running'):
@@ -6550,6 +6744,11 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
                 or final['frontend']['State'].get('Running') is not True
                 or final['frontend']['State'].get('Health', {}).get('Status') != 'healthy'):
             raise BuildControlError('New frontend changed during source-view verification')
+        if frontend_bind_witness is not None:
+            operation['receipt']['frontend_bind_source_witness'] = frontend_bind_witness
+        new_config_sha = hashlib.sha256(canonical(refreshed)).hexdigest()
+        if frontend_bind_witness is not None:
+            control.write(operation['root'] + '/compose.json', refreshed)
         if recover_oom:
             operation['receipt'].update(recovery_scope='legacy-oom-frontend-recreation',
                 selected_source_qualification='NOT VERIFIED', backend_observation=backend_observation,

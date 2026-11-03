@@ -106,6 +106,33 @@ Kwalifikacja operacyjna pozostaje `NOT VERIFIED` do czasu rzeczywistej próby.
 Wycofanie nie usuwa archiwów ani wyników i nie przywraca starych bajtów, jeśli
 istnieją aktywni konsumenci lub zdążyło nastąpić kolejne admission.
 
+## Domknięcie refreshu po udanym odtworzeniu frontendu
+
+Docker Desktop może przedstawiać ten sam bind WSL innym zapisem niż host.
+Po odtworzeniu frontendu nie wolno przepisywać pinów wyłącznie z jego
+nowego inventory. Naprawa wymaga zaufanego, niezmienionego bindu backendu,
+zgodnego host source oraz niezależnej tożsamości plików host/backend/frontend.
+Dla podkatalogów dopuszczalny jest osobny opaque alias demona; zgodność
+basename ani dopisanie suffixu do aliasu nie stanowią dowodu. Globalny
+validator mountów pozostaje ścisły.
+
+Jeżeli guard odrzuci taki zapis już po recreacji, typowana procedura
+`docker_volume_frontend_refresh_reconcile.py` rozdziela prepare i apply.
+Request w control volume przypina unknown receipt, poprzedni Compose,
+obecność lub brak pointerów, potwierdzoną kontynuację backendu, oba
+kontenery, pakiet, źródła, sesję storage oraz helper commit i pliki.
+Przed publikacją powtarza pełne obserwacje pod observer CAS przy zachowanym
+oryginalnym lease. Archiwizuje oryginalne dowody i publikuje terminal na
+końcu. Oryginalny helper sam zwalnia swój lease. Procedura nie odtwarza ani
+nie zatrzymuje usług, nie uruchamia Solve i nie zmienia fizyki.
+
+Helper może pochodzić z odrębnego, czystego checkoutu o przypiętym commicie;
+checkout aplikacji pozostaje zamrożony, a zwykłe sprawdzenie zgodności
+backend source snapshot nadal jest obowiązkowe. Odmowa dowolnego pinu
+zachowuje zasoby. Niepełna publikacja zachowuje journal i blokadę zamiast
+umożliwiać nową konkurencyjną operację. Regresje interpretowane nie zastępują
+kwalifikacji rzeczywistego prepare/apply ani symulacji.
+
 ## Obowiązki i weryfikacja
 
 Adapter klienta i host paths: `docker_dev_host.py`; build kontrolny:

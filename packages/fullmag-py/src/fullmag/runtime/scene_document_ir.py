@@ -76,6 +76,7 @@ _STUDY_FIELDS = frozenset(
         "fdm",
         "external_field",
         "rotated_interfacial_dmi",
+        "rotated_interfacial_dmi_object_ids",
         "solver",
         "universe_mesh",
         "shared_domain_mesh",

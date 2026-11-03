@@ -115,6 +115,7 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
             fdm: scene_fdm,
             external_field: builder.external_field,
             rotated_interfacial_dmi: builder.rotated_interfacial_dmi,
+            rotated_interfacial_dmi_object_ids: builder.rotated_interfacial_dmi_object_ids.clone(),
             solver: builder.solver.clone(),
             universe_mesh: builder.universe.clone(),
             shared_domain_mesh: builder.mesh.clone(),
@@ -262,6 +263,7 @@ pub fn scene_document_to_script_builder(
         ),
         external_field: normalized_scene.study.external_field,
         rotated_interfacial_dmi: normalized_scene.study.rotated_interfacial_dmi,
+        rotated_interfacial_dmi_object_ids: normalized_scene.study.rotated_interfacial_dmi_object_ids.clone(),
         solver: normalized_scene.study.solver.clone(),
         mesh: normalized_scene.study.shared_domain_mesh.clone(),
         universe: normalized_scene
@@ -532,6 +534,7 @@ pub fn scene_document_to_script_builder_overrides(
         "external_field": builder.external_field
             .map(|value| serde_json::json!([value[0], value[1], value[2]]))
             .unwrap_or(Value::Null),
+        "rotated_interfacial_dmi_object_ids": builder.rotated_interfacial_dmi_object_ids,
         "rotated_interfacial_dmi": builder.rotated_interfacial_dmi
             .map(Value::from)
             .unwrap_or(Value::Null),
@@ -2633,6 +2636,7 @@ mod tests {
             fdm: None,
             external_field: Some([0.0, 0.0, 0.015]),
             rotated_interfacial_dmi: None,
+            rotated_interfacial_dmi_object_ids: None,
             solver: ScriptBuilderSolverState {
                 integrator: "rk45".to_string(),
                 fixed_timestep: "1e-15".to_string(),
@@ -3754,6 +3758,30 @@ mod tests {
             serde_json::to_value(&expected).unwrap()
         );
         assert_eq!(round_trip.study.table_autosave, Some(expected));
+    }
+
+    #[test]
+    fn scene_document_round_trips_rotated_dmi_object_scope() {
+        let mut builder = sample_builder();
+        builder.geometries[0].physics_stack.retain(|interaction| !matches!(
+            interaction.kind, ScriptBuilderMagneticInteractionKind::InterfacialDmi | ScriptBuilderMagneticInteractionKind::BulkDmi));
+        builder.rotated_interfacial_dmi = Some(0.004);
+        let mut scene = scene_document_from_script_builder(&builder);
+        let ids = vec![scene.objects[0].id.clone()];
+        scene.study.rotated_interfacial_dmi_object_ids = Some(ids.clone());
+        let roundtrip = scene_document_to_script_builder(&scene).expect("valid scope");
+        assert_eq!(roundtrip.rotated_interfacial_dmi_object_ids, Some(ids.clone()));
+        let restored = scene_document_from_script_builder(&roundtrip);
+        assert_eq!(restored.study.rotated_interfacial_dmi_object_ids, Some(ids.clone()));
+        let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+        assert_eq!(overrides["rotated_interfacial_dmi_object_ids"], serde_json::json!(ids));
+        scene.objects[0].role = "antenna".into();
+        assert!(scene_document_to_script_builder(&scene).is_err());
+        scene.objects[0].role = "magnet".into();
+        scene.study.rotated_interfacial_dmi_object_ids = Some(vec!["missing".into()]);
+        assert!(scene_document_to_script_builder(&scene).is_err());
+        scene.study.rotated_interfacial_dmi_object_ids = Some(vec![]);
+        assert!(scene_document_to_script_builder(&scene).is_err());
     }
 
     #[test]

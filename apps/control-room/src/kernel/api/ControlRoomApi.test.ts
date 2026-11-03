@@ -105,6 +105,86 @@ describe("derived B_drive display quantity", () => {
     expect(sourceValues[1]).toBe(-2);
     expect(converted.responseMetadata.quantityId).toBe("B_drive");
   });
+
+  it("preserves float32 storage when converting display values", () => {
+    const sourceValues = new Float32Array([1, -2, 3]);
+    const converted = transformFieldVectorForDisplay("B_drive", {
+      byteLength: sourceValues.byteLength,
+      data: {
+        dtype: "float32",
+        grid: [1, 1, 1],
+        nComp: 3,
+        pointCount: 1,
+        quantityId: "H_drive",
+        valueCount: 3,
+        values: sourceValues,
+      },
+      etag: "drive-f32",
+      responseMetadata: {
+        component: "full",
+        domainGenerationId: "domain-1",
+        encoding: "FMVP;version=3",
+        fieldIndexing: "full_domain",
+        fieldRevision: "5",
+        identityIssues: [],
+        meshTopologyHash: "mesh",
+        nComp: 3,
+        nodeIndexCount: 0,
+        pointCount: 1,
+        quantityId: "H_drive",
+        scopeId: null,
+        scopeKind: "magnetic_only",
+        snapshotId: null,
+        valueCount: 3,
+      },
+      status: "ready",
+    });
+
+    expect(converted.status).toBe("ready");
+    if (converted.status !== "ready") throw new Error("expected ready result");
+    expect(converted.data.dtype).toBe("float32");
+    expect(converted.data.values).toBeInstanceOf(Float32Array);
+    expect(converted.data.values).not.toBe(sourceValues);
+    expect(converted.data.values[1]).toBeCloseTo(-2 * 4e-7 * Math.PI, 10);
+    expect(sourceValues[1]).toBe(-2);
+  });
+
+  it("rejects non-finite float32 results from display conversion", () => {
+    const values = new Float32Array([Number.POSITIVE_INFINITY, 0, 0]);
+    expect(() =>
+      transformFieldVectorForDisplay("B_drive", {
+        byteLength: values.byteLength,
+        data: {
+          dtype: "float32",
+          grid: [1, 1, 1],
+          nComp: 3,
+          pointCount: 1,
+          quantityId: "H_drive",
+          valueCount: 3,
+          values,
+        },
+        etag: "drive-f32-overflow",
+        responseMetadata: {
+          component: "full",
+          domainGenerationId: "domain-1",
+          encoding: "FMVP;version=3",
+          fieldIndexing: "full_domain",
+          fieldRevision: "6",
+          identityIssues: [],
+          meshTopologyHash: "mesh",
+          nComp: 3,
+          nodeIndexCount: 0,
+          pointCount: 1,
+          quantityId: "H_drive",
+          scopeId: null,
+          scopeKind: "magnetic_only",
+          snapshotId: null,
+          valueCount: 3,
+        },
+        status: "ready",
+      }),
+    ).toThrow("Display conversion produced non-finite float32 values");
+  });
 });
 
 describe("antenna source-spectrum binary payloads", () => {

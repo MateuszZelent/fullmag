@@ -3949,6 +3949,7 @@ mod tests {
                      native_origin: [f64; 3],
                      initial_magnetization: Vec<[f64; 3]>| {
             fullmag_ir::FdmLayerPlanIR {
+                rotated_interfacial_dmi: None,
                 magnet_name: magnet_name.into(),
                 layer_id: layer_id.into(),
                 object_id: object_id.into(),

@@ -197,6 +197,39 @@ class DevelopmentRecoveryShellTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertFalse(result.stdout)
 
+    def test_frontend_completion_closed_prepare_and_apply_dispatch(self):
+        marker = '  *"scripts/docker_volume_frontend_refresh_reconcile.py"*)\n'
+        script = 'python "/ignored/scripts/docker_volume_frontend_refresh_reconcile.py" '
+        source = '/selected/$(printf injected);worktree'
+        prepare = (script + "--prepare --attempt '" + 'a'*32 + "' --base-attempt '" + 'b'*32
+                   + "' --source-root '" + source + "' --port '3342'")
+        request = 'verification/frontend-refresh-completion/' + 'c'*64 + '/request.json'
+        apply = script + "--apply --request '" + request + "' --request-sha256 '" + 'd'*64 + "' --source-root '" + source + "'"
+        prefix = [b'/recorded/python', b'-B', b'/registered/checkout/scripts/docker_volume_frontend_refresh_reconcile.py']
+        for recipe, expected in ((prepare, [b'--prepare', b'--attempt', b'a'*32,
+                b'--base-attempt', b'b'*32, b'--source-root', source.encode(), b'--port', b'3342']),
+                (apply, [b'--apply', b'--request', request.encode(), b'--request-sha256', b'd'*64,
+                         b'--source-root', source.encode()])):
+            with self.subTest(recipe=recipe):
+                result = self.dispatch(recipe, marker=marker)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.split(b'\0')[:-1], prefix + expected)
+        for recipe in (prepare + '; printf injected', apply + ' && printf injected',
+                       prepare + '\nprintf injected', prepare.replace('a'*32, 'A'*32),
+                       apply.replace('d'*64, 'short'), apply.replace(request, '../../request.json'),
+                       prepare.replace("'" + source + "'", "'relative/source'"),
+                       prepare.replace("'3342'", "'3342' --apply"),
+                       apply + ' --request-sha256 ' + 'e'*64):
+            with self.subTest(recipe=recipe):
+                result = self.dispatch(recipe, marker=marker)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertFalse(result.stdout)
+
+    def test_frontend_completion_dispatch_precedes_storage_resolver(self):
+        source = globals().get('WRAPPER') or (Path(__file__).resolve().parent / 'just_storage_shell.sh').read_text()
+        dispatch = source.index('  *"scripts/docker_volume_frontend_refresh_reconcile.py"*)')
+        self.assertLess(dispatch, source.rindex('"${resolver}" run'))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -322,7 +322,7 @@ pub(crate) struct ArtifactPipelineSender {
     queue_depth: Arc<AtomicUsize>,
     diagnostics: Arc<ArtifactPipelineDiagnosticsState>,
     physics_execution_context: Option<crate::physics_graph_execution::PhysicsGraphExecutionContext>,
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
     accepted_step_fields: Arc<Vec<(String, u64)>>,
 }
 
@@ -569,7 +569,7 @@ pub(crate) struct ArtifactPipeline {
     queue_depth: Arc<AtomicUsize>,
     diagnostics: Arc<ArtifactPipelineDiagnosticsState>,
     physics_execution_context: Option<crate::physics_graph_execution::PhysicsGraphExecutionContext>,
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
     accepted_step_fields: Arc<Vec<(String, u64)>>,
 }
 
@@ -683,7 +683,7 @@ impl ArtifactPipeline {
                 error
             ),
         })?;
-        #[cfg(feature = "fem-gpu")]
+        #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
         let accepted_step_fields = Arc::new(
             stage_autosave
                 .as_ref()
@@ -730,7 +730,7 @@ impl ArtifactPipeline {
             queue_depth,
             diagnostics,
             physics_execution_context,
-            #[cfg(feature = "fem-gpu")]
+            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
             accepted_step_fields,
         })
     }
@@ -745,7 +745,7 @@ impl ArtifactPipeline {
             queue_depth: Arc::clone(&self.queue_depth),
             diagnostics: Arc::clone(&self.diagnostics),
             physics_execution_context: self.physics_execution_context.clone(),
-            #[cfg(feature = "fem-gpu")]
+            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
             accepted_step_fields: Arc::clone(&self.accepted_step_fields),
         }
     }
@@ -1067,9 +1067,9 @@ pub(crate) struct ArtifactRecorder {
     pipeline: Option<ArtifactPipelineSender>,
     provenance: ExecutionProvenance,
     physics_execution_context: Option<crate::physics_graph_execution::PhysicsGraphExecutionContext>,
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
     accepted_step_fields: Arc<Vec<(String, u64)>>,
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
     accepted_step_field_last_sample: std::collections::BTreeMap<String, u64>,
 }
 
@@ -1084,9 +1084,9 @@ impl ArtifactRecorder {
             pipeline: None,
             provenance,
             physics_execution_context: None,
-            #[cfg(feature = "fem-gpu")]
+            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
             accepted_step_fields: Arc::new(Vec::new()),
-            #[cfg(feature = "fem-gpu")]
+            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
             accepted_step_field_last_sample: std::collections::BTreeMap::new(),
         }
     }
@@ -1095,7 +1095,7 @@ impl ArtifactRecorder {
         provenance: ExecutionProvenance,
         pipeline: ArtifactPipelineSender,
     ) -> Self {
-        #[cfg(feature = "fem-gpu")]
+        #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
         let accepted_step_fields = Arc::clone(&pipeline.accepted_step_fields);
         let physics_execution_context = pipeline.physics_execution_context.clone();
         Self {
@@ -1107,14 +1107,14 @@ impl ArtifactRecorder {
             pipeline: Some(pipeline),
             provenance,
             physics_execution_context,
-            #[cfg(feature = "fem-gpu")]
+            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
             accepted_step_fields,
-            #[cfg(feature = "fem-gpu")]
+            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
             accepted_step_field_last_sample: std::collections::BTreeMap::new(),
         }
     }
 
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
     pub(crate) fn due_accepted_step_fields(
         &mut self,
         accepted_step: u64,
@@ -2380,6 +2380,30 @@ mod tests {
         );
     }
 
+    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+    #[test]
+    fn accepted_step_field_policy_samples_step_zero_and_forces_one_terminal_sample() {
+        let mut recorder = ArtifactRecorder::in_memory(ExecutionProvenance::default());
+        recorder.accepted_step_fields =
+            Arc::new(vec![("m".into(), 2), ("H_rotated_dmi".into(), 3)]);
+
+        assert_eq!(
+            recorder.due_accepted_step_fields(0, false),
+            vec!["m".to_string(), "H_rotated_dmi".to_string()]
+        );
+        assert!(recorder.due_accepted_step_fields(0, false).is_empty());
+        assert!(recorder.due_accepted_step_fields(1, false).is_empty());
+        assert_eq!(
+            recorder.due_accepted_step_fields(2, false),
+            vec!["m".to_string()]
+        );
+        assert_eq!(
+            recorder.due_accepted_step_fields(2, true),
+            vec!["H_rotated_dmi".to_string()]
+        );
+        assert!(recorder.due_accepted_step_fields(2, true).is_empty());
+    }
+
     #[test]
     fn failed_run_provenance_is_durable_without_success_finish() {
         let unique = SystemTime::now()
@@ -2452,7 +2476,7 @@ mod tests {
             queue_depth: Arc::new(AtomicUsize::new(initial_depth)),
             diagnostics: Arc::new(ArtifactPipelineDiagnosticsState::default()),
             physics_execution_context: None,
-            #[cfg(feature = "fem-gpu")]
+            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
             accepted_step_fields: Arc::new(Vec::new()),
         }
     }

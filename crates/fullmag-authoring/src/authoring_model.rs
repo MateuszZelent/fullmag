@@ -483,12 +483,16 @@ fn energy_terms(scene: &SceneDocument) -> Vec<Value> {
         terms.push(json!({ "kind": "demag", "scope": "study" }));
     }
     if let Some(value) = scene.study.rotated_interfacial_dmi {
-        if value != 0.0 {
-            terms.push(json!({
+        if value != 0.0 || scene.study.rotated_interfacial_dmi_object_ids.is_some() {
+            let mut term = json!({
                 "kind": "rotated_interfacial_dmi",
                 "scope": "study",
                 "value": value
-            }));
+            });
+            if let Some(ids) = &scene.study.rotated_interfacial_dmi_object_ids {
+                term["object_ids"] = json!(ids);
+            }
+            terms.push(term);
         }
     }
     terms
@@ -601,5 +605,23 @@ mod canonical_compatibility_tests {
             model.canonical_sha256().expect("canonical digest"),
             EXPECTED_SHA256.trim(),
         );
+    }
+}
+
+#[cfg(test)]
+mod rotated_dmi_scope_tests {
+    use super::*;
+
+    #[test]
+    fn projection_keeps_scoped_targets_and_legacy_global_shape() {
+        let mut scene = SceneDocument::default();
+        scene.study.rotated_interfacial_dmi = Some(0.004);
+        let global = energy_terms(&scene).into_iter().find(|t| t["kind"] == "rotated_interfacial_dmi").unwrap();
+        assert!(global.get("object_ids").is_none());
+        scene.study.rotated_interfacial_dmi = Some(0.0);
+        scene.study.rotated_interfacial_dmi_object_ids = Some(vec!["film".into()]);
+        let scoped = energy_terms(&scene).into_iter().find(|t| t["kind"] == "rotated_interfacial_dmi").unwrap();
+        assert_eq!(scoped["object_ids"], json!(["film"]));
+        assert_eq!(scoped["value"], 0.0);
     }
 }

@@ -59,6 +59,15 @@ const FDM_PARTIAL_LAYER_ID = "layer:partial";
 const FDM_DENSE_LAYER_ID = "layer:dense";
 const FDM_MULTILAYER_LAYOUT_REVISION = 7;
 const FDM_MULTILAYER_GRID_FINGERPRINT = "a1".repeat(32);
+const FDM_MULTILAYER_AIRBOX_GRID_FINGERPRINT = "b2".repeat(32);
+const FDM_MULTILAYER_AIRBOX_SHAPE = [12, 8, 2];
+const FDM_MULTILAYER_AIRBOX_ORIGIN = [-7.5e-7, -5e-7, -1e-7];
+const FDM_MULTILAYER_AIRBOX_CELL_SIZE = [2.5e-8, 2.5e-8, 5e-8];
+const FDM_MULTILAYER_AIRBOX_CELL_COUNT = FDM_MULTILAYER_AIRBOX_SHAPE.reduce(
+  (product, count) => product * count,
+  1,
+);
+const COLD_VECTOR_PROOF_SESSION_KEY = "__fullmag_viewport_cold_vector_proof__";
 const FDM_PARTIAL_INACTIVE_CELL_INDICES = [0, 23, 384, 767];
 const FDM_PARTIAL_ACTIVE_MASK = createPartialActiveMask();
 const FDM_PARTIAL_PACKED_MASK = packActiveMask(FDM_PARTIAL_ACTIVE_MASK);
@@ -515,6 +524,18 @@ try {
     fixture,
     fixtureRequests,
   );
+  const coldNativeVectors = await assertColdFdmMultilayerVectorOnlyRendered(
+    page,
+    fixture,
+    auditArtifactsDirectory,
+    "native",
+  );
+  const coldAirboxVectors = await assertColdFdmMultilayerVectorOnlyRendered(
+    page,
+    fixture,
+    auditArtifactsDirectory,
+    "airbox",
+  );
   if (errors.length > 0) {
     throw new Error(`Browser console/network errors:\n${errors.join("\n")}`);
   }
@@ -541,6 +562,8 @@ try {
     idle,
     idleRequests,
     partialMultilayer,
+    coldNativeVectors,
+    coldAirboxVectors,
     quantitySwitchPerformanceDelta,
     rawPerformanceTrace,
     fidelity,
@@ -1143,6 +1166,10 @@ async function assertPartialMultilayerNativeMaskRendered(
   const activeMaskPath = fdmMultilayerActiveMaskPath(FDM_PARTIAL_LAYER_ID);
   const requestsBeforeReload = countFixtureRequests(fixtureRequests, activeMaskPath);
   fixture.multilayerEnabled = true;
+  // This separate case qualifies cell geometry, independently of the display
+  // state left by the preceding quantity/style stress scenario.
+  fixture.visualizationState = fdmVisualizationStateFixture();
+  fixture.status = fdmStatusFixture(fixture);
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForFunction(
     () => Boolean(window.__FULLMAG_CONTROL_ROOM_AUDIT__),
@@ -1195,6 +1222,396 @@ async function assertPartialMultilayerNativeMaskRendered(
     maskPath: activeMaskPath,
     requested: countFixtureRequests(fixtureRequests, activeMaskPath) - requestsBeforeReload,
   };
+}
+
+async function assertColdFdmMultilayerVectorOnlyRendered(
+  page,
+  fixture,
+  artifactsDirectory,
+  targetKind,
+) {
+  const target = coldVectorOnlyTarget(targetKind);
+  fixture.multilayerEnabled = true;
+  fixture.multilayerAirboxEnabled = targetKind === "airbox";
+  fixture.multilayerLayoutGate = createDeferred();
+  fixture.scopedFieldResponses = [];
+  fixture.visualizationState = fdmColdVectorOnlyVisualizationStateFixture(targetKind);
+  fixture.status = fdmStatusFixture(fixture);
+
+  await page.evaluate((sessionKey) => {
+    sessionStorage.setItem(sessionKey, "1");
+  }, COLD_VECTOR_PROOF_SESSION_KEY);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(
+    () => Boolean(window.__FULLMAG_CONTROL_ROOM_AUDIT__),
+    undefined,
+    { timeout: 10_000 },
+  );
+  await waitForColdVectorOnlyTargetSettings(page, target, targetKind);
+
+  // Hold the layout carrier until the target-specific vector-only state has
+  // reached the browser. The viewport cannot schedule a cell model first.
+  const [gpuBefore, drawHistogramBefore] = await Promise.all([
+    readBrowserAuditCounters(page),
+    readColdGlyphInstancedDrawHistogram(page),
+  ]);
+  fixture.multilayerLayoutGate.resolve();
+  fixture.multilayerLayoutGate = null;
+  await openThreeDimensionalViewport(page);
+
+  const viewport = page.locator(".fm-viewport-3d");
+  const canvas = page.locator(".fm-viewport-3d canvas");
+  await canvas.waitFor({ state: "visible", timeout: 10_000 });
+  await waitForCanvasReady(canvas);
+
+  const expectedField = targetKind === "native"
+    ? { quantityId: "m", scopeId: FDM_PARTIAL_LAYER_ID, scopeKind: "layer" }
+    : { quantityId: "H_demag", scopeId: "airbox", scopeKind: "airbox" };
+  await waitForCondition(
+    () => fixture.scopedFieldResponses.some((response) => (
+      response.quantityId === expectedField.quantityId &&
+      response.scopeId === expectedField.scopeId &&
+      response.scopeKind === expectedField.scopeKind &&
+      response.formatVersion === 3
+    )),
+    15_000,
+    `Cold ${targetKind} fixture did not return its correctly scoped FMVP v3 field.`,
+  );
+  const fieldResponse = fixture.scopedFieldResponses.find((response) => (
+    response.quantityId === expectedField.quantityId &&
+    response.scopeId === expectedField.scopeId &&
+    response.scopeKind === expectedField.scopeKind
+  ));
+  if (!fieldResponse) throw new Error(`Cold ${targetKind} scoped field response is missing.`);
+  if (targetKind === "airbox" && fieldResponse.carrierFingerprint !== FDM_MULTILAYER_AIRBOX_GRID_FINGERPRINT) {
+    throw new Error(
+      `Cold Airbox field carrier fingerprint was ${fieldResponse.carrierFingerprint ?? "missing"}; expected ${FDM_MULTILAYER_AIRBOX_GRID_FINGERPRINT}.`,
+    );
+  }
+
+  let vectorOnlyResult = null;
+  await waitForCondition(
+    async () => {
+      const results = await readFdmBuildResults(page);
+      vectorOnlyResult = results.find((result) => (
+        result.vectorOnly === true &&
+        (targetKind === "native"
+          ? result.layerId === FDM_PARTIAL_LAYER_ID
+          : result.carrierFingerprint === `sha256:${FDM_MULTILAYER_AIRBOX_GRID_FINGERPRINT}`)
+      ));
+      return Boolean(vectorOnlyResult);
+    },
+    20_000,
+    `Cold ${targetKind} vector-only build did not return an observable worker result.`,
+  );
+  assertColdVectorOnlyBuildResult(vectorOnlyResult, targetKind);
+
+  let glyphBuild = null;
+  await waitForCondition(
+    async () => {
+      const results = await readVectorGlyphBuildResults(page);
+      glyphBuild = results.find((result) => (
+        result.inputSegmentCount === vectorOnlyResult.vectorSegmentCount &&
+        result.transformsCount === vectorOnlyResult.vectorSegmentCount
+      ));
+      return Boolean(glyphBuild);
+    },
+    15_000,
+    `Cold ${targetKind} vector segments were not adopted by the glyph-build worker.`,
+  );
+  if (!glyphBuild || glyphBuild.transformsCount <= 0) {
+    throw new Error(`Cold ${targetKind} glyph transform count was empty.`);
+  }
+
+  const drawEvidence = await waitForColdVectorInstancedDraws(
+    page,
+    gpuBefore,
+    drawHistogramBefore,
+    glyphBuild.transformsCount,
+    targetKind,
+  );
+  const [gpuAfter, targetSettings] = await Promise.all([
+    readBrowserAuditCounters(page),
+    readColdVectorOnlyTargetSettings(page, target),
+  ]);
+  assertColdVectorOnlySettings(targetSettings, targetKind);
+
+  const viewportState = await viewport.evaluate((element) => ({
+    airboxBuildStatus: element.getAttribute("data-fdm-airbox-build-status"),
+    airboxDomainCellCount: Number(element.getAttribute("data-fdm-airbox-domain-cell-count")),
+    airboxModelCount: Number(element.getAttribute("data-fdm-airbox-model-count")),
+    airboxTarget: element.getAttribute("data-fdm-airbox-target"),
+    airboxVectorSegmentCount: Number(element.getAttribute("data-fdm-airbox-vector-segment-count")),
+    airboxVectorsVisible: element.getAttribute("data-fdm-airbox-vectors-visible"),
+    fdmModelCount: Number(element.getAttribute("data-fdm-model-count")),
+  }));
+  if (viewportState.fdmModelCount !== 0) {
+    throw new Error(
+      `Cold ${targetKind} viewport retained ${viewportState.fdmModelCount} cell instances; expected a vector-only frame.`,
+    );
+  }
+  if (targetKind === "airbox") {
+    if (
+      viewportState.airboxTarget !== "airbox" ||
+      viewportState.airboxBuildStatus !== "ready" ||
+      viewportState.airboxDomainCellCount !== FDM_MULTILAYER_AIRBOX_CELL_COUNT ||
+      viewportState.airboxModelCount !== 0 ||
+      viewportState.airboxVectorSegmentCount !== vectorOnlyResult.vectorSegmentCount ||
+      viewportState.airboxVectorsVisible !== "true"
+    ) {
+      throw new Error(
+        `Cold multilayer Airbox renderer did not adopt its vector-only build: ${JSON.stringify(viewportState)}.`,
+      );
+    }
+  }
+
+  const webgl = await canvas.evaluate((element) => {
+    const context = element.getContext("webgl2") ?? element.getContext("webgl");
+    return {
+      contextAvailable: Boolean(context),
+      contextLost: context?.isContextLost() ?? true,
+      drawingBufferHeight: context?.drawingBufferHeight ?? 0,
+      drawingBufferWidth: context?.drawingBufferWidth ?? 0,
+    };
+  });
+  if (
+    !webgl.contextAvailable ||
+    webgl.contextLost !== false ||
+    webgl.drawingBufferWidth <= 0 ||
+    webgl.drawingBufferHeight <= 0
+  ) {
+    throw new Error(`Cold ${targetKind} WebGL context is unhealthy: ${JSON.stringify(webgl)}.`);
+  }
+  const fidelity = await assertCanvasHasFidelity(page);
+  const screenshot = path.join(
+    artifactsDirectory,
+    `cold-${targetKind}-vector-only.png`,
+  );
+  await canvas.screenshot({ path: screenshot });
+
+  // Keep field identity and vectors unchanged while requesting cell geometry.
+  // A cached vector-only job must not suppress this subsequent full build.
+  fixture.visualizationState = applyPatch(fixture.visualizationState, {
+    overrides: fixture.visualizationState.overrides.map((entry) => (
+      entry.scope_id === target.id
+        ? mergeRecords(entry, { display: { surface: { visible: true } } })
+        : entry
+    )),
+    revision: fixture.visualizationState.revision + 1,
+  });
+  fixture.status.resources.visualization_state_revision = fixture.visualizationState.revision;
+  await page.evaluate((state) => {
+    window.__FULLMAG_CONTROL_ROOM_AUDIT__.publishVisualizationState(state);
+  }, fixture.visualizationState);
+  const modelCountAttribute = targetKind === "native"
+    ? "data-fdm-model-count"
+    : "data-fdm-airbox-model-count";
+  let surfaceEvidence = null;
+  // Multilayer fields are target-scoped: the primary-field HUD legitimately
+  // says field:none. Qualify this transition with the target model and draw.
+  await waitForCondition(
+    async () => {
+      const [modelCount, runtime, gpu] = await Promise.all([
+        viewport.getAttribute(modelCountAttribute),
+        readViewportAuditRuntime(page),
+        readBrowserAuditCounters(page),
+      ]);
+      surfaceEvidence = {
+        modelCount: Number(modelCount),
+        visualizationRevision: runtime.visualizationRevision,
+        workerJobs: Number(runtime.workers?.jobs ?? -1),
+        drawCalls: gpu.drawCalls - gpuAfter.drawCalls,
+      };
+      return surfaceEvidence.modelCount > 0 &&
+        String(surfaceEvidence.visualizationRevision) === String(fixture.visualizationState.revision) &&
+        surfaceEvidence.workerJobs === 0 && surfaceEvidence.drawCalls > 0;
+    },
+    15_000,
+    `Cold ${targetKind} vector-only job prevented the subsequent surface build.`,
+  );
+  const surfaceModelCount = surfaceEvidence.modelCount;
+
+  return {
+    surfaceModelCount,
+    surfaceEvidence,
+    fieldResponse,
+    glyphBuild,
+    gpu: {
+      viewportBufferBytesUploaded:
+        gpuAfter.viewportBufferBytesUploaded - gpuBefore.viewportBufferBytesUploaded,
+      drawCalls: gpuAfter.drawCalls,
+      instancedDrawCalls: gpuAfter.instancedDrawCalls - gpuBefore.instancedDrawCalls,
+      instancedDrawInstanceCountTotal:
+        gpuAfter.instancedDrawInstanceCountTotal -
+        gpuBefore.instancedDrawInstanceCountTotal,
+      matchingInstancedDrawCount: drawEvidence.matchingDrawCount,
+      matchingInstancedDrawInstanceCountTotal:
+        drawEvidence.matchingDrawCount * glyphBuild.transformsCount,
+    },
+    screenshot,
+    targetKind,
+    vectorOnlyBuild: {
+      activeCellIndices: vectorOnlyResult.vectorCellIndices,
+      layerId: vectorOnlyResult.layerId,
+      modelIsNull: vectorOnlyResult.modelIsNull,
+      requestedCellIndices: vectorOnlyResult.requestedCellIndices,
+      segmentCount: vectorOnlyResult.vectorSegmentCount,
+    },
+    viewport: viewportState,
+    webgl,
+    fidelity,
+  };
+}
+
+async function waitForColdVectorOnlyTargetSettings(page, target, targetKind) {
+  await waitForCondition(
+    async () => {
+      const settings = await readColdVectorOnlyTargetSettings(page, target);
+      return settings?.visible === (targetKind === "native" || targetKind === "airbox") &&
+        settings?.vectorsVisible === (targetKind === "native" || targetKind === "airbox") &&
+        settings?.pointsVisible === false &&
+        settings?.wireframeVisible === false &&
+        settings?.shaderVisible === false;
+    },
+    10_000,
+    `Cold ${targetKind} vector-only settings were not active before multilayer layout release.`,
+  );
+  const settings = await readColdVectorOnlyTargetSettings(page, target);
+  assertColdVectorOnlySettings(settings, targetKind);
+}
+
+async function readColdVectorOnlyTargetSettings(page, target) {
+  return page.evaluate((targetRef) => {
+    const hook = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+    // The controller getter exposes local patches, not persisted overrides.
+    // Admit the layout only after the browser's canonical resource is hydrated;
+    // the worker and draw assertions below verify that the viewport applies it.
+    const resource = hook?.readViewportAuditResource?.(
+      "/v2/sessions/current/visualization/state",
+    );
+    const scope = targetRef.kind === "fdm-native-layer" ? "fdm_native_layer" : "airbox";
+    const override = resource?.data?.overrides?.find((entry) => (
+      entry.scope === scope && entry.scope_id === targetRef.id
+    ));
+    if (!override) return null;
+    return {
+      visible: override.display?.visible ?? override.visible,
+      vectorsVisible: override.display?.vectors?.visible,
+      pointsVisible: override.display?.points?.visible,
+      wireframeVisible: override.display?.wireframe?.visible,
+      shaderVisible: override.display?.surface?.visible,
+    };
+  }, target);
+}
+
+function assertColdVectorOnlySettings(settings, targetKind) {
+  const enabled = targetKind === "native" || targetKind === "airbox";
+  if (
+    settings?.visible !== enabled ||
+    settings?.vectorsVisible !== enabled ||
+    settings?.pointsVisible !== false ||
+    settings?.wireframeVisible !== false ||
+    settings?.shaderVisible !== false
+  ) {
+    throw new Error(
+      `Cold ${targetKind} display settings were not vectors-only: ${JSON.stringify(settings)}.`,
+    );
+  }
+}
+
+function coldVectorOnlyTarget(targetKind) {
+  if (targetKind === "native") {
+    return {
+      id: `fdm-native-layer:${encodeURIComponent(FDM_PARTIAL_LAYER_ID)}`,
+      kind: "fdm-native-layer",
+      label: "partial",
+    };
+  }
+  if (targetKind === "airbox") {
+    return { id: "airbox", kind: "airbox", label: "Airbox" };
+  }
+  throw new Error(`Unknown cold FDM target kind: ${targetKind}.`);
+}
+
+function assertColdVectorOnlyBuildResult(result, targetKind) {
+  if (
+    !result ||
+    result.modelIsNull !== true ||
+    !Array.isArray(result.requestedCellIndices) ||
+    result.requestedCellIndices.length === 0 ||
+    !Array.isArray(result.vectorCellIndices) ||
+    result.vectorCellIndices.length === 0 ||
+    result.vectorSegmentCount <= 0 ||
+    result.vectorSegmentCount !== result.vectorCellIndices.length
+  ) {
+    throw new Error(
+      `Cold ${targetKind} vector-only worker result was incomplete: ${JSON.stringify(result)}.`,
+    );
+  }
+  if (targetKind === "native") {
+    if (result.layerId !== FDM_PARTIAL_LAYER_ID || !Array.isArray(result.activeMask) || result.activeMask.length !== FIELD_GRID[0] * FIELD_GRID[1] * FIELD_GRID[2]) {
+      throw new Error(`Cold native vector-only worker result lacks the declared partial-layer active mask.`);
+    }
+    const inactive = result.vectorCellIndices.filter((cellIndex) => result.activeMask[cellIndex] !== 1);
+    if (inactive.length > 0) {
+      throw new Error(`Cold native vector-only worker sampled inactive cell indices: ${inactive.join(",")}.`);
+    }
+  } else {
+    if (result.carrierFingerprint !== `sha256:${FDM_MULTILAYER_AIRBOX_GRID_FINGERPRINT}`) {
+      throw new Error(`Cold Airbox vector-only worker result used a different carrier fingerprint.`);
+    }
+    const outOfRange = result.vectorCellIndices.filter(
+      (cellIndex) => cellIndex >= FDM_MULTILAYER_AIRBOX_CELL_COUNT,
+    );
+    if (outOfRange.length > 0) {
+      throw new Error(`Cold Airbox vector-only worker emitted out-of-range sample indices: ${outOfRange.join(",")}.`);
+    }
+  }
+}
+
+async function readVectorGlyphBuildResults(page) {
+  return page.evaluate(() => (
+    window.__FM_VIEWPORT_BROWSER_AUDIT__?.vectorGlyphBuildResults ?? []
+  ));
+}
+
+async function readColdGlyphInstancedDrawHistogram(page) {
+  return page.evaluate(() => Array.from(
+    window.__FM_VIEWPORT_BROWSER_AUDIT__?.glyphInstancedDrawCounts ?? [],
+  ));
+}
+
+async function waitForColdVectorInstancedDraws(
+  page,
+  initialCounters,
+  initialHistogram,
+  expectedGlyphCount,
+  targetKind,
+) {
+  let counters = null;
+  let matchingDrawCount = 0;
+  const initialMatchingDrawCount = initialHistogram.find(
+    ([instanceCount]) => instanceCount === expectedGlyphCount,
+  )?.[1] ?? 0;
+  await waitForCondition(
+    async () => {
+      const [nextCounters, histogram] = await Promise.all([
+        readBrowserAuditCounters(page),
+        readColdGlyphInstancedDrawHistogram(page),
+      ]);
+      counters = nextCounters;
+      matchingDrawCount = (histogram.find(
+        ([instanceCount]) => instanceCount === expectedGlyphCount,
+      )?.[1] ?? 0) - initialMatchingDrawCount;
+      return (
+        counters.viewportBufferBytesUploaded > initialCounters.viewportBufferBytesUploaded &&
+        matchingDrawCount >= 2
+      );
+    },
+    15_000,
+    `Cold ${targetKind} glyphs did not upload and render through matching head/shaft instanced draws; count=${matchingDrawCount}, counters=${JSON.stringify(counters)}.`,
+  );
+  return { counters, matchingDrawCount };
 }
 
 async function readFdmBuildResults(page) {
@@ -1431,18 +1848,44 @@ async function waitForHttp(targetUrl, timeoutMs, child) {
 
 async function installBrowserAuditInstrumentation(page) {
   await page.addInitScript(() => {
+    let coldVectorProofEnabled = false;
+    try {
+      coldVectorProofEnabled =
+        sessionStorage.getItem("__fullmag_viewport_cold_vector_proof__") === "1";
+      if (coldVectorProofEnabled) {
+        sessionStorage.removeItem("__fullmag_viewport_cold_vector_proof__");
+      }
+    } catch {
+      coldVectorProofEnabled = false;
+    }
     const counters = {
       bufferBytesUploaded: 0,
       buffersCreated: 0,
       buffersDeleted: 0,
       drawCalls: 0,
       frames: 0,
+      instancedDrawCalls: 0,
+      instancedDrawInstanceCountTotal: 0,
+      glyphMatchingInstancedDrawCalls: 0,
+      glyphMatchingInstancedInstanceCountTotal: 0,
+      viewportBufferBytesUploaded: 0,
     };
     const fdmBuildRequests = new Map();
     const fdmBuildResults = [];
+    const vectorGlyphBuildRequests = new WeakMap();
+    const vectorGlyphBuildResults = [];
+    const glyphInstancedDrawCounts = new Map();
     Object.defineProperty(counters, "fdmBuildResults", {
       enumerable: false,
       value: fdmBuildResults,
+    });
+    Object.defineProperty(counters, "vectorGlyphBuildResults", {
+      enumerable: false,
+      value: vectorGlyphBuildResults,
+    });
+    Object.defineProperty(counters, "glyphInstancedDrawCounts", {
+      enumerable: false,
+      value: glyphInstancedDrawCounts,
     });
     window.__FM_VIEWPORT_BROWSER_AUDIT__ = counters;
 
@@ -1452,12 +1895,38 @@ async function installBrowserAuditInstrumentation(page) {
     const originalWorkerPostMessage = Worker.prototype.postMessage;
     Worker.prototype.postMessage = function (message, transfer) {
       if (
-        message?.nativeActiveMask instanceof Uint8Array &&
+        (
+          message?.nativeActiveMask instanceof Uint8Array ||
+          (coldVectorProofEnabled && message?.vectorOnly)
+        ) &&
         Number.isSafeInteger(message.id)
       ) {
         fdmBuildRequests.set(message.id, {
-          activeMask: Array.from(message.nativeActiveMask),
+          activeMask: Array.from(
+            message.nativeActiveMask ?? message.vectorOnly?.nativeActiveMask ?? [],
+          ),
+          carrierFingerprint: message.domain?.carrierFingerprint ?? null,
+          layerId: message.domain?.layerId ?? null,
+          membershipAdmission: message.vectorOnly?.membershipAdmission ?? null,
+          requestedCellIndices: coldVectorProofEnabled
+            ? Array.from(message.vectorOnly?.cellIndices ?? [])
+            : null,
           shape: Array.from(message.domain?.shape ?? []),
+          vectorOnly: coldVectorProofEnabled && Boolean(message.vectorOnly),
+        });
+      }
+      if (
+        coldVectorProofEnabled &&
+        message?.segments instanceof Float32Array &&
+        Number.isSafeInteger(message.id)
+      ) {
+        let requests = vectorGlyphBuildRequests.get(this);
+        if (!requests) {
+          requests = new Map();
+          vectorGlyphBuildRequests.set(this, requests);
+        }
+        requests.set(message.id, {
+          inputSegmentCount: Math.floor(message.segments.length / 7),
         });
       }
       return originalWorkerPostMessage.call(this, message, transfer);
@@ -1475,15 +1944,64 @@ async function installBrowserAuditInstrumentation(page) {
       if (!wrapped) {
         wrapped = function (event) {
           const request = fdmBuildRequests.get(event.data?.id);
-          const model = event.data?.ok ? event.data.data?.model : null;
-          if (request && model?.cellIndices instanceof Uint32Array) {
-            fdmBuildResults.push({
-              activeMask: request.activeMask,
-              cellIndices: Array.from(model.cellIndices),
-              count: model.count,
-              shape: request.shape,
-            });
-            fdmBuildRequests.delete(event.data.id);
+          if (request && event.data?.ok) {
+            const data = event.data.data;
+            const model = data?.model;
+            if (
+              model?.cellIndices instanceof Uint32Array ||
+              (coldVectorProofEnabled && request.vectorOnly)
+            ) {
+              const result = {
+                activeMask: request.activeMask,
+                cellIndices: model?.cellIndices instanceof Uint32Array
+                  ? Array.from(model.cellIndices)
+                  : [],
+                count: model?.count ?? null,
+                shape: request.shape,
+              };
+              if (coldVectorProofEnabled && request.vectorOnly) {
+                Object.assign(result, {
+                  carrierFingerprint: request.carrierFingerprint,
+                  layerId: request.layerId,
+                  membershipAdmission: request.membershipAdmission,
+                  modelIsNull: model === null,
+                  requestedCellIndices: request.requestedCellIndices,
+                  vectorCellIndices: Array.from(data?.vectorCellIndices ?? []),
+                  vectorOnly: true,
+                  vectorSegmentCount: Math.floor((data?.vectorSegments?.length ?? 0) / 7),
+                });
+              }
+              fdmBuildResults.push(result);
+              if (fdmBuildResults.length > 128) fdmBuildResults.shift();
+              fdmBuildRequests.delete(event.data.id);
+            }
+          }
+          if (coldVectorProofEnabled) {
+            const glyphRequests = vectorGlyphBuildRequests.get(this);
+            const glyphRequest = glyphRequests?.get(event.data?.id);
+            if (glyphRequest) {
+              if (event.data?.ok) {
+                vectorGlyphBuildResults.push({
+                  inputSegmentCount: glyphRequest.inputSegmentCount,
+                  transformsCount: event.data.data?.transforms?.count ?? 0,
+                });
+                if (vectorGlyphBuildResults.length > 16) vectorGlyphBuildResults.shift();
+                const currentGlyphCounts = new Set(
+                  vectorGlyphBuildResults.map((result) => result.transformsCount),
+                );
+                for (const instanceCount of glyphInstancedDrawCounts.keys()) {
+                  if (!currentGlyphCounts.has(instanceCount)) {
+                    glyphInstancedDrawCounts.delete(instanceCount);
+                  }
+                }
+                for (const instanceCount of currentGlyphCounts) {
+                  if (!glyphInstancedDrawCounts.has(instanceCount)) {
+                    glyphInstancedDrawCounts.set(instanceCount, 0);
+                  }
+                }
+              }
+              glyphRequests.delete(event.data.id);
+            }
           }
           return listener.call(this, event);
         };
@@ -1519,6 +2037,25 @@ async function installBrowserAuditInstrumentation(page) {
           if (name === "createBuffer") counters.buffersCreated += 1;
           if (name === "deleteBuffer") counters.buffersDeleted += 1;
           if (name.startsWith("draw")) counters.drawCalls += 1;
+          if (
+            coldVectorProofEnabled &&
+            name.endsWith("Instanced") &&
+            gl.canvas?.closest?.(".fm-viewport-3d")
+          ) {
+            const instanceCount = methodArgs[methodArgs.length - 1];
+            if (Number.isSafeInteger(instanceCount) && instanceCount > 0) {
+              counters.instancedDrawCalls += 1;
+              counters.instancedDrawInstanceCountTotal += instanceCount;
+              if (glyphInstancedDrawCounts.has(instanceCount)) {
+                counters.glyphMatchingInstancedDrawCalls += 1;
+                counters.glyphMatchingInstancedInstanceCountTotal += instanceCount;
+                glyphInstancedDrawCounts.set(
+                  instanceCount,
+                  glyphInstancedDrawCounts.get(instanceCount) + 1,
+                );
+              }
+            }
+          }
           return original.apply(this, methodArgs);
         };
       }
@@ -1529,6 +2066,12 @@ async function installBrowserAuditInstrumentation(page) {
           const data = methodArgs[1];
           if (typeof data === "number") counters.bufferBytesUploaded += data;
           else if (data && typeof data.byteLength === "number") counters.bufferBytesUploaded += data.byteLength;
+          if (coldVectorProofEnabled && gl.canvas?.closest?.(".fm-viewport-3d")) {
+            if (typeof data === "number") counters.viewportBufferBytesUploaded += data;
+            else if (data && typeof data.byteLength === "number") {
+              counters.viewportBufferBytesUploaded += data.byteLength;
+            }
+          }
           return original.apply(this, methodArgs);
         };
       }
@@ -1620,7 +2163,11 @@ async function installFdmFixtureApi(page, fixture, requests) {
     }
     if (path === "/v2/sessions/current/data/domain/fdm-multilayer-layout") {
       if (fixture.multilayerEnabled) {
-        await fulfillJson(route, fdmMultilayerLayoutFixture());
+        const layoutGate = fixture.multilayerLayoutGate;
+        if (layoutGate) await layoutGate.promise;
+        await fulfillJson(route, fdmMultilayerLayoutFixture({
+          airboxAvailable: fixture.multilayerAirboxEnabled,
+        }));
       } else {
         await fulfillEmpty(route, 204);
       }
@@ -1663,6 +2210,56 @@ async function installFdmFixtureApi(page, fixture, requests) {
     }
     if (path.startsWith("/v2/sessions/current/data/fields/")) {
       const quantityId = decodeURIComponent(path.split("/")[6] ?? "m");
+      const scopeKind = requestUrl.searchParams.get("scope_kind") ?? "full";
+      const scopeId = requestUrl.searchParams.get("scope_id");
+      const layer = fixture.multilayerEnabled && scopeKind === "layer"
+        ? fdmMultilayerLayoutFixture().layers.find((entry) => entry.layer_id === scopeId)
+        : null;
+      const airboxScoped = fixture.multilayerAirboxEnabled &&
+        scopeKind === "airbox" &&
+        scopeId === "airbox";
+      if (layer || airboxScoped) {
+        const fieldDomain = layer
+          ? {
+              carrierFingerprint: FDM_MULTILAYER_GRID_FINGERPRINT,
+              carrierRevision: FDM_MULTILAYER_LAYOUT_REVISION,
+              grid: FIELD_GRID,
+              indexing: "full_domain",
+              scopeId,
+              scopeKind,
+            }
+          : {
+              carrierFingerprint: FDM_MULTILAYER_AIRBOX_GRID_FINGERPRINT,
+              carrierRevision: 1,
+              grid: FDM_MULTILAYER_AIRBOX_SHAPE,
+              indexing: "explicit_node_indices",
+              scopeId,
+              scopeKind,
+            };
+        const { buffer, headers } = makeFdmMultilayerFieldVectorBuffer({
+          domainGenerationId: "1",
+          domain: fieldDomain,
+          quantityId,
+        });
+        const etag = `"fdm-memory-${quantityId}-${scopeKind}-${scopeId}"`;
+        fixture.scopedFieldResponses.push({
+          carrierFingerprint: fieldDomain.carrierFingerprint,
+          formatVersion: 3,
+          quantityId,
+          resourceKey: `${requestUrl.pathname}${requestUrl.search}`,
+          scopeId,
+          scopeKind,
+        });
+        await fulfillBinary(route, buffer, 200, {
+          ...headers,
+          etag,
+          "x-fullmag-domain-generation-id": "1",
+          "x-fullmag-field-revision": "1",
+          "x-fullmag-payload-state": "current",
+          "x-fullmag-quantity-id": quantityId,
+        });
+        return;
+      }
       const etag = `"fdm-memory-${quantityId}"`;
       if (request.headers()["if-none-match"] === etag) {
         await fulfillEmpty(route, 304, { etag });
@@ -1683,7 +2280,12 @@ async function installFdmFixtureApi(page, fixture, requests) {
       return;
     }
     if (path === "/v2/sessions/current/model/scene") {
-      await fulfillJson(route, fixture.scene);
+      await fulfillJson(
+        route,
+        fixture.multilayerEnabled
+          ? fdmMultilayerSceneFixture(fixture.scene)
+          : fixture.scene,
+      );
       return;
     }
     if (path === "/v2/sessions/current/model/regions") {
@@ -1902,6 +2504,14 @@ async function waitForCondition(check, timeoutMs, message) {
     await sleep(50);
   }
   throw new Error(message);
+}
+
+function createDeferred() {
+  let resolve;
+  const promise = new Promise((accept) => {
+    resolve = accept;
+  });
+  return { promise, resolve };
 }
 
 async function waitForCanvasReady(canvas) {
@@ -2140,7 +2750,7 @@ function fixtureHeaders(extra = {}) {
     "access-control-allow-methods": "GET,POST,PATCH,PUT,DELETE,OPTIONS",
     "access-control-allow-origin": "*",
     "access-control-expose-headers":
-      "x-api-contract-version,etag,x-request-id,x-fullmag-grid-fingerprint,x-fullmag-region-membership-revision,x-fullmag-domain-generation-id,x-fullmag-encoding,x-fullmag-component,x-fullmag-payload-state,x-fullmag-field-revision,x-fullmag-n-comp,x-fullmag-point-count,x-fullmag-quantity-id,x-fullmag-value-count",
+      "x-api-contract-version,etag,x-request-id,x-fullmag-grid-fingerprint,x-fullmag-region-membership-revision,x-fullmag-domain-generation-id,x-fullmag-encoding,x-fullmag-component,x-fullmag-payload-state,x-fullmag-field-revision,x-fullmag-n-comp,x-fullmag-point-count,x-fullmag-quantity-id,x-fullmag-value-count,x-fullmag-field-indexing,x-fullmag-mesh-topology-hash,x-fullmag-mesh-topology-revision,x-fullmag-node-index-count",
     "x-api-contract-version": "1.0.0",
     ...extra,
   };
@@ -2161,6 +2771,10 @@ function createFdmFixture() {
     visualizationIdentity: { clientId: null, viewportId: null },
     visualizationAcks: [],
     visualizationState,
+    multilayerEnabled: false,
+    multilayerAirboxEnabled: false,
+    multilayerLayoutGate: null,
+    scopedFieldResponses: [],
   };
   validateFdmMemoryFixture(fixture);
   return fixture;
@@ -2207,6 +2821,36 @@ function fdmSceneFixture() {
     ],
     revision: 1,
     schema_version: 2,
+  };
+}
+
+function fdmMultilayerSceneFixture(scene) {
+  // A published native layer must have an authored magnetic owner.
+  const owners = fdmMultilayerLayoutFixture().layers.map((layer) => {
+    const size = layer.native_grid.map(
+      (count, axis) => count * layer.native_cell_size[axis],
+    );
+    return {
+      geometry: { geometry_params: { size }, kind: "box" },
+      id: layer.object_id,
+      magnetization_ref: "fixture-magnetization",
+      name: layer.magnet_name,
+      transform: {
+        translation: layer.native_origin.map((origin, axis) => origin + size[axis] / 2),
+      },
+      visible: true,
+    };
+  });
+  return {
+    ...scene,
+    magnetization_assets: [{
+      id: "fixture-magnetization",
+      kind: "preset_texture",
+      preset_kind: "uniform",
+      preset_params: { direction: [1, 0, 0] },
+      preset_version: 1,
+    }],
+    objects: [...scene.objects, ...owners],
   };
 }
 
@@ -2511,16 +3155,34 @@ function fdmMembershipBuffer() {
   return buffer;
 }
 
-function fdmMultilayerLayoutFixture() {
+function fdmMultilayerLayoutFixture({ airboxAvailable = false } = {}) {
   const totalCells = FIELD_GRID[0] * FIELD_GRID[1] * FIELD_GRID[2];
   const nativeCellSize = [1.25e-8, 1.25e-8, 5e-8];
   const nativeGridFingerprint = `sha256:${FDM_MULTILAYER_GRID_FINGERPRINT}`;
+  const airbox = airboxAvailable
+    ? {
+        carrier_available: true,
+        carrier_fingerprint: `sha256:${FDM_MULTILAYER_AIRBOX_GRID_FINGERPRINT}`,
+        carrier_revision: 1,
+        cell_size_m: FDM_MULTILAYER_AIRBOX_CELL_SIZE,
+        cells: FDM_MULTILAYER_AIRBOX_SHAPE,
+        h_demag_available: true,
+        h_eff_available: false,
+        h_eff_unavailable_reason: "fixture_quantity_not_materialized",
+        origin_m: FDM_MULTILAYER_AIRBOX_ORIGIN,
+        sample_count: FDM_MULTILAYER_AIRBOX_CELL_COUNT,
+        source_grid_fingerprints: [nativeGridFingerprint, nativeGridFingerprint],
+        source_policy: "target_only",
+        target_only: true,
+        value_count: FDM_MULTILAYER_AIRBOX_CELL_COUNT * 3,
+      }
+    : {
+        carrier_available: false,
+        h_demag_available: false,
+        h_eff_available: false,
+      };
   return {
-    airbox: {
-      carrier_available: false,
-      h_demag_available: false,
-      h_eff_available: false,
-    },
+    airbox,
     available: true,
     backend: "fdm_multilayer",
     common_transform_layout: {
@@ -2775,6 +3437,56 @@ function fdmVisualizationStateFixture() {
   };
 }
 
+function fdmColdVectorOnlyVisualizationStateFixture(targetKind) {
+  const state = fdmVisualizationStateFixture();
+  state.layers.surface.visible = false;
+  state.layers.points.visible = false;
+  state.layers.vectors.visible = false;
+  state.layers.wireframe.visible = false;
+  state.layers.airbox = {
+    points: { visible: false },
+    surface: { opacity: 0.28, visible: false },
+    vectors: { density: 2, domain: "airbox_only", visible: targetKind === "airbox" },
+    visible: targetKind === "airbox",
+    wireframe: { visible: false },
+  };
+  state.sampling.max_glyphs = 128;
+  state.overrides = [
+    ...[FDM_DENSE_LAYER_ID, FDM_PARTIAL_LAYER_ID].map((layerId) => ({
+      display: {
+        geometry_scope: "full",
+        points: { visible: false },
+        surface: { visible: false },
+        vectors: { density: 2, visible: targetKind === "native" && layerId === FDM_PARTIAL_LAYER_ID },
+        visible: targetKind === "native" && layerId === FDM_PARTIAL_LAYER_ID,
+        wireframe: { visible: false },
+      },
+      quantity: { active_quantity_id: "m" },
+      scope: "fdm_native_layer",
+      scope_id: `fdm-native-layer:${encodeURIComponent(layerId)}`,
+      style: { vector_budget: 128 },
+    })),
+    {
+      display: {
+        geometry_scope: "full",
+        points: { visible: false },
+        surface: { visible: false },
+        vectors: { density: 2, visible: targetKind === "airbox" },
+        visible: targetKind === "airbox",
+        wireframe: { visible: false },
+      },
+      quantity: { active_quantity_id: "H_demag" },
+      scope: "airbox",
+      scope_id: "airbox",
+      style: { vector_budget: 128 },
+    },
+  ];
+  state.quantity.active_quantity_id = targetKind === "airbox" ? "H_demag" : "m";
+  state.active_quantity_id = state.quantity.active_quantity_id;
+  state.revision = 1;
+  return state;
+}
+
 function makeFdmFieldVectorBuffer(quantityId) {
   const pointCount = FIELD_GRID[0] * FIELD_GRID[1] * FIELD_GRID[2];
   const valueCount = pointCount * 3;
@@ -2815,6 +3527,94 @@ function makeFdmFieldVectorBuffer(quantityId) {
   }
 
   return buffer;
+}
+
+function makeFdmMultilayerFieldVectorBuffer({
+  domain,
+  domainGenerationId,
+  quantityId,
+}) {
+  const [nx, ny, nz] = domain.grid;
+  const pointCount = nx * ny * nz;
+  const valueCount = pointCount * 3;
+  const encoder = new TextEncoder();
+  const scopeKindBytes = encoder.encode(domain.scopeKind);
+  const scopeIdBytes = encoder.encode(domain.scopeId);
+  const generationIdBytes = encoder.encode(domainGenerationId);
+  const nodeIndices = domain.indexing === "explicit_node_indices"
+    ? Uint32Array.from({ length: pointCount }, (_, index) => index)
+    : null;
+  const rawMetadataLength =
+    68 +
+    scopeKindBytes.length +
+    scopeIdBytes.length +
+    generationIdBytes.length +
+    (nodeIndices?.byteLength ?? 0);
+  const metadataLength = Math.ceil(rawMetadataLength / 8) * 8;
+  const buffer = new ArrayBuffer(
+    48 + metadataLength + valueCount * Float64Array.BYTES_PER_ELEMENT,
+  );
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMVP"].entries()) {
+    view.setUint8(index, code.charCodeAt(0));
+  }
+  view.setUint8(4, 3);
+  view.setUint8(5, 1);
+  view.setUint8(6, 3);
+  view.setUint32(8, metadataLength, true);
+  view.setUint32(12, valueCount, true);
+  view.setUint32(16, nx, true);
+  view.setUint32(20, ny, true);
+  view.setUint32(24, nz, true);
+  encoder.encodeInto(quantityId, new Uint8Array(buffer, 28, 16));
+
+  for (const [index, code] of [..."FMMI"].entries()) {
+    view.setUint8(48 + index, code.charCodeAt(0));
+  }
+  view.setUint16(52, 2, true);
+  view.setUint16(56, generationIdBytes.length, true);
+  view.setBigUint64(64, BigInt(domain.carrierRevision), true);
+  writeHexBytes(view, 72, domain.carrierFingerprint);
+  view.setUint32(104, nodeIndices ? 1 : 0, true);
+  view.setUint32(108, nodeIndices?.length ?? 0, true);
+  view.setUint16(112, scopeKindBytes.length, true);
+  view.setUint16(114, scopeIdBytes.length, true);
+  new Uint8Array(buffer, 116, scopeKindBytes.length).set(scopeKindBytes);
+  new Uint8Array(buffer, 116 + scopeKindBytes.length, scopeIdBytes.length).set(scopeIdBytes);
+  const generationIdStart = 116 + scopeKindBytes.length + scopeIdBytes.length;
+  new Uint8Array(buffer, generationIdStart, generationIdBytes.length).set(generationIdBytes);
+  let metadataOffset = generationIdStart + generationIdBytes.length;
+  for (const cellIndex of nodeIndices ?? []) {
+    view.setUint32(metadataOffset, cellIndex, true);
+    metadataOffset += Uint32Array.BYTES_PER_ELEMENT;
+  }
+
+  const values = new Float64Array(buffer, 48 + metadataLength, valueCount);
+  const phase = quantityPhase(quantityId);
+  for (let cellIndex = 0; cellIndex < pointCount; cellIndex += 1) {
+    const x = (cellIndex % 3) * 0.25;
+    values[cellIndex * 3] = Math.cos(phase) + x;
+    values[cellIndex * 3 + 1] = Math.sin(phase) + 0.5;
+    values[cellIndex * 3 + 2] = 1;
+  }
+
+  return {
+    buffer,
+    headers: {
+      "x-fullmag-component": "full",
+      "x-fullmag-domain-generation-id": domainGenerationId,
+      "x-fullmag-encoding": "FMVP;version=3",
+      "x-fullmag-field-indexing": nodeIndices
+        ? "explicit_node_indices"
+        : "full_domain",
+      "x-fullmag-mesh-topology-hash": `sha256:${domain.carrierFingerprint}`,
+      "x-fullmag-mesh-topology-revision": String(domain.carrierRevision),
+      "x-fullmag-n-comp": "3",
+      "x-fullmag-node-index-count": String(nodeIndices?.length ?? 0),
+      "x-fullmag-point-count": String(pointCount),
+      "x-fullmag-value-count": String(valueCount),
+    },
+  };
 }
 
 function quantityPhase(quantityId) {
