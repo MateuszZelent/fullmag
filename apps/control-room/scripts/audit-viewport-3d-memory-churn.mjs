@@ -1297,7 +1297,7 @@ async function assertColdFdmMultilayerVectorOnlyRendered(
         result.vectorOnly === true &&
         (targetKind === "native"
           ? result.layerId === FDM_PARTIAL_LAYER_ID
-          : result.carrierFingerprint === FDM_MULTILAYER_AIRBOX_GRID_FINGERPRINT)
+          : result.carrierFingerprint === `sha256:${FDM_MULTILAYER_AIRBOX_GRID_FINGERPRINT}`)
       ));
       return Boolean(vectorOnlyResult);
     },
@@ -1557,7 +1557,7 @@ function assertColdVectorOnlyBuildResult(result, targetKind) {
       throw new Error(`Cold native vector-only worker sampled inactive cell indices: ${inactive.join(",")}.`);
     }
   } else {
-    if (result.carrierFingerprint !== FDM_MULTILAYER_AIRBOX_GRID_FINGERPRINT) {
+    if (result.carrierFingerprint !== `sha256:${FDM_MULTILAYER_AIRBOX_GRID_FINGERPRINT}`) {
       throw new Error(`Cold Airbox vector-only worker result used a different carrier fingerprint.`);
     }
     const outOfRange = result.vectorCellIndices.filter(
