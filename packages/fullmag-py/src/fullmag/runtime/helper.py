@@ -33,6 +33,7 @@ from fullmag.runtime.run_config_export import (
     export_run_config as export_run_config,
 )
 from fullmag.runtime.script_builder import (
+    PinnedFemMeshSourceOutsideRoot,
     export_builder_draft,
     render_scene_document_as_script,
     rewrite_loaded_problem_script,
@@ -45,7 +46,7 @@ MAX_SCRIPT_LOAD_REJECTION_MESSAGE_CHARS = 1024
 
 
 class ScriptLoadRejected(Exception):
-    """The selected user script raised while the canonical loader ran it."""
+    """The selected script or its pinned mesh is invalid before admission."""
 
     def __init__(self, cause: Exception, script_path: Path) -> None:
         self.cause = cause
@@ -490,9 +491,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         except Exception as error:
             # The script itself failed for these exact bytes; the caller has
             # changed nothing yet.  The snapshot read above and the export
-            # below keep their original, unclassified failure.
+            # below retain their own error classification.
             raise ScriptLoadRejected(error, Path(args.script)) from error
-        print(json.dumps(build_scene_document_from_builder(export_builder_draft(loaded))))
+        try:
+            draft = export_builder_draft(loaded)
+        except PinnedFemMeshSourceOutsideRoot as error:
+            raise ScriptLoadRejected(error, Path(args.script)) from error
+        print(json.dumps(build_scene_document_from_builder(draft)))
         emit_progress("Scene document exported")
         return 0
 

@@ -98,6 +98,8 @@ blokuje budowę przed Gmsh.
 |---|---|---|---|---|---|---|---|---|
 | `study.mesh.save.path` | `str \| Path` | required | $1$ | otherwise `ValueError`; must end in `.fullmag-mesh` and resolve to a strictly valid shared-domain FEM mesh. | Native artifact destination. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset` | `packages/fullmag-py/src/fullmag/meshing/persistence.py::save_mesh_artifact` |
 | `study.mesh.load.path` | `str \| Path` | required | $1$ | Schema, digests, authoring fingerprint, topology fingerprint, markers, and certificates must validate. | Native artifact source. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset` | `packages/fullmag-py/src/fullmag/meshing/persistence.py::load_mesh_artifact` |
+| `study.mesh.load.expected_sha256` | `str \| None` | `None` | $1$ | When provided, 64 lowercase hexadecimal characters must match the full archive. A canonical reference must resolve beneath the script directory. | Opt into canonical transport of the exact native archive. | FEM CPU/GPU | `study.fem_domain_mesh.sha256` | `packages/fullmag-py/src/fullmag/world.py::StudyMeshHandle.load` |
+| `study.mesh.load.build_requested` | `bool \| None` | `None` | $1$ | When provided, the flag participates in the mesh authoring fingerprint check. | Restore the authored build flag when replaying a pinned Scene reference. | FEM CPU/GPU | `study.fem_domain_mesh.build_requested` | `packages/fullmag-py/src/fullmag/world.py::StudyMeshHandle.load` |
 | `study.mesh.save_or_load.path` | `str \| Path` | required | $1$ | Corrupt and unsupported artifacts fail closed; only missing or authoring-stale artifacts rebuild. | Reusable native artifact path. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset` | `packages/fullmag-py/src/fullmag/world.py::StudyMeshHandle.save_or_load` |
 | `study.mesh.export.path` | `str \| Path` | required | $1$ | otherwise `ValueError`; must end in `.mphtxt` for COMSOL or .msh for Gmsh; every marker must have a semantic name. | Interchange destination. | FEM CPU/GPU | `not stored; external artifact` | `packages/fullmag-py/src/fullmag/world.py::StudyMeshHandle.export` |
 | `study.mesh.export.format` | `str` | auto | $1$ | auto, comsol, or gmsh; auto resolves from suffix. | Interchange format selector. | FEM CPU/GPU | `not stored; external artifact` | `packages/fullmag-py/src/fullmag/world.py::StudyMeshHandle.export` |
@@ -205,12 +207,16 @@ remains planner-owned. Validation errors reject malformed artifacts,
 and unsupported combinations fail explicitly without CPU/GPU or FDM/FEM
 fallback.
 
-A loaded native mesh archive is represented in the canonical scene by
-`study.fem_domain_mesh`. This reference carries an asset-root-relative
-`.fullmag-mesh` path, its SHA-256 digest, and the authored mesh build flag.
-Canonical preparation verifies the archive and replays the mesh-authoring
-check before producing the existing `fem_domain_mesh_asset`. Missing,
-changed, or incompatible archives fail preparation before solver admission.
+A native mesh archive becomes a pinned canonical-scene reference only when
+loaded with `study.mesh.load(path, expected_sha256=...)`. The
+`study.fem_domain_mesh` reference carries an asset-root-relative
+`.fullmag-mesh` path, its verified SHA-256 digest, and the authored mesh build
+flag. Unpinned `load()` and `save_or_load()` keep their legacy session-bound
+behavior and do not create this reference, so standalone scripts can continue
+to load an archive outside the script asset root. Canonical preparation verifies
+a pinned archive and replays the mesh-authoring check before producing the
+existing `fem_domain_mesh_asset`. Missing, changed, or incompatible pinned
+archives fail preparation before solver admission.
 
 ### 7.1 Transakcja ręcznej przebudowy w sesji interaktywnej
 
@@ -361,6 +367,7 @@ stany bezczynności, również bez opcjonalnych preconditions.
 | Public API | `packages/fullmag-py/src/fullmag/world.py` | `class StudyMeshHandle` | `save`, `load`, `save_or_load`, `export`, `import_` | FEM CPU/GPU | `test_mesh_persistence.py` |
 | Native artifact | `packages/fullmag-py/src/fullmag/meshing/persistence.py` | `save_mesh_artifact` | Atomic container writer | FEM CPU/GPU | Native round-trip and corruption tests |
 | Native validation | `packages/fullmag-py/src/fullmag/meshing/persistence.py` | `load_mesh_artifact` | Digest, fingerprint, topology, and semantic validation | FEM CPU/GPU | Mismatch/corruption tests |
+| Pinned domain mesh | `packages/fullmag-py/src/fullmag/runtime/scene_document_ir.py` | `_capture_scene_document` | Verifies the native mesh in the script asset root before lowering the Scene | FEM CPU/GPU | Canonical Scene round-trip tests |
 | COMSOL export | `packages/fullmag-py/src/fullmag/meshing/persistence.py` | `export_comsol_mesh` | COMSOL MPHTXT v4 and sidecar writer | FEM CPU/GPU | COMSOL interchange tests |
 | COMSOL import | `packages/fullmag-py/src/fullmag/meshing/persistence.py` | `import_comsol_mesh` | MPHTXT v4 parser, entity mapping, validation, and new identity | FEM CPU/GPU | COMSOL interchange tests |
 | Mixed volume evidence | `crates/fullmag-ir/src/mixed_certificate.rs` | `validate_mixed_certificate_evidence_against_mesh` | Recomputes certificate evidence and distinguishes cross-language rounding tolerance from the physical volume-acceptance limit | FEM CPU/GPU | `fullmag-ir` mixed-certificate regression tests and managed SP4 two-stage smoke |

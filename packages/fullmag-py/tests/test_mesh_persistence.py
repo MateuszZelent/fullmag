@@ -678,7 +678,7 @@ class MeshPersistenceTests(unittest.TestCase):
         self.assertEqual(second.action, "loaded")
         builder.assert_not_called()
 
-    def test_study_mesh_load_pins_archive_and_records_fem_reference(self) -> None:
+    def test_study_mesh_load_requires_explicit_pin_for_fem_reference(self) -> None:
         from fullmag.world import _state
 
         mesh = _tetra_mesh()
@@ -691,6 +691,8 @@ class MeshPersistenceTests(unittest.TestCase):
             }
         }
         with TemporaryDirectory() as tmp:
+            # This archive is outside the script's asset root, as in standalone
+            # scripts that load a path resolved from the current working directory.
             path = Path(tmp) / "domain.fullmag-mesh"
             study = fm.study("pinned-mesh-persistence")
             study.engine("fem")
@@ -710,17 +712,34 @@ class MeshPersistenceTests(unittest.TestCase):
                 )
             self.assertFalse(_state._default_mesh_spec.build_requested)
 
-            result = study.mesh.load(path, expected_sha256=expected)
+            unpinned = study.mesh.load(path)
+            self.assertEqual(unpinned.action, "loaded")
+            self.assertNotIn("fem_domain_mesh", _state._extra_runtime_metadata)
+            self.assertNotIn("sha256", _state._extra_runtime_metadata["mesh_persistence"])
+            self.assertIsNone(_state._active_mesh_artifact.source_sha256)
 
-        self.assertEqual(result.action, "loaded")
-        self.assertEqual(
-            _state._extra_runtime_metadata["fem_domain_mesh"],
-            {
-                "source": str(path.resolve()),
-                "sha256": expected,
-                "build_requested": False,
-            },
-        )
+            pinned = study.mesh.load(path, expected_sha256=expected)
+            self.assertEqual(pinned.action, "loaded")
+            self.assertEqual(
+                _state._extra_runtime_metadata["fem_domain_mesh"],
+                {
+                    "source": str(path.resolve()),
+                    "sha256": expected,
+                    "build_requested": False,
+                },
+            )
+
+            rebound = study.mesh.load(path)
+            self.assertEqual(rebound.action, "loaded")
+            self.assertNotIn("fem_domain_mesh", _state._extra_runtime_metadata)
+            self.assertIsNone(_state._active_mesh_artifact.source_sha256)
+
+            study.mesh.load(path, expected_sha256=expected)
+            reused = study.mesh.save_or_load(path)
+            self.assertEqual(reused.action, "loaded")
+            self.assertNotIn("fem_domain_mesh", _state._extra_runtime_metadata)
+            self.assertNotIn("sha256", _state._extra_runtime_metadata["mesh_persistence"])
+            self.assertIsNone(_state._active_mesh_artifact.source_sha256)
 
     def test_study_mesh_save_or_load_materializes_real_shared_domain(self) -> None:
         with TemporaryDirectory() as tmp:

@@ -116,6 +116,10 @@ DEFAULT_ADAPTIVE_DT_MIN = 1e-15
 DEFAULT_ADAPTIVE_ATOL = 1e-6
 
 
+class PinnedFemMeshSourceOutsideRoot(ValueError):
+    """A pinned domain mesh cannot be carried by this source script."""
+
+
 def _is_exact_max_err_policy(policy: AdaptiveTimestep) -> bool:
     return (
         policy._tolerance_mode == "max_error"
@@ -10148,8 +10152,8 @@ def _export_fem_domain_mesh_reference(
     try:
         relative_source = resolved_source.relative_to(source_root.resolve())
     except ValueError as exc:
-        raise ValueError(
-            "runtime_metadata.fem_domain_mesh.source must resolve beneath source_root"
+        raise PinnedFemMeshSourceOutsideRoot(
+            "Pinned FEM domain mesh must resolve beneath the source script's directory"
         ) from exc
 
     digest = raw_reference.get("sha256")

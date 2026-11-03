@@ -5659,11 +5659,15 @@ class StudyMeshHandle:
             path,
             expected_authoring_document=expected_authoring_document,
             expected_sha256=expected_sha256,
-            _include_source_sha256=True,
+            _include_source_sha256=expected_sha256 is not None,
         )
         if build_requested is not None:
             _state._default_mesh_spec.build_requested = build_requested
-        _bind_mesh_artifact(artifact, Path(path))
+        _bind_mesh_artifact(
+            artifact,
+            Path(path),
+            canonical_scene_reference=expected_sha256 is not None,
+        )
         return MeshPersistenceResult(
             action="loaded",
             path=Path(path),
@@ -5687,7 +5691,6 @@ class StudyMeshHandle:
                 artifact = load_mesh_artifact(
                     target,
                     expected_authoring_document=_current_mesh_authoring_document(),
-                    _include_source_sha256=True,
                 )
             except MeshConfigurationMismatch as exc:
                 differences = exc.differences
@@ -5701,7 +5704,7 @@ class StudyMeshHandle:
                     authoring_fingerprint=artifact.authoring_fingerprint,
                 )
         self.save(target)
-        artifact = load_mesh_artifact(target, _include_source_sha256=True)
+        artifact = load_mesh_artifact(target)
         _bind_mesh_artifact(artifact, target)
         return MeshPersistenceResult(
             action="saved",
@@ -8574,7 +8577,12 @@ def _boundary_semantic_map(mesh: object) -> dict[str, int]:
     return result
 
 
-def _bind_mesh_artifact(artifact: object, source: Path) -> None:
+def _bind_mesh_artifact(
+    artifact: object,
+    source: Path,
+    *,
+    canonical_scene_reference: bool = False,
+) -> None:
     source_path = source.expanduser()
     _state._active_mesh_artifact = artifact
     _state._domain_mesh_source = str(source_path)
@@ -8590,7 +8598,8 @@ def _bind_mesh_artifact(artifact: object, source: Path) -> None:
     }
     source_sha256 = getattr(artifact, "source_sha256", None)
     if (
-        source_path.suffix == ".fullmag-mesh"
+        canonical_scene_reference
+        and source_path.suffix == ".fullmag-mesh"
         and isinstance(source_sha256, str)
         and _is_sha256_hex(source_sha256)
     ):
