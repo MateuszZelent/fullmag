@@ -105,3 +105,74 @@ def test_existing_package_reuse_allows_only_the_nonruntime_fixture(monkeypatch):
     changed = "packages/fullmag-py/src/fullmag/__init__.py"
     with pytest.raises(ValueError, match="runtime sources differ"):
         q._runtime_source_binding("/registered", probe, backend)
+
+
+def test_periodic_fem_has_fixed_cpu_scenario_and_mesh_contract():
+    token = "a" * 32
+    args = q.solver_arguments(token, "fem-periodic")
+    assert args[1].endswith("/goebel_2019/scenario_fem_periodic.py")
+    assert args[2:8] == ["--backend", "fem", "--precision", "double", "--mode", "strict"]
+    env = q.solver_environment({"FULLMAG_FDM_EXECUTION": "gpu", "FULLMAG_FEM_EXECUTION": "gpu"},
+                               "fem-periodic")
+    assert env["FULLMAG_FEM_EXECUTION"] == "cpu"
+    assert "FULLMAG_FDM_EXECUTION" not in env
+    assert env["CUDA_VISIBLE_DEVICES"] == ""
+    with pytest.raises(ValueError, match="unknown qualification lane"):
+        q.solver_arguments(token, "../foreign")
+
+
+def test_mesh_pin_and_deadline_are_explicit():
+    from argparse import Namespace
+
+    args = Namespace(lane="fem-periodic", mesh_sha256=None, solver_timeout_s=None)
+    with pytest.raises(ValueError, match="mesh SHA-256"):
+        q.validate_lane_args(args)
+    args.mesh_sha256 = "f" * 64
+    assert q.validate_lane_args(args) > 3600
+    args.solver_timeout_s = 86401
+    with pytest.raises(ValueError, match="deadline"):
+        q.validate_lane_args(args)
+    args.lane = "fdm"
+    with pytest.raises(ValueError, match="mesh SHA-256"):
+        q.validate_lane_args(args)
+
+
+def test_worker_terminal_is_published_once(tmp_path):
+    path = tmp_path / "worker-terminal.json"
+    record = {"schema": q.WORKER_SCHEMA, "attempt": "a" * 32}
+    q.publish_worker_terminal(path, record)
+    assert q._regular_json(path) == record
+    with pytest.raises(FileExistsError):
+        q.publish_worker_terminal(path, {**record, "attempt": "b" * 32})
+    assert q._regular_json(path) == record
+
+
+def test_terminal_observation_binds_worker_to_the_exact_mesh_and_inputs():
+    execution = {
+        "operation_attempt": "a" * 32,
+        "lane": "fem-periodic",
+        "reference_input_sha256": {"scenario_fem_periodic.py": "b" * 64},
+        "fullmag_binary_sha256": "c" * 64,
+        "mesh_sha256": "d" * 64,
+        "solver_timeout_s": 36000,
+    }
+    result = {
+        "runtime_exit_code": 0,
+        "runtime_log_sha256": "e" * 64,
+        "verification": {"state": "not_verified"},
+    }
+    record = {
+        "schema": q.WORKER_SCHEMA,
+        "attempt": execution["operation_attempt"],
+        "lane": execution["lane"],
+        "inputs": execution["reference_input_sha256"],
+        "binary_sha256": execution["fullmag_binary_sha256"],
+        "mesh_sha256": execution["mesh_sha256"],
+        "solver_timeout_s": execution["solver_timeout_s"],
+        "result": result,
+    }
+    assert q.validate_worker_terminal(record, execution) == result
+    with pytest.raises(ValueError, match="differs from the exact admitted operation"):
+        q.validate_worker_terminal({**record, "mesh_sha256": "f" * 64}, execution)
+    with pytest.raises(ValueError, match="no terminal completion evidence"):
+        q.validate_worker_terminal(None, execution)

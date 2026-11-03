@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the pinned Göbel FDM qualification in the existing volume DEV backend."""
+"""Run a pinned Göbel reference lane in the existing volume DEV backend."""
 from __future__ import annotations
 
 import argparse
@@ -8,9 +8,11 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 from urllib.request import ProxyHandler, Request, build_opener
 
@@ -23,6 +25,7 @@ from fullmag_storage import resolve_layout, validate_path
 
 PHASE = "goebel-scientific"
 SCHEMA = "fullmag.goebel.volume-scientific.v1"
+WORKER_SCHEMA = "fullmag.goebel.worker-terminal.v1"
 SOURCE = "tests/standard_problems/bimeron/goebel_2019"
 INPUTS = (
     "tests/__init__.py",
@@ -33,7 +36,11 @@ INPUTS = (
     f"{SOURCE}/verify.py",
     f"{SOURCE}/thresholds.v1.json",
 )
-SCENARIO = f"{SOURCE}/scenario_fdm.py"
+FEM_LANE = "fem-periodic"
+FEM_SCENARIO = f"{SOURCE}/scenario_fem_periodic.py"
+FEM_MESH_MODULE = "tests.standard_problems.bimeron.goebel_2019.periodic_tet4_mesh"
+FEM_MESH = f"{SOURCE}/goebel_periodic_tet4.mesh.json"
+FEM_INPUTS = (*INPUTS[:4], FEM_SCENARIO, f"{SOURCE}/periodic_tet4_mesh.py")
 SOLVER = "/opt/fullmag/package/bin/fullmag-bin"
 CONTROL = Path("/opt/fullmag/control")
 RUNTIME_SOURCE = Path("/opt/fullmag/source")
@@ -41,6 +48,10 @@ STORE = Path("/state/runs/docker-all/session-store")
 MAX_LOG = 32 * 1024 * 1024
 MAX_RECORD = 8 * 1024 * 1024
 SOLVER_TIMEOUT_S = 3600
+FEM_TIMEOUT_S = 12 * 3600
+MAX_TIMEOUT_S = 24 * 3600
+MAX_MESH_BYTES = 64 * 1024 * 1024
+MESH_TIMEOUT_S = 300
 TOKEN = re.compile(r"[0-9a-f]{32}")
 SHA = re.compile(r"[0-9a-f]{64}")
 COMMIT = re.compile(r"[0-9a-f]{40}")
@@ -70,12 +81,46 @@ def result_root(token):
     return Path("/state/runs/goebel-reference") / token
 
 
-def solver_arguments(token):
+def lane_inputs(lane):
+    require(lane in {"fdm", FEM_LANE}, "unknown qualification lane")
+    return FEM_INPUTS if lane == FEM_LANE else INPUTS
+
+
+def validate_lane_args(args):
+    lane_inputs(args.lane)
+    if args.lane == FEM_LANE:
+        require(isinstance(args.mesh_sha256, str) and SHA.fullmatch(args.mesh_sha256),
+                "FEM periodic lane requires the exact generated mesh SHA-256")
+    else:
+        require(args.mesh_sha256 is None, "mesh SHA-256 applies only to the FEM periodic lane")
+    deadline = args.solver_timeout_s
+    if deadline is None:
+        return FEM_TIMEOUT_S if args.lane == FEM_LANE else SOLVER_TIMEOUT_S
+    require(type(deadline) is int and 60 <= deadline <= MAX_TIMEOUT_S, "invalid solver deadline")
+    return deadline
+
+
+def solver_environment(environment, lane):
+    lane_inputs(lane)
+    env = dict(environment)
+    if lane == FEM_LANE:
+        env.pop("FULLMAG_FDM_EXECUTION", None)
+        env.pop("FULLMAG_FEM_ALL_IN_GPU", None)
+        env.update(FULLMAG_FEM_EXECUTION="cpu", FULLMAG_RELAX_DEVICE="cpu", CUDA_VISIBLE_DEVICES="")
+    else:
+        env["FULLMAG_FDM_EXECUTION"] = "gpu"
+    return env
+
+
+def solver_arguments(token, lane="fdm"):
     operation = CONTROL / operation_root(token)
     results = result_root(token)
+    lane_inputs(lane)
+    scenario = FEM_SCENARIO if lane == FEM_LANE else f"{SOURCE}/scenario_fdm.py"
+    backend = "fem" if lane == FEM_LANE else "fdm"
     return [
-        SOLVER, str(operation / "inputs" / SCENARIO),
-        "--backend", "fdm", "--precision", "double", "--mode", "strict",
+        SOLVER, str(operation / "inputs" / scenario),
+        "--backend", backend, "--precision", "double", "--mode", "strict",
         "--headless", "--ui", "none", "--existing-output", "error",
         "--output-dir", str(results / "output.zarr"),
         "--workspace-root", str(results / "workspace"),
@@ -127,10 +172,10 @@ def _git(root, *args):
     )
 
 
-def _reference_inputs(repo, commit):
+def _reference_inputs(repo, commit, lane="fdm"):
     require(_git(repo, "rev-parse", "HEAD").decode().strip() == commit,
             "reference checkout HEAD differs from the full source commit pin")
-    data = {relative: _git(repo, "show", f"{commit}:{relative}") for relative in INPUTS}
+    data = {relative: _git(repo, "show", f"{commit}:{relative}") for relative in lane_inputs(lane)}
     require(all(raw and len(raw) <= MAX_RECORD for raw in data.values()),
             "scientific source file is absent or exceeds the input bound")
     return data
@@ -249,13 +294,65 @@ def _file_sha(path):
     return value.hexdigest()
 
 
-def _run_worker(token, inputs, binary_sha, terminal_run_id):
+def _generate_mesh(operation, input_root, env, mesh_sha):
+    path = input_root / FEM_MESH
+    require(not path.exists() and path.parent.resolve(strict=True) == path.parent,
+            "generated mesh path already exists or has an alias")
+    with (operation / "mesh-generation.log").open("xb") as log:
+        subprocess.run(
+            ["/usr/local/bin/python3", "-B", "-m", FEM_MESH_MODULE, str(path)],
+            cwd=input_root, env=env, stdout=log, stderr=subprocess.STDOUT,
+            timeout=MESH_TIMEOUT_S, check=True,
+        )
+        log.flush()
+        os.fsync(log.fileno())
+    require(0 < path.stat().st_size <= MAX_MESH_BYTES and _file_sha(path) == mesh_sha,
+            "generated FEM mesh exceeds the bound or differs from the pinned SHA-256")
+    return path
+
+
+def publish_worker_terminal(path, record):
+    """Publish one complete worker observation before writing its stdout."""
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".worker-terminal-", delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            stream.write(canonical(record) + b"\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+            os.link(temporary, path, follow_symlinks=False)
+            directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            temporary.unlink()
+
+
+def _worker_entry(token, inputs, binary_sha, terminal_run_id, lane, mesh_sha, timeout):
+    operation = CONTROL / operation_root(token)
+    require(operation.resolve(strict=True) == operation
+            and (CONTROL / "active").read_text().strip() == token,
+            "worker cannot publish outside its managed attempt")
+    try:
+        result = _run_worker(token, inputs, binary_sha, terminal_run_id, lane, mesh_sha, timeout)
+    except Exception as error:
+        result = {"worker_error": f"{type(error).__name__}: {error}"}
+    terminal = {"schema": WORKER_SCHEMA, "attempt": token, "lane": lane,
+                "inputs": inputs, "binary_sha256": binary_sha, "mesh_sha256": mesh_sha,
+                "solver_timeout_s": timeout, "result": result}
+    publish_worker_terminal(operation / "worker-terminal.json", terminal)
+    return terminal
+
+
+def _run_worker(token, inputs, binary_sha, terminal_run_id, lane="fdm", mesh_sha=None,
+                timeout=SOLVER_TIMEOUT_S):
     relative = operation_root(token)
     operation = CONTROL / relative
     require(operation.resolve(strict=True) == operation
             and (CONTROL / "active").read_text().strip() == token,
             "qualification worker lacks the exact managed operation lease")
-    require(set(inputs) == set(INPUTS) and all(SHA.fullmatch(value) for value in inputs.values()),
+    require(set(inputs) == set(lane_inputs(lane)) and all(SHA.fullmatch(value) for value in inputs.values()),
             "scientific input set is not exactly the pinned canonical bundle")
     require(_file_sha(Path(SOLVER)) == binary_sha, "installed CLI changed after host admission")
     input_root = operation / "inputs"
@@ -263,8 +360,12 @@ def _run_worker(token, inputs, binary_sha, terminal_run_id):
             "staged scientific input bytes differ")
     require(not any(key.startswith("FULLMAG_GOEBEL_") for key in os.environ),
             "an inherited environment variable would change the reference scenario")
-    require(os.environ.get("FULLMAG_DOCKER_DEVICE_ACCESS") == "gpu",
-            "fixed backend has no admitted GPU access")
+    if lane == "fdm":
+        require(os.environ.get("FULLMAG_DOCKER_DEVICE_ACCESS") == "gpu",
+                "fixed backend has no admitted GPU access")
+    else:
+        require(isinstance(mesh_sha, str) and SHA.fullmatch(mesh_sha),
+                "missing exact FEM mesh pin")
 
     before = _idle_probe(terminal_run_id)
     results = result_root(token)
@@ -273,7 +374,7 @@ def _run_worker(token, inputs, binary_sha, terminal_run_id):
     private_state = operation / "worker-state"
     private_state.mkdir(exist_ok=False)
     pythonpath = f"{input_root}:{RUNTIME_SOURCE}/packages/fullmag-py/src:/opt/fullmag/package"
-    env = {**os.environ, "FULLMAG_FDM_EXECUTION": "gpu", "FULLMAG_API_PORT": "0",
+    env = {**solver_environment(os.environ, lane), "FULLMAG_API_PORT": "0",
            "PYTHONPATH": pythonpath, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1",
            "FULLMAG_STATE_ROOT": str(private_state), "FULLMAG_STATE_DIR": str(private_state),
            "FULLMAG_RUNS_ROOT": str(private_state / "runs"),
@@ -281,11 +382,19 @@ def _run_worker(token, inputs, binary_sha, terminal_run_id):
            "HOME": str(private_state)}
     env.pop("FULLMAG_RUNTIME_SERVICE_CONFIG", None)
     env.pop("FULLMAG_RUNTIME_SERVICES_ROOT", None)
+    mesh = _generate_mesh(operation, input_root, env, mesh_sha) if lane == FEM_LANE else None
+    if mesh is not None:
+        retained_mesh = results / "goebel_periodic_tet4.mesh.json"
+        with mesh.open("rb") as source, retained_mesh.open("xb") as output:
+            shutil.copyfileobj(source, output, length=1024 * 1024)
+            output.flush()
+            os.fsync(output.fileno())
+        require(_file_sha(retained_mesh) == mesh_sha, "retained FEM mesh does not match the pinned input")
     log = operation / "runtime.log"
     total = 0
     with log.open("xb") as output:
         command = ["/usr/bin/timeout", "--signal=TERM", "--kill-after=15s",
-                   str(SOLVER_TIMEOUT_S), *solver_arguments(token)]
+                   str(timeout), *solver_arguments(token, lane)]
         # Python puts its working directory ahead of PYTHONPATH for -m.
         with subprocess.Popen(command, cwd=input_root, env=env,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as process:
@@ -307,10 +416,28 @@ def _run_worker(token, inputs, binary_sha, terminal_run_id):
     result = {"runtime_exit_code": code, "runtime_log_sha256": _file_sha(log),
               "runtime_log_bytes": min(total, MAX_LOG), "runtime_log_truncated": total > MAX_LOG,
               "idle_evidence": before, "verification": {"state": "not_run"}}
+    if mesh is not None:
+        require(_file_sha(mesh) == _file_sha(retained_mesh) == mesh_sha,
+                "generated or retained FEM mesh changed during solve")
+        result["mesh"] = {"control_path": str(mesh), "result_relative_path": retained_mesh.name,
+                          "sha256": mesh_sha, "bytes": mesh.stat().st_size}
     script_receipt = operation / "script-launch.json"
     if script_receipt.is_file():
         result["script_launch_receipt_sha256"] = _file_sha(script_receipt)
     if code:
+        return result
+    if lane == FEM_LANE:
+        require(script_receipt.is_file(), "FEM process completed without its managed launch receipt")
+        launch = _regular_json(script_receipt)
+        require(launch.get("outcome", {}).get("exit_code") == 0,
+                "FEM launch receipt differs from the completed process")
+        runtime = launch.get("resolved", {})
+        require(runtime.get("backend") == "fem" and runtime.get("device") == "cpu"
+                and runtime.get("precision") == "double" and runtime.get("mode") == "strict"
+                and runtime.get("engine_id") == "fem_cpu_native" and runtime.get("fallback") is None,
+                "FEM launch receipt does not attest strict FP64 native CPU without fallback")
+        result["resolved_execution"] = runtime
+        result["verification"] = {"state": "not_verified", "reason": "FEM comparison pending"}
         return result
 
     # The published validator and thresholds come from the exact reference
@@ -339,12 +466,168 @@ def _run_worker(token, inputs, binary_sha, terminal_run_id):
     return result
 
 
+def validate_worker_terminal(record, execution):
+    require(isinstance(record, dict), "qualification worker has no terminal completion evidence")
+    expected = {
+        "schema": WORKER_SCHEMA,
+        "attempt": execution["operation_attempt"],
+        "lane": execution["lane"],
+        "inputs": execution["reference_input_sha256"],
+        "binary_sha256": execution["fullmag_binary_sha256"],
+        "mesh_sha256": execution["mesh_sha256"],
+        "solver_timeout_s": execution["solver_timeout_s"],
+    }
+    require(all(record.get(key) == value for key, value in expected.items()),
+            "worker completion differs from the exact admitted operation")
+    result = record.get("result")
+    require(isinstance(result, dict) and (
+        isinstance(result.get("worker_error"), str)
+        or (type(result.get("runtime_exit_code")) is int
+            and SHA.fullmatch(result.get("runtime_log_sha256") or "")
+            and isinstance(result.get("verification"), dict))),
+        "qualification worker has no terminal completion evidence")
+    return result
+
+
+def read_worker_terminal(backend_id, token):
+    operation_root(token)
+    command = (
+        "import json,sys; from pathlib import Path; "
+        "from docker_goebel_qualification import _file_sha,_regular_json,require; "
+        "root=Path(sys.argv[1]); path=root/'worker-terminal.json'; "
+        "record=_regular_json(path) if path.exists() else None; "
+        "result=(record or {}).get('result',{}); "
+        "expected=result.get('runtime_log_sha256'); "
+        "actual=_file_sha(root/'runtime.log') if expected is not None else None; "
+        "require(actual==expected,'durable worker runtime log differs'); "
+        "print(json.dumps({'terminal':record}))"
+    )
+    root = CONTROL / operation_root(token)
+    stdout, _ = codegen._exec(
+        backend_id, ("/usr/local/bin/python3", "-B", "-c", command, str(root)), timeout=90,
+        environment={"PYTHONPATH": str(root / "controller") + ":/opt/fullmag/source/scripts"},
+    )
+    return codegen._read_json_bytes(stdout, "Göbel durable worker completion")["terminal"]
+
+
+# Run only in the authenticated retained helper. The original pending receipt
+# is kept as history and terminal.json is the sole release signal.
+RECONCILE_SCRIPT = r"""
+set -euo pipefail
+root=$1; token=$2; expected=$3
+exec 9>"$root/reconcile.lock"; flock -n 9
+test -f /control/active; test ! -L /control/active
+test "$(cat /control/active)" = "$token"
+test -f "$root/receipt.json"; test ! -L "$root/receipt.json"
+test "$(sha256sum "$root/receipt.json" | cut -d ' ' -f1)" = "$expected"
+test ! -e "$root/terminal.json"; test ! -L "$root/terminal.json"
+IFS= read -r result
+IFS= read -r terminal
+temp=$(mktemp "$root/.reconcile.XXXXXXXX")
+trap 'rm -f -- "$temp"' EXIT
+printf '%s\n' "$result" > "$temp"; sync "$temp"
+if test -e "$root/scientific-result.json"; then
+    test ! -L "$root/scientific-result.json"
+    cmp -s "$temp" "$root/scientific-result.json"
+else
+    ln "$temp" "$root/scientific-result.json"
+fi
+rm "$temp"
+temp=$(mktemp "$root/.reconcile.XXXXXXXX")
+printf '%s\n' "$terminal" > "$temp"; sync "$temp"
+ln "$temp" "$root/terminal.json"; sync "$root"
+"""
+
+
+def observe_attempt(args, control, pins, hashes, timeout):
+    token = args.observe_attempt or args.reconcile_attempt
+    root = operation_root(token)
+    raw = control.read_bytes(root + "/receipt.json")
+    receipt = json.loads(raw)
+    expected_inputs = {
+        "development_attempt": pins.attempt,
+        "config_sha256": pins.config_sha256,
+        "reference_source_commit": args.source_commit,
+        "runtime_source_root": str(pins.source_root),
+        "backend_container_id": pins.backend_container_id,
+        "frontend_container_id": pins.frontend_container_id,
+        "terminal_run_id": args.terminal_run_id,
+        "source_inputs_sha256": hashes,
+        "lane": args.lane,
+        "mesh_sha256": args.mesh_sha256,
+        "solver_timeout_s": timeout,
+    }
+    require(receipt.get("attempt") == token and receipt.get("phase") == PHASE
+            and receipt.get("compose_project") == control.project
+            and receipt.get("inputs") == expected_inputs, "retained attempt does not match the explicit pins")
+    execution = receipt.get("scientific_execution")
+    require(isinstance(execution, dict), "retained attempt has no admitted worker")
+    terminal = control.read(root + "/terminal.json", optional=True)
+    if terminal is not None:
+        require(terminal.get("attempt") == token and terminal.get("inputs") == expected_inputs
+                and terminal.get("state") in {"succeeded", "failed-confirmed"},
+                "retained terminal operation differs")
+        print(json.dumps(terminal, ensure_ascii=False, sort_keys=True))
+        return 0
+    record = read_worker_terminal(pins.backend_container_id, token)
+    if not args.reconcile_attempt:
+        if record is not None:
+            validate_worker_terminal(record, execution)
+        print(json.dumps({"attempt": token, "state": receipt["state"], "worker_terminal": record},
+                         ensure_ascii=False, sort_keys=True))
+        return 0
+    require(receipt.get("state") == "outcome-unknown-resources-retained",
+            "reconcile requires a retained unknown operation")
+    completed = validate_worker_terminal(record, execution)
+    observed = codegen._inspect(pins.backend_container_id)
+    require(observed.get("Image") == execution["image_id"]
+            and observed.get("State", {}).get("StartedAt") == execution["backend_started_at"],
+            "backend incarnation changed before reconcile")
+    _, _, package_sha, _ = codegen._backend_documents(pins.backend_container_id)
+    require(package_sha == execution["package_receipt_sha256"],
+            "runtime package changed before reconcile")
+    helper_id = receipt.get("helper_container_id")
+    require(isinstance(helper_id, str) and re.fullmatch(r"[0-9a-f]{64}", helper_id),
+            "retained operation lacks a pinned control helper")
+    control._inspect_operation_helper({"receipt": receipt}, expected_id=helper_id)
+    prior = control.read(root + "/scientific-result.json", optional=True)
+    if prior is None:
+        result = {**execution, **completed}
+    else:
+        require(all(prior.get(key) == value for key, value in {**execution, **completed}.items()),
+                "existing scientific result differs from durable worker completion")
+        result = prior
+    state = "succeeded" if completed.get("runtime_exit_code") == 0 else "failed-confirmed"
+    terminal = {**receipt, "state": state, "scientific_execution": result,
+                "finished_at": time.time(), "reconciled_worker_terminal_sha256": digest(canonical(record))}
+    codegen._exec(
+        helper_id, ("/bin/bash", "-euo", "pipefail", "-c",
+                    control._namespace_guard(RECONCILE_SCRIPT), "goebel-reconcile",
+                    control.path(root), token, digest(raw)),
+        timeout=90, input_bytes=canonical(result) + b"\n" + canonical(terminal) + b"\n",
+    )
+    require(control.read(root + "/terminal.json") == terminal,
+            "reconciled terminal publication could not be confirmed")
+    release = (
+        "import pathlib,sys,time\n"
+        "active = pathlib.Path('/opt/fullmag/control/active')\n"
+        "for _ in range(25):\n"
+        "    if not active.exists() or active.read_text().strip() != sys.argv[1]: break\n"
+        "    time.sleep(0.2)\n"
+        "else: raise RuntimeError('retained helper did not acknowledge terminal receipt')"
+    )
+    codegen._exec(pins.backend_container_id,
+                  ("/usr/local/bin/python3", "-B", "-c", release, token), timeout=15)
+    print(json.dumps(terminal, ensure_ascii=False, sort_keys=True))
+    return 0
+
 def run(args):
+    timeout = validate_lane_args(args)
     require(TOKEN.fullmatch(args.attempt) and SHA.fullmatch(args.config_sha256)
             and COMMIT.fullmatch(args.source_commit), "exact attempt, configuration and source pins required")
     require(args.terminal_run_id is None or RUN_ID.fullmatch(args.terminal_run_id), "invalid terminal run pin")
     repo = args.repo_root.resolve(strict=True)
-    data = _reference_inputs(repo, args.source_commit)
+    data = _reference_inputs(repo, args.source_commit, args.lane)
     defaults = resolve_defaults(repo, source_root=args.source_root, port=args.port)
     pin_args = {"requested_port": args.port, "expected_attempt": args.attempt,
                 "expected_config_sha256": args.config_sha256}
@@ -358,8 +641,10 @@ def run(args):
     retained = f"development/attempts/{args.attempt}"
     terminal = control.read(retained + "/terminal.json")
     document = control.read(retained + "/compose.json")
+    device_access = _retained_device_access(terminal, document)
+    allowed_access = {"cpu", "gpu"} if args.lane == FEM_LANE else {"gpu"}
     require(terminal.get("state") == "succeeded" and digest(canonical(document)) == args.config_sha256
-            and _retained_device_access(terminal, document) == "gpu", "DEV attempt is not a successful GPU admission")
+            and device_access in allowed_access, "DEV attempt does not admit the selected lane")
     state = validate_path(Path(terminal["state_root"]), Path(layout["runtime_root"]), "qualification state root")
     state_mounts = [mount for mount in document["services"]["backend"]["volumes"]
                     if mount.get("target") == "/state"]
@@ -368,12 +653,15 @@ def run(args):
             and _same_host_path(state_mounts[0].get("source"), str(state)),
             "retained /state bind does not match the resolved qualification state root")
     hashes = {name: digest(raw) for name, raw in data.items()}
+    if args.observe_attempt or args.reconcile_attempt:
+        return observe_attempt(args, control, pins, hashes, timeout)
 
     with control.operation(PHASE, {
         "development_attempt": pins.attempt, "config_sha256": pins.config_sha256,
         "reference_source_commit": args.source_commit, "runtime_source_root": str(selected),
         "backend_container_id": pins.backend_container_id, "frontend_container_id": pins.frontend_container_id,
         "terminal_run_id": args.terminal_run_id, "source_inputs_sha256": hashes,
+        "lane": args.lane, "mesh_sha256": args.mesh_sha256, "solver_timeout_s": timeout,
     }) as operation:
         require(_discover_pins(repo, defaults, **pin_args) == pins
                 and control.read(retained + "/terminal.json") == terminal
@@ -393,6 +681,9 @@ def run(args):
         token = operation["receipt"]["attempt"]
         probe, _ = codegen._probe_source(backend_id, token)
         mounted_commit, excluded = _runtime_source_binding(selected, probe, backend)
+        if args.lane == FEM_LANE:
+            require(mounted_commit == backend["commit"],
+                    "FEM periodic lane requires an exact rebuilt runtime package")
         host_output = validate_path(state / "runs/goebel-reference" / token, state, "qualification output")
         require(not host_output.exists(), "qualification output already exists")
         for relative, raw in data.items():
@@ -402,23 +693,24 @@ def run(args):
         result = {
             "schema": SCHEMA, "operation_attempt": token, "compose_project": control.project,
             "image_id": observed["Image"], "backend_container_id": backend_id,
+            "backend_started_at": observed["State"]["StartedAt"],
             "reference_source_commit": args.source_commit, "reference_input_sha256": hashes,
             "package_commit": backend["commit"], "mounted_runtime_commit": mounted_commit,
             "mounted_non_runtime_changes": excluded, "package_source_snapshot_sha256": backend["snapshot"],
             "package_receipt_sha256": receipt_sha, "runtime_provenance_sha256": provenance_sha,
             "fullmag_binary_sha256": binary_sha, "runtime_log": technical_log,
-            "output_root": str(host_output), "command": solver_arguments(token),
+            "output_root": str(host_output), "command": solver_arguments(token, args.lane),
+            "lane": args.lane, "mesh_sha256": args.mesh_sha256, "solver_timeout_s": timeout,
         }
         operation["receipt"]["scientific_execution"] = result
+        operation["receipt"]["helper_container_id"] = operation["helper_container_id"]
         control.write(operation["root"] + "/receipt.json", operation["receipt"])
         worker = (
             "import json,sys\n"
-            "from docker_goebel_qualification import _run_worker\n"
-            "try:\n"
-            "    result = _run_worker(sys.argv[1], json.loads(sys.argv[2]), sys.argv[3], sys.argv[4] or None)\n"
-            "except Exception as error:\n"
-            "    result = {'worker_error': f'{type(error).__name__}: {error}'}\n"
-            "print(json.dumps(result))"
+            "from docker_goebel_qualification import _worker_entry\n"
+            "record = _worker_entry(sys.argv[1], json.loads(sys.argv[2]), sys.argv[3], "
+            "sys.argv[4] or None, sys.argv[5], sys.argv[6] or None, int(sys.argv[7]))\n"
+            "print(json.dumps(record))"
         )
         # The worker controller is copied from the verified reference commit,
         # independently of the backend's read-only runtime source mount.
@@ -431,12 +723,16 @@ def run(args):
         operation["daemon_pending"] = True
         stdout, _ = codegen._exec(
             backend_id, ("/usr/local/bin/python3", "-B", "-c", worker, token,
-                         canonical(hashes).decode(), binary_sha, args.terminal_run_id or ""),
-            timeout=SOLVER_TIMEOUT_S + 300, stdout_limit=MAX_RECORD,
+                         canonical(hashes).decode(), binary_sha, args.terminal_run_id or "",
+                         args.lane, args.mesh_sha256 or "", str(timeout)),
+            timeout=timeout + MESH_TIMEOUT_S + 300, stdout_limit=MAX_RECORD,
             environment={"PYTHONPATH": str(CONTROL / operation["root"] / "controller")
                          + ":/opt/fullmag/source/scripts"},
         )
-        completed = codegen._read_json_bytes(stdout, "Göbel worker completion")
+        record = codegen._read_json_bytes(stdout, "Göbel worker completion")
+        completed = validate_worker_terminal(record, result)
+        require(read_worker_terminal(backend_id, token) == record,
+                "worker stdout differs from its durable completion record")
         if isinstance(completed.get("worker_error"), str):
             operation["daemon_pending"] = False
             raise BuildControlError("qualification worker rejected the run: " + completed["worker_error"])
@@ -449,6 +745,8 @@ def run(args):
         require(_runtime_source_binding(selected, after, backend) == (mounted_commit, excluded)
                 and probe.get("source_digest") == after.get("source_digest"),
                 "mounted runtime source changed during qualification")
+        _, _, final_package_sha, _ = codegen._backend_documents(backend_id)
+        require(final_package_sha == receipt_sha, "runtime package changed during qualification")
         inspected = codegen._inspect(backend_id)
         require(codegen._service_identity(backend_id, inspected)
                 == codegen._service_identity(backend_id, observed)
@@ -472,6 +770,12 @@ def parser():
     result.add_argument("--source-commit", required=True)
     result.add_argument("--port", type=int, required=True)
     result.add_argument("--terminal-run-id")
+    result.add_argument("--lane", choices=("fdm", FEM_LANE), default="fdm")
+    result.add_argument("--mesh-sha256")
+    result.add_argument("--solver-timeout-s", type=int)
+    recovery = result.add_mutually_exclusive_group()
+    recovery.add_argument("--observe-attempt")
+    recovery.add_argument("--reconcile-attempt")
     return result
 
 
