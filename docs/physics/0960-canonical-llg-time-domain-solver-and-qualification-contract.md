@@ -244,6 +244,22 @@ must always be finite, even while history is inactive; it must additionally be
 positive when history is active. Finite zero is the canonical inactive-history
 placeholder and is ignored by the startup expression.
 
+A physical stage endpoint has one narrow exception to the attempted-step lower
+bound. When the positive remaining physical interval is shorter than `dt_min`,
+the runtime may make one terminal RK45 attempt using that exact remaining
+interval to reach the requested endpoint. This endpoint-bounded interval is
+not a controller proposal: the adaptive controller keeps the authored
+`[dt_min, dt_max]` bounds for every subsequent proposal. The terminal attempt
+must pass the same error, geometry, stability, and final-field checks as any
+other attempt, and its magnetization and physical clock commit together. If the
+error estimate exceeds tolerance, the runtime reports `dt_min_exhausted`; any
+other failed guard keeps its typed failure. Every failed terminal attempt
+restores the pre-attempt state and is never retried below the endpoint interval
+or force-accepted. The runtime must not extend the physical stage beyond its
+endpoint or change a checkpoint time without solving the corresponding
+interval. This exception does not change ordinary attempt bounds or the
+resolved first-step policy.
+
 The bounded decision vocabulary is `accepted`, `retry`, and `failed`. The
 bounded reason vocabulary is `within_tolerance`, `error_above_tolerance`,
 `dt_min_exhausted`, `invalid_order`, `invalid_bounds`,

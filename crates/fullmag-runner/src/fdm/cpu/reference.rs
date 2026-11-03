@@ -2140,7 +2140,7 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
         direct_metrics.insert("rhs_evaluations".to_string(), result.rhs_evaluations as f64);
         direct_metrics.insert("accepted_steps".to_string(), result.steps_taken as f64);
 
-        steps.push(final_stats);
+        record_direct_minimizer_terminal_stats(final_stats, &mut steps, &mut artifacts)?;
         direct_minimizer_completion = Some(infer_direct_minimizer_completion(
             control,
             result.converged,
@@ -2345,6 +2345,14 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                 &scalar_schedules,
                 live.as_ref(),
             );
+            let use_hard_endpoint_rk45_step = should_use_rk45_hard_endpoint_step(
+                plan.integrator,
+                plan.adaptive_timestep.as_ref(),
+                plan.relaxation.is_none() && spin_transport.is_none(),
+                transport_step_end.is_some(),
+                remaining,
+                dt_step,
+            );
             if crate::antenna_fields::has_time_varying_antenna_zeeman_masks(
                 &plan.antenna_zeeman_masks,
             ) {
@@ -2510,15 +2518,27 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                     })?
                 }
             } else {
-                let result = step_reference_fdm_problem(
-                    &problem,
-                    &mut state,
-                    &mut state_soa,
-                    dt_step,
-                    &mut fft_workspace,
-                    &mut integrator_bufs,
-                    step_evaluation,
-                );
+                let result = if use_hard_endpoint_rk45_step {
+                    step_reference_fdm_problem_to_hard_endpoint(
+                        &problem,
+                        &mut state,
+                        &mut state_soa,
+                        stage_end_time_s,
+                        &mut fft_workspace,
+                        &mut integrator_bufs,
+                        step_evaluation,
+                    )
+                } else {
+                    step_reference_fdm_problem(
+                        &problem,
+                        &mut state,
+                        &mut state_soa,
+                        dt_step,
+                        &mut fft_workspace,
+                        &mut integrator_bufs,
+                        step_evaluation,
+                    )
+                };
                 match result {
                     Ok((report, state_copy)) => {
                         if state_copy.full_field_copy_count > 0 {
@@ -2970,6 +2990,27 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
         }
     }
 
+    // Direct minimizers advance accepted steps without advancing physical
+    // time. The initial sample at t=0 therefore cannot stand in for the
+    // terminal state when a field schedule was already sampled at t=0.
+    let force_direct_final_fields = is_direct_minimization && step_count > 0;
+    if force_direct_final_fields {
+        for schedule in &mut field_schedules {
+            schedule.last_sampled_time = None;
+        }
+    }
+    #[cfg(feature = "fem-gpu")]
+    // BB/NCG return only their terminal magnetization; they do not expose
+    // accepted intermediate states to the artifact writer. Preserve the
+    // configured final field request without manufacturing missing cadence
+    // samples from the terminal state.
+    let autosave_final_field_names = if is_direct_minimization {
+        artifacts.due_accepted_step_fields(step_count, true)
+    } else {
+        Vec::new()
+    };
+    #[cfg(not(feature = "fem-gpu"))]
+    let autosave_final_field_names: Vec<String> = Vec::new();
     let finalization_field_snapshot_metrics = record_final_outputs(
         &problem,
         &state,
@@ -2978,10 +3019,16 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
         last_solver_dt,
         default_scalar_trace,
         last_step_report.as_ref(),
+        &autosave_final_field_names,
         &field_schedules,
         &mut steps,
         &mut artifacts,
     )?;
+    if force_direct_final_fields {
+        for schedule in &mut field_schedules {
+            schedule.last_sampled_time = Some(state.time_seconds);
+        }
+    }
 
     if !paused && !cancelled {
         if let Some(live) = live.as_mut() {
@@ -3661,6 +3708,58 @@ fn step_reference_fdm_problem(
     }
 }
 
+fn should_use_rk45_hard_endpoint_step(
+    integrator: Option<IntegratorChoice>,
+    adaptive: Option<&AdaptiveTimeStepIR>,
+    is_physical_time_evolution: bool,
+    has_transport_step_end: bool,
+    remaining_s: f64,
+    dt_step_s: f64,
+) -> bool {
+    is_physical_time_evolution
+        && !has_transport_step_end
+        && integrator.unwrap_or(IntegratorChoice::Heun) == IntegratorChoice::Rk45
+        && remaining_s.is_finite()
+        && remaining_s > 0.0
+        && adaptive.is_some_and(|policy| remaining_s < policy.dt_min && dt_step_s == remaining_s)
+}
+
+fn step_reference_fdm_problem_to_hard_endpoint(
+    problem: &ExchangeLlgProblem,
+    state: &mut ExchangeLlgState,
+    state_soa: &mut Option<ExchangeLlgStateSoA>,
+    endpoint_time_s: f64,
+    fft_workspace: &mut FftWorkspace,
+    integrator_bufs: &mut IntegratorBuffers,
+    evaluation: EvaluationRequest,
+) -> Result<(StepReport, fullmag_engine::FdmCpuStateCopyTelemetry), EngineError> {
+    if state_soa.is_none() && problem.soa_fast_path_supported() {
+        *state_soa = Some(state.to_soa());
+    }
+
+    if let Some(soa) = state_soa.as_mut() {
+        let report = problem.step_rk45_soa_to_hard_endpoint_with_buffers_evaluation(
+            soa,
+            endpoint_time_s,
+            fft_workspace,
+            integrator_bufs,
+            evaluation,
+        )?;
+        let state_copy = soa.publish_accepted_to(state);
+        Ok((report, state_copy))
+    } else {
+        problem
+            .step_rk45_to_hard_endpoint_with_buffers_evaluation(
+                state,
+                endpoint_time_s,
+                fft_workspace,
+                integrator_bufs,
+                evaluation,
+            )
+            .map(|report| (report, Default::default()))
+    }
+}
+
 fn infer_direct_minimizer_completion(
     control: &RelaxationControlIR,
     converged: bool,
@@ -3896,6 +3995,26 @@ fn record_scalar_snapshot(
     Ok(())
 }
 
+/// Publish the direct minimizer's terminal accepted state to the scalar
+/// artifact stream. BB/NCG have no per-step output callback, and their
+/// accepted-step clock is independent of physical time, so `record_final_outputs`
+/// cannot infer that a row at the same time belongs to a different accepted
+/// step.
+fn record_direct_minimizer_terminal_stats(
+    stats: StepStats,
+    steps: &mut Vec<StepStats>,
+    artifacts: &mut ArtifactRecorder,
+) -> Result<(), RunError> {
+    let already_recorded = steps.last().is_some_and(|previous| {
+        previous.step == stats.step && same_time(previous.time, stats.time)
+    });
+    if !already_recorded {
+        artifacts.record_scalar(&stats)?;
+    }
+    steps.push(stats);
+    Ok(())
+}
+
 fn record_final_outputs(
     problem: &ExchangeLlgProblem,
     state: &ExchangeLlgState,
@@ -3904,6 +4023,7 @@ fn record_final_outputs(
     solver_dt: f64,
     default_scalar_trace: bool,
     final_step_report: Option<&StepReport>,
+    autosave_final_field_names: &[String],
     field_schedules: &[OutputSchedule],
     steps: &mut Vec<StepStats>,
     artifacts: &mut ArtifactRecorder,
@@ -3921,7 +4041,7 @@ fn record_final_outputs(
                 .map(|stats| !same_time(stats.time, state.time_seconds))
                 .unwrap_or(true));
 
-    let requested_field_names = field_schedules
+    let mut requested_field_names = field_schedules
         .iter()
         .filter(|schedule| {
             schedule
@@ -3931,6 +4051,11 @@ fn record_final_outputs(
         })
         .map(|schedule| schedule.name.clone())
         .collect::<Vec<_>>();
+    for name in autosave_final_field_names {
+        if !requested_field_names.contains(name) {
+            requested_field_names.push(name.clone());
+        }
+    }
     let missing_field_names = requested_field_names
         .into_iter()
         .filter(|name| {
@@ -4828,6 +4953,68 @@ mod tests {
             decide_coupled_adaptive_step(4.0, one_ulp_above, &adaptive),
             CoupledAdaptiveDecision::DtMinExhausted
         );
+    }
+
+    #[test]
+    fn only_subminimum_rk45_physical_endpoint_steps_use_endpoint_entrypoint() {
+        let adaptive = adaptive_test_policy();
+        let endpoint_interval = adaptive.dt_min * 0.5;
+        assert!(should_use_rk45_hard_endpoint_step(
+            Some(IntegratorChoice::Rk45),
+            Some(&adaptive),
+            true,
+            false,
+            endpoint_interval,
+            endpoint_interval,
+        ));
+        assert!(!should_use_rk45_hard_endpoint_step(
+            Some(IntegratorChoice::Rk45),
+            Some(&adaptive),
+            true,
+            false,
+            adaptive.dt_min,
+            adaptive.dt_min,
+        ));
+        assert!(!should_use_rk45_hard_endpoint_step(
+            Some(IntegratorChoice::Rk45),
+            Some(&adaptive),
+            true,
+            false,
+            endpoint_interval,
+            endpoint_interval * 0.5,
+        ));
+        assert!(!should_use_rk45_hard_endpoint_step(
+            Some(IntegratorChoice::Heun),
+            Some(&adaptive),
+            true,
+            false,
+            endpoint_interval,
+            endpoint_interval,
+        ));
+        assert!(!should_use_rk45_hard_endpoint_step(
+            Some(IntegratorChoice::Rk45),
+            Some(&adaptive),
+            false,
+            false,
+            endpoint_interval,
+            endpoint_interval,
+        ));
+        assert!(!should_use_rk45_hard_endpoint_step(
+            Some(IntegratorChoice::Rk45),
+            Some(&adaptive),
+            true,
+            true,
+            endpoint_interval,
+            endpoint_interval,
+        ));
+        assert!(!should_use_rk45_hard_endpoint_step(
+            Some(IntegratorChoice::Rk45),
+            None,
+            true,
+            false,
+            endpoint_interval,
+            endpoint_interval,
+        ));
     }
 
     fn make_test_plan() -> FdmPlanIR {
@@ -7085,6 +7272,180 @@ mod tests {
     }
 
     #[test]
+    fn direct_minimizer_publishes_terminal_artifacts_at_same_physical_time() {
+        let plan = FdmPlanIR {
+            initial_magnetization: fullmag_plan::generate_random_unit_vectors(42, 16),
+            relaxation: Some(direct_minimizer_test_control()),
+            ..make_test_plan()
+        };
+        let outputs = [
+            OutputIR::Scalar {
+                name: "E_total".to_string(),
+                every_seconds: 1e-12,
+            },
+            OutputIR::Field {
+                name: "m".to_string(),
+                every_seconds: 1e-12,
+            },
+        ];
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-direct-minimizer-terminal-artifacts-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        let context = crate::artifacts::FieldArtifactContext {
+            problem_name: "direct-minimizer-terminal-artifacts".to_string(),
+            ir_version: "v0".to_string(),
+            source_hash: None,
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            layout: serde_json::json!({"kind": "fdm", "cell_count": 16}),
+            magnetization_field_semantics: Ok(None),
+            execution_resolution: None,
+        };
+        let mut pipeline =
+            crate::artifact_pipeline::ArtifactPipeline::start(output_dir.clone(), context, 2)
+                .expect("artifact pipeline");
+        let executed = execute_reference_fdm(&plan, 1e-12, &outputs, None, Some(pipeline.sender()))
+            .expect("direct minimizer should complete");
+        let terminal_step = executed.result.steps.last().expect("terminal stats").step;
+        assert!(
+            terminal_step > 0,
+            "test must exercise accepted minimizer steps"
+        );
+        pipeline.finish().expect("finish artifact pipeline");
+
+        let scalar_rows =
+            std::fs::read_to_string(output_dir.join("scalars.csv")).expect("scalar trace");
+        let terminal_step_text = terminal_step.to_string();
+        assert!(
+            scalar_rows
+                .lines()
+                .skip(1)
+                .any(|row| row.split(',').next() == Some(terminal_step_text.as_str())),
+            "terminal scalar row at accepted step {terminal_step} is missing: {scalar_rows}"
+        );
+        let frames: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(output_dir.join("frames.json")).expect("field frame index"),
+        )
+        .expect("decode field frame index");
+        let frames = frames["frames"].as_array().expect("frame list");
+        assert_eq!(
+            frames.len(),
+            2,
+            "only initial and actual terminal fields exist"
+        );
+        assert_eq!(frames[0]["step"], 0);
+        assert_eq!(frames[1]["step"], terminal_step);
+        assert_eq!(frames[1]["quantity_ids"][0], "m");
+
+        std::fs::remove_dir_all(output_dir).expect("remove test output");
+    }
+
+    #[test]
+    fn direct_minimizer_scalar_artifact_keeps_terminal_step_271_at_time_zero() {
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-direct-minimizer-step-271-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        let context = crate::artifacts::FieldArtifactContext {
+            problem_name: "direct-minimizer-step-271".to_string(),
+            ir_version: "v0".to_string(),
+            source_hash: None,
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            layout: serde_json::json!({"kind": "fdm", "cell_count": 1}),
+            magnetization_field_semantics: Ok(None),
+            execution_resolution: None,
+        };
+        let mut pipeline =
+            crate::artifact_pipeline::ArtifactPipeline::start(output_dir.clone(), context, 2)
+                .expect("artifact pipeline");
+        let mut artifacts =
+            ArtifactRecorder::streaming(ExecutionProvenance::default(), pipeline.sender());
+        let initial = StepStats {
+            step: 0,
+            time: 0.0,
+            ..StepStats::default()
+        };
+        artifacts
+            .record_scalar(&initial)
+            .expect("initial scalar row");
+        let mut steps = vec![initial];
+        record_direct_minimizer_terminal_stats(
+            StepStats {
+                step: 271,
+                time: 0.0,
+                ..StepStats::default()
+            },
+            &mut steps,
+            &mut artifacts,
+        )
+        .expect("terminal direct-minimizer scalar row");
+        drop(artifacts);
+        pipeline.finish().expect("finish artifact pipeline");
+
+        let scalar_rows =
+            std::fs::read_to_string(output_dir.join("scalars.csv")).expect("scalar trace");
+        let steps = scalar_rows
+            .lines()
+            .skip(1)
+            .map(|row| row.split(',').next().expect("step column"))
+            .collect::<Vec<_>>();
+        assert_eq!(steps, ["0", "271"]);
+        std::fs::remove_dir_all(output_dir).expect("remove test output");
+    }
+
+    #[test]
+    fn autosave_only_direct_minimizer_field_uses_terminal_step_271() {
+        let plan = make_test_plan();
+        let (problem, state) = build_snapshot_problem_and_state(&plan)
+            .expect("build autosave-only field fixture");
+        let autosave_final_field_names = vec!["m".to_string()];
+        let mut steps = vec![StepStats {
+            step: 271,
+            time: 0.0,
+            ..StepStats::default()
+        }];
+        let mut artifacts = ArtifactRecorder::in_memory(ExecutionProvenance::default());
+
+        record_final_outputs(
+            &problem,
+            &state,
+            None,
+            271,
+            0.0,
+            false,
+            None,
+            &autosave_final_field_names,
+            &[],
+            &mut steps,
+            &mut artifacts,
+        )
+        .expect("publish the terminal autosave field");
+
+        let (field_snapshots, field_snapshot_count, _) = artifacts.finish();
+        assert_eq!(field_snapshot_count, 1);
+        assert_eq!(field_snapshots.len(), 1);
+        assert_eq!(field_snapshots[0].name, "m");
+        assert_eq!(field_snapshots[0].step, 271);
+        assert_eq!(field_snapshots[0].time, 0.0);
+        assert_eq!(
+            field_snapshots[0].values,
+            state
+                .magnetization()
+                .iter()
+                .flat_map(|value| value.iter().copied())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn llg_terminal_update_contains_final_state_and_cached_fields() {
         let plan = FdmPlanIR {
             enable_demag: true,
@@ -8520,6 +8881,7 @@ mod tests {
             1e-14,
             false,
             None,
+            &[],
             &field_schedules,
             &mut steps,
             &mut artifacts,
@@ -8589,6 +8951,7 @@ mod tests {
             1e-14,
             true,
             None,
+            &[],
             &field_schedules,
             &mut steps,
             &mut artifacts,
