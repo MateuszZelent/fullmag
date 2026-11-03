@@ -144,6 +144,9 @@ void gpu_snapshot_preserves_full_domain_observable_fields() {
     check(
         api.find("fullmag_cuda_apply_full_domain_demag_correction(") != std::string::npos,
         "GPU full-domain H_eff snapshots must combine current magnetic and full-domain demag in staging");
+    check(
+        api.find("context.gpu_state.device.mesh_regions.magnetic_node_mask") != std::string::npos,
+        "GPU full-domain H_eff snapshots must preserve the magnetic-node mask when staging airbox fields");
     const std::size_t staging_done =
         api.find("cudaEventRecord(staging_done_event, io_stream)");
     const std::size_t compute_wait =
@@ -152,9 +155,9 @@ void gpu_snapshot_preserves_full_domain_observable_fields() {
         staging_done != std::string::npos && compute_wait != std::string::npos,
         "GPU snapshot staging must complete before the compute stream can mutate source fields");
     check(
-        api.find("FEM GPU full-domain H_eff snapshot requires allocated demag component buffers") !=
+        api.find("FEM GPU full-domain H_eff snapshot requires allocated demag and magnetic-mask buffers") !=
             std::string::npos,
-        "GPU full-domain H_eff composition must fail closed when either demag field is unallocated");
+        "GPU full-domain H_eff composition must fail closed when demag or mask buffers are unallocated");
 }
 
 void gpu_snapshot_preserves_fresh_demag_solver_intent() {
@@ -465,31 +468,39 @@ void gpu_snapshot_composes_full_domain_effective_field_in_staging() {
     double *full = nullptr;
     double *magnetic = nullptr;
     double *effective = nullptr;
+    uint8_t *magnetic_node_mask = nullptr;
+    const uint8_t mask_host[2] = {1u, 0u};
     check(cudaMalloc(&full, sizeof(full_host)) == cudaSuccess, "allocate full-domain demag");
     check(cudaMalloc(&magnetic, sizeof(magnetic_host)) == cudaSuccess, "allocate magnetic demag");
     check(cudaMalloc(&effective, sizeof(effective_host)) == cudaSuccess, "allocate effective staging");
+    check(cudaMalloc(&magnetic_node_mask, sizeof(mask_host)) == cudaSuccess,
+        "allocate magnetic-node mask");
     check(cudaMemcpy(full, full_host, sizeof(full_host), cudaMemcpyHostToDevice) == cudaSuccess,
         "upload full-domain demag");
     check(cudaMemcpy(magnetic, magnetic_host, sizeof(magnetic_host), cudaMemcpyHostToDevice) == cudaSuccess,
         "upload magnetic demag");
     check(cudaMemcpy(effective, effective_host, sizeof(effective_host), cudaMemcpyHostToDevice) == cudaSuccess,
         "upload effective staging");
+    check(cudaMemcpy(magnetic_node_mask, mask_host, sizeof(mask_host), cudaMemcpyHostToDevice) == cudaSuccess,
+        "upload magnetic-node mask");
 
     fullmag::fem::fullmag_cuda_apply_full_domain_demag_correction(
         full,
         magnetic,
         effective,
+        magnetic_node_mask,
         2);
     check(cudaDeviceSynchronize() == cudaSuccess, "synchronize full-domain H_eff correction");
     double result[2] = {};
     check(cudaMemcpy(result, effective, sizeof(result), cudaMemcpyDeviceToHost) == cudaSuccess,
         "download full-domain H_eff correction");
-    check(result[0] == 7.0 && result[1] == 9.0,
-        "full-domain H_eff must equal magnetic H_eff plus the demag continuation");
+    check(result[0] == 5.0 && result[1] == 9.0,
+        "magnetic H_eff stays unchanged while airbox H_eff receives the demag continuation");
 
     cudaFree(full);
     cudaFree(magnetic);
     cudaFree(effective);
+    cudaFree(magnetic_node_mask);
 }
 #endif
 

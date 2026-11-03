@@ -789,28 +789,34 @@ bool schedule_gpu_snapshot_payload(
     if (compose_full_domain_h_eff) {
         const auto &h_demag_full = context.gpu_state.device.demag_poisson.poisson_gradient;
         const auto &h_demag_magnetic = context.gpu_state.device.fields.h_demag;
+        const auto *magnetic_node_mask =
+            context.gpu_state.device.mesh_regions.magnetic_node_mask;
         if (h_demag_full.x == nullptr || h_demag_full.y == nullptr ||
             h_demag_full.z == nullptr || h_demag_magnetic.x == nullptr ||
-            h_demag_magnetic.y == nullptr || h_demag_magnetic.z == nullptr) {
+            h_demag_magnetic.y == nullptr || h_demag_magnetic.z == nullptr ||
+            magnetic_node_mask == nullptr) {
             return fail_message(
-                "FEM GPU full-domain H_eff snapshot requires allocated demag component buffers");
+                "FEM GPU full-domain H_eff snapshot requires allocated demag and magnetic-mask buffers");
         }
         fullmag::fem::fullmag_cuda_apply_full_domain_demag_correction(
             h_demag_full.x,
             h_demag_magnetic.x,
             snapshot.staging.x,
+            magnetic_node_mask,
             static_cast<int>(node_count),
             io_stream);
         fullmag::fem::fullmag_cuda_apply_full_domain_demag_correction(
             h_demag_full.y,
             h_demag_magnetic.y,
             snapshot.staging.y,
+            magnetic_node_mask,
             static_cast<int>(node_count),
             io_stream);
         fullmag::fem::fullmag_cuda_apply_full_domain_demag_correction(
             h_demag_full.z,
             h_demag_magnetic.z,
             snapshot.staging.z,
+            magnetic_node_mask,
             static_cast<int>(node_count),
             io_stream);
         err = cudaGetLastError();
