@@ -983,6 +983,7 @@ describe("useViewport3DSceneModel", () => {
       "objectContext: getObjectContext(domain.objectId)",
     );
     expect(nativeLayerSettingsBlock).toContain("globalObjectBaseSettings");
+    expect(nativeLayerSettingsBlock).toContain("snapshot: objectVisualizationSnapshot");
     expect(nativeLayerSettingsBlock).toContain("visualizationState: renderingState");
     expect(nativeLayerSettingsBlock).toContain("getObjectContext,");
     expect(nativeLayerSettingsBlock).toContain("globalObjectBaseSettings,");
