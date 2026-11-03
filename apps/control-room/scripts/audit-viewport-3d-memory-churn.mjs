@@ -2280,7 +2280,12 @@ async function installFdmFixtureApi(page, fixture, requests) {
       return;
     }
     if (path === "/v2/sessions/current/model/scene") {
-      await fulfillJson(route, fixture.scene);
+      await fulfillJson(
+        route,
+        fixture.multilayerEnabled
+          ? fdmMultilayerSceneFixture(fixture.scene)
+          : fixture.scene,
+      );
       return;
     }
     if (path === "/v2/sessions/current/model/regions") {
@@ -2816,6 +2821,36 @@ function fdmSceneFixture() {
     ],
     revision: 1,
     schema_version: 2,
+  };
+}
+
+function fdmMultilayerSceneFixture(scene) {
+  // A published native layer must have an authored magnetic owner.
+  const owners = fdmMultilayerLayoutFixture().layers.map((layer) => {
+    const size = layer.native_grid.map(
+      (count, axis) => count * layer.native_cell_size[axis],
+    );
+    return {
+      geometry: { geometry_params: { size }, kind: "box" },
+      id: layer.object_id,
+      magnetization_ref: "fixture-magnetization",
+      name: layer.magnet_name,
+      transform: {
+        translation: layer.native_origin.map((origin, axis) => origin + size[axis] / 2),
+      },
+      visible: true,
+    };
+  });
+  return {
+    ...scene,
+    magnetization_assets: [{
+      id: "fixture-magnetization",
+      kind: "preset_texture",
+      preset_kind: "uniform",
+      preset_params: { direction: [1, 0, 0] },
+      preset_version: 1,
+    }],
+    objects: [...scene.objects, ...owners],
   };
 }
 
