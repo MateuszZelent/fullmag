@@ -59,10 +59,7 @@ def _make_bundle(
             "element_markers": [7] * 6 + [0],
             "boundary_markers": [],
         },
-        "region_materials": [
-            {"object_id": "film", "element_marker": 7,
-             "material": {"saturation_magnetisation": 0.58e6}},
-        ],
+        "material": {"saturation_magnetisation": 0.58e6},
         "demag_realization": "poisson_robin",
     }
 
@@ -95,7 +92,8 @@ def _make_bundle(
             "execution_plan": {"backend_plan": plan},
             "execution_provenance": {"execution_engine": engine},
         })
-        for name, step, time_s in (("m_initial.json", 0, 0.0), ("m_final.json", 8, end_s)):
+        snapshot_end_s = end_s + start_s if backend == "fem" else end_s
+        for name, step, time_s in (("m_initial.json", 0, 0.0), ("m_final.json", 8, snapshot_end_s)):
             _write_json(stage / name, {"layout": layout, "step": step, "time": time_s,
                                       "observable": "m", "values": values})
     return root

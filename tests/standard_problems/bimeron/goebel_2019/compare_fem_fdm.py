@@ -65,6 +65,7 @@ class _Endpoint:
             "pbc": self.metadata["pbc"],
             "fem_demag_realization": self.plan.get("demag_realization"),
             "step": self.state["step"],
+            "final_snapshot_time_s": self.state["time"],
             "stage_local_duration_s": self.local_duration_s,
             "global_start_s": self.global_start_s,
             "global_end_s": self.global_start_s + self.local_duration_s,
@@ -101,7 +102,8 @@ def _load_endpoint(bundle: Path, directory: str, backend: str) -> _Endpoint:
     if pbc.get("axes") != ["periodic", "open", "open"] or pbc.get("demag") != expected_demag:
         raise ValueError(f"{path}: expected x-only periodicity with {expected_demag}")
 
-    # Flat headless stages reset the field clock and retain the global origin in the plan.
+    # The writer uses zero for m_initial in both lanes. Native FEM reports the
+    # accepted endpoint on the absolute clock, while CUDA FDM uses a local one.
     initial = json.loads((path / "m_initial.json").read_bytes())
     start_s = float(plan["time_stage"]["start_time_s"])
     initial_s, final_s = float(initial["time"]), float(state["time"])
@@ -113,7 +115,7 @@ def _load_endpoint(bundle: Path, directory: str, backend: str) -> _Endpoint:
         metadata,
         plan,
         start_s,
-        final_s - initial_s,
+        final_s - (start_s if backend == "fem" else initial_s),
         hashlib.sha256(state_bytes).hexdigest(),
         hashlib.sha256(metadata_bytes).hexdigest(),
     )
@@ -165,10 +167,14 @@ def _sample_fem(endpoint: _Endpoint, grid: CartesianGrid) -> tuple[np.ndarray, d
     if endpoint.plan.get("fe_order") != 1 or endpoint.plan.get("demag_realization") != "poisson_robin":
         raise ValueError(f"{endpoint.path}: expected P1 FEM with Poisson Robin demag")
     mesh = mesh_data_from_ir(endpoint.plan["mesh"])
-    regions = endpoint.plan["region_materials"]
-    if len(regions) != 1 or regions[0]["material"]["saturation_magnetisation"] <= 0.0:
+    markers = np.unique(mesh.element_markers[mesh.element_markers > 0])
+    regions = endpoint.plan.get("region_materials") or []
+    material = regions[0]["material"] if len(regions) == 1 else endpoint.plan.get("material", {})
+    if len(markers) != 1 or len(regions) > 1 or not material.get("saturation_magnetisation", 0) > 0.0:
         raise ValueError(f"{endpoint.path}: expected one magnetic film region in the FEM plan")
-    marker = regions[0]["element_marker"]
+    marker = int(markers[0])
+    if regions and regions[0]["element_marker"] != marker:
+        raise ValueError(f"{endpoint.path}: FEM region material and magnetic marker disagree")
     selected = mesh.element_markers == marker
     if mesh.cell_mesh_parts.size and not np.array_equal(selected, mesh.cell_mesh_parts == "magnetic"):
         raise ValueError(f"{endpoint.path}: FEM magnetic marker and mesh parts disagree")
@@ -199,7 +205,7 @@ def _sample_fem(endpoint: _Endpoint, grid: CartesianGrid) -> tuple[np.ndarray, d
         raise ValueError(f"{endpoint.path}: cannot normalize a zero or invalid sampled vector")
     return raw / norms[:, None], {
         **sampled.metadata,
-        "magnetic_object_id": regions[0]["object_id"],
+        "magnetic_object_id": regions[0]["object_id"] if regions else None,
         "raw_norm_min": float(np.min(norms)),
         "raw_norm_max": float(np.max(norms)),
         "raw_norm_max_deviation_from_one": float(np.max(np.abs(norms - 1.0))),
