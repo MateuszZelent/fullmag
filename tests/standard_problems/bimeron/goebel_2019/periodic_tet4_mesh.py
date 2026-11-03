@@ -85,17 +85,31 @@ def build_mesh() -> dict:
     ]
     boundary_faces = []
     boundary_markers = []
+    facet_roles = []
+    roles = {10: "material_interface", 20: "exterior", 100: "periodic_seam", 101: "periodic_seam"}
     for plane, axis, positive, marker in groups:
         triangles = _plane_triangles(plane, axis, positive)
         boundary_faces.extend(triangles.tolist())
         boundary_markers.extend([marker] * len(triangles))
+        facet_roles.extend([roles[marker]] * len(triangles))
 
     return {
         "mesh_name": "goebel_periodic_tet4",
         "nodes": nodes.tolist(),
-        "elements": elements.tolist(),
+        "cells": {
+            "types": ["tet4"] * len(elements),
+            "offsets": list(range(0, 4 * len(elements) + 1, 4)),
+            "nodes": elements.ravel().tolist(),
+            "global_ordinals": list(range(len(elements))),
+        },
         "element_markers": element_markers.tolist(),
-        "boundary_faces": boundary_faces,
+        "facets": {
+            "types": ["tri3"] * len(boundary_faces),
+            "roles": facet_roles,
+            "offsets": list(range(0, 3 * len(boundary_faces) + 1, 3)),
+            "nodes": [node for face in boundary_faces for node in face],
+            "global_ordinals": list(range(len(boundary_faces))),
+        },
         "boundary_markers": boundary_markers,
         "periodic_boundary_pairs": [{
             "pair_id": "x_faces", "marker_a": 100, "marker_b": 101,

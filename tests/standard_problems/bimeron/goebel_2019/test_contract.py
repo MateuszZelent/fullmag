@@ -264,3 +264,19 @@ def test_x_periodic_airbox_authoring_stays_within_fem_time_domain() -> None:
     modal = replace(loaded.problem, study=fm.Eigenmodes(count=1, outputs=(fm.SaveSpectrum(),)))
     with pytest.raises(ValueError, match="requires FEM relaxation or time evolution"):
         modal.to_ir(include_geometry_assets=False)
+
+
+def test_layered_periodic_mesh_exports_canonical_facet_roles() -> None:
+    import numpy as np
+
+    from fullmag.meshing.persistence import mesh_data_from_ir
+    from tests.standard_problems.bimeron.goebel_2019.periodic_tet4_mesh import build_mesh
+
+    mesh = mesh_data_from_ir(build_mesh())
+    mesh.validate_strict(eps_volume=1e-30 / 6)
+    for marker, role in ((10, "material_interface"), (20, "exterior"),
+                         (100, "periodic_seam"), (101, "periodic_seam")):
+        selected = mesh.boundary_markers == marker
+        assert np.any(selected)
+        assert np.all(mesh.facet_roles[selected] == role)
+    assert len(mesh.periodic_node_pairs) == np.unique(mesh.boundary_faces[mesh.boundary_markers == 100]).size
