@@ -3474,6 +3474,18 @@ mod tests {
             "missing stage pointer must be rebuilt from the immutable task receipt"
         );
 
+        // The legacy path publishes against a run already catalogued in the
+        // live journal. Set it up only after checking that accepted commits did
+        // not create any live-journal catalog or anchor.
+        live_store
+            .commit_run_catalog(&fullmag_session::FmsRunCatalog {
+                schema_version: fullmag_session::FMS_RUN_CATALOG_SCHEMA.into(),
+                run_id: run_id.into(),
+                revision: 1,
+                updated_at: chrono::Utc::now(),
+                tasks: Vec::new(),
+            })
+            .unwrap();
         let legacy_receipt = legacy_test_receipt(&specification, "prep-live-legacy");
         let legacy_disposition = commit_live_preparation_receipt_for_context_under_transition(
             &state,
