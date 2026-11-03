@@ -133,9 +133,25 @@ odbiorców. Nie usuwa całego `BuildControl.volume`: zachowuje root control,
 `private/ledger`, receipts i provenance, dopóki osobna archiwizacja nie
 potwierdzi ich retencji. Aktywny/zachowany kontener, obcy konsument, nieznana
 tożsamość albo błąd Dockera blokują `completed`. Trwały plan i znacznik
-zamykania blokują nowe zarządzane starty; przerwaną operację wznawiaj tym samym
-poleceniem. Receipt ma potwierdzić dokładnie usunięte subpaths/namespace. Dopiero
-potem usuń worktree i zintegrowany branch, a wynik zapisz w rekordzie.
+zamykania blokują nowe zarządzane starty. Receipt ma potwierdzić dokładnie
+usunięte podścieżki i namespace. Dopiero potem usuń worktree i zintegrowany
+branch, a wynik zapisz w rekordzie.
+
+Jeśli próba została przerwana podczas czyszczenia prywatnego cache i helper
+nadal trzyma lease, przypnij identyfikator próby i SHA-256 surowych bajtów
+`cache-retirement/attempts/<attempt>/receipt.json` z kontrolnego wolumenu
+tego worktree. Z istniejącego worktree użyj:
+
+```sh
+just worktree-finish <task_id> <owner> <powód_i_dowód_integracji> completed <attempt>@<receipt_sha256>
+```
+
+Wznowienie wymaga tego samego planu, znacznika zamykania, właściciela, profilu
+i braku innych konsumentów usuwanego cache. Oryginalny helper musi zakończyć
+logowanie. Komenda zachowuje pierwotny receipt i zapisuje terminal
+przerwanej próby, po którym jej helper zwalnia lease. Nowa próba ponownie
+sprawdza plan i mounty przed usuwaniem pozostałych podścieżek. Stan po
+rozpoczęciu retencji wspólnego namespace’u wymaga osobnej diagnozy.
 
 Przed usunięciem worktree wykonaj niezależny inventory z użyciem
 zarejestrowanego source/worktree, storage root oraz bieżących i dawnych Compose
