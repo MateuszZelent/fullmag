@@ -1954,8 +1954,22 @@ async fn commit_live_preparation_receipt_for_context_under_transition_with_sourc
     // different durable owners. Keep the roots explicit: legacy live
     // preparations use the current-live journal store, while an accepted run
     // keeps its catalog, RunIntent, anchor, task, and stage provenance in the
-    // accepted store.
-    let live_store = crate::session_persistence::open_store(state)?;
+    // accepted store. Do not open the live journal on the normal accepted-run
+    // path: opening it may itself need its writer, although this receipt is
+    // owned entirely by the accepted store.
+    let previous_live_receipt = state.current_live_preparation_receipt.read().await.clone();
+    let previous_legacy_replacement_needs_live_store = previous_live_receipt
+        .as_ref()
+        .filter(|previous| previous.run_id != durable_receipt.run_id)
+        .and_then(|previous| validated_live_preparation_payload(&previous.payload))
+        .is_some_and(|previous| live_preparation_accepted_source(&previous).is_none());
+    let live_store = if accepted_source_step.is_none()
+        || previous_legacy_replacement_needs_live_store
+    {
+        Some(crate::session_persistence::open_store(state)?)
+    } else {
+        None
+    };
     let accepted_store = if accepted_source_step.is_some() {
         let store_root = state.submit_store_root.as_ref().ok_or_else(|| {
             ApiError::with_status_and_code(
@@ -1974,12 +1988,16 @@ async fn commit_live_preparation_receipt_for_context_under_transition_with_sourc
     } else {
         None
     };
-    let previous_live_receipt = state.current_live_preparation_receipt.read().await.clone();
     let previous_durable_receipt = match accepted_store.as_ref() {
         Some(accepted_store) => {
             read_durable_preparation_anchor(accepted_store, &durable_receipt.run_id)?
         }
-        None => read_durable_preparation_anchor(&live_store, &durable_receipt.run_id)?,
+        None => {
+            let live_store = live_store.as_ref().ok_or_else(|| {
+                ApiError::internal("legacy preparation requires the current-live journal store")
+            })?;
+            read_durable_preparation_anchor(live_store, &durable_receipt.run_id)?
+        }
     };
     let disposition = if let Some(step_id) = accepted_source_step.as_deref() {
         let accepted_store = accepted_store.as_ref().ok_or_else(|| {
@@ -2020,7 +2038,7 @@ async fn commit_live_preparation_receipt_for_context_under_transition_with_sourc
         let stale_accepted_replacement = match previous_live_receipt.as_ref() {
             Some(previous) if previous.run_id != durable_receipt.run_id => {
                 prove_stale_accepted_replacement(
-                    &live_store,
+                    live_store.as_ref(),
                     accepted_store,
                     previous,
                     current_preparation_id.as_deref(),
@@ -2073,6 +2091,10 @@ async fn commit_live_preparation_receipt_for_context_under_transition_with_sourc
         }
     } else {
         live_store
+            .as_ref()
+            .ok_or_else(|| {
+                ApiError::internal("legacy preparation requires the current-live journal store")
+            })?
             .commit_preparation_receipt(&durable_receipt)
             .map_err(|error| ApiError::conflict(error.to_string()))?
     };
@@ -2315,7 +2337,7 @@ fn stale_replacement_durable_evidence_matches(
 /// immutable preparation for the run, so an accepted later-stage receipt is
 /// proven by its task/stage records instead of being compared to that anchor.
 fn prove_stale_accepted_replacement(
-    live_store: &fullmag_session::SessionStore,
+    live_store: Option<&fullmag_session::SessionStore>,
     accepted_store: &fullmag_session::SessionStore,
     previous: &fullmag_session::FmsPreparationReceipt,
     current_preparation_id: Option<&str>,
@@ -2339,7 +2361,9 @@ fn prove_stale_accepted_replacement(
     let anchor_store = if source.is_some() {
         accepted_store
     } else {
-        live_store
+        live_store.ok_or_else(|| {
+            ApiError::internal("stale legacy preparation requires the current-live journal store")
+        })?
     };
     let Some(anchor) = read_durable_preparation_anchor(anchor_store, &previous.run_id)?
     else {
@@ -2958,6 +2982,33 @@ mod tests {
         .unwrap()
     }
 
+    fn legacy_test_receipt(
+        specification: &RunSpecification,
+        preparation_id: &str,
+    ) -> PreparationReceipt {
+        let accepted_receipt = accepted_test_receipt(specification, "step-a", preparation_id);
+        let accepted_plan = accepted_receipt.plan;
+        let plan = PreparationPlan::new(
+            accepted_plan.problem_fingerprint.clone(),
+            1,
+            accepted_plan.requested_backend.clone(),
+            accepted_plan.resolved_backend.clone(),
+            accepted_plan.geometry.clone(),
+            accepted_plan.display.clone(),
+            accepted_plan.grid.clone(),
+            accepted_plan.mesh.clone(),
+            accepted_plan.space.clone(),
+        )
+        .unwrap();
+        PreparationReceipt::ready(
+            preparation_id,
+            plan,
+            accepted_receipt.certificates,
+            accepted_receipt.reuse,
+        )
+        .unwrap()
+    }
+
     #[test]
     fn accepted_source_identity_accepts_exact_binding_and_rejects_stale_or_mismatched_input() {
         let source = accepted_source("run-accepted", 'a', 'b', "step-a");
@@ -3099,7 +3150,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn accepted_commit_uses_submit_store_for_anchor_and_stage_with_distinct_live_store() {
+    async fn accepted_commit_ignores_busy_live_journal_and_legacy_commit_still_uses_it() {
         let temporary = tempfile::tempdir().unwrap();
         let accepted_root = temporary.path().join("accepted-store");
         let live_root = temporary.path().join("live-store");
@@ -3198,17 +3249,26 @@ mod tests {
         let context = crate::capture_current_live_request_context(&state)
             .await
             .unwrap();
+        let live_store = fullmag_session::SessionStore::open(&live_root).unwrap();
         let contention_store =
             fullmag_session::SessionStore::open_existing(&accepted_root).unwrap();
+        let live_contention_store =
+            fullmag_session::SessionStore::open_existing(&live_root).unwrap();
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         let (go_tx, go_rx) = std::sync::mpsc::channel();
         let contention_thread = std::thread::spawn(move || {
-            let Ok(lease) = contention_store.write_transaction() else {
+            let Ok(accepted_lease) = contention_store.write_transaction() else {
+                let _ = ready_tx.send(false);
+                return;
+            };
+            let Ok(live_lease) = live_contention_store.write_transaction() else {
+                drop(accepted_lease);
                 let _ = ready_tx.send(false);
                 return;
             };
             if ready_tx.send(true).is_err() {
-                drop(lease);
+                drop(live_lease);
+                drop(accepted_lease);
                 return;
             }
             if go_rx
@@ -3219,7 +3279,8 @@ mod tests {
                 // witnessed the native conflict and is about to call the API.
                 std::thread::sleep(std::time::Duration::from_millis(250));
             }
-            drop(lease);
+            drop(live_lease);
+            drop(accepted_lease);
         });
         let ready = ready_rx.recv_timeout(std::time::Duration::from_secs(5));
         let probe_error = match (
@@ -3242,9 +3303,29 @@ mod tests {
                 .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
                 && format!("{error:#}").contains("conflict=native descriptor")
         });
+        let live_probe_error = match (
+            &ready,
+            fullmag_session::SessionStore::open_existing(&live_root),
+        ) {
+            (Ok(true), Ok(probe)) => match probe.write_transaction() {
+                Ok(lease) => {
+                    drop(lease);
+                    None
+                }
+                Err(error) => Some(error),
+            },
+            (_, Err(error)) => Some(error),
+            _ => None,
+        };
+        let live_native_busy = live_probe_error.as_ref().is_some_and(|error| {
+            error
+                .chain()
+                .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
+                && format!("{error:#}").contains("conflict=native descriptor")
+        });
         let _transition = state.current_live_session_transition.lock().await;
         let go_sent = go_tx.send(()).is_ok();
-        let disposition = if native_busy && go_sent {
+        let disposition = if native_busy && live_native_busy && go_sent {
             commit_live_preparation_receipt_for_context_under_transition(
                 &state,
                 &context,
@@ -3269,6 +3350,10 @@ mod tests {
             "test setup must observe native StoreWriterBusy before accepted commit: {probe_error:?}"
         );
         assert!(
+            live_native_busy,
+            "test setup must hold the live journal writer during accepted commit: {live_probe_error:?}"
+        );
+        assert!(
             go_sent,
             "contention thread was not ready to start its bounded hold"
         );
@@ -3291,7 +3376,6 @@ mod tests {
             .unwrap()
             .expect("accepted stage pointer must be in the accepted store");
         assert_eq!(stage.preparation_id, preparation_id);
-        let live_store = fullmag_session::SessionStore::open(&live_root).unwrap();
         assert!(
             live_store.read_preparation_receipt(run_id).unwrap().is_none(),
             "live journal store must not receive an accepted run anchor"
@@ -3388,6 +3472,40 @@ mod tests {
                 .unwrap()
                 .is_some(),
             "missing stage pointer must be rebuilt from the immutable task receipt"
+        );
+
+        let legacy_receipt = legacy_test_receipt(&specification, "prep-live-legacy");
+        let legacy_disposition = commit_live_preparation_receipt_for_context_under_transition(
+            &state,
+            &context,
+            legacy_receipt,
+            None,
+            None,
+            Some(run_id),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            legacy_disposition,
+            fullmag_session::PreparationReceiptCommitDisposition::Accepted
+        );
+        assert_eq!(
+            live_store
+                .read_preparation_receipt(run_id)
+                .unwrap()
+                .unwrap()
+                .preparation_id,
+            "prep-live-legacy",
+            "unaccepted legacy receipt must continue to use the current-live journal store"
+        );
+        assert_eq!(
+            accepted_store
+                .read_preparation_receipt(run_id)
+                .unwrap()
+                .unwrap()
+                .preparation_id,
+            preparation_id,
+            "legacy receipt must not replace the accepted-store run anchor"
         );
     }
 
