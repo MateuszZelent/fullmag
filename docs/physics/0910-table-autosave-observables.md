@@ -48,6 +48,10 @@ t_current + eps >= t_next_sample
 When adaptive stepping crosses several requested sample times in one solver
 step, the first implementation records the current solver state once and marks
 the sample policy as coalesced. It does not invent interpolated physics values.
+At a Run stage origin, a scalar sample due at `t=0` uses the actual initialized
+solver state before integration; its row remains at the origin instead of being
+shifted to the first accepted step. The initial scalar event consumes the due
+schedule, so the first accepted row does not duplicate that sample.
 
 Relaxation uses an explicit accepted-step cadence:
 

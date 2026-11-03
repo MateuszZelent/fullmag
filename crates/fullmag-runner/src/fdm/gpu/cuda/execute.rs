@@ -11,8 +11,8 @@ use crate::artifact_pipeline::ArtifactRecorder;
 use crate::constraints::FrozenSpinsCheckpointV1;
 #[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::artifacts::{
-    capture_initial_cuda_fields, record_cuda_due_outputs,
-    record_cuda_final_outputs,
+    capture_initial_cuda_fields, record_cuda_due_outputs, record_cuda_final_outputs,
+    record_cuda_initial_scalar, CudaFieldCaptureLedger,
 };
 #[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::live_observations::FdmLiveObservationScheduler;
@@ -68,6 +68,38 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 /// native policy leaves per-step energies unfilled (projector reads at 2 Hz).
 #[cfg(feature = "cuda")]
 const LIVE_STATS_SNAPSHOT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Preserve the last accepted clock and mark cancellation without manufacturing
+/// a new accepted step. `current_accepted` is the backend's existing snapshot.
+#[cfg(feature = "cuda")]
+fn mark_cuda_cancelled_preserving_accepted<T: Clone>(
+    latest_accepted: &mut Option<T>,
+    current_accepted: &T,
+    cancelled: &mut bool,
+) {
+    *cancelled = true;
+    if latest_accepted.is_none() {
+        *latest_accepted = Some(current_accepted.clone());
+    }
+}
+
+/// Convert the native interrupt sentinel into cancellation. `None` is emitted
+/// by `NativeFdmBackend::step_interruptible` only for
+/// FULLMAG_FDM_ERR_INTERRUPTED; the native integrator rolls that candidate
+/// step back before returning.
+#[cfg(feature = "cuda")]
+fn resolve_interruptible_cuda_step<T: Clone>(
+    step: Option<T>,
+    latest_accepted: &mut Option<T>,
+    current_accepted: &T,
+    cancelled: &mut bool,
+) -> Option<T> {
+    let Some(step) = step else {
+        mark_cuda_cancelled_preserving_accepted(latest_accepted, current_accepted, cancelled);
+        return None;
+    };
+    Some(step)
+}
 
 #[cfg(feature = "cuda")]
 pub(super) fn capture_full_active_cuda_fields(
@@ -420,7 +452,20 @@ fn public_gpu_device_ordinal() -> Result<i32, RunError> {
 }
 
 #[cfg(feature = "cuda")]
-fn adaptive_batch_execution_eligible(plan: &FdmPlanIR, live: bool) -> bool {
+fn should_refresh_cuda_terminal_stats(
+    quantity_mask: u64,
+    has_accepted_step_table: bool,
+    direct_minimizer: bool,
+) -> bool {
+    (quantity_mask != 0 || has_accepted_step_table) && !direct_minimizer
+}
+
+#[cfg(feature = "cuda")]
+fn adaptive_batch_execution_eligible(
+    plan: &FdmPlanIR,
+    live: bool,
+    has_accepted_step_autosave_schedules: bool,
+) -> bool {
     // The batch ABI runs only through the adaptive CUDA graph, which bakes
     // stage times into its capture and rejects time-dependent drives.
     plan.adaptive_timestep.is_some()
@@ -428,6 +473,9 @@ fn adaptive_batch_execution_eligible(plan: &FdmPlanIR, live: bool) -> bool {
         && plan.spin_transport_plans.is_empty()
         && !plan_uploads_time_dependent_drive(plan)
         && !live
+        // The native batch ABI exposes only terminal accepted-state outputs.
+        // Accepted-step table or field autosaves require the regular loop.
+        && !has_accepted_step_autosave_schedules
 }
 
 #[cfg(feature = "cuda")]
@@ -735,7 +783,14 @@ pub(crate) fn execute_cuda_fdm(
         })?;
         Some(session)
     };
-    let use_adaptive_batch = adaptive_batch_execution_eligible(plan, live.is_some());
+    let has_accepted_step_autosave_schedules = artifact_writer
+        .as_ref()
+        .is_some_and(ArtifactPipelineSender::has_accepted_step_autosave_schedules);
+    let use_adaptive_batch = adaptive_batch_execution_eligible(
+        plan,
+        live.is_some(),
+        has_accepted_step_autosave_schedules,
+    );
     let mut backend = if use_adaptive_batch {
         NativeFdmBackend::create_for_adaptive_batch_with_policy(plan, observation_policy.native)?
     } else {
@@ -853,14 +908,7 @@ pub(crate) fn execute_cuda_fdm(
     };
     let default_scalar_trace = scalar_schedules.is_empty();
     let drive_event_schedule = cuda_drive_event_schedule(plan, until_seconds);
-    capture_initial_cuda_fields(
-        &backend,
-        plan,
-        cell_count,
-        &mut field_schedules,
-        &mut artifacts,
-    )?;
-
+    let mut field_capture_ledger = CudaFieldCaptureLedger::default();
     let mut latest_stats: Option<StepStats> = None;
     let mut current_time = 0.0;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
@@ -875,6 +923,37 @@ pub(crate) fn execute_cuda_fdm(
         backend.snapshot_step_stats(plan.grid.cells)?
     };
     ensure_single_object_scalars(&mut current_stats, "free");
+    capture_initial_cuda_fields(
+        &backend,
+        plan,
+        cell_count,
+        &current_stats,
+        &mut field_schedules,
+        &mut field_capture_ledger,
+        &mut artifacts,
+    )?;
+    let mut initial_scalar_stats = if artifacts.accepted_step_table_due(current_stats.step) {
+        let mut table_stats = backend.snapshot_step_stats_with_policy(
+            plan.grid.cells,
+            NativeStatsPolicy::full(1),
+        )?;
+        ensure_single_object_scalars(&mut table_stats, "free");
+        table_stats
+    } else {
+        current_stats.clone()
+    };
+    backend.apply_average_m_to_step_stats_from_values(
+        &mut initial_scalar_stats,
+        &initial_magnetization,
+    );
+    apply_regional_drive_energy(plan, &mut initial_scalar_stats, &initial_magnetization);
+    record_cuda_initial_scalar(
+        &initial_scalar_stats,
+        default_scalar_trace,
+        &mut scalar_schedules,
+        &mut steps,
+        &mut artifacts,
+    )?;
     let mut live_observations = live
         .as_ref()
         .map(|_| FdmLiveObservationScheduler::new(plan, plan.grid.cells));
@@ -966,9 +1045,11 @@ pub(crate) fn execute_cuda_fdm(
                     cell_count,
                     &sampled_stats,
                     Some(&magnetization),
+                    None,
                     &mut scalar_schedules,
                     &mut field_schedules,
                     &mut steps,
+                    &mut field_capture_ledger,
                     &mut artifacts,
                 )?;
                 continue;
@@ -1023,7 +1104,11 @@ pub(crate) fn execute_cuda_fdm(
                         last_preview_revision = Some(display_selection.revision);
                     }
                     if action == StepAction::Stop {
-                        cancelled = true;
+                        mark_cuda_cancelled_preserving_accepted(
+                            &mut latest_stats,
+                            &current_stats,
+                            &mut cancelled,
+                        );
                         break;
                     }
                 }
@@ -1038,8 +1123,16 @@ pub(crate) fn execute_cuda_fdm(
             let interrupt_requested = live
                 .as_ref()
                 .and_then(|consumer| consumer.interrupt_requested);
-            let Some(mut stats) = backend.step_interruptible(dt_step, interrupt_requested)? else {
-                continue;
+            let step = backend.step_interruptible(dt_step, interrupt_requested)?;
+            let Some(mut stats) = resolve_interruptible_cuda_step(
+                step,
+                &mut latest_stats,
+                &current_stats,
+                &mut cancelled,
+            ) else {
+                // The interrupted attempt rolled back. Finalize from the
+                // backend's last accepted magnetization instead of retrying it.
+                break;
             };
             // Adaptive integrators return the controller's next step size with
             // the accepted step; snapshots below replace `stats` and drop it.
@@ -1304,15 +1397,43 @@ pub(crate) fn execute_cuda_fdm(
             if cancelled {
                 break;
             }
+            let stage_table_stats = if artifacts.accepted_step_table_due(stats.step) {
+                // A stage table row always uses a full artifact snapshot, even
+                // when a narrower OutputIR row is due at the same accepted state.
+                // Keep this separate from control and live/current statistics.
+                let mut table_stats = backend.snapshot_step_stats_with_policy(
+                    plan.grid.cells,
+                    NativeStatsPolicy::full(1),
+                )?;
+                ensure_single_object_scalars(&mut table_stats, "free");
+                if magnetization_cache.is_none() {
+                    magnetization_cache = Some(backend.copy_m(cell_count)?);
+                }
+                let magnetization = magnetization_cache
+                    .as_deref()
+                    .expect("table snapshot magnetization cache initialized");
+                apply_average_m_to_step_stats_with_active_mask(
+                    &mut table_stats,
+                    magnetization,
+                    plan.active_mask.as_deref(),
+                    plan.material.ms_field.as_deref(),
+                );
+                apply_regional_drive_energy(plan, &mut table_stats, magnetization);
+                Some(table_stats)
+            } else {
+                None
+            };
             record_cuda_due_outputs(
                 &backend,
                 plan,
                 cell_count,
                 &sampled_stats,
                 magnetization_cache.as_deref(),
+                stage_table_stats,
                 &mut scalar_schedules,
                 &mut field_schedules,
                 &mut steps,
+                &mut field_capture_ledger,
                 &mut artifacts,
             )?;
             let energy_plateau_range = if native_relaxation_control && !due_scalar_row {
@@ -1337,8 +1458,17 @@ pub(crate) fn execute_cuda_fdm(
         }
     }
 
-    if latest_stats.is_some() && observation_policy.native.quantity_mask != 0 {
-        let mut final_stats = if observation_policy.native.mode == NativeStatsMode::Control {
+    let has_accepted_step_table = artifacts.has_accepted_step_table();
+    if latest_stats.is_some()
+        && should_refresh_cuda_terminal_stats(
+            observation_policy.native.quantity_mask,
+            has_accepted_step_table,
+            direct_minimizer_control(plan.relaxation.as_ref()).is_some(),
+        )
+    {
+        let mut final_stats = if has_accepted_step_table
+            || observation_policy.native.mode == NativeStatsMode::Control
+        {
             backend.snapshot_step_stats_with_policy(plan.grid.cells, NativeStatsPolicy::full(1))?
         } else {
             backend.snapshot_step_stats(plan.grid.cells)?
@@ -1388,10 +1518,10 @@ pub(crate) fn execute_cuda_fdm(
         plan,
         cell_count,
         latest_stats.clone(),
-        default_scalar_trace,
         &scalar_schedules,
         &field_schedules,
         &mut steps,
+        &mut field_capture_ledger,
         &mut artifacts,
     )?;
 
@@ -1654,10 +1784,12 @@ pub(crate) fn execute_cuda_fdm(
 mod adaptive_batch_tests {
     use super::{
         adaptive_batch_target, cap_cuda_target_to_drive_event, cuda_drive_event_schedule,
-        execute_cuda_fdm, resolve_observation_policy, OutputSchedule,
+        execute_cuda_fdm, record_cuda_initial_scalar, resolve_observation_policy, OutputSchedule,
     };
-    use crate::fdm::gpu::cuda::{canonical_fdm_time, canonical_fdm_waveform_time};
+    use crate::artifact_pipeline::ArtifactRecorder;
     use crate::fdm::gpu::cuda::native::NativeStatsMode;
+    use crate::fdm::gpu::cuda::{canonical_fdm_time, canonical_fdm_waveform_time};
+    use crate::types::{ExecutionProvenance, StepStats};
     use fullmag_ir::{
         AdaptiveTimeStepIR, AdaptiveToleranceModeIR, BackendTarget, ExchangeBoundaryCondition,
         ExecutionMode, ExecutionPrecision, FdmMaterialIR, FdmPlanIR, FieldDriveKindIR,
@@ -1665,6 +1797,168 @@ mod adaptive_batch_tests {
         OutputIR, RegionalFieldDriveIR, ResolvedSolvedAntennaDriveBasisIR, SolvedAntennaDriveIR,
         StudyKindIR, TimeDependenceIR,
     };
+
+    #[test]
+    fn live_stop_before_first_cuda_step_retains_initial_state_without_event() {
+        let initial = StepStats {
+            step: 0,
+            time: 0.0,
+            dt: 0.0,
+            e_total: 0.75,
+            ..StepStats::default()
+        };
+        let mut latest_accepted = None;
+        let mut cancelled = false;
+        let mut accepted_step_events = 0;
+        let action = crate::types::StepAction::Stop;
+
+        loop {
+            if action == crate::types::StepAction::Stop {
+                super::mark_cuda_cancelled_preserving_accepted(
+                    &mut latest_accepted,
+                    &initial,
+                    &mut cancelled,
+                );
+                break;
+            }
+            accepted_step_events += 1;
+        }
+
+        assert!(cancelled, "Stop before stepping must remain cancellation");
+        assert_eq!(accepted_step_events, 0);
+        let retained = latest_accepted.expect("initial backend snapshot remains accepted");
+        assert_eq!(retained.step, 0);
+        assert_eq!(retained.time, 0.0);
+        assert_eq!(retained.e_total, 0.75);
+
+        let source = include_str!("execute.rs");
+        let pre_step_stop = source
+            .split("if action == StepAction::Stop {")
+            .nth(1)
+            .expect("live Stop branch before the first native step")
+            .split("break;")
+            .next()
+            .expect("Stop branch terminator");
+        assert!(pre_step_stop.contains("mark_cuda_cancelled_preserving_accepted"));
+    }
+
+    #[test]
+    fn interrupted_first_cuda_step_cancels_once_and_preserves_initial_accepted_clock() {
+        let initial = StepStats {
+            step: 0,
+            time: 0.0,
+            dt: 0.0,
+            e_total: 1.25,
+            ..StepStats::default()
+        };
+        let mut latest_accepted = None;
+        let mut cancelled = false;
+        let mut native_step_calls = 0;
+        let mut accepted_step_events = 0;
+
+        loop {
+            native_step_calls += 1;
+            let native_result: Option<StepStats> = None;
+            let Some(_accepted) = super::resolve_interruptible_cuda_step(
+                native_result,
+                &mut latest_accepted,
+                &initial,
+                &mut cancelled,
+            ) else {
+                break;
+            };
+            accepted_step_events += 1;
+        }
+
+        assert_eq!(
+            native_step_calls, 1,
+            "an interrupted step must not be retried"
+        );
+        assert_eq!(
+            accepted_step_events, 0,
+            "interruption is not an accepted event"
+        );
+        assert!(cancelled, "native interruption must become cancellation");
+        let retained = latest_accepted.expect("initial state remains accepted");
+        assert_eq!(retained.step, 0);
+        assert_eq!(retained.time, 0.0);
+        assert_eq!(retained.e_total, 1.25);
+    }
+
+    #[test]
+    fn interrupted_cuda_step_keeps_the_previous_accepted_state_and_exits_loop() {
+        let accepted = StepStats {
+            step: 9,
+            time: 9.0e-15,
+            e_total: 2.5,
+            ..StepStats::default()
+        };
+        let mut latest_accepted = Some(accepted.clone());
+        let mut cancelled = false;
+        let mut native_step_calls = 0;
+        let mut accepted_step_events = 1;
+
+        loop {
+            native_step_calls += 1;
+            let native_result: Option<StepStats> = None;
+            let Some(_accepted) = super::resolve_interruptible_cuda_step(
+                native_result,
+                &mut latest_accepted,
+                &accepted,
+                &mut cancelled,
+            ) else {
+                break;
+            };
+            accepted_step_events += 1;
+        }
+
+        assert_eq!(
+            native_step_calls, 1,
+            "an interrupted step must not be retried"
+        );
+        assert_eq!(
+            accepted_step_events, 1,
+            "interruption adds no accepted event"
+        );
+        assert!(cancelled, "native interruption must become cancellation");
+        let retained = latest_accepted.expect("previous accepted state remains available");
+        assert_eq!(retained.step, 9);
+        assert_eq!(retained.time, 9.0e-15);
+        assert_eq!(retained.e_total, 2.5);
+    }
+
+    #[test]
+    fn interrupted_cuda_step_path_reaches_shared_cancelled_finalization() {
+        let source = include_str!("execute.rs");
+        let branch = source
+            .split("let Some(mut stats) = resolve_interruptible_cuda_step(")
+            .nth(1)
+            .expect("single-step interruption branch")
+            .split("};")
+            .next()
+            .expect("interruption branch terminator");
+        assert!(branch.contains("break;"));
+        assert!(!branch.contains("continue;"));
+        assert!(!branch.contains("steps.push("));
+        assert!(!branch.contains("record_cuda_due_outputs("));
+        assert!(source.contains("record_cuda_final_outputs("));
+        assert!(source.contains(
+            "let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();"
+        ));
+        assert!(source.contains("RunStatus::Cancelled"));
+        assert!(
+            source.contains("step_adaptive_batch_interruptible(dt, target_time, max_steps, None)?")
+        );
+        let batch_eligibility = source
+            .split("fn adaptive_batch_execution_eligible(")
+            .nth(1)
+            .expect("batch-eligibility gate");
+        assert!(batch_eligibility.contains("plan.relaxation.is_none()"));
+        assert!(batch_eligibility.contains("&& !live"));
+        let runner = include_str!("../../../lib.rs");
+        assert!(runner.contains("None => artifact_pipeline.finish()"));
+        assert!(runner.contains("artifacts::write_artifacts("));
+    }
 
     fn schedule(next_time: f64) -> OutputSchedule {
         OutputSchedule {
@@ -1676,12 +1970,135 @@ mod adaptive_batch_tests {
     }
 
     #[test]
+    fn terminal_native_refresh_preserves_direct_minimizer_accepted_clock() {
+        let accepted = StepStats {
+            step: 271,
+            time: 0.0,
+            dt: 0.0,
+            e_total: 2.5e-19,
+            ..StepStats::default()
+        };
+        let native_llg_snapshot = StepStats {
+            step: 0,
+            time: 0.0,
+            dt: 0.0,
+            e_total: 0.0,
+            ..StepStats::default()
+        };
+
+        assert!(should_refresh_cuda_terminal_stats(1, false, false));
+        assert!(should_refresh_cuda_terminal_stats(0, true, false));
+        assert!(!should_refresh_cuda_terminal_stats(1, true, true));
+        let terminal = if should_refresh_cuda_terminal_stats(1, true, true) {
+            native_llg_snapshot
+        } else {
+            accepted
+        };
+        assert_eq!(terminal.step, 271);
+        assert_eq!(terminal.time, 0.0);
+        assert_eq!(terminal.dt, 0.0);
+        assert_eq!(terminal.e_total, 2.5e-19);
+    }
+
+    #[test]
+    fn accepted_step_autosave_cadence_disables_batching_but_time_only_streams_do_not() {
+        let plan = FdmPlanIR {
+            adaptive_timestep: Some(AdaptiveTimeStepIR {
+                tolerance_mode: AdaptiveToleranceModeIR::MaxError,
+                atol: 1.0e-8,
+                rtol: 0.0,
+                dt_initial: Some(1.0e-15),
+                dt_min: 1.0e-17,
+                dt_max: Some(1.0e-14),
+                safety: 0.9,
+                growth_limit: 2.0,
+                shrink_limit: 0.25,
+                max_spin_rotation: None,
+                norm_tolerance: None,
+            }),
+            ..FdmPlanIR::default()
+        };
+
+        assert!(adaptive_batch_execution_eligible(&plan, false, false));
+        assert!(
+            !adaptive_batch_execution_eligible(&plan, false, true),
+            "accepted-step table or field autosaves require an exact accepted state"
+        );
+    }
+
+    // A stale due event still forces a bounded observation step. The stage-origin
+    // scalar event is consumed before entering this batching helper below.
+    #[test]
     fn due_output_forces_one_accepted_step_before_observation() {
         let (target, max_steps) =
             adaptive_batch_target(0.0, 2.0e-15, 1.0e-11, &[schedule(0.0)], &[]);
 
         assert_eq!(target, 2.0e-15);
         assert_eq!(max_steps, 1);
+    }
+
+    #[test]
+    fn initial_scalar_consumes_t0_schedule_before_adaptive_batching() {
+        let initial = StepStats {
+            step: 0,
+            time: 0.0,
+            mx: 0.25,
+            my: 0.5,
+            mz: 0.75,
+            e_total: 4.0e-19,
+            ..StepStats::default()
+        };
+        let mut scalar = [schedule(0.0)];
+        let mut steps = Vec::new();
+        let mut artifacts = ArtifactRecorder::in_memory(ExecutionProvenance::default());
+
+        record_cuda_initial_scalar(
+            &initial,
+            false,
+            &mut scalar,
+            &mut steps,
+            &mut artifacts,
+        )
+        .expect("record the due initial scalar row");
+
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].step, 0);
+        assert_eq!(steps[0].time, 0.0);
+        assert_eq!(steps[0].mx, 0.25);
+        assert_eq!(steps[0].e_total, 4.0e-19);
+        assert_eq!(scalar[0].next_time, scalar[0].every_seconds);
+
+        let (target, max_steps) =
+            adaptive_batch_target(0.0, 2.0e-15, 1.0e-11, &scalar, &[]);
+        assert_eq!(target, scalar[0].every_seconds);
+        assert_eq!(max_steps, 64);
+    }
+
+    #[test]
+    fn empty_output_list_records_only_the_existing_default_initial_scalar() {
+        let initial = StepStats {
+            step: 0,
+            time: 0.0,
+            e_total: 4.0e-19,
+            ..StepStats::default()
+        };
+        let mut scalar: Vec<OutputSchedule> = Vec::new();
+        let mut steps = Vec::new();
+        let mut artifacts = ArtifactRecorder::in_memory(ExecutionProvenance::default());
+
+        record_cuda_initial_scalar(
+            &initial,
+            true,
+            &mut scalar,
+            &mut steps,
+            &mut artifacts,
+        )
+        .expect("record default scalar trace at stage origin");
+
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].step, 0);
+        assert_eq!(steps[0].time, 0.0);
+        assert_eq!(steps[0].e_total, 4.0e-19);
     }
 
     #[test]
