@@ -12,8 +12,10 @@ import base64
 import json
 import re
 import posixpath
+import shlex
 from pathlib import Path
 import textwrap
+import time
 from typing import Any, Callable, Mapping
 
 from docker_build_control import MIN_FREE_CONTROL_BYTES, bounded_capture, docker_capture
@@ -47,9 +49,17 @@ _PRIVATE_CACHE_LEAVES = {
     "frontend": (
         "workspace/node_modules",
         "workspace/apps/control-room/node_modules",
-        "workspace/apps/control-room/.next-control-room-8080",
-        "workspace/apps/control-room/.next",
     ),
+}
+_PRIVATE_NEXT_CACHE_ALIASES = {
+    "workspace/apps/control-room/.next": {
+        "target": "/state/development/cache/next/default",
+        "cache": "cache/next/default",
+    },
+    "workspace/apps/control-room/.next-control-room-8080": {
+        "target": "/state/development/cache/next/dev-8080",
+        "cache": "cache/next/dev-8080",
+    },
 }
 _PRIVATE_PRESERVED = (
     "source workspaces are not mounted",
@@ -340,6 +350,8 @@ def _private_group_cleanup_script(owner: Mapping[str, Any], group: Mapping[str, 
     encoded = base64.b64encode(marker).decode("ascii")
     leaves = json.dumps({role: list(paths) for role, paths in _PRIVATE_CACHE_LEAVES.items()},
                         sort_keys=True, separators=(",", ":"))
+    next_aliases = json.dumps(_PRIVATE_NEXT_CACHE_ALIASES,
+                              sort_keys=True, separators=(",", ":"))
     expected_values = {key: group[key] for key in
                        ("unit_key", "registry_sha256", "owner_sha256")}
     expected_values["plan_sha256"] = plan_sha256
@@ -353,6 +365,7 @@ def _private_group_cleanup_script(owner: Mapping[str, Any], group: Mapping[str, 
 
         expected_marker = base64.b64decode("{encoded}", validate=True)
         leaves = json.loads({leaves!r})
+        next_aliases = json.loads({next_aliases!r})
         expected = json.loads({expected!r})
         preserved = json.loads({preserved!r})
         paths = json.loads({roots!r})
@@ -427,39 +440,113 @@ def _private_group_cleanup_script(owner: Mapping[str, Any], group: Mapping[str, 
                 raise SystemExit("retained cache inventory exceeds its report bound")
             return values
 
+        def open_parent(root_fd, parts):
+            current = os.dup(root_fd)
+            try:
+                for part in parts:
+                    next_fd = opened_dir(current, part)
+                    os.close(current)
+                    current = next_fd
+                return current
+            except FileNotFoundError:
+                os.close(current)
+                return None
+            except BaseException:
+                os.close(current)
+                raise
+
+        def clear_directory_leaf(root_fd, role, relative, report_states):
+            parts = relative.split("/")
+            parent = open_parent(root_fd, parts[:-1])
+            report_key = role + "/" + relative
+            if parent is None:
+                report_states[report_key] = "absent"
+                return
+            try:
+                try:
+                    metadata = os.stat(parts[-1], dir_fd=parent,
+                                       follow_symlinks=False)
+                except FileNotFoundError:
+                    report_states[report_key] = "absent"
+                    return
+                if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+                    raise SystemExit("allowlisted cache leaf is linked or not a directory")
+                target_fd = opened_dir(parent, parts[-1])
+                try:
+                    clear_tree(target_fd)
+                finally:
+                    os.close(target_fd)
+                os.rmdir(parts[-1], dir_fd=parent)
+                report_states[report_key] = "cleared"
+            finally:
+                os.close(parent)
+
+        def unlink_next_aliases(root_fd):
+            states = {{}}
+            opened_aliases = []
+            try:
+                for relative, binding in next_aliases.items():
+                    parts = relative.split("/")
+                    parent = open_parent(root_fd, parts[:-1])
+                    if parent is None:
+                        states["frontend/" + relative] = "absent"
+                        continue
+                    try:
+                        try:
+                            metadata = os.stat(parts[-1], dir_fd=parent,
+                                               follow_symlinks=False)
+                        except FileNotFoundError:
+                            states["frontend/" + relative] = "absent"
+                            continue
+                        if stat.S_ISLNK(metadata.st_mode):
+                            actual_target = os.readlink(parts[-1], dir_fd=parent)
+                            if actual_target != binding["target"]:
+                                raise SystemExit("managed Next cache alias target does not match")
+                            kind = "symlink"
+                        elif stat.S_ISDIR(metadata.st_mode):
+                            kind = "legacy-directory"
+                        else:
+                            raise SystemExit("managed Next cache alias is not a directory or symlink")
+                        opened_aliases.append((parent, parts[-1], relative, kind))
+                        parent = None
+                    finally:
+                        if parent is not None:
+                            os.close(parent)
+
+                for parent, name, relative, kind in opened_aliases:
+                    if kind == "symlink":
+                        metadata = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                        if (
+                            not stat.S_ISLNK(metadata.st_mode)
+                            or os.readlink(name, dir_fd=parent)
+                            != next_aliases[relative]["target"]
+                        ):
+                            raise SystemExit("managed Next cache alias changed before unlink")
+                        os.unlink(name, dir_fd=parent)
+                        states["frontend/" + relative] = "unlinked"
+                    else:
+                        clear_directory_leaf(root_fd, "frontend", relative, states)
+                return states
+            finally:
+                for parent, _, _, _ in opened_aliases:
+                    os.close(parent)
+
         states = {{}}
         roots = {{}}
+        frontend_fd = os.open(paths["frontend"], flags)
+        roots["frontend"] = (frontend_fd, bounded_names(frontend_fd))
+        states.update(unlink_next_aliases(frontend_fd))
         for role, root_path in (("backend", paths["backend"]), ("frontend", paths["frontend"])):
-            root_fd = os.open(root_path, flags)
-            roots[role] = (root_fd, bounded_names(root_fd))
+            if role == "frontend":
+                root_fd = frontend_fd
+            else:
+                root_fd = os.open(root_path, flags)
+                roots[role] = (root_fd, bounded_names(root_fd))
             for relative in leaves[role]:
-                parts = relative.split("/")
-                parent = os.dup(root_fd)
-                try:
-                    try:
-                        for part in parts[:-1]:
-                            next_fd = opened_dir(parent, part)
-                            os.close(parent)
-                            parent = next_fd
-                    except FileNotFoundError:
-                        states[role + "/" + relative] = "absent"
-                        continue
-                    try:
-                        before = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
-                    except FileNotFoundError:
-                        states[role + "/" + relative] = "absent"
-                        continue
-                    if not stat.S_ISDIR(before.st_mode) or stat.S_ISLNK(before.st_mode):
-                        raise SystemExit("allowlisted cache leaf is linked or not a directory")
-                    target_fd = opened_dir(parent, parts[-1])
-                    try:
-                        clear_tree(target_fd)
-                    finally:
-                        os.close(target_fd)
-                    os.rmdir(parts[-1], dir_fd=parent)
-                    states[role + "/" + relative] = "cleared"
-                finally:
-                    os.close(parent)
+                clear_directory_leaf(root_fd, role, relative, states)
+
+        for binding in next_aliases.values():
+            clear_directory_leaf(frontend_fd, "frontend", binding["cache"], states)
 
         retained = {{role: {{"root_entries": entries,
                             "workspace_entries": list_dir(fd, ["workspace"]),
@@ -489,14 +576,29 @@ def _valid_private_group_cleanup_receipt(value: Any, group: Mapping[str, Any],
             *expected, "leaves", "retained", "preserved"}
             or any(value.get(key) != expected_value for key, expected_value in expected.items())):
         return False
-    expected_leaves = {role + "/" + path for role, paths in _PRIVATE_CACHE_LEAVES.items()
-                       for path in paths}
+    legacy_leaves = {role + "/" + path for role, paths in _PRIVATE_CACHE_LEAVES.items()
+                     for path in paths}
+    alias_leaves = {"frontend/" + path for path in _PRIVATE_NEXT_CACHE_ALIASES}
+    legacy_leaves.update(alias_leaves)
+    expected_leaves = legacy_leaves | {
+        "frontend/" + binding["cache"]
+        for binding in _PRIVATE_NEXT_CACHE_ALIASES.values()
+    }
     leaves = value.get("leaves")
     retained = value.get("retained")
-    if (not isinstance(leaves, Mapping) or set(leaves) != expected_leaves
-            or any(state not in {"cleared", "absent"} for state in leaves.values())
+    if (not isinstance(leaves, Mapping)
+            or frozenset(leaves) not in {frozenset(expected_leaves), frozenset(legacy_leaves)}
             or not isinstance(retained, Mapping) or set(retained) != {"backend", "frontend"}
             or value.get("preserved") != list(_PRIVATE_PRESERVED)):
+        return False
+    leaf_keys = set(leaves)
+    if leaf_keys == legacy_leaves:
+        if any(state not in {"cleared", "absent"} for state in leaves.values()):
+            return False
+    elif (
+        any(leaves[key] not in {"cleared", "absent"} for key in leaf_keys - alias_leaves)
+        or any(leaves[key] not in {"unlinked", "cleared", "absent"} for key in alias_leaves)
+    ):
         return False
     expected_retained_fields = {"root_entries", "workspace_entries", "control_room_entries",
                                 "unknown_next_cache_entries"}
@@ -551,7 +653,7 @@ def _private_group_cleanup_command(control: Any, script: str, helper_image: str)
 
 def _clear_private_group_cache(control: Any, identity: Mapping[str, str],
                                group: Mapping[str, Any], operation: dict[str, Any],
-                               plan_sha256: str) -> dict[str, Any]:
+                               plan_sha256: str, *, resumed_private_raw=None) -> dict[str, Any]:
     expected_receipt = {
         "schema": PRIVATE_GROUP_CLEANUP_SCHEMA,
         "unit_key": group["unit_key"], "registry_sha256": group["registry_sha256"],
@@ -562,13 +664,20 @@ def _clear_private_group_cache(control: Any, identity: Mapping[str, str],
         if (not isinstance(previous, Mapping)
                 or any(previous.get(key) != value for key, value in expected_receipt.items())):
             raise CacheRetirementError("Private group cache cleanup receipt differs from the durable plan")
-        if not _valid_private_group_cleanup_receipt(previous, group, plan_sha256):
+        if _valid_private_group_cleanup_receipt(previous, group, plan_sha256):
+            return dict(previous)
+        if (resumed_private_raw is None
+                or control.read_bytes(PRIVATE_GROUP_RESULT_PATH) != resumed_private_raw):
             raise CacheRetirementError("Prior private cache cleanup outcome is not proven; retaining group data")
-        return dict(previous)
+    elif resumed_private_raw is not None:
+        raise CacheRetirementError("Reconciled private cache receipt disappeared before retry")
     if getattr(control, "_active_operation", operation) is not operation:
         raise CacheRetirementError("Private cache cleanup requires the active BuildControl operation")
     import docker_group_storage as group_storage
 
+    attempt = operation.get("receipt", {}).get("attempt")
+    if attempt is not None:
+        expected_receipt["attempt"] = attempt
     try:
         owner = group_storage.owner_manifest(control, identity["source_root"])
         if hashlib.sha256(_canonical(owner)).hexdigest() != group["owner_sha256"]:
@@ -576,7 +685,6 @@ def _clear_private_group_cache(control: Any, identity: Mapping[str, str],
         script = _private_group_cleanup_script(owner, group, plan_sha256=plan_sha256)
         args = _private_group_cleanup_command(
             control, script, _private_group_helper_image(control, group))
-        control.write(PRIVATE_GROUP_RESULT_PATH, {**expected_receipt, "state": "started"})
         entrypoint = args.index("--entrypoint")
         mounts = [*group_storage.cli_mount_args(control, "backend", "/private-backend"),
                   *group_storage.cli_mount_args(control, "frontend", "/private-frontend")]
@@ -589,14 +697,16 @@ def _clear_private_group_cache(control: Any, identity: Mapping[str, str],
         else:
             raise CacheRetirementError("Private cache cleanup helper has no bounded control mount")
         operation["daemon_pending"] = True
+        control.write(PRIVATE_GROUP_RESULT_PATH, {**expected_receipt, "state": "started"})
         result = bounded_capture(args, data=b"", timeout=900, maximum=128 * 1024)
         if getattr(result, "returncode", 1) != 0:
             control.write(PRIVATE_GROUP_RESULT_PATH,
                           {**expected_receipt, "state": "outcome-unknown"})
+            diagnostic = bytes(result.stderr).decode("utf-8", errors="replace").strip()[-500:]
             raise CacheRetirementError(
-                "Private group cache helper did not prove its daemon-side outcome; the BuildControl lease is retained"
+                "Private group cache helper did not prove its daemon-side outcome; "
+                "the BuildControl lease is retained" + (f": {diagnostic}" if diagnostic else "")
             )
-        operation["daemon_pending"] = False
         value = json.loads(bytes(result.stdout).decode("utf-8"))
         if (not isinstance(value, Mapping)
                 or any(value.get(key) != expected_receipt.get(key) for key in
@@ -606,16 +716,18 @@ def _clear_private_group_cache(control: Any, identity: Mapping[str, str],
             raise CacheRetirementError("Private group cache cleanup helper returned an incomplete receipt")
         receipt = dict(value)
         control.write(PRIVATE_GROUP_RESULT_PATH, receipt)
+        operation["daemon_pending"] = False
         return receipt
     except CacheRetirementError:
         raise
     except Exception as error:
-        try:
-            control.write(PRIVATE_GROUP_RESULT_PATH,
-                          {**expected_receipt, "state": "outcome-unknown"})
-        except Exception:
-            pass
-        raise CacheRetirementError("Private group cache cleanup outcome is unknown; all later retirement is retained") from error
+        if operation["daemon_pending"]:
+            try:
+                control.write(PRIVATE_GROUP_RESULT_PATH,
+                              {**expected_receipt, "state": "outcome-unknown"})
+            except Exception:
+                pass
+        raise CacheRetirementError("Private group cache cleanup could not be confirmed; later retirement is retained") from error
 
 
 def _group_match(document: Mapping[str, Any], identity: Mapping[str, str]) -> bool:
@@ -1144,9 +1256,146 @@ def _helper_ids(operation: Mapping[str, Any]) -> set[str]:
     return result
 
 
+def _publish_interrupted_terminal(control, helper_id, attempt, terminal_path, terminal, pins, docker):
+    checks = []
+    for relative, raw in pins.items():
+        path = shlex.quote(control.path(relative))
+        digest = hashlib.sha256(raw).hexdigest()
+        checks.append(f'test -f {path}; test "$(readlink -f {path})" = {path}; '
+                      f'test "$(stat -c %h {path})" = 1; '
+                      f'test "$(sha256sum {path} | cut -d " " -f1)" = {digest}')
+    for relative in (terminal_path, NAMESPACE_RESULT_PATH, RESULT_PATH, "cache-retirement/group-intents"):
+        path = shlex.quote(control.path(relative))
+        checks.append(f'test ! -e {path}; test ! -L {path}')
+    lock = shlex.quote(control.path("operation.lock"))
+    target = shlex.quote(control.path(terminal_path))
+    parent = shlex.quote(posixpath.dirname(control.path(terminal_path)))
+    body = shlex.quote(_canonical(terminal).decode("utf-8"))
+    script = "; ".join([
+        "umask 027", *checks,
+        f'test "$(readlink -f {lock})" = {lock}',
+        f'exec 8<{lock}', 'if flock -n 8; then exit 72; fi',
+        f'test "$(cat {shlex.quote(control.path("active"))})" = {attempt}',
+        f'tmp=$(mktemp {parent}/.retirement-terminal.XXXXXXXX)',
+        'trap \'rm -f -- "$tmp"\' EXIT',
+        f'printf "%s\\n" {body} > "$tmp"', 'sync "$tmp"',
+        f'mv -nT -- "$tmp" {target}', f'sync {parent}',
+    ])
+    _run(("exec", "--user", "65532:65532", helper_id,
+          "/bin/bash", "-euo", "pipefail", "-c", control._namespace_guard(script)), docker)
+
+
+def _reconcile_private_cleanup(control, identity, plan, closing, inputs, resume, docker):
+    """Terminalize only an abandoned private cleanup under the original lease."""
+    if re.fullmatch(r"[0-9a-f]{32}@[0-9a-f]{64}", resume) is None:
+        raise CacheRetirementError("Retirement resume pin must be an exact attempt@receipt_sha256")
+    attempt, receipt_sha = resume.split("@")
+    root = f"cache-retirement/attempts/{attempt}"
+    receipt_path, terminal_path = f"{root}/receipt.json", f"{root}/terminal.json"
+    receipt_raw = control.read_bytes(receipt_path)
+    if hashlib.sha256(receipt_raw).hexdigest() != receipt_sha:
+        raise CacheRetirementError("Retirement attempt receipt differs from its operator pin")
+    receipt = _mapping(json.loads(receipt_raw), "Retirement attempt receipt")
+    expected = {
+        "schema": "fullmag.docker-build-operation.v1", "phase": "cache-retirement",
+        "attempt": attempt, "compose_project": control.project, "control_volume": control.volume,
+        "helper_container": f"fullmag-control-{attempt}", "inputs": inputs,
+    }
+    if control.namespace:
+        expected.update(control_namespace=control.namespace,
+                        namespace_registry_sha256=control.namespace_registry_sha256)
+    if (any(receipt.get(key) != value for key, value in expected.items())
+            or receipt.get("state") not in {"starting", "outcome-unknown-resources-retained"}):
+        raise CacheRetirementError("Retirement attempt is not the interrupted operation for this plan")
+
+    private_raw = control.read_bytes(PRIVATE_GROUP_RESULT_PATH)
+    private = _mapping(json.loads(private_raw), "Interrupted private cache receipt")
+    group = plan["private_group_cache"]
+    private_expected = {
+        "schema": PRIVATE_GROUP_CLEANUP_SCHEMA, "plan_sha256": inputs["plan_sha256"],
+        **{key: group[key] for key in ("unit_key", "registry_sha256", "owner_sha256")},
+    }
+    if "attempt" in private or receipt["state"] == "starting":
+        private_expected["attempt"] = attempt
+    if (set(private) != {*private_expected, "state"}
+            or any(private.get(key) != value for key, value in private_expected.items())
+            or private.get("state") not in {"started", "outcome-unknown"}):
+        raise CacheRetirementError("Interrupted private cache receipt does not bind the exact attempt and plan")
+    if (control.read(NAMESPACE_RESULT_PATH, optional=True) is not None
+            or control.read(RESULT_PATH, optional=True) is not None):
+        raise CacheRetirementError("Interrupted retirement has already reached a later phase")
+
+    pins = {receipt_path: receipt_raw, PRIVATE_GROUP_RESULT_PATH: private_raw}
+    for relative, document in ((PLAN_PATH, plan), (CLOSING_PATH, closing)):
+        raw = control.read_bytes(relative)
+        if json.loads(raw) != document:
+            raise CacheRetirementError("Retirement plan or closing marker changed during reconciliation")
+        pins[relative] = raw
+    for relative, key in ((GROUP_STORAGE_REGISTRY_PATH, "registry_sha256"),
+                          (GROUP_STORAGE_OWNER_PATH, "owner_sha256")):
+        raw = control.read_bytes(relative)
+        if hashlib.sha256(_canonical(json.loads(raw))).hexdigest() != group[key]:
+            raise CacheRetirementError("Private group profile or owner changed during reconciliation")
+        pins[relative] = raw
+
+    active = control.read_bytes("active", optional=True)
+    terminal_raw = control.read_bytes(terminal_path, optional=True)
+    if active not in (None, (attempt + "\n").encode()):
+        raise CacheRetirementError("Active retirement lease belongs to a different attempt")
+    if active is None and terminal_raw is None:
+        raise CacheRetirementError("Interrupted attempt has neither its original lease nor a recovery terminal")
+    if terminal_raw is None:
+        helper_id = control._inspect_operation_helper({"receipt": dict(receipt)})
+        if _run(("logs", helper_id), docker).splitlines() != ["READY", "LOGGED"]:
+            raise CacheRetirementError("Original lease has not finished logging; recovery refused")
+    else:
+        saved = _mapping(json.loads(terminal_raw), "Retirement recovery terminal")
+        recovery = _mapping(saved.get("private_cleanup_recovery"), "Private cleanup recovery proof")
+        helper_id = recovery.get("helper_container_id")
+    if not isinstance(helper_id, str) or _CONTAINER_ID.fullmatch(helper_id) is None:
+        raise CacheRetirementError("Original retirement helper ID is malformed")
+
+    terminal = {
+        **receipt, "state": "failed-confirmed",
+        "private_cleanup_recovery": {
+            "schema": "fullmag.interrupted-private-cache-retirement.v1",
+            "helper_container_id": helper_id, "original_receipt_sha256": receipt_sha,
+            "interrupted_private_receipt_sha256": hashlib.sha256(private_raw).hexdigest(),
+            "interrupted_private_receipt": dict(private),
+        },
+    }
+    if terminal_raw is not None and json.loads(terminal_raw) != terminal:
+        raise CacheRetirementError("Existing retirement terminal does not match the interrupted attempt")
+
+    documents = _container_inventory(docker)
+    matching = [doc for doc in documents if doc["Id"] == helper_id]
+    if matching:
+        control._inspect_operation_helper({"receipt": dict(receipt)}, expected_id=helper_id)
+    elif terminal_raw is None:
+        raise CacheRetirementError("Original retirement lease disappeared before terminal publication")
+    _check_consumers(documents, identity, plan["volumes"], plan["shared_package_volume"],
+                     set(plan["namespaces_pending"]), {helper_id} if matching else set(),
+                     group["volume_name"], group["mountpoint"])
+    if terminal_raw is None:
+        pins["active"] = active
+        _publish_interrupted_terminal(control, helper_id, attempt, terminal_path, terminal, pins, docker)
+        if control.read(terminal_path) != terminal:
+            raise CacheRetirementError("Reconciled terminal did not persist; retaining the retirement lease")
+
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        active = control.read_bytes("active", optional=True)
+        if active is None and all(doc["Id"] != helper_id for doc in _container_inventory(docker)):
+            return private_raw
+        if active not in (None, (attempt + "\n").encode()):
+            raise CacheRetirementError("A different lease appeared after retirement reconciliation")
+        time.sleep(0.25)
+    raise CacheRetirementError("Original retirement helper has not released the reconciled lease")
+
+
 def retire(control: Any, layout: Mapping[str, Any], task_id: str, owner: str, *,
            retire_namespaces: Callable[[list[str], dict[str, Any]], Mapping[str, Any]] | None = None,
-           docker: Callable[..., Any] | None = None) -> dict[str, Any]:
+           docker: Callable[..., Any] | None = None, resume: str | None = None) -> dict[str, Any]:
     """Remove exact private cache volumes for one already-registered worktree.
 
     Shared `groups/<unit_key>` paths are delegated to a required guest callback
@@ -1156,8 +1405,8 @@ def retire(control: Any, layout: Mapping[str, Any], task_id: str, owner: str, *,
     if not isinstance(task_id, str) or not task_id.strip() or not isinstance(owner, str) or not owner.strip():
         raise CacheRetirementError("Retirement requires exact nonempty task_id and owner")
     identity = _identity(control, layout)
-    before = _container_inventory(docker)
-    _check_group_empty(before, identity)
+    if resume is None:
+        _check_group_empty(_container_inventory(docker), identity)
 
     previous_plan = control.read(PLAN_PATH, optional=True)
     if previous_plan is not None:
@@ -1249,11 +1498,23 @@ def retire(control: Any, layout: Mapping[str, Any], task_id: str, owner: str, *,
         for item in current_plan["volumes"]:
             if _inspect_volume(item["name"], docker) is not None:
                 raise CacheRetirementError("A private volume reappeared after successful retirement; retaining it")
+        _check_group_empty(_container_inventory(docker), identity)
         return dict(previous_result)
+
+    operation_inputs = {"task_id": task_id, "owner": owner, **identity, "plan_sha256": plan_sha256}
+    resumed_private_raw = None
+    if resume is not None:
+        if previous_plan is None or previous_closing is None or private_group is None or previous_namespace is not None:
+            raise CacheRetirementError("Resume requires a durable plan interrupted during private group cleanup")
+        _recheck_inventory(control, layout, identity, current_plan, previous_plan, docker)
+        resumed_private_raw = _reconcile_private_cleanup(
+            control, identity, current_plan, closing, operation_inputs, resume, docker
+        )
+        _check_group_empty(_container_inventory(docker), identity)
 
     with control.operation(
         "cache-retirement",
-        {"task_id": task_id, "owner": owner, **identity, "plan_sha256": plan_sha256},
+        operation_inputs,
         minimum_free_bytes=MIN_FREE_CONTROL_BYTES,
     ) as operation:
         helper_ids = _helper_ids(operation)
@@ -1273,7 +1534,7 @@ def retire(control: Any, layout: Mapping[str, Any], task_id: str, owner: str, *,
             if _private_group_registry(control, layout, identity, docker) != private_group:
                 raise CacheRetirementError("Private group cache owner changed before its cache cleanup")
             private_cleanup = _clear_private_group_cache(
-                control, identity, private_group, operation, plan_sha256
+                control, identity, private_group, operation, plan_sha256, resumed_private_raw=resumed_private_raw
             )
 
         namespace_receipt = None

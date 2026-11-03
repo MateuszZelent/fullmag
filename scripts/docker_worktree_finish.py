@@ -69,7 +69,7 @@ print(json.dumps(result))
     return proof
 
 
-def finish(layout, task_id, owner):
+def finish(layout, task_id, owner, *, resume=None):
     """Called under storage's worktree lock after exact registry owner validation."""
     from docker_backend_volume_cache import _safe_project_id
     from docker_cache_retirement import retire
@@ -81,7 +81,7 @@ def finish(layout, task_id, owner):
     control = BuildControl(identity, configured['services']['fem-gpu-toolchain']['build']['args']['FULLMAG_CUDA_BASE_IMAGE'])
     control.prepare(minimum_free_bytes=MIN_FREE_CONTROL_BYTES)
     cache_project_id = _safe_project_id(layout)
-    result = retire(control, layout, task_id, owner,
+    result = retire(control, layout, task_id, owner, resume=resume,
         retire_namespaces=lambda keys, operation: _retire_groups(
             control, selected, cache_project_id, keys, operation))
     return {'state': result['state'], 'compose_project': control.project,
