@@ -21,6 +21,11 @@ Luki oznaczają obserwowane przedziały/batche — nie generujemy fikcyjnych
 rekordów dla brakujących kroków. Ścieżka bez callbacku odczytuje dostępne
 statystyki po solve i jawnie nie mierzy opóźnień poszczególnych callbacków.
 
+W histerezie indeks diagnostyczny sumuje obserwowane przyrosty kroków
+numerycznych przez kolejne etapy ustalania stanu i ich ponowienia. Stany
+początkowe, komunikaty postępu i podsumowania punktów pola pozostają poza
+licznikiem. Indeksy w callbackach naukowych zachowują własną semantykę.
+
 Czas trwania i szybkość używają zegara monotonicznego. UTC służy identyfikacji.
 Surowe `StepStats.wall_time_ns` ma semantykę zależną od realizacji; tylko
 jawnie wskazana ścieżka BB korzysta z delty licznika kumulatywnego.
