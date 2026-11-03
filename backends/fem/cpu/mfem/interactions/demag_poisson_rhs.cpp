@@ -9,6 +9,7 @@
 
 #include "context.hpp"
 #include "core/fem_material_runtime.hpp"
+#include "cpu/mfem/runtime/mfem_device.hpp"
 #include "fem_common.hpp"
 
 #include <cstddef>
@@ -122,6 +123,73 @@ private:
     mfem::FiniteElementSpace *source_fes_;
 };
 
+namespace {
+
+bool make_periodic_cpu_magnetic_attribute_marker(
+    const Context &ctx,
+    const mfem::FiniteElementSpace &potential_fes,
+    const mfem::FiniteElementSpace &source_fes,
+    mfem::Array<int> &marker)
+{
+    const auto *mesh = potential_fes.GetMesh();
+    if (ctx.poisson_demag.periodic_workspace == nullptr ||
+        mfem_device_requests_gpu(ctx) ||
+        mesh == nullptr || mesh != source_fes.GetMesh() ||
+        mesh->Dimension() != 3 || mesh->GetNE() == 0 ||
+        ctx.mesh.magnetic_element_mask.size() != static_cast<size_t>(mesh->GetNE()) ||
+        mesh->attributes.Size() == 0) {
+        return false;
+    }
+
+    const int max_attr = mesh->attributes.Max();
+    // Sparse attribute IDs need not be normalized. Avoid making an
+    // unbounded allocation merely to enable this optional optimization.
+    if (max_attr <= 0 || max_attr > mesh->GetNE()) {
+        return false;
+    }
+
+    constexpr int air = 1;
+    constexpr int magnetic = 2;
+    mfem::Array<int> attribute_kind(max_attr);
+    attribute_kind = 0;
+    bool has_air = false;
+    bool has_magnetic = false;
+    for (int element = 0; element < mesh->GetNE(); ++element) {
+        if (mesh->GetElementBaseGeometry(element) != mfem::Geometry::TETRAHEDRON ||
+            potential_fes.GetFE(element)->GetOrder() != 1 ||
+            source_fes.GetFE(element)->GetOrder() != 1) {
+            return false;
+        }
+
+        const int attr = mesh->GetAttribute(element);
+        if (attr <= 0 || attr > max_attr) {
+            return false;
+        }
+        const int kind = ctx.mesh.magnetic_element_mask[static_cast<size_t>(element)] == 0u
+            ? air : magnetic;
+        int &previous = attribute_kind[attr - 1];
+        if (previous != 0 && previous != kind) {
+            // MFEM selects whole attributes. A shared air/magnetic
+            // attribute still needs the coefficient's per-element mask.
+            return false;
+        }
+        previous = kind;
+        has_air |= kind == air;
+        has_magnetic |= kind == magnetic;
+    }
+    if (!has_air || !has_magnetic) {
+        return false;
+    }
+
+    marker.SetSize(max_attr);
+    for (int attr = 0; attr < max_attr; ++attr) {
+        marker[attr] = attribute_kind[attr] == magnetic ? 1 : 0;
+    }
+    return true;
+}
+
+} // namespace
+
 struct PoissonRhsWorkspace {
     PoissonRhsWorkspace(
         Context &ctx,
@@ -132,11 +200,20 @@ struct PoissonRhsWorkspace {
         , rhs_form(potential_fes)
         , rhs_true(potential_fes->GetTrueVSize())
     {
-        rhs_form.AddDomainIntegrator(new mfem::DomainLFGradIntegrator(m_coeff));
+        if (make_periodic_cpu_magnetic_attribute_marker(
+                ctx, *potential_fes, *source_fes, magnetic_attr_marker)) {
+            rhs_form.AddDomainIntegrator(
+                new mfem::DomainLFGradIntegrator(m_coeff), magnetic_attr_marker);
+        } else {
+            rhs_form.AddDomainIntegrator(new mfem::DomainLFGradIntegrator(m_coeff));
+        }
     }
 
     mfem::FiniteElementSpace *fes = nullptr;
     MagnetizationCoefficient m_coeff;
+    // LinearForm borrows this marker for every Assemble call. Keep it alive
+    // until after rhs_form is destroyed.
+    mfem::Array<int> magnetic_attr_marker;
     mfem::LinearForm rhs_form;
     mfem::Vector rhs_true;
 };

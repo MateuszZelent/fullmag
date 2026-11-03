@@ -4,6 +4,7 @@
 
 namespace mfem {
 class Vector;
+class HypreBoomerAMG;
 } // namespace mfem
 
 namespace fullmag::fem {
@@ -11,6 +12,8 @@ namespace fullmag::fem {
 struct Context;
 
 #if FULLMAG_HAS_MFEM_STACK
+void configure_demag_amg(mfem::HypreBoomerAMG &amg, const Context &ctx);
+
 /*
  * Non-periodic Hypre-backed Poisson solve policy for native FEM demag.
  *

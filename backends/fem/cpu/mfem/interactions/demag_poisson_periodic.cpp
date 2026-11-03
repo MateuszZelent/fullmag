@@ -9,10 +9,17 @@
 
 #include "context.hpp"
 #include "core/demag_linear_solve_validation.hpp"
+#include "cpu/mfem/interactions/demag_poisson_hypre.hpp"
+#include "cpu/mfem/runtime/hypre_host_policy.hpp"
+#include "cpu/mfem/runtime/mfem_device.hpp"
+#include "cpu/mfem/runtime/mpi_init.hpp"
 #include "fem_common.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstdio>
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -58,8 +65,35 @@ bool demag_periodic_poisson_reduction_requested(const Context &ctx)
 }
 
 #if FULLMAG_HAS_MFEM_STACK
+#ifdef MFEM_USE_MPI
+struct PeriodicHypreWorkspace {
+    PeriodicHypreWorkspace(mfem::SparseMatrix &op, const Context &ctx)
+        : rows{0, static_cast<HYPRE_BigInt>(op.Height())}
+        , matrix(fullmag_serial_comm(), rows[1], rows.data(), &op)
+        , rhs(fullmag_serial_comm(), rows[1], rows.data())
+        , solution(fullmag_serial_comm(), rows[1], rows.data())
+        , preconditioner(matrix)
+        , solver(fullmag_serial_comm())
+    {
+        configure_demag_amg(preconditioner, ctx);
+        solver.iterative_mode = true;
+        solver.SetPrintLevel(static_cast<int>(ctx.demag.solver.print_level));
+        solver.SetOperator(matrix);
+        solver.SetPreconditioner(preconditioner);
+    }
+
+    std::array<HYPRE_BigInt, 2> rows;
+    mfem::HypreParMatrix matrix;
+    mfem::HypreParVector rhs;
+    mfem::HypreParVector solution;
+    mfem::HypreBoomerAMG preconditioner;
+    mfem::HyprePCG solver;
+    bool setup_complete = false;
+};
+#endif
+
 struct PeriodicPoissonReducedWorkspace {
-    explicit PeriodicPoissonReducedWorkspace(mfem::SparseMatrix &op)
+    PeriodicPoissonReducedWorkspace(mfem::SparseMatrix &op, const Context &ctx)
         : preconditioner(op)
         , accepted_solution_backup(op.Height())
         , residual(op.Height())
@@ -68,6 +102,22 @@ struct PeriodicPoissonReducedWorkspace {
         solver.SetPreconditioner(preconditioner);
         solver.SetOperator(op);
         solver.SetPrintLevel(0);
+#ifdef MFEM_USE_MPI
+        if (!mfem_device_requests_gpu(ctx) && ctx.base_plan.fe_order == 1u &&
+            ctx.demag.realization == FULLMAG_FEM_DEMAG_AIRBOX_ROBIN &&
+            ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_CG &&
+            ctx.demag.solver.preconditioner == FULLMAG_FEM_PRECONDITIONER_AMG &&
+            std::all_of(ctx.mesh.cell_types.begin(), ctx.mesh.cell_types.end(),
+                        [](uint32_t type) { return type == FULLMAG_FEM_CELL_TET4; })) {
+            const auto policy = current_hypre_host_policy();
+            if (policy.memory_location_host && policy.execution_policy_host) {
+                ensure_mpi_initialized();
+                hypre = std::make_unique<PeriodicHypreWorkspace>(op, ctx);
+            }
+        }
+#else
+        (void)ctx;
+#endif
     }
 
     void configure(double rel_tol, double abs_tol, int max_iter) {
@@ -81,6 +131,9 @@ struct PeriodicPoissonReducedWorkspace {
     mfem::Vector full_solution;
     mfem::Vector accepted_solution_backup;
     mfem::Vector residual;
+#ifdef MFEM_USE_MPI
+    std::unique_ptr<PeriodicHypreWorkspace> hypre;
+#endif
     bool x_p_contains_solution = false;
 };
 
@@ -171,7 +224,7 @@ bool initialize_demag_periodic_poisson_reduction(
         ctx.poisson_demag.periodic_solution = periodic_solution;
         ctx.poisson_demag.periodic_workspace =
             new PeriodicPoissonReducedWorkspace(
-                *static_cast<mfem::SparseMatrix *>(ctx.poisson_demag.periodic_matrix));
+                *static_cast<mfem::SparseMatrix *>(ctx.poisson_demag.periodic_matrix), ctx);
         ctx.poisson_demag.periodic_reduced_ready = true;
         return true;
     } catch (const std::exception &ex) {
@@ -231,8 +284,6 @@ bool solve_demag_periodic_poisson_reduced(
         ctx.demag.solver.absolute_tolerance > 0.0
             ? ctx.demag.solver.absolute_tolerance
             : 0.0;
-    periodic_workspace->configure(
-        certification_solver_tolerance(rel_tol), abs_tol, max_iter);
     ctx.poisson_demag.last_setup_wall_time_ns = 0;
     ctx.poisson_demag.last_solver_setup_reused = true;
     const bool used_cached_solution = periodic_workspace->x_p_contains_solution;
@@ -251,9 +302,50 @@ bool solve_demag_periodic_poisson_reduced(
         }
         periodic_workspace->x_p_contains_solution = used_cached_solution;
     };
-    const auto solver_apply_wall_start = FemSteadyClock::now();
+    auto solver_apply_wall_start = FemSteadyClock::now();
+    int iterations = 0;
+    bool converged = false;
+    bool independently_certified = false;
+    const char *solver_kind = "cpu_poisson_periodic/cg";
     try {
-        periodic_workspace->solver.Mult(*rhs_p, *x_p);
+#ifdef MFEM_USE_MPI
+        if (auto *hypre = periodic_workspace->hypre.get()) {
+            solver_kind = "cpu_poisson_periodic/hypre_pcg_amg";
+            independently_certified = true;
+            hypre->solver.SetTol(certification_solver_tolerance(rel_tol));
+            hypre->solver.SetAbsTol(abs_tol);
+            hypre->solver.SetMaxIter(max_iter);
+            std::copy_n(rhs_p->HostRead(), rhs_p->Size(), hypre->rhs.HostWrite());
+            // RK rollback owns x_p; the Hypre vector is scratch on every call.
+            std::copy_n(x_p->HostRead(), x_p->Size(), hypre->solution.HostWrite());
+            if (!hypre->setup_complete) {
+                const auto setup_start = FemSteadyClock::now();
+                hypre->solver.Setup(hypre->rhs, hypre->solution);
+                hypre->setup_complete = true;
+                ctx.poisson_demag.last_setup_wall_time_ns = elapsed_ns(setup_start);
+                ctx.poisson_demag.last_solver_setup_reused = false;
+                ++ctx.poisson_demag.setup_count;
+                ++ctx.poisson_demag.setup_count_current_step;
+                std::fprintf(stderr,
+                    "[fullmag-fem] periodic Poisson solver=HyprePCG preconditioner=BoomerAMG reduced_nodes=%d\n",
+                    rhs_p->Size());
+            }
+            solver_apply_wall_start = FemSteadyClock::now();
+            hypre->solver.Mult(hypre->rhs, hypre->solution);
+            hypre->solver.GetNumIterations(iterations);
+            HYPRE_Int reported_converged = 0;
+            HYPRE_PCGGetConverged(static_cast<HYPRE_Solver>(hypre->solver), &reported_converged);
+            converged = reported_converged != 0;
+            std::copy_n(hypre->solution.HostRead(), x_p->Size(), x_p->HostWrite());
+        } else
+#endif
+        {
+            periodic_workspace->configure(
+                certification_solver_tolerance(rel_tol), abs_tol, max_iter);
+            periodic_workspace->solver.Mult(*rhs_p, *x_p);
+            iterations = periodic_workspace->solver.GetNumIterations();
+            converged = periodic_workspace->solver.GetConverged();
+        }
     } catch (const std::exception &ex) {
         ctx.poisson_demag.last_solver_apply_wall_time_ns =
             elapsed_ns(solver_apply_wall_start);
@@ -269,7 +361,6 @@ bool solve_demag_periodic_poisson_reduced(
     }
     ctx.poisson_demag.last_solver_apply_wall_time_ns =
         elapsed_ns(solver_apply_wall_start);
-    const int iterations = periodic_workspace->solver.GetNumIterations();
     auto *periodic_matrix =
         static_cast<mfem::SparseMatrix *>(ctx.poisson_demag.periodic_matrix);
     mfem::Vector &residual = periodic_workspace->residual;
@@ -294,8 +385,9 @@ bool solve_demag_periodic_poisson_reduced(
     ctx.poisson_demag.last_residual = relative_residual;
 
     DemagLinearSolveResult result;
-    result.solver_kind = "cpu_poisson_periodic/cg";
-    result.solver_reported_converged = periodic_workspace->solver.GetConverged();
+    result.solver_kind = solver_kind;
+    result.solver_reported_converged = converged;
+    result.residual_independently_certified = independently_certified;
     result.iterations = iterations;
     result.relative_residual = relative_residual;
     result.has_absolute_residual = true;

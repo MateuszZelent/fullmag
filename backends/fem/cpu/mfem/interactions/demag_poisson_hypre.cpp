@@ -66,8 +66,6 @@ struct PoissonHypreWorkspace {
 };
 #endif
 
-namespace {
-
 #ifdef MFEM_USE_MPI
 void configure_demag_amg(mfem::HypreBoomerAMG &amg, const Context &ctx)
 {
@@ -80,7 +78,11 @@ void configure_demag_amg(mfem::HypreBoomerAMG &amg, const Context &ctx)
     if (policy.strength_threshold_is_set) amg.SetStrengthThresh(policy.strength_threshold);
     if (policy.max_levels_is_set) amg.SetMaxLevels(policy.max_levels);
 }
+#endif
 
+namespace {
+
+#ifdef MFEM_USE_MPI
 void destroy_hypre_solver(mfem::HypreSolver *solver, int solver_kind) noexcept
 {
     switch (solver_kind) {

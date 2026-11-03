@@ -15,6 +15,8 @@
 #include "cpu/mfem/interactions/demag_poisson_field.hpp"
 #include "cpu/mfem/interactions/demag_poisson_hypre.hpp"
 #include "cpu/mfem/interactions/demag_poisson_periodic.hpp"
+#include "cpu/mfem/interactions/demag_poisson_rhs.hpp"
+#include "cpu/mfem/runtime/hypre_host_policy.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
 #include "gpu/cuda/demag_poisson/poisson.hpp"
 #include "gpu/cuda/demag_poisson/stage_compute.hpp"
@@ -454,6 +456,117 @@ void periodic_demag_reuses_warm_start_and_resets_after_failure() {
     fullmag::fem::destroy_demag_periodic_poisson_reduction(ctx);
     ctx.poisson_demag.poisson_bc_op = nullptr;
 }
+
+void periodic_p1_rhs_attribute_selection_preserves_the_magnetic_load() {
+    for (const bool distinct_attributes : {true, false}) {
+        mfem::Mesh mesh(3, 5, 2, 0);
+        const double vertices[][3] = {
+            {0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}, {0, 0, -1},
+        };
+        for (const auto &vertex : vertices) mesh.AddVertex(vertex);
+        mesh.AddTet(0, 1, 2, 3, 1);
+        mesh.AddTet(0, 2, 1, 4, distinct_attributes ? 2 : 1);
+        mesh.FinalizeTetMesh(1, 0, true);
+        mfem::H1_FECollection collection(1, 3);
+        mfem::FiniteElementSpace fes(&mesh, &collection);
+
+        fullmag::fem::Context ctx;
+        ctx.mfem_device.device_string_override = "cpu";
+        ctx.mfem_context.fes = &fes;
+        ctx.mesh.magnetic_element_mask = {1u, 0u};
+        ctx.material_fields.material.saturation_magnetisation = 8.0e5;
+        ctx.material_fields.Ms_field = {7.0e5, 8.0e5, 9.0e5, 6.0e5, 0.0};
+        const std::vector<double> m = {
+            1, 0, 0, 0, 1, 0, 0, 0, 1, 0.8, 0.6, 0, 0, 0, -1,
+        };
+        std::string error;
+        check_result(fullmag::fem::initialize_demag_poisson_rhs_workspace(ctx, fes, error),
+                     error, "initialize unmasked reference RHS");
+        mfem::Vector *rhs = nullptr;
+        check_result(fullmag::fem::assemble_demag_poisson_rhs(ctx, m, rhs, error),
+                     error, "assemble unmasked reference RHS");
+        const mfem::Vector expected(*rhs);
+        fullmag::fem::destroy_demag_poisson_rhs_workspace(ctx);
+
+        // Only the existence of an initialized reduction is needed by RHS
+        // admission. The RHS workspace never reads the reduction object.
+        int periodic_workspace = 0;
+        ctx.poisson_demag.periodic_workspace = &periodic_workspace;
+        check_result(fullmag::fem::initialize_demag_poisson_rhs_workspace(ctx, fes, error),
+                     error, "initialize periodic RHS");
+        const auto *markers = static_cast<mfem::LinearForm *>(
+            ctx.poisson_demag.rhs_form)->GetDLFI_Marker();
+        check(((*markers)[0] != nullptr) == distinct_attributes,
+              "RHS restricts integration only when air attributes are disjoint");
+        check_result(fullmag::fem::assemble_demag_poisson_rhs(ctx, m, rhs, error),
+                     error, "assemble periodic RHS");
+        for (int node = 0; node < expected.Size(); ++node) {
+            check_near((*rhs)(node), expected(node), 1.0e-10, "periodic magnetic load parity");
+        }
+        fullmag::fem::destroy_demag_poisson_rhs_workspace(ctx);
+        ctx.poisson_demag.periodic_workspace = nullptr;
+        ctx.mfem_context.fes = nullptr;
+    }
+}
+
+#ifdef MFEM_USE_MPI
+void periodic_hypre_amg_matches_serial_cg_and_reuses_setup() {
+    fullmag::fem::Context legacy;
+    fullmag::fem::Context optimized;
+    mfem::SparseMatrix op = nontrivial_spd_matrix(8);
+    std::string error;
+    check_result(fullmag::fem::configure_hypre_host_policy(error), error,
+                 "configure CPU Hypre policy");
+    for (auto *ctx : {&legacy, &optimized}) {
+        configure_one_iteration_demag_solver(*ctx);
+        ctx->demag.enabled = true;
+        ctx->demag.realization = FULLMAG_FEM_DEMAG_AIRBOX_ROBIN;
+        ctx->demag.solver.relative_tolerance = 1.0e-10;
+        ctx->demag.solver.max_iterations = 100;
+        ctx->demag.amg_policy = fullmag::fem::resolve_demag_amg_policy_from_environment();
+        ctx->mfem_device.device_string_override = "cpu";
+        ctx->mesh.cell_types = {FULLMAG_FEM_CELL_TET4};
+        ctx->mesh.n_nodes = 8;
+        ctx->mesh.periodic_node_pairs = {0u, 7u};
+        ctx->mesh.periodic_reduced_node = {0u, 1u, 2u, 3u, 4u, 5u, 6u, 0u};
+        ctx->mesh.periodic_representative_nodes = {0u, 1u, 2u, 3u, 4u, 5u, 6u};
+        ctx->mesh.periodic_reduced_node_count = 7;
+        ctx->poisson_demag.poisson_bc_op = &op;
+    }
+    optimized.demag.solver.preconditioner = FULLMAG_FEM_PRECONDITIONER_AMG;
+    for (auto *ctx : {&legacy, &optimized}) {
+        check_result(fullmag::fem::initialize_demag_periodic_poisson_reduction(*ctx, error),
+                     error, "initialize periodic reduced Poisson fixture");
+    }
+
+    for (int sample = 0; sample < 2; ++sample) {
+        mfem::Vector rhs(8);
+        for (int node = 0; node < rhs.Size(); ++node) {
+            rhs(node) = 1.0 + static_cast<double>((node + sample) % 3);
+        }
+        mfem::Vector *baseline = nullptr;
+        mfem::Vector *amg = nullptr;
+        uint64_t elapsed = 0;
+        check_result(fullmag::fem::solve_demag_periodic_poisson_reduced(
+                         legacy, rhs, baseline, elapsed, error), error, "serial CG solve");
+        check_result(fullmag::fem::solve_demag_periodic_poisson_reduced(
+                         optimized, rhs, amg, elapsed, error), error, "Hypre PCG/AMG solve");
+        check(baseline != nullptr && amg != nullptr, "both paths lift accepted solutions");
+        for (int node = 0; node < rhs.Size(); ++node) {
+            check_near((*amg)(node), (*baseline)(node), 1.0e-10, "periodic potential parity");
+        }
+        check((*amg)(0) == (*amg)(7), "AMG lift preserves the seam");
+        check(optimized.poisson_demag.last_residual <= 1.0e-10, "AMG true residual is certified");
+        check(optimized.poisson_demag.setup_count == 1u &&
+                  optimized.poisson_demag.last_solver_setup_reused == (sample != 0),
+              "AMG setup occurs once across distinct right-hand sides");
+    }
+    for (auto *ctx : {&legacy, &optimized}) {
+        fullmag::fem::destroy_demag_periodic_poisson_reduction(*ctx);
+        ctx->poisson_demag.poisson_bc_op = nullptr;
+    }
+}
+#endif
 #endif
 
 std::string read_text_file(const std::filesystem::path &path) {
@@ -3865,6 +3978,10 @@ int main() {
     nonperiodic_hypre_rejected_candidate_preserves_published_warm_start();
     periodic_demag_rejects_one_iteration_candidate();
     periodic_demag_reuses_warm_start_and_resets_after_failure();
+    periodic_p1_rhs_attribute_selection_preserves_the_magnetic_load();
+#ifdef MFEM_USE_MPI
+    periodic_hypre_amg_matches_serial_cg_and_reuses_setup();
+#endif
 #endif
     demag_boundary_operator_is_owned_by_poisson_boundary_module();
     demag_periodic_reduction_is_owned_by_poisson_periodic_module();
