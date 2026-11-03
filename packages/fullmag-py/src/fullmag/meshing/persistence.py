@@ -9,6 +9,7 @@ from io import BytesIO
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 from time import monotonic_ns
 from typing import Mapping, Sequence
@@ -121,6 +122,7 @@ class MeshArtifact:
     boundary_map: dict[str, int]
     build_report: dict[str, object] | None = None
     provenance: dict[str, object] | None = None
+    source_sha256: str | None = None
 
 
 def mesh_data_from_ir(payload: Mapping[str, object]) -> MeshData:
@@ -506,61 +508,94 @@ def _write_native_artifact(
 
 def _read_native_artifact(
     source: Path,
-) -> tuple[dict[str, object], dict[str, bytes]]:
+    *,
+    expected_sha256: str | None = None,
+    include_source_sha256: bool = False,
+) -> tuple[dict[str, object], dict[str, bytes], str | None]:
+    if expected_sha256 is not None and (
+        not isinstance(expected_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+    ):
+        raise ValueError("expected_sha256 must be 64 lowercase hexadecimal characters")
     try:
-        with zipfile.ZipFile(source, "r") as archive:
-            names = archive.namelist()
-            if len(names) != len(set(names)):
+        with source.open("rb") as stream:
+            file_identity = os.fstat(stream.fileno())
+            source_sha256: str | None = None
+            if expected_sha256 is not None or include_source_sha256:
+                digest = sha256()
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+                source_sha256 = digest.hexdigest()
+                if expected_sha256 is not None and source_sha256 != expected_sha256:
+                    raise MeshArtifactCorruptionError(
+                        "native mesh artifact SHA256 does not match expected_sha256"
+                    )
+                stream.seek(0)
+
+            with zipfile.ZipFile(stream, "r") as archive:
+                names = archive.namelist()
+                if len(names) != len(set(names)):
+                    raise MeshArtifactCorruptionError(
+                        "native mesh artifact contains duplicate member names"
+                    )
+                manifest = json.loads(archive.read("manifest.json"))
+                if not isinstance(manifest, dict):
+                    raise MeshArtifactCorruptionError("manifest.json must contain an object")
+                schema = manifest.get("schema")
+                if schema not in {ARTIFACT_SCHEMA_V1, ARTIFACT_SCHEMA_V2}:
+                    raise MeshArtifactVersionError(
+                        f"unsupported mesh artifact schema {schema!r}"
+                    )
+                descriptors = manifest.get("members")
+                if not isinstance(descriptors, Mapping):
+                    raise MeshArtifactCorruptionError("manifest members must be an object")
+                if schema == ARTIFACT_SCHEMA_V2:
+                    required = {
+                        "topology.npz",
+                        "build-report.json",
+                        "certification-receipt.json",
+                    }
+                    if set(descriptors) != required or set(names) != required | {"manifest.json"}:
+                        raise MeshArtifactCorruptionError(
+                            "v2 native mesh artifact has an invalid member set"
+                        )
+                members: dict[str, bytes] = {}
+                for name, raw_descriptor in descriptors.items():
+                    if not isinstance(name, str) or not isinstance(raw_descriptor, Mapping):
+                        raise MeshArtifactCorruptionError("manifest member descriptor is invalid")
+                    if set(raw_descriptor) != {"sha256", "bytes"}:
+                        raise MeshArtifactCorruptionError(
+                            f"manifest descriptor fields are invalid for {name}"
+                        )
+                    content = archive.read(name)
+                    if sha256(content).hexdigest() != raw_descriptor.get("sha256"):
+                        raise MeshArtifactCorruptionError(f"digest mismatch for {name}")
+                    expected_bytes = raw_descriptor.get("bytes")
+                    if (
+                        isinstance(expected_bytes, bool)
+                        or not isinstance(expected_bytes, int)
+                        or len(content) != expected_bytes
+                    ):
+                        raise MeshArtifactCorruptionError(f"byte length mismatch for {name}")
+                    members[name] = content
+            current_identity = os.fstat(stream.fileno())
+            if (
+                file_identity.st_dev != current_identity.st_dev
+                or file_identity.st_ino != current_identity.st_ino
+                or file_identity.st_size != current_identity.st_size
+                or file_identity.st_mtime_ns != current_identity.st_mtime_ns
+                or file_identity.st_ctime_ns != current_identity.st_ctime_ns
+            ):
                 raise MeshArtifactCorruptionError(
-                    "native mesh artifact contains duplicate member names"
+                    "native mesh artifact changed while it was being read"
                 )
-            manifest = json.loads(archive.read("manifest.json"))
-            if not isinstance(manifest, dict):
-                raise MeshArtifactCorruptionError("manifest.json must contain an object")
-            schema = manifest.get("schema")
-            if schema not in {ARTIFACT_SCHEMA_V1, ARTIFACT_SCHEMA_V2}:
-                raise MeshArtifactVersionError(
-                    f"unsupported mesh artifact schema {schema!r}"
-                )
-            descriptors = manifest.get("members")
-            if not isinstance(descriptors, Mapping):
-                raise MeshArtifactCorruptionError("manifest members must be an object")
-            if schema == ARTIFACT_SCHEMA_V2:
-                required = {
-                    "topology.npz",
-                    "build-report.json",
-                    "certification-receipt.json",
-                }
-                if set(descriptors) != required or set(names) != required | {"manifest.json"}:
-                    raise MeshArtifactCorruptionError(
-                        "v2 native mesh artifact has an invalid member set"
-                    )
-            members: dict[str, bytes] = {}
-            for name, raw_descriptor in descriptors.items():
-                if not isinstance(name, str) or not isinstance(raw_descriptor, Mapping):
-                    raise MeshArtifactCorruptionError("manifest member descriptor is invalid")
-                if set(raw_descriptor) != {"sha256", "bytes"}:
-                    raise MeshArtifactCorruptionError(
-                        f"manifest descriptor fields are invalid for {name}"
-                    )
-                content = archive.read(name)
-                if sha256(content).hexdigest() != raw_descriptor.get("sha256"):
-                    raise MeshArtifactCorruptionError(f"digest mismatch for {name}")
-                expected_bytes = raw_descriptor.get("bytes")
-                if (
-                    isinstance(expected_bytes, bool)
-                    or not isinstance(expected_bytes, int)
-                    or len(content) != expected_bytes
-                ):
-                    raise MeshArtifactCorruptionError(f"byte length mismatch for {name}")
-                members[name] = content
     except (MeshArtifactError, FileNotFoundError):
         raise
     except Exception as exc:
         raise MeshArtifactCorruptionError(f"invalid native mesh artifact: {exc}") from exc
     if "topology.npz" not in members:
         raise MeshArtifactCorruptionError("native mesh artifact is missing topology.npz")
-    return manifest, members
+    return manifest, members, source_sha256
 
 
 def _bindings_from_manifest(
@@ -877,10 +912,14 @@ def load_mesh_artifact(
     path: str | Path,
     *,
     expected_authoring_document: Mapping[str, object] | None = None,
+    expected_sha256: str | None = None,
+    _include_source_sha256: bool = False,
 ) -> MeshArtifact:
     return _load_mesh_artifact_full_audit(
         path,
         expected_authoring_document=expected_authoring_document,
+        expected_sha256=expected_sha256,
+        include_source_sha256=_include_source_sha256,
         require_native=False,
         artifact_trust="portable_full_audit",
     )
@@ -890,6 +929,8 @@ def _load_mesh_artifact_forced_audit(path: str | Path) -> MeshArtifact:
     return _load_mesh_artifact_full_audit(
         path,
         expected_authoring_document=None,
+        expected_sha256=None,
+        include_source_sha256=False,
         require_native=True,
         artifact_trust="forced_audit",
     )
@@ -899,20 +940,31 @@ def _load_mesh_artifact_full_audit(
     path: str | Path,
     *,
     expected_authoring_document: Mapping[str, object] | None,
+    expected_sha256: str | None,
+    include_source_sha256: bool,
     require_native: bool,
     artifact_trust: str,
 ) -> MeshArtifact:
     source = Path(path)
     if source.suffix != ".fullmag-mesh":
         raise ValueError("study.mesh.load() accepts only .fullmag-mesh artifacts")
-    manifest, members = _read_native_artifact(source)
-    return _audit_mesh_artifact_members(
+    manifest, members, source_sha256 = _read_native_artifact(
+        source,
+        expected_sha256=expected_sha256,
+        include_source_sha256=include_source_sha256,
+    )
+    artifact = _audit_mesh_artifact_members(
         source,
         manifest,
         members,
         expected_authoring_document=expected_authoring_document,
         require_native=require_native,
         artifact_trust=artifact_trust,
+    )
+    return (
+        replace(artifact, source_sha256=source_sha256)
+        if source_sha256 is not None
+        else artifact
     )
 
 
@@ -1151,7 +1203,7 @@ def _load_trusted_cached_mesh_artifact(
     if source.suffix != ".fullmag-mesh":
         raise ValueError("trusted mesh cache accepts only .fullmag-mesh artifacts")
     cache_load_started_ns = monotonic_ns()
-    manifest, members = _read_native_artifact(source)
+    manifest, members, _source_sha256 = _read_native_artifact(source)
     if manifest.get("schema") != ARTIFACT_SCHEMA_V2:
         raise MeshArtifactVersionError(
             f"schema {manifest.get('schema')} is never eligible for trusted fast path"

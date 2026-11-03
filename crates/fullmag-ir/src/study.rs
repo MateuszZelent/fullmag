@@ -905,6 +905,99 @@ pub struct FemBackendCapability {
     pub supports_sot: bool,
 }
 
+/// Authored FEM accuracy constraint carried through Scene and canonical Python.
+/// The planner remains responsible for checking the resolved mesh and demag.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct FemDemagAccuracyContractIR {
+    pub schema_version: String,
+    pub profile: String,
+    pub required_potential_order: u32,
+    pub required_topology: String,
+}
+
+impl FemDemagAccuracyContractIR {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.schema_version != "fullmag.fem.demag_accuracy.v1" {
+            return Err("fem_demag_accuracy_contract.schema_version must be 'fullmag.fem.demag_accuracy.v1'".into());
+        }
+        if self.profile.trim().is_empty() {
+            return Err("fem_demag_accuracy_contract.profile must be a non-empty string".into());
+        }
+        if self.required_potential_order != 2 {
+            return Err("fem_demag_accuracy_contract.required_potential_order must be 2 for schema v1".into());
+        }
+        if self.required_topology != "all_tet" {
+            return Err("fem_demag_accuracy_contract.required_topology must be 'all_tet' for schema v1".into());
+        }
+        Ok(())
+    }
+}
+
+impl<'de> Deserialize<'de> for FemDemagAccuracyContractIR {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct AuthoredContract {
+            schema_version: String,
+            profile: String,
+            required_potential_order: u32,
+            required_topology: String,
+        }
+        let raw = AuthoredContract::deserialize(deserializer)?;
+        let contract = Self {
+            schema_version: raw.schema_version,
+            profile: raw.profile,
+            required_potential_order: raw.required_potential_order,
+            required_topology: raw.required_topology,
+        };
+        contract.validate().map_err(serde::de::Error::custom)?;
+        Ok(contract)
+    }
+}
+
+#[cfg(test)]
+mod fem_demag_accuracy_contract_tests {
+    use super::FemDemagAccuracyContractIR;
+
+    fn authored() -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": "fullmag.fem.demag_accuracy.v1",
+            "profile": " mumax3_sp4_v1 ",
+            "required_potential_order": 2,
+            "required_topology": "all_tet",
+        })
+    }
+
+    #[test]
+    fn authored_contract_roundtrips_without_changing_the_profile() {
+        let raw = authored();
+        let contract: FemDemagAccuracyContractIR = serde_json::from_value(raw.clone()).unwrap();
+        assert_eq!(serde_json::to_value(contract).unwrap(), raw);
+    }
+
+    #[test]
+    fn invalid_or_incomplete_authored_contracts_are_rejected() {
+        for (key, value) in [
+            ("schema_version", serde_json::json!("unknown")),
+            ("profile", serde_json::json!("  ")),
+            ("required_potential_order", serde_json::json!(1)),
+            ("required_potential_order", serde_json::json!(true)),
+            ("required_potential_order", serde_json::json!(2.0)),
+            ("required_topology", serde_json::json!("mixed_p1")),
+            ("extra", serde_json::json!(true)),
+        ] {
+            let mut raw = authored();
+            raw[key] = value;
+            assert!(serde_json::from_value::<FemDemagAccuracyContractIR>(raw).is_err(), "{key}");
+        }
+        for key in ["schema_version", "profile", "required_potential_order", "required_topology"] {
+            let mut raw = authored();
+            raw.as_object_mut().unwrap().remove(key);
+            assert!(serde_json::from_value::<FemDemagAccuracyContractIR>(raw).is_err(), "{key}");
+        }
+    }
+}
+
 /// Policy for the linear solver used in FEM Poisson/demag/mechanics.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FemLinearSolverPolicy {

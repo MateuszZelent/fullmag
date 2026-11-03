@@ -482,8 +482,18 @@ case "${recipe}" in
     docker_dev_frontend_refresh_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" refresh-frontend-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})'( --frontend-frozen-resume '([0-9a-f]{32})' --frontend-frozen-resume-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
     docker_dev_idle_restart_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" restart-idle-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})'( --saved-authoring-checkpoint '([a-zA-Z0-9_./-]+)' --saved-authoring-checkpoint-sha256 '([0-9a-f]{64})')?( --stop-only)?( --allow-prepared-session)?[[:space:]]*$"
     docker_dev_cache_maintenance_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" maintain-cache --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)'[[:space:]]*$"
+    docker_dev_interrupted_fresh_archive_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" resume-interrupted-fresh-archive --prior-attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '(/[^']+)' --recreation-attempt '([0-9a-f]{32})' --unknown-receipt-sha256 '([0-9a-f]{64})' --helper-container-id '([0-9a-f]{64})' --helper-image '([^[:space:]']+@sha256:[0-9a-f]{64}|sha256:[0-9a-f]{64})' --engine-id '([^']{1,256})'( --apply --expected-plan-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
     docker_dev_args=(--repo-root "${repo_root}")
-    if [[ "${recipe}" =~ ${docker_dev_codegen_pattern} ]]; then
+    if [[ "${recipe}" =~ ${docker_dev_interrupted_fresh_archive_pattern} ]]; then
+      docker_dev_args+=(resume-interrupted-fresh-archive --prior-attempt "${BASH_REMATCH[1]}"
+        --config-sha256 "${BASH_REMATCH[2]}" --source-root "${BASH_REMATCH[3]}"
+        --recreation-attempt "${BASH_REMATCH[4]}" --unknown-receipt-sha256 "${BASH_REMATCH[5]}"
+        --helper-container-id "${BASH_REMATCH[6]}" --helper-image "${BASH_REMATCH[7]}"
+        --engine-id "${BASH_REMATCH[8]}")
+      if [[ -n "${BASH_REMATCH[9]:-}" ]]; then
+        docker_dev_args+=(--apply --expected-plan-sha256 "${BASH_REMATCH[10]}")
+      fi
+    elif [[ "${recipe}" =~ ${docker_dev_codegen_pattern} ]]; then
       docker_dev_args+=(codegen-openapi)
       if [[ -n "${BASH_REMATCH[2]:-}" ]]; then
         docker_dev_args+=(--source-root "${BASH_REMATCH[2]}")

@@ -891,6 +891,8 @@ pub struct ScriptBuilderState {
     pub pbc: Option<fullmag_ir::FdmPeriodicityIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_demag_solver_policy: Option<fullmag_ir::FemLinearSolverPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_demag_accuracy_contract: Option<fullmag_ir::FemDemagAccuracyContractIR>,
     #[serde(default = "default_true")]
     pub exchange_enabled: bool,
     #[serde(default = "default_true")]
@@ -907,6 +909,8 @@ pub struct ScriptBuilderState {
     pub rotated_interfacial_dmi_object_ids: Option<Vec<String>>,
     pub solver: ScriptBuilderSolverState,
     pub mesh: ScriptBuilderMeshState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_domain_mesh: Option<crate::SceneFemDomainMeshReference>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub universe: Option<ScriptBuilderUniverseState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

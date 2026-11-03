@@ -3756,16 +3756,31 @@ void demag_visual_effective_field_preserves_full_domain_demag() {
         7.0, 8.0, 9.0,
         1.0, 2.0, 3.0,
     };
+    const auto full_domain_h_demag = ctx.demag.h_visual_xyz;
+    ctx.mesh.n_nodes = 2;
+    ctx.mesh.magnetic_node_mask = {1u, 0u};
 
     fullmag::fem::update_demag_poisson_visual_effective_field(ctx, h_eff, h_demag);
     check(ctx.effective_field.h_visual_xyz.size() == h_eff.size(), "visual H_eff size");
-    check(ctx.effective_field.h_visual_xyz[0] == 4.0, "visual H_eff first x");
-    check(ctx.effective_field.h_visual_xyz[1] == 14.0, "visual H_eff first y");
-    check(ctx.effective_field.h_visual_xyz[2] == 24.0, "visual H_eff first z");
-    check(ctx.effective_field.h_visual_xyz[3] == 43.0, "visual H_eff second x");
-    check(ctx.effective_field.h_visual_xyz[4] == 53.0, "visual H_eff second y");
-    check(ctx.effective_field.h_visual_xyz[5] == 63.0, "visual H_eff second z");
+    check(ctx.effective_field.h_visual_xyz[0] == 1.0, "magnetic H_eff x stays solver value");
+    check(ctx.effective_field.h_visual_xyz[1] == 2.0, "magnetic H_eff y stays solver value");
+    check(ctx.effective_field.h_visual_xyz[2] == 3.0, "magnetic H_eff z stays solver value");
+    check(ctx.effective_field.h_visual_xyz[3] == 43.0, "airbox H_eff x gets demag continuation");
+    check(ctx.effective_field.h_visual_xyz[4] == 53.0, "airbox H_eff y gets demag continuation");
+    check(ctx.effective_field.h_visual_xyz[5] == 63.0, "airbox H_eff z gets demag continuation");
+    check(ctx.demag.h_visual_xyz == full_domain_h_demag,
+          "publishing H_eff must preserve full-domain H_demag");
 
+    ctx.mesh.magnetic_node_mask.clear();
+    fullmag::fem::update_demag_poisson_visual_effective_field(ctx, h_eff, h_demag);
+    check(ctx.effective_field.h_visual_xyz == h_eff,
+          "an empty mask treats every node as magnetic");
+
+    ctx.mesh.magnetic_node_mask = {1u};
+    fullmag::fem::update_demag_poisson_visual_effective_field(ctx, h_eff, h_demag);
+    check(ctx.effective_field.h_visual_xyz.empty(), "visual H_eff clears on mismatched mask size");
+
+    ctx.mesh.magnetic_node_mask = {1u, 0u};
     ctx.demag.h_visual_xyz.pop_back();
     fullmag::fem::update_demag_poisson_visual_effective_field(ctx, h_eff, h_demag);
     check(ctx.effective_field.h_visual_xyz.empty(), "visual H_eff clears on mismatched demag visual size");

@@ -8962,7 +8962,10 @@ mod tests {
     #[test]
     fn every_direct_minimizer_owner_observes_energy_evaluation() {
         for (path, accepted_boundary) in [
-            ("fdm/cpu/reference.rs", "steps.push(final_stats);"),
+            (
+                "fdm/cpu/reference.rs",
+                "record_direct_minimizer_terminal_stats(final_stats, &mut steps, &mut artifacts)?;",
+            ),
             (
                 "fdm/gpu/cuda/direct_minimizer.rs",
                 "artifacts.record_scalar(&accepted_stats)?;",

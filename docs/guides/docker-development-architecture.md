@@ -249,6 +249,50 @@ Nie zastępuj tego procedurą `down --volumes`, przejęciem obcej grupy ani rese
 ownera. Niepotwierdzone zatrzymanie wymaga kanonicznego recovery; nie jest zgodą
 na ponowne uruchomienie aktywnej symulacji. Zachowaj logi i receipty błędu.
 
+### Odzyskiwanie po anulowaniu zaakceptowanego FDM GPU po przygotowaniu in-process
+
+Jeżeli zaakceptowany run FDM GPU strict double otrzymał kompletny receipt geometrii,
+siatki i przestrzeni, ale został anulowany przed Compute, użyj wyłącznie jawnego
+wariantu `in-process-fdm`. Domyślny `failed-external` nadal obsługuje wyłącznie
+przygotowanie zakończone błędem zewnętrznego procesu. Wariant in-process nie
+tworzy ani nie udaje rekordu nieudanego preparera.
+
+Podgląd wymaga dokładnych pinów development, iteracji i aktywacji. Zwiąże RunIntent
+z niezmienną definicją, StudyPlan i katalogiem ProblemIR w CAS, potwierdzi zgodną
+intencję FDM GPU strict double, komplet pięciu certyfikatów oraz zamkniętą bramkę
+manualnego startu. Odrzuci claim/admission/worker, lease solvera lub hosta,
+rezerwację, niepustą kolejkę, zewnętrzny launch/exit/lease preparera i receipt
+retry. Nie uruchamia Solve ani ponownego startu. Przykład podglądu:
+
+```powershell
+python -B <repo>\scripts\docker_dev.py --repo-root <repo> recover-cancelled-activation `
+  --attempt <development-attempt> --iteration-attempt <iteration-attempt> `
+  --activation-attempt <activation-attempt> --config-sha256 <config-sha256> `
+  --source-root <repo> --port <port> --preparation-kind in-process-fdm
+```
+
+Po sprawdzeniu zwróconego planu zastosuj go tylko z dokładnym SHA planu z podglądu:
+
+```powershell
+python -B <repo>\scripts\docker_dev.py --repo-root <repo> recover-cancelled-activation `
+  --attempt <development-attempt> --iteration-attempt <iteration-attempt> `
+  --activation-attempt <activation-attempt> --config-sha256 <config-sha256> `
+  --source-root <repo> --port <port> --preparation-kind in-process-fdm `
+  --apply --expected-plan-sha256 <plan-sha256>
+```
+
+Odzyskanie zatrzymuje i uwierzytelnia drain tylko przypiętego backendu, zachowując
+SessionStore, historię, frontend i wszystkie wolumeny. Następny konsument może
+utworzyć archiwum i świeży runtime przez istniejącą ścieżkę recovery. To jest
+recreate z zachowanym archiwum, nie wznowienie tego samego runu ani podstawienie
+CPU za żądany GPU. Niezgodny CAS, zmieniona instancja, otwarta bramka albo
+jakikolwiek owner kończy podgląd błędem bez wykonania stopu.
+
+Wariant `in-process-fdm` wysyła do przypiętego backendu pojedynczy `SIGTERM`
+poleceniem `docker kill --signal=TERM <backend-id>` i obserwuje zatrzymanie do
+120 sekund. Po upływie terminu zachowuje journal i zasoby; nie eskaluje sygnału
+ani nie wysyła go ponownie przy wznowieniu.
+
 ### Anulowanie nieudanej próby przed startem workera
 
 Jeżeli natywny owner ma stan `Failed`, oba jego procesy potomne zakończyły się,
@@ -350,6 +394,41 @@ nie resetuje ownera, nie usuwa cache i nie tworzy nowej grupy. W razie błędu
 tożsamości, CAS, provenance lub storage pozostaje fail-closed, z zachowanym
 receiptem i diagnostyką. Stara recepta hostowego receipt DEV pozostaje ścieżką
 odrzuconą, a nie instrukcją kompatybilności.
+
+### Dokończenie przerwanego fresh-state archiwum
+
+Jeśli dokładnie przypięta operacja `recreate-services` zakończyła się stanem
+`outcome-unknown-resources-retained` przed archiwizacją, ale jej pierwotny helper
+nadal utrzymuje `/control/active`, użyj dedykowanej kontynuacji. Nie ponawia ona
+`docker stop`, `docker rm` ani Solve. Wymaga bieżącego procesu hostowego bez
+pierwotnego writera, potwierdzonego `READY`/`LOGGED` oryginalnego helpera,
+pełnego ID kontenera, obrazu helpera i ID silnika Docker. Weryfikuje także
+kanoniczny fence anulowania oraz historyczny snapshot pary usług; backend musi
+być zatrzymany z kodem 0. Snapshot frontendu może pochodzić sprzed jego
+zatrzymania i nie jest traktowany jako dowód jego kodu wyjścia.
+
+Najpierw uruchom preview bez `apply`; wypisany SHA jest wymagany przy apply:
+
+```powershell
+just docker-dev-resume-interrupted-fresh-archive `
+  $priorAttempt $configSha256 $source $recreationAttempt `
+  $unknownReceiptSha256 $helperContainerId $helperImage $engineId
+
+just docker-dev-resume-interrupted-fresh-archive `
+  $priorAttempt $configSha256 $source $recreationAttempt `
+  $unknownReceiptSha256 $helperContainerId $helperImage $engineId `
+  $planSha256 true
+```
+
+Kontynuacja zachowuje bajty pierwotnego niepewnego receipt w niemutowalnym
+sidecarze, publikuje intent przed ruchem danych i korzysta z istniejącego
+archiwizatora runtime. Końcowe `receipt.json`, `current.json`, `verified.json`
+i `terminal.json` muszą zawierać identyczny succeeded receipt; terminal jest
+publikowany jako ostatni, aby pierwotny helper sam zwolnił marker aktywności.
+Po publikacji kontynuacja wykonuje odłączony readback i przypina archiwum do
+fence anulowania. Nie uruchamia usług ani nowej sesji. Jeśli obserwacja helpera,
+CAS, kontenerów lub inode zmieni się względem preview, niczego nie usuwa i
+kończy się błędem do ponownego inventory/review.
 
 ### Logi i gotowość
 

@@ -59,6 +59,11 @@ docker-dev-cancel-failed-no-spawn source_root container_id image_id process_rece
 docker-dev-release-unknown-activation source_root activation:
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev_release_unknown_activation.py" --repo-root "{{repo_root}}" --source-root {{quote(source_root)}} --activation {{quote(activation)}}
 
+# Reconcile only the known pre-admission helper-output failure, preserving terminal history.
+# Preview is read-only; apply requires its unchanged digest and authenticates drain.
+docker-dev-reconcile-helper-output source_root activation apply="false" plan_sha256="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev_reconcile_helper_output_failure.py" --repo-root "{{repo_root}}" --source-root {{quote(source_root)}} --activation {{quote(activation)}}{{if apply == "true" { " --apply --plan-sha256 " + quote(plan_sha256) } else if apply == "false" { "" } else { error("apply must be true or false") } }}
+
 # Stop one rejected startup before any RunIntent or host reservation was admitted.
 # Every identity and proof is explicit; the helper never retries the script or clears state.
 docker-dev-stop-unadmitted attempt config_sha256 source_root backend_container_id frontend_container_id image_id failure_marker_sha256 process_receipt_sha256 source_sha256 request_id session_id:
@@ -188,6 +193,11 @@ docker-dev-recreate-volume attempt config_sha256 source_root port="3197" fresh_s
 # Continue one exact completed recreation without repeating service removal.
 docker-dev-resume-recreation attempt config_sha256 source_root recreation_attempt port="3197":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" recreate-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --resume-recreation {{quote(recreation_attempt)}}
+
+# Continue one exact failed-before-archive fresh recreation. Preview by default;
+# apply requires the exact plan SHA printed by the preview.
+docker-dev-resume-interrupted-fresh-archive prior_attempt config_sha256 source_root recreation_attempt unknown_receipt_sha256 helper_container_id helper_image engine_id expected_plan_sha256="" apply="false":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" resume-interrupted-fresh-archive --prior-attempt {{quote(prior_attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --recreation-attempt {{quote(recreation_attempt)}} --unknown-receipt-sha256 {{quote(unknown_receipt_sha256)}} --helper-container-id {{quote(helper_container_id)}} --helper-image {{quote(helper_image)}} --engine-id {{quote(engine_id)}}{{if apply == "true" { if expected_plan_sha256 == "" { error("apply requires expected_plan_sha256 from preview") } else { " --apply --expected-plan-sha256 " + quote(expected_plan_sha256) } } else if apply == "false" { if expected_plan_sha256 == "" { "" } else { error("expected_plan_sha256 requires apply=true") } } else { error("apply must be true or false") } }}
 
 # Drain saved authoring before a managed configuration migration; preserve all data.
 docker-dev-stop-saved-authoring attempt config_sha256 source_root checkpoint checkpoint_sha256 port="3197":

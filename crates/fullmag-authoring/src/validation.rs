@@ -172,6 +172,35 @@ fn validate_scene_document_with_mode(
         validate_scene_v1_has_no_region_owned_payloads(scene)?;
     }
     validate_execution_profile_intent(&scene.study)?;
+    if let Some(reference) = &scene.study.fem_domain_mesh {
+        if scene.study.requested_backend.eq_ignore_ascii_case("fdm") {
+            return Err(SceneDocumentValidationError::new(
+                "study.fem_domain_mesh requires a FEM execution request",
+            ));
+        }
+        if reference.source.trim() != reference.source
+            || !reference.source.ends_with(".fullmag-mesh")
+            || reference.source.contains(['\\', ':', '\0'])
+            || reference
+                .source
+                .split('/')
+                .any(|part| part.is_empty() || matches!(part, "." | ".."))
+        {
+            return Err(SceneDocumentValidationError::new(
+                "study.fem_domain_mesh.source must be a relative .fullmag-mesh asset path",
+            ));
+        }
+        if reference.sha256.len() != 64
+            || !reference
+                .sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(SceneDocumentValidationError::new(
+                "study.fem_domain_mesh.sha256 must be a lowercase SHA-256 digest",
+            ));
+        }
+    }
     validate_dmi_scope_exclusivity(scene)?;
     if !matches!(
         scene.study.requested_mode.as_str(),

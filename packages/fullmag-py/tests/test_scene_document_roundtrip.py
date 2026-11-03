@@ -7,6 +7,7 @@ from fullmag.runtime.scene_document import (
     builder_overrides_from_scene_document,
 )
 from fullmag.runtime.script_builder import (
+    _omit_scene_mesh_editor_defaults,
     export_builder_draft,
     render_scene_document_as_script,
     rewrite_loaded_problem_script,
@@ -52,6 +53,63 @@ def test_scene_document_preserves_declared_bias_field_sweep_order() -> None:
     rebuilt = build_builder_from_scene_document(scene)
 
     assert rebuilt["stages"][0]["bias_field_sweep"] == builder["stages"][0]["bias_field_sweep"]
+
+
+def test_scene_document_round_trips_pinned_fem_domain_mesh_reference(
+    tmp_path: Path,
+) -> None:
+    reference = {
+        "source": "assets/sp4.fullmag-mesh",
+        "sha256": "a" * 64,
+        "build_requested": True,
+    }
+    source = tmp_path / "pinned_mesh.py"
+    source.write_text(
+        """import fullmag as fm
+study = fm.study('pinned-mesh')
+study.engine('fem')
+body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name='film')
+body.Ms = 800e3
+body.Aex = 13e-12
+body.m = fm.texture.uniform(1, 0, 0)
+body.mesh(maximum_element_size=20e-9, algorithm_3d=1, order=1)
+""",
+        encoding="utf-8",
+    )
+    draft = export_builder_draft(fm.load_problem_from_script(source, lightweight_assets=True))
+    draft["fem_domain_mesh"] = reference
+    scene = build_scene_document_from_builder(draft)
+
+    rebuilt = build_builder_from_scene_document(scene)
+    overrides = builder_overrides_from_scene_document(scene)
+    rendered = render_scene_document_as_script(scene)
+
+    assert scene["study"]["fem_domain_mesh"] == reference
+    assert rebuilt["fem_domain_mesh"] == reference
+    assert overrides["fem_domain_mesh"] == reference
+    assert (
+        'study.mesh.load((Path(__file__).resolve().parent / '
+        '"assets/sp4.fullmag-mesh"), expected_sha256="'
+        + "a" * 64
+        + '", build_requested=True)'
+    ) in rendered
+
+
+def test_pinned_mesh_scene_keeps_authored_default_per_object_algorithm() -> None:
+    overrides = {
+        "fem_domain_mesh": {
+            "source": "assets/sp4.fullmag-mesh",
+            "sha256": "a" * 64,
+            "build_requested": True,
+        },
+        "geometries": [
+            {"mesh": {"algorithm_2d": 6, "algorithm_3d": 1}},
+        ],
+    }
+
+    _omit_scene_mesh_editor_defaults(overrides)
+
+    assert overrides["geometries"][0]["mesh"]["algorithm_3d"] == 1
 
 
 def test_scene_document_exports_and_reloads_canonical_k0_problem_ir(tmp_path: Path) -> None:
