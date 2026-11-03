@@ -3052,6 +3052,75 @@ class DockerRuntimeContract(unittest.TestCase):
         lock_path.write_bytes(b"runtime-service-owner-lock\n")
         return owner, terminal, lock_path
 
+    @unittest.skipIf(os.name == "nt", "Guest owner locks are qualified on Linux")
+    def test_group_memory_increase_holds_owner_lock_during_native_migration(self):
+        import copy
+        import fcntl
+        from dataclasses import replace
+
+        service = self.load_service()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            paths = replace(service.RuntimePaths(), state_root=root, store=root / "store",
+                            config=root / "docker-all.json")
+            _, _, lock_path = self._write_authenticated_drain_fixture(service, paths)
+            group_id = "b" * 64
+            current = {
+                "compute_resources": [{"budget": {"memory_bytes": 24, "cpu_millis": 6000}}],
+                "preparation_resources": [{"budget": {"memory_bytes": 7, "cpu_millis": 2000}}],
+                "host_execution": {
+                    "policy": {"host_id": group_id, "revision": 1,
+                               "topology_sha256": "a" * 64,
+                               "total_budget": {"memory_bytes": 31 * service.GIB, "cpu_millis": 8000}},
+                    "runtime_generation_sha256": "d" * 64,
+                    "compute_placements": {"compute": {"cpu_ids": [0]}},
+                    "preparation_cpu_ids": {"prepare": [1]},
+                },
+            }
+            expected = copy.deepcopy(current)
+            old_policy = current["host_execution"]["policy"]
+            new_policy = expected["host_execution"]["policy"]
+            new_policy.update(revision=2, topology_sha256="c" * 64)
+            new_policy["total_budget"]["memory_bytes"] = 63 * service.GIB
+            expected["host_execution"]["runtime_generation_sha256"] = "e" * 64
+            expected["compute_resources"][0]["budget"]["memory_bytes"] = 48
+            expected["preparation_resources"][0]["budget"]["memory_bytes"] = 15
+            raw = service._post_build_canonical(current)
+            paths.config.write_bytes(raw)
+            digest = hashlib.sha256(raw).hexdigest()
+
+            def initialize(_paths, _device, authority, *, group_memory_transition_sha256):
+                self.assertEqual(group_memory_transition_sha256, digest)
+                with lock_path.open("rb") as lock, self.assertRaises(BlockingIOError):
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                authority.update(descriptor_sha256=digest, current_policy=new_policy,
+                                 historical_policies=[old_policy])
+                return expected
+
+            with patch.dict(os.environ, {
+                "FULLMAG_HOST_LEDGER_PROFILE": "group-ledger-v1",
+                "FULLMAG_GROUP_LEDGER_HOST_ID": group_id,
+                "FULLMAG_DOCKER_CPU_MILLIS": "8000",
+                "FULLMAG_DOCKER_MEMORY_BYTES": str(64 * service.GIB),
+            }, clear=True), patch.object(service, "initialize_host_configuration",
+                                         side_effect=initialize) as migrate:
+                with self.assertRaisesRegex(service.RuntimeServiceError, "stale.*pin"):
+                    service._maybe_increase_group_memory(paths, "gpu", "f" * 64, None)
+                with lock_path.open("rb") as lock:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    with self.assertRaisesRegex(service.RuntimeServiceError, "owner is still active"):
+                        service.ensure_configuration(paths)
+                migrate.assert_not_called()
+                self.assertEqual(service.ensure_configuration(paths), expected)
+                self.assertEqual(json.loads(paths.config.read_bytes()), expected)
+                self.assertEqual(paths.config.with_name(f"docker-all.previous-{digest}.json").read_bytes(), raw)
+                expected["host_execution"]["compute_placements"]["compute"]["cpu_ids"] = [2]
+                self.assertFalse(service._group_memory_transition_allowed(
+                    current, expected, digest,
+                    {"descriptor_sha256": digest, "current_policy": new_policy,
+                     "historical_policies": [old_policy]},
+                ))
+
     def _initialize_host_fixture(self, service, stored_host_id, ledger_document=None):
         from dataclasses import replace
         with tempfile.TemporaryDirectory() as directory:
