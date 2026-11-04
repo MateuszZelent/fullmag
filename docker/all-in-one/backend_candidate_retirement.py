@@ -1788,6 +1788,8 @@ def retire_candidate(
     toolchain: Mapping[str, Any],
     cargo_profile: str,
     current: tuple[dict[str, Any], bytes, dict[str, Any]] | None,
+    *,
+    required_native_contracts: tuple[str, ...] = (),
 ) -> RetirementResult:
     """Retire a stale/duplicate candidate or return it for normal rotation."""
 
@@ -1816,6 +1818,7 @@ def retire_candidate(
         _absolute(b, Path(fresh_manifest), "fresh live source manifest"),
         dict(toolchain),
         cargo_profile,
+        **({"required_native_contracts": required_native_contracts} if required_native_contracts else {}),
     )
     # A rerun can produce a different receipt (fresh capture id/timestamp)
     # while publishing byte-identical artifacts.  Treat the package inventory

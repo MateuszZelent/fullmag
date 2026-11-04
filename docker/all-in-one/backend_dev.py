@@ -11,7 +11,10 @@ then hands process ownership to the existing all-in-one entrypoint.
 
 This command deliberately has no public build-command option.  The source
 contract is data, never a shell script supplied by the caller, and the only
-native build command is the canonical ``make install-cli-dev`` or ``make install-cli`` target selected by the validated Cargo profile.
+application build command is the canonical ``make install-cli-dev`` or
+``make install-cli`` target selected by the validated Cargo profile. An
+explicit allowlisted native contract can additionally qualify that package
+before publication and API startup.
 """
 
 from __future__ import annotations
@@ -2386,11 +2389,44 @@ def _runtime_source_digest(capsule: Mapping[str, Any]) -> str:
     )
 
 
+def _requested_native_contracts(args: argparse.Namespace) -> tuple[str, ...]:
+    requested = getattr(args, "native_contract", None)
+    if not requested:
+        return ()
+    import backend_native_contracts
+    try:
+        return backend_native_contracts.normalize_contracts(requested)
+    except backend_native_contracts.NativeContractError as error:
+        _fail(str(error))
+
+
+def _native_contract_receipt_matches(receipt: Mapping[str, Any], requested: tuple[str, ...]) -> bool:
+    if not requested:
+        return True
+    import backend_native_contracts
+    artifacts, source = receipt.get("artifacts"), receipt.get("source")
+    if not isinstance(artifacts, list) or not isinstance(source, Mapping):
+        return False
+    libraries = [record.get("sha256") for record in artifacts
+                 if isinstance(record, Mapping) and record.get("path") == "lib/libfullmag_fem.so"]
+    if len(libraries) != 1:
+        return False
+    # Callers already verify the package inventory. Shared producers are
+    # checked again against restored candidate files before publication.
+    return backend_native_contracts.receipt_satisfies(
+        receipt.get("native_contracts"), requested=requested,
+        source_snapshot_sha256=source.get("source_snapshot_sha256"),
+        package_root=None, package_library_sha256=libraries[0],
+    )
+
+
 def _package_matches_fresh_live_manifest(
     receipt: Mapping[str, Any],
     manifest_path: Path,
     toolchain: Mapping[str, Any],
     cargo_profile: str,
+    *,
+    required_native_contracts: tuple[str, ...] = (),
 ) -> bool:
     """Check whether a verified package exactly matches a fresh source capture.
 
@@ -2400,6 +2436,8 @@ def _package_matches_fresh_live_manifest(
     toolchain, and fixed build inputs remain exact bindings.
     """
 
+    if not _native_contract_receipt_matches(receipt, required_native_contracts):
+        return False
     source = receipt.get("source")
     native = receipt.get("native_source_identity")
     build = receipt.get("build")
@@ -2439,7 +2477,9 @@ def _package_matches_fresh_live_manifest(
     if os.environ.get("FULLMAG_SHARED_BACKEND_STORE"):
         import backend_shared_store as shared
         architectures = _dev_cuda_architectures()
-        expected_key = shared.key_for(_shared_package_identity(manifest_path, toolchain, architectures))
+        expected_key = shared.key_for(_shared_package_identity(
+            manifest_path, toolchain, architectures,
+            **({"required_native_contracts": required_native_contracts} if required_native_contracts else {})))
         binding = receipt.get("shared_package", {})
         return (isinstance(binding, dict) and binding.get("schema") == shared.SCHEMA
                 and binding.get("key") == expected_key
@@ -3832,6 +3872,8 @@ def _classify_ready_candidate_retirements(
         dict[str, Any], bytes, dict[str, tuple[int, int, int, int, int]]
     ]
     | None,
+    *,
+    required_native_contracts: tuple[str, ...] = (),
 ) -> Any | None:
     """Retire stale/duplicate candidates and return one fresh promotion."""
 
@@ -3853,6 +3895,7 @@ def _classify_ready_candidate_retirements(
             fresh_manifest,
             toolchain,
             cargo_profile,
+            **({"required_native_contracts": required_native_contracts} if required_native_contracts else {}),
         )
         and (current_artifacts is None or list(spec.artifacts) != current_artifacts)
     ]
@@ -3869,6 +3912,7 @@ def _classify_ready_candidate_retirements(
             toolchain,
             cargo_profile,
             current_package,
+            **({"required_native_contracts": required_native_contracts} if required_native_contracts else {}),
         )
         if result.action == "promote":
             if promotion is None or result.candidate != promotion.candidate:
@@ -5847,15 +5891,20 @@ def _run_canonical_make(command: list[str], workspace: Path, environment: Mappin
         _fail(f"cannot execute canonical Make target: {error}")
 
 
-def _shared_package_identity(manifest: Path, toolchain: Mapping[str, Any], architectures: str | None) -> dict[str, Any]:
+def _shared_package_identity(manifest: Path, toolchain: Mapping[str, Any], architectures: str | None,
+                             *, required_native_contracts: tuple[str, ...] = ()) -> dict[str, Any]:
     document, _ = _read_json(manifest, "shared package source manifest", 64 * 1024 * 1024)
     capsule, native, _, _ = _validate_live_manifest(document)
     # The commit and native snapshot are compiled into fullmag-build-info.
     # Never relabel a package from another commit as a newly compiled binary.
     helpers = {}
-    for name in ("backend_dev.py", "backend_source.py", "backend_shared_store.py", "backend_shared_recovery.py", "backend_group_cache_cleanup.py"):
+    names = ("backend_dev.py", "backend_source.py", "backend_shared_store.py", "backend_shared_recovery.py", "backend_group_cache_cleanup.py")
+    if required_native_contracts:
+        names += ("backend_native_contracts.py",)
+    for name in names:
         helpers[name] = _sha256_file(Path(__file__).with_name(name), "trusted builder helper")[0]
     return {
+        **({"native_contracts": list(required_native_contracts)} if required_native_contracts else {}),
         "runtime_source_digest": _runtime_source_digest(capsule),
         "resolved_commit": capsule["resolved_commit"],
         "native_source_identity": native,
@@ -5916,7 +5965,9 @@ def _prepare_with_shared_package(
     if configured != str(shared.ROOT) or direct_install_root != output:
         _fail("shared packages require the fixed managed volume and direct candidate")
     architectures = _dev_cuda_architectures()
-    identity = _shared_package_identity(Path(args.manifest), toolchain, architectures)
+    required_contracts = _requested_native_contracts(args)
+    identity = _shared_package_identity(Path(args.manifest), toolchain, architectures,
+        **({"required_native_contracts": required_contracts} if required_contracts else {}))
     try:
         store = shared.Store(Path(configured))
         alias = store.private_alias(PACKAGE_ROOT, output, os.environ.get("FULLMAG_SHARED_BACKEND_GROUP", ""))
@@ -5925,7 +5976,8 @@ def _prepare_with_shared_package(
             cached = entry.read()
             if cached is not None:
                 producer = cached["receipt"]
-                if (not _package_matches_fresh_live_manifest(producer, Path(args.manifest), toolchain, BACKEND_CARGO_PROFILE)
+                if (not _package_matches_fresh_live_manifest(producer, Path(args.manifest), toolchain, BACKEND_CARGO_PROFILE,
+                        **({"required_native_contracts": required_contracts} if required_contracts else {}))
                         or producer.get("build", {}).get("cuda_architectures") != architectures):
                     _fail("shared package receipt does not match its build inputs")
                 _validate_candidate_marker(output, PACKAGE_ROOT, build_root, state="building")
@@ -5933,6 +5985,14 @@ def _prepare_with_shared_package(
                 _write_candidate_marker(output, PACKAGE_ROOT, build_root, state="building",
                     shared_restore={"key": entry.key, "artifacts": producer["artifacts"]})
                 entry.restore(alias, cached)
+                if required_contracts:
+                    import backend_native_contracts
+                    if not backend_native_contracts.receipt_satisfies(
+                        producer.get("native_contracts"), requested=required_contracts,
+                        source_snapshot_sha256=producer["source"]["source_snapshot_sha256"],
+                        package_root=output,
+                    ):
+                        _fail("shared native contract proof does not match restored package")
                 document, raw = _read_json(Path(args.manifest), "shared package consumer manifest", 64 * 1024 * 1024)
                 capsule, native, _, live_hash = _validate_live_manifest(document)
                 receipt = dict(producer)
@@ -6058,6 +6118,32 @@ def _prepare_locked(
         _fail(f"canonical Make target failed with exit code {return_code}")
     if source_mode == LIVE_SOURCE_MODE:
         _verify_shadow_source(workspace, capsule)
+    native_contract_report = None
+    required_contracts = _requested_native_contracts(args)
+    if required_contracts:
+        if not direct_install:
+            _fail("native contract qualification requires the direct DEV candidate")
+        _flatten_package_library_aliases(output)
+        import backend_native_contracts
+        _log_phase("native-contract", "start", contracts=",".join(required_contracts))
+        try:
+            native_contract_report = backend_native_contracts.run_contracts(
+                requested=required_contracts,
+                native_build_root=Path(environment["FULLMAG_FEM_NATIVE_BUILD_ROOT"]),
+                package_root=output, evidence_root=BACKEND_CONTROL_ROOT / "native-contracts",
+                source_snapshot_sha256=native["source_snapshot_sha256"],
+                environment=environment, jobs=jobs,
+            )
+        except backend_native_contracts.NativeContractError as error:
+            _fail(f"native contract qualification failed: {error}")
+        if not backend_native_contracts.receipt_satisfies(
+            native_contract_report, requested=required_contracts,
+            source_snapshot_sha256=native["source_snapshot_sha256"], package_root=output,
+        ):
+            _fail("native contract result does not qualify the candidate library")
+        if source_mode == LIVE_SOURCE_MODE:
+            _verify_shadow_source(workspace, capsule)
+        _log_phase("native-contract", "complete", state="succeeded")
     if direct_install:
         attempt = _read_failed_make_attempt(build_root, output)
         if attempt is None or attempt[0].get("state") != "succeeded":
@@ -6078,6 +6164,7 @@ def _prepare_locked(
         package_root=PACKAGE_ROOT if direct_install else None,
         build_root=build_root if direct_install else None,
         cuda_architectures=environment.get("FULLMAG_CUDA_ARCHITECTURES"),
+        **({"native_contract_report": native_contract_report} if native_contract_report is not None else {}),
     )
     if direct_install:
         attempt = _read_failed_make_attempt(build_root, output)
@@ -6106,6 +6193,7 @@ def _publish_completed_build(
     package_root: Path | None = None,
     build_root: Path | None = None,
     cuda_architectures: str | None = None,
+    native_contract_report: Mapping[str, Any] | None = None,
 ) -> int:
     """Publish verified artifacts after the canonical Make invocation succeeded."""
     started = time.monotonic()
@@ -6131,6 +6219,7 @@ def _publish_completed_build(
     else:
         source_record["live_manifest_sha256"] = capsule.get("_live_manifest_sha256", manifest_hash)
     receipt: dict[str, Any] = {
+        **({"native_contracts": dict(native_contract_report)} if native_contract_report is not None else {}),
         "schema": RECEIPT_SCHEMA,
         "state": "succeeded",
         "qualification": "NOT VERIFIED",
@@ -6377,6 +6466,7 @@ def _start(args: argparse.Namespace) -> int:
     """Build and hand off to the API in this same backend container."""
 
     _log_phase("start", "begin", mode="backend-dev")
+    required_contracts = _requested_native_contracts(args)
     build_root = _absolute(Path(args.build_root), "build root")
     output = _absolute(Path(args.output), "backend output")
     jobs = int(args.jobs)
@@ -6452,6 +6542,7 @@ def _start(args: argparse.Namespace) -> int:
                 toolchain,
                 cargo_profile,
                 previous_receipt,
+                **({"required_native_contracts": required_contracts} if required_contracts else {}),
             )
             if promotion_spec is None:
                 _reject_partial_package_candidates(
@@ -6463,7 +6554,8 @@ def _start(args: argparse.Namespace) -> int:
                 promotion_spec is None
                 and previous_receipt is not None
                 and _package_matches_fresh_live_manifest(
-                    previous_receipt[0], start_args.manifest, toolchain, cargo_profile
+                    previous_receipt[0], start_args.manifest, toolchain, cargo_profile,
+                    **({"required_native_contracts": required_contracts} if required_contracts else {})
                 )
             ):
                 _log_phase("start", "cache-hit", source="verified-package")
@@ -6537,6 +6629,11 @@ def _start(args: argparse.Namespace) -> int:
                 _candidate_receipt = dict(promotion_spec.receipt)
                 candidate_receipt_bytes = promotion_spec.receipt_bytes
 
+            if required_contracts and not _package_matches_fresh_live_manifest(
+                _candidate_receipt, start_args.manifest, toolchain, cargo_profile,
+                required_native_contracts=required_contracts,
+            ):
+                _fail("candidate does not satisfy requested native contract qualification")
             if previous_receipt is not None:
                 _validated_package(
                     output,
@@ -7077,6 +7174,9 @@ def _parser() -> argparse.ArgumentParser:
     start.add_argument("--output", default=PACKAGE_ROOT, type=Path)
     start.add_argument("--build-root", default=BUILD_ROOT, type=Path)
     start.add_argument("--jobs", default=int(os.environ.get("CARGO_BUILD_JOBS", "2")), type=int)
+    start.add_argument("--native-contract", action="append", default=None,
+                       choices=("fem-demag-poisson",),
+                       help="require an allowlisted native contract before package publication and API start")
     maintenance = subparsers.add_parser("maintain-packages", help="retain current/direct rollback and bound shared package cache")
     maintenance.add_argument("--max-shared-entries", type=int, default=8)
     maintenance.add_argument("--max-shared-bytes", type=int, default=64 * 1024**3)

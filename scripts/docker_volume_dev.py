@@ -1947,6 +1947,49 @@ def _validate_cancellation_maintenance(value):
     return dict(value)
 
 
+def _native_contracts(values):
+    if values is None:
+        return ()
+    if (not isinstance(values, (list, tuple))
+            or any(value != "fem-demag-poisson" for value in values)
+            or len(set(values)) != len(values)):
+        raise BuildControlError("Native contracts must be unique allowlisted identifiers")
+    return tuple(sorted(values))
+
+
+def _retained_native_contracts(previous, document):
+    command = document.get("services", {}).get("backend", {}).get("command", [])
+    if not isinstance(command, list) or any(not isinstance(value, str) for value in command):
+        raise BuildControlError("Retained backend command is invalid")
+    values = []
+    for index, argument in enumerate(command):
+        if argument == "--native-contract":
+            if index + 1 == len(command):
+                raise BuildControlError("Retained native contract has no identifier")
+            values.append(command[index + 1])
+        elif argument.startswith("--native-contract="):
+            raise BuildControlError("Retained native contract must use canonical command arguments")
+    selected = _native_contracts(values)
+    if selected and (not command or command[0] != "start"):
+        raise BuildControlError("Native contracts require the canonical backend start command")
+    if selected != _native_contracts(previous.get("inputs", {}).get("native_contracts")):
+        raise BuildControlError("Retained native contract inputs differ from the Compose command")
+    return selected
+
+
+def _pin_native_contract_command(backend, requested):
+    requested = _native_contracts(requested)
+    if not requested:
+        return
+    command = backend.get("command")
+    if (not isinstance(command, list) or not command or command[0] != "start"
+            or any(not isinstance(value, str) for value in command)
+            or any(value.startswith("--native-contract") for value in command)):
+        raise BuildControlError("Rendered backend native contract command is ambiguous")
+    backend["command"] = command + [argument for identifier in requested
+                                     for argument in ("--native-contract", identifier)]
+
+
 def start(args, *, reuse_state=None, control=None, operation=None, prepared=None,
           recovery_environment=None, recovery_metadata=None, previous_config_sha256=None,
           native_restart_metadata=None, accepted_reattach_environment=None,
@@ -1959,6 +2002,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
     import fullmag_docker_runtime as runtime
     provided_control = control
     provided_operation = operation
+    native_contracts = _native_contracts(getattr(args, "native_contract", None))
     if retained_device_access is not None and retained_device_access not in ("cpu", "gpu"):
         raise BuildControlError("Retained device access must be cpu or gpu")
     retained_helper_source_binding = (
@@ -2136,6 +2180,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         from docker_volume_activation_reconcile import assert_no_unresolved_activation
         assert_no_unresolved_activation(control)
     operation_inputs = {"source_root": str(selected), "image_id": image,
+        **({"native_contracts": list(native_contracts)} if native_contracts else {}),
         "source_project_id": identity["project_id"],
         "source_worktree_id": identity["worktree_id"],
         "source_checkout_kind": identity["checkout_kind"],
@@ -2431,6 +2476,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         if device_access == "gpu":
             document["services"]["backend"]["gpus"] = [{"count": "all"}]
         backend, frontend = (document["services"][name] for name in ("backend", "frontend"))
+        _pin_native_contract_command(backend, native_contracts)
         service_source_groups = (
             (backend, _source_supplementary_groups(selected, git_common)),
             (frontend, _source_supplementary_groups(selected)),
@@ -7299,6 +7345,14 @@ def _retained_operation(
     document = control.read(previous_root + "/compose.json")
     if hashlib.sha256(canonical(document)).hexdigest() != args.config_sha256 or document.get("name") != control.project:
         raise BuildControlError("Resume Compose identity/CAS differs")
+    retained_contracts = _retained_native_contracts(previous, document)
+    requested_contracts = getattr(args, "native_contract", None)
+    if requested_contracts is None and retained_contracts:
+        args.native_contract = list(retained_contracts)
+    elif requested_contracts is not None:
+        requested_contracts = _native_contracts(requested_contracts)
+        if requested_contracts != retained_contracts and not recreate_services:
+            raise BuildControlError("Changing native contracts requires managed service recreation")
     from docker_volume_cancelled_activation_guard import require_fresh_recreation
     require_fresh_recreation(control, args, previous, recreate_services=recreate_services)
     from docker_volume_preparation_abort import require_fresh_archive

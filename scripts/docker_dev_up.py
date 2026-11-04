@@ -42,6 +42,7 @@ SOURCE_MATCH_MARKER = "FULLMAG_SOURCE_MATCH_V1:"
 TERMINAL_STATES = frozenset({"succeeded", "failed-confirmed"})
 IMAGE_HELPER_SOURCES = (
     ("backend_dev.py", "docker/all-in-one/backend_dev.py"),
+    ("backend_native_contracts.py", "docker/all-in-one/backend_native_contracts.py"),
     ("backend_source.py", "docker/all-in-one/backend_source.py"),
     ("backend_group_cache_cleanup.py", "docker/all-in-one/backend_group_cache_cleanup.py"),
     ("backend_volume_cache_maintenance.py", "docker/all-in-one/backend_volume_cache_maintenance.py"),

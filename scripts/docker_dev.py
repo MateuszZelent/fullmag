@@ -79,6 +79,7 @@ RUNTIME_IMAGE_CONTEXT_FILES = (
     ("Dockerfile.backend", "docker/all-in-one/Dockerfile.backend"),
     ("Dockerfile.backend.dockerignore", "docker/all-in-one/Dockerfile.backend.dockerignore"),
     ("backend_dev.py", "docker/all-in-one/backend_dev.py"),
+    ("backend_native_contracts.py", "docker/all-in-one/backend_native_contracts.py"),
     ("backend_source.py", "docker/all-in-one/backend_source.py"),
     ("backend_shared_store.py", "docker/all-in-one/backend_shared_store.py"),
     ("backend_shared_recovery.py", "docker/all-in-one/backend_shared_recovery.py"),
@@ -2750,6 +2751,9 @@ def _parser() -> argparse.ArgumentParser:
     recreate_volume.add_argument("--config-sha256", required=True)
     recreate_volume.add_argument("--source-root", type=Path, required=True)
     recreate_volume.add_argument("--port", type=int, required=True)
+    recreate_volume.add_argument("--native-contract", action="append", default=None,
+                                 choices=("fem-demag-poisson",),
+                                 help="require an allowlisted native contract before publishing the replacement backend package")
     recreate_volume.add_argument(
         "--helper-source-root", type=Path,
         help="durable clean infrastructure checkout used only for managed runtime helpers",
@@ -2895,6 +2899,9 @@ def _parser() -> argparse.ArgumentParser:
         ))
         command.add_argument("--source-root", type=Path,
                              help="registered checkout/worktree mounted live by both services")
+        command.add_argument("--native-contract", action="append", default=None,
+                             choices=("fem-demag-poisson",),
+                             help="qualify the package with this native contract before API startup")
         command.add_argument(
             "--profile", choices=sorted(BUILD_PROFILE_TO_CARGO_PROFILE),
             default=DEFAULT_BUILD_PROFILE,
