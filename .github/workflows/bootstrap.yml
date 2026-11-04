@@ -888,6 +888,8 @@ jobs:
           python -B scripts/test_fullmag_docker_runtime.py -v
           python -B scripts/test_fem_cpu_hypre_host_policy.py -v
           python -B scripts/test_docker_backend_dev.py -v
+          python -B scripts/test_backend_native_contracts.py -v
+          python -B scripts/test_docker_native_contract_integration.py -v
           python -B scripts/test_docker_shared_build_storage.py -v
           python -B scripts/test_backend_shared_store.py -v
           python -B scripts/test_backend_shared_integration.py -v
