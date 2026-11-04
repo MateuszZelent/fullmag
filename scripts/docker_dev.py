@@ -2584,6 +2584,10 @@ def _parser() -> argparse.ArgumentParser:
         "--request-id",
         help="optional stable request fence; default is fresh for each explicit invocation",
     )
+    activate_parser.add_argument(
+        "--solver-profile", action="store_true",
+        help="enable the bounded accepted FEM solver profile for this activation",
+    )
     script_parser = subparsers.add_parser(
         "script",
         help=(
@@ -2620,6 +2624,10 @@ def _parser() -> argparse.ArgumentParser:
     run_script_parser.add_argument("--source-root", type=Path)
     run_script_parser.add_argument("--port", type=int)
     run_script_parser.add_argument("--request-id")
+    run_script_parser.add_argument(
+        "--solver-profile", action="store_true",
+        help="enable the bounded accepted FEM solver profile for this run",
+    )
     run_script_parser.add_argument("--attempt")
     run_script_parser.add_argument("--config-sha256")
     run_script_parser.add_argument(
@@ -3201,6 +3209,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 attempt=getattr(args, "attempt", None),
                 config_sha256=getattr(args, "config_sha256", None),
                 headless=bool(getattr(args, "headless", False)),
+                solver_profile=getattr(args, "solver_profile", False),
             )
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
             return int(result["exit_code"])

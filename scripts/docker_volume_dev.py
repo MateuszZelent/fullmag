@@ -3257,6 +3257,25 @@ def rejected_startup_marker(status,identity):
         authorization=marker.get("authorization")
         if not isinstance(authorization,dict):
             raise RuntimeError("startup activation receipt has no authorization")
+        solver_profile_sha256=None
+        authorization_fields={"schema","authorization","source_root","source_path","source_relative","source_sha256","source_size_bytes","source_commit","container_source_root","container_script_path","request_id","execution_policy"}
+        if "solver_profile" in authorization:
+            profile=authorization.get("solver_profile")
+            expected_profile_config={"enabled":True,"sample_every":1,
+                "sample_interval_wall_ms":0,"max_samples":128,
+                "emit_engine_log":False,"persist_artifact":True}
+            if (not isinstance(profile,dict)
+                    or set(profile)!={"schema_version","config"}
+                    or profile.get("schema_version")!="accepted_solver_profile.v1"
+                    or not isinstance(profile.get("config"),dict)
+                    or set(profile["config"])!=set(expected_profile_config)
+                    or any(type(profile["config"].get(name)) is not type(value)
+                        or profile["config"].get(name)!=value
+                        for name,value in expected_profile_config.items())):
+                raise RuntimeError("startup authorization solver profile differs from the supported preset")
+            solver_profile_sha256=hashlib.sha256(json.dumps(profile,
+                ensure_ascii=False,sort_keys=True,separators=(",",":")).encode("utf-8")).hexdigest()
+            authorization_fields.add("solver_profile")
         if (hashlib.sha256(request_id.encode("utf-8")).hexdigest()!=key
                 or marker.get("schema")!="fullmag.docker-startup-activation-receipt.v1"
                 or marker.get("state")!="rejected"
@@ -3267,7 +3286,7 @@ def rejected_startup_marker(status,identity):
                 or re.fullmatch(r"[0-9a-f]{64}",marker.get("provenance_sha256","")) is None):
             raise RuntimeError("current session is not bound to a rejected startup receipt")
         relative=authorization.get("source_relative")
-        if (set(authorization)!={"schema","authorization","source_root","source_path","source_relative","source_sha256","source_size_bytes","source_commit","container_source_root","container_script_path","request_id","execution_policy"}
+        if (set(authorization)!=authorization_fields
                 or authorization.get("schema")!="fullmag.docker-startup-script.v1"
                 or authorization.get("authorization")!="explicit_startup_script"
                 or authorization.get("request_id")!=request_id
@@ -3302,7 +3321,7 @@ def rejected_startup_marker(status,identity):
                 or result.get("source_relative")!=relative):
             raise RuntimeError("startup activation rejection result differs from its receipt")
         rejection=result.get("rejection")
-        rejection_codes={"bad_request","validation_error","unprocessable_entity","unsupported_capability","accepted_execution_command_unsupported","accepted_study_plan_invalid","accepted_execution_stage_missing","accepted_gpu_scope_unsupported","accepted_execution_plan_invalid","accepted_backend_unsupported","accepted_study_step_unsupported","accepted_study_step_ambiguous","docker_startup_output_mapping_required","docker_startup_output_mapping_invalid"}
+        rejection_codes={"bad_request","validation_error","unprocessable_entity","unsupported_capability","accepted_execution_command_unsupported","accepted_study_plan_invalid","accepted_execution_stage_missing","accepted_gpu_scope_unsupported","accepted_execution_plan_invalid","accepted_backend_unsupported","accepted_study_step_unsupported","accepted_study_step_ambiguous","invalid_solver_profile","accepted_solver_profile_unsupported","docker_startup_output_mapping_required","docker_startup_output_mapping_invalid"}
         if (not isinstance(rejection,dict)
                 or set(rejection)!={"http_status","code","message"}
                 or type(rejection.get("http_status")) is not int
@@ -3311,8 +3330,11 @@ def rejected_startup_marker(status,identity):
                 or not isinstance(rejection.get("message"),str)
                 or not rejection["message"].strip() or len(rejection["message"])>2048):
             raise RuntimeError("startup activation rejection is not a known pre-acceptance outcome")
-        matches.append({"key":key,"raw":raw,"marker":marker,"request_id":request_id,
-            "source_sha256":source_sha,"source_relative":relative,"rejection":rejection})
+        match={"key":key,"raw":raw,"marker":marker,"request_id":request_id,
+            "source_sha256":source_sha,"source_relative":relative,"rejection":rejection}
+        if solver_profile_sha256 is not None:
+            match["solver_profile_sha256"]=solver_profile_sha256
+        matches.append(match)
     if len(matches)!=1:
         raise RuntimeError("startup_failed session has no unique exact rejected activation receipt")
     return matches[0]
@@ -3416,7 +3438,9 @@ def startup_failed_preacceptance(status,run,identity):
             "receipt_sha256":hashlib.sha256(activation["raw"]).hexdigest(),
             "request_id":activation["request_id"],"source_sha256":activation["source_sha256"],
             "source_relative":activation["source_relative"],
-            "rejection":activation["rejection"]},
+            "rejection":activation["rejection"],
+            **({"solver_profile_sha256":activation["solver_profile_sha256"]}
+               if "solver_profile_sha256" in activation else {})},
         "session_status":{"solver":status.get("solver"),"lifecycle":status.get("lifecycle"),
             "resources":status.get("resources"),"session":session},
         "preparation":preparation,"compute_queue":queue,"commands":commands,

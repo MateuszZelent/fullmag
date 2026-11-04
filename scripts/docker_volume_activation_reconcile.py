@@ -714,6 +714,11 @@ def _validate_activation_receipt(
     if not isinstance(request_id, str) or REQUEST_ID_RE.fullmatch(request_id) is None:
         raise _fail("Unknown activation request id is invalid")
     provenance_sha256 = _hash(inputs.get("provenance_sha256"), "activation provenance digest")
+    solver_profile_sha256 = inputs.get("solver_profile_sha256")
+    if ("solver_profile_sha256" in inputs
+            and (not isinstance(solver_profile_sha256, str)
+                 or SHA256_RE.fullmatch(solver_profile_sha256) is None)):
+        raise _fail("Unknown activation solver profile digest is invalid")
     key = _hash(inputs.get("activation_receipt_key"), "activation receipt key")
     path = inputs.get("activation_receipt_path")
     if path != _activation_marker_path(key):
@@ -731,6 +736,8 @@ def _validate_activation_receipt(
         "activation_receipt_key": key,
         "activation_receipt_path": path,
     }
+    if solver_profile_sha256 is not None:
+        validated_inputs["solver_profile_sha256"] = solver_profile_sha256
     return receipt, raw, validated_inputs
 
 
@@ -761,6 +768,8 @@ def _validate_unresolved_activation(
     _hash(record.get("activation_receipt_sha256"), "quarantined activation receipt digest")
     _hash(record.get("source_sha256"), "quarantined source digest")
     _hash(record.get("provenance_sha256"), "quarantined provenance digest")
+    if "solver_profile_sha256" in record:
+        _hash(record.get("solver_profile_sha256"), "quarantined solver profile digest")
     key = _hash(record.get("activation_receipt_key"), "quarantined activation receipt key")
     if record.get("activation_receipt_path") != _activation_marker_path(key):
         raise _fail("Quarantined activation marker path differs")
@@ -1249,6 +1258,8 @@ def _reconcile_absent_helper(
         "native_stop_journal_sha256": native["journal_sha256"],
         "reconciliation_attempt": reconciliation_attempt,
     }
+    if "solver_profile_sha256" in activation_inputs:
+        common_expected["solver_profile_sha256"] = activation_inputs["solver_profile_sha256"]
     existing_raw = _control_bytes(control, "activation/unresolved.json", optional=True)
     if (unresolved is None) != (existing_raw is None):
         raise _fail("Unresolved activation quarantine changed during reconciliation admission")
@@ -1315,6 +1326,8 @@ def _reconcile_absent_helper(
         "started_at": time.time(),
         "finished_at": time.time(),
     }
+    if "solver_profile_sha256" in common_expected:
+        final_receipt["solver_profile_sha256"] = common_expected["solver_profile_sha256"]
     if native.get("namespace_attestation_path") is not None:
         final_receipt.update(
             namespace_attestation_path=native["namespace_attestation_path"],
@@ -1963,6 +1976,8 @@ def reconcile_unknown_activation(
         "provenance_sha256": activation_inputs["provenance_sha256"],
         "activation_receipt_key": activation_inputs["activation_receipt_key"],
         "activation_receipt_path": activation_inputs["activation_receipt_path"],
+        **({"solver_profile_sha256": activation_inputs["solver_profile_sha256"]}
+           if "solver_profile_sha256" in activation_inputs else {}),
         "activation_receipt_sha256": hashlib.sha256(receipt_raw).hexdigest(),
         "helper_container": helper_name,
         "helper_id": helper_id,
@@ -2005,6 +2020,8 @@ def reconcile_unknown_activation(
         "helper_log_tail": helper_log,
         "started_at": time.time(),
     }
+    if "solver_profile_sha256" in activation_inputs:
+        initial_receipt["solver_profile_sha256"] = activation_inputs["solver_profile_sha256"]
     if native.get("namespace_attestation_path") is not None:
         initial_receipt.update(
             namespace_attestation_path=native["namespace_attestation_path"],

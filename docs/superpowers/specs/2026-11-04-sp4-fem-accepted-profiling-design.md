@@ -24,6 +24,8 @@ Nowy `worker_step_profile.v1.json` jest osobny od `worker_operation_profile.v1.j
 
 Istniejący accepted projector czyta wyłącznie attempt należący do aktualnego catalog/Start i publikuje snapshot przez ten sam resource. Zmiana samych writerów bez readera nie spełnia kontraktu. Publiczny kształt `SolverProfileResource` pozostaje ten sam; jeśli implementacja potrzebuje zmiany schematu, trzeba jawnie zmienić OpenAPI i wygenerowany transport.
 
+Próbki kroków pozostają opisane immutable config przyjętego wykonania A. Późniejsza komenda konfigurująca B dla następnego RunIntent nie zmienia config próbek A; B pozostaje w journalu next-admission. Step sample nie ma osobnego execution_config, więc overlay B na te próbki fałszowałby ich opis. Legacy operation overlay z własnym execution_config pozostaje. Nowy accepted RunSpec bez profilu lub disabled czyści poprzednie step samples, aggregates i rates.
+
 ## Drugi etap: pełny ślad CUDA
 
 Decyzja roota: osobny moduł CUPTI pod `backends/fem/gpu/cuda/runtime/`, w tym samym PID. Zwykły wrapper nsys zmieniłby spawn-root PID zapisany przez supervisor w process-exit receipt; nie jest przezroczystą podmianą. Istniejący nsys2024.3.2 nie daje potwierdzonego attach do już działającego PID. Własny CUPTI hook jest wyborem implementacyjnym, obecnie niewykonanym.

@@ -58,6 +58,8 @@ pub(crate) struct DockerStartupRequest {
     pub request_id: String,
     pub source: DockerStartupSource,
     pub execution: DockerStartupExecution,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solver_profile: Option<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -86,6 +88,8 @@ pub(crate) struct DockerStartupResponse {
     pub authorization: &'static str,
     pub request_id: String,
     pub source_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solver_profile_sha256: Option<String>,
     pub status: &'static str,
     pub execution: DockerStartupExecution,
     pub session_id: String,
@@ -207,6 +211,7 @@ pub(crate) async fn activate_current_live_startup(
             Some(source_root),
             Some(loaded.source.path.clone()),
             progress_sender,
+            request.solver_profile.clone(),
         );
         tokio::pin!(preparation);
         let mut progress_receiver_open = true;
@@ -582,6 +587,10 @@ fn validate_request(request: &DockerStartupRequest) -> Result<(), ApiError> {
         return Err(ApiError::bad_request(
             "docker startup request_id is invalid",
         ));
+    }
+    if let Some(value) = &request.solver_profile {
+        crate::accepted_solver_profile::request_digest(value)
+            .map_err(|error| ApiError::unprocessable_with_code("invalid_solver_profile", error.to_string()))?;
     }
     validate_source_identity(&request.source)?;
     if request.execution.mode != "canonical_live_v2"
@@ -1411,7 +1420,11 @@ fn build_startup_snapshot(
 }
 
 fn startup_session_id(request: &DockerStartupRequest, source: &CapturedSource) -> String {
-    let identity = format!("{}\0{}", request.request_id, source.sha256);
+    let mut identity = format!("{}\0{}", request.request_id, source.sha256);
+    if let Some(value) = &request.solver_profile {
+        identity.push('\0');
+        identity.push_str(&fullmag_session::canonical_json_sha256(value));
+    }
     format!(
         "docker-startup-{}",
         fullmag_session::hex_sha256(identity.as_bytes())
@@ -1548,6 +1561,7 @@ fn replay_or_reject(
         authorization: AUTHORIZATION_KIND,
         request_id: request.request_id.clone(),
         source_sha256: source.sha256.clone(),
+        solver_profile_sha256: request.solver_profile.as_ref().map(fullmag_session::canonical_json_sha256),
         status,
         execution: request.execution.clone(),
         session_id: existing.session.session_id.clone(),
@@ -1675,6 +1689,7 @@ async fn publish_startup_result(
         authorization: AUTHORIZATION_KIND,
         request_id: request.request_id.clone(),
         source_sha256: loaded.source.sha256.clone(),
+        solver_profile_sha256: request.solver_profile.as_ref().map(fullmag_session::canonical_json_sha256),
         status: if status == "waiting_for_solve" {
             "waiting_for_solve"
         } else {
@@ -2470,6 +2485,7 @@ mod tests {
             schema: REQUEST_SCHEMA.to_string(),
             authorization: AUTHORIZATION_KIND.to_string(),
             request_id: "startup-test-1".to_string(),
+            solver_profile: None,
             source: DockerStartupSource {
                 path: "/opt/fullmag/source/examples/scene.py".to_string(),
                 root: CONTAINER_SOURCE_ROOT.to_string(),
@@ -3070,6 +3086,46 @@ mod tests {
         let error = replay_or_reject(&request, &source, &snapshot)
             .expect_err("a preparation failure must not replay as accepted");
         assert_eq!(error.code.as_deref(), Some("accepted_run_recovery_required"));
+    }
+
+    fn profile_parameter() -> Value {
+        json!({"schema_version": "accepted_solver_profile.v1", "config": {
+            "enabled": true, "sample_every": 1, "sample_interval_wall_ms": 0,
+            "max_samples": 128, "emit_engine_log": false, "persist_artifact": true}})
+    }
+
+    #[test]
+    fn startup_profile_is_optional_and_changes_semantic_session_identity() {
+        let absent = request();
+        assert!(serde_json::to_value(&absent).unwrap().get("solver_profile").is_none());
+        let source = CapturedSource { path: PathBuf::from(&absent.source.path),
+            sha256: absent.source.sha256.clone(), size_bytes: 1, bytes: Vec::new() };
+        let legacy = format!("{}\0{}", absent.request_id, source.sha256);
+        assert_eq!(startup_session_id(&absent, &source), format!("docker-startup-{}", fullmag_session::hex_sha256(legacy.as_bytes())));
+        let mut explicit = absent.clone(); explicit.solver_profile = Some(profile_parameter());
+        validate_request(&explicit).unwrap();
+        assert_ne!(startup_session_id(&absent, &source), startup_session_id(&explicit, &source));
+        let mut invalid = explicit; invalid.solver_profile.as_mut().unwrap()["config"]["emit_engine_log"] = json!(true);
+        assert_eq!(validate_request(&invalid).unwrap_err().code.as_deref(), Some("invalid_solver_profile"));
+    }
+
+    #[test]
+    fn startup_profile_replay_confirms_the_whole_wrapper_and_rejects_a_changed_profile() {
+        let mut request = request(); request.solver_profile = Some(profile_parameter());
+        let source = CapturedSource { path: PathBuf::from(&request.source.path),
+            sha256: request.source.sha256.clone(), size_bytes: 1, bytes: Vec::new() };
+        let snapshot_request: CurrentLiveSnapshotRequest = serde_json::from_value(json!({"session_id": "profile-replay"})).unwrap();
+        let mut snapshot = default_current_live_state(&snapshot_request);
+        snapshot.metadata = Some(json!({STARTUP_METADATA_KEY: {
+            "request": request, "source_sha256": source.sha256, "source_size_bytes": 1,
+            "status": "waiting_for_compute", "run_id": "run-profile", "step_ids": ["step:run"],
+            "scene_revision": 1, "runtime_metadata": {"interactive": true, "wait_for_solve": true}
+        }}).into());
+        let Json(response) = replay_or_reject(&request, &source, &snapshot).unwrap();
+        assert_eq!(response.solver_profile_sha256, request.solver_profile.as_ref().map(fullmag_session::canonical_json_sha256));
+        request.solver_profile.as_mut().unwrap()["config"]["max_samples"] = json!(256);
+        let error = replay_or_reject(&request, &source, &snapshot).unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("docker_startup_request_conflict"));
     }
 
     #[test]

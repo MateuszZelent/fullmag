@@ -752,6 +752,7 @@ where
     H: FnMut() -> Result<()>,
 {
     let mut command = Command::new(executable);
+    crate::accepted_solver_profile::configure_child(&mut command, false);
     compute_operator_env::remove_local_compute_operator_token(&mut command);
     command
         .arg("--store-root")

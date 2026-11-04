@@ -2644,6 +2644,7 @@ fn execute_accepted_worker_start_with_snapshot(
     }
 
     let specification = &accepted.run.specification;
+    crate::accepted_solver_profile::validate_study_profile(&specification.parameters, &accepted.study, &accepted.catalog)?;
     let immutable_problem = accepted
         .catalog
         .entries()
@@ -2679,7 +2680,7 @@ fn execute_accepted_worker_start_with_snapshot(
     }
     // Validate the same bounded RunSpec metadata before backend dispatch;
     // FEM must not bypass the live-workspace/start-policy binding guard.
-    validate_accepted_worker_parameters(&specification.parameters, &accepted_step.step_id, false)?;
+    validate_accepted_worker_parameters(&specification.parameters, &accepted_step.step_id, request.backend == "fem")?;
     if request.backend == "fem" {
         crate::accepted_fem_study_worker::validate_declared_outputs(&study_step.outputs)
             .context("validate accepted FEM output contract before recovery or reservation")?;
@@ -3288,6 +3289,8 @@ fn execute_accepted_fem_worker_start(
     )?;
     let storage_attempt_dir = attempt_output_dir.clone();
     let execution: Result<AcceptedRunnerExecution> = (|| {
+        let mut profile = crate::accepted_solver_profile::step_profile::Capture::new(
+            crate::accepted_solver_profile::config(&accepted.run.specification.parameters)?.unwrap_or_default());
         let outcome = crate::accepted_fem_study_worker::execute_accepted_fem_attempt(
             accepted_step,
             &prepared,
@@ -3297,8 +3300,19 @@ fn execute_accepted_fem_worker_start(
                 .map(|value| value.data_root())
                 .unwrap_or(&attempt_output_dir),
             interrupt_requested,
-        )
-        .context("execute accepted FEM CPU/GPU worker attempt")?;
+            &mut profile,
+        );
+        let profile_outcome = match &outcome {
+            Ok(crate::accepted_fem_study_worker::AcceptedFemExecutionOutcome::Completed(_)) =>
+                crate::accepted_solver_profile::step_profile::Outcome::Completed,
+            Ok(crate::accepted_fem_study_worker::AcceptedFemExecutionOutcome::Cancelled { .. }) =>
+                crate::accepted_solver_profile::step_profile::Outcome::Cancelled,
+            Err(_) => crate::accepted_solver_profile::step_profile::Outcome::Failed,
+        };
+        if let Err(error) = profile.persist(&attempt_output_dir, &receipt_identity, profile_outcome) {
+            eprintln!("accepted FEM step profile persistence failed: {error:#}");
+        }
+        let outcome = outcome.context("execute accepted FEM CPU/GPU worker attempt")?;
         match outcome {
             crate::accepted_fem_study_worker::AcceptedFemExecutionOutcome::Cancelled {
                 completed_step_count,
