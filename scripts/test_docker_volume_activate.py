@@ -14,6 +14,7 @@ import unittest
 from unittest.mock import patch
 
 import docker_volume_activate as activate
+import docker_volume_dev
 from docker_build_control import BuildControlError
 
 
@@ -286,7 +287,13 @@ class DockerVolumeActivationTests(unittest.TestCase):
 
         return Control(), original_attempt, original, linked, config_sha256, backend_image, documents
 
-    def _retained_group_fixture(self, frontend_image: str | None = None):
+    def _retained_group_fixture(
+        self,
+        frontend_image: str | None = None,
+        *,
+        frontend_running: bool = True,
+        ui_mode: str | None = None,
+    ):
         backend_image = "sha256:" + "a" * 64
         frontend_image = frontend_image or "sha256:" + "b" * 64
         backend_id = "c" * 64
@@ -309,6 +316,7 @@ class DockerVolumeActivationTests(unittest.TestCase):
                     "image": frontend_image,
                     "environment": {},
                     "volumes": [],
+                    "ports": ["127.0.0.1:3197:8080"],
                 },
             },
         }
@@ -316,6 +324,14 @@ class DockerVolumeActivationTests(unittest.TestCase):
             "backend_container": backend_id,
             "frontend_container": frontend_id,
         }
+        if ui_mode is not None:
+            terminal.update(
+                ui_mode=ui_mode,
+                finished_at=1.0,
+                backend_started_at="2026-11-04T00:00:00Z",
+                frontend_started_at=("2026-11-04T00:00:00Z" if frontend_running
+                                     else "0001-01-01T00:00:00Z"),
+            )
         control = SimpleNamespace(project=document["name"])
         identity = {"worktree_id": "demo-worktree"}
         actual_images = {"backend": backend_image, "frontend": frontend_image}
@@ -343,10 +359,16 @@ class DockerVolumeActivationTests(unittest.TestCase):
                             "org.fullmag.source.worktree-id": identity["worktree_id"],
                         },
                     },
-                    "State": {
+                    "State": ({
                         "Running": True,
+                        "StartedAt": ("2026-11-04T00:00:00Z" if service == "backend"
+                                       else "2026-11-04T00:00:00Z"),
                         "Health": {"Status": "healthy"},
-                    },
+                    } if service == "backend" or frontend_running else {
+                        "Running": False,
+                        "Status": "created",
+                        "StartedAt": "0001-01-01T00:00:00Z",
+                    }),
                 }])
             raise AssertionError(arguments)
 
@@ -457,6 +479,182 @@ class DockerVolumeActivationTests(unittest.TestCase):
         self.assertEqual(validator.call_args_list[0].args[3]["Cmd"], ["backend-image"])
         self.assertEqual(validator.call_args_list[1].args[2], "frontend")
         self.assertEqual(validator.call_args_list[1].args[3]["Cmd"], ["frontend-image"])
+
+    def test_headless_retained_group_requires_explicit_mode_and_stopped_frontend(self) -> None:
+        fixture = self._retained_group_fixture(frontend_running=False, ui_mode="headless")
+        control, identity, document, terminal, backend_image, compose, docker_text = fixture
+        with patch.object(activate, "compose_capture", side_effect=compose), \
+                patch.object(activate, "_docker_text", side_effect=docker_text), \
+                patch("docker_volume_dev._validate_retained_service"), \
+                patch("docker_dev_defaults._validate_live_network") as network:
+            result = activate._validate_running_group(
+                control, identity, document, terminal, backend_image,
+                frontend_required=False,
+            )
+        self.assertEqual(result, ("c" * 64, "d" * 64))
+        self.assertFalse(network.call_args.kwargs["frontend_required"])
+
+    def test_finish_readiness_accepts_stopped_frontend_only_for_headless(self) -> None:
+        document = {"services": {
+            "backend": {"image": "backend-image"},
+            "frontend": {"image": "frontend-image"},
+        }}
+        backend = {"Image": "backend-image", "State": {
+            "Running": True, "StartedAt": "backend-start",
+            "Health": {"Status": "healthy"},
+        }}
+        frontend = {"Image": "frontend-image", "State": {
+            "Running": False, "Status": "created", "StartedAt": "frontend-not-started",
+        }}
+        with patch.object(docker_volume_dev, "_validate_retained_service"):
+            self.assertTrue(docker_volume_dev._service_readiness_satisfied(
+                document, backend, "backend", {}, expected_image="backend-image",
+                expected_started_at="backend-start", headless=True,
+            ))
+            self.assertTrue(docker_volume_dev._service_readiness_satisfied(
+                document, frontend, "frontend", {}, expected_image="frontend-image",
+                expected_started_at="frontend-not-started", headless=True,
+            ))
+            with self.assertRaisesRegex(BuildControlError, "exited before readiness"):
+                docker_volume_dev._service_readiness_satisfied(
+                    document, frontend, "frontend", {}, expected_image="frontend-image",
+                    expected_started_at="frontend-not-started", headless=False,
+                )
+            backend["State"]["Health"]["Status"] = "starting"
+            self.assertFalse(docker_volume_dev._service_readiness_satisfied(
+                document, backend, "backend", {}, expected_image="backend-image",
+                expected_started_at="backend-start", headless=True,
+            ))
+
+    def test_headless_retained_group_rejects_a_gui_receipt_or_running_frontend(self) -> None:
+        fixtures = (
+            ("GUI receipt", self._retained_group_fixture(frontend_running=False, ui_mode="gui")),
+            ("running frontend", self._retained_group_fixture(frontend_running=True, ui_mode="headless")),
+            ("legacy receipt", self._retained_group_fixture(frontend_running=False)),
+        )
+        for label, fixture in fixtures:
+            with self.subTest(case=label):
+                control, identity, document, terminal, backend_image, compose, docker_text = fixture
+                with patch.object(activate, "compose_capture", side_effect=compose), \
+                        patch.object(activate, "_docker_text", side_effect=docker_text), \
+                        patch("docker_volume_dev._validate_retained_service"), \
+                        patch("docker_dev_defaults._validate_live_network"):
+                    with self.assertRaises(BuildControlError):
+                        activate._validate_running_group(
+                            control, identity, document, terminal, backend_image,
+                            frontend_required=False,
+                        )
+
+    def test_headless_group_rejects_failed_or_restarted_frontend(self) -> None:
+        base = self._retained_group_fixture(frontend_running=False, ui_mode="headless")
+        control, identity, document, terminal, backend_image, compose, original_text = base
+        frontend_id = terminal["frontend_container"]
+        bad_states = (
+            {"Running": False, "Status": "exited", "ExitCode": 137, "OOMKilled": False,
+             "StartedAt": terminal["frontend_started_at"]},
+            {"Running": False, "Status": "exited", "ExitCode": 0, "OOMKilled": True,
+             "StartedAt": terminal["frontend_started_at"]},
+            {"Running": False, "Status": "exited", "ExitCode": 0,
+             "StartedAt": terminal["frontend_started_at"]},
+            {"Running": False, "Status": "exited", "ExitCode": 0, "OOMKilled": False,
+             "StartedAt": "2026-11-04T00:00:01Z"},
+        )
+        for bad_state in bad_states:
+            with self.subTest(state=bad_state):
+                def docker_text(*arguments, **kwargs):
+                    records = json.loads(original_text(*arguments, **kwargs))
+                    if arguments[:2] == ("inspect", frontend_id):
+                        records[0]["State"].update(bad_state)
+                    return json.dumps(records)
+
+                with patch.object(activate, "compose_capture", side_effect=compose), \
+                        patch.object(activate, "_docker_text", side_effect=docker_text), \
+                        patch("docker_volume_dev._validate_retained_service"), \
+                        patch("docker_dev_defaults._validate_live_network"):
+                    with self.assertRaises(BuildControlError):
+                        activate._validate_running_group(
+                            control, identity, document, terminal, backend_image,
+                            frontend_required=False,
+                        )
+
+    def test_mode_aware_runtime_selection_uses_latest_mode_and_current_source(self) -> None:
+        control, original_attempt, original, headless, config_sha256, image, documents = (
+            self._linked_receipt_fixture("resume")
+        )
+        original.update(state="succeeded", ui_mode="gui", finished_at=10.0)
+        headless.update(
+            ui_mode="headless", finished_at=20.0,
+            backend_started_at="backend-start-2", frontend_started_at="frontend-start-1",
+        )
+        headless["inputs"].update(
+            source_root=original["inputs"]["source_root"], image_id=image,
+        )
+        headless.update(
+            source_commit="3" * 40, source_digest="4" * 64,
+            source_snapshot_sha256="5" * 64, backend_build_receipt_sha256="6" * 64,
+        )
+        documents["resume/verified.json"] = copy.deepcopy(headless)
+        documents["resume/attempts/" + headless["attempt"] + "/terminal.json"] = copy.deepcopy(headless)
+        self.assertEqual(
+            activate._linked_runtime_terminals(
+                control, original_attempt, original,
+                source_root=original["inputs"]["source_root"], image=image,
+                config_sha256=config_sha256,
+            ),
+            [headless],
+        )
+
+        gui = copy.deepcopy(headless)
+        gui.update(phase="iteration", attempt="7" * 32, ui_mode="gui", finished_at=30.0)
+        gui["inputs"].update(attempt=original_attempt, config_sha256=config_sha256)
+        gui.update(
+            source_commit="8" * 40, source_digest="9" * 64,
+            source_snapshot_sha256="a" * 64, backend_build_receipt_sha256="b" * 64,
+        )
+        documents["iteration/verified.json"] = copy.deepcopy(gui)
+        documents["iteration/attempts/" + gui["attempt"] + "/terminal.json"] = copy.deepcopy(gui)
+        self.assertEqual(
+            activate._linked_runtime_terminals(
+                control, original_attempt, original,
+                source_root=original["inputs"]["source_root"], image=image,
+                config_sha256=config_sha256,
+            ),
+            [gui],
+        )
+
+    def test_mode_aware_runtime_selection_rejects_nonfinite_or_ambiguous_time(self) -> None:
+        control, original_attempt, original, linked, config_sha256, image, documents = (
+            self._linked_receipt_fixture("resume")
+        )
+        original.update(state="succeeded", ui_mode="gui", finished_at=10.0)
+        linked.update(
+            ui_mode="headless", finished_at=float("nan"),
+            backend_started_at="backend-start-2", frontend_started_at="frontend-start-1",
+        )
+        linked["inputs"].update(source_root=original["inputs"]["source_root"], image_id=image)
+        documents["resume/verified.json"] = copy.deepcopy(linked)
+        documents["resume/attempts/" + linked["attempt"] + "/terminal.json"] = copy.deepcopy(linked)
+        with self.assertRaises(BuildControlError):
+            activate._linked_runtime_terminals(
+                control, original_attempt, original,
+                source_root=original["inputs"]["source_root"], image=image,
+                config_sha256=config_sha256,
+            )
+
+        linked["finished_at"] = 20.0
+        documents["resume/verified.json"] = copy.deepcopy(linked)
+        documents["resume/attempts/" + linked["attempt"] + "/terminal.json"] = copy.deepcopy(linked)
+        gui = copy.deepcopy(linked)
+        gui.update(phase="iteration", attempt="7" * 32, ui_mode="gui")
+        gui["inputs"].update(attempt=original_attempt, config_sha256=config_sha256)
+        documents["iteration/verified.json"] = copy.deepcopy(gui)
+        documents["iteration/attempts/" + gui["attempt"] + "/terminal.json"] = copy.deepcopy(gui)
+        with self.assertRaisesRegex(BuildControlError, "Conflicting"):
+            activate._linked_runtime_terminals(
+                control, original_attempt, original,
+                source_root=original["inputs"]["source_root"], image=image,
+                config_sha256=config_sha256,
+            )
 
     def test_retained_group_accepts_docker_desktop_host_mount_spelling(self) -> None:
         fixture = self._retained_group_fixture()

@@ -38,6 +38,39 @@ i obrazy helperów. Osobne `just docker-dev-toolchain` jest opcjonalne: pozwala
 przygotować zależności wcześniej albo diagnozować ten etap bez startu aplikacji.
 Nie kompiluje aplikacji; ta buduje się w stałym `backend`.
 
+### Konsola interaktywna
+
+`just fullmag master examples/model.py` uruchamia tryb GUI: zarządzana grupa
+Compose buduje i uruchamia backend oraz frontend, a terminal pokazuje logi
+budowania i obliczeń. Terminal pozostaje aktywny po zakończeniu obliczeń aż do
+Ctrl+C. Jawny tryb GUI ma postać `just fullmag gui master examples/model.py`;
+`just fullmag headless master examples/model.py` uruchamia tylko backend.
+
+Selektorem źródeł może być `master` (główny zarejestrowany checkout), ścieżka
+do zarejestrowanego checkoutu albo nazwa brancha. Dwuelementowa forma domyślna
+korzysta też z domyślnego portu i `gpu_access=auto`. Aby ustawić port lub dostęp
+do GPU (`auto`, `required`, `disabled`), użyj jawnego `gui` albo `headless`, np.:
+`just fullmag gui master examples/model.py 3197 required`. Gdy podajesz tylko GPU,
+przekaż pusty port: `just fullmag headless master examples/model.py "" disabled`.
+
+Przykład dla warstwy z bimeronem i górnego walca:
+
+```sh
+just fullmag master examples/bimeron-cylinder-relax/relax.py
+just fullmag headless master examples/bimeron-cylinder-relax/relax.py
+```
+
+Nowa konsola wymaga zatrzymanej grupy; aktywnej grupy nie przejmuje. Do ponownego
+wykonania skryptu w świadomie pozostawionej działającej grupie służy dotychczasowe
+`fullmag-dev-container`. Tryb headless wymaga skryptu uruchamiającego Solve;
+`study.wait_for_solve(True)` zachowuje swoje oczekiwanie na osobne Compute.
+
+Ctrl+C prosi o zatrzymanie dokładnie zaakceptowanego uruchomienia, a potem
+łagodnie zatrzymuje tylko zweryfikowane kontenery tej grupy; wyniki i wolumeny
+pozostają zachowane. Przy zmienionej tożsamości lub nieznanym wyniku mutacji
+launcher zgłasza stan wymagający recovery zamiast wykonywać niepotwierdzone
+sprzątanie.
+
 `just docker-dev` obsługuje również grupę istniejącą dla wybranego checkoutu.
 Działający backend z pasującymi wejściami jest używany ponownie. Zmiana źródeł
 uruchamia kontrolowany restart bez aktywnych obliczeń; backend sprawdza istniejący

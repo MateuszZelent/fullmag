@@ -1154,7 +1154,9 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
         self.assertFalse(any(Path(path).name in ('host-ledger.json','ledger-maintenance-compose.json')
                              for path in writes))
         from docker_volume_activate import _linked_runtime_terminals
-        self.assertEqual(_linked_runtime_terminals(mock.Mock(),terminal['attempt'],terminal,
+        retained_control = mock.Mock()
+        retained_control.read.return_value = None  # No later resume/iteration exists.
+        self.assertEqual(_linked_runtime_terminals(retained_control,terminal['attempt'],terminal,
             source_root='/selected',image='image',config_sha256=terminal['config_sha256']),[terminal])
         lifecycle=composed.call_args_list[0]
         self.assertEqual(lifecycle.args[1:],('up','--detach','--no-build','--pull','never','--no-deps','--force-recreate','frontend'))

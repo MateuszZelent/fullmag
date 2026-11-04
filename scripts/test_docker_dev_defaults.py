@@ -214,6 +214,63 @@ class DockerDevDefaultsTests(unittest.TestCase):
                 self.assertRaisesRegex(defaults.DiscoveryError, "loopback"):
             defaults._validate_live_network(backend_id, frontend_id, "fullmag-master", 3197)
 
+    def test_headless_network_requires_healthy_backend_and_exact_stopped_frontend(self) -> None:
+        backend_id, frontend_id = "b" * 64, "f" * 64
+        inspect = {
+            backend_id: {
+                "State": {"Running": True, "Health": {"Status": "healthy"}},
+                "HostConfig": {"PortBindings": {}, "NetworkMode": "fullmag-net"},
+                "NetworkSettings": {"Networks": {"fullmag-master_fullmag": {}}},
+            },
+            frontend_id: {
+                "State": {"Running": False, "Status": "created"},
+                "HostConfig": {
+                    "PortBindings": {"8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": "3197"}]},
+                },
+                "NetworkSettings": {"Networks": {"fullmag-master_fullmag": {}}},
+            },
+        }
+
+        def docker_text(*args, **_kwargs):
+            if args[0] == "inspect":
+                return json.dumps([inspect[args[1]]])
+            if args[:2] == ("network", "inspect"):
+                return json.dumps([{
+                    "Name": "fullmag-master_fullmag",
+                    "Driver": "bridge",
+                    "Labels": {
+                        "com.docker.compose.project": "fullmag-master",
+                        "com.docker.compose.network": "fullmag",
+                    },
+                    "Containers": {backend_id: {}},
+                }])
+            raise AssertionError(args)
+
+        with patch("docker_volume_activate._docker_text", side_effect=docker_text):
+            defaults._validate_live_network(
+                backend_id, frontend_id, "fullmag-master", 3197,
+                frontend_required=False, expected_network="fullmag-master_fullmag",
+            )
+        inspect[frontend_id]["State"] = {"Running": True, "Health": {"Status": "healthy"}}
+        with patch("docker_volume_activate._docker_text", side_effect=docker_text), \
+                self.assertRaisesRegex(defaults.DiscoveryError, "frontend.*stopped"):
+            defaults._validate_live_network(
+                backend_id, frontend_id, "fullmag-master", 3197,
+                frontend_required=False, expected_network="fullmag-master_fullmag",
+            )
+        for failed_state in (
+            {"Running": False, "Status": "exited", "ExitCode": 137, "OOMKilled": False},
+            {"Running": False, "Status": "exited", "ExitCode": 0, "OOMKilled": True},
+        ):
+            with self.subTest(frontend_state=failed_state):
+                inspect[frontend_id]["State"] = failed_state
+                with patch("docker_volume_activate._docker_text", side_effect=docker_text), \
+                        self.assertRaisesRegex(defaults.DiscoveryError, "unexpected exit or OOM"):
+                    defaults._validate_live_network(
+                        backend_id, frontend_id, "fullmag-master", 3197,
+                        frontend_required=False, expected_network="fullmag-master_fullmag",
+                    )
+
     def test_discovered_activation_preserves_request_fence(self) -> None:
         pins = defaults.ScriptPins("a" * 32, "b" * 64, self.worktree, 3197)
         args = argparse.Namespace(
