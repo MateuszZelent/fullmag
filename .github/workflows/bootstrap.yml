@@ -408,6 +408,12 @@ jobs:
       - name: Run application materialization and eigen selector contracts
         run: cargo test -p fullmag-application --no-fail-fast
 
+      - name: Run FEM StageAutosave origin contracts
+        run: |
+          cargo test --locked -p fullmag-runner --lib artifact_pipeline::tests::initial_stage_autosave_table_scalar_does_not_write_legacy_scalar_trace -- --exact
+          cargo test --locked -p fullmag-runner --lib dispatch::tests::native_fem_stage_autosave_initial_table_is_t0_only_and_skips_direct_minimizer -- --exact
+          cargo test --locked -p fullmag-runner --lib dispatch::tests::native_fem_initial_snapshot_is_lazy_for_headless_time_domain -- --exact
+
       - name: Run native session writer lease contracts
         run: cargo test -p fullmag-session --lib writer --no-fail-fast
 

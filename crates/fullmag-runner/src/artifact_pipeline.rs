@@ -259,6 +259,7 @@ fn adaptive_attempt_reason_name(reason: AdaptiveAttemptReason) -> &'static str {
 enum ArtifactJob {
     TerminalHistory(serde_json::Value),
     ScalarRow(StepStats),
+    StageAutosaveScalarRow(StepStats),
     FieldSnapshot {
         snapshot: FieldSnapshot,
         provenance: ExecutionProvenance,
@@ -298,7 +299,9 @@ impl ArtifactJob {
     fn estimated_bytes(&self) -> u64 {
         match self {
             ArtifactJob::TerminalHistory(value) => value.to_string().len() as u64,
-            ArtifactJob::ScalarRow(_) => std::mem::size_of::<StepStats>() as u64,
+            ArtifactJob::ScalarRow(_) | ArtifactJob::StageAutosaveScalarRow(_) => {
+                std::mem::size_of::<StepStats>() as u64
+            }
             ArtifactJob::FieldSnapshot { snapshot, .. } => snapshot
                 .values
                 .len()
@@ -328,6 +331,7 @@ pub(crate) struct ArtifactPipelineSender {
     queue_depth: Arc<AtomicUsize>,
     diagnostics: Arc<ArtifactPipelineDiagnosticsState>,
     physics_execution_context: Option<crate::physics_graph_execution::PhysicsGraphExecutionContext>,
+    has_physical_time_stage_autosave_table: bool,
     #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
     accepted_step_fields: Arc<Vec<(String, u64)>>,
     #[cfg(feature = "fem-gpu")]
@@ -354,6 +358,10 @@ impl ArtifactPipelineSender {
         {
             has_field_schedule
         }
+    }
+
+    pub(crate) fn has_physical_time_stage_autosave_table(&self) -> bool {
+        self.has_physical_time_stage_autosave_table
     }
 
     fn push(&self, job: ArtifactJob) -> Result<ArtifactEnqueueMetrics, RunError> {
@@ -654,6 +662,7 @@ pub(crate) struct ArtifactPipeline {
     queue_depth: Arc<AtomicUsize>,
     diagnostics: Arc<ArtifactPipelineDiagnosticsState>,
     physics_execution_context: Option<crate::physics_graph_execution::PhysicsGraphExecutionContext>,
+    has_physical_time_stage_autosave_table: bool,
     #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
     accepted_step_fields: Arc<Vec<(String, u64)>>,
     #[cfg(feature = "fem-gpu")]
@@ -793,6 +802,10 @@ impl ArtifactPipeline {
             .as_ref()
             .and_then(|config| config.policy.table.as_ref())
             .and_then(|table| table.accepted_step_cadence());
+        let has_physical_time_stage_autosave_table = stage_autosave
+            .as_ref()
+            .and_then(|config| config.policy.table.as_ref())
+            .is_some_and(|table| table.accepted_step_cadence().is_none());
         let queue_depth = Arc::new(AtomicUsize::new(0));
         let writer_queue_depth = Arc::clone(&queue_depth);
         let diagnostics = Arc::new(ArtifactPipelineDiagnosticsState::default());
@@ -822,6 +835,7 @@ impl ArtifactPipeline {
             queue_depth,
             diagnostics,
             physics_execution_context,
+            has_physical_time_stage_autosave_table,
             #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
             accepted_step_fields,
             #[cfg(feature = "fem-gpu")]
@@ -839,6 +853,7 @@ impl ArtifactPipeline {
             queue_depth: Arc::clone(&self.queue_depth),
             diagnostics: Arc::clone(&self.diagnostics),
             physics_execution_context: self.physics_execution_context.clone(),
+            has_physical_time_stage_autosave_table: self.has_physical_time_stage_autosave_table,
             #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
             accepted_step_fields: Arc::clone(&self.accepted_step_fields),
             #[cfg(feature = "fem-gpu")]
@@ -1313,6 +1328,17 @@ impl ArtifactRecorder {
     ) -> Result<ArtifactEnqueueMetrics, RunError> {
         if let Some(pipeline) = self.pipeline.as_ref() {
             return pipeline.push(ArtifactJob::ScalarRow(stats.clone()));
+        }
+        Ok(ArtifactEnqueueMetrics::default())
+    }
+
+    /// Enqueue a scalar sample for the StageAutosave table without writing legacy traces.
+    pub(crate) fn record_stage_autosave_scalar(
+        &mut self,
+        stats: &StepStats,
+    ) -> Result<ArtifactEnqueueMetrics, RunError> {
+        if let Some(pipeline) = self.pipeline.as_ref() {
+            return pipeline.push(ArtifactJob::StageAutosaveScalarRow(stats.clone()));
         }
         Ok(ArtifactEnqueueMetrics::default())
     }
@@ -2016,6 +2042,19 @@ fn writer_loop(
                     job_start.elapsed(),
                 );
             }
+            ArtifactJob::StageAutosaveScalarRow(stats) => {
+                let job_start = std::time::Instant::now();
+                let runtime = stage_autosave
+                    .as_mut()
+                    .ok_or("stage-autosave scalar row received without an active stage")?;
+                runtime.append_scalar(&stats)?;
+                record_writer_job_time(
+                    &mut summary,
+                    &diagnostics,
+                    ArtifactWriterJobKind::StageAutosaveTableRow,
+                    job_start.elapsed(),
+                );
+            }
             ArtifactJob::FieldSnapshot {
                 snapshot,
                 provenance,
@@ -2432,6 +2471,7 @@ fn write_terminal_cpu_adaptive_attempts(
 
 enum ArtifactWriterJobKind {
     ScalarRow,
+    StageAutosaveTableRow,
     FieldSnapshot,
     #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
     NativeFieldSnapshot,
@@ -2463,6 +2503,7 @@ fn record_writer_job_time(
                 .scalar_row_writer_wall_time_ns
                 .fetch_add(wall_time_ns, Ordering::Relaxed);
         }
+        ArtifactWriterJobKind::StageAutosaveTableRow => {}
         ArtifactWriterJobKind::FieldSnapshot => {
             summary.field_snapshot_writer_wall_time_ns = summary
                 .field_snapshot_writer_wall_time_ns
@@ -2670,6 +2711,7 @@ mod tests {
             queue_depth: Arc::new(AtomicUsize::new(initial_depth)),
             diagnostics: Arc::new(ArtifactPipelineDiagnosticsState::default()),
             physics_execution_context: None,
+            has_physical_time_stage_autosave_table: false,
             #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
             accepted_step_fields: Arc::new(Vec::new()),
             #[cfg(feature = "fem-gpu")]
@@ -2684,6 +2726,7 @@ mod tests {
         let mut sender = isolated_pipeline_sender(tx, 0);
         sender.accepted_step_table_every = Some(10);
         assert!(sender.has_accepted_step_autosave_schedules());
+        assert!(!sender.has_physical_time_stage_autosave_table());
 
         let mut recorder = ArtifactRecorder::in_memory(ExecutionProvenance::default());
         recorder.accepted_step_table_every = Some(10);
@@ -3144,6 +3187,82 @@ mod tests {
             serde_json::to_value(resolution).expect("serialize execution resolution")
         );
         fs::remove_dir_all(output_dir).expect("remove exact physics fixture");
+    }
+
+    #[test]
+    fn initial_stage_autosave_table_scalar_does_not_write_legacy_scalar_trace() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-stage-autosave-t0-output-{}-{unique}",
+            std::process::id()
+        ));
+        let autosave_root = std::env::temp_dir().join(format!(
+            "fullmag-stage-autosave-t0-root-{}-{unique}",
+            std::process::id()
+        ));
+        let field_context = FieldArtifactContext {
+            problem_name: "stage-autosave-t0".into(),
+            ir_version: "v0".into(),
+            source_hash: None,
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            layout: serde_json::json!({"kind": "fem", "node_count": 1}),
+            magnetization_field_semantics: Ok(None),
+            execution_resolution: None,
+        };
+        let stage_autosave = StageAutosavePipelineConfig {
+            stage_id: "run".into(),
+            policy: fullmag_ir::StageAutosaveIR {
+                kind: "stage_autosave".into(),
+                target: "state".into(),
+                layout: fullmag_ir::AutosaveLayoutIR::Separate,
+                format: fullmag_ir::AutosaveFormatIR::Zarr,
+                table: Some(fullmag_ir::TableAutosaveIR {
+                    kind: "table_autosave".into(),
+                    table_id: "default".into(),
+                    sample_period_s: Some(1.0e-12),
+                    sample_period_policy: None,
+                    resolved_sample_period_s: None,
+                    every_steps: None,
+                    quantities: vec!["step".into()],
+                    expressions: Vec::new(),
+                }),
+                fields: Vec::new(),
+            },
+        };
+        let mut pipeline = ArtifactPipeline::start_with_stage_autosave_roots(
+            output_dir.clone(),
+            autosave_root.clone(),
+            field_context,
+            2,
+            Some(stage_autosave),
+            None,
+        )
+        .expect("start artifact pipeline");
+        let sender = pipeline.sender();
+        assert!(sender.has_physical_time_stage_autosave_table());
+        let mut recorder = ArtifactRecorder::streaming(ExecutionProvenance::default(), sender);
+        recorder
+            .record_stage_autosave_scalar(&StepStats {
+                step: 0,
+                time: 0.0,
+                ..StepStats::default()
+            })
+            .expect("enqueue initial StageAutosave table row");
+
+        let summary = pipeline.finish().expect("finish artifact pipeline");
+        assert_eq!(summary.scalar_rows_written, 0);
+        assert!(!output_dir.join("scalars.csv").exists());
+        let stage_manifest: serde_json::Value = serde_json::from_slice(
+            &fs::read(autosave_root.join("state.zarr/stages/stage_0000_run/manifest.json"))
+                .expect("read StageAutosave stage manifest"),
+        )
+        .expect("decode StageAutosave stage manifest");
+        assert_eq!(stage_manifest["table_sample_count"], 1);
+        fs::remove_dir_all(output_dir).expect("remove t0 artifact output");
+        fs::remove_dir_all(autosave_root).expect("remove t0 autosave output");
     }
 
     #[test]

@@ -28,7 +28,7 @@
     {
       "id": "eq-table-time-cadence",
       "symbols": ["t", "epsilon", "t_next"],
-      "sources": ["table-store", "stage-autosave-append", "native-fem-origin-limit", "native-fem-initial-field", "origin-requirement"]
+      "sources": ["table-store", "stage-autosave-append", "native-fem-origin-limit", "native-fem-initial-field", "origin-requirement", "native-fem-stage-table-origin", "stage-table-origin-artifact-job"]
     },
     {
       "id": "eq-table-accepted-step-cadence",
@@ -142,7 +142,7 @@
       "id": "native-fem-origin-limit",
       "path": "crates/fullmag-runner/src/dispatch.rs",
       "symbol": "native_fem_requires_initial_snapshot",
-      "responsibility": "Current native FEM initial snapshot admission includes live, direct-minimization, and field-schedule consumers; StageAutosave scalar rows are not enqueued by this decision."
+      "responsibility": "Admit initialized native FEM snapshots for live, minimizer, field, and physical-time StageAutosave table consumers."
     },
     {
       "id": "native-fem-initial-field",
@@ -154,14 +154,26 @@
       "id": "native-fem-origin-limit-test",
       "path": "crates/fullmag-runner/src/dispatch.rs",
       "symbol": "native_fem_initial_snapshot_is_lazy_for_headless_time_domain",
-      "responsibility": "Verify current native FEM initial output admission behavior for headless time-domain runs."
+      "responsibility": "Verify initial snapshot admission including physical-time StageAutosave tables."
     },
     {
       "id": "origin-requirement",
       "path": "docs/physics/0910-table-autosave-observables.md",
       "symbol": "DOC-ANCHOR:table-time-origin-contract",
-      "responsibility": "State the required physical-time origin sample without claiming that the current native FEM StageAutosave scalar path implements it.",
+      "responsibility": "Specify physical-time origin sampling and the native FEM source and qualification scope.",
       "evidence_status": "planned_contract"
+    },
+    {
+      "id": "native-fem-stage-table-origin",
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "native_fem_should_initialize_stage_autosave_table",
+      "responsibility": "Admit the initialized scalar event for a fresh native FEM LLG stage at physical time zero."
+    },
+    {
+      "id": "stage-table-origin-artifact-job",
+      "path": "crates/fullmag-runner/src/artifact_pipeline.rs",
+      "symbol": "record_stage_autosave_scalar",
+      "responsibility": "Queue the initialized scalar state for StageAutosave table output."
     }
   ],
   "tests": [
@@ -188,7 +200,17 @@
     {
       "path": "crates/fullmag-runner/src/dispatch.rs",
       "symbol": "native_fem_initial_snapshot_is_lazy_for_headless_time_domain",
-      "scope": "Current native FEM initial-output admission limitation."
+      "scope": "Initial native FEM snapshot admission for table-only and field consumers."
+    },
+    {
+      "path": "crates/fullmag-runner/src/artifact_pipeline.rs",
+      "symbol": "initial_stage_autosave_table_scalar_does_not_write_legacy_scalar_trace",
+      "scope": "Write an origin row through the artifact pipeline while preserving accepted-step legacy trace counts."
+    },
+    {
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "native_fem_stage_autosave_initial_table_is_t0_only_and_skips_direct_minimizer",
+      "scope": "Qualify source admission at physical time zero with explicit direct-minimizer and nonzero-start exclusions."
     }
   ]
 }
