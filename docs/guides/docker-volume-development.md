@@ -942,3 +942,26 @@ CAS. Każdy ponowny odczyt zatrzymanej pary sprawdza identyfikator, obraz,
 fingerprint, `StartedAt` oraz poprawne zakończenie kontenera. Dotychczasowe
 bramki natywnego admission, ledgeru i magazynu wszystkich runów nadal obowiązują.
 Opcje nie są dostępne dla zwykłego readmission ani udanego terminala.
+
+## Zatrzymanie Linux DEV po OOM procesu API
+
+Gdy proces API został zabity przez OOM, a native owner pozostaje READY,
+`scripts/docker_volume_stop_failed.py` może zamknąć dokładnie przypiętą grupę.
+Wymaga pełnych ID kontenera i obrazu, SHA256 process-tree oraz jednoznacznej
+tożsamości źródeł, storage i prywatnego ledgeru. Pod istniejącymi blokadami
+weryfikuje brak API/listenera, terminalność wszystkich katalogów zadań,
+zwolnienie lease/rezerwacji i nieobecność pending transactions.
+
+Dwie obserwacje muszą potwierdzić ten sam stan przyjęcia pracy. Porównanie
+zachowuje schemat, politykę i historię, node policy, reservations, readiness,
+katalogi, lease oraz release proofs. Pomija wyłącznie wskaźnik
+`runtime_state.snapshot_sha256`, który zmienia sampler statystyk. Pełne surowe
+hashe i obie obserwacje pozostają w receipcie operacji do diagnozy; ich zmiana
+nie udaje zmiany stanu zadań. Zmiana readiness, rezerwacji lub dowolnego
+innego pola nadal odmawia stopu.
+
+SIGTERM jest wysyłany raz, bez wymuszonego SIGKILL. Sukces wymaga
+uwierzytelnionego native drainu, zgodnych inkarnacji i zamkniętych procesów.
+`--stop-frontend` zamyka następnie wyłącznie frontend tej samej grupy.
+Nie zmienia stanów tasków, nie usuwa wyników ani nie ponawia Solve.
+Niepotwierdzony efekt zachowuje lease i dowody do recovery.
