@@ -57,6 +57,28 @@ class DevelopmentRecoveryShellTests(unittest.TestCase):
                 expected.extend([b'--apply', b'--expected-plan-sha256', b'c' * 64])
             self.assertEqual(result.stdout.split(b'\0')[:-1], expected)
 
+    def test_completed_cache_real_recipe_preserves_preview_and_apply_pins(self):
+        repo = Path(__file__).resolve().parents[1]
+        target = 'fullmag-backend-v2-' + 'a' * 24 + '-package'
+        registry = '/registered/storage/index/completed task.json'
+        for apply in (False, True):
+            arguments = [registry, target, 'b' * 32]
+            if apply:
+                arguments.extend(['true', 'c' * 64])
+            dry = subprocess.run(['just', '--justfile', str(repo / 'justfile'), '--dry-run',
+                'docker-dev-reconcile-completed-cache', *arguments],
+                capture_output=True, text=True, timeout=15)
+            self.assertEqual(dry.returncode, 0, dry.stderr)
+            result = self.dispatch(dry.stderr.strip(), marker='  *"scripts/docker_dev.py"*)\n')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            expected = [b'/recorded/python', b'/registered/checkout/scripts/docker_dev.py',
+                        b'--repo-root', b'/registered/checkout', b'reconcile-completed-cache',
+                        b'--registry', registry.encode(), b'--volume', target.encode(),
+                        b'--recovery-id', b'b' * 32]
+            if apply:
+                expected.extend([b'--apply', b'--expected-plan-sha256', b'c' * 64])
+            self.assertEqual(result.stdout.split(b'\0')[:-1], expected)
+
     def test_retire_stopped_real_recipe_does_not_lose_retire_only_flag(self):
         repo = Path(__file__).resolve().parents[1]
         dry = subprocess.run(['just', '--justfile', str(repo / 'justfile'), '--dry-run',

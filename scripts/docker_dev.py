@@ -2533,6 +2533,15 @@ def _parser() -> argparse.ArgumentParser:
     cold_quarantine.add_argument("--recovery-id", required=True)
     cold_quarantine.add_argument("--apply", action="store_true")
     cold_quarantine.add_argument("--expected-plan-sha256")
+    completed_cache = subparsers.add_parser(
+        "reconcile-completed-cache",
+        help="reconcile one omitted private package volume after completed worktree retirement",
+    )
+    completed_cache.add_argument("--registry", type=Path, required=True)
+    completed_cache.add_argument("--volume", required=True)
+    completed_cache.add_argument("--recovery-id", required=True)
+    completed_cache.add_argument("--apply", action="store_true")
+    completed_cache.add_argument("--expected-plan-sha256")
     offline_reconcile = subparsers.add_parser(
         "reconcile-offline-volume",
         help="repair one stopped terminal-owner control lease while preserving sessions and unknown activation evidence",
@@ -3084,6 +3093,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.action == "quarantine-failed-bootstrap":
             from docker_volume_failed_bootstrap_quarantine import run
             print(json.dumps(run(args), ensure_ascii=False, sort_keys=True))
+        elif args.action == "reconcile-completed-cache":
+            from docker_completed_cache_reconcile import run, CompletedCacheReconcileError
+            if not args.apply and args.expected_plan_sha256 is not None:
+                raise _fail("A completed-cache plan digest requires --apply")
+            try:
+                result = run(argparse.Namespace(**{
+                    **vars(args), "repo_root": str(args.repo_root), "registry": str(args.registry),
+                }))
+            except CompletedCacheReconcileError as error:
+                raise _fail(str(error)) from error
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         elif args.action == "reconcile-offline-volume":
             from docker_volume_offline_reconcile import apply, collect
             if not args.apply and args.expected_plan_sha256 is not None:
