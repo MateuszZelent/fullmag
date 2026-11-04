@@ -6143,7 +6143,7 @@ def _prepare_locked(
             _fail("native contract result does not qualify the candidate library")
         if source_mode == LIVE_SOURCE_MODE:
             _verify_shadow_source(workspace, capsule)
-        _log_phase("native-contract", "complete", state="succeeded")
+        _log_phase("native-contract", "complete")
     if direct_install:
         attempt = _read_failed_make_attempt(build_root, output)
         if attempt is None or attempt[0].get("state") != "succeeded":

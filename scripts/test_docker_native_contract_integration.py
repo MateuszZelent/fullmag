@@ -1,5 +1,6 @@
 """Interpreted native qualification integration; no native or Docker execution."""
 import contextlib
+import hashlib
 import io
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_docker_backend_dev as fixtures
 import backend_dev as backend
+import backend_native_contracts as native_contracts
 import docker_dev
 import docker_volume_dev as volume
 
@@ -101,6 +103,180 @@ class NativeContractIntegrationTests(unittest.TestCase):
             self.assertIn("candidate does not satisfy requested native contract", errors.getvalue())
             rotate.assert_not_called()
             serve.assert_not_called()
+
+    def test_native_contract_success_reaches_publication_with_valid_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / "package"
+            package.mkdir()
+            build_root = root / "build"
+            build_root.mkdir()
+            control = backend._ensure_package_development_root(package)
+            candidate = control / backend.PACKAGE_CANDIDATES_DIRNAME / ".backend-package-candidate-native-contract"
+            candidate.mkdir()
+            backend._write_candidate_marker(candidate, package, build_root, state="building")
+            workspace = root / "workspace"
+            workspace.mkdir()
+            manifest = root / "manifest.json"
+            manifest.write_bytes(b"native contract integration fixture")
+            source_snapshot = "a" * 64
+            native = {
+                "source_snapshot_sha256": source_snapshot,
+                "head_commit_full": "b" * 40,
+                "source_snapshot_dirty": False,
+            }
+            capsule = {
+                "source_digest": "c" * 64,
+                "resolved_commit": "b" * 40,
+                "files": [],
+                "deleted": [],
+            }
+            native_root = root / "native-build"
+            environment = {"FULLMAG_FEM_NATIVE_BUILD_ROOT": str(native_root)}
+            package_library = candidate / native_contracts.PACKAGE_LIBRARY_ARTIFACT_PATH
+            make_log_bytes = b"mocked canonical Make success\n"
+            reports = []
+
+            def fake_make(_command, _workspace, make_environment, log_path):
+                install_root = Path(make_environment["FULLMAG_INTERNAL_INSTALL_ROOT"])
+                for relative in backend.REQUIRED_PACKAGE_PATHS:
+                    if relative in backend.RUNTIME_MANIFEST_PATHS:
+                        continue
+                    path = install_root.joinpath(*relative.split("/"))
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    content = b"cuda-fem-gpu\n" if relative == "launcher-build-mode" else b"package fixture\n"
+                    path.write_bytes(content)
+                    if relative.startswith("bin/"):
+                        path.chmod(0o755)
+                library_root = install_root / "lib"
+                library_root.mkdir(parents=True, exist_ok=True)
+                (library_root / "libfullmag_fdm.so.1").write_bytes(b"FDM package library fixture")
+                (library_root / "libfullmag_fem.so.1").write_bytes(b"FEM package library fixture")
+                (library_root / "libfullmag_fem.so").symlink_to("libfullmag_fem.so.1")
+                log_path.write_bytes(make_log_bytes)
+                return 0
+
+            def fake_run_contracts(**kwargs):
+                self.assertEqual(kwargs["requested"], GATES)
+                self.assertEqual(kwargs["package_root"], candidate)
+                library_sha256 = hashlib.sha256(package_library.read_bytes()).hexdigest()
+                attempt_id = "d" * 32
+                test_binary_sha256 = "e" * 64
+                report = {
+                    "schema": native_contracts.SCHEMA,
+                    "contract_revision": native_contracts.CONTRACT_REVISION,
+                    "state": "succeeded",
+                    "source_snapshot_sha256": source_snapshot,
+                    "requested": list(GATES),
+                    "attempt_id": attempt_id,
+                    "evidence": {
+                        "log_sha256": "f" * 64,
+                        "log_size_bytes": 1,
+                        "log_path": f"attempt-{attempt_id}/native-contract.log",
+                        "report_path": f"attempt-{attempt_id}/report.json",
+                    },
+                    "contracts": {
+                        GATES[0]: {
+                            "contract_revision": native_contracts.CONTRACT_REVISION,
+                            "state": "passed",
+                            "compile": {
+                                "state": "succeeded",
+                                "exit_code": 0,
+                                "argv": [
+                                    "cmake", "--build", str(native_root), "--target",
+                                    native_contracts.TEST_BINARY_RELATIVE_PATH.name,
+                                    "--parallel", "2",
+                                ],
+                                "duration_seconds": 0.001,
+                            },
+                            "test": {
+                                "state": "succeeded",
+                                "exit_code": 0,
+                                "argv": [str(native_root / native_contracts.TEST_BINARY_RELATIVE_PATH)],
+                                "duration_seconds": 0.001,
+                            },
+                            "test_binary": {
+                                "path": native_contracts.TEST_BINARY_RELATIVE_PATH.as_posix(),
+                                "sha256_before": test_binary_sha256,
+                                "sha256_after": test_binary_sha256,
+                            },
+                            "libraries": {
+                                "build": {
+                                    "path": native_contracts.BUILD_LIBRARY_RELATIVE_PATH.as_posix(),
+                                    "sha256": library_sha256,
+                                },
+                                "package": {
+                                    "path": native_contracts.PACKAGE_LIBRARY_ARTIFACT_PATH,
+                                    "sha256": library_sha256,
+                                },
+                            },
+                        }
+                    },
+                }
+                reports.append(report)
+                return report
+
+            args = backend.argparse.Namespace(
+                source_tar=None,
+                manifest=manifest,
+                source_root=root / "source",
+                git_common_root=root / "git-common",
+                native_contract=list(GATES),
+            )
+            errors = io.StringIO()
+            publish_completed_build = backend._publish_completed_build
+
+            def publish(*publish_args, **kwargs):
+                self.assertEqual(kwargs["native_contract_report"], reports[0])
+                self.assertIn(
+                    "backend-dev: phase=native-contract state=complete",
+                    errors.getvalue(),
+                )
+                return publish_completed_build(*publish_args, **kwargs)
+
+            with (
+                patch.object(backend, "PACKAGE_ROOT", package),
+                patch.dict(
+                    os.environ,
+                    {
+                        "FULLMAG_BACKEND_CARGO_PROFILE": "backend-dev",
+                        "FULLMAG_PRIVATE_GROUP_STORAGE": "",
+                    },
+                    clear=False,
+                ),
+                patch.object(
+                    backend,
+                    "_materialize_source",
+                    return_value=(workspace, capsule, native, "1" * 64, None, "snapshot"),
+                ),
+                patch.object(backend, "_build_environment", return_value=environment),
+                patch.object(backend, "_run_canonical_make", side_effect=fake_make),
+                patch.object(native_contracts, "run_contracts", side_effect=fake_run_contracts),
+                patch.object(backend, "_publish_completed_build", side_effect=publish),
+                contextlib.redirect_stderr(errors),
+            ):
+                self.assertEqual(
+                    backend._prepare_locked(
+                        args, build_root, candidate, 2, {}, candidate
+                    ),
+                    0,
+                )
+
+            self.assertEqual(len(reports), 1)
+            self.assertTrue(
+                native_contracts.receipt_satisfies(
+                    reports[0],
+                    requested=GATES,
+                    source_snapshot_sha256=source_snapshot,
+                    package_root=candidate,
+                )
+            )
+            receipt, _ = backend._read_json(
+                candidate / "backend-build-receipt.json",
+                "native contract integration build receipt",
+            )
+            self.assertEqual(receipt["state"], "succeeded")
+            self.assertEqual(receipt["native_contracts"], reports[0])
 
     def test_shared_cache_identity_separates_required_native_contracts(self):
         capsule = {"resolved_commit": "a" * 40}
