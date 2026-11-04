@@ -1495,6 +1495,28 @@ fn apply_resolved_docker_output_storage_binding(
     Ok(())
 }
 
+fn select_live_preparation_scene(
+    scene: &fullmag_authoring::SceneDocument,
+    allow_legacy_profile: bool,
+) -> Result<
+    (fullmag_authoring::SceneDocument, fullmag_ir::ExecutionProfileIR),
+    ApiError,
+> {
+    let profile = match scene.study.execution_profile.as_ref() {
+        Some(profile) => profile.clone(),
+        None if allow_legacy_profile => fullmag_application::legacy_live_execution_profile(),
+        None => {
+            return Err(ApiError::unprocessable_with_code(
+                "accepted_execution_profile_missing",
+                "accepted live execution requires a published execution profile",
+            ));
+        }
+    };
+    // The profile belongs to the StudyPlan defaults. Injecting it into a legacy
+    // Scene before Python capture suppresses its authored execution selectors.
+    Ok((scene.clone(), profile))
+}
+
 /// Expensive preparation with no accepted durable-state publication. It may
 /// materialize bounded geometry/cache/staging assets in the workspace and reads
 /// immutable profile data; RunIntent/CAS and run catalog publication happen in
@@ -1535,32 +1557,11 @@ fn prepare_live_accepted(
         .validate()
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
 
-    // Keep the current workspace immutable. Docker legacy scenes receive an
-    // effective clone containing the canonical default profile; the authored
-    // layer is added only after the selected StudyPlan step is known, so typed
-    // resources cannot be borrowed from a different stage.
-    let mut effective_scene = scene.clone();
-    let needs_legacy_profile_migration = effective_scene.study.execution_profile.is_none();
-    if needs_legacy_profile_migration {
-        if !docker_api_only_runtime() {
-            return Err(ApiError::unprocessable_with_code(
-                "accepted_execution_profile_missing",
-                "accepted live execution requires a published execution profile",
-            ));
-        }
-        let profile = fullmag_application::legacy_live_execution_profile();
-        effective_scene.study.execution_profile = Some(profile);
-    }
-    let profile = effective_scene
-        .study
-        .execution_profile
-        .clone()
-        .ok_or_else(|| {
-            ApiError::unprocessable_with_code(
-                "accepted_execution_profile_missing",
-                "accepted live execution requires a published execution profile",
-            )
-        })?;
+    // Migrate each legacy step only after Python has captured its authored
+    // selectors. Keep the selected default profile outside that Scene capture.
+    let needs_legacy_profile_migration = scene.study.execution_profile.is_none();
+    let (effective_scene, profile) =
+        select_live_preparation_scene(scene, docker_api_only_runtime())?;
 
     let (command_id, request_idempotency_key, command_value, startup_source_sha256) =
         match &submission {
@@ -2725,6 +2726,136 @@ mod tests {
                 "requested_device": "cpu", "requested_precision": "double",
                 "fdm": {"default_cell": [10e-9, 10e-9, 10e-9]}}
         })).unwrap()
+    }
+
+    #[test]
+    fn legacy_preparation_capture_preserves_cpu_threads_through_python_and_binding() {
+        let root = crate::script::repo_root();
+        for raw_threads in [
+            None,
+            Some(serde_json::Value::Null),
+            Some(serde_json::json!(1)),
+            Some(serde_json::json!(2)),
+            Some(serde_json::json!(6)),
+        ] {
+            let threads = raw_threads
+                .as_ref()
+                .and_then(serde_json::Value::as_u64)
+                .map(|threads| u32::try_from(threads).unwrap());
+            let mut document = serde_json::to_value(ui_source_scene()).unwrap();
+            if let Some(value) = raw_threads {
+                document["study"]["requested_cpu_threads"] = value;
+            } else {
+                document["study"].as_object_mut().unwrap().remove("requested_cpu_threads");
+            }
+            let mut authored: fullmag_authoring::SceneDocument =
+                serde_json::from_value(document).unwrap();
+            authored.study.stages = serde_json::from_value(serde_json::json!([{
+                "kind": "run", "entrypoint_kind": "flat_run",
+                "until_seconds": 1e-13
+            }]))
+            .unwrap();
+            let (capture_scene, profile) =
+                super::select_live_preparation_scene(&authored, true).unwrap();
+            let defaults = fullmag_authoring::StudyPlanMigrationDefaults {
+                model: fullmag_authoring::StudyModelReference {
+                    model_id: "model:legacy-thread-capture".into(),
+                    version: "1".into(),
+                },
+                solver_config: fullmag_authoring::StudySolverConfigReference {
+                    preset_id: "solver:legacy-thread-capture".into(),
+                    version: "1".into(),
+                },
+                discretization: fullmag_authoring::StudyDiscretizationReference {
+                    recipe_id: "mesh:legacy-thread-capture".into(),
+                    version: "1".into(),
+                },
+                execution_profile: fullmag_authoring::StudyExecutionProfileReference {
+                    profile_id: profile.profile_id.clone(),
+                    version: profile.version.clone(),
+                },
+            };
+            let study = fullmag_authoring::scene_document_to_study_plan(
+                &capture_scene,
+                "study:legacy-thread-capture",
+                capture_scene.revision,
+                &defaults,
+            )
+            .unwrap();
+            let requested = fullmag_application::RequestedExecution {
+                backend: "fdm".into(),
+                device: "cpu".into(),
+                precision: "double".into(),
+                mode: "strict".into(),
+                minimum_resources: None,
+            };
+            let workspace = tempfile::tempdir().unwrap();
+            let inputs = crate::script::scene_document_to_study_execution_inputs(
+                &root,
+                workspace.path(),
+                &capture_scene,
+                &requested,
+                &study,
+            )
+            .expect("capture actual Python Scene-to-IR preparation inputs");
+            assert_eq!(inputs.len(), 1);
+            for input in inputs {
+                assert_eq!(
+                    input.problem.problem_meta.runtime_metadata["runtime_selection"]["cpu_threads"]
+                        .as_u64(),
+                    threads.map(u64::from),
+                    "preparation must retain the authored count before migration"
+                );
+                let location = format!("live.scene.study.legacy_execution.{}", input.step_id);
+                let migration = fullmag_application::migrate_legacy_live_execution(
+                    &input.problem,
+                    &requested,
+                    fullmag_ir::ExecutionOriginKindIR::Study,
+                    &location,
+                )
+                .unwrap();
+                assert_eq!(migration.profile, profile);
+                let bound = fullmag_application::bind_materialized_execution(
+                    &input.problem,
+                    &migration.materialized,
+                )
+                .unwrap();
+                let worker_resources = fullmag_ir::ComputeResourcesIR::from_problem(&bound)
+                    .unwrap()
+                    .expect("bound worker resources");
+                assert_eq!(worker_resources.cpu.threads.count(), threads);
+                assert_eq!(
+                    bound.problem_meta.runtime_metadata["runtime_selection"]["cpu_threads"]
+                        .as_u64(),
+                    threads.map(u64::from)
+                );
+                let origin = &migration.materialized.origins["resources.cpu.threads"];
+                if threads.is_some() {
+                    assert_eq!(origin.kind, fullmag_ir::ExecutionOriginKindIR::Study);
+                    assert_eq!(origin.location, location);
+                } else {
+                    assert_eq!(origin.kind, fullmag_ir::ExecutionOriginKindIR::ProductDefault);
+                }
+            }
+            assert!(authored.study.execution_profile.is_none());
+        }
+    }
+
+    #[test]
+    fn preparation_profile_selection_preserves_authored_profiles_and_missing_profile_guard() {
+        let legacy = ui_source_scene();
+        let error = super::select_live_preparation_scene(&legacy, false).unwrap_err();
+        assert!(error.message.contains("published execution profile"));
+        let mut authored = legacy;
+        let mut profile = fullmag_application::legacy_live_execution_profile();
+        profile.profile_id = "exec:authored-thread-capture".into();
+        authored.study.execution_profile = Some(profile);
+        for allow_legacy in [false, true] {
+            let (capture, profile) =
+                super::select_live_preparation_scene(&authored, allow_legacy).unwrap();
+            assert_eq!(capture, authored);
+            assert_eq!(Some(profile), authored.study.execution_profile);
+        }
     }
 
     #[test]
