@@ -2644,7 +2644,7 @@ fn execute_accepted_worker_start_with_snapshot(
     }
 
     let specification = &accepted.run.specification;
-    crate::accepted_solver_profile::validate_study_profile(&specification.parameters, &accepted.study, &accepted.catalog)?;
+    crate::accepted_solver_profile::validate_resolved_study_profile(&specification.parameters, &accepted.study, &accepted.catalog, &accepted.lowered)?;
     let immutable_problem = accepted
         .catalog
         .entries()

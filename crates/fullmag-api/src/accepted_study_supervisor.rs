@@ -17,6 +17,9 @@ use std::time::{Duration, Instant};
 #[path = "accepted_worker_execution_receipt.rs"]
 mod accepted_worker_execution_receipt;
 
+#[path = "accepted_profile_admission.rs"]
+mod profile_admission;
+
 #[path = "owned_worker_process.rs"]
 mod owned_worker_process;
 #[path = "compute_operator_env.rs"]
@@ -948,7 +951,7 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
     let linux_cgroup = None;
     let mut active_lease = lease;
     let mut pending_heartbeat = None;
-    let fem_step_profile = crate::accepted_solver_profile::fem_child_enabled(store, run_id, task_id)?;
+    let fem_step_profile = profile_admission::fem_child_enabled(store, run_id, task_id)?;
     let host_launch_token = match host
         .map(|host| authorize_host_worker_launch(host, store, &active_lease))
         .transpose()
@@ -1644,7 +1647,7 @@ where
         bail!("accepted worker executable must be a regular file");
     }
     let mut command = Command::new(worker_executable);
-    crate::accepted_solver_profile::configure_child(&mut command, fem_step_profile);
+    profile_admission::configure_child(&mut command, fem_step_profile);
     compute_operator_env::remove_local_compute_operator_token(&mut command);
     for (name, value) in worker_environment(gpu_uuid, host_launch_token.is_some()) {
         if let Some(value) = value {

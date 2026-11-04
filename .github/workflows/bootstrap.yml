@@ -148,6 +148,7 @@ jobs:
         env:
           RUST_MIN_STACK: 8388608
         run: |
+          cargo check --locked -p fullmag-api --bins
           cargo test -p fullmag-plan --lib preparation::tests::fdm_
           cargo test -p fullmag-api --bin fullmag-api docker_startup::tests
           cargo test --locked -p fullmag-api --bin fullmag-api accepted_solver_profile:: --no-fail-fast

@@ -4,124 +4,15 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use super::accepted_worker_execution_receipt::WorkerExecutionReceiptIdentity;
 
-pub(crate) const PARAMETER: &str = "solver_profile";
-const SCHEMA: &str = "accepted_solver_profile.v1";
+#[path = "accepted_profile_admission.rs"]
+mod admission;
+pub(crate) use admission::{config, parameter, request_digest, validate_study_profile,
+    validate_resolved_study_profile, validate_fem_profile_plan, PARAMETER};
+#[cfg(test)]
+use admission::{configure_child, SCHEMA};
+
 const RECEIPT_SCHEMA: &str = "worker_operation_profile.v1";
 const RECEIPT: &str = "worker_operation_profile.v1.json";
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Request {
-    schema_version: String,
-    config: fullmag_runner::SolverProfileConfig,
-}
-
-pub(crate) fn config(parameters: &serde_json::Value) -> Result<Option<fullmag_runner::SolverProfileConfig>> {
-    let Some(value) = parameters.get(PARAMETER) else { return Ok(None); };
-    let object = value.get("config").and_then(serde_json::Value::as_object)
-        .context("accepted solver profile requires a config object")?;
-    const KEYS: &[&str] = &["enabled", "sample_every", "sample_interval_wall_ms", "max_samples", "emit_engine_log", "persist_artifact"];
-    if object.keys().any(|key| !KEYS.contains(&key.as_str())) {
-        bail!("accepted solver profile contains an unknown config key");
-    }
-    let request: Request = serde_json::from_value(value.clone())?;
-    if request.schema_version != SCHEMA { bail!("unsupported accepted solver profile schema"); }
-    let config = request.config.normalized();
-    if config.enabled && config.emit_engine_log {
-        bail!("accepted solver profiling does not yet support emit_engine_log=true");
-    }
-    if config.enabled && !config.persist_artifact {
-        bail!("accepted solver profiling requires explicit persist_artifact=true");
-    }
-    Ok(config.enabled.then_some(config))
-}
-
-pub(crate) fn parameter(configuration: fullmag_runner::SolverProfileConfig) -> Result<serde_json::Value> {
-    let value = serde_json::to_value(Request { schema_version: SCHEMA.into(), config: configuration })?;
-    let mut parameters = serde_json::Map::new();
-    parameters.insert(PARAMETER.into(), value.clone());
-    config(&serde_json::Value::Object(parameters))?;
-    Ok(value)
-}
-
-/// Validate before RunIntent acceptance, for live and headless admission alike.
-pub(crate) fn validate_study_profile(parameters: &serde_json::Value,
-    study: &fullmag_authoring::StudyPlan,
-    catalog: &fullmag_plan::StudyProblemCatalog,
-) -> Result<Option<fullmag_runner::SolverProfileConfig>> {
-    if parameters.get(PARAMETER).is_none() { return Ok(None); }
-    let configuration = config(parameters)?;
-    use fullmag_authoring::{StudyStepKind, StudyPrimitiveStageKind};
-    let lowered = fullmag_plan::lower_study_plan_with_catalog(study, catalog)?;
-    let mut count = 0;
-    let mut operation_only = None;
-    for step in study.steps.iter().filter(|step| step.enabled) {
-        count += 1;
-        let operation = matches!(&step.kind, StudyStepKind::ClosedLoopInspection { .. });
-        if operation_only.is_some_and(|previous| previous != operation) {
-            bail!("solver_profile cannot mix operation inspection with FEM step profiling");
-        }
-        operation_only = Some(operation);
-        match &step.kind {
-            StudyStepKind::ClosedLoopInspection { .. } => {}
-            StudyStepKind::Primitive { stage_kind: StudyPrimitiveStageKind::Run | StudyPrimitiveStageKind::Relax } => {
-                let problem = catalog.entries().iter().find(|entry| entry.step_id() == step.step_id)
-                    .context("profiled FEM step has no exact catalog entry")?.problem();
-                let plan = lowered.steps.iter().find(|entry| entry.step_id == step.step_id)
-                    .and_then(|entry| entry.execution_plan.as_ref()).context("profiled FEM step has no exact lowered plan")?;
-                validate_fem_profile_plan(problem, plan)?;
-            }
-            _ => bail!("solver_profile supports only closed-loop inspection and strict native FEM Run/Relax"),
-        }
-    }
-    if count == 0 { bail!("solver_profile requires an enabled supported study step"); }
-
-    Ok(configuration)
-}
-
-pub(crate) fn validate_fem_profile_plan(problem: &fullmag_ir::ProblemIR,
-    plan: &fullmag_ir::ExecutionPlanIR) -> Result<()> {
-    use fullmag_ir::{BackendTarget, BackendPlanIR, ExecutionMode, ExecutionPrecision, StudyIR};
-    if problem.backend_policy.requested_backend != BackendTarget::Fem
-        || problem.backend_policy.execution_precision != ExecutionPrecision::Double
-        || problem.validation_profile.execution_mode != ExecutionMode::Strict
-        || plan.common.requested_backend != BackendTarget::Fem
-        || plan.common.resolved_backend != BackendTarget::Fem
-        || plan.common.execution_mode != ExecutionMode::Strict
-        || !matches!(&plan.backend_plan, BackendPlanIR::Fem(fem) if fem.fe_order == 1)
-        || !matches!(&problem.study, StudyIR::TimeEvolution { .. } | StudyIR::Relaxation { .. }) {
-        bail!("solver_profile Run/Relax requires the exact strict double native FEM H1/P1 problem and plan");
-    }
-    Ok(())
-}
-
-pub(crate) fn request_digest(value: &serde_json::Value) -> Result<String> {
-    config(&serde_json::json!({"solver_profile": value}))?;
-    Ok(fullmag_session::canonical_json_sha256(value))
-}
-
-/// Resolve native instrumentation only from the immutable accepted run. The
-/// child command explicitly removes an inherited timer flag when this is off.
-pub(crate) fn fem_child_enabled(store: &fullmag_session::SessionStore, run_id: &str, task_id: &str) -> Result<bool> {
-    let intent = store.read_run_intent(run_id)?.context("profile child has no accepted RunIntent")?;
-    let specification: fullmag_application::RunSpecification = serde_json::from_value(intent.specification)?;
-    if specification.parameters.get(PARAMETER).is_none() { return Ok(false); }
-    let accepted = fullmag_runtime_control::load_accepted_study_snapshot(store, &specification.run_id,
-        &specification.snapshot.project_id)?;
-    let enabled = validate_study_profile(&specification.parameters, &accepted.study, &accepted.catalog)?.is_some();
-    for step in &accepted.lowered.steps {
-        if fullmag_session::task_id_for_study_step(run_id, &step.step_id)? == task_id {
-            return Ok(enabled && matches!(step.execution_plan.as_ref().map(|plan| &plan.backend_plan),
-                Some(fullmag_ir::BackendPlanIR::Fem(_))));
-        }
-    }
-    bail!("profile child task has no exact accepted step")
-}
-
-pub(crate) fn configure_child(command: &mut std::process::Command, enabled: bool) {
-    if enabled { command.env("FULLMAG_FEM_STEP_PROFILE", "1"); }
-    else { command.env_remove("FULLMAG_FEM_STEP_PROFILE"); }
-}
 
 #[path = "accepted_step_profile.rs"]
 pub(crate) mod step_profile;
@@ -184,7 +75,7 @@ pub(crate) fn load_projection(store: &fullmag_session::SessionStore,
     let Some(config) = config(&specification.parameters)? else { return Ok(None); };
     let accepted = fullmag_runtime_control::load_accepted_study_snapshot(
         store, &specification.run_id, &specification.snapshot.project_id)?;
-    validate_study_profile(&specification.parameters, &accepted.study, &accepted.catalog)?;
+    validate_resolved_study_profile(&specification.parameters, &accepted.study, &accepted.catalog, &accepted.lowered)?;
     let journal = store.read_coordinator_journal(specification.run_id.as_str())?;
     let mut latest = None;
     for step in &accepted.lowered.steps {
@@ -289,6 +180,56 @@ mod tests {
         let parameters = request(serde_json::json!({"enabled": true, "persist_artifact": true}));
         assert!(validate_study_profile(&parameters, &study, &catalog).unwrap().is_some());
     }
+    #[test]
+    fn authored_fem_without_mesh_is_profile_admissible_but_not_a_resolved_execution() {
+        let (study, catalog) = fem_fixture();
+        let parameters = request(serde_json::json!({"enabled": true, "persist_artifact": true}));
+        assert!(catalog.entries()[0].problem().geometry_assets.is_none());
+        assert!(validate_study_profile(&parameters, &study, &catalog).unwrap().is_some());
+        // The fixture is genuinely pre-preparation. Do not inject a structural
+        // MeshIR or reinterpret its planning failure as an execution plan.
+        let error = fullmag_plan::lower_study_plan_with_catalog(&study, &catalog).unwrap_err();
+        assert!(error.to_string().contains("precomputed FEM mesh asset"));
+
+        let mut fdm_problem = catalog.entries()[0].problem().clone();
+        fdm_problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fdm;
+        let fdm_catalog = fullmag_plan::StudyProblemCatalog::from_entries(&study, vec![
+            fullmag_plan::StudyProblemCatalogEntry::from_step(&study.steps[0], fdm_problem)]).unwrap();
+        let non_native = fullmag_plan::lower_study_plan_with_catalog(&study, &fdm_catalog).unwrap();
+        assert!(validate_resolved_study_profile(&parameters, &study, &catalog, &non_native).is_err());
+        let mut missing = non_native.clone(); missing.steps[0].execution_plan = None;
+        assert!(validate_resolved_study_profile(&parameters, &study, &catalog, &missing).is_err());
+        let mut foreign = non_native.clone(); foreign.study_revision += 1;
+        assert!(validate_resolved_study_profile(&parameters, &study, &catalog, &foreign).is_err());
+        let mut mislabeled = non_native;
+        let plan = mislabeled.steps[0].execution_plan.as_mut().unwrap();
+        plan.common.requested_backend = fullmag_ir::BackendTarget::Fem;
+        plan.common.resolved_backend = fullmag_ir::BackendTarget::Fem;
+        // A native label on an FDM payload cannot satisfy the native plan gate.
+        assert!(validate_resolved_study_profile(&parameters, &study, &catalog, &mislabeled).is_err());
+    }
+
+    #[test]
+    fn preparation_profile_admission_keeps_strict_double_and_p1_magnetization_guards() {
+        let (study, catalog) = fem_fixture();
+        let parameters = request(serde_json::json!({"enabled": true, "persist_artifact": true}));
+        for dimension in ["precision", "mode", "magnetization_order"] {
+            let mut problem = catalog.entries()[0].problem().clone();
+            match dimension {
+                "precision" => problem.backend_policy.execution_precision = fullmag_ir::ExecutionPrecision::Single,
+                "mode" => problem.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Extended,
+                _ => problem.backend_policy.discretization_hints.as_mut().unwrap().fem.as_mut().unwrap().order = 2,
+            }
+            let result = fullmag_plan::StudyProblemCatalog::from_entries(&study, vec![
+                fullmag_plan::StudyProblemCatalogEntry::from_step(&study.steps[0], problem)]);
+            // The catalog itself may already reject the unsupported lane;
+            // otherwise the profile admission must do so before preparation.
+            if let Ok(candidate) = result {
+                assert!(validate_study_profile(&parameters, &study, &candidate).is_err(), "{dimension}");
+            }
+        }
+    }
+
     #[test]
     fn explicit_disabled_fdm_and_unsupported_steps_still_refuse_before_acceptance() {
         let (study, catalog) = fem_fixture();

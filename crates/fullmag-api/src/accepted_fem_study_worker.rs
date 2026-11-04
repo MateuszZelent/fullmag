@@ -97,6 +97,10 @@ pub(crate) fn prepare_accepted_fem_execution(
     let execution_plan =
         crate::accepted_study_worker::materialize_resolved_study_inputs(store, accepted_step)
             .context("materialize accepted FEM CAS inputs for the runner")?;
+    if accepted.run.specification.parameters.get(crate::accepted_solver_profile::PARAMETER).is_some() {
+        crate::accepted_solver_profile::validate_fem_profile_plan(&accepted_step.problem, &execution_plan)
+            .context("validate the actual preparation-resolved profiling plan before native dispatch")?;
+    }
     let mut problem = accepted_step.problem.clone();
     problem.problem_meta.runtime_metadata.insert("performance_execution_identity".into(),
         serde_json::json!({
