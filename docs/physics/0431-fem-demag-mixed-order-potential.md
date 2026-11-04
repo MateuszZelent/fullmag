@@ -326,6 +326,13 @@ separate realization remains P1.
   or report their explicit separately qualified P1 realization.
 - Table, telemetry, field artifacts, and solver diagnostics must report the
   same accepted state and the same `E_demag` contract.
+- The CPU MPI/Hypre owner must initialize MPI and `mfem::Hypre::Init()` before
+  constructing its first persistent `HypreParVector`. Initialization by a
+  later matrix constructor is too late for that vector workspace. Successful
+  setup, repeated solves, and teardown must not introduce a HYPRE error flag.
+  A controlled nonconvergence fixture may consume only its verified
+  `HYPRE_ERROR_CONV` after checking rejection and rollback; an unexplained
+  `HYPRE_ERROR_GENERIC` remains a failure, including before GPU policy setup.
 
 (discrete-realization)=
 ## 8. Discrete realization
@@ -491,6 +498,19 @@ Required gates are cumulative:
    failure and verify no partial publication or dangling FE references. Mark
    unavailable fixtures explicitly and retain the oracle path for unsupported
    inputs.
+8. **Native contract verified — Hypre initialization-order regression:** enter with a
+   clean library error flag, construct the first CPU vector workspace, and
+   require initialized HYPRE with a zero flag after every one of 100 repeated
+   solves and after teardown. Keep the same operator, RHS, requested solver
+   tolerances, independent residual certification, and rollback checks. The
+   subsequent strict GPU fixture must start without inherited CPU errors.
+
+Managed native contract `a7a0f16e751c446a8fd4a85bab1e54a8` passed on source
+snapshot `55ac22f0b0ed3f887a27fab6b4543bd65373bd33c42d4c4f34edd1f194946f44`.
+It exercised 100 error-free CPU solves and teardown, the scoped expected
+nonconvergence error, and strict CPU/GPU field, energy, and torque checks for
+Robin and Dirichlet fixtures. Packaged API readiness, R2 performance, and full
+SP4 trajectories remain separate required gates.
 
 (limitations)=
 ## 11. Limitations
@@ -539,6 +559,8 @@ Required gates are cumulative:
 | P2-to-P1 field | `backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp` + `recover_demag_poisson_field` | FEM CPU | implemented P2-gradient projection to the P1 physical field |
 | Field energy | `backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp` + `demag_poisson_energy_from_field` | FEM CPU | implemented independent field form |
 | Solve orchestration | `backends/fem/cpu/mfem/interactions/demag_poisson_solve.cpp` + `context_compute_demag_poisson` | FEM CPU | implemented direct variational and recovered-field energy telemetry |
+| Hypre initialization order | `backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp` + `solve_demag_poisson_hypre` | FEM CPU | library initialization before persistent vectors; native contract passed |
+| Hypre lifecycle regression | `backends/fem/tests/demag_poisson_contract.cpp` + `nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves` | FEM CPU test | 100 error-free solves and teardown passed in the managed native contract |
 | Device mixed-order operators | `backends/fem/gpu/cuda/demag_poisson/operators.hpp` + `build_p1_demag_operators` | FEM GPU | P2 nonperiodic operator implementation compiled; executed-device qualification pending |
 | Device stage | `backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp` + `compute_device_demag_for_device_stage` | FEM GPU | P2 nonperiodic stage implementation compiled; executed-device qualification pending |
 | Perimeter refinement | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` + `_build_perimeter_refinement_fields` | FEM meshing | implemented fields; near-air scoping correction pending |

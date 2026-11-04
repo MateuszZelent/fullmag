@@ -18,6 +18,7 @@
 #include "gpu/cuda/demag_poisson/operators.hpp"
 #include "gpu/cuda/demag_poisson/poisson.hpp"
 #include "gpu/cuda/demag_poisson/stage_compute.hpp"
+#include "gpu/cuda/runtime/hypre_device_policy.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 
@@ -26,6 +27,9 @@
 #endif
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include <cuda_runtime.h>
+#endif
+#if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+#include <HYPRE_utilities.h>
 #endif
 
 #include <cmath>
@@ -192,6 +196,10 @@ void configure_one_iteration_demag_solver(fullmag::fem::Context &ctx) {
 }
 
 void nonperiodic_hypre_demag_rejects_one_iteration_candidate() {
+#ifdef MFEM_USE_MPI
+    check(HYPRE_GetError() == 0,
+          "one-iteration Hypre rejection must enter with a clean library error flag");
+#endif
     fullmag::fem::Context ctx;
     configure_one_iteration_demag_solver(ctx);
     mfem::SparseMatrix op = nontrivial_spd_matrix(8);
@@ -228,6 +236,18 @@ void nonperiodic_hypre_demag_rejects_one_iteration_candidate() {
           "explicit Hypre reset records a fresh zero guess without rebuilding setup");
     fullmag::fem::destroy_demag_poisson_hypre_workspace(ctx);
     ctx.poisson_demag.poisson_bc_op = nullptr;
+#ifdef MFEM_USE_MPI
+    // This fixture deliberately exhausts PCG's single permitted iteration.
+    // Consume only that proven expected error after all rejection/rollback
+    // checks. Any additional error remains a test failure.
+    const HYPRE_Int expected_error = HYPRE_GetError();
+    check(expected_error == HYPRE_ERROR_CONV,
+          "one-iteration Hypre rejection must produce only the expected convergence error");
+    check(HYPRE_ClearError(HYPRE_ERROR_CONV) == 0 && HYPRE_GetError() == 0,
+          "one-iteration Hypre rejection must consume only its expected convergence error");
+    std::fprintf(stderr, "expected HYPRE nonconvergence consumed: error=%d\n",
+                 static_cast<int>(expected_error));
+#endif
 }
 
 void nonperiodic_hypre_rejected_candidate_preserves_published_warm_start() {
@@ -1753,6 +1773,10 @@ void poisson_dependency_key_fails_closed_after_mesh_or_policy_mutation() {
 }
 
 void nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves() {
+#ifdef MFEM_USE_MPI
+    check(HYPRE_GetError() == 0,
+          "repeated Poisson workspace test must enter with a clean HYPRE error flag");
+#endif
     mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
     mfem::H1_FECollection state_fec(1, 3);
     mfem::FiniteElementSpace state_fes(&mesh, &state_fec);
@@ -1795,6 +1819,11 @@ void nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves() {
     size_t steady_visual_field_capacity = 0u;
     for (int repeat = 0; repeat < kRepeatedSolves; ++repeat) {
         error.clear();
+#ifdef MFEM_USE_MPI
+        const HYPRE_Int before_compute = HYPRE_GetError();
+        check(before_compute == 0,
+              "repeated Poisson solve must start without an inherited HYPRE error");
+#endif
         check_result(fullmag::fem::context_compute_demag_poisson(
                          ctx,
                          m_xyz,
@@ -1805,6 +1834,15 @@ void nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves() {
                          error),
                      error,
                      "repeated nonperiodic Poisson solve");
+#ifdef MFEM_USE_MPI
+        std::fprintf(stderr,
+                     "HYPRE repeated compute: repeat=%d before=%d after=%d iterations=%d certified_residual=%.17g\n",
+                     repeat, static_cast<int>(before_compute),
+                     static_cast<int>(HYPRE_GetError()),
+                     ctx.poisson_demag.last_iterations, ctx.poisson_demag.last_residual);
+        check(HYPRE_Initialized() != 0 && HYPRE_GetError() == 0,
+              "first vector setup and every repeated solve must retain initialized, error-free HYPRE");
+#endif
         check(h_demag.size() == m_xyz.size() && std::isfinite(demag_energy),
               "repeated Poisson solve must publish finite field and energy");
         if (repeat == 0) {
@@ -1859,7 +1897,19 @@ void nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves() {
               ctx.poisson_demag.last_solver_setup_reused,
           "repeated Poisson solves must retain cached Hypre operator and solver");
 
+#ifdef MFEM_USE_MPI
+    std::fprintf(stderr, "HYPRE repeated teardown: before=%d\n",
+                 static_cast<int>(HYPRE_GetError()));
+    check(HYPRE_GetError() == 0,
+          "repeated Poisson workspace must be error-free before teardown");
+#endif
     fullmag::fem::context_destroy_poisson(ctx);
+#ifdef MFEM_USE_MPI
+    std::fprintf(stderr, "HYPRE repeated teardown: after=%d\n",
+                 static_cast<int>(HYPRE_GetError()));
+    check(HYPRE_GetError() == 0,
+          "repeated Poisson teardown must not introduce a HYPRE error");
+#endif
 }
 
 void failed_hypre_setup_does_not_publish_partial_state() {
@@ -2296,25 +2346,58 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
     check(cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0,
           "managed mixed-P1 GPU Poisson contract requires a CUDA device");
 
-    for (const int realization : {
-             FULLMAG_FEM_DEMAG_AIRBOX_ROBIN,
-             FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET}) {
+    constexpr std::array<int, 2> realizations = {
+        FULLMAG_FEM_DEMAG_AIRBOX_ROBIN,
+        FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET};
+    struct CpuOracle {
+        std::vector<double> magnetization;
+        std::vector<double> field;
+        double energy = 0.0;
+    };
+    std::array<CpuOracle, realizations.size()> cpu_oracles;
+    // Finish and destroy every CPU workspace before configuring MFEM's
+    // process-wide CUDA backend, as the production MFEM entry point does.
+    for (size_t index = 0; index < realizations.size(); ++index) {
+        mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
+        mfem::H1_FECollection fixture_fec(1, 3);
+        mfem::FiniteElementSpace fixture_fes(&mesh, &fixture_fec);
+        fullmag::fem::Context ctx;
+        mixed_poisson_context(ctx, mesh, fixture_fes, {1u, 0u, 0u});
+        ctx.demag.realization = realizations[index];
+        auto &oracle = cpu_oracles[index];
+        oracle.magnetization = smooth_magnetization(mesh, 0.2);
+        std::string error;
+        check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
+                     "mixed CUDA/Hypre CPU oracle workspace initialization");
+        check_result(fullmag::fem::context_compute_demag_poisson(
+                  ctx, oracle.magnetization, oracle.field, oracle.energy,
+                  false, nullptr, error),
+              error, "mixed CUDA/Hypre CPU oracle solve");
+        fullmag::fem::context_destroy_poisson(ctx);
+    }
+    int selected_device = 0;
+    check(cudaGetDevice(&selected_device) == cudaSuccess,
+          "mixed CUDA/Hypre contract must resolve the selected CUDA device");
+    std::fprintf(stderr, "mixed CUDA/Hypre before MFEM Device: hypre_error=%d device=%d\n",
+                 static_cast<int>(HYPRE_GetError()), selected_device);
+    // Device must outlive both GPU cases, including all MFEM/Hypre objects.
+    mfem::Device cuda_device("cuda", selected_device);
+    for (size_t index = 0; index < realizations.size(); ++index) {
     mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
     mfem::H1_FECollection fixture_fec(1, 3);
     mfem::FiniteElementSpace fixture_fes(&mesh, &fixture_fec);
     fullmag::fem::Context ctx;
     mixed_poisson_context(ctx, mesh, fixture_fes, {1u, 0u, 0u});
-    ctx.demag.realization = realization;
+    ctx.demag.realization = realizations[index];
     const std::vector<double> m_xyz = smooth_magnetization(mesh, 0.2);
+    const auto &oracle = cpu_oracles[index];
+    check(m_xyz == oracle.magnetization,
+          "mixed CUDA/Hypre CPU and GPU must use identical magnetization");
+    const auto &cpu_field = oracle.field;
+    const double cpu_energy = oracle.energy;
     std::string error;
     check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
                  "mixed CUDA/Hypre Poisson runtime workspace initialization");
-
-    std::vector<double> cpu_field;
-    double cpu_energy = 0.0;
-    check_result(fullmag::fem::context_compute_demag_poisson(
-              ctx, m_xyz, cpu_field, cpu_energy, false, nullptr, error),
-          error, "mixed CUDA/Hypre CPU oracle solve");
 
     check_result(fullmag::fem::gpu_state_initialize(
               ctx.gpu_state.device,
@@ -2351,7 +2434,17 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
               error),
           error, "mixed CUDA/Hypre runtime coefficient upload");
     ctx.poisson_demag.gpu_demag_mode = FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON;
-    check_result(fullmag::fem::gpu_demag_poisson_initialize(ctx, error), error,
+    std::fprintf(stderr, "mixed CUDA/Hypre before device policy: hypre_error=%d bc=%d\n",
+                 static_cast<int>(HYPRE_GetError()), realizations[index]);
+    const bool gpu_initialized = fullmag::fem::gpu_demag_poisson_initialize(ctx, error);
+    if (!gpu_initialized) {
+        const auto policy = fullmag::fem::configure_hypre_cuda_device_policy();
+        std::fprintf(stderr,
+                     "mixed CUDA/Hypre policy failure: first_error=%d configured=%d memory_device=%d execution_device=%d\n",
+                     policy.first_error_code, policy.configured,
+                     policy.memory_location_device, policy.execution_policy_device);
+    }
+    check_result(gpu_initialized, error,
                  "mixed CUDA/Hypre Poisson operator initialization");
     check(fullmag::fem::gpu_demag_poisson_ready(ctx),
           "mixed-P1 Robin GPU Poisson workspace must be ready");
@@ -3882,76 +3975,98 @@ void demag_recovered_field_finalize_projects_periodic_and_syncs_visual() {
     check(ctx.demag.h_visual_xyz.empty(), "empty visual demag remains empty");
 }
 
+void run_contract_case(const char *name, void (*body)()) {
+    (void)name;
+#if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+    const HYPRE_Int before = HYPRE_GetError();
+    if (before != 0) {
+        std::fprintf(stderr, "HYPRE contract carry-in: case=%s error=%d\n",
+                     name, static_cast<int>(before));
+    }
+#endif
+    body();
+#if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+    const HYPRE_Int after = HYPRE_GetError();
+    if (after != before) {
+        std::fprintf(stderr,
+                     "HYPRE contract transition: case=%s before=%d after=%d newly_set=%d\n",
+                     name, static_cast<int>(before), static_cast<int>(after),
+                     static_cast<int>(after & ~before));
+    }
+#endif
+}
+
 } // namespace
 
 int main() {
-    demag_amg_policy_resolves_defaults_overrides_and_invalid_values();
-    demag_linear_solve_validation_rejects_invalid_results();
-    poisson_runtime_wrappers_are_owned_by_separate_modules();
-    poisson_aggregate_header_documents_submodule_boundaries();
-    poisson_source_files_document_module_boundaries();
-    poisson_dependency_key_and_guard_are_owned_by_dependency_module();
-    poisson_debug_env_gate_is_cached_on_hot_path();
-    demag_energy_uses_half_factor_ms_mass_and_magnetic_mask();
+    run_contract_case("demag_amg_policy_resolves_defaults_overrides_and_invalid_values", demag_amg_policy_resolves_defaults_overrides_and_invalid_values);
+    run_contract_case("demag_linear_solve_validation_rejects_invalid_results", demag_linear_solve_validation_rejects_invalid_results);
+    run_contract_case("poisson_runtime_wrappers_are_owned_by_separate_modules", poisson_runtime_wrappers_are_owned_by_separate_modules);
+    run_contract_case("poisson_aggregate_header_documents_submodule_boundaries", poisson_aggregate_header_documents_submodule_boundaries);
+    run_contract_case("poisson_source_files_document_module_boundaries", poisson_source_files_document_module_boundaries);
+    run_contract_case("poisson_dependency_key_and_guard_are_owned_by_dependency_module", poisson_dependency_key_and_guard_are_owned_by_dependency_module);
+    run_contract_case("poisson_debug_env_gate_is_cached_on_hot_path", poisson_debug_env_gate_is_cached_on_hot_path);
+    run_contract_case("demag_energy_uses_half_factor_ms_mass_and_magnetic_mask", demag_energy_uses_half_factor_ms_mass_and_magnetic_mask);
 #if FULLMAG_HAS_MFEM_STACK
-    demag_variational_energy_uses_rhs_potential_pairing();
+    run_contract_case("demag_variational_energy_uses_rhs_potential_pairing", demag_variational_energy_uses_rhs_potential_pairing);
 #endif
-    demag_cache_refresh_policy_matches_bridge_contract();
-    cached_demag_energy_matches_direct_without_legacy_robin_addition();
-    demag_energy_is_owned_by_poisson_energy_module();
-    demag_cache_store_and_reuse_are_owned_by_poisson_module();
-    demag_telemetry_is_owned_by_poisson_telemetry_module();
-    demag_field_visual_postprocessing_is_owned_by_poisson_field_module();
-    demag_rhs_assembly_is_owned_by_poisson_rhs_module();
-    demag_rhs_sign_contract_matches_laplace_phi_equals_div_m();
-    sharp_ms_demag_energy_and_delta_use_active_exact_mass();
-    sharp_ms_demag_rhs_uses_typed_element_accessor();
+    run_contract_case("demag_cache_refresh_policy_matches_bridge_contract", demag_cache_refresh_policy_matches_bridge_contract);
+    run_contract_case("cached_demag_energy_matches_direct_without_legacy_robin_addition", cached_demag_energy_matches_direct_without_legacy_robin_addition);
+    run_contract_case("demag_energy_is_owned_by_poisson_energy_module", demag_energy_is_owned_by_poisson_energy_module);
+    run_contract_case("demag_cache_store_and_reuse_are_owned_by_poisson_module", demag_cache_store_and_reuse_are_owned_by_poisson_module);
+    run_contract_case("demag_telemetry_is_owned_by_poisson_telemetry_module", demag_telemetry_is_owned_by_poisson_telemetry_module);
+    run_contract_case("demag_field_visual_postprocessing_is_owned_by_poisson_field_module", demag_field_visual_postprocessing_is_owned_by_poisson_field_module);
+    run_contract_case("demag_rhs_assembly_is_owned_by_poisson_rhs_module", demag_rhs_assembly_is_owned_by_poisson_rhs_module);
+    run_contract_case("demag_rhs_sign_contract_matches_laplace_phi_equals_div_m", demag_rhs_sign_contract_matches_laplace_phi_equals_div_m);
+    run_contract_case("sharp_ms_demag_energy_and_delta_use_active_exact_mass", sharp_ms_demag_energy_and_delta_use_active_exact_mass);
+    run_contract_case("sharp_ms_demag_rhs_uses_typed_element_accessor", sharp_ms_demag_rhs_uses_typed_element_accessor);
 #if FULLMAG_HAS_MFEM_STACK
-    sharp_ms_demag_rhs_matches_elementwise_p1_gradient_oracle();
-    nonperiodic_all_tet_poisson_uses_p2_potential_over_p1_magnetization();
-    mixed_pyramid_nonperiodic_poisson_uses_mfem_compatible_p1_potential();
-    periodic_poisson_remains_explicit_p1_node_class_space();
-    poisson_dependency_key_fails_closed_after_mesh_or_policy_mutation();
-    nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves();
-    failed_hypre_setup_does_not_publish_partial_state();
-    failed_poisson_reinitialize_preserves_published_state();
-    mixed_poisson_manufactured_rhs_stiffness_recovery_and_trace();
-    airbox_dirichlet_and_robin_match_manufactured_slab_oracle();
-    mixed_poisson_rhs_is_magnetic_only_with_air_present();
-    mixed_p1_gpu_rhs_and_magnetic_recovery_match_cpu_mfem();
-#if FULLMAG_HAS_CUDA_RUNTIME && defined(MFEM_USE_MPI)
-    mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step();
+    run_contract_case("sharp_ms_demag_rhs_matches_elementwise_p1_gradient_oracle", sharp_ms_demag_rhs_matches_elementwise_p1_gradient_oracle);
+    run_contract_case("nonperiodic_all_tet_poisson_uses_p2_potential_over_p1_magnetization", nonperiodic_all_tet_poisson_uses_p2_potential_over_p1_magnetization);
+    run_contract_case("mixed_pyramid_nonperiodic_poisson_uses_mfem_compatible_p1_potential", mixed_pyramid_nonperiodic_poisson_uses_mfem_compatible_p1_potential);
+    run_contract_case("periodic_poisson_remains_explicit_p1_node_class_space", periodic_poisson_remains_explicit_p1_node_class_space);
+    run_contract_case("poisson_dependency_key_fails_closed_after_mesh_or_policy_mutation", poisson_dependency_key_fails_closed_after_mesh_or_policy_mutation);
+    run_contract_case("nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves", nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves);
+    run_contract_case("failed_hypre_setup_does_not_publish_partial_state", failed_hypre_setup_does_not_publish_partial_state);
+    run_contract_case("failed_poisson_reinitialize_preserves_published_state", failed_poisson_reinitialize_preserves_published_state);
+    run_contract_case("mixed_poisson_manufactured_rhs_stiffness_recovery_and_trace", mixed_poisson_manufactured_rhs_stiffness_recovery_and_trace);
+    run_contract_case("airbox_dirichlet_and_robin_match_manufactured_slab_oracle", airbox_dirichlet_and_robin_match_manufactured_slab_oracle);
+    run_contract_case("mixed_poisson_rhs_is_magnetic_only_with_air_present", mixed_poisson_rhs_is_magnetic_only_with_air_present);
+    run_contract_case("mixed_p1_gpu_rhs_and_magnetic_recovery_match_cpu_mfem", mixed_p1_gpu_rhs_and_magnetic_recovery_match_cpu_mfem);
+    run_contract_case("mixed_poisson_uses_continuous_weak_flux_not_continuous_physical_hn", mixed_poisson_uses_continuous_weak_flux_not_continuous_physical_hn);
+    run_contract_case("mixed_poisson_robin_mass_uses_outer_tri_and_quad_only", mixed_poisson_robin_mass_uses_outer_tri_and_quad_only);
+    run_contract_case("mixed_poisson_energy_sign_and_directional_derivative", mixed_poisson_energy_sign_and_directional_derivative);
+    run_contract_case("mixed_poisson_matches_independently_refined_all_tet_reference", mixed_poisson_matches_independently_refined_all_tet_reference);
+    run_contract_case("nonperiodic_hypre_demag_rejects_one_iteration_candidate", nonperiodic_hypre_demag_rejects_one_iteration_candidate);
+    run_contract_case("nonperiodic_hypre_rejected_candidate_preserves_published_warm_start", nonperiodic_hypre_rejected_candidate_preserves_published_warm_start);
+    run_contract_case("periodic_demag_rejects_one_iteration_candidate", periodic_demag_rejects_one_iteration_candidate);
+    run_contract_case("periodic_demag_reuses_warm_start_and_resets_after_failure", periodic_demag_reuses_warm_start_and_resets_after_failure);
 #endif
-    mixed_poisson_uses_continuous_weak_flux_not_continuous_physical_hn();
-    mixed_poisson_robin_mass_uses_outer_tri_and_quad_only();
-    mixed_poisson_energy_sign_and_directional_derivative();
-    mixed_poisson_matches_independently_refined_all_tet_reference();
-    nonperiodic_hypre_demag_rejects_one_iteration_candidate();
-    nonperiodic_hypre_rejected_candidate_preserves_published_warm_start();
-    periodic_demag_rejects_one_iteration_candidate();
-    periodic_demag_reuses_warm_start_and_resets_after_failure();
-#endif
-    demag_boundary_operator_is_owned_by_poisson_boundary_module();
-    demag_periodic_reduction_is_owned_by_poisson_periodic_module();
-    demag_periodic_reduction_predicate_requires_complete_class_map();
-    backend_demag_tangent_abi_uses_fresh_poisson_dispatch();
-    demag_robin_boundary_mass_excludes_periodic_seam_markers();
-    demag_hypre_solve_is_owned_by_poisson_hypre_module();
-    demag_hypre_solve_returns_workspace_solution_without_final_host_copy();
-    demag_poisson_solver_runtime_state_is_owned_by_poisson_module();
-    demag_recovery_is_owned_by_poisson_recovery_module();
-    demag_recovery_parallel_path_avoids_full_per_thread_node_buffers();
+    run_contract_case("demag_boundary_operator_is_owned_by_poisson_boundary_module", demag_boundary_operator_is_owned_by_poisson_boundary_module);
+    run_contract_case("demag_periodic_reduction_is_owned_by_poisson_periodic_module", demag_periodic_reduction_is_owned_by_poisson_periodic_module);
+    run_contract_case("demag_periodic_reduction_predicate_requires_complete_class_map", demag_periodic_reduction_predicate_requires_complete_class_map);
+    run_contract_case("backend_demag_tangent_abi_uses_fresh_poisson_dispatch", backend_demag_tangent_abi_uses_fresh_poisson_dispatch);
+    run_contract_case("demag_robin_boundary_mass_excludes_periodic_seam_markers", demag_robin_boundary_mass_excludes_periodic_seam_markers);
+    run_contract_case("demag_hypre_solve_is_owned_by_poisson_hypre_module", demag_hypre_solve_is_owned_by_poisson_hypre_module);
+    run_contract_case("demag_hypre_solve_returns_workspace_solution_without_final_host_copy", demag_hypre_solve_returns_workspace_solution_without_final_host_copy);
+    run_contract_case("demag_poisson_solver_runtime_state_is_owned_by_poisson_module", demag_poisson_solver_runtime_state_is_owned_by_poisson_module);
+    run_contract_case("demag_recovery_is_owned_by_poisson_recovery_module", demag_recovery_is_owned_by_poisson_recovery_module);
+    run_contract_case("demag_recovery_parallel_path_avoids_full_per_thread_node_buffers", demag_recovery_parallel_path_avoids_full_per_thread_node_buffers);
 #if FULLMAG_HAS_MFEM_STACK
-    demag_recovery_uses_negative_scalar_potential_gradient();
+    run_contract_case("demag_recovery_uses_negative_scalar_potential_gradient", demag_recovery_uses_negative_scalar_potential_gradient);
 #endif
-    demag_recovery_finalizes_periodic_field_before_energy();
-    demag_solver_stats_are_filled_by_poisson_module();
-    demag_step_stats_provenance_abi_is_append_only();
-    demag_poisson_ready_contract_is_owned_by_poisson_module();
-    demag_solver_telemetry_names_are_owned_by_poisson_module();
-    demag_phase_timings_are_owned_by_poisson_module();
-    demag_call_profile_format_is_owned_by_poisson_module();
-    demag_visual_effective_field_preserves_full_domain_demag();
-    demag_recovered_field_finalize_projects_periodic_and_syncs_visual();
+    run_contract_case("demag_recovery_finalizes_periodic_field_before_energy", demag_recovery_finalizes_periodic_field_before_energy);
+    run_contract_case("demag_solver_stats_are_filled_by_poisson_module", demag_solver_stats_are_filled_by_poisson_module);
+    run_contract_case("demag_step_stats_provenance_abi_is_append_only", demag_step_stats_provenance_abi_is_append_only);
+    run_contract_case("demag_poisson_ready_contract_is_owned_by_poisson_module", demag_poisson_ready_contract_is_owned_by_poisson_module);
+    run_contract_case("demag_solver_telemetry_names_are_owned_by_poisson_module", demag_solver_telemetry_names_are_owned_by_poisson_module);
+    run_contract_case("demag_phase_timings_are_owned_by_poisson_module", demag_phase_timings_are_owned_by_poisson_module);
+    run_contract_case("demag_call_profile_format_is_owned_by_poisson_module", demag_call_profile_format_is_owned_by_poisson_module);
+    run_contract_case("demag_visual_effective_field_preserves_full_domain_demag", demag_visual_effective_field_preserves_full_domain_demag);
+    run_contract_case("demag_recovered_field_finalize_projects_periodic_and_syncs_visual", demag_recovered_field_finalize_projects_periodic_and_syncs_visual);
+#if FULLMAG_HAS_MFEM_STACK && FULLMAG_HAS_CUDA_RUNTIME && defined(MFEM_USE_MPI)
+    // Keep the process-wide CUDA configuration after all CPU oracle tests.
+    run_contract_case("mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step", mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step);
+#endif
     return 0;
 }
