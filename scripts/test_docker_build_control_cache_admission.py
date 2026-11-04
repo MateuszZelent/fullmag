@@ -262,6 +262,19 @@ class BuildSpaceAdmissionTests(unittest.TestCase):
             )
         return result, digests
 
+    def test_toolchain_and_both_image_producers_share_semantic_hash_contract(self):
+        digest=control.build_input_digest
+        fake=FakeControl(receipt={'state':'succeeded','source_digest':'MATCH',
+            'compose_project':'fullmag-cache-test','image_id':IMAGE})
+        with mock.patch.object(control,'build_input_digest',wraps=digest) as observed:
+            self._run_toolchain(fake)
+            self.assertEqual(observed.call_count,1)
+        fake=FakeControl()
+        with mock.patch.object(control,'build_input_digest',wraps=digest) as observed:
+            result,_=self._run_runtime_images(fake)
+            self.assertEqual(observed.call_count,2)
+            self.assertEqual(set(result),{'dev','backend'})
+
     def test_warm_cache_uses_bounded_budget_without_build(self):
         fake = FakeControl(receipt={
             "state": "succeeded", "source_digest": "MATCH",

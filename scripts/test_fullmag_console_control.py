@@ -64,5 +64,32 @@ class ConsoleControlTests(unittest.TestCase):
         self.assertEqual(terminals[0]['inputs']['console_session_id'], TOKEN)
 
 
+class SemanticBuildInputsTests(unittest.TestCase):
+    def test_only_exact_valid_operational_token_is_projected_without_mutation(self):
+        semantic={'source_inputs':[{'path':'Dockerfile','sha256':'b'*64}],'target':'fem-gpu-dev'}
+        expected=subject.canonical(semantic)
+        for token in ('9c4bc6be2de043d1b87c56648fa2f189','d'*32):
+            inputs={**semantic,'console_session_id':token}
+            self.assertEqual(subject.canonical(subject.semantic_build_inputs(inputs)),expected)
+            self.assertEqual(subject.build_input_digest(inputs),subject.build_input_digest(semantic))
+            self.assertEqual(inputs['console_session_id'],token)
+        self.assertNotEqual(subject.build_input_digest({**semantic,'console_session_id_extra':TOKEN}),subject.build_input_digest(semantic))
+    def test_malformed_operational_token_is_never_silently_removed(self):
+        for token in (None,'','bad','A'*32,True,123,[]):
+            with self.subTest(token=token),self.assertRaises(subject.BuildControlError):
+                subject.build_input_digest({'target':'fem-gpu-dev','console_session_id':token})
+    def test_managed_operation_keeps_console_ownership_for_build_phases(self):
+        for phase in ('toolchain','image-dev','image-backend'):
+            value=control();logger=Mock();logger.stdin.closed=True;logger.wait.return_value=0
+            semantic={'source_inputs':[],'target':'fem-gpu-dev'}
+            with patch.dict(os.environ,FULLMAG_CONSOLE_SESSION_ID=TOKEN,FULLMAG_CONSOLE_CANCEL_REQUESTED=''), \
+                 patch.object(subject.subprocess,'Popen',return_value=logger),redirect_stdout(io.StringIO()):
+                with value.operation(phase,semantic) as operation:
+                    self.assertEqual(operation['receipt']['inputs']['console_session_id'],TOKEN)
+                    self.assertEqual(subject.build_input_digest(operation['receipt']['inputs']),subject.build_input_digest(semantic))
+                    operation['receipt']['state']='succeeded'
+            self.assertNotIn('console_session_id',semantic)
+
+
 if __name__ == '__main__':
     unittest.main()
