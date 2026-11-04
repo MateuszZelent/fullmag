@@ -2761,6 +2761,10 @@ def _parser() -> argparse.ArgumentParser:
         preowner_policy.add_argument("--" + option, required=True)
     preowner_policy.add_argument("--apply", action="store_true")
     preowner_policy.add_argument("--expected-plan-sha256")
+    preowner_policy.add_argument(
+        "--variant", choices=("legacy", "cold-memory-increase-restore-stored-budget"), default="legacy")
+    preowner_policy.add_argument("--drain-attempt", help="exact historical successful idle-drain iteration")
+    preowner_policy.add_argument("--continue-intent-sha256", help="observe and finalize this exact interrupted intent without signalling again")
     preowner_policy.add_argument("--terminal-observation-proof", dest="proof_path")
     preowner_policy.add_argument("--terminal-observation-proof-sha256", dest="proof_sha256")
     stop_bootstrap = subparsers.add_parser(
@@ -3082,7 +3086,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.action == "stop-preowner-policy-volume":
             if bool(args.proof_path) != bool(args.proof_sha256):
                 raise _fail("Terminal observation successor requires paired proof path and digest")
-            if args.proof_path:
+            if args.variant == "cold-memory-increase-restore-stored-budget":
+                if args.proof_path or not args.drain_attempt:
+                    raise _fail("Cold stored-budget restore requires drain attempt without terminal observation proof")
+                from docker_volume_cold_budget_restore import stop
+            elif args.drain_attempt or args.continue_intent_sha256:
+                raise _fail("Drain attempt and intent continuation are supported only by cold stored-budget restore")
+            elif args.proof_path:
                 from docker_volume_preowner_drained import stop
             else:
                 from docker_volume_stop_preowner_policy import stop

@@ -664,6 +664,56 @@ automatycznie ponawiać `docker update`. Limit 200 GiB wymaga VM większej niż
 200 GiB z zapasem dla innych usług; komenda nie restartuje Docker/WSL ani innych grup.
 Odbiór uruchomienia API, meshu i solvera jest osobnym dowodem.
 
+## Przywrócenie zapisanego budżetu po odmowie cold startu
+
+Wariant `cold-memory-increase-restore-stored-budget` dotyczy jednej grupy DEV,
+w której nowy start utworzył wyłącznie diagnostyczne API, ponieważ konfiguracja
+żąda większego RAM niż zachowana polityka group ledgeru. CPU, GPU, storage,
+host, topology, revision i epoch muszą być identyczne. Historyczny runtime musi
+mieć uwierzytelniony idle-drain; same wpisy `released` ani brak PID nie stanowią
+wystarczającego dowodu. Gotowość rzeczywistego odtworzenia pozostaje
+**NOT VERIFIED** do zakończenia operacji i kontroli nowego API.
+
+Podgląd używa aktualnej failed-development próby, jej konfiguracji, kontenera,
+obrazu oraz osobnego historycznego idle-drain:
+
+```bash
+python3 -B scripts/docker_dev.py --repo-root <source> stop-preowner-policy-volume \
+  --variant cold-memory-increase-restore-stored-budget \
+  --source-root <source> --attempt <failed-development-uuid> \
+  --config-sha256 <compose-sha256> --backend-container-id <full-container-id> \
+  --image-id <sha256:image-id> --drain-attempt <successful-idle-drain-uuid>
+```
+
+Apply wymaga tych samych pinów, `--apply` oraz
+`--expected-plan-sha256 <preview-sha256>`. Kontrola ponownie uwierzytelnia
+historyczny native drain, bieżący failure fence i incarnation, release proofs,
+wszystkie lokalne lease, terminalne katalogi runów, wolny OWNER.lock i inventory.
+Read-only mount ledgeru zachowuje rzeczywisty volume subpath z HostConfig.
+Nieznany lub aktywny konsument blokuje mutację.
+
+Operacja zatrzymuje bieżący backend diagnostyczny przez SIGTERM i ograniczoną
+obserwację bez SIGKILL. Frontend pozostaje uruchomiony. Zachowuje oryginalny
+native drain, ledger, rezerwacje, lease, sesje i wyniki; nie wykonuje Solve.
+Nowy typed journal wiąże intent, plan i terminal operacji. Przerwanej operacji
+nie zastępuje nowy Stop ani usunięcie markerów: wymaga kontynuacji dokładnego
+intentu, bez ponownego sygnału i z idempotentną publikacją. Kontynuacja używa
+tej samej komendy i wszystkich pierwotnych pinów oraz `--apply`,
+`--expected-plan-sha256 <preview-sha256>` i
+`--continue-intent-sha256 <intent-sha256>`. Obserwuje ten sam backend;
+nie wysyła ponownego sygnału. Nieznany wynik nadal zachowuje blokadę i dowody.
+
+Istniejące `recreate-volume` konsumuje uwierzytelniony journal i przywraca
+budżet wynikający z zapisanej polityki oraz historycznego Compose. Dotyczy to
+tej grupy; globalny `.env` pozostaje bez zmian. Uwierzytelniony pin ma pierwszeństwo przed globalnymi ustawieniami
+backendu i saved-budget. Pojemność sprawdza się dla efektywnego budżetu
+przed końcowym hashem Compose. Jego pochodzenie jest
+zapisane w receipcie i ponownie uwierzytelniane podczas kolejnego retained startu.
+Nie powstaje fikcyjny receipt zwiększenia zasobów ani nowy ledger. Wymagany
+native contract, explicit untracked inputs i brak startup Solve pozostają
+przypięte. Zdrowe API, bieżący native owner i fizyczne wykonanie solvera są
+oddzielnymi bramkami; pozytywny preview nie dowodzi ich ukończenia.
+
 ## Zatrzymanie zbędnej kontroli rollbacków przed API
 
 Gdy opublikowany pakiet jest gotowy, lecz stary helper nadal sprawdza rollbacki,

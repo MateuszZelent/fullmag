@@ -385,7 +385,7 @@ def _assert_group_inventory(control, backend_id, frontend_id):
 
 
 def _load_parent(control, previous, document, *, selected, attempt, config_sha256, image_id,
-                 backend_container_id):
+                 backend_container_id, allow_legacy_root_namespace=False):
     _require(isinstance(attempt, str) and ATTEMPT.fullmatch(attempt), "parent development attempt is invalid")
     _require(isinstance(config_sha256, str) and SHA.fullmatch(config_sha256), "Compose digest is invalid")
     _require(isinstance(image_id, str) and IMAGE.fullmatch(image_id), "backend image ID is invalid")
@@ -407,7 +407,9 @@ def _load_parent(control, previous, document, *, selected, attempt, config_sha25
              and terminal.get("attempt") == attempt
              and terminal.get("compose_project") == control.project
              and terminal.get("control_volume") == control.volume
-             and terminal.get("control_namespace") == control.namespace
+             and (terminal.get("control_namespace") == control.namespace
+                  or allow_legacy_root_namespace is True and control.namespace == ""
+                  and "control_namespace" not in terminal)
              and terminal.get("config_sha256") == config_sha256 == _sha(canonical(document))
              and inputs.get("source_root") == str(selected)
              and inputs.get("image_id") == image_id

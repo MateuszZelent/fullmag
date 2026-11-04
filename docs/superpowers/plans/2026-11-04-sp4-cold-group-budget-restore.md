@@ -52,8 +52,13 @@ może udawać dowodu recovery. Zmiana dotyczy jednej grupy DEV.
 4. Preview SHA → trwały intent → stop wyłącznie bieżącego diagnostic API
    i supervisora → potwierdzenie graceful stop i incarnation → ponowne
    inventory → terminal journal. Nie nadpisywać starego native drainu.
-5. Retained recreate uwierzytelnia journal i nakłada odtworzony budżet po
-   `.env` i saved-budget, przed ostatecznym hashem Compose. RAM wyprowadza
+   Wysyłać wyłącznie SIGTERM; timeout obserwacji nie może eskalować do SIGKILL.
+   Frontend pozostaje uruchomiony. Przerwanie po sygnale lub publikacji wymaga
+   jawnej kontynuacji tego samego intentu i incarnation bez ponownego sygnału;
+   końcowa publikacja i jej odczyt muszą być idempotentne.
+5. Retained recreate uwierzytelnia journal. Odtworzony budżet ma pierwszeństwo
+   przed `.env` i saved-budget; pojemność sprawdza się dla efektywnego wyniku
+   przed ostatecznym hashem Compose. RAM wyprowadza
    z zapisanej pamięci i istniejącego headroom, CPU z cpu_millis. Limity
    kontenera, FULLMAG_DOCKER_* i Cargo jobs są spójne. Pochodzenie override
    jest zapisane w receipt i zachowane przy następnym retained recreate.

@@ -938,6 +938,7 @@ jobs:
           python -B scripts/test_docker_volume_no_spawn_cancellation.py -v
           python -B scripts/test_docker_volume_no_spawn_loader_reconcile.py -v
           python -B scripts/test_docker_volume_linux_supervision_stop.py -v
+          python -B scripts/test_docker_volume_cold_budget_restore.py -v
           python -B scripts/test_docker_volume_activation_reconcile.py -v
           python -B scripts/test_docker_volume_offline_reconcile.py -v
           python -B scripts/test_docker_stopped_network.py -v
