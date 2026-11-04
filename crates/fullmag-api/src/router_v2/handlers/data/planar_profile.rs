@@ -120,7 +120,8 @@ pub(super) async fn planar_profile_response(
         expected_mesh_revision: profile.expected_mesh_revision,
         expected_carrier_revision: profile.expected_carrier_revision,
         expected_field_revision: profile.expected_field_revision,
-        position_fraction: None,
+        position_fraction: profile.position_fraction,
+        position_m: profile.position_m,
     };
     let built = build_planar_field_from_source(state, quantity_id, source, &query).await?;
     let bounds = built.result.meta.bounds_uv_m;

@@ -999,6 +999,32 @@ finite `position_fraction` in `[0,1]` and a positive finite slab thickness;
 legacy v8 persistence input is migrated privately and is never dual-written
 as `active_monitor_id`.
 
+`visualization/state.planar.field_overlays` is an additive presentation list
+(default `[]` for persisted documents without the property), with at most four
+entries and unique non-empty `id` values. Each entry owns `quantity_id`,
+`component`, `view_scope`, `colormap`, `range`, `raster_opacity`,
+`raster_visible`, `vectors_visible`, and `vector_style`, using the existing
+planar types and validation. An omitted PATCH property preserves the list; a
+supplied list replaces it atomically, including `[]` to clear it. Source,
+default slice/operator, resolution, quality, and camera/interaction remain
+shared by the single planar view. Profiles do not modify the scene, Python,
+ProblemIR, or solver fields.
+
+Default-source planar reads accept either `position_fraction` (existing
+carrier-relative layer/node snapping) or `position_m` (finite SI world
+coordinate on the selected plane's normal axis), never both. `position_m`
+samples the exact physical plane without per-carrier FDM/FEM snapping; the
+other two frame coordinates retain the source's origin. The request is not
+clamped to a carrier's extent: occupancy describes missing intersections.
+Section metadata publishes the exact requested/resolved coordinate and its
+carrier-relative fraction (which may lie outside `[0,1]`). Absolute position
+is part of source/sample identity and is preserved in scalar, vector, mask,
+mesh, probe, profile and PNG request replay. Probe and profile queries also
+preserve fractional position overrides. Authored-monitor reads reject either
+override and retain their authored physical frame. Composition clients align
+samples using physical frames and verify shared plane/operator and resource
+revisions; equal pixel indices or equal fractions across scopes are insufficient.
+
 Default-source target resolution is quantity-domain aware: `magnetic_only`
 quantities such as `m` select `magnetic_domain`, while full-domain quantities
 retain `domain`. FEM nodal carriers accept native Tet4 and Prism6 P1 topology;

@@ -15,7 +15,7 @@ use crate::{
     field_render_png::{encode_direction_png, encode_scalar_png, AutoScaleMode, DIRECTION_COLORMAP},
     field_store::serialize_field_vector_binary_v2,
     planar_sampling::{
-        resolve_authored_planar_source, resolve_default_planar_source_with_stops,
+        resolve_authored_planar_source, resolve_default_planar_source_at_position,
         resolve_spatial_target, FemNodePlaneStops,
         evaluate_point_component, sample_resolved_target_cached, Occupancy, PlanarComponent, PlanarSampleIdentity,
         PlanarSampleResult, ResolvedPlanarSampleRequest, ResolvedPlanarSection,
@@ -87,6 +87,7 @@ struct BuiltPlanarField {
     scope_region_id: Option<String>,
     /// Default-source position override (multislice panel), echoed into links.
     position_fraction: Option<f64>,
+    position_m: Option<f64>,
     etag: String,
     sample_token: String,
 }
@@ -494,6 +495,12 @@ async fn build_planar_field_from_source(
     source: PlanarDataSource,
     query: &PlanarFieldQuery,
 ) -> Result<BuiltPlanarField, ApiError> {
+    if query.position_m.is_some() && query.position_fraction.is_some() {
+        return Err(ApiError::bad_request("invalid_planar_position: position_m and position_fraction are mutually exclusive"));
+    }
+    if query.position_m.is_some_and(|position| !position.is_finite()) {
+        return Err(ApiError::bad_request("invalid_planar_position: position_m must be finite"));
+    }
     let request_context = crate::capture_current_live_request_context(state).await?;
     let resolution = resolve_resolution(query)?;
     validate_auxiliary_query(query)?;
@@ -512,26 +519,78 @@ async fn build_planar_field_from_source(
     let planar_state = presentation
         .visualization_planar
         .unwrap_or_else(crate::schemas::visualization_state::default_planar_visualization_state);
-    // Ok(None) unless the plan is an FDM multilayer; an error matters only to
-    // the scopes that sample the composite carrier.
+    let default_airbox_scope = matches!(&source, PlanarDataSource::Default)
+        && query.scope_kind.as_deref() == Some("airbox");
+    let default_multilayer_airbox_scope = default_airbox_scope
+        && query.snapshot_id.is_none()
+        && is_fdm_multilayer_snapshot(snapshot);
+    let scope_validated_early = default_multilayer_airbox_scope;
+    if scope_validated_early {
+        validate_scope(snapshot, query)?;
+    }
+    let spec = fullmag_quantities::quantity_spec(quantity_id);
+    if default_multilayer_airbox_scope && spec.is_none() {
+        return Err(ApiError::not_found(format!(
+            "quantity_unavailable: quantity '{quantity_id}' is unknown"
+        )));
+    }
+    let mut airbox_carrier = None;
+    // Ok(None) unless the plan is an FDM multilayer; Airbox requests use their
+    // target-only carrier below while applicable other scopes use the composite.
     let multilayer_composite = resolve_fdm_multilayer_composite(snapshot);
     let resolved_source = match &source {
         PlanarDataSource::Default => {
             let mut domain = super::domain::domain_meta_for_snapshot(snapshot);
-            if let Ok(Some(composite)) = &multilayer_composite {
+            if default_multilayer_airbox_scope {
+                airbox_carrier =
+                    load_fdm_multilayer_airbox_carrier_for_quantity(snapshot, quantity_id)
+                        .map_err(|reason| {
+                            ApiError::not_found(format!(
+                                "multilayer FDM Airbox carrier unavailable: {reason}"
+                            ))
+                        })?;
+                let carrier = airbox_carrier.as_ref().ok_or_else(|| {
+                    ApiError::not_found(format!(
+                        "quantity_not_materialized: Airbox field '{quantity_id}' is not published"
+                    ))
+                })?;
+                domain.discretization = "fdm".to_string();
+                domain.bounds.min = carrier.origin_m;
+                domain.bounds.max = [
+                    carrier.origin_m[0] + f64::from(carrier.cells[0]) * carrier.cell_size_m[0],
+                    carrier.origin_m[1] + f64::from(carrier.cells[1]) * carrier.cell_size_m[1],
+                    carrier.origin_m[2] + f64::from(carrier.cells[2]) * carrier.cell_size_m[2],
+                ];
+                domain.counts.cells =
+                    Some(carrier.cells.into_iter().map(u64::from).product::<u64>());
+                domain.grid = Some(crate::schemas::domain::StructuredGridDescriptor {
+                    shape: carrier.cells,
+                    origin: carrier.origin_m,
+                    spacing: carrier.cell_size_m,
+                });
+            } else if let Ok(Some(composite)) = &multilayer_composite {
                 composite.apply_to_domain(&mut domain);
             }
-            let stops = snapshot
-                .fem_mesh
-                .as_ref()
-                .and_then(|mesh| mesh.build_report.as_ref())
-                .and_then(FemNodePlaneStops::from_build_report);
+            let stops = if airbox_carrier.is_some() {
+                None
+            } else {
+                snapshot
+                    .fem_mesh
+                    .as_ref()
+                    .and_then(|mesh| mesh.build_report.as_ref())
+                    .and_then(FemNodePlaneStops::from_build_report)
+            };
             let mut default_slice = planar_state.default_slice.clone();
             if let Some(position_fraction) = query.position_fraction {
                 // Multislice panel: same plane and operator, its own position.
                 default_slice.position_fraction = position_fraction;
             }
-            resolve_default_planar_source_with_stops(&domain, &default_slice, stops.as_ref())?
+            resolve_default_planar_source_at_position(&domain, &default_slice, stops.as_ref(), query.position_m)?
+        }
+        PlanarDataSource::Monitor(_) if query.position_m.is_some() => {
+            return Err(ApiError::bad_request(
+                "planar_position_m_requires_default_source: authored monitors retain their physical frame",
+            ));
         }
         PlanarDataSource::Monitor(_) if query.position_fraction.is_some() => {
             return Err(ApiError::bad_request(
@@ -554,7 +613,7 @@ async fn build_planar_field_from_source(
         .as_ref()
         .map(|scene| scene.revision)
         .unwrap_or(0);
-    let spec = fullmag_quantities::quantity_spec(quantity_id).ok_or_else(|| {
+    let spec = spec.ok_or_else(|| {
         ApiError::not_found(format!(
             "quantity_unavailable: quantity '{quantity_id}' is unknown"
         ))
@@ -568,7 +627,9 @@ async fn build_planar_field_from_source(
     let current_field_revision = field_quantity_revision(snapshot, quantity_id);
     let generation_id = domain_generation_id(snapshot);
     let mesh_revision = snapshot.mesh_revision;
-    validate_scope(snapshot, query)?;
+    if !scope_validated_early {
+        validate_scope(snapshot, query)?;
+    }
 
     let snapshot_values = if let Some(snapshot_id) = query.snapshot_id.as_deref() {
         let stage_id = query.stage_id.as_deref().ok_or_else(|| {
@@ -619,11 +680,16 @@ async fn build_planar_field_from_source(
                 )
             })?
     } else if query.scope_kind.as_deref() == Some("airbox") {
-        match load_fdm_multilayer_airbox_carrier_for_quantity(snapshot, quantity_id).map_err(|reason| {
-            ApiError::not_found(format!(
-                "multilayer FDM Airbox carrier unavailable: {reason}"
-            ))
-        })? {
+        let carrier = match airbox_carrier.take() {
+            Some(carrier) => Some(carrier),
+            None => load_fdm_multilayer_airbox_carrier_for_quantity(snapshot, quantity_id)
+                .map_err(|reason| {
+                    ApiError::not_found(format!(
+                        "multilayer FDM Airbox carrier unavailable: {reason}"
+                    ))
+                })?,
+        };
+        match carrier {
             Some(carrier) => {
                 resolved_fdm_multilayer_airbox_field(snapshot, quantity_id, n_comp, &carrier)?
             }
@@ -878,6 +944,7 @@ async fn build_planar_field_from_source(
         scope_id: query.scope_id.clone(),
         scope_region_id: query.scope_region_id.clone(),
         position_fraction: query.position_fraction,
+        position_m: query.position_m,
         etag,
         sample_token,
     })
@@ -1011,7 +1078,8 @@ async fn planar_probe_response(
         expected_mesh_revision: probe.expected_mesh_revision,
         expected_carrier_revision: probe.expected_carrier_revision,
         expected_field_revision: probe.expected_field_revision,
-        position_fraction: None,
+        position_fraction: probe.position_fraction,
+        position_m: probe.position_m,
     };
     let built = build_planar_field_from_source(state, quantity_id, source, &query).await?;
     let bounds = built.result.meta.bounds_uv_m;
@@ -1557,6 +1625,9 @@ fn canonical_sample_query(built: &BuiltPlanarField) -> String {
     if let Some(position_fraction) = built.position_fraction {
         // Shortest round-trip decimal, so the link names the same slice.
         entries.push(("position_fraction", position_fraction.to_string()));
+    }
+    if let Some(position_m) = built.position_m {
+        entries.push(("position_m", position_m.to_string()));
     }
     if let Some(stage_id) = &built.stage_id {
         entries.push(("stage_id", stage_id.clone()));

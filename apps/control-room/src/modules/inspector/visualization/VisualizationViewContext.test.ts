@@ -76,6 +76,19 @@ describe("visualization view context", () => {
     ).toEqual({ kind: "airbox" });
   });
 
+  it("maps a Universe selection to the aggregate Airbox scope without an id", () => {
+    expect(
+      planarViewScopeForSelection({
+        kind: "universe",
+        label: "Universe",
+        moduleSource: "inspector",
+        nodeId: "universe",
+        objectId: null,
+        ref: null,
+      }),
+    ).toEqual({ kind: "airbox" });
+  });
+
   it("maps an FDM multilayer layer selection to the native layer scope", () => {
     expect(
       planarViewScopeForSelection({

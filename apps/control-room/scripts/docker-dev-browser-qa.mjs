@@ -12,6 +12,7 @@ import { runViewportLayoutBrowserQa } from "./lib/viewport-layout-browser-qa.mjs
 import { runViewportQaFixtureBrowser } from "./lib/viewport-qa-fixture-browser.mjs";
 import { runViewportCameraBrowserQa } from "./lib/viewport-camera-browser-qa.mjs";
 import { runTerminalFooterTelemetryBrowserQa } from "./docker-dev-terminal-telemetry.mjs";
+import { assertPlanarEvidenceReady } from "./lib/planar-field-evidence.mjs";
 
 const require = createRequire(import.meta.url);
 const playwrightPackage = require("playwright/package.json");
@@ -29,6 +30,7 @@ const scratchSourcePath = fileURLToPath(new URL("./lib/scratch-authoring-browser
 const fixtureDataPath = fileURLToPath(new URL("./fixtures/scratch-authoring/fdm.v1.json", import.meta.url));
 const cameraSourcePath = fileURLToPath(new URL("./lib/viewport-camera-browser-qa.mjs", import.meta.url));
 const terminalTelemetrySourcePath = fileURLToPath(new URL("./docker-dev-terminal-telemetry.mjs", import.meta.url));
+const planarFieldEvidenceSourcePath = fileURLToPath(new URL("./lib/planar-field-evidence.mjs", import.meta.url));
 const expectedVersion = process.env.CONTROL_ROOM_EXPECTED_PLAYWRIGHT_VERSION ?? "1.62.1";
 // Leave room for bounded UI restoration and result publication before the
 // managed outer runtime deadline expires.
@@ -53,6 +55,8 @@ const expectTerminalTelemetrySetting = process.env.CONTROL_ROOM_BROWSER_QA_EXPEC
 const expectTerminalTelemetry = expectTerminalTelemetrySetting === "1";
 const expectRunPerformanceSetting = process.env.CONTROL_ROOM_BROWSER_QA_EXPECT_RUN_PERFORMANCE;
 const expectRunPerformance = expectRunPerformanceSetting === "1";
+const expectPlanarAirboxSetting = process.env.CONTROL_ROOM_BROWSER_QA_EXPECT_PLANAR_AIRBOX ?? "0";
+const expectPlanarAirbox = expectPlanarAirboxSetting === "1";
 const maxCanvasScreenshotBytes = 512 * 1024;
 const canvasOnlySkippedAreas = [
   "viewport appearance and color-profile checks",
@@ -83,6 +87,7 @@ const expectedResponseDrops = [];
 const intentionalResponseDropRequests = new WeakSet();
 const resourceResponses = [];
 const femAirboxVectorResponses = [];
+const planarAirboxMetaResponses = [];
 const fieldTransportLifecycle = [];
 const fieldTransportLifecycleByRequest = new WeakMap();
 const fieldTransportLifecycleStartedAt = new WeakMap();
@@ -167,6 +172,9 @@ const readHarnessSourceHashes = async () => {
   };
   if (expectTerminalTelemetry) {
     hashes.terminal_telemetry_helper = await sha256File(terminalTelemetrySourcePath);
+  }
+  if (expectPlanarAirbox) {
+    hashes.planar_field_evidence = await sha256File(planarFieldEvidenceSourcePath);
   }
   return hashes;
 };
@@ -335,6 +343,383 @@ const waitForLiveField = async (page, quantityId, requireAirboxVectors) => {
     throw new Error("FDM-only airbox-vector gate unavailable: viewport exposes no FDM domain/model dataset; FEM has no corresponding airbox-vector dataset");
   }
   return observed;
+};
+
+const currentSessionRunIdentity = async (page) => {
+  const status = await page.request.get(
+    new URL("/v2/sessions/current/status", page.url()).toString(), { timeout },
+  );
+  if (status.status() !== 200) {
+    throw new Error(`GET /v2/sessions/current/status returned ${status.status()}`);
+  }
+  const body = await status.json();
+  const identity = {
+    session_id: body?.session?.session_id,
+    session_epoch: body?.session?.session_epoch,
+    request_scope_epoch: body?.session?.request_scope_epoch,
+    run_id: body?.run?.run_id,
+  };
+  if (Object.values(identity).some((value) => typeof value !== "string" || value.trim() === "")) {
+    throw new Error("Planar Airbox proof requires a current session, run, and request-scope identity");
+  }
+  return identity;
+};
+
+const canonicalizeJsonValue = (value) => {
+  if (Array.isArray(value)) return value.map(canonicalizeJsonValue);
+  if (value === null || typeof value !== "object") return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalizeJsonValue(value[key])]));
+};
+
+const sameCanonicalJsonValue = (left, right) =>
+  JSON.stringify(canonicalizeJsonValue(left)) === JSON.stringify(canonicalizeJsonValue(right));
+
+const planarProfileRangeIsRestorable = (range) =>
+  (range?.mode === "auto" && range.min === null && range.max === null) ||
+  (range?.mode === "manual" && Number.isFinite(range.min) && Number.isFinite(range.max) && range.min < range.max);
+
+const expectedAirboxDefaultFrame = (layout, planar) => {
+  const airbox = layout?.airbox;
+  const cells = airbox?.cells;
+  const origin = airbox?.origin_m;
+  const spacing = airbox?.cell_size_m;
+  if (!Array.isArray(cells) || cells.length !== 3 || cells.some((value) => !Number.isSafeInteger(value) || value <= 0) ||
+      !Array.isArray(origin) || origin.length !== 3 || origin.some((value) => !Number.isFinite(value)) ||
+      !Array.isArray(spacing) || spacing.length !== 3 || spacing.some((value) => !Number.isFinite(value) || value <= 0)) {
+    throw new Error("fdm-multilayer-layout.airbox does not expose a physical target grid");
+  }
+  const bounds = {
+    min: [...origin],
+    max: origin.map((value, axis) => value + cells[axis] * spacing[axis]),
+  };
+  const defaultSlice = planar?.default_slice;
+  const plane = defaultSlice?.plane;
+  const positionFraction = defaultSlice?.position_fraction;
+  const operatorKind = defaultSlice?.operator?.kind;
+  if (!(["xy", "xz", "yz"].includes(plane)) || !Number.isFinite(positionFraction) ||
+      positionFraction < 0 || positionFraction > 1 || !["plane_sample", "slab_average"].includes(operatorKind)) {
+    throw new Error("Current default planar slice presentation is not a supported axis-aligned slice");
+  }
+  const [normalAxis, uAxis, vAxis] = {
+    xy: [2, 0, 1], xz: [1, 0, 2], yz: [0, 1, 2],
+  }[plane];
+  const lengths = bounds.max.map((value, axis) => value - bounds.min[axis]);
+  const frameOrigin = bounds.min.map((value, axis) => (value + bounds.max[axis]) * 0.5);
+  const requestedCoordinate = bounds.min[normalAxis] + positionFraction * lengths[normalAxis];
+  let resolvedCoordinateM = requestedCoordinate;
+  if (operatorKind === "plane_sample") {
+    const count = cells[normalAxis];
+    const scaled = positionFraction * count;
+    const index = Math.min(Math.max(scaled <= 0 ? 0 : Math.ceil(scaled) - 1, 0), count - 1);
+    resolvedCoordinateM = origin[normalAxis] + (index + 0.5) * spacing[normalAxis];
+  }
+  frameOrigin[normalAxis] = resolvedCoordinateM;
+  const axes = {
+    xy: { normal: [0, 0, 1], u: [1, 0, 0], v: [0, 1, 0] },
+    xz: { normal: [0, -1, 0], u: [1, 0, 0], v: [0, 0, 1] },
+    yz: { normal: [1, 0, 0], u: [0, 1, 0], v: [0, 0, 1] },
+  }[plane];
+  return {
+    plane,
+    positionFraction,
+    operatorKind,
+    resolvedCoordinateM,
+    originM: frameOrigin,
+    uAxis: axes.u,
+    vAxis: axes.v,
+    normal: axes.normal,
+    boundsUvM: [-0.5 * lengths[uAxis], 0.5 * lengths[uAxis], -0.5 * lengths[vAxis], 0.5 * lengths[vAxis]],
+    bounds,
+  };
+};
+
+const assertPlanarFrameMatchesAirbox = (meta, expected) => {
+  if (meta?.source?.kind !== "default" || meta?.scope_kind !== "airbox" ||
+      meta?.operator?.kind !== expected.operatorKind) {
+    throw new Error("Planar metadata does not describe the default Airbox field slice");
+  }
+  const close = (left, right) => Number.isFinite(left) && Number.isFinite(right) &&
+    Math.abs(left - right) <= Math.max(Math.abs(right) * 1e-10, 1e-18);
+  const frame = meta.frame;
+  for (const [key, expectedValues] of [
+    ["origin_m", expected.originM], ["bounds_uv_m", expected.boundsUvM],
+    ["u_axis", expected.uAxis], ["v_axis", expected.vAxis], ["normal", expected.normal],
+  ]) {
+    const actual = frame?.[key];
+    if (!Array.isArray(actual) || actual.length !== expectedValues.length ||
+        actual.some((value, index) => !close(value, expectedValues[index]))) {
+      throw new Error(`Planar metadata ${key} differs from fdm-multilayer-layout.airbox: ${JSON.stringify({ actual, expected: expectedValues })}`);
+    }
+  }
+  return frame;
+};
+
+const readPlanarAirboxJson = async (page, path, label) => {
+  const response = await page.request.get(new URL(path, page.url()).toString(), { timeout });
+  if (response.status() !== 200) throw new Error(`${label} returned ${response.status()}`);
+  return response.json();
+};
+
+const waitForPlanarAirboxMeta = async (firstIndex) => {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const isCurrentAirboxMeta = (entry) =>
+      entry.method === "GET" && entry.path === "/v2/sessions/current/data/fields/H_demag/planar-default/meta" &&
+      entry.scope_kind === "airbox" && entry.scope_id_present === false && entry.status === 200 && entry.payload;
+    const match = [...planarAirboxMetaResponses.slice(firstIndex)].reverse().find(isCurrentAirboxMeta) ??
+      [...planarAirboxMetaResponses].reverse().find(isCurrentAirboxMeta);
+    if (match) return match;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("The browser did not load planar-default metadata for scope_kind=airbox without scope_id");
+};
+
+const assertPlanarFieldMapCanvas = async (page) => {
+  const canvas = page.locator(".fm-field-map__canvas").first();
+  await canvas.waitFor({ state: "visible", timeout });
+  await page.waitForFunction(() => {
+    const node = document.querySelector(".fm-field-map__canvas");
+    if (!(node instanceof HTMLCanvasElement) || node.width <= 0 || node.height <= 0) return false;
+    const rect = node.getBoundingClientRect();
+    const style = getComputedStyle(node);
+    if (rect.width <= 0 || rect.height <= 0 || style.display === "none" || style.visibility === "hidden" || Number(style.opacity) <= 0) return false;
+    const context = node.getContext("2d");
+    if (!context) return false;
+    const pixels = context.getImageData(0, 0, node.width, node.height).data;
+    for (let index = 3; index < pixels.length; index += 4) if (pixels[index] !== 0) return true;
+    return false;
+  }, null, { timeout });
+  return canvas.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    return { visible: rect.width > 0 && rect.height > 0, width: node.width, height: node.height, non_transparent: true };
+  });
+};
+
+const capturePlanarFieldMapScreenshot = async (page) => {
+  const png = await page.locator(".fm-field-map__canvas").first().screenshot({ type: "png", timeout });
+  if (png.length < 24 || !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+    throw new Error("Planar Airbox screenshot was not a PNG");
+  }
+  const width = png.readUInt32BE(16);
+  const height = png.readUInt32BE(20);
+  if (png.length > maxCanvasScreenshotBytes || width <= 0 || height <= 0) {
+    throw new Error(`Planar Airbox screenshot exceeds its bounded PNG limits: ${png.length} bytes`);
+  }
+  return {
+    state: "captured", image_proof: true, media_type: "image/png", width, height,
+    byte_length: png.length, png_base64: png.toString("base64"),
+  };
+};
+
+const selectToolbarOption = async (page, trigger, label, description) => {
+  await trigger.click();
+  const option = page.getByRole("option", { name: label, exact: true });
+  await option.waitFor({ state: "visible", timeout });
+  if ((await option.getAttribute("aria-disabled")) === "true") {
+    throw new Error(`${description} is disabled in the current field catalog`);
+  }
+  if ((await option.getAttribute("aria-selected")) === "true") {
+    await page.keyboard.press("Escape");
+    return false;
+  }
+  const acknowledgement = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === "PATCH" && url.pathname === "/v2/sessions/current/visualization/state";
+  }, { timeout });
+  await option.click();
+  const response = await acknowledgement;
+  if (response.status() < 200 || response.status() >= 300) {
+    throw new Error(`${description} display-state acknowledgement returned ${response.status()}`);
+  }
+  return true;
+};
+
+const runPlanarAirboxBrowserQa = async (page, expectedSession) => {
+  const sessionBefore = await currentSessionRunIdentity(page);
+  for (const key of ["session_id", "session_epoch", "request_scope_epoch"]) {
+    if (sessionBefore[key] !== expectedSession[key]) throw new Error(`Planar Airbox initial ${key} differs from the active browser session`);
+  }
+  const originalState = await readPlanarAirboxJson(
+    page, "/v2/sessions/current/visualization/state", "Visualization state",
+  );
+  const planar = originalState?.planar;
+  if (planar?.source?.kind !== "default") {
+    throw new Error("Planar Airbox QA requires the loaded session's existing default field source");
+  }
+  const originalScopeKind = planar.view_scope?.kind;
+  if (!["monitor_target", "airbox"].includes(originalScopeKind)) {
+    throw new Error(`Planar Airbox QA cannot safely restore the existing ${String(originalScopeKind)} scope`);
+  }
+  if (!["m", "H_demag"].includes(planar.quantity_id) || planar.component !== "magnitude") {
+    throw new Error("Planar Airbox QA supports only restorable m or H_demag magnitude profiles");
+  }
+  if (planar.quantity_id === "m" && originalScopeKind !== "monitor_target") {
+    throw new Error("Planar Airbox QA requires an m field to start in Monitor target scope");
+  }
+  if (planar.quantity_id === "m" &&
+      (!["viridis", "hsl_direction"].includes(planar.colormap) || !planarProfileRangeIsRestorable(planar.range))) {
+    throw new Error("Planar Airbox QA cannot safely restore the existing m palette and color range");
+  }
+  const layout = await readPlanarAirboxJson(
+    page, "/v2/sessions/current/data/domain/fdm-multilayer-layout", "FDM multilayer layout",
+  );
+  const airbox = layout?.airbox;
+  if (layout?.schema_version !== "fdm-multilayer-layout.v1" || layout.available !== true ||
+      layout.backend !== "fdm_multilayer" || airbox?.carrier_available !== true ||
+      airbox?.h_demag_available !== true || airbox?.target_only !== true) {
+    throw new Error("Current session has no authoritative materialized FDM multilayer Airbox H_demag carrier");
+  }
+  const expectedFrame = expectedAirboxDefaultFrame(layout, planar);
+  const open2d = page.getByRole("tab", { name: "2D View", exact: true });
+  const originalViewWas2d = (await open2d.getAttribute("aria-selected")) === "true";
+  if (!originalViewWas2d) await open2d.click();
+  const toolbar = page.getByRole("toolbar", { name: "2D view controls", exact: true });
+  await toolbar.waitFor({ state: "visible", timeout });
+  const quantity = toolbar.getByRole("combobox", { name: "Quantity", exact: true });
+  const scope = toolbar.getByRole("combobox", { name: "Scope", exact: true });
+  if (await quantity.count() !== 1 || await scope.count() !== 1) {
+    throw new Error("2D Field Map did not expose one Quantity and one Scope selector");
+  }
+  const originalQuantityLabel = (await quantity.innerText()).trim();
+  const originalScopeLabel = (await scope.innerText()).trim();
+  const metadataStart = planarAirboxMetaResponses.length;
+  const patchStart = displayPatchRequestCount;
+  const catalog = await readPlanarAirboxJson(
+    page, "/v2/sessions/current/data/fields", "Field catalog",
+  );
+  const demagEntries = Array.isArray(catalog?.quantities)
+    ? catalog.quantities.filter((entry) => entry.quantity_id === "H_demag") : [];
+  if (demagEntries.length !== 1 || demagEntries[0].available !== true) {
+    throw new Error("The live field catalog did not expose one available H_demag quantity");
+  }
+  const demagLabel = `${demagEntries[0].label}${demagEntries[0].unit ? ` (${demagEntries[0].unit})` : ""}`;
+  let presentationRestored = false;
+  let originalViewRestored = originalViewWas2d;
+  let observation = null;
+  try {
+    await selectToolbarOption(page, quantity, demagLabel, "H_demag quantity");
+    await selectToolbarOption(page, scope, "Universe / Airbox", "Universe / Airbox scope");
+    const metaRequest = await waitForPlanarAirboxMeta(metadataStart);
+    const meta = metaRequest.payload;
+    const evidenceHandle = await page.waitForFunction((expected) => {
+      const raw = document.querySelector("[aria-label='Planar field evidence']")?.getAttribute("data-planar-evidence");
+      if (!raw) return null;
+      try {
+        const evidence = JSON.parse(raw);
+        return evidence.status === "ready" && evidence.quantityId === "H_demag" &&
+          evidence.sourceKind === "default" && evidence.sourceId === "default" &&
+          evidence.component === "magnitude" && evidence.metaIdentity === expected.etag &&
+          evidence.sampleToken === expected.sample_token ? evidence : null;
+      } catch {
+        return null;
+      }
+    }, { etag: meta.etag, sample_token: meta.sample_token }, { timeout });
+    const evidence = await evidenceHandle.jsonValue();
+    assertPlanarEvidenceReady(evidence, {
+      component: "magnitude",
+      sourceKind: "default",
+      sourceId: "default",
+      operatorKind: expectedFrame.operatorKind,
+      quantityId: "H_demag",
+      defaultPlane: expectedFrame.plane,
+      positionFraction: expectedFrame.positionFraction,
+      resolvedCoordinateM: expectedFrame.resolvedCoordinateM,
+    }, meta);
+    const matchedFrame = assertPlanarFrameMatchesAirbox(meta, expectedFrame);
+    if (evidence.domainGenerationId !== layout.domain_generation_id ||
+        !evidence.sampleToken || evidence.sampleToken !== meta.sample_token ||
+        !evidence.raster?.checksum || evidence.raster.sampleCount <= 0) {
+      throw new Error("Planar Airbox raster evidence is not bound to the current metadata/layout identities");
+    }
+    const canvas = await assertPlanarFieldMapCanvas(page);
+    const screenshot = await capturePlanarFieldMapScreenshot(page);
+    observation = {
+      schema: "fullmag.docker-dev-planar-airbox-browser-proof.v1",
+      state: "passed",
+      quantity_id: "H_demag",
+      source_kind: "default",
+      source_id: "default",
+      scope_kind: "airbox",
+      scope_id: null,
+      session_before: sessionBefore,
+      session_after: null,
+      meta_request: {
+        method: metaRequest.method,
+        path: metaRequest.path,
+        scope_kind: metaRequest.scope_kind,
+        scope_id_present: metaRequest.scope_id_present,
+        status: metaRequest.status,
+      },
+      meta,
+      evidence,
+      domain_layout: {
+        schema_version: layout.schema_version,
+        available: layout.available,
+        backend: layout.backend,
+        domain_generation_id: layout.domain_generation_id,
+        layout_fingerprint: layout.layout_fingerprint,
+        airbox: {
+          carrier_available: airbox.carrier_available,
+          h_demag_available: airbox.h_demag_available,
+          target_only: airbox.target_only,
+          cells: airbox.cells,
+          origin_m: airbox.origin_m,
+          cell_size_m: airbox.cell_size_m,
+        },
+      },
+      expected_frame: expectedFrame,
+      matched_frame: matchedFrame,
+      canvas,
+      screenshot,
+      display_state_patch_count: displayPatchRequestCount - patchStart,
+      visualization_client_ack_request_count: visualizationClientAckRequestCount,
+      blocked_mutation_count: blockedMutations.length,
+      no_computation_or_monitor_mutations: blockedMutations.length === 0,
+      presentation_restored: false,
+    };
+  } finally {
+    const currentScopeLabel = (await scope.innerText().catch(() => "")).trim();
+    if (currentScopeLabel !== originalScopeLabel) {
+      await selectToolbarOption(page, scope, originalScopeLabel, "Original scope restoration");
+    }
+    const restoredScopeState = await readPlanarAirboxJson(
+      page, "/v2/sessions/current/visualization/state", "Restored planar scope",
+    );
+    if (!sameCanonicalJsonValue(restoredScopeState?.planar?.view_scope, planar.view_scope)) {
+      throw new Error("Planar Airbox QA could not restore the original scope before restoring quantity");
+    }
+    const currentQuantityLabel = (await quantity.innerText().catch(() => "")).trim();
+    if (currentQuantityLabel !== originalQuantityLabel) {
+      await selectToolbarOption(page, quantity, originalQuantityLabel, "Original quantity restoration");
+    }
+    const restoredState = await readPlanarAirboxJson(
+      page, "/v2/sessions/current/visualization/state", "Restored visualization state",
+    );
+    presentationRestored = sameCanonicalJsonValue(planar, restoredState?.planar);
+    if (!presentationRestored) throw new Error("Planar Airbox QA could not restore the original default-source presentation");
+    if (!originalViewWas2d) {
+      await page.getByRole("tab", { name: "3D Viewport", exact: true }).click();
+    }
+    originalViewRestored =
+      (await page.getByRole("tab", { name: originalViewWas2d ? "2D View" : "3D Viewport", exact: true })
+        .getAttribute("aria-selected")) === "true";
+    presentationRestored = presentationRestored && originalViewRestored;
+    const sessionAfter = await currentSessionRunIdentity(page);
+    if (JSON.stringify(sessionBefore) !== JSON.stringify(sessionAfter)) {
+      throw new Error("Planar Airbox presentation changed session/run identity");
+    }
+    if (observation) {
+      observation.session_after = sessionAfter;
+      observation.presentation_restored = presentationRestored;
+      observation.display_state_patch_count = displayPatchRequestCount - patchStart;
+      observation.blocked_mutation_count = blockedMutations.length;
+      observation.no_computation_or_monitor_mutations = blockedMutations.length === 0;
+    }
+  }
+  if (!observation || !presentationRestored || observation.blocked_mutation_count !== 0) {
+    throw new Error("Planar Airbox browser proof did not complete its presentation-only round trip");
+  }
+  return observation;
 };
 
 const readFemAirboxDebugDom = () => {
@@ -1380,6 +1765,18 @@ const main = async () => {
   if (!expectFemAirboxVectors && scenarioSetting === "fem-airbox-vectors") {
     throw new Error("FEM Airbox vector scenario is missing its explicit observation flag");
   }
+  if (!(["0", "1"].includes(expectPlanarAirboxSetting))) {
+    throw new Error("CONTROL_ROOM_BROWSER_QA_EXPECT_PLANAR_AIRBOX must be exactly 0 or 1");
+  }
+  if (expectPlanarAirbox && (!canvasOnly || expectedLiveField !== "m" || expectAirboxVectors ||
+      expectFemAirboxVectors || expectAmbiguousComputeFields || expectTerminalTelemetry ||
+      expectRunPerformance || scenarioSetting !== "planar-airbox" ||
+      process.env.CONTROL_ROOM_PREPARE_VIEWPORT_FIXTURE === "1")) {
+    throw new Error("Planar Airbox QA requires its canvas-only primary-m scenario and excludes other browser mutations");
+  }
+  if (!expectPlanarAirbox && scenarioSetting === "planar-airbox") {
+    throw new Error("Planar Airbox scenario is missing its explicit observation flag");
+  }
   if (expectTerminalTelemetrySetting !== undefined && expectTerminalTelemetrySetting !== "1") {
     throw new Error("CONTROL_ROOM_BROWSER_QA_EXPECT_TERMINAL_TELEMETRY must be absent or exactly 1");
   }
@@ -1435,7 +1832,7 @@ const main = async () => {
     page = await context.newPage();
     page.setDefaultTimeout(timeout);
     installFieldTransportLifecycleObserver(page);
-    if (expectFemAirboxVectors) {
+    if (expectFemAirboxVectors || expectPlanarAirbox) {
       await page.route("**/v2/**", async (route) => {
         const request = route.request();
         const method = request.method();
@@ -1445,8 +1842,7 @@ const main = async () => {
             url.pathname === "/v2/sessions/current/visualization/state") {
           return route.continue();
         }
-        // The viewport acknowledges display adoption through this resource;
-        // its handler records client diagnostics and cannot start computation.
+        // This resource records presentation adoption and cannot start computation.
         if (method === "POST" && url.origin === loopbackProxy.origin &&
             url.pathname === "/v2/sessions/current/visualization/client-acks") {
           visualizationClientAckRequestCount += 1;
@@ -1519,6 +1915,25 @@ const main = async () => {
     });
     page.on("response", (response) => {
       const url = new URL(response.url());
+      const planarMetaMatch = url.pathname.match(
+        /^\/v2\/sessions\/current\/data\/fields\/H_demag\/planar-default\/meta$/,
+      );
+      if (expectPlanarAirbox && planarMetaMatch && planarAirboxMetaResponses.length < 16) {
+        const record = {
+          method: response.request().method(),
+          path: url.pathname,
+          scope_kind: url.searchParams.get("scope_kind"),
+          scope_id_present: url.searchParams.has("scope_id"),
+          status: response.status(),
+          payload: null,
+        };
+        if (response.status() === 200) {
+          response.json().then((payload) => { record.payload = payload; }).catch((error) => {
+            collect(pageErrors, `Planar Airbox metadata inspection failed: ${String(error)}`);
+          });
+        }
+        planarAirboxMetaResponses.push(record);
+      }
       if (url.pathname === "/v2/sessions/current/data/fields/H_demag/samples/vector" &&
           femAirboxVectorResponses.length < 16) {
         femAirboxVectorResponses.push({
@@ -1738,6 +2153,16 @@ const main = async () => {
         after_home: null,
       };
     }
+    let planarAirboxObservation = null;
+    if (expectPlanarAirbox) {
+      try {
+        planarAirboxObservation = await runPlanarAirboxBrowserQa(page, sessionBefore);
+        partialProof.planar_airbox_observation = planarAirboxObservation;
+      } catch (error) {
+        if (error?.partialProof) partialProof.planar_airbox_observation = error.partialProof;
+        throw error;
+      }
+    }
     const canvasHandle = await page.locator(".fm-viewport-3d canvas").first().elementHandle();
     if (!canvasHandle) throw new Error("before Home: could not retain the workspace canvas element");
 
@@ -1828,6 +2253,7 @@ const main = async () => {
       schema: resultSchema,
       state: "passed",
       qa_scope: expectRunPerformance ? runPerformanceQaScope :
+        expectPlanarAirbox ? "canvas-home-planar-airbox" :
         expectAmbiguousComputeFields ? "canvas-home-ambiguous-compute-fields" :
         expectFemAirboxVectors ? "canvas-home-fem-airbox-vectors" :
         expectAirboxVectors ? "canvas-home-live-field-airbox" :
@@ -1843,6 +2269,7 @@ const main = async () => {
       canvas_only: canvasOnly,
       expect_live_field: expectedLiveField,
       expect_airbox_vectors: expectAirboxVectors,
+      expect_planar_airbox: expectPlanarAirbox,
       expect_ambiguous_compute_fields: expectAmbiguousComputeFields,
       ...(expectFemAirboxVectors ? { expect_fem_airbox_vectors: true } : {}),
       ...(expectTerminalTelemetry ? {
@@ -1871,6 +2298,7 @@ const main = async () => {
         },
         canvas_screenshot: await captureCanvasScreenshot(page, after),
       } : {}),
+      ...(expectPlanarAirbox ? { planar_airbox_observation: planarAirboxObservation } : {}),
       ...(expectFemAirboxVectors ? { fem_airbox_observation: femAirboxObservation } : {}),
       ...(expectAmbiguousComputeFields ? {
         ambiguous_command_submission: ambiguousCommandSubmission,
@@ -1955,6 +2383,10 @@ const main = async () => {
           terminal_telemetry_helper_before: sourceHashesBefore.terminal_telemetry_helper,
           terminal_telemetry_helper_after: sourceHashesAfter.terminal_telemetry_helper,
         } : {}),
+        ...(expectPlanarAirbox ? {
+          planar_field_evidence_before: sourceHashesBefore.planar_field_evidence,
+          planar_field_evidence_after: sourceHashesAfter.planar_field_evidence,
+        } : {}),
         unchanged,
       };
       if (!unchanged) throw new Error("Browser QA harness source changed during the run");
@@ -1977,11 +2409,13 @@ try {
     canvas_only: canvasOnly,
     expect_live_field: expectedLiveField,
     expect_airbox_vectors: expectAirboxVectors,
+    expect_planar_airbox: expectPlanarAirbox,
     expect_ambiguous_compute_fields: expectAmbiguousComputeFields,
     ...(expectFemAirboxVectors ? { expect_fem_airbox_vectors: true } : {}),
     ...(expectTerminalTelemetry ? { expect_terminal_telemetry: true } : {}),
     ...(expectRunPerformance ? { expect_run_performance: true } : {}),
     qa_scope: expectRunPerformance ? "canvas-engine-run-performance" :
+      expectPlanarAirbox ? "canvas-home-planar-airbox" :
       expectAmbiguousComputeFields ? "canvas-home-ambiguous-compute-fields" :
       expectFemAirboxVectors ? "canvas-home-fem-airbox-vectors" :
       expectAirboxVectors ? "canvas-home-live-field-airbox" :

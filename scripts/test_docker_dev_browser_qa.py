@@ -28,6 +28,112 @@ def _load_qa_module():
     return module
 
 
+def _planar_airbox_observation_fixture(qa):
+    session = {
+        "session_id": "session-1",
+        "session_epoch": "session-1@1",
+        "request_scope_epoch": "api:1",
+        "run_id": "run-1",
+    }
+    png = (
+        b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR"
+        + (4).to_bytes(4, "big") + (3).to_bytes(4, "big") + b"\x08\x02\x00\x00\x00"
+    )
+    return {
+        "schema": qa.PLANAR_AIRBOX_OBSERVATION_SCHEMA,
+        "state": "passed",
+        "quantity_id": "H_demag",
+        "source_kind": "default",
+        "source_id": "default",
+        "scope_kind": "airbox",
+        "scope_id": None,
+        "session_before": deepcopy(session),
+        "session_after": deepcopy(session),
+        "meta_request": {
+            "method": "GET",
+            "path": "/v2/sessions/current/data/fields/H_demag/planar-default/meta",
+            "scope_kind": "airbox",
+            "scope_id_present": False,
+            "status": 200,
+        },
+        "meta": {
+            "etag": "etag-1",
+            "sample_token": "planar-sample-v1:current",
+            "field_revision": 7,
+            "scope_kind": "airbox",
+            "source": {
+                "kind": "default",
+                "default_slice_hash": "default-hash",
+                "default_slice_revision": "4",
+            },
+            "operator": {"kind": "plane_sample"},
+            "frame": {
+                "origin_m": [11.0, 22.0, 32.0],
+                "bounds_uv_m": [-1.0, 1.0, -2.0, 2.0],
+                "u_axis": [1.0, 0.0, 0.0],
+                "v_axis": [0.0, 1.0, 0.0],
+                "normal": [0.0, 0.0, 1.0],
+            },
+        },
+        "evidence": {
+            "status": "ready",
+            "quantityId": "H_demag",
+            "sourceKind": "default",
+            "sourceId": "default",
+            "operatorKind": "plane_sample",
+            "component": "magnitude",
+            "metaIdentity": "etag-1",
+            "scalarIdentity": "etag-1",
+            "fieldRevision": 7,
+            "sourceRevision": "4",
+            "sourceHash": "default-hash",
+            "operatorRevision": "4",
+            "domainGenerationId": "generation-1",
+            "defaultPlane": "xy",
+            "positionFraction": 0.5,
+            "resolvedCoordinateM": 32.0,
+            "sampleToken": "planar-sample-v1:current",
+            "glyphCount": 0,
+            "raster": {
+                "checksum": "fnv1a32:deadbeef",
+                "min": -1.0,
+                "max": 1.0,
+                "sampleCount": 4,
+            },
+        },
+        "domain_layout": {
+            "schema_version": "fdm-multilayer-layout.v1",
+            "available": True,
+            "backend": "fdm_multilayer",
+            "domain_generation_id": "generation-1",
+            "layout_fingerprint": "sha256:" + "a" * 64,
+            "airbox": {
+                "carrier_available": True,
+                "h_demag_available": True,
+                "target_only": True,
+                "cells": [2, 2, 2],
+                "origin_m": [10.0, 20.0, 30.0],
+                "cell_size_m": [1.0, 2.0, 4.0],
+            },
+        },
+        "canvas": {"visible": True, "non_transparent": True, "width": 4, "height": 3},
+        "screenshot": {
+            "state": "captured",
+            "image_proof": True,
+            "media_type": "image/png",
+            "width": 4,
+            "height": 3,
+            "byte_length": len(png),
+            "png_base64": base64.b64encode(png).decode("ascii"),
+        },
+        "display_state_patch_count": 4,
+        "visualization_client_ack_request_count": 2,
+        "blocked_mutation_count": 0,
+        "no_computation_or_monitor_mutations": True,
+        "presentation_restored": True,
+    }
+
+
 def _airbox_inspector_result_fixture(qa):
     public_url = "http://127.0.0.1:3269"
     browser_url = "http://frontend:8080"
@@ -983,6 +1089,88 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
             "/state/development/workspace/apps/control-room/scripts",
         })
 
+    def test_planar_airbox_compose_reuses_the_managed_readonly_runner(self):
+        identity = {
+            "project_name": "fullmag-worktree-fixture",
+            "network_name": "fullmag-worktree-fixture_fullmag",
+            "project_id": "fullmag",
+            "worktree_id": "fixture",
+            "checkout_kind": "worktree",
+            "source_root": str(ROOT),
+        }
+        standard = self.qa._compose_document(
+            ROOT, identity, self.qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3199, 180,
+        )
+        planar = self.qa._compose_document(
+            ROOT, identity, self.qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3199, 180,
+            canvas_only=True,
+            expect_live_field="m",
+            expect_airbox_vectors=False,
+            expect_ambiguous_compute_fields=False,
+            expect_planar_airbox=True,
+        )
+        standard_service = standard["services"]["browser-qa"]
+        service = planar["services"]["browser-qa"]
+        self.assertEqual(service["command"], standard_service["command"])
+        self.assertEqual(service["command"][-1],
+                         "/state/development/workspace/apps/control-room/scripts/docker-dev-browser-qa.mjs")
+        self.assertEqual(service["environment"]["CONTROL_ROOM_BROWSER_QA_SCENARIO"], "planar-airbox")
+        self.assertEqual(service["environment"]["CONTROL_ROOM_BROWSER_QA_EXPECT_PLANAR_AIRBOX"], "1")
+        self.assertEqual(service["environment"]["CONTROL_ROOM_BROWSER_QA_EXPECT_LIVE_FIELD"], "m")
+        self.assertEqual(service["environment"]["CONTROL_ROOM_BROWSER_QA_EXPECT_AIRBOX_VECTORS"], "0")
+        self.assertTrue(service["read_only"])
+        self.assertNotIn("ports", service)
+        self.assertTrue(all(mount["read_only"] for mount in service["volumes"]))
+        for invalid in (
+            {"canvas_only": False},
+            {"canvas_only": True, "expect_live_field": "H_demag"},
+            {"canvas_only": True, "expect_live_field": "m", "expect_airbox_vectors": True},
+        ):
+            with self.subTest(invalid=invalid), self.assertRaises(self.qa.BuildControlError):
+                self.qa._compose_document(
+                    ROOT, identity, self.qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3199, 180,
+                    expect_planar_airbox=True,
+                    expect_ambiguous_compute_fields=False,
+                    **invalid,
+                )
+
+    def test_planar_airbox_observation_checks_scope_physical_frame_and_identity(self):
+        qa = self.qa
+        session = {
+            "session_id": "session-1",
+            "session_epoch": "session-1@1",
+            "request_scope_epoch": "api:1",
+        }
+        observation = _planar_airbox_observation_fixture(qa)
+        qa._validate_planar_airbox_observation(observation, session)
+
+        cases = (
+            ("sample token", lambda item: item["evidence"].update(sampleToken="stale-token")),
+            ("scope id", lambda item: item["meta_request"].update(scope_id_present=True)),
+            # This is the small ferromagnet-sized frame, not the 2 x 2 x 2
+            # authoritative Universe/Airbox grid in the layout fixture.
+            ("magnetic bounds", lambda item: item["meta"]["frame"].update(
+                bounds_uv_m=[-0.05, 0.05, -0.05, 0.05],
+            )),
+            # At z=0.5 the requested midpoint is a cell edge; the target grid
+            # must resolve it to the lower native cell center at z=32.
+            ("snapped normal coordinate", lambda item: item["meta"]["frame"].update(
+                origin_m=[11.0, 22.0, 34.0],
+            )),
+            ("run identity", lambda item: item["session_after"].update(run_id="run-2")),
+            ("presentation restoration", lambda item: item.update(presentation_restored=False)),
+            ("forbidden mutation", lambda item: item.update(blocked_mutation_count=1)),
+            ("computation mutation", lambda item: item.update(no_computation_or_monitor_mutations=False)),
+            ("invisible canvas", lambda item: item["canvas"].update(visible=False)),
+            ("empty raster", lambda item: item["evidence"]["raster"].update(sampleCount=0)),
+        )
+        for name, mutate in cases:
+            with self.subTest(reason=name):
+                invalid = deepcopy(observation)
+                mutate(invalid)
+                with self.assertRaises(qa.BuildControlError):
+                    qa._validate_planar_airbox_observation(invalid, session)
+
     def test_airbox_inspector_compose_is_opt_in_and_uses_the_managed_readonly_runner(self):
         identity = {
             "project_name": "fullmag-worktree-fixture",
@@ -1659,6 +1847,60 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
             "volume", "inspect", control.volume, allow_failure=True, timeout=60
         )
 
+
+    def test_historical_root_source_label_requires_receipt_bound_current_namespace(self):
+        qa = self.qa
+        from docker_build_control import BuildControl
+        from docker_control_namespace import REGISTRY_SCHEMA
+
+        identity = {"project_name": "fullmag-worktree-control-fixture",
+                    "project_id": "fullmag-fixture", "worktree_id": "current-fixture"}
+        with patch("docker_control_namespace.resolve_namespace", return_value=None):
+            control = BuildControl(identity, "sha256:" + "d" * 64)
+        retirement = {"schema": "test-retirement", "data_preserved": True}
+        token = "a" * 32
+        registry = {"schema": REGISTRY_SCHEMA, "recovery_id": token,
+                    "namespace": "namespaces/" + token,
+                    "receipt_path": "namespace-recovery/" + token + "/terminal.json",
+                    "compose_project": control.project, "control_volume": control.volume,
+                    "source_project_id": identity["project_id"],
+                    "source_worktree_id": identity["worktree_id"],
+                    "receipt_sha256": hashlib.sha256(qa.canonical(retirement) + b"\n").hexdigest()}
+        control.namespace = registry["namespace"]
+        control.namespace_registry = {**registry, "retirement": retirement}
+        control.namespace_registry_sha256 = hashlib.sha256(qa.canonical(registry)).hexdigest()
+        volume = {"Name": control.volume, "Driver": "local", "Options": {},
+                  "Mountpoint": "/var/lib/docker/volumes/" + control.volume + "/_data",
+                  "Labels": {**control.labels, "org.fullmag.source.worktree-id": "historical-fixture"}}
+        with patch.object(qa, "_inspect_existing_volume", return_value=volume):
+            for ending in (b"", b"\n"):
+                control.namespace_registry_sha256 = hashlib.sha256(qa.canonical(registry) + ending).hexdigest()
+                self.assertIs(qa._validate_existing_control_volume(control), volume)
+            original = deepcopy(control.namespace_registry)
+            for key, value in (("source_worktree_id", "foreign"), ("source_project_id", "foreign"),
+                               ("compose_project", "foreign"), ("control_volume", "foreign"),
+                               ("retirement", {"data_preserved": False})):
+                with self.subTest(binding=key):
+                    control.namespace_registry = {**original, key: value}
+                    with self.assertRaises(qa.BuildControlError):
+                        qa._validate_existing_control_volume(control)
+            control.namespace_registry = original
+            for key, value in (("namespace", ""), ("namespace_registry", None),
+                               ("namespace_registry_sha256", "invalid")):
+                previous = getattr(control, key)
+                setattr(control, key, value)
+                with self.subTest(proof=key), self.assertRaises(qa.BuildControlError):
+                    qa._validate_existing_control_volume(control)
+                setattr(control, key, previous)
+            for key, value in (("Driver", "nfs"), ("Options", {"device": "/foreign"})):
+                previous = volume[key]
+                volume[key] = value
+                with self.subTest(backing=key), self.assertRaises(qa.BuildControlError):
+                    qa._validate_existing_control_volume(control)
+                volume[key] = previous
+            volume["Labels"]["org.fullmag.build.role"] = "foreign"
+            with self.assertRaises(qa.BuildControlError):
+                qa._validate_existing_control_volume(control)
 
     def test_shared_cache_project_uses_the_renderer_root_fallback(self):
         project_root=str(ROOT.resolve())

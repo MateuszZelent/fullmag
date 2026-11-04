@@ -89,6 +89,7 @@ LIVE_FIELD_OBSERVATION_NOTE = (
     "they do not prove field payload presence or values."
 )
 FEM_AIRBOX_VECTOR_OBSERVATION_SCHEMA = "fullmag.fem-airbox-vector-observation.v1"
+PLANAR_AIRBOX_OBSERVATION_SCHEMA = "fullmag.docker-dev-planar-airbox-browser-proof.v1"
 TERMINAL_TELEMETRY_RESULT_SCHEMA = "fullmag.docker-dev-terminal-telemetry.v1"
 RUN_PERFORMANCE_PROOF_SCHEMA = "fullmag.docker-dev-run-performance-browser-proof.v1"
 TERMINAL_TELEMETRY_ENERGY_FORMAT = "en-US:maxFractionDigits=6;scientific:toExponential(6)"
@@ -133,6 +134,53 @@ def _inspect_existing_volume(name: str, label: str) -> dict[str, object]:
     return records[0]
 
 
+def _has_authenticated_source_namespace(control: BuildControl) -> bool:
+    """Use the constructor's receipt-bound namespace, not historical root labels.
+
+    BuildControl resolves and authenticates the root registry before this
+    read-only preflight. Subsequent helper reads retain its registry CAS.
+    """
+    from docker_control_namespace import REGISTRY_SCHEMA
+
+    registry = getattr(control, "namespace_registry", None)
+    identity = getattr(control, "identity", None)
+    namespace = getattr(control, "namespace", None)
+    registry_sha = getattr(control, "namespace_registry_sha256", None)
+    if not isinstance(registry, Mapping) or not isinstance(identity, Mapping):
+        return False
+    token = registry.get("recovery_id")
+    if not isinstance(token, str) or re.fullmatch(r"[0-9a-f]{32}", token) is None:
+        return False
+    expected = {
+        "schema": REGISTRY_SCHEMA,
+        "namespace": "namespaces/" + token,
+        "receipt_path": "namespace-recovery/" + token + "/terminal.json",
+        "compose_project": control.project,
+        "control_volume": control.volume,
+        "source_worktree_id": identity.get("worktree_id"),
+        "source_project_id": identity.get("project_id"),
+    }
+    retirement = registry.get("retirement")
+    if (namespace != expected["namespace"]
+            or any(not isinstance(value, str) or not value for value in expected.values())
+            or any(registry.get(key) != value for key, value in expected.items())
+            or not isinstance(retirement, Mapping)
+            or not isinstance(registry_sha, str) or SHA256_RE.fullmatch(registry_sha) is None):
+        return False
+    raw_registry = {key: value for key, value in registry.items() if key != "retirement"}
+    try:
+        # Cold recovery writes canonical registry bytes without a newline;
+        # the regular control writer appends one. The constructor pins the
+        # actual bytes, so only those two exact encodings are admissible.
+        registry_bytes = canonical(raw_registry)
+        return (registry_sha in {hashlib.sha256(registry_bytes).hexdigest(),
+                                 hashlib.sha256(registry_bytes + b"\n").hexdigest()}
+                and hashlib.sha256(canonical(retirement) + b"\n").hexdigest()
+                == registry.get("receipt_sha256"))
+    except (TypeError, ValueError):
+        return False
+
+
 def _validate_existing_control_volume(control: BuildControl) -> dict[str, object]:
     """Authenticate the control volume before any helper mount can create it."""
     import docker_group_storage as group_storage
@@ -167,7 +215,10 @@ def _validate_existing_control_volume(control: BuildControl) -> dict[str, object
         or volume.get("Options") not in (None, {})
         or not isinstance(labels, Mapping)
         or any(labels.get(key) != value for key, value in expected_labels.items())
-        or any(key in labels and labels.get(key) != value for key, value in optional_labels.items())
+        or any(key in labels and labels.get(key) != value
+               and not (key == "org.fullmag.source.worktree-id"
+                        and _has_authenticated_source_namespace(control))
+               for key, value in optional_labels.items())
         or set(labels) - allowed_labels
     ):
         raise BuildControlError(
@@ -371,6 +422,18 @@ def _run_performance_harness_sha256(selected: Path) -> str:
         raise BuildControlError("Selected checkout is missing the run performance browser harness") from error
     if len(payload) > 2 * 1024 * 1024:
         raise BuildControlError("Run performance browser harness exceeds its source pin bound")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _planar_airbox_harness_sha256(selected: Path, relative_path: str) -> str:
+    harness = selected / relative_path
+    try:
+        with harness.open("rb") as source:
+            payload = source.read(2 * 1024 * 1024 + 1)
+    except OSError as error:
+        raise BuildControlError("Selected checkout is missing the planar Airbox browser proof source") from error
+    if len(payload) > 2 * 1024 * 1024:
+        raise BuildControlError("Planar Airbox browser proof source exceeds its source pin bound")
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -1065,11 +1128,14 @@ def _compose_document(
     expect_fem_airbox_vectors: bool | None = None,
     expect_terminal_telemetry: bool | None = None,
     expect_run_performance: bool | None = None,
+    expect_planar_airbox: bool = False,
     control: BuildControl | None = None,
     private_group_storage: bool = False,
 ) -> dict[str, object]:
     if type(private_group_storage) is not bool:
         raise BuildControlError("Browser QA private group storage marker must be boolean")
+    if type(expect_planar_airbox) is not bool:
+        raise BuildControlError("Planar Airbox browser expectation must be boolean")
     frontend_state_volume = {"type": "volume", "source": "frontend-state",
                              "target": "/state/development", "read_only": True,
                              "volume": {"nocopy": True}}
@@ -1101,6 +1167,7 @@ def _compose_document(
             or expect_fem_airbox_vectors is True
             or expect_terminal_telemetry is True
             or expect_run_performance is True
+            or expect_planar_airbox
             or expect_ambiguous_compute_fields is not None
             or airbox_inspector
         ):
@@ -1152,6 +1219,21 @@ def _compose_document(
         raise BuildControlError(
             "Run performance QA requires standalone canvas-only scope and excludes other browser scenarios"
         )
+    if expect_planar_airbox and (
+        canvas_only is not True
+        or expect_live_field != "m"
+        or expect_airbox_vectors is not False
+        or prepare_viewport_fixture
+        or expect_fem_airbox_vectors is True
+        or expect_terminal_telemetry is True
+        or expect_run_performance is True
+        or expect_ambiguous_compute_fields is not False
+        or airbox_inspector
+        or saved_playback_item_id is not None
+    ):
+        raise BuildControlError(
+            "Planar Airbox QA requires canvas-only m readiness and excludes other browser scenarios"
+        )
     if airbox_inspector and (
         prepare_viewport_fixture
         or canvas_only is not None
@@ -1191,6 +1273,9 @@ def _compose_document(
         environment["CONTROL_ROOM_BROWSER_QA_SCENARIO"] = "saved-playback"
         environment["CONTROL_ROOM_BROWSER_QA_SAVED_PLAYBACK_ITEM_ID"] = saved_playback_item_id
         environment["CONTROL_ROOM_BROWSER_QA_SAVED_PLAYBACK_SCRIPT_SHA256"] = source_script_sha256
+    elif expect_planar_airbox:
+        environment["CONTROL_ROOM_BROWSER_QA_SCENARIO"] = "planar-airbox"
+        environment["CONTROL_ROOM_BROWSER_QA_EXPECT_PLANAR_AIRBOX"] = "1"
     if prepare_viewport_fixture:
         environment["CONTROL_ROOM_PREPARE_VIEWPORT_FIXTURE"] = "1"
     if canvas_only is not None:
@@ -1285,6 +1370,7 @@ def _validate_browser_helper(
     expect_fem_airbox_vectors: bool | None = None,
     expect_terminal_telemetry: bool | None = None,
     expect_run_performance: bool | None = None,
+    expect_planar_airbox: bool = False,
     private_group_storage: bool = False,
 ) -> None:
     if type(private_group_storage) is not bool:
@@ -1402,6 +1488,24 @@ def _validate_browser_helper(
             raise ControlOutcomeUnknown("Browser helper run performance expectation is duplicated or malformed")
     elif run_performance_environment:
         raise ControlOutcomeUnknown("Browser helper reported an unrequested run performance scenario")
+    planar_airbox_environment = [
+        entry for entry in raw_environment
+        if entry.startswith("CONTROL_ROOM_BROWSER_QA_EXPECT_PLANAR_AIRBOX=")
+    ]
+    planar_airbox_scenario_environment = [
+        entry for entry in raw_environment
+        if entry.startswith("CONTROL_ROOM_BROWSER_QA_SCENARIO=planar-airbox")
+    ]
+    if expect_planar_airbox:
+        if (canvas_only is not True or expect_live_field != "m" or expect_airbox_vectors is not False
+                or expect_fem_airbox_vectors is True or expect_terminal_telemetry is True
+                or expect_run_performance is True or expect_ambiguous_compute_fields is not False):
+            raise ControlOutcomeUnknown("Planar Airbox helper differs from the admitted canvas/m scenario")
+        if (planar_airbox_environment != ["CONTROL_ROOM_BROWSER_QA_EXPECT_PLANAR_AIRBOX=1"]
+                or planar_airbox_scenario_environment != ["CONTROL_ROOM_BROWSER_QA_SCENARIO=planar-airbox"]):
+            raise ControlOutcomeUnknown("Browser helper Planar Airbox scenario identity differs")
+    elif planar_airbox_environment or planar_airbox_scenario_environment:
+        raise ControlOutcomeUnknown("Browser helper reported an unrequested Planar Airbox scenario")
     if canvas_only is not None:
         mode_environment = [
             entry for entry in environment
@@ -2828,6 +2932,130 @@ def _parse_saved_playback_result(
     return payload
 
 
+def _validate_planar_airbox_observation(value: object, session: object) -> None:
+    if not isinstance(value, Mapping) or value.get("schema") != PLANAR_AIRBOX_OBSERVATION_SCHEMA:
+        raise BuildControlError("Browser helper Planar Airbox evidence is missing or malformed")
+    if (value.get("state") != "passed" or value.get("quantity_id") != "H_demag"
+            or value.get("source_kind") != "default" or value.get("source_id") != "default"
+            or value.get("scope_kind") != "airbox" or value.get("scope_id") is not None):
+        raise BuildControlError("Browser helper Planar Airbox source or scope differs")
+    before, after = value.get("session_before"), value.get("session_after")
+    if not isinstance(before, Mapping) or not isinstance(after, Mapping) or not isinstance(session, Mapping):
+        raise BuildControlError("Planar Airbox evidence omitted active session/run identity")
+    identity_keys = ("session_id", "session_epoch", "request_scope_epoch", "run_id")
+    if any(not isinstance(before.get(key), str) or not before[key] for key in identity_keys):
+        raise BuildControlError("Planar Airbox before identity is malformed")
+    if any(before.get(key) != after.get(key) for key in identity_keys):
+        raise BuildControlError("Planar Airbox presentation changed session or run identity")
+    if any(after.get(key) != session.get(key) for key in identity_keys[:3]):
+        raise BuildControlError("Planar Airbox session identity differs from the browser result")
+    request = value.get("meta_request")
+    if (not isinstance(request, Mapping) or request.get("method") != "GET"
+            or request.get("path") != "/v2/sessions/current/data/fields/H_demag/planar-default/meta"
+            or request.get("scope_kind") != "airbox" or request.get("scope_id_present") is not False
+            or request.get("status") != 200):
+        raise BuildControlError("Planar Airbox metadata request did not use the exact default airbox scope")
+    meta, evidence = value.get("meta"), value.get("evidence")
+    if not isinstance(meta, Mapping) or not isinstance(evidence, Mapping):
+        raise BuildControlError("Planar Airbox evidence omitted metadata or rendered field evidence")
+    source = meta.get("source")
+    if (not isinstance(source, Mapping) or source.get("kind") != "default"
+            or meta.get("scope_kind") != "airbox"
+            or not isinstance(meta.get("etag"), str) or not meta["etag"]
+            or not isinstance(meta.get("sample_token"), str) or not meta["sample_token"]
+            or evidence.get("sampleToken") != meta.get("sample_token")
+            or evidence.get("metaIdentity") != meta.get("etag")
+            or evidence.get("scalarIdentity") != meta.get("etag")
+            or evidence.get("quantityId") != "H_demag"
+            or evidence.get("sourceKind") != "default" or evidence.get("sourceId") != "default"
+            or evidence.get("component") != "magnitude"):
+        raise BuildControlError("Planar Airbox sample token, raster, or metadata identity differs")
+    raster = evidence.get("raster")
+    if (not isinstance(raster, Mapping) or not isinstance(raster.get("checksum"), str)
+            or not raster["checksum"] or type(raster.get("sampleCount")) is not int
+            or raster["sampleCount"] <= 0 or type(evidence.get("glyphCount")) is not int
+            or evidence["glyphCount"] < 0):
+        raise BuildControlError("Planar Airbox raster evidence is missing or malformed")
+    for key in ("min", "max"):
+        number = raster.get(key)
+        if type(number) not in (int, float) or not math.isfinite(number):
+            raise BuildControlError("Planar Airbox raster range is non-finite")
+    if raster["min"] > raster["max"]:
+        raise BuildControlError("Planar Airbox raster range is inverted")
+    layout = value.get("domain_layout")
+    airbox = layout.get("airbox") if isinstance(layout, Mapping) else None
+    if (not isinstance(layout, Mapping) or layout.get("schema_version") != "fdm-multilayer-layout.v1"
+            or layout.get("available") is not True or layout.get("backend") != "fdm_multilayer"
+            or layout.get("domain_generation_id") != evidence.get("domainGenerationId")
+            or not isinstance(airbox, Mapping) or airbox.get("carrier_available") is not True
+            or airbox.get("h_demag_available") is not True or airbox.get("target_only") is not True):
+        raise BuildControlError("Planar Airbox frame has no current authoritative multilayer Airbox layout")
+    cells, origin, spacing = airbox.get("cells"), airbox.get("origin_m"), airbox.get("cell_size_m")
+    if (not isinstance(cells, list) or len(cells) != 3
+            or any(type(item) is not int or item <= 0 for item in cells)
+            or not isinstance(origin, list) or len(origin) != 3
+            or not isinstance(spacing, list) or len(spacing) != 3
+            or any(type(item) not in (int, float) or not math.isfinite(item) for item in origin + spacing)
+            or any(item <= 0 for item in spacing)):
+        raise BuildControlError("Authoritative multilayer Airbox grid is malformed")
+    frame = meta.get("frame")
+    plane = evidence.get("defaultPlane")
+    fraction = evidence.get("positionFraction")
+    operator_kind = evidence.get("operatorKind")
+    if (not isinstance(frame, Mapping) or plane not in {"xy", "xz", "yz"}
+            or type(fraction) not in (int, float) or not math.isfinite(fraction) or not 0 <= fraction <= 1
+            or operator_kind not in {"plane_sample", "slab_average"}):
+        raise BuildControlError("Planar Airbox default slice frame identity is malformed")
+    normal_axis, u_axis, v_axis = {
+        "xy": (2, 0, 1), "xz": (1, 0, 2), "yz": (0, 1, 2),
+    }[plane]
+    bounds = [[origin[axis], origin[axis] + cells[axis] * spacing[axis]] for axis in range(3)]
+    midpoints = [(minimum + maximum) * 0.5 for minimum, maximum in bounds]
+    continuous = bounds[normal_axis][0] + fraction * (bounds[normal_axis][1] - bounds[normal_axis][0])
+    expected_coordinate = continuous
+    if operator_kind == "plane_sample":
+        count = cells[normal_axis]
+        scaled = fraction * count
+        index = min(max(math.ceil(scaled) - 1, 0), count - 1)
+        expected_coordinate = origin[normal_axis] + (index + 0.5) * spacing[normal_axis]
+    expected_origin = list(midpoints)
+    expected_origin[normal_axis] = expected_coordinate
+    expected_bounds_uv = [
+        -0.5 * (bounds[u_axis][1] - bounds[u_axis][0]),
+        0.5 * (bounds[u_axis][1] - bounds[u_axis][0]),
+        -0.5 * (bounds[v_axis][1] - bounds[v_axis][0]),
+        0.5 * (bounds[v_axis][1] - bounds[v_axis][0]),
+    ]
+    expected_axes = {
+        "xy": ([1, 0, 0], [0, 1, 0], [0, 0, 1]),
+        "xz": ([1, 0, 0], [0, 0, 1], [0, -1, 0]),
+        "yz": ([0, 1, 0], [0, 0, 1], [1, 0, 0]),
+    }[plane]
+    for key, expected in (("origin_m", expected_origin), ("bounds_uv_m", expected_bounds_uv),
+                          ("u_axis", expected_axes[0]), ("v_axis", expected_axes[1]),
+                          ("normal", expected_axes[2])):
+        actual = frame.get(key)
+        if (not isinstance(actual, list) or len(actual) != len(expected)
+                or any(type(item) not in (int, float) or not math.isfinite(item) for item in actual)
+                or any(not math.isclose(a, b, rel_tol=1e-10, abs_tol=1e-18)
+                       for a, b in zip(actual, expected))):
+            raise BuildControlError(f"Planar Airbox {key} differs from the authoritative Airbox frame")
+    canvas = value.get("canvas")
+    if (not isinstance(canvas, Mapping) or canvas.get("visible") is not True
+            or canvas.get("non_transparent") is not True
+            or type(canvas.get("width")) is not int or canvas["width"] <= 0
+            or type(canvas.get("height")) is not int or canvas["height"] <= 0):
+        raise BuildControlError("Planar Airbox browser canvas is not visibly rendered")
+    screenshot = value.get("screenshot")
+    _validate_canvas_screenshot(screenshot)
+    if not isinstance(screenshot, Mapping) or screenshot.get("state") != "captured":
+        raise BuildControlError("Planar Airbox browser screenshot is missing")
+    if (value.get("presentation_restored") is not True
+            or value.get("blocked_mutation_count") != 0
+            or value.get("no_computation_or_monitor_mutations") is not True):
+        raise BuildControlError("Planar Airbox browser scenario changed or attempted a non-presentation resource")
+
+
 def _parse_result(
     output: bytes,
     public_url: str,
@@ -2841,6 +3069,9 @@ def _parse_result(
     terminal_telemetry_helper_sha256: str | None = None,
     expect_run_performance: bool = False,
     run_performance_harness_sha256: str | None = None,
+    expect_planar_airbox: bool = False,
+    planar_airbox_harness_sha256: str | None = None,
+    planar_field_evidence_sha256: str | None = None,
 ) -> dict[str, object]:
     text = output.decode("utf-8", "replace")
     payload = None
@@ -2878,6 +3109,9 @@ def _parse_result(
             or type(payload.get("expect_airbox_vectors")) is not bool
             or payload["expect_airbox_vectors"] is not expect_airbox_vectors):
         raise BuildControlError("Browser helper live-field expectation differs from the admitted operation")
+    planar_expectation = payload.get("expect_planar_airbox", False)
+    if type(planar_expectation) is not bool or planar_expectation is not expect_planar_airbox:
+        raise BuildControlError("Browser helper Planar Airbox expectation differs from the admitted operation")
     fem_expectation = payload.get("expect_fem_airbox_vectors", False)
     if type(fem_expectation) is not bool or fem_expectation is not expect_fem_airbox_vectors:
         raise BuildControlError("Browser helper FEM Airbox expectation differs from the admitted operation")
@@ -2906,9 +3140,16 @@ def _parse_result(
         or expect_fem_airbox_vectors or expect_ambiguous_compute_fields or expect_terminal_telemetry
     ):
         raise BuildControlError("Run performance result is outside standalone canvas-only QA scope")
+    if expect_planar_airbox and (
+        not canvas_only or expect_live_field != "m" or expect_airbox_vectors
+        or expect_fem_airbox_vectors or expect_ambiguous_compute_fields
+        or expect_terminal_telemetry or expect_run_performance
+    ):
+        raise BuildControlError("Planar Airbox result is outside its canvas-only primary-m scenario")
     if expect_ambiguous_compute_fields and not canvas_only:
         raise BuildControlError("Ambiguous Compute Fields result is outside canvas-only QA scope")
     expected_scope = (
+        "canvas-home-planar-airbox" if expect_planar_airbox else
         "canvas-engine-run-performance" if expect_run_performance else
         "canvas-home-ambiguous-compute-fields" if expect_ambiguous_compute_fields else
         "canvas-home-fem-airbox-vectors" if expect_fem_airbox_vectors else
@@ -2988,6 +3229,27 @@ def _parse_result(
         )
     elif ("run_performance" in payload or run_performance_harness_sha256 is not None):
         raise BuildControlError("Browser helper reported an unrequested run performance proof")
+    if expect_planar_airbox:
+        harness_hashes = payload.get("harness_source_sha256")
+        if (not isinstance(planar_airbox_harness_sha256, str)
+                or not SHA256_RE.fullmatch(planar_airbox_harness_sha256)
+                or not isinstance(planar_field_evidence_sha256, str)
+                or not SHA256_RE.fullmatch(planar_field_evidence_sha256)
+                or not isinstance(harness_hashes, Mapping)
+                or harness_hashes.get("algorithm") != "sha256"
+                or harness_hashes.get("unchanged") is not True
+                or harness_hashes.get("runner_before") != planar_airbox_harness_sha256
+                or harness_hashes.get("runner_after") != planar_airbox_harness_sha256
+                or harness_hashes.get("planar_field_evidence_before") != planar_field_evidence_sha256
+                or harness_hashes.get("planar_field_evidence_after") != planar_field_evidence_sha256):
+            raise BuildControlError("Planar Airbox browser source pin differs or changed during QA")
+        _validate_planar_airbox_observation(
+            payload.get("planar_airbox_observation"), payload.get("session"),
+        )
+    elif ("planar_airbox_observation" in payload
+          or planar_airbox_harness_sha256 is not None
+          or planar_field_evidence_sha256 is not None):
+        raise BuildControlError("Browser helper reported an unrequested Planar Airbox proof")
     ambiguous_submission = payload.get("ambiguous_command_submission")
     if expect_ambiguous_compute_fields:
         _validate_ambiguous_command_submission(ambiguous_submission, payload.get("session"))
@@ -3074,6 +3336,9 @@ def _run(
     expect_run_performance: bool = False,
     run_performance_harness_sha256: str | None = None,
     private_group_storage: bool = False,
+    expect_planar_airbox: bool = False,
+    planar_airbox_harness_sha256: str | None = None,
+    planar_field_evidence_sha256: str | None = None,
 ) -> None:
     root = operation["root"]
     helper_name = "fullmag-browser-qa-" + operation["receipt"]["attempt"][:12]
@@ -3135,6 +3400,7 @@ def _run(
         airbox_inspector=airbox_inspector,
         saved_playback_item_id=saved_playback_item_id,
         source_script_sha256=source_script_sha256,
+        expect_planar_airbox=expect_planar_airbox,
         private_group_storage=private_group_storage)
     if observed["Config"].get("Cmd") != document["services"]["browser-qa"]["command"]:
         raise ControlOutcomeUnknown("Browser helper command differs from the admitted Compose harness")
@@ -3169,7 +3435,10 @@ def _run(
                 expect_terminal_telemetry=expect_terminal_telemetry,
                 terminal_telemetry_helper_sha256=terminal_telemetry_helper_sha256,
                 expect_run_performance=expect_run_performance,
-                run_performance_harness_sha256=run_performance_harness_sha256)
+                run_performance_harness_sha256=run_performance_harness_sha256,
+                expect_planar_airbox=expect_planar_airbox,
+                planar_airbox_harness_sha256=planar_airbox_harness_sha256,
+                planar_field_evidence_sha256=planar_field_evidence_sha256)
     except BuildControlError as error:
         control.write(root + "/result.json", {
             "schema": RESULT_SCHEMA,
@@ -3238,8 +3507,31 @@ def reconcile_browser_qa(control, selected, identity, args):
     if private_group_storage and inputs.get("frontend_volume") != control.volume:
         raise BuildControlError("QA reconciliation frontend volume differs from its group profile")
     scenario = inputs.get("scenario", "standard")
-    if scenario not in {"standard", "airbox-inspector", "saved-playback"}:
+    if scenario not in {"standard", "airbox-inspector", "saved-playback", "planar-airbox"}:
         raise BuildControlError("QA reconciliation scenario is unsupported")
+    expect_planar_airbox_input = inputs.get("expect_planar_airbox", False)
+    if type(expect_planar_airbox_input) is not bool:
+        raise BuildControlError("QA reconciliation Planar Airbox expectation must be boolean")
+    if expect_planar_airbox_input != (scenario == "planar-airbox"):
+        raise BuildControlError("QA reconciliation Planar Airbox scenario identity differs")
+    planar_airbox_harness_sha256 = None
+    planar_field_evidence_sha256 = None
+    if expect_planar_airbox_input:
+        planar_airbox_harness_sha256 = inputs.get("planar_airbox_harness_sha256")
+        planar_field_evidence_sha256 = inputs.get("planar_field_evidence_sha256")
+        if (not isinstance(planar_airbox_harness_sha256, str)
+                or not SHA256_RE.fullmatch(planar_airbox_harness_sha256)
+                or _planar_airbox_harness_sha256(
+                    selected, "apps/control-room/scripts/docker-dev-browser-qa.mjs"
+                ) != planar_airbox_harness_sha256
+                or not isinstance(planar_field_evidence_sha256, str)
+                or not SHA256_RE.fullmatch(planar_field_evidence_sha256)
+                or _planar_airbox_harness_sha256(
+                    selected, "apps/control-room/scripts/lib/planar-field-evidence.mjs"
+                ) != planar_field_evidence_sha256):
+            raise BuildControlError("QA reconciliation Planar Airbox source pin differs")
+    elif "planar_airbox_harness_sha256" in inputs or "planar_field_evidence_sha256" in inputs:
+        raise BuildControlError("QA reconciliation has an unrequested Planar Airbox source pin")
     expect_fem_airbox_vectors_input = inputs.get("expect_fem_airbox_vectors", False)
     if type(expect_fem_airbox_vectors_input) is not bool:
         raise BuildControlError("QA reconciliation FEM Airbox-vector expectation must be boolean")
@@ -3286,6 +3578,7 @@ def reconcile_browser_qa(control, selected, identity, args):
                 or inputs.get("expect_live_field") is not None
                 or inputs.get("expect_airbox_vectors") is not False
                 or inputs.get("expect_fem_airbox_vectors", False) is not False
+                or inputs.get("expect_planar_airbox", False) is not False
                 or inputs.get("expect_ambiguous_compute_fields") is not False):
             raise BuildControlError("QA reconciliation Saved Playback receipt includes another browser scenario")
     elif "saved_playback_item_id" in inputs or "source_script_sha256" in inputs:
@@ -3374,6 +3667,17 @@ def reconcile_browser_qa(control, selected, identity, args):
         or expect_terminal_telemetry_input
     ):
         raise BuildControlError("QA reconciliation run performance scenario is outside standalone canvas-only scope")
+    if expect_planar_airbox_input and (
+        not canvas_only_input
+        or prepare_viewport_fixture
+        or expect_live_field_input != "m"
+        or expect_airbox_vectors_input
+        or expect_fem_airbox_vectors_input
+        or expect_ambiguous_command_input
+        or expect_terminal_telemetry_input
+        or expect_run_performance_input
+    ):
+        raise BuildControlError("QA reconciliation Planar Airbox scenario differs from canvas-only m scope")
     if canvas_only_input and prepare_viewport_fixture:
         raise BuildControlError("Canvas-only browser QA receipt cannot prepare a viewport fixture")
     expected_document = _compose_document(selected, identity, inputs["browser_image"],
@@ -3387,6 +3691,7 @@ def reconcile_browser_qa(control, selected, identity, args):
         ),
         expect_terminal_telemetry=(True if expect_terminal_telemetry_input else None),
         expect_run_performance=(True if expect_run_performance_input else None),
+        expect_planar_airbox=expect_planar_airbox_input,
         expect_ambiguous_compute_fields=(
             None if scenario == "saved-playback" or airbox_inspector
             else expect_ambiguous_command_compose_pin
@@ -3459,6 +3764,7 @@ def reconcile_browser_qa(control, selected, identity, args):
         airbox_inspector=airbox_inspector,
         saved_playback_item_id=saved_playback_item_id,
         source_script_sha256=source_script_sha256,
+        expect_planar_airbox=expect_planar_airbox_input,
         private_group_storage=private_group_storage)
     service = document["services"]["browser-qa"]
     if (observed["Config"].get("Cmd") != service["command"]
@@ -3553,6 +3859,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Select FEM Airbox H_demag vectors and require live render-adoption evidence (canvas-only, --expect-live-field m)",
     )
     parser.add_argument(
+        "--expect-planar-airbox",
+        action="store_true",
+        help="Prove the current default H_demag planar field against the Universe/Airbox scope (canvas-only, --expect-live-field m)",
+    )
+    parser.add_argument(
         "--expect-terminal-telemetry",
         action="store_true",
         help="Prove visible terminal Step and total energy against scoped API provenance before and after page reload (canvas-only, --expect-live-field m)",
@@ -3606,6 +3917,21 @@ def main(argv: list[str] | None = None) -> int:
         raise BuildControlError("Focused live-field and Airbox-vector expectations require --canvas-only")
     if args.expect_airbox_vectors and args.expect_live_field is None:
         raise BuildControlError("--expect-airbox-vectors requires --expect-live-field")
+    if args.expect_planar_airbox and (
+        not args.canvas_only
+        or args.expect_live_field != "m"
+        or args.expect_airbox_vectors
+        or args.expect_fem_airbox_vectors
+        or args.expect_terminal_telemetry
+        or args.expect_run_performance
+        or args.expect_ambiguous_compute_fields
+        or args.prepare_viewport_fixture
+        or args.airbox_inspector
+        or args.saved_playback_item_id is not None
+    ):
+        raise BuildControlError(
+            "--expect-planar-airbox requires --canvas-only --expect-live-field m and excludes other scenarios"
+        )
     if args.expect_fem_airbox_vectors and (
         args.expect_live_field != "m"
         or args.expect_airbox_vectors
@@ -3634,6 +3960,7 @@ def main(argv: list[str] | None = None) -> int:
         or args.expect_live_field is not None
         or args.expect_airbox_vectors
         or args.expect_fem_airbox_vectors
+        or args.expect_planar_airbox
         or args.expect_terminal_telemetry
         or args.expect_ambiguous_compute_fields
         or args.airbox_inspector
@@ -3661,6 +3988,7 @@ def main(argv: list[str] | None = None) -> int:
             or args.expect_live_field is not None
             or args.expect_airbox_vectors
             or args.expect_fem_airbox_vectors
+            or args.expect_planar_airbox
             or args.expect_terminal_telemetry
             or args.expect_ambiguous_compute_fields
             or args.airbox_inspector
@@ -3707,6 +4035,14 @@ def main(argv: list[str] | None = None) -> int:
     run_performance_harness_sha256 = (
         _run_performance_harness_sha256(selected) if args.expect_run_performance else None
     )
+    planar_airbox_harness_sha256 = (
+        _planar_airbox_harness_sha256(selected, "apps/control-room/scripts/docker-dev-browser-qa.mjs")
+        if args.expect_planar_airbox else None
+    )
+    planar_field_evidence_sha256 = (
+        _planar_airbox_harness_sha256(selected, "apps/control-room/scripts/lib/planar-field-evidence.mjs")
+        if args.expect_planar_airbox else None
+    )
     document = _compose_document(
         selected,
         identity,
@@ -3721,6 +4057,7 @@ def main(argv: list[str] | None = None) -> int:
         expect_fem_airbox_vectors=(True if args.expect_fem_airbox_vectors else None),
         expect_terminal_telemetry=(True if args.expect_terminal_telemetry else None),
         expect_run_performance=(True if args.expect_run_performance else None),
+        expect_planar_airbox=args.expect_planar_airbox,
         expect_ambiguous_compute_fields=(
             None if args.airbox_inspector or args.saved_playback_item_id is not None
             else args.expect_ambiguous_compute_fields
@@ -3761,9 +4098,11 @@ def main(argv: list[str] | None = None) -> int:
         "expect_terminal_telemetry": args.expect_terminal_telemetry,
         "expect_run_performance": args.expect_run_performance,
         "expect_ambiguous_compute_fields": args.expect_ambiguous_compute_fields,
+        "expect_planar_airbox": args.expect_planar_airbox,
         "scenario": (
             "saved-playback" if args.saved_playback_item_id is not None
             else "airbox-inspector" if args.airbox_inspector
+            else "planar-airbox" if args.expect_planar_airbox
             else "standard"
         ),
         "airbox_inspector_script_sha256": airbox_inspector_script_sha256,
@@ -3779,6 +4118,9 @@ def main(argv: list[str] | None = None) -> int:
         inputs["terminal_telemetry_helper_sha256"] = terminal_telemetry_helper_sha256
     if args.expect_run_performance:
         inputs["run_performance_harness_sha256"] = run_performance_harness_sha256
+    if args.expect_planar_airbox:
+        inputs["planar_airbox_harness_sha256"] = planar_airbox_harness_sha256
+        inputs["planar_field_evidence_sha256"] = planar_field_evidence_sha256
     with control.operation("browser-qa", inputs) as operation:
         live_fence = control.read("development/current.json")
         if hashlib.sha256(canonical(live_fence)).hexdigest() != current["development_fence_sha256"]:
@@ -3811,6 +4153,9 @@ def main(argv: list[str] | None = None) -> int:
             args.expect_run_performance,
             run_performance_harness_sha256,
             private_group_storage,
+            args.expect_planar_airbox,
+            planar_airbox_harness_sha256,
+            planar_field_evidence_sha256,
         )
     return 0
 

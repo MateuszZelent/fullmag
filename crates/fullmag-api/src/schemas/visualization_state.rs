@@ -228,7 +228,29 @@ pub struct PlanarVisualizationState {
     pub interaction: PlanarInteractionState,
     #[serde(default = "default_planar_multislice_state")]
     pub multislice: PlanarMultisliceState,
+    /// Additional quantities in the same physical planar view.
+    #[serde(default)]
+    pub field_overlays: Vec<PlanarFieldOverlayState>,
 }
+
+/// Presentation of an additional field on the base source's physical plane.
+/// Source, operator, resolution and interaction are shared with the base view.
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PlanarFieldOverlayState {
+    pub id: String,
+    pub quantity_id: String,
+    pub component: PlanarFieldComponent,
+    pub view_scope: PlanarViewScopeState,
+    pub colormap: String,
+    pub range: PlanarColorRangeState,
+    pub raster_opacity: f64,
+    pub raster_visible: bool,
+    pub vectors_visible: bool,
+    pub vector_style: PlanarVectorStyleState,
+}
+
+pub const PLANAR_FIELD_OVERLAYS_MAX: usize = 4;
 
 /// Multislice presentation (F6 B2, note 0970 § Multislice panels): panels of
 /// the Default source at fixed position fractions along the current plane
@@ -275,6 +297,8 @@ pub struct PlanarVisualizationPatch {
     pub vector_style: Option<PlanarVectorStyleState>,
     pub interaction: Option<PlanarInteractionState>,
     pub multislice: Option<PlanarMultisliceState>,
+    /// Omitted preserves the list; a supplied list replaces it atomically.
+    pub field_overlays: Option<Vec<PlanarFieldOverlayState>>,
 }
 
 /// The source selected by the session-scoped planar viewport state.
@@ -460,6 +484,7 @@ pub(crate) fn default_planar_visualization_state() -> PlanarVisualizationState {
     PlanarVisualizationState {
         visible: true,
         source: PlanarSourceSelectionState::Default,
+        field_overlays: Vec::new(),
         default_slice: DefaultPlanarSliceState {
             plane: PlanarAxisPlane::Xy,
             position_fraction: 0.5,

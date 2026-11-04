@@ -43,6 +43,9 @@ export function planarVisualizationCoverage(selection: Selection): {
 export function planarViewScopeForSelection(
   selection: Selection,
 ): PlanarViewScopeState {
+  if (selection.kind === "universe") {
+    return { kind: "airbox" };
+  }
   if (selection.ref?.type === "mesh-part") {
     return {
       kind: "mesh_part",

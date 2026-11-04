@@ -283,6 +283,78 @@ ANTENNA_COMMANDS = (
 )
 
 
+FIELD_MAP_TESTS = (
+    'src/modules/field-map/components/FieldMapToolbar.test.tsx',
+    'src/modules/field-map/model/fieldMapDataPlan.test.ts',
+    'src/modules/field-map/FieldMapModule.test.tsx',
+    'src/modules/inspector/visualization/VisualizationViewContext.test.ts',
+)
+FIELD_MAP_FILES = (
+    'src/modules/field-map/components/FieldMapToolbar.tsx',
+    'src/modules/field-map/model/fieldMapDataPlan.ts',
+    'src/modules/field-map/FieldMapModule.tsx',
+    'src/modules/inspector/visualization/VisualizationViewContext.ts',
+    *FIELD_MAP_TESTS,
+)
+FIELD_MAP_COMMANDS = (
+    *FRONTEND_COMMANDS[:2],
+    ('vitest', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'vitest', 'run',
+                *FIELD_MAP_TESTS, '--pool=threads', '--maxWorkers=1')),
+    ('eslint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'eslint',
+                *FIELD_MAP_FILES, '--max-warnings=0')),
+)
+
+
+AIRBOX_TESTS = (
+    'src/modules/inspector/panels/airbox/AirboxInspectorLanePanel.test.tsx',
+    'src/modules/inspector/panels/airbox/FdmMultilayerAirboxTargetPanel.test.tsx',
+    'src/modules/inspector/panels/airbox/fdmMultilayerAirboxTargetInspectorModel.test.ts',
+    'src/shared/domain/mesh/fdmMultilayerAirboxTarget.test.ts',
+    'src/modules/viewport-3d/viewport3dMultilayerDomainAdapter.test.ts',
+)
+AIRBOX_FILES = (
+    'src/modules/inspector/panels/airbox/AirboxInspectorLanePanel.tsx',
+    'src/modules/inspector/panels/airbox/FdmMultilayerAirboxTargetPanel.tsx',
+    'src/modules/inspector/panels/airbox/fdmMultilayerAirboxTargetInspectorModel.ts',
+    'src/shared/domain/mesh/fdmMultilayerAirboxTarget.ts',
+    'src/modules/viewport-3d/viewport3dDomainAdapter.ts',
+    *AIRBOX_TESTS,
+)
+AIRBOX_COMMANDS = (
+    *FRONTEND_COMMANDS[:2],
+    ('vitest', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'vitest', 'run',
+                *AIRBOX_TESTS, '--pool=threads', '--maxWorkers=1')),
+    ('eslint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'eslint',
+                *AIRBOX_FILES, '--max-warnings=0')),
+)
+
+
+CAMERA_TESTS = (
+    'src/modules/viewport-3d/orientation/cameraOrientation.test.ts',
+    'src/modules/viewport-3d/orientation/orientationCameraGesture.test.ts',
+    'src/modules/viewport-3d/layers/CameraControls.test.ts',
+    'src/modules/viewport-3d/layers/viewport3DCameraGesture.test.ts',
+    'src/modules/viewport-3d/layers/Viewport3DScene.test.ts',
+)
+CAMERA_FILES = (
+    'src/modules/viewport-3d/orientation/cameraOrientation.ts',
+    'src/modules/viewport-3d/orientation/orientationCameraGesture.ts',
+    'src/modules/viewport-3d/orientation/OrientationHudLayer.tsx',
+    'src/modules/viewport-3d/orientation/ViewCube3DBox.tsx',
+    'src/modules/viewport-3d/layers/CameraControls.tsx',
+    'src/modules/viewport-3d/layers/viewport3DCameraGesture.ts',
+    'src/modules/viewport-3d/layers/Viewport3DScene.tsx',
+    *CAMERA_TESTS,
+)
+CAMERA_COMMANDS = (
+    *FRONTEND_COMMANDS[:2],
+    ('vitest', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'vitest', 'run',
+                *CAMERA_TESTS, '--pool=threads', '--maxWorkers=1')),
+    ('eslint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'eslint',
+                *CAMERA_FILES, '--max-warnings=0')),
+)
+
+
 VISUALIZATION_FILES = (
     'src/kernel/visualization/ObjectVisualizationController.ts',
     'src/kernel/visualization/ObjectVisualizationController.test.ts',
@@ -385,11 +457,14 @@ def frontend_import_checks(control, selected, identity, *, scope='frontend-impor
     import hashlib
     import time
     import docker_dev_codegen as codegen
-    if scope not in ('frontend-import', 'frontend-antenna', 'frontend-visualization', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'):
+    if scope not in ('frontend-import', 'frontend-antenna', 'frontend-field-map', 'frontend-airbox', 'frontend-camera', 'frontend-visualization', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'):
         raise BuildControlError('Unknown frontend verification scope')
     source_files, commands = {
         'frontend-import': (IMPORT_FILES, FRONTEND_COMMANDS),
         'frontend-antenna': (ANTENNA_FILES, ANTENNA_COMMANDS),
+        'frontend-field-map': (FIELD_MAP_FILES, FIELD_MAP_COMMANDS),
+        'frontend-airbox': (AIRBOX_FILES, AIRBOX_COMMANDS),
+        'frontend-camera': (CAMERA_FILES, CAMERA_COMMANDS),
         'frontend-visualization': (VISUALIZATION_FILES, VISUALIZATION_COMMANDS),
         'frontend-telemetry': (TELEMETRY_FILES, TELEMETRY_COMMANDS),
         'frontend-telemetry-source': (TELEMETRY_FILES, TELEMETRY_SOURCE_COMMANDS),
@@ -497,7 +572,7 @@ def main():
     parser.add_argument('--offline', action='store_true', help='Run interpreted checks in a private group helper when backend is stopped')
     parser.add_argument('--initial-attempt', help='Pinned pre-service development attempt for offline checks')
     parser.add_argument('--modules', nargs='+', help='Explicit unittest modules (offline mode only)')
-    parser.add_argument('--scope', choices=('all', 'source-capture', 'frontend-import', 'frontend-antenna', 'frontend-visualization', 'frontend-tools', 'field-only', 'network-failure', 'empty-authoring', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'), default='all')
+    parser.add_argument('--scope', choices=('all', 'source-capture', 'frontend-import', 'frontend-antenna', 'frontend-field-map', 'frontend-airbox', 'frontend-camera', 'frontend-visualization', 'frontend-tools', 'field-only', 'network-failure', 'empty-authoring', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'), default='all')
     args = parser.parse_args()
     if args.initial_attempt is not None and not args.offline:
         raise BuildControlError('--initial-attempt requires --offline')
@@ -519,7 +594,7 @@ def main():
     helper = configured["services"]["fem-gpu-toolchain"]["build"]["args"]["FULLMAG_CUDA_BASE_IMAGE"]
     control = BuildControl(identity, helper)
     control.prepare()
-    if args.scope in ('frontend-import', 'frontend-antenna', 'frontend-visualization', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'):
+    if args.scope in ('frontend-import', 'frontend-antenna', 'frontend-field-map', 'frontend-airbox', 'frontend-camera', 'frontend-visualization', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'):
         return frontend_import_checks(control, selected, identity, scope=args.scope)
     if args.initial_attempt is not None:
         return _offline_checks(control, selected, None, args.modules, initial_attempt=args.initial_attempt)
