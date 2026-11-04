@@ -51,6 +51,19 @@ def assert_no_replay(receipt, request_id):
             'a quarantined request cannot be replayed')
 
 
+
+def _writer_identity(info):
+    return {'device':info.st_dev,'inode':info.st_ino,'size':info.st_size,'mode':stat.S_IMODE(info.st_mode),
+            'uid':info.st_uid,'gid':info.st_gid,'links':info.st_nlink}
+
+
+def _bind_plan(plan, helper_identity):
+    """Pin each filesystem view independently; coupling is proved by flock."""
+    expected=plan.get('store_writer_helper_identity')
+    require(expected is None or canonical(expected)==canonical(helper_identity),
+            'helper view writer identity differs from the reviewed plan')
+    return {**plan,'store_writer_helper_identity':helper_identity}
+
 def historical_owner_pins(snapshot, owner, process):
     """Optional diagnostic only; never substitutes for terminal/lock closure."""
     prefix = snapshot['previous_namespace'] + '/'
@@ -321,6 +334,8 @@ def collect(args):
              if m.get('Type')=='bind' and m.get('Source') and m.get('Destination',m.get('Target'))
              in {'/state','/user-data','/opt/fullmag/source','/opt/fullmag/script-output'}}),
           'previous_state_root':str(state),'store':store_proof,'pending':pending,
+          'store_writer_identity':_writer_identity((store/'WRITER.lock').lstat()),
+          'bind_identity_protocol':'host-flock-conflict-release-reacquire-v1',
           'operation_attempt':args.operation_attempt,'development_attempt':attempt,'config_sha256':config_sha,
           'containers':{service:{'id':row['Id'],'image_id':row['Image'],'started_at':row['State']['StartedAt'],
                          'inspect_sha256':digest(canonical(row))} for service,row in pair.items()},
@@ -370,7 +385,8 @@ def _resume_collect(args, control):
     require(digest(host.read_owned_regular(state/host.CERTIFICATE_NAME))==plan['host_certificate_sha256']
             and digest(host.read_owned_regular(state/host.OWNER_NAME))==plan['host_owner_sha256'],
             'published recovery state admission drift')
-    require(_inventory_store(store)==plan['store'] and _pending_store(store)==plan['pending'],
+    require(_inventory_store(store)==plan['store'] and _pending_store(store)==plan['pending']
+            and _writer_identity((store/'WRITER.lock').lstat())==plan['store_writer_identity'],
             'published recovery store drift')
     oldcontrol=copy.copy(control);oldcontrol.namespace=plan['previous_namespace']
     pair=_observe_survivors(plan,allow_absent=True)
@@ -409,8 +425,31 @@ def lock(path):
  fds.append((fd,path))
 for path in [root/'operation.lock',old/'runtime-control/runtime-services/OWNER.lock',
  old/'runtime-control/runtime-services/LAUNCH.lock',old/'runtime-control/runtime-services/STARTUP-GATE.lock',
- P('/store/WRITER.lock'),P('/ledger/ledger/WRITER.lock'),P('/ledger/ledger/HOST_INVENTORY_OWNER.lock')]: lock(path)
+ P('/ledger/ledger/WRITER.lock'),P('/ledger/ledger/HOST_INVENTORY_OWNER.lock')]: lock(path)
 if not os.path.samefile(root/'operation.lock',old/'operation.lock'): raise RuntimeError('old namespace uses another global lock')
+if request.get('bind_probe'):
+ path=P('/store/WRITER.lock')
+ if path.resolve()!=path: raise RuntimeError('linked store writer lock')
+ fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+ info=os.fstat(fd)
+ if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1: raise RuntimeError('unsafe store writer lock')
+ binding={'device':info.st_dev,'inode':info.st_ino,'size':info.st_size,'mode':stat.S_IMODE(info.st_mode),
+          'uid':info.st_uid,'gid':info.st_gid,'links':info.st_nlink}
+ if p.get('store_writer_helper_identity') is not None and binding!=p['store_writer_helper_identity']: raise RuntimeError('helper-view writer stat differs: expected='+json.dumps(p['store_writer_helper_identity'],sort_keys=True)+'; observed='+json.dumps(binding,sort_keys=True))
+ try: fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+ except BlockingIOError: pass
+ else: raise RuntimeError('store bind did not observe the held host writer lock')
+ print('STORE-BLOCKED '+json.dumps(binding,sort_keys=True),flush=True)
+ if sys.stdin.buffer.readline(32)!=b'GO\n': raise RuntimeError('store bind proof not authorized')
+ final=json.loads(sys.stdin.buffer.readline(8*1024*1024+1))
+ expected=dict(p);expected['store_writer_helper_identity']=binding
+ if final!=expected: raise RuntimeError('final reviewed plan differs from the observed helper view')
+ p=final
+ fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+ if (os.fstat(fd).st_dev,os.fstat(fd).st_ino)!=(path.stat().st_dev,path.stat().st_ino): raise RuntimeError('store bind inode drift')
+ fds.append((fd,path))
+else:
+ lock(P('/store/WRITER.lock'))
 def verify():
  for relative,expected in p['control_pins'].items():
   path=root/relative
@@ -426,6 +465,11 @@ def verify():
  rows=json.loads(read(P('/ledger/ledger/HOST_RESOURCE_LEDGER.json')))['reservations']
  if not isinstance(rows,list) or any(r.get('state')!='released' for r in rows): raise RuntimeError('live reservation')
  if json.loads(read(P('/store/WRITER.owner.json'))).get('released') is not True: raise RuntimeError('live store writer')
+ if request.get('bind_probe'):
+  current=P('/store/WRITER.lock').stat()
+  observed={'device':current.st_dev,'inode':current.st_ino,'size':current.st_size,
+            'mode':stat.S_IMODE(current.st_mode),'uid':current.st_uid,'gid':current.st_gid,'links':current.st_nlink}
+  if observed!=p['store_writer_helper_identity']: raise RuntimeError('helper view writer stat drift')
 verify()
 if resume:
  archive=root/'namespace-recovery'/p['recovery_id']
@@ -483,7 +527,7 @@ print('RELEASED',flush=True)
 '''
 
 
-def _authenticate_helper(control, name, script, store, ledger_mount):
+def _authenticate_helper(control, name, script, store, ledger_mount, *, store_binding=None):
     rows=json.loads(docker_capture('inspect',name).stdout)
     require(len(rows)==1,'ambiguous transaction helper')
     row=rows[0]; config=row['Config']; host=row['HostConfig']
@@ -498,11 +542,45 @@ def _authenticate_helper(control, name, script, store, ledger_mount):
     expected={'/control':('volume',control.volume,False),'/store':('bind',str(store),True),
               '/ledger':('volume',ledger_mount.split('src=',1)[1].split(',',1)[0],True)}
     require(len(mounts)==3,'helper mount set differs')
+    actual_mounts=row.get('Mounts',[])
+    require(len(actual_mounts)==3,'helper runtime mount set differs')
     for target,(kind,source,readonly) in expected.items():
         found=[m for m in mounts if m.get('Target')==target]
-        require(len(found)==1 and found[0].get('Type')==kind and found[0].get('Source')==source
-                and bool(found[0].get('ReadOnly',False))==readonly,'helper mount identity differs')
+        actual=[m for m in actual_mounts if m.get('Destination')==target]
+        require(len(found)==1 and len(actual)==1,'helper duplicate/missing mount at '+target)
+        host_mount,runtime_mount=found[0],actual[0]
+        source_matches=host_mount.get('Source')==source
+        if target=='/store' and not source_matches:
+            from docker_linux_host_readmission import _WSL_ALIAS_PREFIXES
+            require(isinstance(store_binding,dict)
+                    and store_binding.get('requested_source')==str(store)
+                    and isinstance(store_binding.get('host'),dict)
+                    and isinstance(store_binding.get('helper'),dict)
+                    and all(set(store_binding[view])=={'device','inode','size','mode','uid','gid','links'}
+                            and store_binding[view].get('links')==1 for view in ('host','helper')),
+                    'opaque store bind has no matching host-held inode/lock proof')
+            alias=host_mount.get('Source')
+            from docker_isolated_sqlite_fence import _require_posix_bind_source
+            _require_posix_bind_source(alias)
+            source_matches=(isinstance(alias,str) and alias.startswith(_WSL_ALIAS_PREFIXES)
+                            and runtime_mount.get('Source')==alias)
+        require(host_mount.get('Type')==kind and source_matches
+                and bool(host_mount.get('ReadOnly',False))==readonly,
+                'helper mount identity differs at '+target+': expected '+repr((kind,source,readonly))
+                +'; observed '+repr(found))
+        require(runtime_mount.get('Type')==kind and runtime_mount.get('RW') is (not readonly),
+                'helper runtime readonly/type differs at '+target)
+        if kind=='volume':
+            require(runtime_mount.get('Name')==source,'helper runtime volume identity differs at '+target)
+        else:
+            require(runtime_mount.get('Source')==host_mount.get('Source'),
+                    'helper runtime bind source differs from HostConfig at '+target)
+    root_mount=[m for m in mounts if m.get('Target')=='/control'][0]
+    root_options=root_mount.get('VolumeOptions') or {}
+    require(root_options.get('NoCopy') is True and root_options.get('Subpath') in (None,''),
+            'helper /control must mount the exact raw root, without a namespace subpath')
     ledger=[m for m in mounts if m.get('Target')=='/ledger'][0]
+    require((ledger.get('VolumeOptions') or {}).get('NoCopy') is True,'helper ledger must not copy image data')
     expected_subpath=ledger_mount.split(',volume-subpath=',1)[1] if ',volume-subpath=' in ledger_mount else ''
     require((ledger.get('VolumeOptions') or {}).get('Subpath','')==expected_subpath,'helper ledger subpath differs')
     return row['Id']
@@ -522,10 +600,52 @@ def _sqlite_helpers(control, before):
     return list(ids)
 
 
+
+def _host_store_lock(store):
+    """Hold the exact existing writer inode before asking Docker to bind it."""
+    import fcntl
+    path=store/'WRITER.lock'
+    require(path.resolve(strict=True)==path,'host store writer lock is linked')
+    descriptor=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    try:
+        info=os.fstat(descriptor)
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink==1,'unsafe host writer lock')
+        require((info.st_dev,info.st_ino)==(path.stat().st_dev,path.stat().st_ino),'host writer inode changed')
+        try: fcntl.flock(descriptor,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise BuildControlError('Cold namespace quarantine: host store writer lock is active') from error
+        return descriptor,_writer_identity(info)
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _verify_host_store_inode(descriptor, store):
+    path=store/'WRITER.lock'
+    require(path.resolve(strict=True)==path,'host store writer path changed')
+    opened,named=os.fstat(descriptor),path.stat()
+    require((opened.st_dev,opened.st_ino)==(named.st_dev,named.st_ino)
+            and stat.S_ISREG(named.st_mode) and named.st_nlink==1,
+            'host store writer inode changed while helper was fenced')
+
+
+def _prove_helper_store_conflict(descriptor, store):
+    """Prove the helper's final flock excludes the still-open host view."""
+    import fcntl
+    _verify_host_store_inode(descriptor,store)
+    try:
+        fcntl.flock(descriptor,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    except BlockingIOError:
+        return
+    fcntl.flock(descriptor,fcntl.LOCK_UN)
+    raise BuildControlError('Cold namespace quarantine: helper writer lock does not block the host view')
+
 def run(args):
     from docker_isolated_sqlite_fence import hold_managed_workspace_database
     context=collect(args); plan=context['plan']; control=context['control']
-    if args.apply: require_plan(args.expected_plan_sha256,plan)
+    if args.apply:
+        require(isinstance(args.expected_plan_sha256,str) and SHA.fullmatch(args.expected_plan_sha256),
+                'apply requires the reviewed final plan SHA-256')
     else: require(args.expected_plan_sha256 is None,'plan confirmation requires apply')
     raw=_root(control)
     name='fullmag-cold-quarantine-'+args.recovery_id
@@ -534,20 +654,39 @@ def run(args):
     index=command.index('--entrypoint')
     command[index:index]=['--mount','type=bind,src='+str(context['store_root'])+',dst=/store,readonly',
                           '--mount',plan['ledger_mount']]
-    process=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    host_store_fd,host_binding=_host_store_lock(context['store_root'])
+    process=None
     try:
+        require(host_binding==plan['store_writer_identity'],'host writer inode differs from the reviewed plan')
+        process=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         process.stdin.write(canonical({'plan':plan,'resume':context.get('resume',False),
-                                              'registry_sha256':control.namespace_registry_sha256})+b'\n');process.stdin.flush()
-        require(_line(process,timeout=60)=='LOCKED','existing lock acquisition refused')
-        helper_id=_authenticate_helper(raw,name,script,context['store_root'],plan['ledger_mount'])
+                                              'registry_sha256':control.namespace_registry_sha256,'bind_probe':True})+b'\n');process.stdin.flush()
+        first=_line(process,timeout=60)
+        require(first.startswith('STORE-BLOCKED '),'helper did not observe the existing host writer lock')
+        helper_binding=json.loads(first[len('STORE-BLOCKED '):])
+        plan=_bind_plan(plan,helper_binding)
+        context['plan_sha256']=digest(canonical(plan))
+        if args.apply: require_plan(args.expected_plan_sha256,plan)
+        binding={'requested_source':str(context['store_root']),'host':host_binding,'helper':helper_binding}
+        helper_id=_authenticate_helper(raw,name,script,context['store_root'],plan['ledger_mount'],store_binding=binding)
+        import fcntl
+        _verify_host_store_inode(host_store_fd,context['store_root'])
+        fcntl.flock(host_store_fd,fcntl.LOCK_UN)
+        process.stdin.write(b'GO\n'+canonical(plan)+b'\n');process.stdin.flush()
+        require(_line(process,timeout=60)=='LOCKED','helper could not acquire the same released writer lock')
+        _prove_helper_store_conflict(host_store_fd,context['store_root'])
+        require(_authenticate_helper(raw,name,script,context['store_root'],plan['ledger_mount'],store_binding=binding)==helper_id,
+                'helper identity changed across host writer lock handoff')
         before=docker_capture('ps','-aq','--no-trunc').stdout.decode().splitlines()
         with hold_managed_workspace_database(control,context['fence_backend'] if context.get('resume') else context['pair']['backend'],Path(plan['user_data_root'])) as fence:
             sqlite_ids=_sqlite_helpers(control,before)
             fence.verify()
             args._allowed_helpers=[helper_id,*sqlite_ids]
             again=collect(args)
-            require(again['plan']==plan,'namespace/store/container/engine drift under locks')
+            require(_bind_plan(again['plan'],helper_binding)==plan,'namespace/store/container/engine drift under locks')
+            _verify_host_store_inode(host_store_fd,context['store_root'])
             fence.verify()
+            _prove_helper_store_conflict(host_store_fd,context['store_root'])
             if not args.apply:
                 process.stdin.write(b'ABORT\n');process.stdin.flush()
                 require(process.wait(timeout=30)==0,'preview lock release failed')
@@ -570,13 +709,18 @@ def run(args):
         return {'state':STATE,'namespace':plan['namespace'],'native_owner_drained':False,
                 'data_preserved':True,'removed_container_ids':ids,'plan_sha256':context['plan_sha256']}
     finally:
-        if process.poll() is None:
-            # EOF never authorizes publication; after publication EOF retains
-            # the registry and all historical records for explicit inspection.
-            process.stdin.close()
-            try: process.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                raise BuildControlError('Cold quarantine helper is still active; retain resources and inspect '+name)
+        try:
+            if process is not None and process.poll() is None:
+                # EOF never authorizes publication; retained state stays fenced.
+                process.stdin.close()
+                try: process.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    raise BuildControlError('Cold quarantine helper is still active; retain resources and inspect '+name)
+        finally:
+            os.close(host_store_fd)
+            if process is not None and process.poll() is not None:
+                for stream in (process.stdin,process.stdout,process.stderr):
+                    if stream is not None: stream.close()
 
 
 def resolve_cold_namespace(control,registry,registry_raw,receipt):

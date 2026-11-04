@@ -39,6 +39,16 @@ class QualificationTests(unittest.TestCase):
             recovery.validate_ledger({'schema_version':'host_resource_ledger.v4','reservations':[{'state':'running'}]})
     def test_apply_requires_exact_reviewed_plan(self):
         with self.assertRaises(BuildControlError): recovery.require_plan('1'*64,{'proof':'drift'})
+    def test_helper_stat_is_pinned_in_its_own_view(self):
+        host={'device':2096,'inode':4496398,'uid':65534,'gid':65534,'size':23,'mode':432,'links':1}
+        helper={**host,'uid':65532,'gid':65532}
+        plan={'store_writer_identity':host}
+        final=recovery._bind_plan(plan,helper)
+        self.assertEqual(final['store_writer_identity']['uid'],65534)
+        self.assertEqual(final['store_writer_helper_identity']['uid'],65532)
+        with self.assertRaisesRegex(BuildControlError,'helper view'):
+            recovery._bind_plan(final,{**helper,'inode':4496399})
+        with self.assertRaises(BuildControlError):recovery.require_plan(recovery.digest(canonical(plan)),final)
     def test_no_confirmation_is_not_apply_authority(self):
         with self.assertRaises(BuildControlError): recovery.require_plan(None,{'proof':'ok'})
 
@@ -68,6 +78,7 @@ class TransactionTests(unittest.TestCase):
             'ledger_sha256':recovery.digest((self.ledger/'ledger/HOST_RESOURCE_LEDGER.json').read_bytes()),
             'containers':{'backend':{'id':'b'*64},'frontend':{'id':'f'*64}},
             'compose_project':'fullmag-master','control_volume':'old-volume','source_project_id':'p','source_worktree_id':'w'}
+        self.plan['store_writer_identity']=recovery._writer_identity((self.store/'WRITER.lock').lstat())
         self.script=recovery.TRANSACTION.replace("P('/control')",'P('+repr(str(self.root))+')').replace("P('/store/",'P('+repr(str(self.store))+'+\'/').replace("P('/ledger/",'P('+repr(str(self.ledger))+'+\'/')
     def execute(self, commands=b'ABORT\n'):
         import subprocess
@@ -118,6 +129,88 @@ class TransactionTests(unittest.TestCase):
         self.assertEqual((archive/'previous-registry.json').read_bytes(),b'old-registry')
         self.assertTrue((archive/'removed-containers.json').exists())
 
+    def test_store_bind_handshake_proves_host_conflict_then_helper_acquisition(self):
+        import fcntl
+        import subprocess
+        descriptor,expected=recovery._host_store_lock(self.store)
+        try:
+            process=subprocess.Popen([sys.executable,'-B','-u','-c',self.script],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            process.stdin.write(canonical({'plan':self.plan,'bind_probe':True})+b'\n');process.stdin.flush()
+            line=process.stdout.readline().decode().strip()
+            self.assertTrue(line.startswith('STORE-BLOCKED '),line)
+            observed=json.loads(line[len('STORE-BLOCKED '):])
+            self.assertEqual(observed,expected)
+            final=recovery._bind_plan(self.plan,observed)
+            fcntl.flock(descriptor,fcntl.LOCK_UN)
+            process.stdin.write(b'GO\n'+canonical(final)+b'\n');process.stdin.flush()
+            self.assertEqual(process.stdout.readline(),b'LOCKED\n')
+            recovery._prove_helper_store_conflict(descriptor,self.store)
+            recovery._prove_helper_store_conflict(descriptor,self.store)
+            process.stdin.write(b'ABORT\n');process.stdin.flush()
+            self.assertEqual(process.wait(timeout=5),0,process.stderr.read())
+        finally:
+            import os
+            os.close(descriptor)
+            if process.poll() is None:
+                process.stdin.close();process.wait(timeout=5)
+            for stream in (process.stdin,process.stdout,process.stderr):stream.close()
+        self.assertFalse((self.root/self.new).exists())
+    def test_host_writer_lock_conflict_is_refused_before_helper_start(self):
+        import os
+        descriptor,_=recovery._host_store_lock(self.store)
+        try:
+            with self.assertRaisesRegex(BuildControlError,'writer lock is active'):
+                recovery._host_store_lock(self.store)
+        finally:os.close(descriptor)
+    def test_host_writer_inode_replacement_is_refused(self):
+        import os
+        descriptor,_=recovery._host_store_lock(self.store)
+        try:
+            path=self.store/'WRITER.lock';path.rename(self.store/'old-writer.lock');path.write_bytes(b'')
+            with self.assertRaisesRegex(BuildControlError,'inode changed'):
+                recovery._verify_host_store_inode(descriptor,self.store)
+        finally:os.close(descriptor)
+    def test_fake_helper_locked_ack_without_lock_is_refused(self):
+        import fcntl
+        import os
+        descriptor,_=recovery._host_store_lock(self.store)
+        try:
+            fcntl.flock(descriptor,fcntl.LOCK_UN)
+            with self.assertRaisesRegex(BuildControlError,'does not block the host'):
+                recovery._prove_helper_store_conflict(descriptor,self.store)
+            # Failed verification must release the unexpectedly acquired lock.
+            other,_=recovery._host_store_lock(self.store)
+            os.close(other)
+        finally:os.close(descriptor)
+    def test_helper_rejects_final_plan_that_changes_original_constraints(self):
+        import fcntl
+        import os
+        import subprocess
+        descriptor,_=recovery._host_store_lock(self.store)
+        process=None
+        try:
+            process=subprocess.Popen([sys.executable,'-B','-u','-c',self.script],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            process.stdin.write(canonical({'plan':self.plan,'bind_probe':True})+b'\n');process.stdin.flush()
+            line=process.stdout.readline().decode().strip()
+            self.assertTrue(line.startswith('STORE-BLOCKED '),line)
+            final=recovery._bind_plan(self.plan,json.loads(line[len('STORE-BLOCKED '):]))
+            final['allow_old_request_replay']=True
+            fcntl.flock(descriptor,fcntl.LOCK_UN)
+            process.stdin.write(b'GO\n'+canonical(final)+b'\n');process.stdin.flush()
+            self.assertNotEqual(process.wait(timeout=5),0)
+            self.assertIn(b'final reviewed plan differs',process.stderr.read())
+            self.assertEqual((self.root/'namespaces/current.json').read_bytes(),b'old-registry')
+        finally:
+            os.close(descriptor)
+            if process is not None:
+                if process.poll() is None:process.stdin.close();process.wait(timeout=5)
+                for stream in (process.stdin,process.stdout,process.stderr):stream.close()
+    def test_store_bind_probe_without_host_lock_refuses(self):
+        import subprocess
+        result=subprocess.run([sys.executable,'-B','-u','-c',self.script],input=canonical({'plan':self.plan,'bind_probe':True})+b'\nGO\nABORT\n',capture_output=True,timeout=5)
+        self.assertNotEqual(result.returncode,0)
+        self.assertNotIn(b'LOCKED',result.stdout)
+        self.assertFalse((self.root/self.new).exists())
     def test_live_store_writer_refuses_even_with_unheld_flock(self):
         (self.store/'WRITER.owner.json').write_text('{"released":false}')
         result=self.execute(b'PUBLISH\nRELEASE\n')
@@ -148,6 +241,61 @@ class ResumeSurvivorTests(unittest.TestCase):
         plan={'containers':{'backend':{'id':'b'*64}}}
         with patch.object(recovery,'docker_capture',return_value=SimpleNamespace(returncode=1,stderr=b'daemon unavailable')):
             with self.assertRaises(BuildControlError):recovery._observe_survivors(plan,allow_absent=True)
+
+
+class HelperMountTests(unittest.TestCase):
+    def helper(self):
+        from types import SimpleNamespace
+        control=SimpleNamespace(image='sha256:'+'1'*64,volume='control')
+        row={'Id':'a'*64,'Name':'/helper','Image':control.image,'Config':{'User':'65532:65532',
+             'Entrypoint':['/bin/bash'],'Cmd':['-euo','pipefail','-c','transaction']},'State':{'Running':True},
+             'HostConfig':{'NetworkMode':'none','ReadonlyRootfs':True,'Privileged':False,'CapDrop':['ALL'],'CapAdd':None,
+               'Mounts':[{'Type':'volume','Source':'control','Target':'/control','ReadOnly':False,'VolumeOptions':{'NoCopy':True}},
+                         {'Type':'bind','Source':'/store-path','Target':'/store','ReadOnly':True},
+                         {'Type':'volume','Source':'ledger','Target':'/ledger','ReadOnly':True,'VolumeOptions':{'NoCopy':True}}]}}
+        row['Mounts']=[{'Type':'volume','Name':'control','Destination':'/control','RW':True},
+                       {'Type':'bind','Source':'/store-path','Destination':'/store','RW':False},
+                       {'Type':'volume','Name':'ledger','Destination':'/ledger','RW':False}]
+        return control,row
+    def authenticate(self,control,row,store_binding=None):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        with patch.object(recovery,'docker_capture',return_value=SimpleNamespace(stdout=json.dumps([row]).encode())):
+            return recovery._authenticate_helper(control,'helper','transaction',Path('/store-path'),
+                                                'type=volume,src=ledger,dst=/ledger,readonly,volume-nocopy',store_binding=store_binding)
+    def test_exact_raw_root_and_readonly_retained_mounts(self):
+        control,row=self.helper()
+        self.assertEqual(self.authenticate(control,row),'a'*64)
+    def test_namespaced_control_mount_cannot_own_raw_registry_transaction(self):
+        control,row=self.helper()
+        row['HostConfig']['Mounts'][0]['VolumeOptions']['Subpath']='namespaces/'+'f'*32
+        with self.assertRaises(BuildControlError):self.authenticate(control,row)
+    def test_actual_desktop_alias_requires_matching_two_view_inode_proof(self):
+        control,row=self.helper()
+        alias='/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/281cf2742056105533c748d4d9a7bc9f43701ad4b93cc2e6f9bb330c8af04850'
+        row['HostConfig']['Mounts'][1]['Source']=alias
+        row['Mounts'][1]['Source']=alias
+        with self.assertRaisesRegex(BuildControlError,'proof'):self.authenticate(control,row)
+        metadata={'device':2096,'inode':123,'size':0,'mode':0o640,'uid':65534,'gid':65534,'links':1}
+        proof={'requested_source':'/store-path','host':metadata,'helper':{**metadata,'uid':65532,'gid':65532}}
+        self.assertEqual(self.authenticate(control,row,proof),'a'*64)
+        proof['helper'].pop('inode')
+        with self.assertRaisesRegex(BuildControlError,'proof'):self.authenticate(control,row,proof)
+    def test_opaque_alias_views_must_agree(self):
+        control,row=self.helper()
+        alias='/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/'+'a'*64
+        row['HostConfig']['Mounts'][1]['Source']=alias
+        proof={'requested_source':'/store-path','host':{'inode':123},'helper':{'inode':123}}
+        with self.assertRaises(BuildControlError):self.authenticate(control,row,proof)
+    def test_runtime_store_cannot_be_writable(self):
+        control,row=self.helper();row['Mounts'][1]['RW']=True
+        with self.assertRaisesRegex(BuildControlError,'readonly'):self.authenticate(control,row)
+    def test_writable_store_is_refused(self):
+        control,row=self.helper();row['HostConfig']['Mounts'][1]['ReadOnly']=False
+        with self.assertRaisesRegex(BuildControlError,'/store'):self.authenticate(control,row)
+    def test_wrong_ledger_subpath_is_refused(self):
+        control,row=self.helper();row['HostConfig']['Mounts'][2]['VolumeOptions']['Subpath']='other'
+        with self.assertRaisesRegex(BuildControlError,'subpath'):self.authenticate(control,row)
 
 
 class ShellOnlyReaderTests(unittest.TestCase):
