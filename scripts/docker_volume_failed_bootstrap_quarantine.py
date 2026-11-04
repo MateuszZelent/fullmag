@@ -31,6 +31,15 @@ RUNTIME_PINS = (OWNER, PROCESS, 'runtime-control/runtime-services/LAUNCH.json',
 HEX = re.compile(r'[0-9a-f]{32}\Z')
 SHA = re.compile(r'[0-9a-f]{64}\Z')
 
+# Parser-only completion bridge from the reviewed aaa67d0d7 controller. It
+# never admits survivors, a new namespace, a changed transaction or a start.
+CONTROLLER_COMPLETION_PROFILES = {
+    'docker-cli-lowercase-absence-completion-v1': {
+        'controller_sha256': '76e60d5fccabb3eb333d577abdfd4a8a1f786ad478d755c755dbcbe7ed567369',
+        'transaction_sha256': '89146b99098dcde8901fc2b2d1e0289518a1bebf0fb8678a506710584f68a3cb',
+    },
+}
+
 
 def require(value, message):
     if not value:
@@ -356,10 +365,17 @@ def _observe_survivors(plan, *, allow_absent):
         identifier=pin['id']
         result=docker_capture('inspect',identifier,allow_failure=True)
         if result.returncode:
+            from docker_volume_fresh_runtime import _ABSENT_CONTAINER, _assert_exact_absence
             text=result.stderr.decode(errors='replace')
+            match=_ABSENT_CONTAINER.search(text)
             require(allow_absent and result.returncode==1
-                    and re.search(r'(?:No such object|No such container):\s*'+re.escape(identifier)+r'(?:\s|$)',text),
+                    and result.stdout.strip() in (b'',b'[]')
+                    and len([line for line in text.splitlines() if line.strip()])==1
+                    and match is not None and match.group(1).lower()==identifier,
                     'container absence is not authenticated: '+identifier)
+            # The established verifier also re-inspects and checks the exact
+            # full ID against Docker ps; a daemon failure is never absence.
+            _assert_exact_absence(identifier,service)
             continue
         rows=json.loads(result.stdout)
         require(len(rows)==1 and rows[0].get('Id')==identifier,'ambiguous survivor identity')
@@ -372,12 +388,31 @@ def _observe_survivors(plan, *, allow_absent):
     return survivors
 
 
+
+def _controller_compatibility(plan):
+    current=digest(Path(__file__).read_bytes())
+    transaction=digest(TRANSACTION.encode())
+    require(plan.get('transaction_sha256')==transaction,'published recovery transaction code differs')
+    if plan.get('controller_sha256')==current:
+        return None
+    for profile,expected in CONTROLLER_COMPLETION_PROFILES.items():
+        if all(plan.get(field)==sha for field,sha in expected.items()):
+            return {'schema':'fullmag.cold-controller-completion-compatibility.v1',
+                    'profile':profile,'scope':'completion-only-exact-absence',
+                    'old_controller_sha256':expected['controller_sha256'],
+                    'new_controller_sha256':current,'transaction_sha256':transaction}
+    raise BuildControlError('Cold namespace quarantine: published recovery controller has no reviewed completion profile')
+
+
+def _require_completion_absence(compatibility, survivors):
+    require(compatibility is None or not survivors,
+            'controller compatibility permits only full exact absence; survivors retained')
+
 def _resume_collect(args, control):
     plan=control.namespace_registry['retirement']
     require(plan['recovery_id']==args.recovery_id and plan['operation_attempt']==args.operation_attempt,
             'published recovery differs; no new quarantine is admitted')
-    require(plan['controller_sha256']==digest(Path(__file__).read_bytes())
-            and plan['transaction_sha256']==digest(TRANSACTION.encode()),'published recovery controller code differs')
+    compatibility=_controller_compatibility(plan)
     require(docker_capture('info','--format','{{.ID}}').stdout.decode().strip()==plan['engine_id'],
             'published recovery Docker engine differs')
     import linux_native_host as host
@@ -389,7 +424,9 @@ def _resume_collect(args, control):
             and _writer_identity((store/'WRITER.lock').lstat())==plan['store_writer_identity'],
             'published recovery store drift')
     oldcontrol=copy.copy(control);oldcontrol.namespace=plan['previous_namespace']
+    require(set(plan['containers'])=={'backend','frontend'},'published recovery pair is incomplete')
     pair=_observe_survivors(plan,allow_absent=True)
+    _require_completion_absence(compatibility,pair)
     inventory=_inventory(control,pair,state,plan['ledger_volume'],
                          allowed_helpers=getattr(args,'_allowed_helpers',()),state_sources=plan['protected_bind_sources'])
     require(_ledger(control,plan['ledger_mount'])==plan['ledger_sha256'],'published recovery ledger drift')
@@ -398,7 +435,8 @@ def _resume_collect(args, control):
     compose=oldcontrol.read('development/attempts/'+plan['development_attempt']+'/compose.json')
     return {'plan':plan,'plan_sha256':digest(canonical(plan)),'control':oldcontrol,
             'compose':compose,'pair':pair,'store_root':store,'state_root':state,
-            'inventory':inventory,'resume':True,'fence_backend':retained['backend']}
+            'inventory':inventory,'resume':True,'fence_backend':retained['backend'],
+            'controller_compatibility':compatibility}
 
 # The helper owns the existing global and native flock inodes throughout the
 # second host observation and registry CAS. All retained mounts are read-only.
@@ -640,6 +678,52 @@ def _prove_helper_store_conflict(descriptor, store):
     fcntl.flock(descriptor,fcntl.LOCK_UN)
     raise BuildControlError('Cold namespace quarantine: helper writer lock does not block the host view')
 
+
+COMPATIBILITY_RECEIPT_SCRIPT = r'''
+import hashlib,json,os,pathlib,stat,sys
+root=pathlib.Path('/control')
+p=json.loads(sys.stdin.buffer.read(1048577))
+registry=root/'namespaces/current.json'
+if hashlib.sha256(registry.read_bytes()).hexdigest()!=p['registry_sha256']: raise RuntimeError('completion registry CAS drift')
+path=root/p['receipt_path']
+if root not in path.parents or path.resolve()!=path or not path.parent.is_dir(): raise RuntimeError('unsafe compatibility receipt path')
+raw=(json.dumps(p['record'],sort_keys=True,separators=(',',':'),ensure_ascii=False)+'\n').encode()
+if os.path.lexists(path):
+ info=path.lstat()
+ if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1 or path.read_bytes()!=raw: raise RuntimeError('immutable compatibility receipt differs')
+else:
+ fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o640)
+ with os.fdopen(fd,'wb') as out: out.write(raw);out.flush();os.fsync(out.fileno())
+ directory=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY);os.fsync(directory);os.close(directory)
+print(hashlib.sha256(raw).hexdigest())
+'''
+
+
+def _publish_controller_completion(control, helper_id, plan, compatibility):
+    """Write only a new immutable sidecar while the same helper holds all locks.
+
+    The unmodified transaction writes its standard completion on RELEASE. This
+    sidecar binds that exact expected receipt to the reviewed parser revision.
+    """
+    from docker_build_control import docker_argv
+    archive='namespace-recovery/'+plan['recovery_id']+'/'
+    removed={'schema':'fullmag.cold-quarantine-container-retirement.v1','state':'removed-confirmed',
+             'container_ids':{key:value['id'] for key,value in plan['containers'].items()},
+             'native_owner_drained':False,'data_preserved':True}
+    record={**compatibility,'state':'exact-absence-confirmed','recovery_id':plan['recovery_id'],
+            'operation_attempt':plan['operation_attempt'],'namespace':plan['namespace'],
+            'plan_sha256':digest(canonical(plan)),'completion_receipt_path':archive+'removed-containers.json',
+            'completion_receipt_sha256':digest(canonical(removed)+b'\n'),
+            'native_owner_drained':False,'data_preserved':True}
+    relative=archive+'controller-compatibility-'+compatibility['profile']+'.json'
+    payload={'receipt_path':relative,'registry_sha256':control.namespace_registry_sha256,'record':record}
+    result=bounded_capture(docker_argv('exec','-i','--user','65532:65532',helper_id,
+                           'python3','-I','-B','-c',COMPATIBILITY_RECEIPT_SCRIPT),
+                           data=canonical(payload),timeout=60)
+    require(result.returncode==0 and result.stdout.decode().strip()==digest(canonical(record)+b'\n'),
+            'compatibility receipt publication is not confirmed: '+result.stderr.decode(errors='replace')[-1000:])
+    return {'receipt_path':relative,**record}
+
 def run(args):
     from docker_isolated_sqlite_fence import hold_managed_workspace_database
     context=collect(args); plan=context['plan']; control=context['control']
@@ -696,6 +780,7 @@ def run(args):
             # Publication fences old clients. Containers are removed only while
             # the same global lock and SQLite/store/native locks remain held.
             survivors=_observe_survivors(plan,allow_absent=True)
+            _require_completion_absence(context.get('controller_compatibility'),survivors)
             _inventory(control,survivors,context['state_root'],plan['ledger_volume'],
                        allowed_helpers=[helper_id,*sqlite_ids],state_sources=plan['protected_bind_sources'])
             fence.verify()
@@ -704,10 +789,17 @@ def run(args):
                 docker_capture('rm',*surviving_ids)
             require(not _observe_survivors(plan,allow_absent=True),'exact container removal not confirmed')
             ids=[row['id'] for row in plan['containers'].values()]
+            completion_compatibility=None
+            if context.get('controller_compatibility') is not None:
+                _prove_helper_store_conflict(host_store_fd,context['store_root'])
+                require(_authenticate_helper(raw,name,script,context['store_root'],plan['ledger_mount'],store_binding=binding)==helper_id,
+                        'completion helper identity changed')
+                completion_compatibility=_publish_controller_completion(control,helper_id,plan,context['controller_compatibility'])
             process.stdin.write(b'RELEASE\n');process.stdin.flush()
             require(_line(process,timeout=30)=='RELEASED' and process.wait(timeout=30)==0,'transaction release outcome unknown')
         return {'state':STATE,'namespace':plan['namespace'],'native_owner_drained':False,
-                'data_preserved':True,'removed_container_ids':ids,'plan_sha256':context['plan_sha256']}
+                'data_preserved':True,'removed_container_ids':ids,'plan_sha256':context['plan_sha256'],
+                'controller_compatibility':completion_compatibility}
     finally:
         try:
             if process is not None and process.poll() is None:

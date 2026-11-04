@@ -229,18 +229,80 @@ class ResumeSurvivorTests(unittest.TestCase):
             service:{'id':row['Id'],'image_id':row['Image'],'inspect_sha256':recovery.digest(canonical(row))}
             for service,row in [('backend',backend),('frontend',frontend)]}}
         def docker(*args,**kwargs):
+            if args[0]=='ps':return SimpleNamespace(returncode=0,stderr=b'',stdout=b'')
             if args[1]=='b'*64:
                 return SimpleNamespace(returncode=1,stderr=('Error: No such object: '+'b'*64+'\n').encode(),stdout=b'')
             return SimpleNamespace(returncode=0,stderr=b'',stdout=json.dumps([frontend]).encode())
-        with patch.object(recovery,'docker_capture',side_effect=docker),patch.object(recovery,'_validate_container'):
+        with patch.object(recovery,'docker_capture',side_effect=docker),patch('docker_volume_fresh_runtime.docker_capture',side_effect=docker),patch.object(recovery,'_validate_container'):
             self.assertEqual(set(recovery._observe_survivors(plan,allow_absent=True)),{'frontend'})
             with self.assertRaises(BuildControlError):recovery._observe_survivors(plan,allow_absent=False)
+    def test_actual_lowercase_docker_cli_output_with_empty_json_is_absence(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        identifier='b'*64
+        def docker(*args,**kwargs):
+            if args[0]=='ps':return SimpleNamespace(returncode=0,stdout=b'',stderr=b'')
+            return SimpleNamespace(returncode=1,stdout=b'[]\n',stderr=('error: no such object: '+identifier+'\n').encode())
+        plan={'containers':{'backend':{'id':identifier}}}
+        with patch.object(recovery,'docker_capture',side_effect=docker),patch('docker_volume_fresh_runtime.docker_capture',side_effect=docker):
+            self.assertEqual(recovery._observe_survivors(plan,allow_absent=True),{})
+    def test_ambiguous_stdout_is_not_absence(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        identifier='b'*64
+        output=SimpleNamespace(returncode=1,stdout=b'[{"Id":"unexpected"}]\n',stderr=('error: no such object: '+identifier+'\n').encode())
+        with patch.object(recovery,'docker_capture',return_value=output):
+            with self.assertRaises(BuildControlError):recovery._observe_survivors({'containers':{'backend':{'id':identifier}}},allow_absent=True)
+    def test_other_full_id_is_not_absence(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        output=SimpleNamespace(returncode=1,stdout=b'[]\n',stderr=('error: no such object: '+'f'*64+'\n').encode())
+        with patch.object(recovery,'docker_capture',return_value=output):
+            with self.assertRaises(BuildControlError):recovery._observe_survivors({'containers':{'backend':{'id':'b'*64}}},allow_absent=True)
     def test_daemon_error_is_not_proof_of_absence(self):
         from types import SimpleNamespace
         from unittest.mock import patch
         plan={'containers':{'backend':{'id':'b'*64}}}
-        with patch.object(recovery,'docker_capture',return_value=SimpleNamespace(returncode=1,stderr=b'daemon unavailable')):
+        with patch.object(recovery,'docker_capture',return_value=SimpleNamespace(returncode=1,stderr=b'daemon unavailable',stdout=b'')):
             with self.assertRaises(BuildControlError):recovery._observe_survivors(plan,allow_absent=True)
+
+
+class ControllerCompatibilityTests(unittest.TestCase):
+    def legacy_plan(self):
+        profile=next(iter(recovery.CONTROLLER_COMPLETION_PROFILES.values()))
+        return {'controller_sha256':profile['controller_sha256'],'transaction_sha256':profile['transaction_sha256']}
+    def test_known_parser_revision_is_completion_only(self):
+        proof=recovery._controller_compatibility(self.legacy_plan())
+        self.assertEqual(proof['scope'],'completion-only-exact-absence')
+        recovery._require_completion_absence(proof,{})
+        with self.assertRaises(BuildControlError):recovery._require_completion_absence(proof,{'frontend':{'Id':'f'*64}})
+    def test_compatibility_sidecar_is_immutable_and_registry_bound(self):
+        import subprocess
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);(root/'namespaces').mkdir();(root/'namespaces/current.json').write_bytes(b'current-registry')
+            archive=root/'namespace-recovery'/('2'*32);archive.mkdir(parents=True)
+            script=recovery.COMPATIBILITY_RECEIPT_SCRIPT.replace("pathlib.Path('/control')",'pathlib.Path('+repr(str(root))+')')
+            relative='namespace-recovery/'+('2'*32)+'/controller-compatibility-profile-v1.json'
+            record=recovery._controller_compatibility(self.legacy_plan())
+            request={'receipt_path':relative,'registry_sha256':recovery.digest(b'current-registry'),'record':record}
+            def execute():return subprocess.run([sys.executable,'-B','-c',script],input=canonical(request),capture_output=True,timeout=5)
+            result=execute();self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(result.stdout.decode().strip(),recovery.digest(canonical(record)+b'\n'))
+            self.assertEqual(execute().returncode,0)
+            original=(root/relative).read_bytes()
+            request['record']={**record,'new_controller_sha256':'1'*64}
+            self.assertNotEqual(execute().returncode,0)
+            self.assertEqual((root/relative).read_bytes(),original)
+            request['receipt_path']='namespace-recovery/'+('2'*32)+'/other.json'
+            request['registry_sha256']='1'*64
+            self.assertNotEqual(execute().returncode,0)
+            self.assertFalse((archive/'other.json').exists())
+    def test_unknown_controller_and_changed_transaction_are_refused(self):
+        plan=self.legacy_plan();plan['controller_sha256']='1'*64
+        with self.assertRaises(BuildControlError):recovery._controller_compatibility(plan)
+        plan=self.legacy_plan();plan['transaction_sha256']='1'*64
+        with self.assertRaises(BuildControlError):recovery._controller_compatibility(plan)
 
 
 class HelperMountTests(unittest.TestCase):
