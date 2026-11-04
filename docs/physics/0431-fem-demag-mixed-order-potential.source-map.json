@@ -1,7 +1,7 @@
 {
   "document": {"path": "docs/physics/0431-fem-demag-mixed-order-potential.md"},
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "documented", "reason": "Existing nonperiodic P1/P2 Poisson-Robin CPU route is implemented; the prior fixed-mesh energy gate passed. The proposed fixed-coupling cache is PLANNED / NOT VERIFIED and has no qualified performance result."},
+    {"solver": "FEM", "device": "CPU", "status": "documented", "reason": "The existing P1/P2 Poisson CPU route and fixed-coupling cache are implemented. Managed native oracle, reuse, invalidation, memory-guard, and failure fixtures passed; R2 production memory, A/B performance, and full SP4 remain unqualified."},
     {"solver": "FEM", "device": "GPU", "status": "documented", "reason": "Nonperiodic P2 device operators are implemented and compiled; executed-device scientific qualification is pending."},
     {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "FDM uses a Newell tensor convolution and serves only as the cross-discretization oracle."},
     {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "FDM GPU does not use the FEM mixed-order potential realization."}
@@ -36,7 +36,7 @@
     {"id": "Ed", "latex": "E_{\\mathrm{demag},h}", "meaning": "discrete demagnetization energy", "si_unit": "\\mathrm J"},
     {"id": "mu0", "latex": "\\mu_0", "meaning": "vacuum permeability", "si_unit": "\\mathrm{N\\,A^{-2}}"},
     {"id": "Hd", "latex": "\\mathbf H_{\\mathrm{demag},h}", "meaning": "recovered demagnetizing field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
-    {"id": "Cij", "latex": "C^d_{ij}", "meaning": "planned cached discrete RHS transfer coefficient for component $d$", "si_unit": "\\mathrm{A\\,m}"},
+    {"id": "Cij", "latex": "C^d_{ij}", "meaning": "cached discrete RHS transfer coefficient for component $d$", "si_unit": "\\mathrm{A\\,m}"},
     {"id": "Em", "latex": "\\mathcal E_m", "meaning": "elements selected by the current magnetic mask", "si_unit": "1"},
     {"id": "Qe", "latex": "Q_e", "meaning": "existing quadrature rule and points for element $e$", "si_unit": "1"},
     {"id": "wq", "latex": "w_q", "meaning": "quadrature rule weight at point $q$", "si_unit": "1"},
@@ -52,8 +52,8 @@
     {"id": "localRhs", "latex": "\\mathbf b_{\\mathrm{local}}", "meaning": "local scalar-potential right-hand side", "si_unit": "\\mathrm{A\\,m}"},
     {"id": "mComponent", "latex": "\\mathbf m_d", "meaning": "state coefficient vector for Cartesian component $d$", "si_unit": "1"},
     {"id": "S", "latex": "\\mathcal S", "meaning": "magnetic-element or full-domain recovery set", "si_unit": "1"},
-    {"id": "G", "latex": "G^{d,\\mathcal S}_{ji}", "meaning": "planned recovery numerator transfer coefficient", "si_unit": "\\mathrm{m^2}"},
-    {"id": "W", "latex": "W^{\\mathcal S}_j", "meaning": "planned recovery normalization weight", "si_unit": "\\mathrm{m^3}"},
+    {"id": "G", "latex": "G^{d,\\mathcal S}_{ji}", "meaning": "cached recovery numerator transfer coefficient", "si_unit": "\\mathrm{m^2}"},
+    {"id": "W", "latex": "W^{\\mathcal S}_j", "meaning": "cached recovery normalization weight", "si_unit": "\\mathrm{m^3}"},
     {"id": "localPotential", "latex": "\\mathbf u_{\\mathrm{local}}", "meaning": "local potential coefficients after true-to-local mapping", "si_unit": "\\mathrm A"}
   ],
   "sources": [
@@ -70,11 +70,14 @@
     {"id": "mesh-perimeter", "path": "packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py", "symbol": "_build_perimeter_refinement_fields", "responsibility": "Build edge and corner refinement fields."},
     {"id": "sp4-scenario", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "study", "responsibility": "Author the public SP4 FEM relaxation workflow."},
     {"id": "cpu-rhs-oracle", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp", "symbol": "assemble_demag_poisson_rhs", "responsibility": "Retained CPU quadrature assembly is the RHS numerical oracle and same-CPU fallback."},
-    {"id": "cpu-contract-test-suite", "path": "backends/fem/tests/demag_poisson_contract.cpp", "symbol": "main", "responsibility": "Run the current FEM Poisson contract fixtures for RHS and recovery; these are existing oracles, not cache regressions."},
+    {"id": "cpu-contract-test-suite", "path": "backends/fem/tests/demag_poisson_contract.cpp", "symbol": "main", "responsibility": "Run retained quadrature oracles and six fixed-transfer cache regressions; managed native contract a7a0f16e751c446a8fd4a85bab1e54a8 passed.", "evidence_status": "native_contract_verified"},
     {"id": "cpu-recovery-oracle", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp", "symbol": "recover_demag_poisson_field", "responsibility": "Retain current physical/visual CPU recovery and branch-specific quadrature."},
-    {"id": "cpu-dependency-key", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_dependency.cpp", "symbol": "make_poisson_operator_dependency_key_impl", "responsibility": "Current dependency identity; planned cache adds geometry and FE-space inputs."},
+    {"id": "cpu-dependency-key", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_dependency.cpp", "symbol": "make_poisson_operator_dependency_key_impl", "responsibility": "Include geometry including Nodes, both FE spaces and constraints, materials, masks, and periodic maps in cache invalidation."},
     {"id": "cpu-recovery-finalizer", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_field.cpp", "symbol": "finalize_demag_poisson_recovered_field", "responsibility": "Existing field finalization retained after cached recovery."},
-    {"id": "planned-cpu-fixed-coupling", "path": "docs/physics/0431-fem-demag-mixed-order-potential.md", "symbol": "DOC-ANCHOR:planned-cpu-fixed-coupling", "responsibility": "Planned CPU cache contract; not evidence of implementation.", "evidence_status": "planned_contract"}
+    {"id": "planned-cpu-fixed-coupling", "path": "docs/physics/0431-fem-demag-mixed-order-potential.md", "symbol": "DOC-ANCHOR:planned-cpu-fixed-coupling", "responsibility": "Preserved CPU cache contract anchor; runtime and performance evidence are recorded separately.", "evidence_status": "planned_contract"},
+    {"id": "cpu-transfer-memory", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_transfer.hpp", "symbol": "class CpuTransferMatrix", "responsibility": "Own optional CPU sparse transfers with RAII; adjacent setup helpers guard persistent bytes and process RSS high-water relative to one baseline."},
+    {"id": "cpu-transfer-stats-abi", "path": "backends/fem/src/api.cpp", "symbol": "fullmag_fem_backend_snapshot_cpu_fixed_coupling_v1", "responsibility": "Expose versioned CPU-only fixed-transfer diagnostics without changing the existing step-statistics ABI."},
+    {"id": "cpu-transfer-regression", "path": "backends/fem/tests/demag_poisson_contract.cpp", "symbol": "cpu_fixed_transfers_match_retained_quadrature_and_reuse_setup", "responsibility": "Compare cached RHS, physical/visual fields, and energies with retained quadrature across supported fixtures and two inputs.", "evidence_status": "native_contract_verified"}
   ],
   "public_api": {
     "parameters": [

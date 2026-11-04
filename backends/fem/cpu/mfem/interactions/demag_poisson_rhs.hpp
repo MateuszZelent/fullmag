@@ -37,6 +37,11 @@ bool assemble_demag_poisson_rhs(
     const std::vector<double> &m_xyz,
     mfem::Vector *&rhs,
     std::string &error);
+
+// Retained numerical oracle for native contract comparisons.
+bool assemble_demag_poisson_rhs_quadrature(
+    Context &ctx, const std::vector<double> &m_xyz, mfem::Vector *&rhs,
+    std::string &error);
 #endif
 
 } // namespace fullmag::fem

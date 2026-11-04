@@ -1859,6 +1859,52 @@ pub struct fullmag_fem_endpoint_cache_telemetry_v1 {
     pub cache_projection_valid: u32,
 }
 
+pub const FULLMAG_FEM_CPU_FIXED_COUPLING_V1_ABI_VERSION: u32 = 1;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct fullmag_fem_cpu_transfer_diagnostics_v1 {
+    pub state: u32,
+    pub reason: [c_char; 256],
+    pub build_count: u64,
+    pub reuse_count: u64,
+    pub nnz: u64,
+    pub persistent_bytes: u64,
+    pub setup_wall_time_ns: u64,
+    pub setup_rss_baseline_bytes: u64,
+    pub setup_observed_peak_rss_bytes: u64,
+    pub setup_observed_peak_delta_bytes: u64,
+    pub setup_estimated_peak_delta_bytes: u64,
+}
+
+impl Default for fullmag_fem_cpu_transfer_diagnostics_v1 {
+    fn default() -> Self {
+        Self {
+            state: 0,
+            reason: [0; 256],
+            build_count: 0,
+            reuse_count: 0,
+            nnz: 0,
+            persistent_bytes: 0,
+            setup_wall_time_ns: 0,
+            setup_rss_baseline_bytes: 0,
+            setup_observed_peak_rss_bytes: 0,
+            setup_observed_peak_delta_bytes: 0,
+            setup_estimated_peak_delta_bytes: 0,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct fullmag_fem_cpu_fixed_coupling_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub available: u32,
+    pub rhs: fullmag_fem_cpu_transfer_diagnostics_v1,
+    pub recovery: fullmag_fem_cpu_transfer_diagnostics_v1,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct fullmag_fem_representation_receipt_v1 {
@@ -3631,6 +3677,11 @@ extern "C" {
         out_telemetry: *mut fullmag_fem_endpoint_cache_telemetry_v1,
     ) -> i32;
 
+    pub fn fullmag_fem_backend_snapshot_cpu_fixed_coupling_v1(
+        handle: *mut fullmag_fem_backend,
+        out_telemetry: *mut fullmag_fem_cpu_fixed_coupling_v1,
+    ) -> i32;
+
     pub fn fullmag_fem_backend_snapshot_representation_receipt_v1(
         handle: *mut fullmag_fem_backend,
         out_receipt: *mut fullmag_fem_representation_receipt_v1,
@@ -3994,6 +4045,16 @@ mod tests {
         );
         assert_eq!(FULLMAG_FEM_ENDPOINT_REFRESH_CACHE_HIT, 1);
         assert_eq!(FULLMAG_FEM_ENDPOINT_REFRESH_CACHE_UNAVAILABLE, 8);
+    }
+
+    #[test]
+    fn cpu_fixed_coupling_v1_has_separate_stable_layout() {
+        assert_eq!(FULLMAG_FEM_CPU_FIXED_COUPLING_V1_ABI_VERSION, 1);
+        assert_eq!(std::mem::size_of::<fullmag_fem_cpu_transfer_diagnostics_v1>(), 336);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_cpu_transfer_diagnostics_v1, build_count), 264);
+        assert_eq!(std::mem::size_of::<fullmag_fem_cpu_fixed_coupling_v1>(), 688);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_cpu_fixed_coupling_v1, rhs), 16);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_cpu_fixed_coupling_v1, recovery), 352);
     }
 
     #[test]
