@@ -665,7 +665,7 @@ class LinuxOOMReadyStopTests(unittest.TestCase):
                 with self.assertRaises(stop.BuildControlError):
                     stop._validate_linux_oom_drained_receipt(candidate, before)
 
-    def run_stop(self, fault=None):
+    def run_stop(self, fault=None, *, stop_frontend=False):
         import contextlib, copy, hashlib, io, json, types
         import docker_build_control as build
         import docker_group_ledger as group_ledger
@@ -757,6 +757,8 @@ class LinuxOOMReadyStopTests(unittest.TestCase):
             if args[:2] == ('image', 'inspect'):
                 return types.SimpleNamespace(stdout=b'[{"Config":{}}]', returncode=0, stderr=b'')
             if args[0] == 'inspect':
+                if fault == 'frontend-restarted' and events and events[-1] == 'terminal-receipt':
+                    services[frontend_id]['State']['StartedAt'] = 'replacement-start'
                 selected = [services[item] for item in args[1:]]
                 return types.SimpleNamespace(stdout=json.dumps(selected).encode(), returncode=0, stderr=b'')
             if args[0] == 'exec':
@@ -768,6 +770,12 @@ class LinuxOOMReadyStopTests(unittest.TestCase):
                 return types.SimpleNamespace(stdout=json.dumps(value).encode(), returncode=0, stderr=b'')
             if args[0] == 'stop':
                 self.assertEqual(args[1:5], ('--signal', 'SIGTERM', '--time', '-1'))
+                if args[-1] == frontend_id:
+                    events.append('frontend-stop')
+                    if fault == 'frontend-stop-unknown':
+                        raise build.ControlOutcomeUnknown('injected frontend stop outcome unknown')
+                    services[frontend_id]['State'].update(Running=False, Pid=0, ExitCode=0)
+                    return types.SimpleNamespace(stdout=b'', returncode=0, stderr=b'')
                 events.append('stop')
                 if fault == 'stop-unknown':
                     raise build.ControlOutcomeUnknown('injected daemon transport unknown')
@@ -782,7 +790,7 @@ class LinuxOOMReadyStopTests(unittest.TestCase):
             raw = (json.dumps(drained, sort_keys=True, separators=(',', ':')) + '\n').encode()
             return raw, drained
         args = types.SimpleNamespace(container_id=backend_id, image_id=image,
-                                     process_receipt_sha256='a' * 64)
+                                     process_receipt_sha256='a' * 64, stop_frontend=stop_frontend)
         error = None
         with (
             patch.object(stop, 'BuildControl', return_value=control),
@@ -833,6 +841,32 @@ class LinuxOOMReadyStopTests(unittest.TestCase):
         self.assertEqual(events[-2:], ['stop', 'terminal-receipt'])
         receipts = [value for path, value in writes if path.endswith('/receipt.json')]
         self.assertEqual(receipts[-1]['state'], 'outcome-unknown-resources-retained')
+        self.assertFalse(any(path.endswith('/terminal.json') for path, value in writes))
+        logger.wait.assert_not_called()
+
+    def test_group_stop_closes_frontend_after_authenticated_backend_drain(self):
+        writes, events, logger, error = self.run_stop(stop_frontend=True)
+        self.assertIsNone(error)
+        self.assertEqual(events, ['probe', 'probe', 'stop', 'terminal-receipt', 'frontend-stop'])
+        journal = next(value for path, value in reversed(writes) if path.startswith('verification/'))
+        self.assertTrue(journal['frontend_stopped'])
+        self.assertEqual(journal['frontend_container_id'], 'f' * 64)
+        logger.wait.assert_called_once()
+
+    def test_group_stop_preserves_frontend_on_failed_drain_or_changed_incarnation(self):
+        for fault in ('drain-child', 'frontend-restarted'):
+            with self.subTest(fault=fault):
+                writes, events, logger, error = self.run_stop(fault, stop_frontend=True)
+                self.assertIsInstance(error, stop.BuildControlError)
+                self.assertNotIn('frontend-stop', events)
+                self.assertFalse(any(path.endswith('/terminal.json') for path, value in writes))
+                logger.wait.assert_not_called()
+
+    def test_unknown_frontend_stop_retains_the_operation_lease(self):
+        from docker_build_control import ControlOutcomeUnknown
+        writes, events, logger, error = self.run_stop('frontend-stop-unknown', stop_frontend=True)
+        self.assertIsInstance(error, ControlOutcomeUnknown)
+        self.assertIn('frontend-stop', events)
         self.assertFalse(any(path.endswith('/terminal.json') for path, value in writes))
         logger.wait.assert_not_called()
 

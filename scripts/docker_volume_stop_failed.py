@@ -1371,6 +1371,7 @@ def _stop_linux_oom_ready(args, selected, identity, actual):
             'group_ledger_host_id': expected_group_host_id,
             'group_ledger_volume_name': ledger_profile.get('volume_name'),
             'group_ledger_subpath': expected_subpath,
+            'stop_frontend': bool(getattr(args, 'stop_frontend', False)),
     }) as operation:
         if (control.read('development/current.json') != previous
                 or control.read(base + '/terminal.json') != previous
@@ -1439,6 +1440,33 @@ def _stop_linux_oom_ready(args, selected, identity, actual):
             terminal_owner_sha256=hashlib.sha256(canonical(terminal_owner)).hexdigest(),
             namespace_processes_absent=True,
         )
+        if getattr(args, 'stop_frontend', False):
+            journal['state'] = 'backend-drained-frontend-pending'
+            control.write(journal_path, journal)
+            frontend_rows = json.loads(docker_capture('inspect', ids['frontend']).stdout)
+            if len(frontend_rows) != 1:
+                raise BuildControlError('OOM group frontend inspection is ambiguous')
+            frontend = frontend_rows[0]
+            _validate_retained_service(document, frontend, 'frontend', image_config)
+            if (frontend.get('Id') != ids['frontend']
+                    or (frontend.get('State', {}).get('StartedAt'), fingerprint(frontend))
+                    != initial['frontend']):
+                raise BuildControlError('OOM group frontend incarnation changed after backend drain')
+            if frontend.get('State', {}).get('Running') is True:
+                docker_capture('stop', '--signal', 'SIGTERM', '--time', '-1', ids['frontend'], timeout=90)
+            stopped_frontend = json.loads(docker_capture('inspect', ids['frontend']).stdout)
+            if len(stopped_frontend) != 1:
+                raise BuildControlError('OOM group frontend terminal inspection is ambiguous')
+            frontend = stopped_frontend[0]
+            frontend_state = frontend.get('State', {})
+            _validate_retained_service(document, frontend, 'frontend', image_config)
+            if (frontend.get('Id') != ids['frontend']
+                    or (frontend_state.get('StartedAt'), fingerprint(frontend)) != initial['frontend']
+                    or frontend_state.get('Running') is not False or frontend_state.get('Pid') != 0
+                    or frontend_state.get('OOMKilled') is True or frontend_state.get('ExitCode') != 0):
+                raise BuildControlError('OOM group frontend graceful stop is unconfirmed')
+            journal.update(state='stopped-confirmed', frontend_stopped=True,
+                           frontend_container_id=ids['frontend'])
         control.write(journal_path, journal)
         operation['daemon_pending'] = False
         operation['receipt']['state'] = 'succeeded'
@@ -1452,6 +1480,8 @@ def main():
     parser.add_argument('--container-id',required=True)
     parser.add_argument('--image-id',required=True)
     parser.add_argument('--process-receipt-sha256',required=True)
+    parser.add_argument('--stop-frontend', action='store_true',
+                        help='After authenticated Linux OOM drain, stop this exact group frontend')
     args=parser.parse_args()
     if not re.fullmatch('[0-9a-f]{64}',args.container_id) or not re.fullmatch('sha256:[0-9a-f]{64}',args.image_id) or not re.fullmatch('[0-9a-f]{64}',args.process_receipt_sha256):
         raise BuildControlError('Stop requires complete immutable container/image/receipt identities')
@@ -1471,6 +1501,8 @@ def main():
             raise BuildControlError('OOM stop is supported only for the pinned Linux DEV session profile')
         _stop_linux_oom_ready(args, selected, identity, actual)
         return 0
+    if args.stop_frontend:
+        raise BuildControlError('--stop-frontend requires the authenticated Linux OOM stop route')
     log_result = docker_capture('logs','--since',actual['State']['StartedAt'],'--tail','100',args.container_id)
     logs = (log_result.stdout + log_result.stderr).decode('utf-8','replace')
     if 'Startup or runtime failed; admission closed:' not in logs:
