@@ -69,6 +69,16 @@ stare volume’y do zakończenia tych kontroli. Błąd, nieznany owner, aktywny
 writer lub drift oznacza pozostawienie obu układów i recovery; żadnego global
 prune ani dotykania cudzej grupy.
 
+### Semantyczne wejścia buildu i właściciel konsoli
+
+`source_digest` obrazów toolchain/dev/backend obejmuje wszystkie semantyczne
+wejścia buildu. Wspólna projekcja producenta i czytnika wyłącza wyłącznie jawne
+operacyjne `inputs.console_session_id`, po walidacji jako 32 małe znaki hex.
+Pole pozostaje w receipcie jako dowód własności konsoli; nie zmienia tożsamości
+cache ani tagu obrazu. Wszystkie pozostałe pola, również nieznane nowe klucze,
+pozostają hashowane. Ten sam kontrakt weryfikuje istniejące receipty bez ich
+przepisywania; błędny token albo zmienione wejścia powodują odmowę.
+
 ### Własność namespace a provenance fizycznego rootu
 
 Historyczna etykieta `org.fullmag.source.worktree-id` stabilnego volume opisuje

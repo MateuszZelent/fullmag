@@ -7,6 +7,7 @@ network, Docker socket, host writes, or application execution responsibility.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from collections.abc import Mapping
 import errno
 import hashlib
 import json
@@ -47,6 +48,27 @@ class BuildControlError(RuntimeError):
 
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def semantic_build_inputs(inputs):
+    """Project build identity while retaining console ownership in receipts.
+
+    Only the exact, validated operation token is non-semantic. Every other
+    input, including unknown future keys, remains covered by the digest.
+    """
+    if not isinstance(inputs, Mapping):
+        raise BuildControlError("Build inputs must be an object")
+    result = dict(inputs)
+    if "console_session_id" in result:
+        token = result["console_session_id"]
+        if not isinstance(token, str) or re.fullmatch(r"[0-9a-f]{32}", token) is None:
+            raise BuildControlError("Build input console session identity is invalid")
+        del result["console_session_id"]
+    return result
+
+
+def build_input_digest(inputs):
+    return hashlib.sha256(canonical(semantic_build_inputs(inputs))).hexdigest()
 
 
 def _available_space(space):
@@ -872,7 +894,7 @@ def build_volume_toolchain(repo):
         raise BuildControlError("Untracked dependency inputs require explicit Git staging before build")
     source_identity = {"source_inputs": manifest, "build_args": build.get("args", {}),
                        "target": build["target"]}
-    digest = hashlib.sha256(canonical(source_identity)).hexdigest()
+    digest = build_input_digest(source_identity)
     service["image"] = "fullmag/fem-gpu-toolchain:inputs-" + digest[:24]
     with control.operation("toolchain", source_identity,
                            minimum_free_bytes=MIN_FREE_CONTROL_BYTES) as operation:
@@ -951,7 +973,7 @@ def build_volume_runtime_images(repo, control, toolchain, *, helper_source_bindi
         identity = {"parent_image_id": parent, "files": manifest}
         if helper_source_binding is not None:
             identity["helper_source"] = helper_source_binding
-        digest = hashlib.sha256(canonical(identity)).hexdigest()
+        digest = build_input_digest(identity)
         tag = "fullmag/development-" + kind + ":inputs-" + digest[:24]
         parent_digest = parent[7:] if parent.startswith("sha256:") else parent
         parent_ref = "fullmag/" + control.project + "-base:sha-" + parent_digest
