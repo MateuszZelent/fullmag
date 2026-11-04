@@ -107,6 +107,45 @@ class OwnershipTests(unittest.TestCase):
             self.assertTrue(value.closed)
 
 
+class BuildLogObservationTests(unittest.TestCase):
+    def test_no_backend_means_no_receipt_helpers_during_startup_admission(self):
+        value = runtime()
+        with patch.object(subject, 'docker_capture', return_value=SimpleNamespace(stdout=b'')) as docker, \
+             patch.object(value, '_owned_services', return_value=None) as owned:
+            value._follow_build_log()
+        owned.assert_not_called()
+        docker.assert_called_once_with('ps', '--quiet', '--no-trunc',
+            '--filter', 'label=com.docker.compose.project=fullmag-fixture',
+            '--filter', 'label=com.docker.compose.service=backend', '--filter', 'status=running')
+
+    def test_running_backend_still_requires_this_consoles_receipt(self):
+        value = runtime()
+        with patch.object(subject, 'docker_capture', return_value=SimpleNamespace(stdout=(BACKEND + '\n').encode())), \
+             patch.object(value, '_owned_services', return_value=None), \
+             patch.object(subject.subprocess, 'Popen') as launch:
+            value._follow_build_log()
+        launch.assert_not_called()
+        self.assertIsNone(value.log_container)
+
+    def test_backend_replaced_between_observations_is_not_followed(self):
+        value = runtime()
+        with patch.object(subject, 'docker_capture', return_value=SimpleNamespace(stdout=('d' * 64 + '\n').encode())), \
+             patch.object(value, '_owned_services', return_value=services()), \
+             patch.object(subject.subprocess, 'Popen') as launch:
+            value._follow_build_log()
+        launch.assert_not_called()
+
+    def test_authenticated_backend_build_log_is_followed(self):
+        value = runtime()
+        with patch.object(subject, 'docker_capture', return_value=SimpleNamespace(stdout=(BACKEND + '\n').encode())), \
+             patch.object(value, '_owned_services', return_value=services()), \
+             patch.object(subject, 'docker_argv', side_effect=lambda *args: ['docker', *args]), \
+             patch.object(subject.subprocess, 'Popen') as launch:
+            value._follow_build_log()
+        self.assertEqual(value.log_container, BACKEND)
+        self.assertEqual(launch.call_args.args[0], ['docker', 'logs', '--follow', '--since', 'backend-start', BACKEND])
+
+
 class StartupInterruptionTests(unittest.TestCase):
     def test_dependency_operation_reaches_its_boundary_after_one_interrupt(self):
         value = runtime()

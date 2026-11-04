@@ -69,6 +69,22 @@ stare volume’y do zakończenia tych kontroli. Błąd, nieznany owner, aktywny
 writer lub drift oznacza pozostawienie obu układów i recovery; żadnego global
 prune ani dotykania cudzej grupy.
 
+### Własność namespace a provenance fizycznego rootu
+
+Historyczna etykieta `org.fullmag.source.worktree-id` stabilnego volume opisuje
+pochodzenie fizycznego rootu; po kwalifikowanym wyborze nowego namespace nie
+zastępuje jego bieżącego ownera. Adapter cache może przyjąć różną historyczną
+wartość wyłącznie z jawnym manifestem `prepared_group_owner`, który wcześniej
+`docker_group_storage.prepare()` uwierzytelnił pod aktywną blokadą BuildControl.
+Manifest musi dokładnie wiązać niepusty namespace, projekt Compose, kanoniczny
+volume, źródła i aktualne source project/worktree IDs. Source project ID pochodzi
+z domeny resolvera `FULLMAG_PROJECT_ID`, nie z odrębnego cache project ID.
+
+Pozostałe etykiety grupy/schema/roli nadal muszą być zgodne. Bez dowodu albo przy
+drifcie obowiązuje odmowa; nie zmienia się etykiet volume, cache keys ani nazw.
+Dowód pozostaje w profilu i receipcie cache, a odczyt po serializacji podlega
+ponownej walidacji. Nie jest to dowód działającego runtime ani buildu.
+
 ## Skutek i zakres
 
 ### Kwarantanna terminalnego namespace po nieudanym bootstrapie
