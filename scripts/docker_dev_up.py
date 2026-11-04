@@ -27,6 +27,7 @@ from docker_build_control import (
     BuildControl,
     BuildControlError,
     bounded_capture,
+    build_input_digest,
     canonical,
     compose_capture,
     docker_capture,
@@ -747,7 +748,11 @@ def _verified_build_receipt(
         or not isinstance(inputs, Mapping)
     ):
         raise BuildInputUnknown(f"Retained {phase} build receipt inputs are incomplete")
-    if hashlib.sha256(canonical(inputs)).hexdigest() != source_digest:
+    try:
+        observed_digest = build_input_digest(inputs)
+    except BuildControlError as error:
+        raise BuildInputUnknown(f"Retained {phase} build receipt operational metadata is invalid") from error
+    if observed_digest != source_digest:
         raise BuildInputUnknown(f"Retained {phase} build receipt input digest is invalid")
     return receipt
 
@@ -906,7 +911,7 @@ def _build_inputs_match(group: RetainedGroup) -> bool:
         # That is an authenticated rebuild requirement, not an unknown receipt.
         changed.append("toolchain")
     current_toolchain = _toolchain_identity(group)
-    if hashlib.sha256(canonical(current_toolchain)).hexdigest() != toolchain["source_digest"]:
+    if build_input_digest(current_toolchain) != toolchain["source_digest"]:
         if "toolchain" not in changed:
             changed.append("toolchain")
     from docker_dev import BASE_CONTEXT_FILES, RUNTIME_IMAGE_CONTEXT_FILES
@@ -919,7 +924,7 @@ def _build_inputs_match(group: RetainedGroup) -> bool:
             "docker/all-in-one/Dockerfile.dev.dockerignore",
         ),
     }
-    if hashlib.sha256(canonical(current_development)).hexdigest() != development["source_digest"]:
+    if build_input_digest(current_development) != development["source_digest"]:
         changed.append("image-dev")
     current_backend = {
         "parent_image_id": development_image,
@@ -929,7 +934,7 @@ def _build_inputs_match(group: RetainedGroup) -> bool:
             "docker/all-in-one/Dockerfile.backend.dockerignore",
         ),
     }
-    if hashlib.sha256(canonical(current_backend)).hexdigest() != backend["source_digest"]:
+    if build_input_digest(current_backend) != backend["source_digest"]:
         changed.append("image-backend")
     if changed:
         raise BuildInputDrift(changed)

@@ -864,5 +864,45 @@ class DockerDevUpReconciliationTests(unittest.TestCase):
         control.read.assert_not_called()
 
 
+
+class RetainedSemanticBuildReceiptTests(unittest.TestCase):
+    def fixtures(self):
+        token='9c4bc6be2de043d1b87c56648fa2f189'
+        payloads={
+            'toolchain':{'source_inputs':[{'path':'docker/fem-gpu/Dockerfile','sha256':'a'*64}],
+                         'build_args':{'FULLMAG_CUDA_BASE_IMAGE':'cuda@sha256:'+'b'*64},'target':'fem-gpu-dev'},
+            'image-dev':{'parent_image_id':'sha256:'+'c'*64,'files':[{'path':'Dockerfile.dev','sha256':'d'*64}]},
+            'image-backend':{'parent_image_id':'sha256:'+'e'*64,'files':[{'path':'Dockerfile.backend','sha256':'f'*64}]},
+        }
+        for phase,semantic in payloads.items():
+            yield phase,semantic,{'schema':'fullmag.docker-build-operation.v1','phase':phase,'state':'succeeded',
+                'compose_project':'fullmag-master','image_id':'sha256:'+'1'*64,
+                'source_digest':hashlib.sha256(docker_dev_up.canonical(semantic)).hexdigest(),
+                'inputs':{**semantic,'console_session_id':token}}
+    def test_legacy_console_receipts_for_all_three_phases_remain_authenticated(self):
+        for phase,semantic,receipt in self.fixtures():
+            with self.subTest(phase=phase):
+                group=_group();group.control.read.return_value=receipt
+                checked=docker_dev_up._verified_build_receipt(group,phase+'/verified.json',phase)
+                self.assertIs(checked,receipt)
+                self.assertEqual(checked['inputs']['console_session_id'],'9c4bc6be2de043d1b87c56648fa2f189')
+                group.control.write.assert_not_called()
+                receipt['inputs']=semantic
+                self.assertIs(docker_dev_up._verified_build_receipt(group,phase+'/verified.json',phase),receipt)
+    def test_malformed_token_mutated_source_and_unknown_keys_fail_closed(self):
+        import copy
+        for phase,semantic,receipt in self.fixtures():
+            variants=[]
+            malformed=copy.deepcopy(receipt);malformed['inputs']['console_session_id']='bad';variants.append(malformed)
+            mutated=copy.deepcopy(receipt);mutated['inputs'][next(iter(semantic))]='changed';variants.append(mutated)
+            extra=copy.deepcopy(receipt);extra['inputs']['unknown_build_input']=True;variants.append(extra)
+            prefix=copy.deepcopy(receipt);prefix['inputs']['console_session_id_extra']='2'*32;variants.append(prefix)
+            for variant in variants:
+                with self.subTest(phase=phase,inputs=variant['inputs']):
+                    group=_group();group.control.read.return_value=variant
+                    with self.assertRaises(docker_dev_up.BuildInputUnknown):
+                        docker_dev_up._verified_build_receipt(group,phase+'/verified.json',phase)
+                    group.control.write.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()
