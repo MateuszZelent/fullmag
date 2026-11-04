@@ -71,6 +71,34 @@ prune ani dotykania cudzej grupy.
 
 ## Skutek i zakres
 
+### Kwarantanna terminalnego namespace po nieudanym bootstrapie
+
+Nieudany bootstrap skopiowanego snapshotu może zachować dawne `OWNER=ready`
+oraz nieznaną operację rekreacji bez autentycznego drainu. Taki stan nie jest
+drained i nie wolno go tak oznaczać ani przejmować ownera na podstawie PID lub
+wieku. Jawnie autoryzowany nowy start może korzystać z osobnej, wąskiej
+kwalifikacji cold-terminal-namespace-quarantine w tym samym projekcie Compose
+i tym samym stabilnym `BuildControl.volume`.
+
+Kwalifikacja wymaga dokładnie przypiętej zatrzymanej pary aplikacji i silnika
+Docker, nieobecności oryginalnego helpera oraz wszystkich innych konsumentów
+źródeł/state/control/ledger, istniejących nieblokujących blokad writer/SQLite/
+OWNER/LAUNCH/startup/operation/ledger i terminalnych katalogów z całkowicie
+zwolnionymi leases/rezerwacjami. Dowody i registry podlegają ponownemu CAS pod
+blokadami. Aktywny konsument, nierozstrzygnięta mutacja, konflikt lub drift
+blokują operację.
+
+Cały stary namespace, jego `active`, OWNER, store, ledger i wyniki pozostają
+bez zmiany bajtów. Nowy namespace otrzymuje pusty runtime/store/ledger oraz
+wspólny istniejący inode blokady operacji. Osobny receipt zapisuje
+`native_owner_drained=false`, a niepotwierdzoną historię OWNER oznacza jawnie;
+nie używa silniejszego schematu `snapshot_bootstrap_retirement`. Publikacja
+registry nie wznawia żadnego starego żądania. Dopiero trwały receipt i ponowna
+kontrola dokładnej pary upoważniają do jej usunięcia. Zwykłe ścieżki
+drain/recreate zachowują dotychczasowe wymagania. Implementacja i runtime tej
+kwalifikacji wymagają oddzielnych testów oraz receiptów; sam ten zapis nie
+jest dowodem jej wykonania.
+
 Ta decyzja supersedes rekomendację osobnych prywatnych `/build` i
 `/opt/fullmag/package` z ADR 0061 oraz starsze topology tabele w przewodnikach.
 Nie zmienia aplikacyjnych kontraktów pakietów, właścicieli/control namespace,
