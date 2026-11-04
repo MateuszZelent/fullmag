@@ -11,9 +11,10 @@ import unittest
 from unittest.mock import Mock, patch
 
 import docker_dev_up
+import docker_dev
 
 
-def _args(*, script=None, port=3197, port_explicit=False, request_id="test-request"):
+def _args(*, script=None, port=3197, port_explicit=False, request_id="test-request", headless=False):
     return argparse.Namespace(
         repo_root=Path("/repo"),
         source_root=Path("/repo"),
@@ -27,16 +28,19 @@ def _args(*, script=None, port=3197, port_explicit=False, request_id="test-reque
         toolchain_image=None,
         source_manifest=None,
         include_untracked=[],
+        headless=headless,
     )
 
 
-def _group(*, backend_running=True, frontend_running=True, healthy=True):
+def _group(*, backend_running=True, frontend_running=True, healthy=True, ui_mode=None):
     backend_state = {
         "Running": backend_running,
         "Health": {"Status": "healthy" if healthy else "unhealthy"},
     }
     backend_image_id = "sha256:" + "e" * 64
     toolchain_image_id = "sha256:" + "f" * 64
+    control = Mock()
+    control.read.return_value = None
     return docker_dev_up.RetainedGroup(
         repo_root=Path("/repo"),
         source_root=Path("/repo"),
@@ -48,7 +52,7 @@ def _group(*, backend_running=True, frontend_running=True, healthy=True):
             "worktree_id": "master",
             "checkout_kind": "main-checkout",
         },
-        control=Mock(),
+        control=control,
         attempt="a" * 32,
         config_sha256="b" * 64,
         port=3297,
@@ -57,6 +61,8 @@ def _group(*, backend_running=True, frontend_running=True, healthy=True):
             "state": "succeeded",
             "backend_container": "c" * 64,
             "frontend_container": "d" * 64,
+            **({"finished_at": 1.0} if ui_mode is not None else {}),
+            **({"ui_mode": ui_mode} if ui_mode is not None else {}),
         },
         backend_id="c" * 64,
         frontend_id="d" * 64,
@@ -77,6 +83,17 @@ def _group(*, backend_running=True, frontend_running=True, healthy=True):
 
 
 class DockerDevUpReconciliationTests(unittest.TestCase):
+    def test_headless_cli_is_explicit_and_gui_remains_the_default(self):
+        parser = docker_dev._parser()
+        gui = parser.parse_args(["--repo-root", "/repo", "up"])
+        headless = parser.parse_args(["--repo-root", "/repo", "up", "--headless"])
+        run_script = parser.parse_args([
+            "--repo-root", "/repo", "run-script", "--script", "examples/model.py", "--headless",
+        ])
+        self.assertFalse(gui.headless)
+        self.assertTrue(headless.headless)
+        self.assertTrue(run_script.headless)
+
     def setUp(self):
         self._build_input_match_impl = docker_dev_up._build_inputs_match
         self._build_input_guard = patch.object(
@@ -419,18 +436,81 @@ class DockerDevUpReconciliationTests(unittest.TestCase):
         self.assertEqual(restart_args.attempt, group.attempt)
         activate.assert_called_once()
 
-    def test_frontend_only_reuse_starts_frontend_and_restarts_when_source_changed(self):
-        group = _group(frontend_running=False)
+    def test_headless_to_gui_transition_drains_then_resumes_both_services(self):
+        group = _group(frontend_running=False, ui_mode="headless")
         args = _args()
         with patch.object(docker_dev_up, "_discover_group", return_value=group), \
                 patch.object(docker_dev_up, "_script_output_mapping_matches", return_value=True), \
-                patch.object(docker_dev_up, "_source_matches", return_value=False), \
+                patch.object(docker_dev_up, "_source_matches", return_value=True), \
+                patch("docker_volume_dev.stop_idle") as stop_idle, \
                 patch("docker_volume_dev.resume") as resume, \
-                patch("docker_volume_dev.restart_idle") as restart:
+                patch("docker_dev_defaults.activate_discovered") as activate:
             docker_dev_up.ensure_up(args)
+        stop_idle.assert_called_once()
         resume.assert_called_once()
-        self.assertFalse(resume.call_args.args[0].restart_backend)
-        restart.assert_called_once()
+        self.assertTrue(resume.call_args.args[0].restart_backend)
+        self.assertFalse(resume.call_args.args[0].headless)
+        activate.assert_not_called()
+
+    def test_headless_to_gui_transition_blocks_when_idle_gate_is_unknown(self):
+        group = _group(frontend_running=False, ui_mode="headless")
+        args = _args(script=Path("examples/model.py"))
+        with patch.object(docker_dev_up, "_discover_group", return_value=group), \
+                patch.object(docker_dev_up, "_script_output_mapping_matches", return_value=True), \
+                patch.object(docker_dev_up, "_source_matches", return_value=True), \
+                patch("docker_volume_dev.stop_idle", side_effect=docker_dev_up.BuildControlError("active or unknown session")), \
+                patch("docker_volume_dev.resume") as resume, \
+                patch("docker_dev_defaults.activate_discovered") as activate:
+            with self.assertRaisesRegex(docker_dev_up.BuildControlError, "active or unknown"):
+                docker_dev_up.ensure_up(args)
+        resume.assert_not_called()
+        activate.assert_not_called()
+
+    def test_headless_mode_transition_drains_gui_group_then_resumes_backend_only(self):
+        group = _group(ui_mode="gui")
+        args = _args(script=Path("examples/model.py"), headless=True)
+        with patch.object(docker_dev_up, "_discover_group", return_value=group), \
+                patch.object(docker_dev_up, "_script_output_mapping_matches", return_value=True), \
+                patch.object(docker_dev_up, "_source_matches", return_value=True), \
+                patch("docker_volume_dev.stop_idle") as stop_idle, \
+                patch("docker_volume_dev.resume") as resume, \
+                patch("docker_dev_defaults.activate_discovered") as activate:
+            docker_dev_up.ensure_up(args)
+        stop_idle.assert_called_once()
+        resume.assert_called_once()
+        self.assertTrue(resume.call_args.args[0].restart_backend)
+        self.assertTrue(resume.call_args.args[0].headless)
+        activate.assert_called_once()
+        self.assertTrue(activate.call_args.args[0].headless)
+
+    def test_headless_mode_transition_stops_when_idle_gate_is_unknown(self):
+        group = _group(ui_mode="gui")
+        args = _args(script=Path("examples/model.py"), headless=True)
+        with patch.object(docker_dev_up, "_discover_group", return_value=group), \
+                patch.object(docker_dev_up, "_script_output_mapping_matches", return_value=True), \
+                patch.object(docker_dev_up, "_source_matches", return_value=True), \
+                patch("docker_volume_dev.stop_idle", side_effect=docker_dev_up.BuildControlError("active or unknown session")), \
+                patch("docker_volume_dev.resume") as resume, \
+                patch("docker_dev_defaults.activate_discovered") as activate:
+            with self.assertRaisesRegex(docker_dev_up.BuildControlError, "active or unknown"):
+                docker_dev_up.ensure_up(args)
+        resume.assert_not_called()
+        activate.assert_not_called()
+
+    def test_headless_receipt_reuses_stopped_frontend_without_starting_it(self):
+        group = _group(frontend_running=False, ui_mode="headless")
+        args = _args(script=Path("examples/model.py"), headless=True)
+        with patch.object(docker_dev_up, "_discover_group", return_value=group), \
+                patch.object(docker_dev_up, "_script_output_mapping_matches", return_value=True), \
+                patch.object(docker_dev_up, "_source_matches", return_value=True), \
+                patch("docker_volume_dev.resume") as resume, \
+                patch("docker_volume_dev.stop_idle") as stop_idle, \
+                patch("docker_dev_defaults.activate_discovered") as activate:
+            docker_dev_up.ensure_up(args)
+        resume.assert_not_called()
+        stop_idle.assert_not_called()
+        activate.assert_called_once()
+        self.assertTrue(activate.call_args.args[0].headless)
 
     def test_stopped_backend_uses_retained_resume_and_preserves_cache(self):
         group = _group(backend_running=False, frontend_running=False)

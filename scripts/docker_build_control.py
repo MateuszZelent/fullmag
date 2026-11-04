@@ -717,6 +717,15 @@ class BuildControl:
                 or (minimum_free_bytes < MIN_FREE_BUILD_BYTES
                     and phase not in CACHE_ONLY_PHASES)):
             raise BuildControlError("Invalid build-space admission for operation phase")
+        console_id = os.environ.get("FULLMAG_CONSOLE_SESSION_ID")
+        if console_id is not None:
+            if not re.fullmatch(r"[0-9a-f]{32}", console_id):
+                raise BuildControlError("Invalid console session identity")
+            if os.environ.get("FULLMAG_CONSOLE_CANCEL_REQUESTED") == console_id:
+                raise BuildControlError("Console startup cancelled before the next managed operation")
+            if "console_session_id" in inputs and inputs["console_session_id"] != console_id:
+                raise BuildControlError("Console session identity differs from operation inputs")
+            inputs = {**inputs, "console_session_id": console_id}
         token = uuid.uuid4().hex
         root = f"{phase}/attempts/{token}"
         path = self.path(root)

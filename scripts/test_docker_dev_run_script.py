@@ -161,6 +161,37 @@ class DockerDevRunScriptTests(unittest.TestCase):
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["exit_code"], 0)
 
+    def test_headless_run_uses_stopped_frontend_discovery_and_marks_activation(self) -> None:
+        activation_namespaces = []
+
+        def activate(namespace):
+            activation_namespaces.append(namespace)
+            return self._activation()
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(
+                defaults, "resolve_defaults",
+                return_value=defaults.ScriptDefaults(self.repo, self.pins.port),
+            ))
+            discovery = stack.enter_context(patch.object(
+                defaults, "_discover_pins", return_value=self.pins,
+            ))
+            stack.enter_context(patch("docker_volume_activate.activate", side_effect=activate))
+            stack.enter_context(patch.object(
+                run_script_module, "_probe_with_retry",
+                side_effect=(
+                    {"state": "observed", "api_instance_id": API_INSTANCE},
+                    _observation("completed"),
+                ),
+            ))
+            result = run_script_module.run_script(
+                self.repo, "examples/demo.py", headless=True,
+            )
+
+        self.assertEqual(result["outcome"], "completed")
+        self.assertFalse(discovery.call_args.kwargs["frontend_required"])
+        self.assertTrue(activation_namespaces[0].headless)
+
     def test_wait_for_solve_remains_attached_until_run_completes(self) -> None:
         observations = iter((
             _observation("waiting_for_solve"),
