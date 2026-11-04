@@ -559,11 +559,11 @@ pub(crate) fn render_accepted_scene_source_bounded(
             "accepted_ui_source_missing", "canonical UI export did not produce executable source",
         ));
     }
-    // Use the shared bounded capture budget; a generated source is not an
+    // Use the shared source-byte budget; a generated source is not an
     // alternative route around the accepted-source transport limits.
     let bytes = fullmag_session::repository_path::read_bounded_regular_file(
         &source.directory, "source.py",
-        fullmag_application::script_source_capture::METADATA_LIMIT,
+        fullmag_application::script_source_capture::SOURCE_LIMIT as usize,
     ).map_err(|error| ApiError::unprocessable_with_code(
         "accepted_ui_source_invalid", format!("canonical UI source is not a bounded regular file: {error}"),
     ))?;

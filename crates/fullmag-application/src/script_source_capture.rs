@@ -8,10 +8,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-const SOURCE_LIMIT: u64 = 8 * 1024 * 1024;
+pub const SOURCE_LIMIT: u64 = 8 * 1024 * 1024;
 const RUNTIME_LIMIT: u64 = 128 * 1024 * 1024;
 const FILE_LIMIT: u64 = 32 * 1024 * 1024;
-pub const METADATA_LIMIT: usize = 8 * 1024 * 1024;
+pub const METADATA_LIMIT: usize = 12 * 1024 * 1024;
 
 pub struct CapturedScriptSource {
     pub config: Option<ScriptExecutionConfig>,
