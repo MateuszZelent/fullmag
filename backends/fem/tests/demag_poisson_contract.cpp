@@ -387,6 +387,26 @@ void periodic_demag_reuses_warm_start_and_resets_after_failure() {
     check(ctx.poisson_demag.fresh_zero_guess_count == 1u,
           "periodic rejected solve records one fresh zero guess");
 
+    auto *periodic_matrix =
+        static_cast<mfem::SparseMatrix *>(ctx.poisson_demag.periodic_matrix);
+    auto *periodic_rhs = static_cast<mfem::Vector *>(ctx.poisson_demag.periodic_rhs);
+    auto *periodic_solution =
+        static_cast<mfem::Vector *>(ctx.poisson_demag.periodic_solution);
+    check(periodic_matrix != nullptr && periodic_rhs != nullptr && periodic_solution != nullptr,
+          "periodic warm-start test retains its reduced system");
+    const auto relative_residual = [&]() {
+        mfem::Vector residual(periodic_rhs->Size());
+        periodic_matrix->Mult(*periodic_solution, residual);
+        residual -= *periodic_rhs;
+        const double rhs_norm = periodic_rhs->Norml2();
+        check(std::isfinite(rhs_norm) && rhs_norm > 0.0,
+              "periodic warm-start test RHS norm is finite and nonzero");
+        return residual.Norml2() / rhs_norm;
+    };
+    const mfem::Vector accepted_rhs(*periodic_rhs);
+    const double rhs_norm = periodic_rhs->Norml2();
+    const double cold_initial_residual = relative_residual();
+
     ctx.demag.solver.max_iterations = 100;
     ctx.demag.solver.relative_tolerance = 1.0e-10;
     solved = nullptr;
@@ -403,6 +423,10 @@ void periodic_demag_reuses_warm_start_and_resets_after_failure() {
           "periodic cold solve must exercise at least one iteration");
     mfem::Vector accepted_solution(solved->Size());
     accepted_solution = *solved;
+    const double cold_final_residual = relative_residual();
+    check(std::isfinite(cold_final_residual) && cold_final_residual <= 1.0e-10,
+          "periodic cold solution meets the requested RHS-relative residual");
+    const double warm_initial_residual = relative_residual();
 
     solved = nullptr;
     error.clear();
@@ -413,8 +437,21 @@ void periodic_demag_reuses_warm_start_and_resets_after_failure() {
     check(solved != nullptr, "periodic warm-start solve publishes a lifted solution");
     check(ctx.poisson_demag.fresh_zero_guess_count == 2u,
           "periodic warm-start solve does not zero the previous solution");
-    check(ctx.poisson_demag.last_iterations < cold_iterations,
-          "periodic warm start reduces iterations for an unchanged RHS");
+    mfem::Vector rhs_difference(*periodic_rhs);
+    rhs_difference -= accepted_rhs;
+    check(rhs_difference.Norml2() == 0.0,
+          "periodic warm start uses exactly the same reduced RHS");
+    const double warm_final_residual = relative_residual();
+    check(std::isfinite(warm_final_residual) && warm_final_residual <= 1.0e-10,
+          "periodic warm solution meets the same RHS-relative residual");
+    // MFEM scales its iterative stopping criterion by each call's initial
+    // residual. Reusing an accurate solution can therefore request a much
+    // smaller final residual without guaranteeing fewer iterations.
+    std::fprintf(stderr,
+                 "periodic warm-start diagnostic: cold_iterations=%d warm_iterations=%d cold_initial_relative_residual=%.17g cold_final_relative_residual=%.17g warm_initial_relative_residual=%.17g warm_final_relative_residual=%.17g rhs_norm=%.17g\n",
+                 cold_iterations, ctx.poisson_demag.last_iterations,
+                 cold_initial_residual, cold_final_residual,
+                 warm_initial_residual, warm_final_residual, rhs_norm);
     mfem::Vector warm_start_difference(solved->Size());
     warm_start_difference = *solved;
     warm_start_difference -= accepted_solution;
@@ -422,6 +459,7 @@ void periodic_demag_reuses_warm_start_and_resets_after_failure() {
         warm_start_difference.Norml2() <=
             1.0e-12 * std::max(1.0, accepted_solution.Norml2()),
         "periodic warm start preserves the qualified solution");
+    const mfem::Vector accepted_reduced_solution(*periodic_solution);
 
     for (int i = 0; i < rhs.Size(); ++i) {
         rhs(i) = -rhs(i);
@@ -438,6 +476,10 @@ void periodic_demag_reuses_warm_start_and_resets_after_failure() {
           "rejected periodic candidate must not publish a lifted solution");
     check(ctx.poisson_demag.fresh_zero_guess_count == 2u,
           "rejected periodic candidate must retain the accepted warm start");
+    mfem::Vector rejected_difference(*periodic_solution);
+    rejected_difference -= accepted_reduced_solution;
+    check(rejected_difference.Norml2() == 0.0,
+          "rejected periodic candidate restores the exact accepted reduced solution");
 
     ctx.demag.solver.max_iterations = 100;
     ctx.demag.solver.relative_tolerance = 1.0e-10;
