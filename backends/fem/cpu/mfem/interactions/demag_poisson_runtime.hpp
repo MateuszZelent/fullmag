@@ -36,6 +36,8 @@ struct PoissonRhsWorkspace;
 struct PoissonOperatorDependencyKey {
     std::uint64_t mesh_topology_revision = 0;
     std::uint64_t mesh_geometry_revision = 0;
+    std::uint64_t state_space_revision = 0;
+    std::uint64_t potential_space_revision = 0;
     std::uint32_t potential_order = 0;
     std::uint64_t material_membership_revision = 0;
     std::uint64_t boundary_revision = 0;
@@ -49,6 +51,8 @@ struct PoissonOperatorDependencyKey {
     {
         return mesh_topology_revision == other.mesh_topology_revision &&
             mesh_geometry_revision == other.mesh_geometry_revision &&
+            state_space_revision == other.state_space_revision &&
+            potential_space_revision == other.potential_space_revision &&
             potential_order == other.potential_order &&
             material_membership_revision == other.material_membership_revision &&
             boundary_revision == other.boundary_revision &&
@@ -78,6 +82,20 @@ struct PoissonOperatorLifecycleReceipt {
     std::uint64_t invalidation_count = 0;
     std::uint64_t failed_setup_count = 0;
     bool setup_complete = false;
+};
+
+struct CpuPoissonTransferDiagnostics {
+    std::string state = "not-built";
+    std::string reason;
+    std::uint64_t build_count = 0;
+    std::uint64_t reuse_count = 0;
+    std::uint64_t nnz = 0;
+    std::uint64_t persistent_bytes = 0;
+    std::uint64_t setup_wall_time_ns = 0;
+    std::uint64_t setup_rss_baseline_bytes = 0;
+    std::uint64_t setup_observed_peak_rss_bytes = 0;
+    std::uint64_t setup_observed_peak_delta_bytes = 0;
+    std::uint64_t setup_estimated_peak_delta_bytes = 0;
 };
 
 /*
@@ -126,6 +144,15 @@ struct PoissonDemagRuntimeState {
     std::vector<int> ess_tdof_list;
     bool ready = false;
     PoissonOperatorLifecycleReceipt operator_lifecycle{};
+    CpuPoissonTransferDiagnostics rhs_transfer;
+    CpuPoissonTransferDiagnostics recovery_transfer;
+    std::uint64_t cpu_transfer_persistent_limit_bytes = 640ull * 1024ull * 1024ull;
+    std::uint64_t cpu_transfer_setup_limit_bytes = 1536ull * 1024ull * 1024ull;
+    std::uint64_t cpu_transfer_setup_rss_baseline_bytes = 0;
+    // Private setup-only fault seam for the native ownership regression.
+    std::uint32_t cpu_transfer_test_fail_after_finalized_matrices = 0;
+    std::uint32_t cpu_transfer_test_finalized_matrices = 0;
+    std::uint64_t cpu_transfer_test_peak_live_matrices = 0;
 
     int last_iterations = 0;
     double last_residual = 0.0;

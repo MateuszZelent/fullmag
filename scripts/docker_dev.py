@@ -79,6 +79,7 @@ RUNTIME_IMAGE_CONTEXT_FILES = (
     ("Dockerfile.backend", "docker/all-in-one/Dockerfile.backend"),
     ("Dockerfile.backend.dockerignore", "docker/all-in-one/Dockerfile.backend.dockerignore"),
     ("backend_dev.py", "docker/all-in-one/backend_dev.py"),
+    ("backend_native_contracts.py", "docker/all-in-one/backend_native_contracts.py"),
     ("backend_source.py", "docker/all-in-one/backend_source.py"),
     ("backend_shared_store.py", "docker/all-in-one/backend_shared_store.py"),
     ("backend_shared_recovery.py", "docker/all-in-one/backend_shared_recovery.py"),
@@ -2760,6 +2761,10 @@ def _parser() -> argparse.ArgumentParser:
         preowner_policy.add_argument("--" + option, required=True)
     preowner_policy.add_argument("--apply", action="store_true")
     preowner_policy.add_argument("--expected-plan-sha256")
+    preowner_policy.add_argument(
+        "--variant", choices=("legacy", "cold-memory-increase-restore-stored-budget"), default="legacy")
+    preowner_policy.add_argument("--drain-attempt", help="exact historical successful idle-drain iteration")
+    preowner_policy.add_argument("--continue-intent-sha256", help="observe and finalize this exact interrupted intent without signalling again")
     preowner_policy.add_argument("--terminal-observation-proof", dest="proof_path")
     preowner_policy.add_argument("--terminal-observation-proof-sha256", dest="proof_sha256")
     stop_bootstrap = subparsers.add_parser(
@@ -2777,6 +2782,9 @@ def _parser() -> argparse.ArgumentParser:
     recreate_volume.add_argument("--config-sha256", required=True)
     recreate_volume.add_argument("--source-root", type=Path, required=True)
     recreate_volume.add_argument("--port", type=int, required=True)
+    recreate_volume.add_argument("--native-contract", action="append", default=None,
+                                 choices=("fem-demag-poisson",),
+                                 help="require an allowlisted native contract before publishing the replacement backend package")
     recreate_volume.add_argument(
         "--helper-source-root", type=Path,
         help="durable clean infrastructure checkout used only for managed runtime helpers",
@@ -2922,6 +2930,9 @@ def _parser() -> argparse.ArgumentParser:
         ))
         command.add_argument("--source-root", type=Path,
                              help="registered checkout/worktree mounted live by both services")
+        command.add_argument("--native-contract", action="append", default=None,
+                             choices=("fem-demag-poisson",),
+                             help="qualify the package with this native contract before API startup")
         command.add_argument(
             "--profile", choices=sorted(BUILD_PROFILE_TO_CARGO_PROFILE),
             default=DEFAULT_BUILD_PROFILE,
@@ -3075,7 +3086,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.action == "stop-preowner-policy-volume":
             if bool(args.proof_path) != bool(args.proof_sha256):
                 raise _fail("Terminal observation successor requires paired proof path and digest")
-            if args.proof_path:
+            if args.variant == "cold-memory-increase-restore-stored-budget":
+                if args.proof_path or not args.drain_attempt:
+                    raise _fail("Cold stored-budget restore requires drain attempt without terminal observation proof")
+                from docker_volume_cold_budget_restore import stop
+            elif args.drain_attempt or args.continue_intent_sha256:
+                raise _fail("Drain attempt and intent continuation are supported only by cold stored-budget restore")
+            elif args.proof_path:
                 from docker_volume_preowner_drained import stop
             else:
                 from docker_volume_stop_preowner_policy import stop

@@ -2016,12 +2016,56 @@ def _validate_cancellation_maintenance(value):
     return dict(value)
 
 
+def _native_contracts(values):
+    if values is None:
+        return ()
+    if (not isinstance(values, (list, tuple))
+            or any(value != "fem-demag-poisson" for value in values)
+            or len(set(values)) != len(values)):
+        raise BuildControlError("Native contracts must be unique allowlisted identifiers")
+    return tuple(sorted(values))
+
+
+def _retained_native_contracts(previous, document):
+    command = document.get("services", {}).get("backend", {}).get("command", [])
+    if not isinstance(command, list) or any(not isinstance(value, str) for value in command):
+        raise BuildControlError("Retained backend command is invalid")
+    values = []
+    for index, argument in enumerate(command):
+        if argument == "--native-contract":
+            if index + 1 == len(command):
+                raise BuildControlError("Retained native contract has no identifier")
+            values.append(command[index + 1])
+        elif argument.startswith("--native-contract="):
+            raise BuildControlError("Retained native contract must use canonical command arguments")
+    selected = _native_contracts(values)
+    if selected and (not command or command[0] != "start"):
+        raise BuildControlError("Native contracts require the canonical backend start command")
+    if selected != _native_contracts(previous.get("inputs", {}).get("native_contracts")):
+        raise BuildControlError("Retained native contract inputs differ from the Compose command")
+    return selected
+
+
+def _pin_native_contract_command(backend, requested):
+    requested = _native_contracts(requested)
+    if not requested:
+        return
+    command = backend.get("command")
+    if (not isinstance(command, list) or not command or command[0] != "start"
+            or any(not isinstance(value, str) for value in command)
+            or any(value.startswith("--native-contract") for value in command)):
+        raise BuildControlError("Rendered backend native contract command is ambiguous")
+    backend["command"] = command + [argument for identifier in requested
+                                     for argument in ("--native-contract", identifier)]
+
+
 def start(args, *, reuse_state=None, control=None, operation=None, prepared=None,
           recovery_environment=None, recovery_metadata=None, previous_config_sha256=None,
           native_restart_metadata=None, accepted_reattach_environment=None,
           accepted_reattach_metadata=None, recreation_resume_proof=None,
           post_build_generation=None, retained_device_access=None, maintenance=None,
-          startup_diagnostic_restart=None, terminal_observation=None, helper_source_binding=None):
+          startup_diagnostic_restart=None, terminal_observation=None, helper_source_binding=None,
+          cold_budget_restore=None):
     from docker_dev import (_select_source, _compose_identity,
         _assert_no_running_fullmag, _source_git_common_directory, _workspace_state_root,
         _operator_probe_environment_from_host)
@@ -2032,6 +2076,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
     ui_mode = "headless" if headless else "gui"
     provided_control = control
     provided_operation = operation
+    native_contracts = _native_contracts(getattr(args, "native_contract", None))
     if retained_device_access is not None and retained_device_access not in ("cpu", "gpu"):
         raise BuildControlError("Retained device access must be cpu or gpu")
     retained_helper_source_binding = (
@@ -2071,6 +2116,8 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
     validated_recovery_environment = _validate_recovery_environment(recovery_environment)
     validated_recovery_metadata = _validate_recovery_metadata(recovery_metadata)
     validated_native_restart_metadata = _validate_recovery_metadata(native_restart_metadata)
+    if cold_budget_restore is not None and (reuse_state is None or args.script is not None):
+        raise BuildControlError("Cold budget restore requires retained storage without startup Solve")
     validated_startup_diagnostic_restart = None
     if startup_diagnostic_restart is not None:
         from docker_volume_startup_diagnostic_restart import validate_metadata
@@ -2209,6 +2256,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         from docker_volume_activation_reconcile import assert_no_unresolved_activation
         assert_no_unresolved_activation(control)
     operation_inputs = {"source_root": str(selected), "image_id": image,
+        **({"native_contracts": list(native_contracts)} if native_contracts else {}),
         "source_project_id": identity["project_id"],
         "source_worktree_id": identity["worktree_id"],
         "source_checkout_kind": identity["checkout_kind"],
@@ -2235,6 +2283,8 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         operation_inputs["terminal_observation"] = terminal_observation["metadata"]
     if validated_startup_diagnostic_restart is not None:
         operation_inputs["startup_diagnostic_restart"] = validated_startup_diagnostic_restart
+    if cold_budget_restore is not None:
+        operation_inputs["cold_budget_restore"] = cold_budget_restore
     if validated_post_build_generation is not None:
         operation_inputs["post_build_generation"] = validated_post_build_generation
     if recreation_resume_proof is not None:
@@ -2287,6 +2337,8 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             )
         if validated_startup_diagnostic_restart is not None:
             operation["receipt"]["startup_diagnostic_restart"] = validated_startup_diagnostic_restart
+        if cold_budget_restore is not None:
+            operation["receipt"]["cold_budget_restore"] = cold_budget_restore
         if validated_accepted_reattach_metadata is not None:
             operation["receipt"]["accepted_reattach"] = validated_accepted_reattach_metadata
         if terminal_observation is not None:
@@ -2500,12 +2552,15 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             raise BuildControlError("DEV Compose render failed: " + configured.stderr.decode("utf-8", "replace"))
         document = json.loads(configured.stdout)
         from docker_dev_defaults import configured_group_budget
-        from docker_volume_resources import apply_group_budget, apply_saved_budget
-        apply_group_budget(document, configured_group_budget(selected))
-        apply_saved_budget(control, document)
+        from docker_volume_resources import apply_development_budget
+        apply_development_budget(
+            control, document, configured_group_budget(selected),
+            cold_budget_restore=cold_budget_restore, source_root=str(selected),
+        )
         if device_access == "gpu":
             document["services"]["backend"]["gpus"] = [{"count": "all"}]
         backend, frontend = (document["services"][name] for name in ("backend", "frontend"))
+        _pin_native_contract_command(backend, native_contracts)
         service_source_groups = (
             (backend, _source_supplementary_groups(selected, git_common)),
             (frontend, _source_supplementary_groups(selected)),
@@ -5520,6 +5575,26 @@ def _retained_recovery_context(
     control, previous, document, *, fresh_state, backend_id=None, removed_container_proof=None,
     drained_successor=None, actual=None,
 ):
+    context = _retained_native_recovery_context(
+        control, previous, document, fresh_state=fresh_state, backend_id=backend_id,
+        removed_container_proof=removed_container_proof, drained_successor=drained_successor, actual=actual,
+    )
+    pin = previous.get("cold_budget_restore")
+    if pin is not None and not fresh_state:
+        from docker_volume_cold_budget_restore import authenticate_journal
+        journal = authenticate_journal(control, pin)
+        if journal["observation"]["source_root"] != previous.get("inputs", {}).get("source_root"):
+            raise BuildControlError("Retained budget restore source differs")
+        if context.get("cold_budget_restore", pin) != pin:
+            raise BuildControlError("Retained budget restore pin changed")
+        context["cold_budget_restore"] = pin
+    return context
+
+
+def _retained_native_recovery_context(
+    control, previous, document, *, fresh_state, backend_id=None, removed_container_proof=None,
+    drained_successor=None, actual=None,
+):
     """Carry pending recovery authority, or consume a completed proof once.
 
     PID 1 still authenticates the native request and current owner before any
@@ -5528,6 +5603,15 @@ def _retained_recovery_context(
     A separate native-start-failure journal carries only reduced restart
     evidence and never mints a recovery authorization.
     """
+    from docker_volume_cold_budget_restore import retained_context as cold_restore_context
+    cold_restore = cold_restore_context(
+        control, previous, document, actual, fresh_state=fresh_state,
+        removed_container_proof=removed_container_proof,
+    )
+    if cold_restore is not None:
+        if drained_successor is not None:
+            raise BuildControlError("Cold budget restore cannot combine with drained successor")
+        return cold_restore
     if drained_successor is not None:
         if fresh_state:
             raise BuildControlError("Drained successor requires retained storage")
@@ -6129,6 +6213,11 @@ def _validate_removed_recreation_proof(
         if operation_terminal.get("startup_diagnostic_restart") != native_recovery_context["startup_diagnostic_restart"]:
             raise BuildControlError("Completed recreation startup diagnostic witness differs")
         proof["startup_diagnostic_restart"] = native_recovery_context["startup_diagnostic_restart"]
+    cold_restore_pin = native_recovery_context.get("cold_budget_restore")
+    if cold_restore_pin is not None:
+        if operation_terminal.get("cold_budget_restore") != cold_restore_pin:
+            raise BuildControlError("Completed recreation lost its authenticated cold budget restore pin")
+        proof["cold_budget_restore"] = cold_restore_pin
     proof["native_recovery_context"] = native_recovery_context
     return snapshot, proof, native_recovery_context
 
@@ -7467,6 +7556,14 @@ def _retained_operation(
     document = control.read(previous_root + "/compose.json")
     if hashlib.sha256(canonical(document)).hexdigest() != args.config_sha256 or document.get("name") != control.project:
         raise BuildControlError("Resume Compose identity/CAS differs")
+    retained_contracts = _retained_native_contracts(previous, document)
+    requested_contracts = getattr(args, "native_contract", None)
+    if requested_contracts is None and retained_contracts:
+        args.native_contract = list(retained_contracts)
+    elif requested_contracts is not None:
+        requested_contracts = _native_contracts(requested_contracts)
+        if requested_contracts != retained_contracts and not recreate_services:
+            raise BuildControlError("Changing native contracts requires managed service recreation")
     from docker_volume_cancelled_activation_guard import require_fresh_recreation
     require_fresh_recreation(control, args, previous, recreate_services=recreate_services)
     from docker_volume_preparation_abort import require_fresh_archive
@@ -7848,6 +7945,23 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
         native_init_successor = isinstance(recovery_context, NativeInitSuccessorContext)
         from docker_volume_startup_diagnostic_restart import StartupDiagnosticStopContext
         startup_diagnostic_stopped = isinstance(recovery_context, StartupDiagnosticStopContext)
+        from docker_volume_cold_budget_restore import ColdBudgetRestoreContext
+        cold_budget_stopped = isinstance(recovery_context, ColdBudgetRestoreContext)
+        retained_restore_pin = previous.get("cold_budget_restore")
+        if cold_budget_stopped:
+            if (args.script is not None or pre_activation_stop is not None
+                    or fresh_state or certificate.get("restart_verified") is not True):
+                raise BuildControlError("Cold budget restore requires retained verified state without startup Solve")
+            retained_restore_pin = recovery_context["cold_budget_restore"]
+            if _native_contracts(getattr(args, "native_contract", None)) != retained_contracts:
+                raise BuildControlError("Cold budget restore must preserve the retained native contract gates")
+            if args.include_untracked != include_untracked_from_compose(document):
+                raise BuildControlError("Cold budget restore must preserve the exact retained untracked allowlist")
+        elif retained_restore_pin is not None and not fresh_state:
+            # Carry the authenticated budget on every later retained recreate.
+            # This pin grants no exception to the normal drain/recovery gates.
+            from docker_volume_cold_budget_restore import authenticate_journal
+            authenticate_journal(control, retained_restore_pin)
         if startup_diagnostic_stopped and (args.script is not None or pre_activation_stop is not None
                 or certificate.get("restart_verified") is not True):
             raise BuildControlError("Startup diagnostic restart requires verified retained storage without activation")
@@ -7945,7 +8059,7 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
         linux_supervision_stop = isinstance(recovery_context, LinuxSupervisionContext)
         if (not fresh_state and pre_activation_stop is None and not pre_api_stopped
                 and not original_after_ready_stop and not native_init_successor and not drained_successor
-                and not startup_diagnostic_stopped and not linux_supervision_stop
+                and not startup_diagnostic_stopped and not cold_budget_stopped and not linux_supervision_stop
                 and certificate.get("restart_verified") is True):
             retained_environment = document["services"]["backend"]["environment"]
             retained_reattach_declared = (
@@ -7998,7 +8112,7 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
         # authority. It must not enter the mutually exclusive no-native
         # pre-admission path merely because the old storage probe was limited.
         if (not fresh_state and not pre_api_stopped and not native_init_successor and not drained_successor
-                and not startup_diagnostic_stopped
+                and not startup_diagnostic_stopped and not cold_budget_stopped
                 and not certificate.get("restart_verified")):
             retained_environment = document["services"]["backend"]["environment"]
             observed_environment = actual["backend"].get("Config", {}).get("Env") or []
@@ -8130,6 +8244,12 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                         or leased_recovery_context.witness != recovery_context.witness):
                     raise BuildControlError("Drained-successor proof changed under recreate lease")
                 operation["receipt"]["drained_successor"] = recovery_context.witness
+            if retained_restore_pin is not None and not fresh_state:
+                operation["receipt"]["cold_budget_restore"] = retained_restore_pin
+            if cold_budget_stopped:
+                if not isinstance(leased_recovery_context, ColdBudgetRestoreContext):
+                    raise BuildControlError("Cold budget restore context changed under recreate lease")
+                operation["receipt"]["cold_budget_restore"] = recovery_context["cold_budget_restore"]
             if startup_diagnostic_stopped:
                 if not isinstance(leased_recovery_context, StartupDiagnosticStopContext):
                     raise BuildControlError("Startup diagnostic context changed under recreate lease")
@@ -8512,6 +8632,8 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
         if reuse is not None and helper_source_binding is not None:
             reuse["helper_source_binding"] = helper_source_binding
         recovery_context.update(accepted_reattach_context)
+        if retained_restore_pin is not None and not fresh_state:
+            recovery_context["cold_budget_restore"] = retained_restore_pin
         return start(
             args, reuse_state=reuse, retained_device_access=retained_device_access,
             terminal_observation=terminal_observation, helper_source_binding=helper_source_binding,

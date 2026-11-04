@@ -45,8 +45,8 @@ docker-dev-reconcile-completed-cache registry volume recovery_id apply="false" e
 
 # Start or reconcile the selected two-service group; reuse matching sources and caches.
 # The source parameter selects the main checkout or a registered worktree.
-docker-dev source_root="" port="" script="" gpu_access="auto":
-    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" up {{if port == "" { "" } else { "--port " + quote(port) } }} --gpu-access {{quote(gpu_access)}} {{if source_root == "" { "" } else { "--source-root " + quote(source_root) } }} {{if script == "" { "" } else { "--script " + quote(script) } }}
+docker-dev source_root="" port="" script="" gpu_access="auto" native_contract="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" up {{if port == "" { "" } else { "--port " + quote(port) } }} --gpu-access {{quote(gpu_access)}} {{if source_root == "" { "" } else { "--source-root " + quote(source_root) } }} {{if script == "" { "" } else { "--script " + quote(script) } }} {{if native_contract == "" { "" } else { "--native-contract " + quote(native_contract) } }}
 
 # Run a managed console session in the selected Docker DEV group.
 # Two arguments use GUI mode; prefix gui or headless to choose explicitly.

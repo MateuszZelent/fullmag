@@ -241,6 +241,12 @@ void context_destroy_poisson(Context &ctx)
     ctx.poisson_demag.ess_tdof_list.clear();
     ctx.poisson_demag.ready = false;
     ctx.poisson_demag.operator_lifecycle = {};
+    ctx.poisson_demag.rhs_transfer = {};
+    ctx.poisson_demag.recovery_transfer = {};
+    ctx.poisson_demag.cpu_transfer_setup_rss_baseline_bytes = 0;
+    ctx.poisson_demag.cpu_transfer_test_fail_after_finalized_matrices = 0;
+    ctx.poisson_demag.cpu_transfer_test_finalized_matrices = 0;
+    ctx.poisson_demag.cpu_transfer_test_peak_live_matrices = 0;
 }
 #endif
 

@@ -41,6 +41,13 @@ bool recover_demag_poisson_field(
     uint64_t *energy_wall_time_ns,
     std::string &error,
     const mfem::Vector *assembled_rhs = nullptr);
+
+// Retained numerical oracle, including the existing normalization and energy.
+bool recover_demag_poisson_field_quadrature(
+    Context &ctx, const mfem::Vector &potential, std::vector<double> &h_demag_xyz,
+    double &demag_energy, const std::vector<double> &m_xyz,
+    uint64_t *energy_wall_time_ns, std::string &error,
+    const mfem::Vector *assembled_rhs = nullptr);
 #endif
 
 } // namespace fullmag::fem

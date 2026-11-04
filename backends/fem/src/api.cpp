@@ -5762,6 +5762,53 @@ int fullmag_fem_backend_snapshot_stats(
 #endif
 }
 
+int fullmag_fem_backend_snapshot_cpu_fixed_coupling_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_cpu_fixed_coupling_v1 *out_telemetry)
+{
+    if (handle == nullptr || out_telemetry == nullptr) {
+        fullmag_fem_set_handle_error(handle, "CPU fixed coupling snapshot requires handle and output");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    *out_telemetry = {};
+    out_telemetry->abi_version = FULLMAG_FEM_CPU_FIXED_COUPLING_V1_ABI_VERSION;
+    out_telemetry->struct_size = sizeof(*out_telemetry);
+#if FULLMAG_HAS_MFEM_STACK
+    const auto &ctx = handle->context;
+    if (fullmag::fem::mfem_device_requests_gpu(ctx) ||
+        ctx.gpu_state.device.lifecycle.allocated || !ctx.poisson_demag.ready) {
+        return FULLMAG_FEM_OK;
+    }
+    auto copy = [](const fullmag::fem::CpuPoissonTransferDiagnostics &source,
+                   fullmag_fem_cpu_transfer_diagnostics_v1 &target) {
+        if (source.state == "not-built") target.state = 0u;
+        else if (source.state == "ready") target.state = 1u;
+        else if (source.state == "quadrature") target.state = 2u;
+        else return false;
+        if (source.reason.size() >= sizeof(target.reason) ||
+            source.reason.find('\0') != std::string::npos) return false;
+        std::snprintf(target.reason, sizeof(target.reason), "%s", source.reason.c_str());
+        target.build_count = source.build_count;
+        target.reuse_count = source.reuse_count;
+        target.nnz = source.nnz;
+        target.persistent_bytes = source.persistent_bytes;
+        target.setup_wall_time_ns = source.setup_wall_time_ns;
+        target.setup_rss_baseline_bytes = source.setup_rss_baseline_bytes;
+        target.setup_observed_peak_rss_bytes = source.setup_observed_peak_rss_bytes;
+        target.setup_observed_peak_delta_bytes = source.setup_observed_peak_delta_bytes;
+        target.setup_estimated_peak_delta_bytes = source.setup_estimated_peak_delta_bytes;
+        return true;
+    };
+    if (!copy(ctx.poisson_demag.rhs_transfer, out_telemetry->rhs) ||
+        !copy(ctx.poisson_demag.recovery_transfer, out_telemetry->recovery)) {
+        fullmag_fem_set_handle_error(handle, "CPU fixed coupling diagnostics cannot be represented by ABI v1");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    out_telemetry->available = 1u;
+#endif
+    return FULLMAG_FEM_OK;
+}
+
 int fullmag_fem_backend_snapshot_endpoint_cache_telemetry_v1(
     fullmag_fem_backend *handle,
     fullmag_fem_endpoint_cache_telemetry_v1 *out_telemetry

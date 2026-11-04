@@ -1850,6 +1850,30 @@ typedef struct {
     uint32_t cache_projection_valid;
 } fullmag_fem_endpoint_cache_telemetry_v1;
 
+/* Additive query of the CPU-owned fixed Poisson transfer workspaces. */
+#define FULLMAG_FEM_CPU_FIXED_COUPLING_V1_ABI_VERSION 1u
+typedef struct {
+    uint32_t state; /* 0 not-built, 1 ready, 2 quadrature */
+    char reason[256];
+    uint64_t build_count;
+    uint64_t reuse_count;
+    uint64_t nnz;
+    uint64_t persistent_bytes;
+    uint64_t setup_wall_time_ns;
+    uint64_t setup_rss_baseline_bytes;
+    uint64_t setup_observed_peak_rss_bytes;
+    uint64_t setup_observed_peak_delta_bytes;
+    uint64_t setup_estimated_peak_delta_bytes;
+} fullmag_fem_cpu_transfer_diagnostics_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t available;
+    fullmag_fem_cpu_transfer_diagnostics_v1 rhs;
+    fullmag_fem_cpu_transfer_diagnostics_v1 recovery;
+} fullmag_fem_cpu_fixed_coupling_v1;
+
 #define FULLMAG_FEM_REPRESENTATION_RECEIPT_V1_ABI_VERSION 1u
 
 typedef enum {
@@ -4090,6 +4114,11 @@ FULLMAG_FEM_API int fullmag_fem_backend_snapshot_stats(
 FULLMAG_FEM_API int fullmag_fem_backend_snapshot_endpoint_cache_telemetry_v1(
     fullmag_fem_backend *handle,
     fullmag_fem_endpoint_cache_telemetry_v1 *out_telemetry
+);
+
+FULLMAG_FEM_API int fullmag_fem_backend_snapshot_cpu_fixed_coupling_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_cpu_fixed_coupling_v1 *out_telemetry
 );
 
 FULLMAG_FEM_API int fullmag_fem_backend_snapshot_representation_receipt_v1(

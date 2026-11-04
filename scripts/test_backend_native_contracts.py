@@ -1,0 +1,347 @@
+"""Mocked command-flow tests for the managed native contract gate."""
+from __future__ import annotations
+
+import io
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+import time
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "docker" / "all-in-one"))
+
+import backend_native_contracts as native_contracts
+from backend_native_contracts import (
+    FEM_DEMAG_POISSON,
+    NativeContractError,
+    PACKAGE_LIBRARY_ARTIFACT_PATH,
+    normalize_contracts,
+    receipt_satisfies,
+    run_contracts,
+)
+
+
+SNAPSHOT = "a" * 64
+
+
+class FakeProcess:
+    def __init__(self, output: bytes, exit_code: int, on_wait=None) -> None:
+        self.stdout = io.BytesIO(output)
+        self.returncode = None
+        self._exit_code = exit_code
+        self._on_wait = on_wait
+        self.killed = False
+
+    def wait(self):
+        if self._on_wait is not None:
+            self._on_wait()
+        self.returncode = -9 if self.killed else self._exit_code
+        return self.returncode
+
+    def kill(self):
+        self.killed = True
+
+
+class BackendNativeContractsTests(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.native_root = self.root / "native-build"
+        self.build_fem = self.native_root / "backends" / "fem"
+        self.build_fem.mkdir(parents=True)
+        (self.build_fem / "libfullmag_fem.so").write_bytes(b"native library")
+        (self.build_fem / "fem_demag_poisson_contract").write_bytes(b"contract executable")
+        self.package_root = self.root / "package"
+        self.package_lib = self.package_root / "lib"
+        self.package_lib.mkdir(parents=True)
+        (self.package_lib / "libfullmag_fem.so").write_bytes(b"native library")
+        self.evidence_root = self.root / "private-control" / "native-contracts"
+        self.environment = {"LD_LIBRARY_PATH": "/existing/dependencies", "PATH": "/usr/bin"}
+
+    def _runner(self, outcomes=None, callbacks=None, output=b"mock output\n"):
+        outcomes = list(outcomes or [0, 0])
+        callbacks = list(callbacks or [None] * len(outcomes))
+        calls = []
+
+        def start(argv, **kwargs):
+            index = len(calls)
+            calls.append((list(argv), kwargs))
+            return FakeProcess(output, outcomes[index], callbacks[index])
+
+        return patch.object(native_contracts.subprocess, "Popen", side_effect=start), calls
+
+    def _run(self):
+        return run_contracts(
+            requested=[FEM_DEMAG_POISSON],
+            native_build_root=self.native_root,
+            package_root=self.package_root,
+            evidence_root=self.evidence_root,
+            source_snapshot_sha256=SNAPSHOT,
+            environment=self.environment,
+            jobs=3,
+        )
+
+    def test_normalize_contracts_allows_empty_and_rejects_unknown_or_duplicate(self) -> None:
+        self.assertEqual(normalize_contracts(None), ())
+        self.assertEqual(normalize_contracts([]), ())
+        self.assertEqual(normalize_contracts([FEM_DEMAG_POISSON]), (FEM_DEMAG_POISSON,))
+        with self.assertRaisesRegex(ValueError, "unknown native contract"):
+            normalize_contracts(["fem-other"])
+        with self.assertRaisesRegex(ValueError, "duplicate native contract"):
+            normalize_contracts([FEM_DEMAG_POISSON, FEM_DEMAG_POISSON])
+        with self.assertRaisesRegex(ValueError, "sequence"):
+            normalize_contracts(FEM_DEMAG_POISSON)
+
+    def test_success_runs_fixed_compile_then_test_and_binds_installed_library(self) -> None:
+        runner, calls = self._runner()
+        with runner:
+            report = self._run()
+
+        self.assertEqual(report["schema"], "fullmag.backend-native-contracts.v1")
+        self.assertEqual(report["state"], "succeeded")
+        self.assertEqual(report["requested"], [FEM_DEMAG_POISSON])
+        contract = report["contracts"][FEM_DEMAG_POISSON]
+        self.assertEqual(contract["contract_revision"], 1)
+        self.assertEqual(contract["state"], "passed")
+        self.assertEqual(contract["compile"]["argv"][0:2], ["cmake", "--build"])
+        self.assertEqual(contract["compile"]["argv"][3:6], ["--target", "fem_demag_poisson_contract", "--parallel"])
+        self.assertEqual(contract["compile"]["argv"][6], "3")
+        self.assertEqual(contract["test"]["argv"], [str(self.build_fem / "fem_demag_poisson_contract")])
+        self.assertEqual(len(calls), 2)
+        for _argv, kwargs in calls:
+            self.assertIs(kwargs["shell"], False)
+            self.assertEqual(
+                kwargs["env"]["LD_LIBRARY_PATH"],
+                str(self.build_fem) + os.pathsep + "/existing/dependencies",
+            )
+        libraries = contract["libraries"]
+        self.assertEqual(libraries["build"]["sha256"], libraries["package"]["sha256"])
+        self.assertTrue(receipt_satisfies(
+            report,
+            requested=[FEM_DEMAG_POISSON],
+            source_snapshot_sha256=SNAPSHOT,
+            package_root=self.package_root,
+        ))
+        artifact_hash = libraries["package"]["sha256"]
+        self.assertTrue(receipt_satisfies(
+            report,
+            requested=[FEM_DEMAG_POISSON],
+            source_snapshot_sha256=SNAPSHOT,
+            package_library_sha256=artifact_hash,
+        ))
+        self.assertFalse(receipt_satisfies(
+            report,
+            requested=[FEM_DEMAG_POISSON],
+            source_snapshot_sha256=SNAPSHOT,
+        ))
+        log_path = self.evidence_root / report["evidence"]["log_path"]
+        receipt_path = self.evidence_root / report["evidence"]["report_path"]
+        self.assertIn(b"mock output", log_path.read_bytes())
+        self.assertEqual(json.loads(receipt_path.read_text(encoding="utf-8")), report)
+        self.assertLessEqual(log_path.stat().st_size, native_contracts.MAX_LOG_BYTES)
+
+    def test_compile_failure_persists_report_and_skips_test(self) -> None:
+        runner, calls = self._runner(outcomes=[7, 0])
+        with runner:
+            with self.assertRaises(NativeContractError) as caught:
+                self._run()
+
+        self.assertEqual(len(calls), 1)
+        report = caught.exception.report
+        self.assertEqual(report["state"], "failed")
+        contract = report["contracts"][FEM_DEMAG_POISSON]
+        self.assertEqual(contract["compile"]["exit_code"], 7)
+        self.assertEqual(contract["test"]["state"], "not_run")
+        self.assertTrue(caught.exception.receipt_path.is_file())
+        persisted = json.loads(caught.exception.receipt_path.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["state"], "failed")
+        self.assertFalse(receipt_satisfies(
+            report,
+            requested=[FEM_DEMAG_POISSON],
+            source_snapshot_sha256=SNAPSHOT,
+            package_root=self.package_root,
+        ))
+
+    def test_test_failure_is_durable_and_does_not_satisfy_receipt(self) -> None:
+        runner, calls = self._runner(outcomes=[0, 9])
+        with runner:
+            with self.assertRaises(NativeContractError) as caught:
+                self._run()
+
+        self.assertEqual(len(calls), 2)
+        report = caught.exception.report
+        self.assertEqual(report["contracts"][FEM_DEMAG_POISSON]["test"]["exit_code"], 9)
+        self.assertFalse(receipt_satisfies(
+            report,
+            requested=[FEM_DEMAG_POISSON],
+            source_snapshot_sha256=SNAPSHOT,
+            package_root=self.package_root,
+        ))
+
+    def test_binary_tampering_during_test_fails_gate(self) -> None:
+        binary = self.build_fem / "fem_demag_poisson_contract"
+
+        def tamper_binary():
+            binary.write_bytes(b"replaced executable")
+
+        runner, _calls = self._runner(callbacks=[None, tamper_binary])
+        with runner:
+            with self.assertRaisesRegex(NativeContractError, "binary changed") as caught:
+                self._run()
+        contract = caught.exception.report["contracts"][FEM_DEMAG_POISSON]
+        self.assertNotEqual(contract["test_binary"]["sha256_before"], contract["test_binary"]["sha256_after"])
+
+    def test_library_tampering_during_test_fails_gate(self) -> None:
+        package_library = self.package_lib / "libfullmag_fem.so"
+
+        def tamper_library():
+            package_library.write_bytes(b"replaced package library")
+
+        runner, _calls = self._runner(callbacks=[None, tamper_library])
+        with runner:
+            with self.assertRaisesRegex(NativeContractError, "packaged FEM library changed") as caught:
+                self._run()
+        report = caught.exception.report
+        self.assertFalse(receipt_satisfies(
+            report,
+            requested=[FEM_DEMAG_POISSON],
+            source_snapshot_sha256=SNAPSHOT,
+            package_root=self.package_root,
+        ))
+
+    def test_receipt_rejects_snapshot_or_package_library_mismatch(self) -> None:
+        runner, _calls = self._runner()
+        with runner:
+            report = self._run()
+        self.assertFalse(receipt_satisfies(
+            report,
+            requested=[FEM_DEMAG_POISSON],
+            source_snapshot_sha256="b" * 64,
+            package_root=self.package_root,
+        ))
+        (self.package_lib / "libfullmag_fem.so").write_bytes(b"post-restore tamper")
+        self.assertFalse(receipt_satisfies(
+            report,
+            requested=[FEM_DEMAG_POISSON],
+            source_snapshot_sha256=SNAPSHOT,
+            package_root=self.package_root,
+        ))
+
+    def test_receipt_rejects_missing_hash_wrong_revision_or_wrong_contract_id(self) -> None:
+        runner, _calls = self._runner()
+        with runner:
+            report = self._run()
+        cases = []
+        missing_hash = json.loads(json.dumps(report))
+        del missing_hash["contracts"][FEM_DEMAG_POISSON]["libraries"]["build"]["sha256"]
+        cases.append((missing_hash, [FEM_DEMAG_POISSON]))
+        wrong_revision = json.loads(json.dumps(report))
+        wrong_revision["contracts"][FEM_DEMAG_POISSON]["contract_revision"] = 2
+        cases.append((wrong_revision, [FEM_DEMAG_POISSON]))
+        wrong_id = json.loads(json.dumps(report))
+        wrong_id["requested"] = ["unknown-contract"]
+        cases.append((wrong_id, [FEM_DEMAG_POISSON]))
+        for candidate, requested in cases:
+            with self.subTest(candidate=candidate):
+                self.assertFalse(receipt_satisfies(
+                    candidate,
+                    requested=requested,
+                    source_snapshot_sha256=SNAPSHOT,
+                    package_root=self.package_root,
+                ))
+
+    def test_build_library_symlink_cannot_escape_native_root(self) -> None:
+        outside = self.root / "outside-library.so"
+        outside.write_bytes(b"outside")
+        built_library = self.build_fem / "libfullmag_fem.so"
+        built_library.unlink()
+        built_library.symlink_to(outside)
+        runner, calls = self._runner()
+        with runner:
+            with self.assertRaisesRegex(NativeContractError, "resolves outside") as caught:
+                self._run()
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(caught.exception.report["contracts"][FEM_DEMAG_POISSON]["test"]["state"], "not_run")
+
+    def test_empty_request_preserves_legacy_receipt_without_touching_evidence(self) -> None:
+        report = run_contracts(
+            requested=[],
+            native_build_root=self.native_root,
+            package_root=self.package_root,
+            evidence_root=self.evidence_root,
+            source_snapshot_sha256="invalid-for-skipped-request",
+            environment={},
+            jobs=0,
+        )
+        self.assertEqual(report["state"], "skipped")
+        self.assertFalse(self.evidence_root.exists())
+        self.assertTrue(receipt_satisfies(
+            None,
+            requested=[],
+            source_snapshot_sha256="legacy-source-had-no-native-contract-field",
+        ))
+
+    def test_evidence_root_symlink_is_rejected_without_writing_through_it(self) -> None:
+        outside = self.root / "outside-evidence"
+        outside.mkdir()
+        self.evidence_root.parent.mkdir(parents=True)
+        self.evidence_root.symlink_to(outside, target_is_directory=True)
+        runner, calls = self._runner()
+        with runner:
+            with self.assertRaisesRegex(NativeContractError, "must not be a symlink"):
+                self._run()
+        self.assertEqual(calls, [])
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_invalid_snapshot_writes_failed_receipt_without_running_commands(self) -> None:
+        runner, calls = self._runner()
+        with runner:
+            with self.assertRaisesRegex(NativeContractError, "snapshot SHA-256 is invalid") as caught:
+                run_contracts(
+                    requested=[FEM_DEMAG_POISSON],
+                    native_build_root=self.native_root,
+                    package_root=self.package_root,
+                    evidence_root=self.evidence_root,
+                    source_snapshot_sha256="bad",
+                    environment=self.environment,
+                    jobs=2,
+                )
+        self.assertEqual(calls, [])
+        self.assertEqual(caught.exception.report["state"], "failed")
+        self.assertTrue(caught.exception.receipt_path.is_file())
+
+    def test_log_limit_fails_gate_and_preserves_bounded_log(self) -> None:
+        runner, calls = self._runner(output=b"x" * (native_contracts.MAX_LOG_BYTES + 1))
+        with runner, patch.object(native_contracts, "_terminate_command_group", side_effect=lambda process: process.kill()):
+            with self.assertRaisesRegex(NativeContractError, "log_limit_exceeded") as caught:
+                self._run()
+        self.assertEqual(len(calls), 1)
+        report = caught.exception.report
+        self.assertEqual(report["contracts"][FEM_DEMAG_POISSON]["compile"]["reason"], "log_limit_exceeded")
+        log_path = self.evidence_root / report["evidence"]["log_path"]
+        self.assertEqual(log_path.stat().st_size, native_contracts.MAX_LOG_BYTES)
+        self.assertEqual(report["evidence"]["log_size_bytes"], native_contracts.MAX_LOG_BYTES)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "managed backend process-group contract")
+    def test_log_limit_stops_descendant_before_returning_failure(self) -> None:
+        marker = self.root / "descendant-wrote-after-failure"
+        child = "import pathlib,time; time.sleep(0.35); pathlib.Path(" + repr(str(marker)) + ").write_text('unsafe')"
+        parent = ("import subprocess,sys,time; subprocess.Popen([sys.executable,'-c'," + repr(child)
+                  + "]); print('x'*262144,flush=True); time.sleep(3)")
+        with (self.root / "real-process.log").open("wb") as log:
+            with patch.object(native_contracts, "MAX_LOG_BYTES", 4096):
+                result = native_contracts._run_command(
+                    [sys.executable, "-c", parent], cwd=self.root,
+                    environment=os.environ.copy(), log_file=log)
+        self.assertEqual(result["reason"], "log_limit_exceeded")
+        time.sleep(0.5)
+        self.assertFalse(marker.exists(), "a descendant kept writing after terminal failure")
+
+
+if __name__ == "__main__":
+    unittest.main()
