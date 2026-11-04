@@ -1233,7 +1233,10 @@ def build_geometry_assets_for_request(
                 )
 
                 if source_suffix == ".fullmag-mesh":
-                    artifact = load_mesh_artifact(explicit_domain_mesh_source)
+                    artifact = load_mesh_artifact(
+                        explicit_domain_mesh_source,
+                        expected_sha256=(mesh_workflow or {}).get("domain_mesh_sha256"),
+                    )
                 elif source_suffix == ".mphtxt":
                     artifact = import_comsol_mesh(explicit_domain_mesh_source)
                 else:

@@ -6,6 +6,8 @@
 - Related ADRs: `docs/adr/0011-resource-first-api.md`, `docs/adr/0013-frontend-v2-module-kernel.md`
 - Related specs: `docs/specs/resource-first-control-room-api-v2.md`, `docs/specs/frontend-v2/16-charts-analysis-module.md`
 
+(problem-statement)=
+
 ## 1. Problem Statement
 
 Fullmag needs a canonical table autosave contract for live scalar observables.
@@ -26,6 +28,8 @@ owning stage executes and cannot leak into a following stage.
 
 ## 2. Physical Model
 
+(governing-equations)=
+
 ### 2.1 Governing Equations
 
 The table does not introduce a new micromagnetic equation. It samples reduced
@@ -41,26 +45,38 @@ max_torque(t_k) = max_x |torque proxy(x, t_k)|
 
 Time-evolution sampling is triggered by simulation time:
 
-```text
-t_current + eps >= t_next_sample
+```{math}
+:label: eq-table-time-cadence
+t + \epsilon \ge t_{\mathrm{next}}
 ```
+
+(table-time-origin-contract)=
 
 When adaptive stepping crosses several requested sample times in one solver
 step, the first implementation records the current solver state once and marks
 the sample policy as coalesced. It does not invent interpolated physics values.
+The contract requires a scalar sample due at a Run stage origin (`t=0`) to use
+the actual initialized solver state before integration, with the row remaining
+at the origin instead of shifting to the first accepted step. The initial
+scalar event consumes the due schedule, so the first accepted row does not
+duplicate that sample. The table store's cadence logic accepts this origin
+state, but the current native FEM physical-time StageAutosave LLG path begins
+scalar rows after a solver step, even when an initial field snapshot is
+captured. This origin-row requirement is not yet implemented for that path.
 
 Relaxation uses an explicit accepted-step cadence:
 
-```text
-accepted_step == 0
-or accepted_step mod every_steps == 0
-or accepted_step is the final accepted state
+```{math}
+:label: eq-table-accepted-step-cadence
+k = 0 \quad\lor\quad k \bmod n = 0 \quad\lor\quad k = k_{\mathrm{final}}
 ```
 
 `every_steps` counts accepted solver states only. Rejected line-search,
 trust-region, or adaptive-controller candidates are diagnostics, not table
 rows. A relaxation table always includes the initial and final state; a final
 state already on cadence is not duplicated.
+
+(symbols-and-si-units)=
 
 ### 2.2 Symbols and SI Units
 
@@ -77,9 +93,16 @@ state already on cadence is not duplicated.
 | `max_torque_T` | max torque in tesla-equivalent display units | `T` |
 | `max_dm_dt` | maximum magnetization-rate norm | `1/s` |
 | `max_h_eff`, `max_h_demag` | maximum field magnitudes | `A/m` |
+| $\epsilon$ | cadence comparison tolerance, equal to `1e-9` times the sample period | `s` |
+| $t_{\mathrm{next}}$ | next requested physical-time sample | `s` |
+| $k$ | accepted solver-step index | `1` |
+| $n$ | accepted-step cadence `every_steps` | `1` |
+| $k_{\mathrm{final}}$ | terminal accepted solver-step index | `1` |
 
 `time` and `solver_dt` remain accepted compatibility aliases for `t` and `dt`.
 Public authoring and UI labels use `t` and `dt`.
+
+(assumptions-and-validity)=
 
 ### 2.3 Assumptions and Approximations
 
@@ -121,6 +144,8 @@ and may be compared directly. The normalized controller metric `eta` remains
 in `solver_attempts.csv`; advanced `atol + rtol` mode must not relabel `eta` as
 an absolute error or compare it directly with `atol`.
 
+(discrete-realization)=
+
 ## 3. Numerical Interpretation
 
 ### 3.1 FDM
@@ -154,11 +179,14 @@ source of each column.
 
 ## 4. API, IR, and Planner Impact
 
+(python-api)=
+
 ### 4.1 Python API Surface
 
 The public DSL adds:
 
 ```python
+# %%
 fm.TableAutosave(t_sampl=1e-12)
 study.table_autosave(t_sampl=1e-12)
 
@@ -202,6 +230,8 @@ stages or `every_steps` for accepted-step Relax stages. `StageAutosave`
 defaults to `target="main"`, `layout="continuous"`, and `format="zarr"`.
 At least one table or field policy is required.
 
+(problem-ir)=
+
 ### 4.2 ProblemIR Representation
 
 `SamplingIR` exposes an optional stage autosave policy containing `target`,
@@ -218,6 +248,8 @@ table policy, and zero or more field policies. The nested table policy keeps:
 The IR field uses SI-clean names and public quantity identifiers. UI-authored
 and Python-authored studies must lower to the same IR.
 
+(round-trip-and-failure-semantics)=
+
 ### 4.3 Planner and Capability-Matrix Impact
 
 Planners validate that time cadence is used for physical time evolution and
@@ -229,6 +261,11 @@ Stages joining one continuous target must agree on format and compatible table
 and field schemas. Mesh identity, value type, component count, quantity
 identity, and chunking must remain compatible. Strict execution rejects a
 conflict before opening the target and never silently forks it.
+Unsupported combinations fail closed. Requested columns are never silently
+omitted.
+
+Canonical export preserves requested intent and resolved execution separately.
+Validation errors reject invalid cadence or unavailable quantities.
 
 ### 4.4 Storage formats and stage layout
 
@@ -260,6 +297,8 @@ Every logical sample carries `sample_index`, `stage_index`, `stage_id`,
 the applicable clock coordinate: physical `time_s` for Run or
 `accepted_step` for Relax. Relaxation pseudotime is never merged with physical
 Run time.
+
+(implementation-mapping)=
 
 ## 5. Runtime, OpenAPI, and UI Impact
 
@@ -309,6 +348,8 @@ flushes and drains the existing bounded artifact pipeline before committing
 the stage manifest. Encoding, compression, HDF5/Zarr writes, and TXT writes
 remain outside solver callbacks and GPU control fences. Failed stages preserve
 completed samples and record an incomplete marker and stop reason.
+
+(validation)=
 
 ## 6. Validation Strategy
 
@@ -368,6 +409,8 @@ completed samples and record an incomplete marker and stop reason.
 - [ ] Tests / benchmarks
 - [ ] Documentation
 
+(limitations)=
+
 ## 8. Known Limits and Deferred Work
 
 - The first implementation stores the live table from existing scalar rows and
@@ -380,9 +423,33 @@ completed samples and record an incomplete marker and stop reason.
   closed when the writer dependency is unavailable and never falls back to
   Zarr.
 
+(scientific-bibliography)=
+
 ## 9. References
 
 - `external_solvers/amumax/src/engine/zarr_table.go`
 - `external_solvers/amumax/frontend/src/lib/table-plot/table-plot.ts`
 - Apache ECharts dynamic data guide
 - Apache ECharts dataset guide
+
+(source-code-index)=
+
+## 10. Source Code Index
+
+| Repository path | Symbol | Responsibility |
+|---|---|---|
+| `packages/fullmag-py/src/fullmag/model/study.py` | `class TableAutosave` | Validate public cadence and lower it into table-autosave IR. |
+| `packages/fullmag-py/tests/test_table_autosave.py` | `test_time_evolution_table_autosave_lowers_default_columns_to_sampling_ir` | Verify physical-time table cadence lowers to `SamplingIR`. |
+| `packages/fullmag-py/tests/test_table_autosave.py` | `test_relaxation_table_autosave_lowers_accepted_step_cadence` | Verify accepted-step cadence lowers to `SamplingIR`. |
+| `crates/fullmag-ir/src/study.rs` | `TableAutosaveIR` | Store the canonical cadence and selected table quantities. |
+| `crates/fullmag-runner/src/scalar_metrics.rs` | `moment_weighted_average_magnetization` | Compute the magnetic-moment-weighted global magnetization components. |
+| `crates/fullmag-runner/src/table_autosave.rs` | `append_if_due` | Apply physical-time or accepted-step cadence to solver-state samples. |
+| `crates/fullmag-runner/src/table_autosave.rs` | `append_final_if_needed` | Append the terminal accepted relaxation state once. |
+| `crates/fullmag-runner/src/artifact_pipeline.rs` | `append_scalar` | Append StageAutosave rows when the artifact pipeline receives scalar stats. |
+| `crates/fullmag-runner/src/table_autosave.rs` | `table_store_persists_averaged_components_from_accepted_direct_step` | Verify scalar magnetization values are taken from the accepted state. |
+| `crates/fullmag-runner/src/table_autosave.rs` | `table_store_appends_on_simulation_time_cadence` | Verify initial sampling and coalesced physical-time cadence. |
+| `crates/fullmag-runner/src/table_autosave.rs` | `table_store_appends_initial_periodic_and_final_accepted_steps` | Verify accepted-step initial, periodic, and terminal rows. |
+| `crates/fullmag-runner/src/dispatch.rs` | `native_fem_requires_initial_snapshot` | Show which current consumers request an initialized native FEM snapshot. |
+| `crates/fullmag-runner/src/dispatch.rs` | `record_native_fem_initial_field_snapshots` | Capture scheduled initial field data without emitting a table scalar row. |
+| `crates/fullmag-runner/src/dispatch.rs` | `native_fem_initial_snapshot_is_lazy_for_headless_time_domain` | Verify current native FEM initial-output admission behavior. |
+| `docs/physics/0910-table-autosave-observables.md` | `DOC-ANCHOR:table-time-origin-contract` | Planned StageAutosave origin requirement; native FEM scalar-row emission is not implemented. |

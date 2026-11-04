@@ -13,7 +13,7 @@ from docker_named_volume_safety import validate_local_named_volume
 import docker_shared_build_storage as shared
 
 
-def _retire_groups(control, selected, unit_keys, operation):
+def _retire_groups(control, selected, cache_project_id, unit_keys, operation):
     if not unit_keys:
         return {'state': 'succeeded', 'unit_keys': []}
     receipt = (control.read('image-backend/verified.json', optional=True)
@@ -25,13 +25,13 @@ def _retire_groups(control, selected, unit_keys, operation):
     image = json.loads(docker_capture('image', 'inspect', receipt['image_id']).stdout)
     if len(image) != 1 or image[0]['Id'] != receipt['image_id']:
         raise BuildControlError('Retirement helper image differs')
-    names = shared.shared_volume_names(control.identity['project_id'])
+    names = shared.shared_volume_names(cache_project_id)
     volume = names[shared.PACKAGE_ROLE]
     observed = json.loads(docker_capture('volume', 'inspect', volume).stdout)
     if len(observed) != 1:
         raise BuildControlError('Shared package volume is ambiguous')
     validate_local_named_volume(observed[0], volume)
-    if any(observed[0].get('Labels', {}).get(k) != v for k, v in shared.shared_volume_labels(control.identity['project_id'], shared.PACKAGE_ROLE).items()):
+    if any(observed[0].get('Labels', {}).get(k) != v for k, v in shared.shared_volume_labels(cache_project_id, shared.PACKAGE_ROLE).items()):
         raise BuildControlError('Shared package labels differ before retirement')
     helpers = selected / 'docker/all-in-one'
     hashes = {name: hashlib.sha256((helpers / name).read_bytes()).hexdigest()
@@ -69,8 +69,9 @@ print(json.dumps(result))
     return proof
 
 
-def finish(layout, task_id, owner):
+def finish(layout, task_id, owner, *, resume=None):
     """Called under storage's worktree lock after exact registry owner validation."""
+    from docker_backend_volume_cache import _safe_project_id
     from docker_cache_retirement import retire
     identity = compose_project_identity(layout)
     if identity['checkout_kind'] != 'worktree':
@@ -79,7 +80,9 @@ def finish(layout, task_id, owner):
     configured = toolchain_configuration(selected, identity)
     control = BuildControl(identity, configured['services']['fem-gpu-toolchain']['build']['args']['FULLMAG_CUDA_BASE_IMAGE'])
     control.prepare(minimum_free_bytes=MIN_FREE_CONTROL_BYTES)
-    result = retire(control, layout, task_id, owner,
-        retire_namespaces=lambda keys, operation: _retire_groups(control, selected, keys, operation))
+    cache_project_id = _safe_project_id(layout)
+    result = retire(control, layout, task_id, owner, resume=resume,
+        retire_namespaces=lambda keys, operation: _retire_groups(
+            control, selected, cache_project_id, keys, operation))
     return {'state': result['state'], 'compose_project': control.project,
             'receipt': 'docker-volume://'+control.volume+'/'+control.subpath('cache-retirement/result.json')}

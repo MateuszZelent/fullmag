@@ -1770,6 +1770,10 @@ pub async fn get_solver_status(
         &request_context,
         state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire),
     )?;
+    let accepted_live_scalar = crate::router_v2::handlers::sessions::status::accepted_live_scalar_row(
+        snapshot,
+        &request_context.request_scope_epoch,
+    );
     let latest = snapshot.live_state.as_ref().map(|value| &value.latest_step)
         .filter(|step| step.is_physical_observation());
     let latest_scalar_row = (!crate::session::has_nonphysical_latest_step(snapshot))
@@ -1833,14 +1837,18 @@ pub async fn get_solver_status(
         max_error: latest_scalar_row.and_then(|value| value.max_error),
         dt_suggested_seconds: latest_scalar_row.and_then(|value| value.dt_suggested),
         rejected_attempts: latest_scalar_row.map(|value| value.rejected_attempts),
-        sim_time_seconds: latest.map(|value| value.time),
+        sim_time_seconds: accepted_live_scalar
+            .map(|row| row.time)
+            .or_else(|| latest.map(|value| value.time)),
         pseudo_time_seconds: latest_scalar_row
             .and_then(|value| value.pseudo_time_s)
             .or_else(|| latest.and_then(|value| value.pseudo_time_s)),
         active_runtime_seconds: latest_scalar_row
             .and_then(|value| value.active_runtime_s)
             .or_else(|| latest.map(|value| value.wall_time_ns as f64 * 1.0e-9)),
-        step_index: latest.map(|value| value.step),
+        step_index: accepted_live_scalar
+            .map(|row| row.step)
+            .or_else(|| latest.map(|value| value.step)),
         last_step_updated_at_unix_ms: snapshot
             .live_state
             .as_ref()
@@ -1885,23 +1893,38 @@ pub async fn get_solver_energies_current(
             .current_live_session_epoch
             .load(std::sync::atomic::Ordering::Acquire),
     )?;
-    if let Some(observation) = crate::accepted_field_materialization::current_energy_observation(snapshot) {
-        return Ok(Json(observation));
-    }
-    let latest_row =
-        latest_energy_row(snapshot).ok_or_else(|| ApiError::not_found("no solver energy data"))?;
+    let accepted_live_row = crate::router_v2::handlers::sessions::status::accepted_live_scalar_row(
+        snapshot,
+        &request_context.request_scope_epoch,
+    );
+    let active_docker_run = active_docker_accepted_run(snapshot);
+    // Accepted field materialization validates the durable accepted state and
+    // scene domain, but it does not carry the live worker's task/attempt/owner
+    // epoch. It therefore cannot prove which active attempt produced it. The
+    // materialization and scalar tail can both describe a prior stage or
+    // attempt even when their physical clocks are identical. The accepted-live
+    // pin above is the only source bound to the current active worker identity,
+    // so an active Docker run fails closed until that pin is available.
+    // Prestart and terminal reads retain their existing sources.
+    let materialized = (!active_docker_run)
+        .then(|| crate::accepted_field_materialization::current_energy_observation(snapshot))
+        .flatten();
+    let historical_row = (!active_docker_run)
+        .then(|| latest_energy_row(snapshot))
+        .flatten();
+    let revision = snapshot.scalar_revision.saturating_add(
+        crate::router_v2::handlers::sessions::status::field_revision(snapshot),
+    );
+    let selected = select_current_energy_resource(
+        accepted_live_row,
+        materialized,
+        historical_row,
+        active_docker_run,
+        revision,
+    )
+    .ok_or_else(|| ApiError::not_found("no solver energy data"))?;
 
-    Ok(Json(SolverEnergyCurrentResource {
-        revision: snapshot.scalar_revision.saturating_add(crate::router_v2::handlers::sessions::status::field_revision(snapshot)),
-        step: latest_row.step,
-        time_seconds: latest_row.time,
-        exchange: latest_row.e_ex,
-        demag: latest_row.e_demag,
-        zeeman: latest_row.e_ext,
-        anisotropy: latest_row.e_ani,
-        dmi: latest_row.e_dmi,
-        total: latest_row.e_total,
-    }))
+    Ok(Json(selected))
 }
 
 #[utoipa::path(
@@ -2610,6 +2633,198 @@ pub async fn get_command_detail(
             .as_ref()
             .and_then(|linkage| linkage.state_transition.clone()),
     }))
+}
+
+fn solver_energy_current_from_scalar_row(
+    row: &ScalarRow,
+    revision: u64,
+) -> SolverEnergyCurrentResource {
+    SolverEnergyCurrentResource {
+        revision,
+        step: row.step,
+        time_seconds: row.time,
+        exchange: row.e_ex,
+        demag: row.e_demag,
+        zeeman: row.e_ext,
+        anisotropy: row.e_ani,
+        dmi: row.e_dmi,
+        total: row.e_total,
+    }
+}
+
+fn active_docker_accepted_run(snapshot: &SessionStateResponse) -> bool {
+    let run = snapshot.run.as_ref();
+    active_docker_accepted_run_for_context(
+        crate::live_accepted_execution::docker_api_only_runtime(),
+        &snapshot.session.session_id,
+        run.map(|run| run.session_id.as_str()),
+        run.map(|run| run.status.as_str()),
+        &effective_runtime_status_code(snapshot),
+    )
+}
+
+fn active_docker_accepted_run_for_context(
+    docker_api_only: bool,
+    current_session_id: &str,
+    run_session_id: Option<&str>,
+    run_status: Option<&str>,
+    effective_runtime_status: &str,
+) -> bool {
+    docker_api_only
+        && run_session_id == Some(current_session_id)
+        && run_status == Some("running")
+        && effective_runtime_status == "running"
+}
+
+fn select_current_energy_resource(
+    accepted_live_row: Option<&ScalarRow>,
+    materialized: Option<SolverEnergyCurrentResource>,
+    historical_row: Option<ScalarRow>,
+    active_docker_run: bool,
+    revision: u64,
+) -> Option<SolverEnergyCurrentResource> {
+    if let Some(row) = accepted_live_row {
+        return Some(solver_energy_current_from_scalar_row(row, revision));
+    }
+    if active_docker_run {
+        return None;
+    }
+    materialized.or_else(|| {
+        historical_row.map(|row| solver_energy_current_from_scalar_row(&row, revision))
+    })
+}
+
+#[cfg(test)]
+mod accepted_live_energy_clock_tests {
+    use super::{
+        active_docker_accepted_run_for_context, select_current_energy_resource,
+        solver_energy_current_from_scalar_row,
+    };
+
+    fn scalar_row(step: u64, time: f64, total: f64) -> crate::types::ScalarRow {
+        serde_json::from_value(serde_json::json!({
+            "kind": "physical_observation",
+            "step": step,
+            "time": time,
+            "solver_dt": 1.0e-15,
+            "mx": 0.1,
+            "my": 0.0,
+            "mz": 0.9,
+            "e_ex": total * 0.1,
+            "e_demag": total * 0.2,
+            "e_ext": total * 0.3,
+            "e_ani": total * 0.1,
+            "e_dmi": total * 0.3,
+            "e_total": total,
+            "max_dm_dt": 7.0,
+            "max_h_eff": 8.0,
+            "max_h_demag": 9.0
+        }))
+        .expect("physical scalar row fixture")
+    }
+
+    fn materialized_energy(step: u64, time: f64, total: f64) -> crate::schemas::runtime::SolverEnergyCurrentResource {
+        crate::schemas::runtime::SolverEnergyCurrentResource {
+            revision: 90,
+            step,
+            time_seconds: time,
+            exchange: total * 0.1,
+            demag: total * 0.2,
+            zeeman: total * 0.3,
+            anisotropy: total * 0.1,
+            dmi: total * 0.3,
+            total,
+        }
+    }
+
+    #[test]
+    fn current_energy_projects_exact_pinned_physical_row_without_t_zero_aliasing() {
+        let row = scalar_row(1_567, 0.0, 75.0);
+
+        let response = solver_energy_current_from_scalar_row(&row, 24);
+        assert_eq!(response.step, 1_567);
+        assert_eq!(response.time_seconds, 0.0);
+        assert_eq!(response.revision, 24);
+        assert_eq!(response.exchange, 7.5);
+        assert_eq!(response.demag, 15.0);
+        assert_eq!(response.zeeman, 22.5);
+        assert_eq!(response.anisotropy, 7.5);
+        assert_eq!(response.dmi, 22.5);
+        assert_eq!(response.total, 75.0);
+    }
+
+    #[test]
+    fn active_docker_energy_selection_uses_exact_pin_and_rejects_same_clock_stale_sources() {
+        // Stage A's cached materialization and scalar tail can have the exact
+        // same step/time as stage B's current observation. The pinned accepted
+        // row must win by identity; without it, the active endpoint has no
+        // qualified current sample and must not expose either stale candidate.
+        let current = scalar_row(1_567, 0.0, 75.0);
+        let stale_tail = scalar_row(1_567, 0.0, 750.0);
+        let stale_materialization = materialized_energy(1_567, 0.0, 7_500.0);
+
+        let selected = select_current_energy_resource(
+            Some(&current),
+            Some(materialized_energy(1_567, 0.0, 7_500.0)),
+            Some(stale_tail.clone()),
+            true,
+            24,
+        )
+        .expect("exact accepted pin is current during the active run");
+        assert_eq!(selected.step, 1_567);
+        assert_eq!(selected.time_seconds, 0.0);
+        assert_eq!(selected.total, 75.0);
+
+        assert!(select_current_energy_resource(
+            None,
+            Some(stale_materialization),
+            Some(stale_tail),
+            true,
+            24,
+        )
+        .is_none(), "active run returns no sample instead of same-clock prior-stage data");
+    }
+
+    #[test]
+    fn inactive_energy_reads_keep_materialization_then_historical_fallback() {
+        let old_row = scalar_row(0, 0.0, 75.0);
+        let materialized = materialized_energy(0, 0.0, 100.0);
+        let selected = select_current_energy_resource(
+            None,
+            Some(materialized),
+            Some(old_row.clone()),
+            false,
+            24,
+        )
+        .expect("non-active read keeps current materialization precedence");
+        assert_eq!(selected.total, 100.0);
+
+        let historical = select_current_energy_resource(None, None, Some(old_row), false, 24)
+            .expect("non-active read keeps scalar history tail fallback");
+        assert_eq!(historical.total, 75.0);
+    }
+
+    #[test]
+    fn active_docker_guard_requires_matching_run_owner_and_running_runtime_states() {
+        assert!(active_docker_accepted_run_for_context(
+            true, "session", Some("session"), Some("running"), "running",
+        ));
+        assert!(!active_docker_accepted_run_for_context(
+            false, "session", Some("session"), Some("running"), "running",
+        ));
+        assert!(!active_docker_accepted_run_for_context(
+            true, "session", Some("other-session"), Some("running"), "running",
+        ));
+        assert!(!active_docker_accepted_run_for_context(
+            true, "session", Some("session"), Some("waiting_for_compute"), "waiting_for_compute",
+        ));
+        assert!(!active_docker_accepted_run_for_context(
+            true, "session", Some("session"), Some("completed"), "completed",
+        ));
+        assert!(!active_docker_accepted_run_for_context(
+            true, "session", Some("session"), Some("running"), "completed",
+        ));
+    }
 }
 
 fn latest_energy_row(snapshot: &SessionStateResponse) -> Option<ScalarRow> {

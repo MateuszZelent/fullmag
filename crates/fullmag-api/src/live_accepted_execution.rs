@@ -1513,6 +1513,13 @@ fn prepare_live_accepted(
     progress_sender: Option<tokio::sync::mpsc::Sender<crate::script::PythonHelperProgress>>,
     solver_profile: Option<fullmag_runner::SolverProfileConfig>,
 ) -> Result<PreparedLiveAcceptedStudy, ApiError> {
+    // Script-backed scenes retain relative native mesh references after the
+    // startup request. Resolve them with the same original asset parent.
+    let asset_root = if scene.study.fem_domain_mesh.is_some() {
+        asset_root.or_else(|| source_script_path.as_deref().and_then(Path::parent))
+    } else {
+        asset_root
+    };
     let queue_tasks = match &submission {
         LiveAcceptedSubmission::Command { .. } => true,
         LiveAcceptedSubmission::Startup { auto_run, .. } => *auto_run,

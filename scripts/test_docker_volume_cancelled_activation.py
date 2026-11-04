@@ -193,6 +193,16 @@ def _proof(control: FakeControl | None = None) -> dict[str, object]:
     }
 
 
+def _inprocess_fdm_proof(control: FakeControl | None = None) -> dict[str, object]:
+    proof = _proof(control)
+    proof["cancellation"] = {
+        **proof["cancellation"],
+        "preparation_kind": "in-process-fdm",
+        "in_process_fdm": {"schema_version": "fullmag.inprocess-fdm-preparation-evidence.v1"},
+    }
+    return proof
+
+
 def _args(proof: dict[str, object], *, digest: str | None = None) -> argparse.Namespace:
     plan = module._plan(proof)
     return argparse.Namespace(
@@ -201,6 +211,7 @@ def _args(proof: dict[str, object], *, digest: str | None = None) -> argparse.Na
         activation_attempt=ATTEMPT,
         config_sha256=CONFIG,
         port=3198,
+        preparation_kind=proof["cancellation"].get("preparation_kind", "failed-external"),
         apply=True,
         expected_plan_sha256=digest or plan["plan_sha256"],
     )
@@ -218,6 +229,36 @@ def _drained_receipt(proof: dict[str, object]) -> tuple[bytes, dict[str, object]
 
 
 class CancelledActivationProofTests(unittest.TestCase):
+    def test_inprocess_fdm_plan_binds_exact_sigterm_protocol_and_kind(self) -> None:
+        proof = _inprocess_fdm_proof()
+        plan = module._plan(proof)
+        self.assertEqual(plan["cancellation_proof"]["preparation_kind"], "in-process-fdm")
+        self.assertEqual(plan["stop"]["command"], ["docker", "kill", "--signal=TERM", BACKEND])
+        self.assertEqual(plan["stop"]["signal"], "SIGTERM")
+        self.assertEqual(plan["stop"]["on_timeout"], "retain-journal-no-escalation-or-resignal")
+        self.assertNotIn("stop", plan["stop"]["command"])
+        self.assertNotIn("--time", plan["stop"]["command"])
+        self.assertNotIn("KILL", plan["stop"]["command"])
+        self.assertNotEqual(plan["plan_sha256"], module._plan(_proof())["plan_sha256"])
+
+    def test_inprocess_sigterm_journal_binds_preparation_kind_and_stop_policy(self) -> None:
+        proof = _inprocess_fdm_proof()
+        args = _args(proof)
+        plan = module._plan(proof)
+        journal = module._initial_journal(args, proof, plan, proof["control"])
+        self.assertEqual(journal["preparation_kind"], "in-process-fdm")
+        self.assertEqual(journal["stop_policy"], plan["stop"])
+        self.assertEqual(journal["stop_command"], plan["stop"]["command"])
+
+        changed = dict(journal, preparation_kind="failed-external")
+        with patch.object(module, "_preserve_original_records"):
+            with self.assertRaises(module.CancelledActivationRecoveryError):
+                module._validate_journal_pins(args, changed, proof, plan)
+            wrong_args = argparse.Namespace(**vars(args))
+            wrong_args.preparation_kind = "failed-external"
+            with self.assertRaisesRegex(module.CancelledActivationRecoveryError, "resume preparation kind"):
+                module._validate_journal_pins(wrong_args, journal, proof, plan)
+
     def test_failed_probe_script_is_read_only_strict_and_does_not_change_baseline(self) -> None:
         baseline = _cancelled_activation_probe_script()
         generated = module._failed_preparation_probe_script()
@@ -603,6 +644,123 @@ class CancelledActivationApplyTests(unittest.TestCase):
                 module.run(args)
         self.assertEqual(self.records, {})
         self.assertEqual(self.stop_calls, 0)
+
+    def test_inprocess_stop_issues_only_pinned_sigterm_command(self) -> None:
+        proof = _inprocess_fdm_proof(self.control)
+        args = _args(proof)
+        plan = module._plan(proof)
+        journal = module._initial_journal(args, proof, plan, self.control)
+        commands: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+        def capture(*argv: object, **kwargs: object):
+            commands.append((argv, kwargs))
+            return subprocess.CompletedProcess(argv, 0, stdout=b"", stderr=b"")
+
+        def publish(_control: object, _path: str, document: object, *, expected_raw: bytes | None):
+            return canonical(dict(document)) + b"\n"
+
+        with patch.object(module, "_publish_cas", side_effect=publish), \
+             patch.object(module, "docker_capture", side_effect=capture), \
+             patch.object(module, "_wait_for_cooperative_sigterm", return_value={"State": {"Running": False}}):
+            issued, _ = module._issue_backend_stop(
+                args, self.control, proof, journal, canonical(journal) + b"\n",
+            )
+
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(commands[0][0], ("kill", "--signal=TERM", BACKEND))
+        self.assertEqual(issued["stop_command"], ["docker", "kill", "--signal=TERM", BACKEND])
+        self.assertEqual(issued["stop_response"], "confirmed")
+        self.assertEqual(issued["state"], "stop-command-confirmed")
+        self.assertGreater(issued["stop_observation_deadline_at"], issued["stop_issued_at"])
+
+    def test_inprocess_resume_waits_without_resending_and_refuses_changed_incarnation(self) -> None:
+        proof = _inprocess_fdm_proof(self.control)
+        args = _args(proof)
+        plan = module._plan(proof)
+        journal = module._initial_journal(args, proof, plan, self.control)
+        journal.update(
+            state="stop-issued",
+            stop_response="pending",
+            stop_issued_at=100.0,
+            stop_observation_deadline_at=160.0,
+        )
+        journal_path = module._journal_path(ATTEMPT)
+        raw = canonical(journal) + b"\n"
+
+        with patch.object(module, "_selected_context", return_value=(self.selected, self.identity, self.control)), \
+             patch.object(module, "_read_journal", return_value=(journal, raw)), \
+             patch.object(module, "_proof_from_journal", return_value=proof), \
+             patch.object(module, "_validate_journal_pins"), \
+             patch.object(module, "_inspect_exact_backend", return_value={
+                 "Id": BACKEND, "Image": IMAGE, "State": {
+                     "StartedAt": proof["backend_started_at"], "Running": True,
+                 },
+             }), \
+             patch.object(module, "_wait_for_cooperative_sigterm", side_effect=ControlOutcomeUnknown("deadline")) as wait, \
+             patch.object(module, "docker_capture") as capture:
+            with self.assertRaises(ControlOutcomeUnknown):
+                module.run(args)
+        wait.assert_called_once_with(proof, journal)
+        capture.assert_not_called()
+        self.assertEqual(journal["state"], "stop-issued")
+        self.assertEqual(journal["stop_command"], ["docker", "kill", "--signal=TERM", BACKEND])
+        self.assertEqual(raw, canonical(journal) + b"\n")
+
+    def test_inprocess_sigterm_observation_refuses_changed_backend_incarnation(self) -> None:
+        proof = _inprocess_fdm_proof(self.control)
+        journal = module._initial_journal(_args(proof), proof, module._plan(proof), self.control)
+        journal.update(
+            state="stop-issued",
+            stop_command=["docker", "kill", "--signal=TERM", BACKEND],
+            stop_issued_at=100.0,
+            stop_observation_deadline_at=100.0 + module.COOPERATIVE_SIGTERM_OBSERVATION_SECONDS,
+        )
+        changed = {"Id": "9" * 64, "Image": IMAGE, "State": {
+            "StartedAt": proof["backend_started_at"], "Running": True,
+        }}
+        with patch.object(module, "_inspect_exact_backend", return_value=changed):
+            with self.assertRaises(module.CancelledActivationRecoveryError):
+                module._wait_for_cooperative_sigterm(proof, journal)
+
+    def test_inprocess_sigterm_timeout_retains_journal_without_escalation(self) -> None:
+        clock = {"now": 100.0}
+
+        class FakeTime:
+            @staticmethod
+            def time() -> float:
+                return clock["now"]
+
+            @staticmethod
+            def sleep(duration: float) -> None:
+                clock["now"] += duration
+
+        with patch.object(module, "COOPERATIVE_SIGTERM_OBSERVATION_SECONDS", 2):
+            proof = _inprocess_fdm_proof(self.control)
+            args = _args(proof)
+            plan = module._plan(proof)
+            journal = module._initial_journal(args, proof, plan, self.control)
+            journal.update(
+                state="stop-command-confirmed",
+                stop_response="confirmed",
+                stop_issued_at=100.0,
+                stop_observation_deadline_at=102.0,
+            )
+            before = dict(journal)
+            running = {"Id": BACKEND, "Image": IMAGE, "State": {
+                "StartedAt": proof["backend_started_at"], "Running": True,
+            }}
+            with patch.object(module, "time", FakeTime), \
+                 patch.object(module, "_inspect_exact_backend", return_value=running) as inspect, \
+                 patch.object(module, "_publish_cas") as publish, \
+                 patch.object(module, "docker_capture") as capture:
+                with self.assertRaisesRegex(ControlOutcomeUnknown, "journal and resources are retained"):
+                    module._wait_for_cooperative_sigterm(proof, journal)
+
+            self.assertEqual(clock["now"], 102.0)
+            self.assertEqual(inspect.call_count, 3)
+            publish.assert_not_called()
+            capture.assert_not_called()
+            self.assertEqual(journal, before)
 
     def test_recovery_and_original_terminal_publication_resume_after_release_loss(self) -> None:
         proof = self.proof

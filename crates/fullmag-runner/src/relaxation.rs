@@ -18,6 +18,11 @@ pub(crate) use convergence::{
     RelaxationTorqueConfirmation, RELAXATION_ENERGY_PLATEAU_WINDOW_STEPS,
 };
 pub(crate) use direct_minimizer_reference::{execute_nonlinear_cg, execute_projected_gradient_bb};
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+pub(crate) use direct_minimizer_reference::{
+    execute_nonlinear_cg_with_observer, execute_projected_gradient_bb_with_observer,
+    DirectMinimizerAcceptedSample, DirectMinimizerAcceptedStateObserver,
+};
 #[cfg(feature = "fem-gpu")]
 pub(crate) use provenance::apply_fem_direct_minimizer_policy_provenance;
 pub(crate) use provenance::NATIVE_LLG_TIME_INTEGRATOR_REALIZATION;
