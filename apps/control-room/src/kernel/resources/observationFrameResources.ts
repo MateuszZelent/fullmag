@@ -18,8 +18,10 @@ import type {
 import type { DecodedFieldVector } from "../api/codecs/types";
 import { useKernel } from "../KernelContext";
 
+import { hasCurrentSimulationRun } from "./simulationResourceAvailability";
 import { useResource } from "./useResource";
 import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
+import { useSessionStatusSelector } from "./useSessionStatus";
 
 export interface ObservationFrameListResourceOptions {
   cursor?: string | null;
@@ -138,6 +140,10 @@ export function useObservationFrameListResource({
   const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
     unscopedResourceKey,
   );
+  const currentRunAvailable = useSessionStatusSelector(
+    (status) => hasCurrentSimulationRun(status.data),
+    { enabled: sessionIdentity !== null && !query.run_id },
+  );
   const load = useCallback(
     ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.data.observationFrames.list(query, { sessionScopeKey, signal }),
@@ -146,7 +152,7 @@ export function useObservationFrameListResource({
 
   return useResource<ObservationFrameListResource>({
     abortStaleInflight: true,
-    enabled: enabled && sessionIdentity !== null,
+    enabled: enabled && sessionIdentity !== null && (Boolean(query.run_id) || currentRunAvailable),
     load,
     resolveRevision: observationFrameListRevision,
     resourceKey,
