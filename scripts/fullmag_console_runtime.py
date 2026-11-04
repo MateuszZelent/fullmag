@@ -198,11 +198,24 @@ class ConsoleRuntime:
     def _follow_build_log(self):
         if self.log_container is not None:
             return
+        if self.identity is None:
+            return
         try:
+            # Receipt reads create short-lived control helpers in this group.
+            # Before permanent services exist those helpers collide with the
+            # startup worker's strict empty-group admission. Docker ps itself
+            # creates no helper; wait for a running backend before reading any
+            # receipt, then retain the existing console ownership checks.
+            identifiers = docker_capture('ps', '--quiet', '--no-trunc',
+                '--filter', 'label=com.docker.compose.project=' + self.identity['project_name'],
+                '--filter', 'label=com.docker.compose.service=backend',
+                '--filter', 'status=running').stdout.decode().splitlines()
+            if len(identifiers) != 1 or not re.fullmatch(r'[0-9a-f]{64}', identifiers[0]):
+                return
             owned = self._owned_services()
         except (BuildControlError, OSError, ValueError):
             return
-        if owned is None:
+        if owned is None or owned['backend']['Id'] != identifiers[0]:
             return
         backend = owned['backend']
         if not backend['State']['Running']:
