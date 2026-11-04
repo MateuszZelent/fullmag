@@ -181,7 +181,11 @@ class RetainedDeviceLifecycleTests(unittest.TestCase):
                             dev.start(args, reuse_state=reuse, retained_device_access='gpu')
                         handles[14].assert_not_called()
                 handles[15].assert_not_called()
-                handles[16].assert_called_once_with(control, cancelled.RECORD, optional=True)
+                self.assertEqual(handles[16].call_args_list, [
+                    mock.call(control, cancelled.replay_index_path('state', str(reuse['state'])),
+                              optional=True),
+                    mock.call(control, cancelled.RECORD, optional=True),
+                ])
                 control.write.assert_not_called()
                 self.assertEqual(args.gpu_access, 'auto')
 
