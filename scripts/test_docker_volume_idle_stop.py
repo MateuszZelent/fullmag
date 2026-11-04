@@ -160,11 +160,14 @@ class IdleStopFixture:
         if args[:2] == ("image", "inspect"):
             return json.dumps([{"Id": IMAGE, "Config": {}}])
         if args[:1] == ("inspect",):
-            identifier = args[1]
-            if identifier == BACKEND_ID and self.backend_stopped:
-                return json.dumps([self.stopped_backend()])
-            service = "backend" if identifier == BACKEND_ID else "frontend"
-            return json.dumps([self.actual(service)])
+            records = []
+            for identifier in args[1:]:
+                if identifier == BACKEND_ID and self.backend_stopped:
+                    records.append(self.stopped_backend())
+                else:
+                    service = "backend" if identifier == BACKEND_ID else "frontend"
+                    records.append(self.actual(service))
+            return json.dumps(records)
         if args[:1] == ("exec",):
             return json.dumps({"status": "ok", "active_session": False})
         raise AssertionError(f"unexpected docker text: {args}")
@@ -261,6 +264,24 @@ class DockerVolumeIdleStopTests(unittest.TestCase):
         self.assertFalse(any(event[0] == "start" for event in fixture.events))
         recreate.assert_not_called()
         finish.assert_not_called()
+
+    def test_headless_idle_stop_drains_backend_without_starting_frontend(self):
+        fixture = IdleStopFixture()
+        fixture.frontend_stopped = True
+        fixture.args.headless = True
+        fixture.args.config_sha256 = hashlib.sha256(dev.canonical(fixture.document)).hexdigest()
+        with ExitStack() as stack:
+            for patcher in self._patches(fixture, (b'{"state":"stopped"}\n', {"state": "stopped"})):
+                stack.enter_context(patcher)
+            dev.stop_idle(fixture.args)
+        self.assertTrue(fixture.backend_stopped)
+        self.assertTrue(fixture.frontend_stopped)
+        stops = [event for event in fixture.events if event[0] == "stop"]
+        self.assertEqual(len(stops), 1)
+        self.assertIn(BACKEND_ID, stops[0][1])
+        receipt = next(event[1] for event in fixture.events if event[0] == "exit")
+        self.assertEqual(receipt['ui_mode'], 'headless')
+        self.assertTrue(receipt['idle_backend_stopped'])
 
     def test_unknown_drain_fails_closed_without_start_or_finish(self):
         fixture = IdleStopFixture()

@@ -931,6 +931,7 @@ jobs:
           python -B scripts/test_docker_volume_dev_cancelled_activation.py -v
           python -B scripts/test_docker_volume_readiness_receipt.py -v
           python -B scripts/test_docker_volume_stop_failed.py -v
+          python -B scripts/test_docker_volume_oom_snapshot_identity.py -v
           python -B scripts/test_docker_volume_no_spawn_cancellation.py -v
           python -B scripts/test_docker_volume_no_spawn_loader_reconcile.py -v
           python -B scripts/test_docker_volume_linux_supervision_stop.py -v
@@ -986,6 +987,11 @@ jobs:
           python -B scripts/test_docker_accepted_reattach.py -v
           python -B scripts/test_docker_volume_accepted_reattach.py -v
           python -B scripts/test_docker_console_progress.py -v
+          python -B scripts/test_fullmag_console.py -v
+          python -B scripts/test_fullmag_console_runtime.py -v
+          python -B scripts/test_fullmag_console_control.py -v
+          python -B scripts/test_fullmag_console_cancellation.py -v
+          python -B scripts/test_just_fullmag_console_shell.py -v
           python -B scripts/test_docker_volume_stop_unadmitted.py -v
           python -B scripts/test_docker_startup_script.py -v
           python -B scripts/test_docker_live_retirement.py -v

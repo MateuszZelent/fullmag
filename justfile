@@ -36,6 +36,11 @@ docker-dev-images:
 docker-dev source_root="" port="" script="" gpu_access="auto" native_contract="":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" up {{if port == "" { "" } else { "--port " + quote(port) } }} --gpu-access {{quote(gpu_access)}} {{if source_root == "" { "" } else { "--source-root " + quote(source_root) } }} {{if script == "" { "" } else { "--script " + quote(script) } }} {{if native_contract == "" { "" } else { "--native-contract " + quote(native_contract) } }}
 
+# Run a managed console session in the selected Docker DEV group.
+# Two arguments use GUI mode; prefix gui or headless to choose explicitly.
+fullmag mode_or_source source_or_script script="" port="" gpu_access="auto":
+    @{{storage_python}} "{{repo_root}}/scripts/fullmag_console.py" --repo-root "{{repo_root}}" --mode-or-source {{quote(mode_or_source)}} --source-or-script {{quote(source_or_script)}} --script {{quote(script)}}{{if port == "" { "" } else { " --port " + quote(port) } }} --gpu-access {{quote(gpu_access)}}
+
 # Ensure the persistent DEV services, then execute exactly one explicit script.
 # Execution stays attached until terminal; API/frontend and caches stay up.
 fullmag-dev-container script source_root="" port="" gpu_access="auto":
@@ -3483,7 +3488,7 @@ fem-fmr-free-demag-airbox-example:
     printf '  plots: .fullmag/reports/fmr-free-demag-airbox-runtime/plots\n'
 
 fem-fmr-free-demag-airbox-ui:
-    just fullmag fem cpu examples/fem_fmr_free_demag_airbox_smoke.py
+    just fullmag-reference fem cpu examples/fem_fmr_free_demag_airbox_smoke.py
 
 fem-fmr-periodic-k0-example:
     just verify-fem-fmr-periodic-k0-runtime
@@ -6204,7 +6209,8 @@ run-headless-bench script:
     FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
     fullmag {{script}} --headless --json
 
-fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
+[private]
+fullmag-reference opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
     bash -euo pipefail -c '\
       r="{{repo_root}}"; build="false"; force="false"; windows="false"; frontend="dev"; backend="auto"; device="auto"; run_mode="interactive"; script=""; web_port="0"; skip_local_changes="false"; seen_options=""; \
       for raw in "{{opt_1}}" "{{opt_2}}" "{{opt_3}}" "{{opt_4}}" "{{opt_5}}" "{{opt_6}}" "{{opt_7}}" "{{opt_8}}"; do \
@@ -6264,7 +6270,7 @@ fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
       case "$backend" in fem|fdm|auto) ;; *) echo "unsupported backend: $backend (expected fem, fdm, or auto)" >&2; exit 2 ;; esac; \
       case "$device" in gpu|cpu|auto) ;; *) echo "unsupported device: $device (expected gpu, cpu, or auto)" >&2; exit 2 ;; esac; \
       case "$run_mode" in interactive|headless) ;; *) echo "unsupported run mode: $run_mode (expected interactive or headless)" >&2; exit 2 ;; esac; \
-      if [ -z "$script" ]; then echo "missing script path; example: just fullmag windows=True build=True dev fdm gpu ./examples/permalloy_layer_bimeron_prism_single_layer_relax_300nm.py" >&2; exit 2; fi; \
+      if [ -z "$script" ]; then echo "missing script path; example: just fullmag-reference windows=True build=True dev fdm gpu ./examples/permalloy_layer_bimeron_prism_single_layer_relax_300nm.py" >&2; exit 2; fi; \
       if [ ! -f "$script" ]; then echo "script not found: $script" >&2; exit 2; fi; \
       skip_local_changes_args=(); if [ "$skip_local_changes" = "true" ]; then skip_local_changes_args=(-SkipLocalChanges); fi; \
       host_windows="false"; \

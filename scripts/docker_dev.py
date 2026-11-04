@@ -2583,6 +2583,10 @@ def _parser() -> argparse.ArgumentParser:
         help="optional frontend port override; conflicting defaults fail closed",
     )
     script_parser.add_argument("--request-id", help="optional stable request fence")
+    script_parser.add_argument(
+        "--headless", action="store_true",
+        help="require the retained explicit headless group with its frontend stopped",
+    )
     frontend_refresh = subparsers.add_parser("refresh-frontend-volume", help="Replace only the pinned frontend metadata generation")
     frontend_refresh.add_argument("--attempt", required=True)
     frontend_refresh.add_argument("--config-sha256", required=True)
@@ -2600,6 +2604,10 @@ def _parser() -> argparse.ArgumentParser:
     run_script_parser.add_argument("--request-id")
     run_script_parser.add_argument("--attempt")
     run_script_parser.add_argument("--config-sha256")
+    run_script_parser.add_argument(
+        "--headless", action="store_true",
+        help="require the retained explicit headless group with its frontend stopped",
+    )
     run_script_parser.add_argument(
         "--timeout-seconds", type=float, default=None,
         help="optional observation deadline; expiration does not cancel or replay the script",
@@ -2929,6 +2937,11 @@ def _parser() -> argparse.ArgumentParser:
                              help="loopback frontend port (up only)")
         command.add_argument("--script", "--startup-script", dest="script", type=Path,
                              help="optional simulation script, relative to the selected checkout or absolute inside it (up only)")
+        if name == "up":
+            command.add_argument(
+                "--headless", action="store_true",
+                help="start the backend without starting the retained frontend service",
+            )
         command.add_argument(
             "--migrate-host-capacity", action="store_true",
             help="explicitly migrate quiescent shared host capacity when rendering new services",
@@ -3139,6 +3152,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 timeout_seconds=getattr(args, "timeout_seconds", None),
                 attempt=getattr(args, "attempt", None),
                 config_sha256=getattr(args, "config_sha256", None),
+                headless=bool(getattr(args, "headless", False)),
             )
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
             return int(result["exit_code"])

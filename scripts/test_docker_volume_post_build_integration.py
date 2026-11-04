@@ -328,7 +328,7 @@ class PostBuildStartIntegrationTests(unittest.TestCase):
                 mock.patch.object(dev, "_resolved_control_subpath", side_effect=lambda _control, service: service),
                 mock.patch.object(dev, "_reassert_operator_probe_environment"),
                 mock.patch.object(dev, "compose_capture", side_effect=compose_capture),
-                mock.patch.object(dev, "_start_compose_services", side_effect=lambda *_args: events.append("compose-start")),
+                mock.patch.object(dev, "_start_compose_services", side_effect=lambda *_args, **_kwargs: (events.append("compose-start") or ("b" * 64, "c" * 64))),
                 mock.patch.object(dev, "_finish", side_effect=finish),
                 mock.patch("docker_backend_volume_cache.validate_container"),
                 mock.patch.object(continuation, "prepare_start_binding", side_effect=prepare),

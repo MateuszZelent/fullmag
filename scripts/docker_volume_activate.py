@@ -13,6 +13,7 @@ import argparse
 import base64
 import hashlib
 import json
+import math
 import os
 from collections.abc import Mapping
 from pathlib import Path, PurePath, PurePosixPath
@@ -402,11 +403,18 @@ def _validate_running_group(
     *,
     source_root: str | None = None,
     require_healthy: bool = True,
+    frontend_required: bool = True,
 ) -> tuple[str, str]:
+    if type(frontend_required) is not bool:
+        raise BuildControlError("Frontend readiness policy must be boolean")
     if not isinstance(document, Mapping):
         raise BuildControlError("Retained Compose configuration is not an object")
     if not isinstance(terminal, Mapping):
         raise BuildControlError("Retained runtime terminal is not an object")
+    if not frontend_required and terminal.get("ui_mode") != "headless":
+        raise BuildControlError("Stopped frontend requires an explicit headless runtime receipt")
+    if frontend_required and terminal.get("ui_mode") == "headless":
+        raise BuildControlError("Headless runtime receipt does not qualify as a GUI group")
     if document.get("name") != control.project:
         raise BuildControlError("Retained Compose project differs from the selected group")
     if not IMAGE_ID_RE.fullmatch(image):
@@ -448,8 +456,21 @@ def _validate_running_group(
         recorded = terminal.get(service + "_container")
         if recorded is not None and recorded != observed.get("Id"):
             raise BuildControlError(f"Retained {service} incarnation differs")
+        recorded_started_at = terminal.get(service + "_started_at")
+        actual_started_at = observed.get("State", {}).get("StartedAt")
+        if terminal.get("ui_mode") == "headless":
+            if (not isinstance(recorded_started_at, str) or not recorded_started_at
+                    or recorded_started_at != actual_started_at):
+                raise BuildControlError(f"Retained {service} start-time pin differs")
         _validate_retained_service(document, observed, service, image_config)
-        if not observed.get("State", {}).get("Running"):
+        state = observed.get("State", {})
+        if service == "frontend" and not frontend_required:
+            if state.get("Running") is not False or state.get("Status") not in {"created", "exited"}:
+                raise BuildControlError("Headless runtime requires its exact frontend container to be stopped")
+            if (state.get("Status") == "exited"
+                    and (state.get("ExitCode") != 0 or state.get("OOMKilled") is not False)):
+                raise BuildControlError("Headless frontend has an unexpected exit or OOM outcome")
+        elif not state.get("Running"):
             raise BuildControlError(f"Retained {service} is not running")
         ids[service] = identifier
 
@@ -489,6 +510,14 @@ def _validate_running_group(
         != "healthy"
     ):
         raise BuildControlError("Retained backend is not healthy")
+    if not frontend_required:
+        from docker_dev_defaults import _document_port, _validate_live_network
+
+        _validate_live_network(
+            ids["backend"], ids["frontend"], control.project,
+            _document_port(document), frontend_required=False,
+            expected_network=identity.get("network_name"),
+        )
     return ids["backend"], ids["frontend"]
 
 
@@ -508,6 +537,8 @@ def _validate_linked_runtime_terminal(
         raise BuildControlError("Original runtime terminal is not an object")
     if terminal.get("phase") != phase or terminal.get("state") != "succeeded":
         raise BuildControlError("Linked runtime terminal is not a succeeded " + phase)
+    if terminal.get("ui_mode") not in (None, "gui", "headless"):
+        raise BuildControlError("Linked runtime terminal has an invalid UI mode")
     if terminal.get("compose_project") != original.get("compose_project"):
         raise BuildControlError("Linked runtime terminal belongs to another Compose group")
     linked_attempt = terminal.get("attempt")
@@ -546,8 +577,18 @@ def _validate_linked_runtime_terminal(
         value = terminal.get(key)
         if not isinstance(value, str) or not pattern.fullmatch(value):
             raise BuildControlError("Linked runtime terminal has an invalid " + key)
-        if key in original and value != original.get(key):
+        if (original.get("state") == "failed-confirmed"
+                and key in original and value != original.get(key)):
             raise BuildControlError("Linked runtime terminal " + key + " differs")
+
+    if terminal.get("ui_mode") in ("gui", "headless"):
+        if inputs.get("source_root") != source_root or inputs.get("image_id") != image:
+            raise BuildControlError("Linked mode-aware runtime terminal source or image pin differs")
+    if terminal.get("ui_mode") == "headless":
+        for key in ("backend_started_at", "frontend_started_at"):
+            value = terminal.get(key)
+            if not isinstance(value, str) or not value:
+                raise BuildControlError("Linked mode-aware runtime terminal has no " + key)
 
     for key in ("state_root", "backend_volumes", "frontend_volume"):
         if key in original and terminal.get(key) != original.get(key):
@@ -567,10 +608,11 @@ def _linked_runtime_terminals(
         raise BuildControlError("Original DEV terminal is not an object")
     state = original.get("state")
     if state == "succeeded":
-        return [original]
-    if state != "failed-confirmed":
+        linked: list[Mapping[str, object]] = [original]
+    elif state == "failed-confirmed":
+        linked = []
+    else:
         raise BuildControlError("Script activation requires a successful retained DEV start or linked recovery")
-    linked: list[Mapping[str, object]] = []
     for phase in ("resume", "iteration"):
         verified = control.read(phase + "/verified.json", optional=True)
         if verified is None:
@@ -583,6 +625,11 @@ def _linked_runtime_terminals(
         if not isinstance(verified_inputs, Mapping):
             raise BuildControlError("Linked " + phase + " verification inputs are missing")
         if verified_inputs.get("attempt") != original_attempt:
+            continue
+        if verified.get("idle_backend_stopped") is True:
+            # Stop-only iteration receipts do not represent a service pair that
+            # can accept activation. A subsequent successful resume supersedes
+            # them as the linked runtime proof.
             continue
         if verified.get("config_sha256") != config_sha256:
             raise BuildControlError("Linked " + phase + " verification/config pin differs")
@@ -610,6 +657,25 @@ def _linked_runtime_terminals(
         linked.append(terminal)
     if not linked:
         raise BuildControlError("No succeeded resume or iteration is linked to the retained DEV attempt")
+    mode_aware = [terminal for terminal in linked
+                  if terminal.get("ui_mode") in ("gui", "headless")]
+    if mode_aware:
+        ordered = []
+        for terminal in mode_aware:
+            finished_at = terminal.get("finished_at")
+            if (isinstance(finished_at, bool)
+                    or not isinstance(finished_at, (int, float))
+                    or not math.isfinite(finished_at)):
+                raise BuildControlError("Mode-aware runtime terminal has no numeric finish time")
+            ordered.append((finished_at, terminal))
+        # A mode-bearing receipt is authoritative for this retained group. Do
+        # not fall back to an older container pair or a receipt for the other
+        # UI mode if the latest incarnation cannot be validated by its caller.
+        latest_at = max(value[0] for value in ordered)
+        latest = [terminal for finished_at, terminal in ordered if finished_at == latest_at]
+        if any(canonical(terminal) != canonical(latest[0]) for terminal in latest[1:]):
+            raise BuildControlError("Conflicting mode-aware runtime terminals share the latest finish time")
+        return [latest[0]]
     return linked
 
 
@@ -1709,6 +1775,7 @@ def activate(args: argparse.Namespace) -> dict[str, object]:
             backend_id, frontend_id = _validate_running_group(
                 control, identity, document, runtime_terminal, image,
                 source_root=str(selected),
+                frontend_required=not bool(getattr(args, "headless", False)),
             )
             break
         except BuildControlError as error:

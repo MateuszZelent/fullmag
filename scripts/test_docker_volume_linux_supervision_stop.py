@@ -59,6 +59,21 @@ class StoreProofTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'held manual'):
             self.observe()
 
+    def test_terminal_observation_pins_leases_without_reading_large_result_payloads(self):
+        with self.assertRaisesRegex(ValueError, 'nonterminal run'):
+            subject.observe_store(self.store, self.ledger, self.store_id, terminal_only=True)
+        write(self.run / 'run_catalog.json', {'run_id': 'run-held', 'tasks': [
+            {'task_id': 'task-a', 'lifecycle': 'interrupted'}]})
+        artifact = self.run / 'worker-attempts/partial-results'
+        artifact.parent.mkdir()
+        with artifact.open('wb') as stream:
+            stream.truncate(subject.MAX_BYTES + 1)
+        proof = subject.observe_store(self.store, self.ledger, self.store_id, terminal_only=True)
+        self.assertEqual(proof['terminal_runs'], ['run-held'])
+        write(self.run / 'resource_leases/cpu/lease-a.json', {'state': 'active'})
+        with self.assertRaisesRegex(ValueError, 'active lease'):
+            subject.observe_store(self.store, self.ledger, self.store_id, terminal_only=True)
+
     def test_claimed_task_and_active_lease_are_rejected(self):
         path = self.run / 'run_catalog.json'
         catalog = json.loads(path.read_bytes())

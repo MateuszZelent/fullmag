@@ -1780,7 +1780,42 @@ def _prefix_runtime_control_mounts(control, backend):
             volume.pop("subpath", None)
 
 
-def _start_compose_services(control, operation, document):
+def _record_service_pins(control, operation, document, backend_id, frontend_id):
+    """Persist exact fixed-service IDs and start times before runtime observation."""
+    records = json.loads(docker_text("inspect", backend_id, frontend_id))
+    if not isinstance(records, list) or len(records) != 2:
+        raise BuildControlError("Cannot pin both fixed DEV service containers")
+    expected = {"backend": backend_id, "frontend": frontend_id}
+    actual = {}
+    for observed in records:
+        if not isinstance(observed, Mapping):
+            raise BuildControlError("DEV service pin inspection is malformed")
+        labels = observed.get("Config", {}).get("Labels", {})
+        service = labels.get("com.docker.compose.service") if isinstance(labels, Mapping) else None
+        identifier = expected.get(service)
+        if (identifier is None or observed.get("Id") != identifier
+                or labels.get("com.docker.compose.project") != control.project):
+            raise BuildControlError("DEV service pin ownership or ID differs")
+        if observed.get("Image") != document["services"][service].get("image"):
+            raise BuildControlError("DEV service pin image differs")
+        state = observed.get("State")
+        started_at = state.get("StartedAt") if isinstance(state, Mapping) else None
+        if not isinstance(started_at, str) or not started_at:
+            raise BuildControlError("DEV service pin has no StartedAt value")
+        actual[service] = (identifier, started_at)
+    if set(actual) != {"backend", "frontend"}:
+        raise BuildControlError("DEV service pin set is incomplete")
+    operation["receipt"].update(
+        backend_container=actual["backend"][0],
+        frontend_container=actual["frontend"][0],
+        backend_started_at=actual["backend"][1],
+        frontend_started_at=actual["frontend"][1],
+    )
+    control.write(operation["root"] + "/receipt.json", operation["receipt"])
+    return records
+
+
+def _start_compose_services(control, operation, document, *, headless=False):
     # Reject invalid declarations before crossing the daemon-mutation boundary.
     configured = json.loads(compose_capture(document, "config", "--format", "json", timeout=60))
     if configured.get("name") != control.project or set(configured.get("services", {})) != {"backend", "frontend"}:
@@ -1789,8 +1824,22 @@ def _start_compose_services(control, operation, document):
         _assert_host_capacity_migration_quiescent()
     operation["receipt"]["compose_preflight"] = "PASS"
     operation["daemon_pending"] = True
-    compose_capture(document, "up", "--detach", "--no-build", "--pull", "never", timeout=180)
+    compose_capture(document, "create", "--no-build", "--pull", "never", timeout=180)
+    backend_id = compose_capture(document, "ps", "--all", "--quiet", "backend").decode().strip()
+    frontend_id = compose_capture(document, "ps", "--all", "--quiet", "frontend").decode().strip()
+    if not backend_id or not frontend_id:
+        raise BuildControlError("Compose did not create both fixed services")
+    _record_service_pins(control, operation, document, backend_id, frontend_id)
+    operation["daemon_pending"] = True
+    services = ("backend",) if headless else ()
+    no_deps = ("--no-deps",) if headless else ()
+    compose_capture(
+        document, "up", "--detach", "--no-build", "--pull", "never",
+        *no_deps, *services, timeout=180,
+    )
+    _record_service_pins(control, operation, document, backend_id, frontend_id)
     operation["daemon_pending"] = False
+    return backend_id, frontend_id
 
 
 def _assert_new_windows_runtime_path(path, state):
@@ -2000,6 +2049,10 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         _assert_no_running_fullmag, _source_git_common_directory, _workspace_state_root,
         _operator_probe_environment_from_host)
     import fullmag_docker_runtime as runtime
+    headless = getattr(args, "headless", False)
+    if type(headless) is not bool:
+        raise BuildControlError("Headless mode must be boolean")
+    ui_mode = "headless" if headless else "gui"
     provided_control = control
     provided_operation = operation
     native_contracts = _native_contracts(getattr(args, "native_contract", None))
@@ -2184,6 +2237,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         "source_project_id": identity["project_id"],
         "source_worktree_id": identity["worktree_id"],
         "source_checkout_kind": identity["checkout_kind"],
+        "ui_mode": ui_mode,
         "gpu_access_requested": policy, "device_access": device_access,
         "gpu_preflight": "PASS" if device_access == "gpu" else "NOT_REQUIRED",
         **operator_probe_record}
@@ -2225,6 +2279,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
                          if provided_operation is None
                          else nullcontext(provided_operation))
     with operation_context as operation:
+        operation["receipt"]["ui_mode"] = ui_mode
         if validated_startup_diagnostic_restart is not None and recreation_resume_proof is not None:
             leased_records = _validate_recreation_resume_records(
                 args, control, selected, identity, expected_proof=recreation_resume_proof,
@@ -2642,11 +2697,9 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         operation["receipt"].update(state="starting-services", state_root=str(state),
             frontend_volume=frontend_volume, backend_volumes=cache["volume_names"])
         _revalidate_helper_source_binding(helper_source_binding, selected)
-        _start_compose_services(control, operation, document)
-        backend_id = compose_capture(document, "ps", "--all", "--quiet", "backend").decode().strip()
-        frontend_id = compose_capture(document, "ps", "--all", "--quiet", "frontend").decode().strip()
-        if not backend_id or not frontend_id:
-            raise BuildControlError("Compose did not return both fixed services")
+        backend_id, frontend_id = _start_compose_services(
+            control, operation, document, headless=headless,
+        )
         import docker_backend_volume_cache as backend_cache
         backend_cache.validate_container(json.loads(docker_text("inspect", backend_id))[0], cache)
         if os.name != "nt":
@@ -2746,11 +2799,37 @@ def _wait_for_publication(control, operation, backend_id, *, timeout=14400, publ
     raise DockerObservationBudgetExceeded("Backend publication observation timed out; services and volumes retained")
 
 
+def _service_readiness_satisfied(document, observed, service, image_config, *,
+                                 expected_image, expected_started_at, headless):
+    if observed.get("Image") != expected_image:
+        raise BuildControlError("DEV service image differs: " + service)
+    _validate_retained_service(
+        document, observed, service, image_config,
+        expected_started_at=expected_started_at,
+    )
+    service_state = observed.get("State", {})
+    if service == "frontend" and headless:
+        if (service_state.get("Running") is not False
+                or service_state.get("Status") not in {"created", "exited"}
+                or (service_state.get("Status") == "exited"
+                    and (service_state.get("ExitCode") != 0
+                         or service_state.get("OOMKilled") is not False))):
+            raise BuildControlError("Headless frontend is not in its expected stopped state")
+        return True
+    if not service_state.get("Running"):
+        raise BuildControlError("DEV service exited before readiness: " + service)
+    return service_state.get("Health", {}).get("Status") == "healthy"
+
+
 def _finish(control, operation, document, backend_id, frontend_id, selected, state,
             certificate_path, certificate, cache, toolchain, image, git_common, ledger_profile, port,
             *, completion_gate=None, helper_source_binding=None, terminal_completion_gate=None):
     import fullmag_docker_runtime as runtime
     token = operation["receipt"]["attempt"]
+    ui_mode = operation["receipt"].get("ui_mode", "gui")
+    if ui_mode not in ("gui", "headless"):
+        raise BuildControlError("DEV runtime has an invalid UI mode receipt")
+    frontend_required = ui_mode == "gui"
     operator_probe_record = _operator_probe_record_from_retained(operation["receipt"], document)
     inputs = {"image_id": image, "toolchain_image_id": toolchain["image_id"],
               "guest_provenance_path": "/opt/fullmag/control/backend/runtime-provenance.json",
@@ -2857,16 +2936,19 @@ def _finish(control, operation, document, backend_id, frontend_id, selected, sta
     readiness_deadline = time.monotonic() + 3900
     while time.monotonic() < readiness_deadline:
         services = json.loads(docker_text("inspect", backend_id, frontend_id))
-        for service, observed in zip(("backend", "frontend"), services):
-            if observed.get('Image') != service_images[service]:
-                raise BuildControlError('DEV service image differs: ' + service)
-            _validate_retained_service(document, observed, service, image_configs[service_images[service]],
-                expected_started_at=operation["receipt"]["backend_started_at"] if service == "backend" else None)
-            if not observed.get("State", {}).get("Running"):
-                raise BuildControlError("DEV service exited before readiness: " + service)
+        if len(services) != 2:
+            raise BuildControlError("DEV service observation is incomplete")
+        readiness = [
+            _service_readiness_satisfied(
+                document, observed, service, image_configs[service_images[service]],
+                expected_image=service_images[service],
+                expected_started_at=operation["receipt"].get(service + "_started_at"),
+                headless=not frontend_required,
+            )
+            for service, observed in zip(("backend", "frontend"), services)
+        ]
         process_receipt = json.loads(docker_text("exec", backend_id, "/usr/local/bin/python3", "-B", "-c", _PROCESS_RECEIPT_PROBE))
-        if (str(process_receipt.get("state", "")).startswith("failed")
-                or services[0].get("State", {}).get("Health", {}).get("Status") != "healthy"):
+        if str(process_receipt.get("state", "")).startswith("failed") or not readiness[0]:
             logs = docker_text("logs", "--since", operation["receipt"]["backend_started_at"],
                                "--tail", "100", backend_id, combined=True)
             failure = _readiness_failure(process_receipt, logs)
@@ -2878,11 +2960,12 @@ def _finish(control, operation, document, backend_id, frontend_id, selected, sta
                     "error": failure,
                 })
                 raise BuildControlError(failure)
-        if all(service.get("State", {}).get("Health", {}).get("Status") == "healthy" for service in services):
+        if all(readiness):
             break
         time.sleep(3)
     else:
-        raise BuildControlError("API/frontend readiness timed out; services and Docker data retained")
+        label = "API/frontend" if frontend_required else "API"
+        raise BuildControlError(label + " readiness timed out; services and Docker data retained")
     startup_environment = document["services"]["backend"]["environment"]
     if startup_environment.get("FULLMAG_STARTUP_ENABLED") == "1":
         startup_path = state / "startup-provenance.json"
@@ -2938,11 +3021,15 @@ def _finish(control, operation, document, backend_id, frontend_id, selected, sta
             from docker_volume_cache_maintenance import run_guest_maintenance
             operation["receipt"]["cache_maintenance"] = run_guest_maintenance(operation, backend_id)
         control.write(operation["root"] + "/cache-maintenance.json", operation["receipt"]["cache_maintenance"])
-    operation["receipt"].update(state="succeeded", backend_container=backend_id,
-        frontend_container=frontend_id, url="http://127.0.0.1:" + str(port),
+    operation["receipt"].update(state="succeeded", ui_mode=ui_mode,
+        backend_container=backend_id, frontend_container=frontend_id,
         source_commit=provenance["commit"], source_digest=provenance["source_digest"],
         source_snapshot_sha256=provenance["source_snapshot_sha256"],
         backend_build_receipt_sha256=provenance["build_receipt_sha256"])
+    if frontend_required:
+        operation["receipt"]["url"] = "http://127.0.0.1:" + str(port)
+    else:
+        operation["receipt"].pop("url", None)
 
 
 
@@ -4981,14 +5068,17 @@ def _saved_authoring_complete(control, operation, backend_id, request, state, ch
     operation["daemon_pending"] = False
 
 
-def _idle_preflight_failed(error, saved_authoring, operation, frontend_id):
+def _idle_preflight_failed(error, saved_authoring, operation, frontend_id, *, restore_frontend=True):
     from docker_build_control import ControlOutcomeUnknown
     if saved_authoring and isinstance(error, ControlOutcomeUnknown):
         operation["daemon_pending"] = True
         operation["receipt"]["saved_authoring_outcome"] = "outcome-unknown"
         return
-    operation["daemon_pending"] = True
-    docker_capture("start", frontend_id, timeout=90)
+    if restore_frontend:
+        operation["daemon_pending"] = True
+        docker_capture("start", frontend_id, timeout=90)
+    else:
+        operation["receipt"]["frontend_restore"] = "retained-stopped"
     operation["daemon_pending"] = False
 
 
@@ -7302,6 +7392,10 @@ def _retained_operation(
 ):
     """Resume one exact retained start; a frontend-only recovery never restarts the backend."""
     from docker_dev import _select_source, _compose_identity
+    headless = getattr(args, "headless", False)
+    if type(headless) is not bool:
+        raise BuildControlError("Headless mode must be boolean")
+    ui_mode = "headless" if headless else "gui"
     require_host()
     import docker_helper_source as helper_source
     helper_pair = helper_source.validate_option_pair(
@@ -7526,12 +7620,16 @@ def _retained_operation(
             _saved_authoring_read_archive(saved_authoring, state)
         with control.operation("iteration", {"source_root": str(selected), "image_id": image,
                                             "attempt": args.attempt, "config_sha256": args.config_sha256,
+                                            "ui_mode": ui_mode,
                                             **({"saved_authoring_checkpoint_sha256": checkpoint_sha} if saved_authoring else {}),
                                             **operator_probe_record}) as operation:
             operation["receipt"].update(operator_probe_record)
+            operation["receipt"]["ui_mode"] = ui_mode
+            _record_service_pins(control, operation, document, ids["backend"], ids["frontend"])
             _assert_private_restart_network(actual, ids, control.project)
             operation["daemon_pending"] = True
-            docker_capture("stop", "--time", "60", ids["frontend"], timeout=90)
+            if actual["frontend"]["State"].get("Running"):
+                docker_capture("stop", "--time", "60", ids["frontend"], timeout=90)
             operation["daemon_pending"] = False
             try:
                 fresh = {service: json.loads(docker_text("inspect", identifier))[0]
@@ -7616,7 +7714,10 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     _saved_authoring_read_archive(saved_authoring, state)
                     control.write(operation["root"] + "/saved-authoring-final-preflight.json", authoring_probe)
             except Exception as error:
-                _idle_preflight_failed(error, saved_authoring, operation, ids["frontend"])
+                _idle_preflight_failed(
+                    error, saved_authoring, operation, ids["frontend"],
+                    restore_frontend=actual["frontend"]["State"].get("Running") is True,
+                )
                 raise
             control.write(operation["root"] + "/idle-preflight.json", health)
             control.write(operation["root"] + "/compose.json", document)
@@ -7644,6 +7745,7 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 "process_receipt_sha256": hashlib.sha256(drained_raw).hexdigest(),
                 "process_receipt": drained,
             })
+            _record_service_pins(control, operation, document, ids["backend"], ids["frontend"])
             if stop_after_drain:
                 stopped_services = {service: json.loads(docker_text("inspect", identifier))[0]
                                     for service, identifier in ids.items()}
@@ -7667,7 +7769,9 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     operation["receipt"]["native_drain_authenticated"] = True
                 return
             docker_capture("start", ids["backend"], timeout=90)
-            docker_capture("start", ids["frontend"], timeout=90)
+            if not headless:
+                docker_capture("start", ids["frontend"], timeout=90)
+            _record_service_pins(control, operation, document, ids["backend"], ids["frontend"])
             operation["daemon_pending"] = bool(saved_authoring)
             git_common = Path(next(m["source"] for m in document["services"]["backend"]["volumes"]
                                    if m["target"] == "/opt/fullmag/source-git"))
@@ -8376,6 +8480,8 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
             **recovery_context,
         )
     restart_backend = bool(getattr(args, "restart_backend", False))
+    if headless and actual["frontend"]["State"].get("Running"):
+        raise BuildControlError("Headless resume requires the exact frontend container to be stopped")
     if restart_backend:
         if actual["backend"]["State"]["Running"]:
             raise BuildControlError("Starting the retained backend requires it to be stopped; active runtime is never interrupted")
@@ -8395,10 +8501,15 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
     prestart_checkpoint = (None if terminal_context is not None else
                           continuation(control, args, previous, document, actual, state))
     with control.operation("resume", {"attempt": args.attempt, "config_sha256": args.config_sha256,
+                                       "source_root": str(selected),
+                                       "image_id": image,
+                                       "ui_mode": ui_mode,
                                        **operator_probe_record}) as operation:
         operation["receipt"].update(operator_probe_record)
+        operation["receipt"]["ui_mode"] = ui_mode
         operation["receipt"].update(state="resuming-observation", state_root=str(state),
             backend_volumes=previous["backend_volumes"], frontend_volume=previous["frontend_volume"])
+        _record_service_pins(control, operation, document, ids["backend"], ids["frontend"])
         if terminal_context is not None:
             fresh = {name: json.loads(docker_text("inspect", identifier))[0] for name, identifier in ids.items()}
             _assert_private_restart_network(fresh, ids, control.project)
@@ -8419,13 +8530,15 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 prestart_reconciliation=args.prestart_reconciliation,
                 prestart_reconciliation_sha256=args.prestart_reconciliation_sha256)
             operation["daemon_pending"] = True
-        if not actual["frontend"]["State"]["Running"]:
+        if not headless and not actual["frontend"]["State"]["Running"]:
+            operation["daemon_pending"] = True
             _frontend(control, operation, selected, state, args.port, image)
             compose_capture(document, "start", "frontend", timeout=90)
         if restart_backend:
             operation["daemon_pending"] = True
             compose_capture(document, "start", "backend", timeout=90)
-            operation["daemon_pending"] = bool(prestart_checkpoint or terminal_context is not None)
+        _record_service_pins(control, operation, document, ids["backend"], ids["frontend"])
+        operation["daemon_pending"] = bool(prestart_checkpoint or terminal_context is not None)
         git_common = Path(environment["FULLMAG_SOURCE_GIT_COMMON"]) if "FULLMAG_SOURCE_GIT_COMMON" in environment else Path(
             next(m["source"] for m in document["services"]["backend"]["volumes"] if m["target"] == "/opt/fullmag/source-git"))
         _finish(control, operation, document, ids["backend"], ids["frontend"], selected, state,

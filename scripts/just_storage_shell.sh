@@ -466,6 +466,20 @@ case "${recipe}" in
       --source-sha256 "${BASH_REMATCH[9]}" --request-id "${BASH_REMATCH[10]}" \
       --session-id "${BASH_REMATCH[11]}"
     ;;
+  *"scripts/fullmag_console.py"*)
+    fullmag_console_pattern="^[^[:space:]]+ \"[^\"]+/scripts/fullmag_console.py\" --repo-root \"[^\"]+\" --mode-or-source '([^']+)' --source-or-script '([^']+)' --script '([^']*)'( --port '([^']+)')? --gpu-access '(auto|required|disabled)'[[:space:]]*$"
+    if [[ ! "${recipe}" =~ ${fullmag_console_pattern} ]]; then
+      echo "[fullmag just] invalid fullmag console recipe" >&2
+      exit 2
+    fi
+    fullmag_console_args=(--repo-root "${repo_root}" --mode-or-source "${BASH_REMATCH[1]}"
+      --source-or-script "${BASH_REMATCH[2]}" --script "${BASH_REMATCH[3]}")
+    if [[ -n "${BASH_REMATCH[5]:-}" ]]; then
+      fullmag_console_args+=(--port "${BASH_REMATCH[5]}")
+    fi
+    fullmag_console_args+=(--gpu-access "${BASH_REMATCH[6]}")
+    exec "${python_cmd}" -B "${script_dir}/fullmag_console.py" "${fullmag_console_args[@]}"
+    ;;
   *"scripts/docker_dev.py"*)
     docker_dev_build_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" build --gpu-access '(auto|required|disabled)'( --source-root '([^']+)')?[[:space:]]*$"
     docker_dev_up_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" up[ ]+(--port '([0-9]{4,5})'[ ]+)?--gpu-access '(auto|required|disabled)'( --source-root '([^']+)')?( --script '([^']+)')?[[:space:]]*$"

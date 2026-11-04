@@ -981,6 +981,37 @@ def _qualify_running_runtime(group: RetainedGroup) -> None:
         )
 
 
+def _latest_ui_mode(group: RetainedGroup) -> str | None:
+    """Return the latest verified UI mode for this exact retained container pair."""
+    from docker_volume_activate import _linked_runtime_terminals
+
+    try:
+        terminals = _linked_runtime_terminals(
+            group.control, group.attempt, group.terminal,
+            source_root=str(group.source_root),
+            image=str(group.backend.get("Image", "")),
+            config_sha256=group.config_sha256,
+        )
+    except (BuildControlError, KeyError, TypeError, ValueError) as error:
+        raise DockerDevUpError("Retained UI mode receipt could not be verified") from error
+    matching = [
+        terminal for terminal in terminals
+        if terminal.get("backend_container") == group.backend_id
+        and terminal.get("frontend_container") == group.frontend_id
+    ]
+    if not matching:
+        raise DockerDevUpError("No verified UI mode receipt matches the retained service pair")
+
+    def order(terminal):
+        finished = terminal.get("finished_at")
+        return finished if isinstance(finished, (int, float)) and not isinstance(finished, bool) else 0
+
+    mode = max(matching, key=order).get("ui_mode")
+    if mode not in (None, "gui", "headless"):
+        raise DockerDevUpError("Retained UI mode receipt is invalid")
+    return mode
+
+
 def _script_output_mapping_matches(group: RetainedGroup) -> bool:
     """Compare the retained output alias with the current operator mapping."""
 
@@ -1135,9 +1166,14 @@ def _recreate_after_drift(group: RetainedGroup, args: argparse.Namespace, *, dra
         raise DockerDevUpError(
             "DEV group disappeared after managed recreate; activation outcome is unknown"
         )
-    if _service_mode(refreshed) != "running-healthy":
+    expected_mode = (
+        "backend-running-frontend-stopped"
+        if getattr(args, "headless", False)
+        else "running-healthy"
+    )
+    if _service_mode(refreshed) != expected_mode:
         raise DockerDevUpError(
-            "Managed recreate did not leave a healthy backend/frontend group; "
+            "Managed recreate did not leave the requested healthy DEV service mode; "
             "activation is withheld"
         )
     _qualify_running_runtime(refreshed)
@@ -1206,6 +1242,60 @@ def _reconcile_group(group: RetainedGroup, args: argparse.Namespace) -> None:
             "Existing backend is running but not healthy; automatic up will not interrupt "
             "a pending build or unknown runtime. Inspect its logs and use explicit recovery"
         )
+    headless = bool(getattr(args, "headless", False))
+    if headless and mode in {"running-healthy", "backend-running-frontend-stopped"}:
+        ui_mode = _latest_ui_mode(group)
+        if ui_mode == "headless" and group.frontend_running:
+            raise DockerDevUpError(
+                "Headless receipt has a running frontend; ownership/state mismatch blocks reuse"
+            )
+        if mode == "backend-running-frontend-stopped" and ui_mode == "headless":
+            try:
+                source_matches = _source_matches(group)
+            except ImageHelperDrift:
+                _recreate_after_drift(group, args, drain=True)
+                return
+            if not source_matches:
+                _recreate_after_drift(group, args, drain=True)
+                return
+            _activate_if_requested(group, args)
+            return
+        try:
+            source_matches = _source_matches(group)
+        except ImageHelperDrift:
+            _recreate_after_drift(group, args, drain=True)
+            return
+        if not source_matches:
+            _recreate_after_drift(group, args, drain=True)
+            return
+        from docker_volume_dev import resume, stop_idle
+
+        stop_idle(_lifecycle_args(group, args, script=None))
+        resume(_lifecycle_args(group, args, restart_backend=True))
+        _activate_if_requested(group, args)
+        return
+    if (not headless and mode in {"running-healthy", "backend-running-frontend-stopped"}
+            and _latest_ui_mode(group) == "headless"):
+        if group.frontend_running:
+            raise DockerDevUpError(
+                "Headless receipt has a running frontend; ownership/state mismatch blocks GUI reconciliation"
+            )
+        try:
+            source_matches = _source_matches(group)
+        except ImageHelperDrift:
+            _recreate_after_drift(group, args, drain=True)
+            return
+        if not source_matches:
+            _recreate_after_drift(group, args, drain=True)
+            return
+        # A headless backend may have an active accepted Run. Use the same
+        # native drain gate as the reverse transition before starting UI.
+        from docker_volume_dev import resume, stop_idle
+
+        stop_idle(_lifecycle_args(group, args, script=None))
+        resume(_lifecycle_args(group, args, restart_backend=True, headless=False))
+        _activate_if_requested(group, args)
+        return
     if mode == "running-healthy":
         try:
             source_matches = _source_matches(group)
