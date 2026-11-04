@@ -78,13 +78,14 @@ def read(path):
         return raw
 
 
-def binary_sha(path):
-    """Hash an installed ELF without loading it into a 64 MiB helper."""
+def binary_sha(path, *, single_link=False):
+    """Hash a bounded binary without loading it into a 64 MiB helper."""
     fd = open_existing(path, os.O_RDONLY)
     with os.fdopen(fd, 'rb') as stream:
         before = os.fstat(stream.fileno())
         require(stat.S_ISREG(before.st_mode)
-                and 0 < before.st_size <= 512 * 1024 * 1024, 'native binary is unbounded/nonregular')
+                and (not single_link or before.st_nlink == 1)
+                and 0 < before.st_size <= 512 * 1024 * 1024, 'binary evidence is unbounded/nonregular')
         digest = hashlib.sha256()
         count = 0
         while True:
@@ -101,7 +102,7 @@ def binary_sha(path):
         return digest.hexdigest()
 
 
-def tree(root):
+def tree(root, *, terminal_only=False):
     """Pin the complete bounded record tree; reject links/devices/aliases."""
     root = Path(root)
     records, directories = {}, []
@@ -117,6 +118,13 @@ def tree(root):
             for name in names:
                 child = path / name
                 metadata = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                relative = child.relative_to(root)
+                if terminal_only and len(relative.parts) == 2:
+                    require(stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode),
+                            'nonregular run entry')
+                    if name not in {'run_intent.json', 'run_catalog.json',
+                                    'resource_leases', 'preparation_resource_leases'}:
+                        continue
                 if stat.S_ISDIR(metadata.st_mode):
                     walk(child)
                 else:
@@ -133,8 +141,8 @@ def tree(root):
     return {'directories': directories, 'files': records}
 
 
-def observe_store(store, ledger, store_id):
-    """Caller holds OWNER, ledger writer and store writer locks."""
+def observe_store(store, ledger, store_id, *, terminal_only=False):
+    """Pin admission evidence under the ledger and store writer locks."""
     store, ledger = Path(store), Path(ledger)
     for name in ('temp', 'recovery'):
         fd = open_existing(store / name, os.O_RDONLY | os.O_DIRECTORY)
@@ -142,7 +150,7 @@ def observe_store(store, ledger, store_id):
             require(not os.listdir(fd), 'pending transactions exist')
         finally:
             os.close(fd)
-    inventory = tree(store / 'runs')
+    inventory = tree(store / 'runs', terminal_only=terminal_only)
     require(all('/' in key for key in inventory['files']), 'unknown file at runs root')
     terminal, held, catalogs, leases, cas = [], [], {}, [], {}
     run_ids = sorted(name for name in inventory['directories'] if '/' not in name and name != '.')
@@ -158,15 +166,18 @@ def observe_store(store, ledger, store_id):
                       specification.get('study', {}).get('plan_sha256'), specification.get('study_catalog_sha256')]
         for digest in references:
             require(isinstance(digest, str) and re.fullmatch('[0-9a-f]{64}', digest), 'immutable run CAS pin missing')
-            raw = read(store / 'objects/sha256' / digest)
-            require(sha(raw) == digest, 'immutable run CAS object differs')
-            cas[digest] = sha(raw)
+            if digest not in cas:
+                path = store / 'objects/sha256' / digest
+                actual = binary_sha(path, single_link=True) if terminal_only else sha(read(path))
+                require(actual == digest, 'immutable run CAS object differs')
+                cas[digest] = actual
         require(all(isinstance(t, dict) for t in tasks), 'invalid task record')
         catalogs[run_id] = tasks
         terminal_task = lambda t: t.get('lifecycle') in {'succeeded', 'failed', 'cancelled', 'interrupted'}
         if all(terminal_task(t) for t in tasks):
             terminal.append(run_id)
         else:
+            require(not terminal_only, 'nonterminal run in terminal-only observation')
             policy = intent.get('specification', {}).get('parameters', {}).get('fullmag.accepted_run_start')
             require(policy == {'schema_version': 'accepted_run_start_policy.v1', 'mode': 'manual'}
                     and not os.path.lexists(root / 'start_release.json'), 'nonterminal run is not held manual')
