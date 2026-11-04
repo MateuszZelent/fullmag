@@ -59,10 +59,14 @@ The contract requires a scalar sample due at a Run stage origin (`t=0`) to use
 the actual initialized solver state before integration, with the row remaining
 at the origin instead of shifting to the first accepted step. The initial
 scalar event consumes the due schedule, so the first accepted row does not
-duplicate that sample. The table store's cadence logic accepts this origin
-state, but the current native FEM physical-time StageAutosave LLG path begins
-scalar rows after a solver step, even when an initial field snapshot is
-captured. This origin-row requirement is not yet implemented for that path.
+duplicate that sample. A native FEM LLG stage starting at physical time zero
+enqueues its initialized scalar state into the physical-time StageAutosave
+table before integration. This requires an initial native snapshot even for a
+table-only stage. The table event has its own artifact job, so legacy scalar
+traces continue to count accepted integration steps. Direct minimizers retain
+their accepted-step sampling contract. The origin event described here applies
+to a fresh stage at physical time zero. Native CPU/GPU output qualification
+for this emission path is pending.
 
 Relaxation uses an explicit accepted-step cadence:
 
@@ -449,7 +453,10 @@ completed samples and record an incomplete marker and stop reason.
 | `crates/fullmag-runner/src/table_autosave.rs` | `table_store_persists_averaged_components_from_accepted_direct_step` | Verify scalar magnetization values are taken from the accepted state. |
 | `crates/fullmag-runner/src/table_autosave.rs` | `table_store_appends_on_simulation_time_cadence` | Verify initial sampling and coalesced physical-time cadence. |
 | `crates/fullmag-runner/src/table_autosave.rs` | `table_store_appends_initial_periodic_and_final_accepted_steps` | Verify accepted-step initial, periodic, and terminal rows. |
-| `crates/fullmag-runner/src/dispatch.rs` | `native_fem_requires_initial_snapshot` | Show which current consumers request an initialized native FEM snapshot. |
+| `crates/fullmag-runner/src/dispatch.rs` | `native_fem_requires_initial_snapshot` | Request initialized native FEM stats for live, minimizer, field, and physical-time table consumers. |
+| `crates/fullmag-runner/src/dispatch.rs` | `native_fem_should_initialize_stage_autosave_table` | Admit the scalar origin event for a fresh physical-time FEM LLG stage. |
+| `crates/fullmag-runner/src/artifact_pipeline.rs` | `record_stage_autosave_scalar` | Enqueue initialized scalar stats for the StageAutosave table. |
+| `crates/fullmag-runner/src/artifact_pipeline.rs` | `initial_stage_autosave_table_scalar_does_not_write_legacy_scalar_trace` | Verify the table origin event through the artifact writer. |
 | `crates/fullmag-runner/src/dispatch.rs` | `record_native_fem_initial_field_snapshots` | Capture scheduled initial field data without emitting a table scalar row. |
 | `crates/fullmag-runner/src/dispatch.rs` | `native_fem_initial_snapshot_is_lazy_for_headless_time_domain` | Verify current native FEM initial-output admission behavior. |
-| `docs/physics/0910-table-autosave-observables.md` | `DOC-ANCHOR:table-time-origin-contract` | Planned StageAutosave origin requirement; native FEM scalar-row emission is not implemented. |
+| `docs/physics/0910-table-autosave-observables.md` | `DOC-ANCHOR:table-time-origin-contract` | Physical-time origin sampling and current native FEM qualification scope. |
