@@ -86,7 +86,10 @@ bool compute_interfacial_dmi_field(
 #ifdef _OPENMP
     dmi_threads = std::max(1, ctx.cpu_threads.effective_omp_threads);
 #endif
-    const bool parallel_dmi = dmi_threads > 1 && mesh->GetNE() >= 2000;
+    // The element loop uses the mesh-owned mutable transformation. Keep the
+    // newly admitted periodic rDMI lane serial until it has thread-local assembly.
+    const bool periodic_rotated = rotated_active && !ctx.mesh.periodic_reduced_node.empty();
+    const bool parallel_dmi = !periodic_rotated && dmi_threads > 1 && mesh->GetNE() >= 2000;
     dmi_workspace->prepare_thread_residuals(parallel_dmi ? dmi_threads : 1, n * 3u);
 
     auto accumulate_element = [&](int elem, int thread_index, double &thread_energy) {

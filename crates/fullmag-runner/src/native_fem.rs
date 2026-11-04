@@ -2975,6 +2975,21 @@ impl NativeFemBackend {
                 errors.join("; ")
             ),
         })?;
+        if crate::fem::engine::has_periodic_rotated_dmi(plan) {
+            plan.mesh
+                .periodic_mesh_certificate_v6_with_material_and_nodal_fields(
+                    plan.ms_element_field.as_deref(),
+                    plan.a_element_field.as_deref(),
+                    plan.material.ms_field.as_deref(),
+                    plan.material.a_field.as_deref(),
+                )
+                .map_err(|errors| RunError {
+                    message: format!(
+                        "native FEM periodic rDMI mesh certificate failed before ABI packaging: {}",
+                        errors.join("; ")
+                    ),
+                })?;
+        }
         if matches!(
             plan.domain_mesh_mode,
             fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh

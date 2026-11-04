@@ -134,6 +134,44 @@ case "${recipe}" in
     if [[ -n "${BASH_REMATCH[8]:-}" ]]; then preclaim_args+=(--apply); fi
     exec "${python_cmd}" -B "${script_dir}/docker_dev_preclaim_cancel.py" "${preclaim_args[@]}"
     ;;
+  *"scripts/docker_goebel_qualification.py"*)
+    goebel_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_goebel_qualification.py\" --repo-root \"[^\"]+\" --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --source-commit '([0-9a-f]{40})' --port '([0-9]{4,5})'( --lane (fem-periodic-gpu|fem-periodic) --mesh-sha256 '([0-9a-f]{64})' --solver-timeout-s '([0-9]{2,6})')?( --terminal-run-id '([A-Za-z0-9][A-Za-z0-9._-]{0,159})')?( --(observe|reconcile)-attempt '([0-9a-f]{32})')?( --fdm-attempt '([0-9a-f]{32})' --fdm-input-sha256 '([0-9a-f]{64})')?( --mesh-profile (light-airbox))?[[:space:]]*$"
+    if [[ ! "${recipe}" =~ ${goebel_pattern} ]]; then
+      echo "[fullmag just] invalid Goebel qualification recipe" >&2
+      exit 2
+    fi
+    goebel_args=()
+    if [[ -n "${BASH_REMATCH[7]:-}" ]]; then
+      goebel_args+=(--lane "${BASH_REMATCH[7]}" --mesh-sha256 "${BASH_REMATCH[8]}" --solver-timeout-s "${BASH_REMATCH[9]}")
+    fi
+    if [[ -n "${BASH_REMATCH[11]:-}" ]]; then
+      goebel_args+=(--terminal-run-id "${BASH_REMATCH[11]}")
+    fi
+    if [[ -n "${BASH_REMATCH[13]:-}" ]]; then
+      if [[ -z "${BASH_REMATCH[7]:-}" ]]; then
+        echo "[fullmag just] Goebel observation requires the FEM periodic recipe" >&2
+        exit 2
+      fi
+      goebel_args+=("--${BASH_REMATCH[13]}-attempt" "${BASH_REMATCH[14]}")
+    fi
+    if [[ -n "${BASH_REMATCH[16]:-}" ]]; then
+      if [[ -z "${BASH_REMATCH[7]:-}" ]]; then
+        echo "[fullmag just] FDM comparison requires the FEM periodic recipe" >&2
+        exit 2
+      fi
+      goebel_args+=(--fdm-attempt "${BASH_REMATCH[16]}" --fdm-input-sha256 "${BASH_REMATCH[17]}")
+    fi
+    if [[ -n "${BASH_REMATCH[19]:-}" ]]; then
+      if [[ -z "${BASH_REMATCH[7]:-}" ]]; then
+        echo "[fullmag just] light airbox requires the FEM periodic recipe" >&2
+        exit 2
+      fi
+      goebel_args+=(--mesh-profile "${BASH_REMATCH[19]}")
+    fi
+    exec "${python_cmd}" -B "${script_dir}/docker_goebel_qualification.py" --repo-root "${repo_root}" \
+      --attempt "${BASH_REMATCH[1]}" --config-sha256 "${BASH_REMATCH[2]}" --source-root "${BASH_REMATCH[3]}" \
+      --source-commit "${BASH_REMATCH[4]}" --port "${BASH_REMATCH[5]}" "${goebel_args[@]}"
+    ;;
   *"scripts/docker_nf_common_volume.py"*)
     nf_volume_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_nf_common_volume.py\" --repo-root \"[^\"]+\" --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --producer-attempt '([0-9a-f]{32})' --producer-receipt-sha256 '([0-9a-f]{64})' --report-id '([0-9a-f]{32})'( --profile '(comparison|fixed-m-iterations-1248)')?$"
     if [[ ! "${recipe}" =~ ${nf_volume_pattern} ]]; then

@@ -4239,12 +4239,15 @@ pub(crate) fn plan_fem(
             ],
         });
     }
-    if rotated_interfacial_dmi.is_some_and(|d| d != 0.0) && !mesh.periodic_node_pairs.is_empty() {
+    let periodic_rotated_dmi = rotated_interfacial_dmi.is_some_and(|d| d != 0.0)
+        && !mesh.periodic_node_pairs.is_empty();
+    if periodic_rotated_dmi
+        && relaxation
+            .as_ref()
+            .is_some_and(|control| is_direct_relaxation_minimizer(control.algorithm))
+    {
         return Err(PlanError {
-            reasons: vec![
-                "FEM RotatedInterfacialDmi with periodic node pairs is unsupported until the weak residual and mass projection are reduced over periodic node classes"
-                    .to_string(),
-            ],
+            reasons: vec!["FEM RotatedInterfacialDmi with periodic node pairs requires time integration or llg_overdamped relaxation".to_string()],
         });
     }
     if requested_static_pbc && mesh.periodic_node_pairs.is_empty() {
@@ -4318,6 +4321,8 @@ pub(crate) fn plan_fem(
                 ],
             });
         }
+    }
+    if (!mesh.periodic_node_pairs.is_empty() && enable_demag) || periodic_rotated_dmi {
         periodic_mesh_certificate_v6 = Some(mesh.periodic_mesh_certificate_v6().map_err(
             |certificate_errors| {
                 PlanError {
@@ -4328,8 +4333,6 @@ pub(crate) fn plan_fem(
                 }
             },
         )?);
-        // Demag PBC with open boundary: allowed (P^T A P reduction via Rust reference path).
-        // Fully 3D periodic demag is not supported in v1.
     }
     if shared_domain_mesh_requested(problem, demag_realization)
         && domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir

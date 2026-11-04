@@ -51,6 +51,8 @@ HOST_LEDGER_PROFILE = "host-ledger-v1"
 # ADR 0067: a volume DEV group's own ledger volume at the same container path.
 GROUP_LEDGER_PROFILE = "group-ledger-v1"
 GROUP_LEDGER_HOST_ID_ENV = "FULLMAG_GROUP_LEDGER_HOST_ID"
+GROUP_MEMORY_TRANSITION_ENV = "FULLMAG_DOCKER_GROUP_MEMORY_TRANSITION_SHA256"
+API_MEMORY_HEADROOM_BYTES = 1024**3
 HOST_CAPACITY_ENVIRONMENT = (
     "FULLMAG_DOCKER_HOST_CAPACITY_PATH",
     "FULLMAG_DOCKER_HOST_CAPACITY_SHA256",
@@ -737,6 +739,7 @@ def process_environment(
     if "FULLMAG_RUNTIME_PACKAGE_ROOT" in environment:
         environment["FULLMAG_RUNTIME_PACKAGE_ROOT"] = str(paths.package)
     environment.pop("FULLMAG_ACCEPTED_STORE_SCOPE", None)
+    environment.pop(GROUP_MEMORY_TRANSITION_ENV, None)
     if service:
         for name in SERVICE_MODE_VARIABLES:
             environment.pop(name, None)
@@ -2238,6 +2241,7 @@ def _validate_host_profile(
 def initialize_host_configuration(
     paths: RuntimePaths, device_access: str = "gpu",
     capacity_authority: dict[str, Any] | None = None,
+    *, group_memory_transition_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Discover native devices and initialize the exact shared Rust ledger."""
     if device_access not in DEVICE_ACCESS_CHOICES:
@@ -2248,12 +2252,15 @@ def initialize_host_configuration(
     _assert_no_links(executable, "runtime service executable")
     if not executable.is_file() or not os.access(executable, os.X_OK):
         _fail("native runtime service executable is unavailable")
+    environment = process_environment(paths, service=True)
+    if group_memory_transition_sha256 is not None:
+        environment[GROUP_MEMORY_TRANSITION_ENV] = group_memory_transition_sha256
     try:
         result = subprocess.run(
             [str(executable), "--initialize-docker-host", "--ledger-root", str(HOST_LEDGER_ROOT),
              "--store-root", str(paths.store), "--device-access", device_access,
              "--host-id", logical_host_id],
-            cwd=str(paths.state), env=process_environment(paths, service=True),
+            cwd=str(paths.state), env=environment,
             stdin=subprocess.DEVNULL, capture_output=True, timeout=60,
         )
     except subprocess.TimeoutExpired as error:
@@ -2263,7 +2270,8 @@ def initialize_host_configuration(
     if result.returncode:
         detail = (result.stderr or result.stdout).decode("utf-8", errors="replace")[-4096:]
         _fail("native Docker host profile initialization failed: " + detail)
-    if os.environ.get("FULLMAG_DOCKER_HOST_CAPACITY_MIGRATION_SHA256") is not None and result.stderr:
+    if (group_memory_transition_sha256 is not None
+            or os.environ.get("FULLMAG_DOCKER_HOST_CAPACITY_MIGRATION_SHA256") is not None) and result.stderr:
         # The native receipt is diagnostic output; preserve it in the backend
         # log rather than discarding it with the successful subprocess capture.
         print(result.stderr[-MAX_JSON_BYTES:].decode("utf-8", errors="replace"),
@@ -2281,8 +2289,8 @@ def initialize_host_configuration(
         capacity_authority.clear()
         evidence = value.get("capacity_migration")
         if evidence is not None:
-            descriptor = os.environ.get("FULLMAG_DOCKER_HOST_CAPACITY_SHA256")
-            requested = os.environ.get("FULLMAG_DOCKER_HOST_CAPACITY_MIGRATION_SHA256")
+            descriptor = group_memory_transition_sha256 or os.environ.get("FULLMAG_DOCKER_HOST_CAPACITY_SHA256")
+            requested = group_memory_transition_sha256 or os.environ.get("FULLMAG_DOCKER_HOST_CAPACITY_MIGRATION_SHA256")
             if (not isinstance(evidence, dict)
                     or set(evidence) != {"descriptor_sha256", "historical_policies"}
                     or not isinstance(requested, str) or not HEX64.fullmatch(requested)
@@ -2329,9 +2337,10 @@ def _retain_previous_configuration(path: Path, raw: bytes) -> None:
         _fail("previous runtime configuration backup verification failed")
 
 
-def _capacity_projection(config: dict[str, Any]) -> dict[str, Any] | None:
+def _capacity_projection(config: dict[str, Any], *, memory_only: bool = False) -> dict[str, Any] | None:
     """Project a configuration onto the fields a measured transition keeps."""
     result = dict(config)
+    budget_fields = {"memory_bytes"} if memory_only else {"cpu_millis", "memory_bytes"}
     for name in ("compute_resources", "preparation_resources"):
         offers = result.get(name)
         if (not isinstance(offers, list) or not offers
@@ -2341,7 +2350,7 @@ def _capacity_projection(config: dict[str, Any]) -> dict[str, Any] | None:
         result[name] = [
             {**offer, "budget": {
                 key: value for key, value in offer["budget"].items()
-                if key not in {"cpu_millis", "memory_bytes"}
+                if key not in budget_fields
             }}
             for offer in offers
         ]
@@ -2360,11 +2369,12 @@ def _capacity_projection(config: dict[str, Any]) -> dict[str, Any] | None:
     # Resource identities, GPU UUIDs, concurrency, paths and timing remain
     # exact, including storage and GPU memory. Only CPU/RAM budgets and CPU
     # masks are permitted to vary.
-    host["compute_placements"] = {
-        key: {field: value for field, value in placement.items() if field != "cpu_ids"}
-        for key, placement in placements.items()
-    }
-    host["preparation_cpu_ids"] = dict.fromkeys(preparation)
+    if not memory_only:
+        host["compute_placements"] = {
+            key: {field: value for field, value in placement.items() if field != "cpu_ids"}
+            for key, placement in placements.items()
+        }
+        host["preparation_cpu_ids"] = dict.fromkeys(preparation)
     result["host_execution"] = host
     return result
 
@@ -2428,9 +2438,38 @@ def _capacity_profile_transition_allowed(
     return old_projection is not None and old_projection == new_projection
 
 
+def _group_memory_transition_allowed(
+    current: dict[str, Any], expected: dict[str, Any], old_sha256: str,
+    authority: Mapping[str, Any],
+) -> bool:
+    old_policy = current["host_execution"].get("policy")
+    new_policy = expected["host_execution"].get("policy")
+    if (authority.get("descriptor_sha256") != old_sha256
+            or not isinstance(old_policy, dict) or not isinstance(new_policy, dict)
+            or new_policy != authority.get("current_policy")
+            or old_policy not in authority.get("historical_policies", [])
+            or old_policy.get("host_id") != os.environ.get(GROUP_LEDGER_HOST_ID_ENV)):
+        return False
+    old_budget, new_budget = old_policy.get("total_budget"), new_policy.get("total_budget")
+    if not isinstance(old_budget, dict) or not isinstance(new_budget, dict):
+        return False
+    old_ram, new_ram = old_budget.get("memory_bytes"), new_budget.get("memory_bytes")
+    old_revision = old_policy.get("revision")
+    if (type(old_ram) is not int or type(new_ram) is not int or new_ram <= old_ram
+            or str(new_ram + API_MEMORY_HEADROOM_BYTES) != os.environ.get("FULLMAG_DOCKER_MEMORY_BYTES")
+            or type(old_revision) is not int or new_policy.get("revision") != old_revision + 1
+            or new_policy != {**old_policy, "revision": old_revision + 1,
+                              "topology_sha256": new_policy.get("topology_sha256"),
+                              "total_budget": {**old_budget, "memory_bytes": new_ram}}):
+        return False
+    old_projection = _capacity_projection(current, memory_only=True)
+    return old_projection is not None and old_projection == _capacity_projection(expected, memory_only=True)
+
+
 def _rotate_configuration_generation(
     paths: RuntimePaths, current: dict[str, Any], expected: dict[str, Any], previous_sha256: str,
     *, capacity_authority: Mapping[str, Any] | None = None,
+    group_memory_authority: Mapping[str, Any] | None = None,
 ) -> None:
     """Change a generation or explicitly measured capacity after an owned stop."""
     old_host, new_host = current.get("host_execution"), expected.get("host_execution")
@@ -2446,10 +2485,14 @@ def _rotate_configuration_generation(
     old_profile, new_profile = dict(old_host), dict(new_host)
     old_profile.pop("runtime_generation_sha256", None)
     new_profile.pop("runtime_generation_sha256", None)
+    if group_memory_authority is not None and not _group_memory_transition_allowed(
+            current, expected, previous_sha256, group_memory_authority):
+        _fail("runtime configuration does not match the authenticated group RAM increase")
     if ({**current, "host_execution": old_profile}
             != {**expected, "host_execution": new_profile}
             and not _capacity_profile_transition_allowed(current, expected, capacity_authority)
-            and not _group_ledger_transition_allowed(current, expected)):
+            and not _group_ledger_transition_allowed(current, expected)
+            and group_memory_authority is None):
         _fail("runtime configuration rotation cannot change the operator profile")
     raw = _bounded_regular(paths.config, "runtime configuration before rotation")
     if hashlib.sha256(raw).hexdigest() != previous_sha256:
@@ -3271,6 +3314,56 @@ def _post_build_binding_state(
         "previous_config_sha256": binding["previous_config_sha256"],
     }
 
+def _maybe_increase_group_memory(
+    paths: RuntimePaths, device_access: str, previous_sha256: str | None,
+    accepted_preflight: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Keep the native owner lock across the ledger and config publications."""
+    if os.environ.get("FULLMAG_HOST_LEDGER_PROFILE") != GROUP_LEDGER_PROFILE:
+        return None
+    requested = os.environ.get("FULLMAG_DOCKER_MEMORY_BYTES", "")
+    if re.fullmatch(r"[0-9]{1,20}", requested) is None:
+        return None
+    try:
+        raw = _bounded_regular(paths.config, "current group runtime configuration")
+    except FileNotFoundError:
+        return None
+    current = _post_build_json(raw, "current group runtime configuration")
+    host = current.get("host_execution")
+    policy = host.get("policy") if isinstance(host, dict) else None
+    group_id = os.environ.get(GROUP_LEDGER_HOST_ID_ENV, "")
+    if (not HEX64.fullmatch(group_id) or not isinstance(policy, dict)
+            or policy.get("host_id") != group_id):
+        return None
+    budget = policy.get("total_budget")
+    if not isinstance(budget, dict) or type(budget.get("memory_bytes")) is not int:
+        _fail("existing group RAM policy is invalid")
+    if int(requested) <= budget["memory_bytes"] + API_MEMORY_HEADROOM_BYTES:
+        return None
+    if (accepted_preflight is not None
+            or os.environ.get(POST_BUILD_START_ENV) is not None
+            or os.environ.get(POST_BUILD_START_SHA_ENV) is not None):
+        _fail("group RAM increase requires ordinary retained recreation after drain")
+    if str(budget.get("cpu_millis")) != os.environ.get("FULLMAG_DOCKER_CPU_MILLIS"):
+        _fail("group RAM increase cannot change the approved CPU budget")
+    old_sha256 = _sha256_bytes(raw)
+    if previous_sha256 is not None and previous_sha256 != old_sha256:
+        _fail("group RAM increase has a stale runtime configuration pin")
+    with _authenticated_terminal_drain(paths) as assert_owner_lock:
+        if _bounded_regular(paths.config, "group runtime configuration under owner lock") != raw:
+            _fail("group runtime configuration changed before RAM increase")
+        assert_owner_lock()
+        authority: dict[str, Any] = {}
+        expected = initialize_host_configuration(
+            paths, device_access, authority, group_memory_transition_sha256=old_sha256,
+        )
+        assert_owner_lock()
+        _rotate_configuration_generation(
+            paths, current, expected, old_sha256, group_memory_authority=authority,
+        )
+        return expected
+
+
 def ensure_configuration(
     paths: RuntimePaths | None = None,
     *,
@@ -3288,6 +3381,9 @@ def ensure_configuration(
         host_mode != "1" or not HEX64.fullmatch(previous_sha256)
     ):
         _fail("FULLMAG_DOCKER_PREVIOUS_CONFIG_SHA256 requires native host mode and a lowercase SHA-256")
+    increased = _maybe_increase_group_memory(paths, device_access, previous_sha256, accepted_preflight)
+    if increased is not None:
+        return increased
     capacity_authority: dict[str, Any] = {}
     expected = initialize_host_configuration(paths, device_access, capacity_authority)
     try:

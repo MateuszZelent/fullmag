@@ -440,6 +440,9 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-runtime-service orphan_teardown_
           cargo test -p fullmag-runtime-control --lib claim::host_binding_tests::fresh_v2_host_claim_receives_the_canonical_runtime_generation_binding -- --exact
           cargo test -p fullmag-runner --lib fem_gpu_execution_receipt_contract_tests
+          cargo test -p fullmag-runner --lib fem_periodic_rotated_dmi_admits_gpu_explicit_rk
+          cargo test -p fullmag-plan --lib fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs
+          cargo test -p fullmag-plan --lib fem_gpu_rotated_interfacial_dmi_rejects_an_incomplete_periodic_seam
           cargo test -p fullmag-session --lib host_resource_ledger
           cargo test -p fullmag-runtime-control --lib compute_node_probe
           cargo test -p fullmag-runtime-control --lib nvml_gpu_partition
@@ -1041,6 +1044,9 @@ jobs:
           python -m pytest -q
           tests/standard_problems/bimeron/goebel_2019/test_verify.py
           tests/standard_problems/bimeron/goebel_2019/test_contract.py
+          tests/standard_problems/bimeron/goebel_2019/test_periodic_tet4_mesh.py
+          tests/standard_problems/bimeron/goebel_2019/test_compare_fem_fdm.py
+          scripts/test_docker_goebel_qualification.py
           scripts/test_render_goebel_2019_bimeron_figure.py
 
       - name: Run eigensolve scene and execution profile merge contracts

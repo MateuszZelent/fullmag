@@ -155,6 +155,19 @@ GpuRkPlan gpu_rk_plan_device_resident(const Context &ctx, std::string &reason)
         reason = "GPU RK device-resident path requires device-resident mesh geometry for DMI";
         return plan;
     }
+    if (!ctx.mesh.periodic_node_pairs.empty() &&
+        (ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled || ctx.dmi.bulk_enabled)) {
+        const auto &regions = ctx.gpu_state.device.mesh_regions;
+        if (!regions.has_periodic_reduced_nodes ||
+            regions.periodic_reduced_node_count != ctx.mesh.periodic_reduced_node_count ||
+            regions.periodic_reduced_node == nullptr ||
+            regions.periodic_representative_nodes == nullptr ||
+            regions.periodic_class_member_offsets == nullptr ||
+            regions.periodic_class_members == nullptr) {
+            reason = "GPU RK periodic DMI requires complete device-resident node-class maps";
+            return plan;
+        }
+    }
     if (ctx.magnetoelastic.enabled) {
         const uint64_t per_node_strain_len = static_cast<uint64_t>(ctx.mesh.n_nodes) * 6ull;
         if (ctx.magnetoelastic.uniform_strain && ctx.magnetoelastic.strain_voigt.size() < 6u) {

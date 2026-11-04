@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 
 
@@ -9,6 +10,8 @@ AEX = 15e-12
 D_ROTATED = 3e-3
 KU_X = 0.8e6
 ALPHA = 0.3
+# Supplement Eq. (4) uses B; Fullmag integrates with H in A/m.
+GAMMA_H = (4e-7 * math.pi) * 1.760e11
 TEMPERATURE = 0.0
 CELL = (0.5e-9, 0.5e-9, 0.5e-9)
 BIMERON_RADIUS = 10e-9

@@ -475,6 +475,11 @@ int run_backend_relaxation_step(
 {
 #if FULLMAG_HAS_MFEM_STACK
     error.clear();
+    if (!ctx.mesh.periodic_node_pairs.empty() && ctx.dmi.rotated_interfacial_enabled &&
+        ctx.dmi.rotated_interfacial_D != 0.0) {
+        error = "FEM RotatedInterfacialDmi with periodic node pairs requires time integration or llg_overdamped relaxation";
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    }
     if (!validate_elementwise_ms_relaxation_support(ctx, error)) {
         return FULLMAG_FEM_ERR_UNAVAILABLE;
     }

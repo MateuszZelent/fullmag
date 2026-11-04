@@ -559,6 +559,19 @@ storage Windows. Log w wolumenie kontrolnym i trwałe receipty pozostają wymaga
 błąd ich zapisu nadal przerywa operację. Zakończenie samego procesu kontrolera
 pozostaje odrębną utratą obserwacji i wymaga rozstrzygnięcia stanu.
 
+### Próba referencyjna Göbela na GPU
+
+Recepta `docker-dev-goebel-qualification` uruchamia okresowy tor FDM z
+`tests/standard_problems/bimeron/goebel_2019/scenario_fdm.py` w istniejącym,
+bezczynnym backendzie DEV. Podaj przypięty attempt, SHA-256 konfiguracji,
+checkout, commit wejść i port tej grupy. Próba wymaga CUDA FP64 w trybie
+strict oraz sprawdzonej tożsamości pakietu i źródeł.
+
+Headless CLI zapisuje oba etapy do jednego nowego bundle Zarr. Log wykonania
+pozostaje w wolumenie grupy, a wyniki i raport 19 kontroli trafiają do
+rozwiązanego katalogu wyników. Raport rozdziela zakończenie uruchomienia od
+wyniku kontroli naukowych. Uruchomienie zachowuje API i frontend bieżącej grupy.
+
 ### Browser QA istniejącej grupy
 
 Po uruchomieniu zdrowej grupy można wykonać kontrolę Home, sesji i WebGL przez

@@ -1326,9 +1326,23 @@ fn resolve_fem_engine_with_registry(
         }
 
         if let Some(fem_plan) = plan {
-            if let Some(algorithm) = fem_gpu_cpu_only_relaxation_algorithm(fem_plan) {
+            let cpu_only = if let Some(algorithm) = fem_gpu_cpu_only_relaxation_algorithm(fem_plan) {
+                Some((
+                    FEM_GPU_RELAXATION_CPU_ONLY_FALLBACK_REASON,
+                    fem_gpu_relaxation_cpu_only_fallback_message(algorithm),
+                    fem_gpu_relaxation_cpu_only_error(algorithm),
+                ))
+            } else if crate::fem::engine::has_periodic_rotated_dmi(fem_plan) {
+                fem_gpu_rk_plan_ineligible_message(fem_plan).map(|message| {
+                    let error = fem_gpu_rk_plan_ineligible_error(message.clone());
+                    (FEM_GPU_RK_PLAN_INELIGIBLE_FALLBACK_REASON, message, error)
+                })
+            } else {
+                None
+            };
+            if let Some((reason, message, error)) = cpu_only {
                 if forced_device {
-                    return Err(fem_gpu_relaxation_cpu_only_error(algorithm));
+                    return Err(error);
                 }
                 let cpu_resolved = resolve_registry_runtime_for_backend(
                     registry,
@@ -1341,11 +1355,10 @@ fn resolve_fem_engine_with_registry(
                         "FEM GPU runtime cannot fall back because no CPU FEM runtime is advertised"
                             .to_string(),
                 })?;
-                let message = fem_gpu_relaxation_cpu_only_fallback_message(algorithm);
                 fallback = Some(runtime_fallback(
                     fem_engine_id(FemEngine::NativeGpu),
                     fem_engine_id(FemEngine::CpuNative),
-                    FEM_GPU_RELAXATION_CPU_ONLY_FALLBACK_REASON,
+                    reason,
                     message,
                 ));
                 let fem_crossover_decision = reconcile_pinned_fem_crossover_decision(
@@ -2006,6 +2019,7 @@ fn fem_static_periodic_decision(plan: &FemPlanIR) -> FemStaticPbcDecision {
     // Terms that require Rust reference algebraic reduction (P^T A P).
     let has_demag = plan.enable_demag;
     let has_dmi = plan.interfacial_dmi.is_some()
+        || crate::fem::engine::has_periodic_rotated_dmi(plan)
         || plan.bulk_dmi.is_some()
         || plan.dind_field.as_ref().map_or(false, |v| !v.is_empty())
         || plan.dbulk_field.as_ref().map_or(false, |v| !v.is_empty());
@@ -6317,6 +6331,39 @@ mod tests {
         assert!(err
             .message
             .contains("no advertised FEM runtime matches device=gpu"));
+    }
+
+    #[test]
+    fn fem_periodic_rotated_dmi_admits_gpu_explicit_rk() {
+        let _guard = env_lock().lock().expect("env mutex");
+        let mut fem = tiny_fem_plan();
+        fem.integrator = Some(fullmag_ir::IntegratorChoice::Rk45);
+        fem.rotated_interfacial_dmi = Some(3.0e-3);
+        fem.mesh.periodic_node_pairs = vec![fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "x_faces".to_string(),
+            node_a: 0,
+            node_b: 1,
+        }];
+        // Supply the already-resolved engine to test plan constraints without
+        // depending on a CUDA device on the CI host.
+        let gpu = || EngineResolution {
+            engine: FemEngine::NativeGpu,
+            fallback: None,
+        };
+        let forced = apply_fem_gpu_plan_constraints(&fem, gpu(), true, None)
+            .expect("forced GPU must accept periodic rDMI with RK45");
+        assert_eq!(forced.engine, FemEngine::NativeGpu);
+        assert!(forced.fallback.is_none());
+
+        fem.integrator = Some(fullmag_ir::IntegratorChoice::Abm3);
+        let error = apply_fem_gpu_plan_constraints(&fem, gpu(), true, None)
+            .expect_err("forced GPU must reject periodic rDMI with ABM3");
+        assert!(error.message.contains("Heun, RK4, RK23, and RK45"));
+        let auto = apply_fem_gpu_plan_constraints(&fem, gpu(), false, None)
+            .expect("auto may choose CPU for ABM3");
+        assert_eq!(auto.engine, FemEngine::CpuNative);
+        let fallback = auto.fallback.expect("auto CPU choice must retain its reason");
+        assert!(fallback.message.contains("Heun, RK4, RK23, and RK45"));
     }
 
     #[test]

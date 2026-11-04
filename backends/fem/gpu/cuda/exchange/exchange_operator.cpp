@@ -190,6 +190,7 @@ bool build_gpu_exchange_periodic_reduced_csr(
     const std::vector<uint32_t> &col_indices,
     const std::vector<double> &values,
     const std::vector<double> &lumped_mass,
+    const std::vector<uint8_t> &host_magnetic_node_mask,
     const std::vector<uint32_t> &reduced_node,
     const std::vector<uint32_t> &representative_nodes,
     uint32_t reduced_rows,
@@ -201,11 +202,20 @@ bool build_gpu_exchange_periodic_reduced_csr(
         row_offsets.size() != static_cast<size_t>(rows) + 1u ||
         row_offsets.front() != 0u || row_offsets.back() != col_indices.size() ||
         col_indices.size() != values.size() || lumped_mass.size() != rows ||
+        (!host_magnetic_node_mask.empty() && host_magnetic_node_mask.size() != rows) ||
         reduced_node.size() != rows || representative_nodes.size() != reduced_rows) {
         error = "GPU periodic reduced exchange dimensions are invalid";
         return false;
     }
+    for (uint8_t magnetic : host_magnetic_node_mask) {
+        if (magnetic > 1u) {
+            error = "GPU periodic reduced exchange magnetic node mask is invalid";
+            return false;
+        }
+    }
     std::vector<uint8_t> class_seen(reduced_rows, 0u);
+    std::vector<uint8_t> class_has_active_magnetic_node(reduced_rows, 0u);
+    std::vector<uint8_t> class_has_nonzero_raw_off_diagonal_edge(reduced_rows, 0u);
     std::vector<std::map<uint32_t, double>> rows_by_class(reduced_rows);
     out.reduced_mass.assign(reduced_rows, 0.0);
     for (uint32_t row = 0; row < rows; ++row) {
@@ -221,6 +231,12 @@ bool build_gpu_exchange_periodic_reduced_csr(
         }
         class_seen[reduced_row] = 1u;
         out.reduced_mass[reduced_row] += lumped_mass[row];
+        if (!host_magnetic_node_mask.empty() && host_magnetic_node_mask[row] != 0u) {
+            class_has_active_magnetic_node[reduced_row] = 1u;
+        }
+    }
+    for (uint32_t row = 0; row < rows; ++row) {
+        const uint32_t reduced_row = reduced_node[row];
         for (uint32_t p = row_offsets[row]; p < row_offsets[row + 1u]; ++p) {
             const uint32_t col = col_indices[p];
             if (col >= rows || !std::isfinite(values[p])) {
@@ -232,6 +248,10 @@ bool build_gpu_exchange_periodic_reduced_csr(
                 error = "GPU periodic reduced exchange column class is invalid";
                 return false;
             }
+            if (col != row && values[p] != 0.0) {
+                class_has_nonzero_raw_off_diagonal_edge[reduced_row] = 1u;
+                class_has_nonzero_raw_off_diagonal_edge[reduced_col] = 1u;
+            }
             if (reduced_col != reduced_row) {
                 rows_by_class[reduced_row][reduced_col] += values[p];
             }
@@ -242,8 +262,15 @@ bool build_gpu_exchange_periodic_reduced_csr(
         if (class_seen[reduced] == 0u || representative >= rows ||
             reduced_node[representative] != reduced ||
             !std::isfinite(out.reduced_mass[reduced]) ||
-            out.reduced_mass[reduced] <= 0.0) {
+            out.reduced_mass[reduced] < 0.0) {
             error = "GPU periodic reduced exchange representative or mass is invalid";
+            return false;
+        }
+        if (out.reduced_mass[reduced] == 0.0 &&
+            (host_magnetic_node_mask.empty() ||
+                class_has_active_magnetic_node[reduced] != 0u ||
+                class_has_nonzero_raw_off_diagonal_edge[reduced] != 0u)) {
+            error = "GPU periodic reduced exchange zero mass requires an uncoupled air class";
             return false;
         }
     }

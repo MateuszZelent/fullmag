@@ -192,7 +192,9 @@ bool upload_legacy_sparse_exchange_to_gpu_state(
         static_cast<uint64_t>(ctx.mesh.periodic_reduced_node.size()),
         ctx.mesh.periodic_representative_nodes.data(),
         static_cast<uint64_t>(ctx.mesh.periodic_representative_nodes.size()),
-        static_cast<uint64_t>(ctx.mesh.periodic_reduced_node_count));
+        static_cast<uint64_t>(ctx.mesh.periodic_reduced_node_count),
+        ctx.mesh.magnetic_node_mask.data(),
+        static_cast<uint64_t>(ctx.mesh.magnetic_node_mask.size()));
 }
 #else
 bool upload_legacy_sparse_exchange_to_gpu_state(

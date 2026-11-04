@@ -43,7 +43,7 @@ use fullmag_session::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     future::Future,
     fs::{File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
@@ -1042,36 +1042,137 @@ fn docker_host_budget_override() -> Result<Option<(u64, u64)>> {
     )))
 }
 
-fn docker_host_capacity_migration_digest(
-    host_capacity_scope: bool,
-) -> Result<Option<String>> {
-    let Some(migration_digest) =
-        std::env::var_os("FULLMAG_DOCKER_HOST_CAPACITY_MIGRATION_SHA256")
-    else {
-        return Ok(None);
-    };
-    if !host_capacity_scope {
-        bail!("FULLMAG_DOCKER_HOST_CAPACITY_MIGRATION_SHA256 requires a validated Docker host capacity descriptor");
-    }
-    let migration_digest = migration_digest
+const GROUP_LEDGER_PROFILE: &str = "group-ledger-v1";
+const GROUP_MEMORY_TRANSITION_ENV: &str = "FULLMAG_DOCKER_GROUP_MEMORY_TRANSITION_SHA256";
+const GLOBAL_CAPACITY_TRANSITION_ENV: &str = "FULLMAG_DOCKER_HOST_CAPACITY_MIGRATION_SHA256";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DockerHostCapacityTransitionKind {
+    GlobalHostCapacity,
+    GroupMemory,
+}
+
+struct DockerHostCapacityTransitionRequest {
+    descriptor_sha256: String,
+    kind: DockerHostCapacityTransitionKind,
+}
+
+fn parse_lowercase_sha256(value: &OsStr, env_name: &str) -> Result<String> {
+    let digest = value
         .to_str()
-        .context("FULLMAG_DOCKER_HOST_CAPACITY_MIGRATION_SHA256 must be UTF-8")?;
-    if migration_digest.len() != 64
-        || !migration_digest
+        .with_context(|| format!("{env_name} must be UTF-8"))?;
+    if digest.len() != 64
+        || !digest
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
-        bail!("FULLMAG_DOCKER_HOST_CAPACITY_MIGRATION_SHA256 must be a lowercase SHA-256 digest");
+        bail!("{env_name} must be a lowercase SHA-256 digest");
     }
+    Ok(digest.to_owned())
+}
+
+fn validate_docker_group_memory_transition_digest(
+    digest: &OsStr,
+    host_ledger_profile: Option<&str>,
+    group_ledger_host_id: Option<&str>,
+    cli_host_id: &str,
+    host_capacity_scope: bool,
+    global_transition_requested: bool,
+) -> Result<String> {
+    if host_ledger_profile != Some(GROUP_LEDGER_PROFILE) {
+        bail!(
+            "{GROUP_MEMORY_TRANSITION_ENV} requires FULLMAG_HOST_LEDGER_PROFILE=group-ledger-v1"
+        );
+    }
+    if group_ledger_host_id != Some(cli_host_id) {
+        bail!(
+            "{GROUP_MEMORY_TRANSITION_ENV} requires FULLMAG_GROUP_LEDGER_HOST_ID to match the native host ID"
+        );
+    }
+    if host_capacity_scope || global_transition_requested {
+        bail!("{GROUP_MEMORY_TRANSITION_ENV} is mutually exclusive with global host capacity migration");
+    }
+    parse_lowercase_sha256(digest, GROUP_MEMORY_TRANSITION_ENV)
+}
+
+fn docker_host_capacity_transition_request(
+    host_capacity_scope: bool,
+    cli_host_id: &str,
+) -> Result<Option<DockerHostCapacityTransitionRequest>> {
+    let global_transition = std::env::var_os(GLOBAL_CAPACITY_TRANSITION_ENV);
+    let group_transition = std::env::var_os(GROUP_MEMORY_TRANSITION_ENV);
+    if global_transition.is_some() && group_transition.is_some() {
+        bail!("global host capacity migration and group memory transition are mutually exclusive");
+    }
+    if let Some(group_transition) = group_transition {
+        let host_execution = std::env::var("FULLMAG_DOCKER_HOST_EXECUTION").ok();
+        if host_execution.as_deref() != Some("1") {
+            bail!("{GROUP_MEMORY_TRANSITION_ENV} requires FULLMAG_DOCKER_HOST_EXECUTION=1");
+        }
+        let host_ledger_profile = std::env::var("FULLMAG_HOST_LEDGER_PROFILE").ok();
+        let group_ledger_host_id = std::env::var("FULLMAG_GROUP_LEDGER_HOST_ID").ok();
+        let descriptor_sha256 = validate_docker_group_memory_transition_digest(
+            &group_transition,
+            host_ledger_profile.as_deref(),
+            group_ledger_host_id.as_deref(),
+            cli_host_id,
+            host_capacity_scope,
+            false,
+        )?;
+        return Ok(Some(DockerHostCapacityTransitionRequest {
+            descriptor_sha256,
+            kind: DockerHostCapacityTransitionKind::GroupMemory,
+        }));
+    }
+    let Some(global_transition) = global_transition else {
+        return Ok(None);
+    };
+    if !host_capacity_scope {
+        bail!(
+            "{GLOBAL_CAPACITY_TRANSITION_ENV} requires a validated Docker host capacity descriptor"
+        );
+    }
+    let transition_sha256 =
+        parse_lowercase_sha256(&global_transition, GLOBAL_CAPACITY_TRANSITION_ENV)?;
     let descriptor_digest = std::env::var_os("FULLMAG_DOCKER_HOST_CAPACITY_SHA256")
         .context("validated Docker host capacity is missing its descriptor digest")?;
     let descriptor_digest = descriptor_digest
         .to_str()
         .context("FULLMAG_DOCKER_HOST_CAPACITY_SHA256 must be UTF-8")?;
-    if migration_digest != descriptor_digest {
-        bail!("FULLMAG_DOCKER_HOST_CAPACITY_MIGRATION_SHA256 must exactly match FULLMAG_DOCKER_HOST_CAPACITY_SHA256");
+    if transition_sha256 != descriptor_digest {
+        bail!(
+            "{GLOBAL_CAPACITY_TRANSITION_ENV} must exactly match FULLMAG_DOCKER_HOST_CAPACITY_SHA256"
+        );
     }
-    Ok(Some(descriptor_digest.to_owned()))
+    Ok(Some(DockerHostCapacityTransitionRequest {
+        descriptor_sha256: descriptor_digest.to_owned(),
+        kind: DockerHostCapacityTransitionKind::GlobalHostCapacity,
+    }))
+}
+
+fn docker_group_memory_transition_required(
+    existing: &HostResourceLedgerPolicy,
+    measured: &HostResourceLedgerPolicy,
+) -> Result<bool> {
+    if existing == measured {
+        return Ok(false);
+    }
+    if existing.host_id != measured.host_id
+        || existing.schema_version != measured.schema_version
+        || existing.revision != measured.revision
+        || existing.owner_epoch != measured.owner_epoch
+        || existing.total_budget.cpu_millis != measured.total_budget.cpu_millis
+        || existing.total_budget.gpu_memory_bytes != measured.total_budget.gpu_memory_bytes
+        || existing.total_budget.storage_bytes != measured.total_budget.storage_bytes
+        || existing.gpu_vram_bytes_by_uuid != measured.gpu_vram_bytes_by_uuid
+        || existing.allowed_cpu_ids != measured.allowed_cpu_ids
+    {
+        bail!("group memory transition may change only memory capacity and its topology digest");
+    }
+    if measured.total_budget.memory_bytes <= existing.total_budget.memory_bytes {
+        bail!("group memory transition must strictly increase the persisted memory budget");
+    }
+    Ok(true)
 }
 
 fn docker_host_cpu_placements(
@@ -1125,8 +1226,10 @@ fn initialize_docker_host(args: impl Iterator<Item = OsString>) -> Result<()> {
     let args = parse_docker_host_init_args(args)?;
     let host_capacity_scope =
         fullmag_runtime_control::compute_node_probe::docker_host_capacity_is_configured()?;
-    let capacity_migration_descriptor_sha256 =
-        docker_host_capacity_migration_digest(host_capacity_scope)?;
+    let capacity_transition_request =
+        docker_host_capacity_transition_request(host_capacity_scope, &args.host_id)?;
+    let group_ledger_scope =
+        std::env::var("FULLMAG_HOST_LEDGER_PROFILE").as_deref() == Ok(GROUP_LEDGER_PROFILE);
     if host_capacity_scope && args.ledger_root != PathBuf::from("/host-ledger/ledger") {
         bail!("Docker root capacity requires the canonical shared /host-ledger/ledger");
     }
@@ -1204,7 +1307,16 @@ fn initialize_docker_host(args: impl Iterator<Item = OsString>) -> Result<()> {
         &provisional.memory.total_bytes,
         "total host memory",
     )?;
-    let consumer_memory_bytes = if host_capacity_scope {
+    let budget_override = docker_host_budget_override()?;
+    let group_memory_transition = capacity_transition_request.as_ref().is_some_and(|request| {
+        request.kind == DockerHostCapacityTransitionKind::GroupMemory
+    });
+    if group_memory_transition && budget_override.is_none() {
+        bail!("group memory transition requires an existing explicit Docker CPU and memory budget");
+    }
+    // A group transition is bounded by the backend process's cgroup-v2
+    // ancestry, not by host-visible memory alone.
+    let consumer_memory_bytes = if host_capacity_scope || group_memory_transition {
         fullmag_runtime_control::compute_node_probe::current_process_memory_capacity_bytes()?
             .min(measured_memory_bytes)
     } else {
@@ -1214,7 +1326,6 @@ fn initialize_docker_host(args: impl Iterator<Item = OsString>) -> Result<()> {
         bail!("Docker host profile requires positive CPU and memory capacity");
     }
     const API_MEMORY_HEADROOM_BYTES: u64 = 1024 * 1024 * 1024;
-    let budget_override = docker_host_budget_override()?;
     let approved_budget = budget_override.is_some();
     let (cpu_millis, memory_bytes) = if let Some((cpu_millis, full_memory_bytes)) = budget_override {
         if cpu_millis > measured_cpu_millis {
@@ -1338,7 +1449,7 @@ fn initialize_docker_host(args: impl Iterator<Item = OsString>) -> Result<()> {
             std::env::var_os("FULLMAG_STATE_ROOT").map(PathBuf::from),
         )?
         .context("Docker host initialization requires explicit FULLMAG_STATE_ROOT")?;
-    let policy = if capacity_migration_descriptor_sha256.is_some() {
+    let policy = if let Some(transition_request) = capacity_transition_request.as_ref() {
         let (existing, pins) = fullmag_runtime_control::retry_store_writer_busy(|| {
             HostResourceLedger::inspect_capacity_migration_for_application(
                 &application_state_root,
@@ -1349,7 +1460,15 @@ fn initialize_docker_host(args: impl Iterator<Item = OsString>) -> Result<()> {
         let existing_policy = existing.policy().clone();
         let mut next_policy = policy.clone();
         next_policy.revision = existing_policy.revision;
-        if next_policy == existing_policy {
+        let migration_required = match transition_request.kind {
+            DockerHostCapacityTransitionKind::GlobalHostCapacity => {
+                next_policy != existing_policy
+            }
+            DockerHostCapacityTransitionKind::GroupMemory => {
+                docker_group_memory_transition_required(&existing_policy, &next_policy)?
+            }
+        };
+        if !migration_required {
             existing_policy
         } else {
             next_policy.revision = existing_policy
@@ -1370,7 +1489,9 @@ fn initialize_docker_host(args: impl Iterator<Item = OsString>) -> Result<()> {
             );
             next_policy
         }
-    } else if host_capacity_scope {
+    } else if host_capacity_scope || group_ledger_scope {
+        // Existing group starts bind their exact measured policy and revision;
+        // a fresh group still receives the measured policy on first creation.
         fullmag_runtime_control::retry_store_writer_busy(|| {
             HostResourceLedger::bind_measured_capacity_policy_for_application(
                 &application_state_root,
@@ -1564,9 +1685,9 @@ fn initialize_docker_host(args: impl Iterator<Item = OsString>) -> Result<()> {
             Vec::new()
         }
     };
-    let capacity_migration = match capacity_migration_descriptor_sha256 {
-        Some(descriptor_sha256) => Some(DockerHostCapacityTransition {
-            descriptor_sha256,
+    let capacity_migration = match capacity_transition_request {
+        Some(transition_request) => Some(DockerHostCapacityTransition {
+            descriptor_sha256: transition_request.descriptor_sha256,
             historical_policies: fullmag_runtime_control::retry_store_writer_busy(|| {
                 ledger.capacity_policy_history()
             })?,
@@ -3108,6 +3229,125 @@ fn run_service(path: PathBuf) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn docker_group_memory_transition_digest_requires_exact_group_scope() {
+        let digest = OsString::from("a".repeat(64));
+        assert_eq!(
+            validate_docker_group_memory_transition_digest(
+                digest.as_os_str(),
+                Some("group-ledger-v1"),
+                Some("group-host"),
+                "group-host",
+                false,
+                false,
+            )
+            .unwrap(),
+            "a".repeat(64),
+        );
+        assert!(validate_docker_group_memory_transition_digest(
+            digest.as_os_str(),
+            Some("host-ledger-v1"),
+            Some("group-host"),
+            "group-host",
+            false,
+            false,
+        )
+        .is_err());
+        assert!(validate_docker_group_memory_transition_digest(
+            digest.as_os_str(),
+            Some("group-ledger-v1"),
+            Some("other-group"),
+            "group-host",
+            false,
+            false,
+        )
+        .is_err());
+        assert!(validate_docker_group_memory_transition_digest(
+            digest.as_os_str(),
+            Some("group-ledger-v1"),
+            Some("group-host"),
+            "group-host",
+            true,
+            false,
+        )
+        .is_err());
+        assert!(validate_docker_group_memory_transition_digest(
+            digest.as_os_str(),
+            Some("group-ledger-v1"),
+            Some("group-host"),
+            "group-host",
+            false,
+            true,
+        )
+        .is_err());
+        assert!(validate_docker_group_memory_transition_digest(
+            OsString::from("A".repeat(64)).as_os_str(),
+            Some("group-ledger-v1"),
+            Some("group-host"),
+            "group-host",
+            false,
+            false,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn docker_group_memory_policy_transition_is_monotonic_and_memory_only() {
+        let existing = docker_group_memory_policy_fixture();
+        assert!(!docker_group_memory_transition_required(&existing, &existing).unwrap());
+
+        let mut increased = existing.clone();
+        increased.total_budget.memory_bytes += 1024;
+        increased.topology_sha256 = "b".repeat(64);
+        assert!(docker_group_memory_transition_required(&existing, &increased).unwrap());
+
+        let mut decreased = existing.clone();
+        decreased.total_budget.memory_bytes -= 1;
+        assert!(docker_group_memory_transition_required(&existing, &decreased).is_err());
+
+        let mut cpu_changed = increased.clone();
+        cpu_changed.total_budget.cpu_millis += 1000;
+        assert!(docker_group_memory_transition_required(&existing, &cpu_changed).is_err());
+
+        let mut storage_changed = increased.clone();
+        storage_changed.total_budget.storage_bytes += 1;
+        assert!(docker_group_memory_transition_required(&existing, &storage_changed).is_err());
+
+        let mut host_changed = increased.clone();
+        host_changed.host_id = "other-group".into();
+        assert!(docker_group_memory_transition_required(&existing, &host_changed).is_err());
+
+        let mut owner_epoch_changed = increased.clone();
+        owner_epoch_changed.owner_epoch += 1;
+        assert!(docker_group_memory_transition_required(&existing, &owner_epoch_changed).is_err());
+
+        let mut gpu_changed = increased.clone();
+        gpu_changed.total_budget.gpu_memory_bytes = 1;
+        assert!(docker_group_memory_transition_required(&existing, &gpu_changed).is_err());
+
+        let mut cpu_mask_changed = increased.clone();
+        cpu_mask_changed.allowed_cpu_ids.remove(&3);
+        assert!(docker_group_memory_transition_required(&existing, &cpu_mask_changed).is_err());
+    }
+
+    fn docker_group_memory_policy_fixture() -> HostResourceLedgerPolicy {
+        HostResourceLedgerPolicy {
+            schema_version: HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V3.into(),
+            host_id: "group-host".into(),
+            topology_sha256: "a".repeat(64),
+            revision: 7,
+            owner_epoch: 3,
+            total_budget: FmsResourceBudget {
+                cpu_millis: 4000,
+                memory_bytes: 8 * 1024 * 1024 * 1024,
+                gpu_memory_bytes: 0,
+                storage_bytes: 12 * 1024 * 1024 * 1024,
+            },
+            gpu_vram_bytes_by_uuid: BTreeMap::new(),
+            allowed_cpu_ids: BTreeSet::from([0, 1, 2, 3]),
+        }
+    }
 
     fn docker_host_initializer_arguments() -> Vec<OsString> {
         let root = std::env::temp_dir().join("fullmag-host-initializer-parser");

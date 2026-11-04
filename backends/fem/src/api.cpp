@@ -4876,13 +4876,6 @@ fullmag_fem_backend *fullmag_fem_backend_create_v3(
             "fullmag_fem_backend_create_v3 rotated-interfacial DMI cannot be combined with interfacial or bulk DMI");
         return nullptr;
     }
-    if (plan->has_rotated_interfacial_dmi != 0 &&
-        plan->rotated_interfacial_dmi_constant != 0.0 &&
-        plan->base.mesh.periodic_node_pairs_len != 0u) {
-        fullmag_fem_set_global_error(
-            "FEM RotatedInterfacialDmi with periodic node pairs is unsupported until the weak residual and mass projection are reduced over periodic node classes");
-        return nullptr;
-    }
     // Rotated interfacial DMI contributes a natural surface term.  The
     // public ABI must enforce the same fail-closed boundary contract as the
     // planner before importing the term or starting any runtime resources:
@@ -4968,13 +4961,6 @@ fullmag_fem_backend *fullmag_fem_backend_create_v4(
         (base.base.has_interfacial_dmi != 0 || base.base.has_bulk_dmi != 0)) {
         fullmag_fem_set_global_error(
             "fullmag_fem_backend_create_v4 rotated-interfacial DMI cannot be combined with interfacial or bulk DMI");
-        return nullptr;
-    }
-    if (base.has_rotated_interfacial_dmi != 0 &&
-        base.rotated_interfacial_dmi_constant != 0.0 &&
-        base.base.mesh.periodic_node_pairs_len != 0u) {
-        fullmag_fem_set_global_error(
-            "FEM RotatedInterfacialDmi with periodic node pairs is unsupported until the weak residual and mass projection are reduced over periodic node classes");
         return nullptr;
     }
     const bool open_magnetic_boundary =

@@ -77,6 +77,7 @@ bool build_gpu_exchange_periodic_reduced_csr(
     const std::vector<uint32_t> &col_indices,
     const std::vector<double> &values,
     const std::vector<double> &lumped_mass,
+    const std::vector<uint8_t> &host_magnetic_node_mask,
     const std::vector<uint32_t> &reduced_node,
     const std::vector<uint32_t> &representative_nodes,
     uint32_t reduced_rows,

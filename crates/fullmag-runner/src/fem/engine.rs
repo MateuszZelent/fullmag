@@ -67,6 +67,11 @@ pub fn availability() -> GpuAvailability {
     native_availability()
 }
 
+pub(crate) fn has_periodic_rotated_dmi(plan: &FemPlanIR) -> bool {
+    !plan.mesh.periodic_node_pairs.is_empty()
+        && plan.rotated_interfacial_dmi.is_some_and(|d| d != 0.0)
+}
+
 /// Returns the first plan-level reason why the native device-resident explicit
 /// RK path cannot execute `plan`.
 ///

@@ -212,10 +212,13 @@ int main() {
         "fullmag_fem_backend_create_v3 rotated-interfacial DMI cannot be combined with interfacial or bulk DMI");
 
     rotated_abi.base.has_bulk_dmi = 0;
+    rotated_abi.base = make_plan(m0);
+    const uint32_t incomplete_pair[] = {0};
+    rotated_abi.base.mesh.periodic_node_pairs = incomplete_pair;
     rotated_abi.base.mesh.periodic_node_pairs_len = 1;
     expect_create_v3_error(
         rotated_abi,
-        "FEM RotatedInterfacialDmi with periodic node pairs is unsupported until the weak residual and mass projection are reduced over periodic node classes");
+        "FEM mesh periodic_node_pairs length must be even");
 
     // A zero coefficient retains the requested term but contributes no natural
     // boundary or periodic residual. Both signs of zero must reach the later

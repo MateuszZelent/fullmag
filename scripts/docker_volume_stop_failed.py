@@ -24,6 +24,8 @@ NATIVE_FAILURE_PROBE_SCHEMA = "fullmag.docker-native-start-failure-stop-probe.v1
 NATIVE_AFTER_READY_FAILURE_PROBE_SCHEMA = (
     "fullmag.docker-native-after-ready-failure-stop-probe.v1"
 )
+LINUX_OOM_READY_PROBE_SCHEMA = "fullmag.docker-linux-oom-ready-stop-probe.v1"
+LINUX_OOM_READY_FAILURE_KIND = "linux-dev-oom-killed-after-ready"
 API_START_FAILURE_MODE = "api-start-failure"
 API_START_FAILURE_ERROR_PREFIX = "API binding did not become ready:"
 
@@ -846,12 +848,640 @@ def _supervision_failed_restart_context(control, previous, journal, journal_raw,
         'terminal_process_receipt_sha256':journal['terminal_process_receipt_sha256'],'claim_pending':False}}
 
 
+def _linux_oom_ready_probe_script(
+    *, process_receipt_sha256, image_id, compose_project, group_host_id,
+    daemon_id_sha256, ledger_subpath, private_group_storage,
+):
+    """Build a read-only Linux DEV proof for an OOM-killed API with live READY owner."""
+    if (re.fullmatch(r"[0-9a-f]{64}", process_receipt_sha256) is None
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", image_id) is None
+            or not isinstance(compose_project, str) or not compose_project
+            or re.fullmatch(r"[0-9a-f]{64}", group_host_id) is None
+            or re.fullmatch(r"[0-9a-f]{64}", daemon_id_sha256) is None
+            or not isinstance(ledger_subpath, str)
+            or private_group_storage not in (None, "group-volume-v1")):
+        raise BuildControlError("Linux OOM stop proof inputs are incomplete")
+    constants = "\n".join((
+        "EXPECTED_PROCESS_RECEIPT_SHA256 = " + repr(process_receipt_sha256),
+        "EXPECTED_IMAGE_ID = " + repr(image_id),
+        "EXPECTED_COMPOSE_PROJECT = " + repr(compose_project),
+        "EXPECTED_GROUP_HOST_ID = " + repr(group_host_id),
+        "EXPECTED_DAEMON_ID_SHA256 = " + repr(daemon_id_sha256),
+        "EXPECTED_LEDGER_SUBPATH = " + repr(ledger_subpath),
+        "EXPECTED_PRIVATE_GROUP_STORAGE = " + repr(private_group_storage),
+        "EXPECTED_SUPERVISION_ERROR = " + repr(SUPERVISION_FAILURE_ERROR),
+    ))
+    return constants + r'''
+import fcntl, hashlib, json, os, pathlib, re, stat, sys, uuid
+sys.path.insert(0, '/opt/fullmag')
+import runtime_service
+source_scripts = pathlib.Path('/opt/fullmag/source/scripts')
+if source_scripts.is_symlink() or not source_scripts.is_dir():
+    raise RuntimeError('selected readonly source scripts are unavailable')
+sys.path.insert(0, str(source_scripts))
+import docker_volume_linux_supervision_stop as store_observer
+
+def require(value, message):
+    if not value:
+        raise RuntimeError(message)
+
+def sha(raw):
+    return hashlib.sha256(raw).hexdigest()
+
+def canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(',', ':'),
+                      ensure_ascii=False, allow_nan=False).encode()
+
+paths = runtime_service.canonical_paths()
+store = pathlib.Path('/state/runs/docker-all/session-store')
+ledger = pathlib.Path('/host-ledger/ledger')
+receipt_path = runtime_service.process_receipt_path(paths)
+require(paths.store == store and str(receipt_path) == '/opt/fullmag/runtime-control/runtime-service/process-tree.json',
+        'canonical runtime/store selection differs')
+require(os.environ.get('FULLMAG_RUNTIME_PROCESS_RECEIPT', str(receipt_path)) == str(receipt_path)
+        and os.environ.get('FULLMAG_HOST_LEDGER_ROOT', str(ledger)) == str(ledger)
+        and os.environ.get('FULLMAG_SESSION_STORAGE_PROFILE') == 'linux-native-v1'
+        and os.environ.get('FULLMAG_HOST_LEDGER_PROFILE') == 'group-ledger-v1'
+        and os.environ.get('FULLMAG_DOCKER_HOST_ID') == EXPECTED_DAEMON_ID_SHA256
+        and os.environ.get('FULLMAG_GROUP_LEDGER_HOST_ID') == EXPECTED_GROUP_HOST_ID
+        and os.environ.get('FULLMAG_PRIVATE_GROUP_STORAGE') == EXPECTED_PRIVATE_GROUP_STORAGE,
+        'Linux storage/group-ledger environment differs')
+expected_group_id = sha(canonical({
+    'schema': 'fullmag.docker-group-ledger-host-id.v1', 'profile': 'group-ledger-v1',
+    'daemon_id_sha256': EXPECTED_DAEMON_ID_SHA256, 'compose_project': EXPECTED_COMPOSE_PROJECT,
+}))
+require(expected_group_id == EXPECTED_GROUP_HOST_ID,
+        'pinned group ledger identity does not derive from its daemon/project')
+require(not EXPECTED_LEDGER_SUBPATH or EXPECTED_PRIVATE_GROUP_STORAGE == 'group-volume-v1',
+        'private group ledger subpath lacks its profile marker')
+require(os.environ.get('FULLMAG_ACCEPTED_STORE_SCOPE') in (None, ''),
+        'accepted-store override is outside the retained Linux session')
+state = pathlib.Path('/state')
+owners = runtime_service.runtime_services_root(paths)
+owner_lock = owners / 'OWNER.lock'
+lock_paths = (owners / 'STARTUP-GATE.lock', owners / 'LAUNCH.lock',
+              ledger / 'WRITER.lock', store / 'WRITER.lock', owner_lock)
+descriptors = []
+try:
+    for path in lock_paths:
+        fd = store_observer.open_existing(path, os.O_RDONLY)
+        descriptors.append((path, fd))
+        info = os.fstat(fd)
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1,
+                'runtime/store/group-ledger lock identity is invalid')
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            if path != owner_lock:
+                raise
+        else:
+            require(path != owner_lock, 'pinned READY owner is not holding OWNER.lock')
+
+    receipt_raw = store_observer.read(receipt_path)
+    receipt = store_observer.decode(receipt_raw)
+    require(sha(receipt_raw) == EXPECTED_PROCESS_RECEIPT_SHA256,
+            'process receipt differs from the supplied immutable pin')
+    degraded = re.fullmatch(r'runtime observation stayed degraded for ([0-9]+)s: (.+)',
+                            receipt.get('error', ''))
+    supervision_cause = degraded.group(2) if degraded is not None else ''
+    require(receipt.get('schema') == 'fullmag.docker-process-tree.v1'
+            and receipt.get('state') == 'failed_outcome_retained'
+            and degraded is not None and int(degraded.group(1)) > 0
+            and (supervision_cause == EXPECTED_SUPERVISION_ERROR
+                 or (supervision_cause.startswith('API identity probe failed during supervision: ')
+                     and len(supervision_cause) > len('API identity probe failed during supervision: ')))
+            and receipt.get('api_diagnostic_only') is False
+            and type(receipt.get('api_exit_code')) is int
+            and receipt.get('runtime_pid') is None
+            and 'terminal_service_owner' not in receipt
+            and receipt.get('accepted_store') == str(store),
+            'process receipt is not the exact degraded supervision/API-reaped state')
+    api_pid = receipt.get('api_pid')
+    ready_pin = receipt.get('service_owner')
+    require(type(api_pid) is int and api_pid > 0 and not (pathlib.Path('/proc') / str(api_pid)).exists()
+            and isinstance(ready_pin, dict), 'API is live or READY identity pin is missing')
+    runtime_service._validate_terminal_owner(ready_pin, state='ready', name='retained READY pin')
+    token = ready_pin.get('owner_token', '')
+    require(str(uuid.UUID(token)) == token and uuid.UUID(token).int != 0,
+            'READY owner token is invalid')
+    owner_path = owners / 'OWNER.json'
+    owner_raw = store_observer.read(owner_path)
+    owner = store_observer.decode(owner_raw)
+    pin_path = owners / ('docker-client-' + token + '.json')
+    pin_raw = store_observer.read(pin_path)
+    durable_pin = store_observer.decode(pin_raw)
+    runtime_service._validate_terminal_owner(owner, state='ready', name='live native owner')
+    require(durable_pin == ready_pin
+            and runtime_service._owner_identity(owner) == runtime_service._owner_identity(ready_pin)
+            and runtime_service._owner_child_identity(owner) == runtime_service._owner_child_identity(ready_pin),
+            'live native owner differs from the durable READY identity pin')
+    native_pids = [owner.get('pid'), *[child.get('pid') for child in owner.get('children', [])]]
+    require(all(type(pid) is int and pid > 0 and (pathlib.Path('/proc') / str(pid)).exists()
+                for pid in native_pids)
+            and len(set(native_pids + [api_pid])) == 4,
+            'native READY owner/children are not the exact live process set')
+
+    native_processes = []
+    package_root = pathlib.Path('/opt/fullmag/package')
+    try:
+        entries = list(os.scandir('/proc'))
+    except OSError as error:
+        raise RuntimeError('private process namespace cannot be inventoried') from error
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            executable = os.readlink(entry.path + '/exe')
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise RuntimeError('private process namespace identity is unreadable') from error
+        try:
+            relative = pathlib.Path(executable).relative_to(package_root)
+        except ValueError:
+            continue
+        if (len(relative.parts) >= 2 and relative.parts[-2] == 'bin'
+                and (relative.name == 'fullmag' or relative.name.startswith('fullmag-'))):
+            native_processes.append(int(entry.name))
+    require(sorted(native_processes) == sorted(native_pids),
+            'unexpected Fullmag native process exists beside the READY owner/children')
+
+    api_listener_open = False
+    for path in ('/proc/net/tcp', '/proc/net/tcp6'):
+        try:
+            rows = pathlib.Path(path).read_text().splitlines()[1:]
+        except OSError as error:
+            raise RuntimeError('API listener state is unreadable') from error
+        for row in rows:
+            fields = row.split()
+            if len(fields) > 3 and fields[3] == '0A' and fields[1].rsplit(':', 1)[-1].upper() == '1F91':
+                api_listener_open = True
+    require(not api_listener_open, 'API port 8081 is still listening')
+
+    config_raw = store_observer.read(paths.config)
+    config = store_observer.decode(config_raw)
+    require(config.get('schema_version') == 'runtime_service_config.v2'
+            and config.get('target_id') == 'docker-all'
+            and config.get('store_root') == str(store), 'runtime config is not bound to the retained store')
+    cert_raw = store_observer.read(state / 'linux-native-host.json')
+    cert = store_observer.decode(cert_raw)
+    owner_cert = store_observer.decode(store_observer.read(state / '.fullmag-linux-native-owner.json'))
+    require(cert == owner_cert and cert.get('schema') == 'fullmag.linux-native-host.v1'
+            and cert.get('storage_profile') == 'linux-native-v1' and cert.get('role') == 'session'
+            and cert.get('owner_scope') == 'docker-linux' and cert.get('restart_verified') is True
+            and cert.get('image_id') == EXPECTED_IMAGE_ID
+            and cert.get('host_inode') == state.stat().st_ino
+            and cert.get('host_device') == state.stat().st_dev,
+            'Linux session-storage admission differs from the pinned image')
+    owner_token, engine = cert.get('owner_token'), cert.get('engine_id')
+    require(isinstance(owner_token, str) and re.fullmatch('[0-9a-f]{32}', owner_token)
+            and isinstance(engine, str) and engine, 'Linux session-store identity is incomplete')
+    sentinel = (owner_token + ':' + EXPECTED_IMAGE_ID).encode()
+    require(store_observer.read(state / '.linux-native-sentinel') == sentinel
+            and store_observer.read(state / '.linux-native-restart') == sentinel
+            and cert.get('restart_expected_sha256') == sha(sentinel),
+            'Linux session-store restart sentinel differs')
+    identity = {'schema': 'fullmag.linux-native-store-identity.v1', 'engine_id': engine,
+                'owner_token': owner_token, 'relative_state_path': 'runs/docker-all/session-store'}
+    store_id = 'sha256:' + sha(canonical(identity))
+
+    ledger_raw = store_observer.read(ledger / 'HOST_RESOURCE_LEDGER.json')
+    ledger_doc = store_observer.decode(ledger_raw)
+    policy = ledger_doc.get('policy')
+    require(isinstance(policy, dict) and policy.get('host_id') == EXPECTED_GROUP_HOST_ID,
+            'group ledger policy identity differs from this Compose group')
+    store_proof = store_observer.observe_store(store, ledger, store_id, terminal_only=True)
+    catalogs = store_proof.get('catalogs')
+    require(isinstance(catalogs, dict)
+            and not store_proof.get('held_manual_runs')
+            and len(store_proof.get('terminal_runs', [])) == len(catalogs),
+            'accepted catalogs contain a nonterminal or held task')
+    terminal_states = {'succeeded', 'failed', 'cancelled', 'interrupted'}
+    task_count = 0
+    for tasks in catalogs.values():
+        require(isinstance(tasks, list) and tasks, 'accepted catalog has no task list')
+        for task in tasks:
+            require(isinstance(task, dict) and task.get('lifecycle') in terminal_states,
+                    'accepted catalog contains a nonterminal task')
+            task_count += 1
+    leases = store_proof.get('leases')
+    reservations = store_proof.get('reservations')
+    require(isinstance(leases, list) and all(item.get('record', {}).get('state') == 'released' for item in leases)
+            and isinstance(reservations, list) and all(row.get('state') == 'released' for row in reservations),
+            'session leases or group ledger reservations remain active')
+    owner_fields = ('owner_token', 'process_start_token', 'pid', 'host', 'target_id', 'control_address',
+                    'build_commit', 'build_snapshot', 'compute_pool_id', 'preparation_pool_id',
+                    'compute_pool_generation', 'preparation_pool_generation')
+    child_identity = tuple(sorted(((child.get('role'), child.get('pid')) for child in ready_pin['children']),
+                                  key=lambda item: (str(item[0]), str(item[1]))))
+    owner_identity = tuple(ready_pin.get(field) for field in owner_fields)
+    identity_digest = sha(canonical((owner_identity, child_identity)))
+    proof = {'schema': 'fullmag.docker-linux-oom-ready-stop-probe.v1',
+             'process_receipt_sha256': sha(receipt_raw), 'process_receipt': receipt,
+             'ready_pin_sha256': sha(canonical(ready_pin)), 'owner_identity_sha256': identity_digest,
+             'current_owner_sha256': sha(owner_raw),
+             'runtime_config_sha256': sha(config_raw), 'certificate_sha256': sha(cert_raw),
+             'group_ledger_host_id': EXPECTED_GROUP_HOST_ID,
+             'group_ledger_policy_host_id': policy['host_id'], 'group_ledger_sha256': sha(ledger_raw),
+             'store_id': store_id, 'store_proof_sha256': sha(canonical(store_proof)),
+             'catalog_count': len(catalogs), 'task_count': task_count,
+             'terminal_run_count': len(store_proof['terminal_runs']), 'lease_count': len(leases),
+             'reservation_count': len(reservations), 'no_pending_transactions': True,
+             'all_tasks_terminal': True, 'all_leases_released': True,
+             'all_reservations_released': True, 'api_pid': api_pid, 'api_pid_exists': False,
+             'api_listener_open': False, 'native_process_pids': sorted(native_pids)}
+    require(store_observer.read(receipt_path) == receipt_raw
+            and store_observer.read(owner_path) == owner_raw
+            and store_observer.read(pin_path) == pin_raw
+            and store_observer.read(paths.config) == config_raw
+            and store_observer.read(state / 'linux-native-host.json') == cert_raw
+            and store_observer.read(ledger / 'HOST_RESOURCE_LEDGER.json') == ledger_raw,
+            'locked Linux OOM stop evidence changed during observation')
+    for path, fd in descriptors:
+        require((os.fstat(fd).st_dev, os.fstat(fd).st_ino) ==
+                (path.stat().st_dev, path.stat().st_ino), 'runtime/store/group-ledger lock inode changed')
+    print(json.dumps(proof, sort_keys=True))
+finally:
+    for _, fd in reversed(descriptors):
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+'''
+
+
+def _validate_linux_oom_ready_probe(probe, expected_process_receipt_sha256, *,
+                                    expected_store, expected_group_host_id):
+    fields = {
+        'schema', 'process_receipt_sha256', 'process_receipt', 'ready_pin_sha256',
+        'owner_identity_sha256', 'current_owner_sha256', 'runtime_config_sha256',
+        'certificate_sha256', 'group_ledger_host_id', 'group_ledger_policy_host_id',
+        'group_ledger_sha256', 'store_id', 'store_proof_sha256', 'catalog_count',
+        'task_count', 'terminal_run_count', 'lease_count', 'reservation_count',
+        'no_pending_transactions', 'all_tasks_terminal', 'all_leases_released',
+        'all_reservations_released', 'api_pid', 'api_pid_exists', 'api_listener_open',
+        'native_process_pids',
+    }
+    if not isinstance(probe, Mapping) or set(probe) != fields:
+        raise BuildControlError('Linux OOM READY proof fields differ')
+    if (probe.get('schema') != LINUX_OOM_READY_PROBE_SCHEMA
+            or probe.get('process_receipt_sha256') != expected_process_receipt_sha256):
+        raise BuildControlError('Linux OOM READY process receipt identity differs')
+    receipt = probe.get('process_receipt')
+    degraded = (re.fullmatch(r'runtime observation stayed degraded for ([0-9]+)s: (.+)', receipt.get('error', ''))
+                if isinstance(receipt, Mapping) else None)
+    supervision_cause = degraded.group(2) if degraded is not None else ''
+    if (not isinstance(receipt, Mapping)
+            or receipt.get('schema') != 'fullmag.docker-process-tree.v1'
+            or receipt.get('state') != 'failed_outcome_retained'
+            or degraded is None or int(degraded.group(1)) <= 0
+            or (supervision_cause != SUPERVISION_FAILURE_ERROR
+                and not (supervision_cause.startswith('API identity probe failed during supervision: ')
+                         and len(supervision_cause) > len('API identity probe failed during supervision: ')))
+            or receipt.get('api_diagnostic_only') is not False
+            or type(receipt.get('api_exit_code')) is not int or receipt.get('runtime_pid') is not None
+            or receipt.get('accepted_store') != str(expected_store)
+            or 'terminal_service_owner' in receipt):
+        raise BuildControlError('Linux OOM process is not the exact reaped degraded API state')
+    ready = _validate_native_ready_owner(receipt.get('service_owner'))
+    if type(receipt.get('api_pid')) is not int or receipt['api_pid'] <= 0:
+        raise BuildControlError('Linux OOM process receipt has no exact API pid')
+    if (probe.get('api_pid') != receipt['api_pid'] or probe.get('api_pid_exists') is not False
+            or probe.get('api_listener_open') is not False):
+        raise BuildControlError('Linux OOM API is live or its listener remains open')
+    identity = _owner_identity_key(ready, 'retained READY owner')
+    from docker_build_control import canonical
+    identity_sha = hashlib.sha256(canonical(identity)).hexdigest()
+    if (probe.get('ready_pin_sha256') != hashlib.sha256(canonical(ready)).hexdigest()
+            or probe.get('owner_identity_sha256') != identity_sha):
+        raise BuildControlError('Linux OOM live owner differs from its durable READY pin')
+    expected_pids = sorted([ready['pid'], *[child['pid'] for child in ready['children']]])
+    native_pids = probe.get('native_process_pids')
+    if (not isinstance(native_pids, list) or native_pids != expected_pids
+            or receipt['api_pid'] in native_pids):
+        raise BuildControlError('Linux OOM private namespace has an unexpected native process set')
+    for key in ('runtime_config_sha256', 'certificate_sha256', 'group_ledger_sha256', 'store_proof_sha256'):
+        if not isinstance(probe.get(key), str) or re.fullmatch(r'[0-9a-f]{64}', probe[key]) is None:
+            raise BuildControlError('Linux OOM proof has an invalid ' + key)
+    if (probe.get('group_ledger_host_id') != expected_group_host_id
+            or probe.get('group_ledger_policy_host_id') != expected_group_host_id
+            or not isinstance(probe.get('store_id'), str)
+            or re.fullmatch(r'sha256:[0-9a-f]{64}', probe['store_id']) is None):
+        raise BuildControlError('Linux OOM proof is not bound to this private group ledger/store')
+    for key in ('catalog_count', 'task_count', 'terminal_run_count', 'lease_count', 'reservation_count'):
+        if type(probe.get(key)) is not int or probe[key] < 0:
+            raise BuildControlError('Linux OOM proof has an invalid ' + key)
+    if (probe['terminal_run_count'] != probe['catalog_count']
+            or probe['task_count'] < probe['catalog_count']):
+        raise BuildControlError('Linux OOM proof does not cover every task catalog')
+    for key in ('no_pending_transactions', 'all_tasks_terminal', 'all_leases_released',
+                'all_reservations_released'):
+        if probe.get(key) is not True:
+            raise BuildControlError('Linux OOM proof has active or pending work: ' + key)
+    return dict(probe)
+
+
+def _linux_oom_ready_probe_cas(probe):
+    """Ignore the mutable owner heartbeat while pinning stop-relevant evidence."""
+    return tuple(probe.get(key) for key in (
+        'process_receipt_sha256', 'ready_pin_sha256', 'owner_identity_sha256',
+        'runtime_config_sha256', 'certificate_sha256', 'group_ledger_host_id',
+        'group_ledger_policy_host_id', 'group_ledger_sha256', 'store_id',
+        'store_proof_sha256', 'catalog_count', 'task_count', 'terminal_run_count',
+        'lease_count', 'reservation_count', 'no_pending_transactions',
+        'all_tasks_terminal', 'all_leases_released', 'all_reservations_released',
+        'api_pid', 'api_pid_exists', 'api_listener_open', 'native_process_pids',
+    ))
+
+
+def _validate_linux_oom_drained_receipt(receipt, before):
+    if (not isinstance(receipt, Mapping)
+            or receipt.get('schema') != 'fullmag.docker-process-tree.v1'
+            or receipt.get('state') != 'drained'
+            or receipt.get('error') != before['process_receipt'].get('error')
+            or receipt.get('api_diagnostic_only') is not False
+            or receipt.get('runtime_pid') is not None
+            or receipt.get('accepted_store') != before['process_receipt'].get('accepted_store')
+            or receipt.get('api_pid') != before['api_pid']
+            or type(receipt.get('api_exit_code')) is not int):
+        raise BuildControlError('Linux OOM backend has no canonical drained API receipt')
+    ready = _validate_native_ready_owner(receipt.get('service_owner'))
+    original = _validate_native_ready_owner(before['process_receipt'].get('service_owner'))
+    terminal = receipt.get('terminal_service_owner')
+    if not isinstance(terminal, Mapping) or terminal.get('state') != 'drained':
+        raise BuildControlError('Linux OOM drain has no terminal READY owner')
+    children = terminal.get('children')
+    if (not isinstance(children, list) or len(children) != 2
+            or {child.get('role') for child in children if isinstance(child, Mapping)} != {'compute', 'preparation'}
+            or any(not isinstance(child, Mapping) or child.get('status') != 'exited_success'
+                   for child in children)):
+        raise BuildControlError('Linux OOM native children did not drain successfully')
+    normalized = dict(terminal, state='ready', children=[dict(child, status='running') for child in children])
+    _validate_native_ready_owner(normalized)
+    key = _owner_identity_key(original, 'pre-stop READY owner')
+    if (_owner_identity_key(ready, 'drained receipt READY owner') != key
+            or _owner_identity_key(normalized, 'terminal drained owner') != key):
+        raise BuildControlError('Linux OOM drain owner/children differ from the durable READY identity')
+    return dict(terminal)
+
+
+def _stop_linux_oom_ready(args, selected, identity, actual):
+    """Gracefully stop one OOM-killed Linux DEV backend after locked idle proof."""
+    from docker_build_control import toolchain_configuration, canonical
+    from docker_volume_dev import (
+        _assert_private_restart_network, _read_runtime_config_digest, _validate_retained_service,
+    )
+    from docker_volume_reconcile import fingerprint
+    import docker_group_ledger
+
+    state = actual.get('State', {})
+    environment = dict(item.split('=', 1) for item in actual.get('Config', {}).get('Env', []) if '=' in item)
+    health = state.get('Health')
+    if (actual.get('Id') != args.container_id or actual.get('Image') != args.image_id
+            or state.get('Running') is not True or state.get('OOMKilled') is not True
+            or not isinstance(health, Mapping) or health.get('Status') != 'unhealthy'
+            or not isinstance(state.get('StartedAt'), str) or not state['StartedAt']
+            or environment.get('FULLMAG_SESSION_STORAGE_PROFILE') != 'linux-native-v1'):
+        raise BuildControlError('Linux OOM stop requires the exact running unhealthy DEV backend')
+
+    configured = toolchain_configuration(selected, identity)
+    try:
+        helper_image = configured['services']['fem-gpu-toolchain']['build']['args']['FULLMAG_CUDA_BASE_IMAGE']
+    except (KeyError, TypeError) as error:
+        raise BuildControlError('Managed DEV control helper image is unavailable') from error
+    control = BuildControl(identity, helper_image)
+    previous = control.read('development/current.json')
+    attempt = previous.get('attempt')
+    if (previous.get('state') != 'succeeded' or previous.get('compose_project') != control.project
+            or not isinstance(attempt, str) or re.fullmatch(r'[0-9a-f]{32}', attempt) is None
+            or previous.get('inputs', {}).get('source_root') != str(selected)
+            or previous.get('inputs', {}).get('image_id') != args.image_id
+            or previous.get('backend_container') != args.container_id):
+        raise BuildControlError('OOM stop has no exact retained DEV group authority')
+    base = 'development/attempts/' + attempt
+    document = control.read(base + '/compose.json')
+    config_sha = hashlib.sha256(canonical(document)).hexdigest()
+    if (previous.get('config_sha256') != config_sha
+            or control.read(base + '/terminal.json') != previous
+            or document.get('name') != control.project
+            or document.get('services', {}).get('backend', {}).get('image') != args.image_id):
+        raise BuildControlError('Retained OOM DEV Compose/configuration CAS differs')
+    ids = {'backend': args.container_id, 'frontend': previous.get('frontend_container')}
+    if (not isinstance(ids['frontend'], str)
+            or re.fullmatch(r'[0-9a-f]{64}', ids['frontend']) is None
+            or ids['frontend'] == ids['backend']):
+        raise BuildControlError('Retained OOM frontend identity is incomplete')
+    image_result = docker_capture('image', 'inspect', args.image_id)
+    image_rows = json.loads(image_result.stdout)
+    if len(image_rows) != 1 or not isinstance(image_rows[0].get('Config'), dict):
+        raise BuildControlError('Pinned OOM backend image inspection is ambiguous')
+    image_config = image_rows[0]['Config']
+    initial = {}
+
+    def services():
+        rows = json.loads(docker_capture('inspect', ids['backend'], ids['frontend']).stdout)
+        current = {row.get('Id'): row for row in rows if isinstance(row, Mapping)}
+        if set(current) != set(ids.values()):
+            raise BuildControlError('OOM stop service inspection is incomplete or ambiguous')
+        selected_services = {name: current[container_id] for name, container_id in ids.items()}
+        for name, value in selected_services.items():
+            if value.get('Image') != args.image_id:
+                raise BuildControlError('OOM stop service image differs: ' + name)
+            _validate_retained_service(document, value, name, image_config)
+            incarnation = (value.get('State', {}).get('StartedAt'), fingerprint(value))
+            if name == 'backend' and not initial:
+                if (incarnation[0] != state.get('StartedAt')
+                        or incarnation[1] != fingerprint(actual)):
+                    raise BuildControlError('OOM backend incarnation changed since the pinned observation')
+            if name in initial and incarnation != initial[name]:
+                raise BuildControlError('OOM stop service incarnation/configuration changed')
+            initial.setdefault(name, incarnation)
+        backend_state = selected_services['backend'].get('State', {})
+        backend_health = backend_state.get('Health')
+        if (backend_state.get('Running') is not True or backend_state.get('OOMKilled') is not True
+                or not isinstance(backend_health, Mapping)
+                or backend_health.get('Status') != 'unhealthy'):
+            raise BuildControlError('OOM backend no longer has the exact unhealthy running state')
+        return selected_services
+
+    ledger_profile = None
+    try:
+        ledger_profile = __import__('docker_volume_dev')._retained_ledger_profile(
+            control, base, document, args.image_id
+        )
+    except (KeyError, TypeError) as error:
+        raise BuildControlError('Retained OOM group ledger binding is incomplete') from error
+    if ledger_profile.get('profile') != 'group-ledger-v1':
+        raise BuildControlError('OOM stop requires this DEV group private ledger profile')
+    group_record = control.read(base + '/group-ledger.json')
+    expected_environment = ledger_profile.get('environment', {})
+    expected_group_host_id = expected_environment.get('FULLMAG_GROUP_LEDGER_HOST_ID')
+    expected_daemon_id = expected_environment.get('FULLMAG_DOCKER_HOST_ID')
+    expected_subpath = ledger_profile.get('ledger_subpath', '')
+    if (group_record.get('schema') != 'fullmag.docker-group-ledger.v1'
+            or group_record.get('profile') != 'group-ledger-v1'
+            or group_record.get('compose_project') != control.project
+            or group_record.get('volume_name') != ledger_profile.get('volume_name')
+            or group_record.get('host_id') != expected_group_host_id
+            or group_record.get('daemon_id_sha256') != expected_daemon_id):
+        raise BuildControlError('Retained OOM group ledger identity differs from Compose')
+    retained_attestation = control.read(base + '/group-ledger-attestation.json')
+    if (retained_attestation.get('schema') != docker_group_ledger.ATTESTATION_SCHEMA
+            or retained_attestation.get('backend_container_id') != args.container_id
+            or retained_attestation.get('compose_project') != control.project
+            or retained_attestation.get('volume_name') != ledger_profile.get('volume_name')
+            or retained_attestation.get('host_id') != expected_group_host_id):
+        raise BuildControlError('Retained OOM group ledger attestation differs')
+
+    def attest_group_ledger(backend):
+        result = docker_group_ledger.validate_container(
+            backend, ledger_profile, lambda *args, **kwargs: docker_capture(*args, **kwargs).stdout
+        )
+        if result != retained_attestation:
+            raise BuildControlError('Live OOM group ledger differs from its retained attestation')
+
+    def probe():
+        script = _linux_oom_ready_probe_script(
+            process_receipt_sha256=args.process_receipt_sha256, image_id=args.image_id,
+            compose_project=control.project, group_host_id=expected_group_host_id,
+            daemon_id_sha256=expected_daemon_id, ledger_subpath=expected_subpath,
+            private_group_storage=expected_environment.get('FULLMAG_PRIVATE_GROUP_STORAGE'),
+        )
+        result = docker_capture('exec', args.container_id, '/usr/local/bin/python3', '-B', '-c',
+                                script, timeout=90)
+        if result.returncode != 0:
+            raise BuildControlError('Linux OOM locked idle proof failed: '
+                                    + result.stderr.decode('utf-8', 'replace')[-2048:])
+        try:
+            value = json.loads(result.stdout)
+        except (TypeError, ValueError, UnicodeDecodeError) as error:
+            raise BuildControlError('Linux OOM locked idle proof returned invalid JSON') from error
+        return _validate_linux_oom_ready_probe(
+            value, args.process_receipt_sha256, expected_store='/state/runs/docker-all/session-store',
+            expected_group_host_id=expected_group_host_id,
+        )
+
+    journal_path = ('verification/stop-linux-oom-ready-' + args.container_id + '-'
+                    + args.process_receipt_sha256 + '.json')
+    with control.operation('stop-linux-oom-ready', {
+            'source_root': str(selected), 'container_id': args.container_id,
+            'image_id': args.image_id, 'started_at': state.get('StartedAt'),
+            'process_receipt_sha256': args.process_receipt_sha256,
+            'attempt': attempt, 'config_sha256': config_sha,
+            'group_ledger_host_id': expected_group_host_id,
+            'group_ledger_volume_name': ledger_profile.get('volume_name'),
+            'group_ledger_subpath': expected_subpath,
+            'stop_frontend': bool(getattr(args, 'stop_frontend', False)),
+    }) as operation:
+        if (control.read('development/current.json') != previous
+                or control.read(base + '/terminal.json') != previous
+                or control.read(base + '/compose.json') != document
+                or control.read(journal_path, optional=True) is not None):
+            raise BuildControlError('Retained OOM authority changed or this stop was already attempted')
+        before = probe()
+        current = services()
+        _assert_private_restart_network(current, ids, control.project)
+        attest_group_ledger(current['backend'])
+        from docker_volume_stop_unadmitted import _preflight_terminal_process_receipt
+        _preflight_terminal_process_receipt(current['backend'], control)
+        journal = {
+            'schema': 'fullmag.docker-linux-oom-ready-stop.v1',
+            'state': 'stopping-confirmed-failed-supervisor',
+            'failure_kind': LINUX_OOM_READY_FAILURE_KIND,
+            'source_root': str(selected), 'compose_project': control.project,
+            'development_attempt': attempt, 'compose_config_sha256': config_sha,
+            'container_id': args.container_id, 'image_id': args.image_id,
+            'started_at': state['StartedAt'], 'backend_fingerprint': initial['backend'][1],
+            'process_receipt_sha256': args.process_receipt_sha256,
+            'ready_pin_sha256': before['ready_pin_sha256'],
+            'owner_identity_sha256': before['owner_identity_sha256'],
+            'runtime_config_sha256': before['runtime_config_sha256'],
+            'group_ledger_host_id': expected_group_host_id,
+            'group_ledger_volume_name': ledger_profile['volume_name'],
+            'group_ledger_subpath': expected_subpath,
+            'group_ledger_attestation_sha256': hashlib.sha256(canonical(retained_attestation)).hexdigest(),
+            'idle_store_proof_sha256': before['store_proof_sha256'],
+            'catalog_count': before['catalog_count'], 'task_count': before['task_count'],
+            'terminal_run_count': before['terminal_run_count'],
+            'released_lease_count': before['lease_count'],
+            'released_reservation_count': before['reservation_count'],
+            'operation_attempt': operation['receipt']['attempt'],
+        }
+        current = services()
+        _assert_private_restart_network(current, ids, control.project)
+        attest_group_ledger(current['backend'])
+        rechecked = probe()
+        if (_linux_oom_ready_probe_cas(rechecked) != _linux_oom_ready_probe_cas(before)
+                or control.read('development/current.json') != previous):
+            raise BuildControlError('Linux OOM idle proof changed immediately before graceful stop')
+        control.write(journal_path, journal)
+        operation['daemon_pending'] = True
+        docker_capture('stop', '--signal', 'SIGTERM', '--time', '-1', args.container_id, timeout=90)
+        after_rows = json.loads(docker_capture('inspect', args.container_id).stdout)
+        if len(after_rows) != 1:
+            raise BuildControlError('Linux OOM backend stop inspection is ambiguous')
+        after = after_rows[0]
+        after_state = after.get('State', {})
+        if (after.get('Id') != args.container_id or after.get('Image') != args.image_id
+                or after_state.get('StartedAt') != state.get('StartedAt')
+                or after_state.get('Running') is not False or after_state.get('Pid') != 0
+                or type(after_state.get('ExitCode')) is not int or after_state.get('ExitCode') != 1
+                or fingerprint(after) != initial['backend'][1]):
+            raise BuildControlError('Linux OOM graceful backend stop is unconfirmed')
+        from docker_volume_stop_unadmitted import _read_terminal_process_receipt
+        drained_raw, drained = _read_terminal_process_receipt(after, control)
+        terminal_owner = _validate_linux_oom_drained_receipt(drained, before)
+        if _read_runtime_config_digest(control) != before['runtime_config_sha256']:
+            raise BuildControlError('Linux OOM runtime configuration changed after drain')
+        journal.update(
+            state='stopped-confirmed', exit_code=after_state['ExitCode'],
+            terminal_process_receipt_sha256=hashlib.sha256(drained_raw).hexdigest(),
+            terminal_process_receipt=drained,
+            terminal_owner_sha256=hashlib.sha256(canonical(terminal_owner)).hexdigest(),
+            namespace_processes_absent=True,
+        )
+        if getattr(args, 'stop_frontend', False):
+            journal['state'] = 'backend-drained-frontend-pending'
+            control.write(journal_path, journal)
+            frontend_rows = json.loads(docker_capture('inspect', ids['frontend']).stdout)
+            if len(frontend_rows) != 1:
+                raise BuildControlError('OOM group frontend inspection is ambiguous')
+            frontend = frontend_rows[0]
+            _validate_retained_service(document, frontend, 'frontend', image_config)
+            if (frontend.get('Id') != ids['frontend']
+                    or (frontend.get('State', {}).get('StartedAt'), fingerprint(frontend))
+                    != initial['frontend']):
+                raise BuildControlError('OOM group frontend incarnation changed after backend drain')
+            if frontend.get('State', {}).get('Running') is True:
+                docker_capture('stop', '--signal', 'SIGTERM', '--time', '-1', ids['frontend'], timeout=90)
+            stopped_frontend = json.loads(docker_capture('inspect', ids['frontend']).stdout)
+            if len(stopped_frontend) != 1:
+                raise BuildControlError('OOM group frontend terminal inspection is ambiguous')
+            frontend = stopped_frontend[0]
+            frontend_state = frontend.get('State', {})
+            _validate_retained_service(document, frontend, 'frontend', image_config)
+            if (frontend.get('Id') != ids['frontend']
+                    or (frontend_state.get('StartedAt'), fingerprint(frontend)) != initial['frontend']
+                    or frontend_state.get('Running') is not False or frontend_state.get('Pid') != 0
+                    or frontend_state.get('OOMKilled') is True or frontend_state.get('ExitCode') != 0):
+                raise BuildControlError('OOM group frontend graceful stop is unconfirmed')
+            journal.update(state='stopped-confirmed', frontend_stopped=True,
+                           frontend_container_id=ids['frontend'])
+        control.write(journal_path, journal)
+        operation['daemon_pending'] = False
+        operation['receipt']['state'] = 'succeeded'
+    print(json.dumps({'state': 'stopped-confirmed', 'failure_kind': LINUX_OOM_READY_FAILURE_KIND,
+                      'container_id': args.container_id, 'process_receipt_sha256': args.process_receipt_sha256}))
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source-root',type=Path,required=True)
     parser.add_argument('--container-id',required=True)
     parser.add_argument('--image-id',required=True)
     parser.add_argument('--process-receipt-sha256',required=True)
+    parser.add_argument('--stop-frontend', action='store_true',
+                        help='After authenticated Linux OOM drain, stop this exact group frontend')
     args=parser.parse_args()
     if not re.fullmatch('[0-9a-f]{64}',args.container_id) or not re.fullmatch('sha256:[0-9a-f]{64}',args.image_id) or not re.fullmatch('[0-9a-f]{64}',args.process_receipt_sha256):
         raise BuildControlError('Stop requires complete immutable container/image/receipt identities')
@@ -865,6 +1495,14 @@ def main():
     labels=actual.get('Config',{}).get('Labels',{})
     if labels.get('com.docker.compose.project')!=identity['project_name'] or labels.get('com.docker.compose.service')!='backend' or not actual.get('State',{}).get('Running'):
         raise BuildControlError('Stop requires this exact running DEV backend')
+    if actual.get('State', {}).get('OOMKilled') is True:
+        env = dict(item.split('=', 1) for item in actual.get('Config', {}).get('Env', []) if '=' in item)
+        if env.get('FULLMAG_SESSION_STORAGE_PROFILE') != 'linux-native-v1':
+            raise BuildControlError('OOM stop is supported only for the pinned Linux DEV session profile')
+        _stop_linux_oom_ready(args, selected, identity, actual)
+        return 0
+    if args.stop_frontend:
+        raise BuildControlError('--stop-frontend requires the authenticated Linux OOM stop route')
     log_result = docker_capture('logs','--since',actual['State']['StartedAt'],'--tail','100',args.container_id)
     logs = (log_result.stdout + log_result.stderr).decode('utf-8','replace')
     if 'Startup or runtime failed; admission closed:' not in logs:
