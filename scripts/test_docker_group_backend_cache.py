@@ -80,6 +80,119 @@ class GroupBackendCacheTests(unittest.TestCase):
             with self.assertRaises(cache.BackendVolumeCacheError):
                 cache._validate_volume_document(doc,p,role)
 
+    def owner(self,args,namespace):
+        _,layout,source,_,_=args
+        layout['env']={'FULLMAG_PROJECT_ID':'resolver-source-project'}
+        base=self.prepare(args,control_namespace=namespace)
+        return {'schema':'fullmag.docker-group-storage-owner.v1',
+                'compose_project':base['control_project'],'control_volume':base['volume_names']['control'],
+                'control_namespace':namespace,'source_project_id':'resolver-source-project',
+                'source_worktree_id':layout['worktree_id'],'source_root':str(source.resolve()),
+                'layout':{'version':1,'private_root':'private','roles':{
+                    'backend':'private/backend','frontend':'private/frontend','ledger':'private/ledger'}}}
+
+    def historical_document(self,profile):
+        name=profile['volume_names']['control']
+        return {'Name':name,'Driver':'local','Options':{},'Scope':'local',
+                'Mountpoint':f'/var/lib/docker/volumes/{name}/_data',
+                'Labels':{**cache._control_volume_labels(profile),
+                    'org.fullmag.build-control.schema':'fullmag.build-control.v1',
+                    'org.fullmag.compose.project':profile['control_project'],
+                    'org.fullmag.source.worktree-id':'fullmag-historical-root',
+                    'org.fullmag.build.role':'control'}}
+
+    def test_namespace_owner_allows_only_historical_root_worktree_label(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args=_profile(tmp,shared_packages=True);namespace='namespaces/'+'1'*32
+            owner=self.owner(args,namespace)
+            baseline=self.prepare(args,control_namespace=namespace)
+            profile=self.prepare(args,control_namespace=namespace,prepared_group_owner=owner)
+            for key in ('project_id','worktree_id','cache_key','unit_key','owner_id','volume_names','mounts'):
+                self.assertEqual(profile[key],baseline[key])
+            self.assertNotEqual(profile['project_id'],owner['source_project_id'])
+            doc=self.historical_document(profile)
+            for role in (cache.BUILD_VOLUME_ROLE,cache.CONTROL_VOLUME_ROLE):
+                self.assertEqual(cache._validate_volume_document(doc,profile,role)['Name'],doc['Name'])
+                with self.assertRaises(cache.BackendVolumeCacheError):cache._validate_volume_document(doc,baseline,role)
+
+    def test_foreign_or_incomplete_prepared_owner_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args=_profile(tmp,shared_packages=True);namespace='namespaces/'+'1'*32
+            owner=self.owner(args,namespace)
+            changes={'schema':'foreign','compose_project':'other','control_volume':'other',
+                     'control_namespace':'namespaces/'+'2'*32,'source_project_id':args[1]['project_id'],
+                     'source_worktree_id':'other','source_root':str(args[3])}
+            for key,value in changes.items():
+                with self.subTest(field=key),self.assertRaises(cache.BackendVolumeCacheError):
+                    self.prepare(args,control_namespace=namespace,prepared_group_owner={**owner,key:value})
+            with self.assertRaises(cache.BackendVolumeCacheError):
+                self.prepare(args,prepared_group_owner={**owner,'control_namespace':''})
+            with self.assertRaises(cache.BackendVolumeCacheError):
+                self.prepare(args,control_namespace=namespace,prepared_group_owner=True)
+
+    def test_owner_proof_does_not_allow_other_foreign_root_labels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args=_profile(tmp,shared_packages=True);namespace='namespaces/'+'1'*32
+            owner=self.owner(args,namespace)
+            profile=self.prepare(args,control_namespace=namespace,prepared_group_owner=owner)
+            doc=self.historical_document(profile)
+            for key in ('org.fullmag.build-control.schema','org.fullmag.compose.project','org.fullmag.build.role',
+                        'com.fullmag.compose.project','com.fullmag.toolchain.control.schema',
+                        'com.fullmag.toolchain.control.project','com.fullmag.toolchain.control.mount'):
+                changed=copy.deepcopy(doc);changed['Labels'][key]='foreign'
+                with self.subTest(label=key),self.assertRaises(cache.BackendVolumeCacheError):
+                    cache._validate_volume_document(changed,profile,cache.BUILD_VOLUME_ROLE)
+
+    def test_owner_proof_survives_ready_serialization_and_is_revalidated(self):
+        import json
+        from test_docker_backend_volume_cache import DockerVolumeFixture
+        with tempfile.TemporaryDirectory() as tmp:
+            args=_profile(tmp,shared_packages=True);namespace='namespaces/'+'1'*32
+            owner=self.owner(args,namespace)
+            profile=self.prepare(args,control_namespace=namespace,prepared_group_owner=owner)
+            docker=DockerVolumeFixture(profile,roles=cache.VOLUME_ROLES)
+            for role in (cache.BUILD_VOLUME_ROLE,cache.CONTROL_VOLUME_ROLE):docker.documents[role]=self.historical_document(profile)
+            _,layout,source,repo,runroot=args
+            ready=cache.prepare_ready(layout,repo,IMAGE,runroot,docker,
+                lambda prepared,overlay:_maintenance_receipt(prepared),
+                source_root=source,toolchain_image=TOOLCHAIN,control_volume_name=profile['volume_names']['control'],
+                shared_packages=True,group_volume=True,control_namespace=namespace,prepared_group_owner=owner)
+            restored=json.loads(json.dumps(ready))
+            self.assertEqual(restored['prepared_group_owner'],owner)
+            self.assertEqual(restored['receipt']['prepared_group_owner'],owner)
+            cache.validate(restored,restored['volume_documents'],restored['maintenance_receipt'])
+            restored['prepared_group_owner']['source_worktree_id']='other'
+            with self.assertRaises(cache.BackendVolumeCacheError):cache.validate_container({},restored)
+
+    def test_launcher_passes_the_already_prepared_owner_to_cache(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        import docker_volume_dev as dev
+        owner={'schema':'fullmag.docker-group-storage-owner.v1'}
+        control=SimpleNamespace(project='fullmag-master',namespace='namespaces/'+'1'*32,volume='control',
+            write=lambda *args:None,_assert_live_operation_helper=lambda operation:'a'*64)
+        with patch.object(dev,'_uses_private_group_storage',return_value=True), \
+             patch('docker_group_storage.prepare',return_value=owner), \
+             patch.object(cache,'prepare',side_effect=RuntimeError('stop after cache contract')) as prepare:
+            with self.assertRaisesRegex(RuntimeError,'stop after cache contract'):
+                dev._backend_cache(control,{'root':'development/attempts/exact'},{},Path('/tmp'),IMAGE,TOOLCHAIN)
+            self.assertIs(prepare.call_args.kwargs['prepared_group_owner'],owner)
+
+    def test_launcher_keeps_normal_group_root_on_strict_legacy_label_path(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        import docker_volume_dev as dev
+        owner={'schema':'fullmag.docker-group-storage-owner.v1','control_namespace':''}
+        control=SimpleNamespace(project='fullmag-master',namespace='',volume='control',
+            write=lambda *args:None,_assert_live_operation_helper=lambda operation:'a'*64)
+        with patch.object(dev,'_uses_private_group_storage',return_value=True), \
+             patch('docker_group_storage.prepare',return_value=owner), \
+             patch.object(cache,'prepare',side_effect=RuntimeError('stop after cache contract')) as prepare:
+            with self.assertRaisesRegex(RuntimeError,'stop after cache contract'):
+                dev._backend_cache(control,{'root':'development/attempts/exact'},{},Path('/tmp'),IMAGE,TOOLCHAIN)
+            self.assertNotIn('prepared_group_owner',prepare.call_args.kwargs)
+            self.assertTrue(prepare.call_args.kwargs['group_volume'])
+
     def test_backend_cannot_mount_group_root_as_build_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             p=self.prepare(_profile(tmp,shared_packages=True))

@@ -894,6 +894,8 @@ jobs:
           python -B scripts/test_backend_shared_recovery.py -v
           python -B scripts/test_backend_group_retirement.py -v
           python -B scripts/test_backend_compiler_cache.py -v
+          python -B scripts/test_docker_backend_volume_cache.py -v
+          python -B scripts/test_docker_group_backend_cache.py -v
           python -B scripts/test_backend_auto_maintenance.py -v
           python -B scripts/test_docker_helper_source.py -v
           python -B scripts/test_backend_package_backup_retirement.py -v

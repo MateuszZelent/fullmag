@@ -776,6 +776,8 @@ def _backend_cache(control, operation, layout, selected, image, toolchain):
         control.write(operation["root"] + "/private-group-storage.json", prepared_group)
     group_options = ({"group_volume": True, "group_helper_id": control._assert_live_operation_helper(operation)}
                      if grouped else {})
+    if grouped and control.namespace:
+        group_options["prepared_group_owner"] = prepared_group
     def volume_docker(*args):
         result = docker_capture(*args, allow_failure=True)
         if result.returncode:
