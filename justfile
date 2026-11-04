@@ -31,6 +31,14 @@ docker-dev-toolchain:
 docker-dev-images:
     @{{storage_python}} "{{repo_root}}/scripts/bootstrap_docker_toolchain.py" --repo-root "{{repo_root}}" --direct-development --prepare-development-images
 
+# Retire a stopped group only with authenticated native drain; never start replacements.
+docker-dev-retire-stopped attempt config_sha256 source_root port="3197":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" recreate-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --fresh-state --retire-only
+
+# Cold quarantine one failed terminal snapshot without claiming a native drain.
+docker-dev-quarantine-failed-bootstrap source_root operation_attempt recovery_id apply="false" expected_plan_sha256="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" quarantine-failed-bootstrap --source-root {{quote(source_root)}} --operation-attempt {{quote(operation_attempt)}} --recovery-id {{quote(recovery_id)}}{{if apply == "true" { " --apply --expected-plan-sha256 " + quote(expected_plan_sha256) } else if apply == "false" { "" } else { error("apply must be true or false") } }}
+
 # Start or reconcile the selected two-service group; reuse matching sources and caches.
 # The source parameter selects the main checkout or a registered worktree.
 docker-dev source_root="" port="" script="" gpu_access="auto":

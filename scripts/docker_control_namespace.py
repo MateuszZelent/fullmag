@@ -180,6 +180,10 @@ def resolve_namespace(control):
     receipt = json.loads(receipt_raw)
     if not isinstance(receipt, dict):
         raise BuildControlError("Control namespace retirement receipt is invalid")
+    if receipt.get("schema") == "fullmag.docker-failed-bootstrap-quarantine.v1":
+        from docker_volume_failed_bootstrap_quarantine import resolve_cold_namespace
+        resolve_cold_namespace(control, registry, raw, receipt)
+        return
     if receipt.get("schema") == "fullmag.docker-isolated-session-snapshot.v1":
         from docker_isolated_snapshot_namespace import resolve_snapshot_namespace
         resolve_snapshot_namespace(control, registry, raw)
@@ -224,6 +228,9 @@ def assert_namespace_activation(control, request_id=None):
     if not control.namespace:
         return
     record = control.namespace_registry["retirement"]
+    if record.get("schema") == "fullmag.docker-failed-bootstrap-quarantine.v1" and request_id is not None:
+        from docker_volume_failed_bootstrap_quarantine import assert_no_replay
+        assert_no_replay(record, request_id)
     if request_id is not None and request_id == record["old_request_id"]:
         raise BuildControlError("The quarantined request cannot be replayed in a new namespace")
     if record.get("schema") == "fullmag.docker-isolated-session-snapshot.v1":

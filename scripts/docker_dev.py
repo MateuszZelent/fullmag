@@ -2524,6 +2524,15 @@ def _parser() -> argparse.ArgumentParser:
     empty_quarantine.add_argument("--activation", required=True)
     empty_quarantine.add_argument("--recovery-id", required=True)
     empty_quarantine.add_argument("--apply", action="store_true", help="commit after exact stopped-namespace and empty-store proofs; default is dry-run")
+    cold_quarantine = subparsers.add_parser(
+        "quarantine-failed-bootstrap",
+        help="cold quarantine a stopped terminal snapshot; preserve old owner, leases and active marker",
+    )
+    cold_quarantine.add_argument("--source-root", type=Path, required=True)
+    cold_quarantine.add_argument("--operation-attempt", required=True)
+    cold_quarantine.add_argument("--recovery-id", required=True)
+    cold_quarantine.add_argument("--apply", action="store_true")
+    cold_quarantine.add_argument("--expected-plan-sha256")
     offline_reconcile = subparsers.add_parser(
         "reconcile-offline-volume",
         help="repair one stopped terminal-owner control lease while preserving sessions and unknown activation evidence",
@@ -2754,6 +2763,7 @@ def _parser() -> argparse.ArgumentParser:
     stop_bootstrap.add_argument("--source-root", type=Path, required=True)
     stop_bootstrap.add_argument("--port", type=int, required=True)
     recreate_volume = subparsers.add_parser("recreate-volume", help="Replace exact stopped-backend DEV services while retaining Docker caches")
+    recreate_volume.add_argument("--retire-only", action="store_true", help="archive an exact stopped and genuinely drained group without starting replacements")
     recreate_volume.add_argument("--attempt", required=True)
     recreate_volume.add_argument("--config-sha256", required=True)
     recreate_volume.add_argument("--source-root", type=Path, required=True)
@@ -3071,6 +3081,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     raise _fail("Apply acknowledgement and plan digest require --apply")
                 result = plan(inspect_retirement(args))
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        elif args.action == "quarantine-failed-bootstrap":
+            from docker_volume_failed_bootstrap_quarantine import run
+            print(json.dumps(run(args), ensure_ascii=False, sort_keys=True))
         elif args.action == "reconcile-offline-volume":
             from docker_volume_offline_reconcile import apply, collect
             if not args.apply and args.expected_plan_sha256 is not None:
@@ -3106,7 +3119,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise _fail(str(error)) from error
             if args.recovery_authorization is not None and helper_pair is not None:
                 raise _fail("helper-source pins are unsupported with --recovery-authorization")
-            if args.resume_recreation is not None:
+            if args.retire_only:
+                if not args.fresh_state or args.recovery_authorization or args.resume_recreation or args.completed_recreation_attempt:
+                    raise _fail("retire-only requires fresh-state and cannot combine recovery or continuation")
+                from docker_volume_dev import retire_stopped
+                retire_stopped(args)
+            elif args.resume_recreation is not None:
                 from docker_volume_dev import resume_recreation
                 resume_recreation(args)
             elif args.recovery_authorization is not None:

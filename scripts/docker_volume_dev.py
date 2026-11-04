@@ -1044,6 +1044,16 @@ def _empty_stopped_namespace_ledger_generation(control):
         if control.namespace != "namespaces/" + token:
             raise BuildControlError("Snapshot fresh-ledger namespace differs")
         return token
+    if retirement.get("schema") == "fullmag.docker-failed-bootstrap-quarantine.v1":
+        token = retirement.get("recovery_id")
+        if (retirement.get("state") != "failed-bootstrap-quarantined-not-drained"
+                or retirement.get("native_owner_drained") is not False
+                or retirement.get("allow_old_request_replay") is not False
+                or not isinstance(token, str) or re.fullmatch(r"[0-9a-f]{32}", token) is None
+                or control.namespace != "namespaces/" + token
+                or not isinstance(retirement.get("ledger_volume"), str)):
+            raise BuildControlError("Cold quarantine namespace has an invalid fresh-ledger binding")
+        return token
     if retirement.get("schema") != "fullmag.docker-control-namespace-empty-quarantine.v1":
         return None
     token = retirement.get("recovery_id")
@@ -1069,6 +1079,14 @@ def _validate_empty_quarantine_ledger_volume(control, empty_generation, volume):
         return
     retirement = control.namespace_registry.get("retirement", {})
     if volume == retirement.get("ledger_volume"):
+        if (retirement.get("schema") == "fullmag.docker-failed-bootstrap-quarantine.v1"
+                and volume == control.volume):
+            old_subpath = retirement.get("ledger_subpath")
+            new_subpath = control.namespace + "/private/ledger"
+            if (isinstance(old_subpath, str)
+                    and re.fullmatch(r"(?:namespaces/[0-9a-f]{32}/)?private/ledger", old_subpath)
+                    and old_subpath != new_subpath):
+                return
         raise BuildControlError("Empty quarantine namespace resolved to the retained old ledger")
 
 
@@ -5046,6 +5064,53 @@ def stop_idle(args):
     return _retained_operation(args, recreate_services=False, restart_idle_service=True, stop_after_drain=True)
 
 
+def retire_stopped(args):
+    """Archive a genuinely drained stopped group without starting a replacement."""
+    return _retained_operation(args, recreate_services=True, retire_only=True)
+
+
+def _require_retirement_stopped_pair(actual):
+    expected = {"Running": False, "Status": "exited", "Pid": 0,
+                "ExitCode": 0, "OOMKilled": False}
+    if (not isinstance(actual, Mapping) or set(actual) != {"backend", "frontend"}
+            or any(not isinstance(row, Mapping)
+                   or not isinstance(row.get("State"), Mapping)
+                   or any(row["State"].get(key) is True for key in ("Paused", "Restarting", "Dead"))
+                   or any(row["State"].get(key) != value for key, value in expected.items())
+                   for row in actual.values())):
+        raise BuildControlError("Group retirement requires both exact services cleanly stopped")
+
+
+def _retired_recreation_result(control, receipt, source_root):
+    """Qualify the completed archive; a retirement never enters start()."""
+    token = receipt.get("attempt")
+    removed = receipt.get("removed_containers")
+    archive = receipt.get("runtime_control_archive")
+    if (receipt.get("phase") != "recreate-services" or receipt.get("state") != "succeeded"
+            or receipt.get("fresh_state") is not True
+            or receipt.get("compose_project") != control.project
+            or control.identity.get("source_root") != source_root
+            or not isinstance(token, str) or re.fullmatch(r"[0-9a-f]{32}", token) is None
+            or not isinstance(removed, list) or len(removed) != 2
+            or any(not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None
+                   for value in removed)
+            or len(set(removed)) != 2
+            or not isinstance(archive, Mapping) or archive.get("state") != "succeeded"
+            or archive.get("operation_attempt") != token
+            or archive.get("compose_project") != control.project
+            or control.read("recreate-services/attempts/" + token
+                            + "/runtime-control-archive-terminal.json") != archive):
+        raise BuildControlError("Retirement has no exact completed fresh-runtime archive")
+    from docker_volume_fresh_runtime import _assert_exact_absence
+    for service, identifier in zip(("backend", "frontend"), removed):
+        _assert_exact_absence(identifier, service)
+    return {"phase": "retirement", "state": "succeeded", "attempt": token,
+            "compose_project": control.project, "control_volume": control.volume,
+            "source_root": source_root, "removed_containers": removed,
+            "results_preserved": True, "replacement_started": False,
+            "runtime_control_archive": dict(archive)}
+
+
 def recreate(args):
     import docker_helper_source as helper_source
     helper_source.validate_option_pair(
@@ -7342,9 +7407,16 @@ def _retained_recovery_build(args, control, previous, document, selected, layout
 
 def _retained_operation(
     args, *, recreate_services, restart_idle_service=False, stop_after_drain=False,
-    resume_recreation_id=None, refresh_frontend_service=False,
+    resume_recreation_id=None, refresh_frontend_service=False, retire_only=False,
 ):
     """Resume one exact retained start; a frontend-only recovery never restarts the backend."""
+    if retire_only and (not recreate_services or restart_idle_service or stop_after_drain
+            or resume_recreation_id is not None or refresh_frontend_service
+            or getattr(args, "fresh_state", False) is not True
+            or any(getattr(args, key, None) for key in (
+                "completed_recreation_attempt", "completed_recreation_sha256",
+                "restart_backend", "script", "resume_recreation"))):
+        raise BuildControlError("Group retirement requires an explicit fresh-state archive only")
     from docker_dev import _select_source, _compose_identity
     headless = getattr(args, "headless", False)
     if type(headless) is not bool:
@@ -7512,6 +7584,11 @@ def _retained_operation(
             image_config,
             allow_legacy_frontend=recreate_services or (service == 'frontend' and legacy_oom_recreation),
         )
+    retirement_drain_raw = None
+    if retire_only:
+        _require_retirement_stopped_pair(actual)
+        from docker_volume_stop_unadmitted import _read_terminal_process_receipt
+        retirement_drain_raw, _ = _read_terminal_process_receipt(actual["backend"], control)
     if legacy_oom_recreation:
         return _refresh_frontend_services(control, args, previous_root, previous, document, selected,
             layout, actual, ids, image, operator_probe_record, recover_oom=True)
@@ -8308,6 +8385,15 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 if leased_post_build != post_build_generation:
                     raise BuildControlError("Post-build continuation differs under recreate lease")
                 actual["backend"] = leased_backend
+            if retire_only:
+                _require_retirement_stopped_pair(actual)
+                from docker_volume_stop_unadmitted import _read_terminal_process_receipt
+                leased_drain_raw, _ = _read_terminal_process_receipt(actual["backend"], control)
+                if leased_drain_raw != retirement_drain_raw:
+                    raise BuildControlError("Retirement native drain changed under the operation lease")
+                control.write_bytes(operation["root"] + "/retirement-native-drain.json", leased_drain_raw)
+                operation["receipt"].update(retire_only=True,
+                    retirement_native_drain_sha256=hashlib.sha256(leased_drain_raw).hexdigest())
             _probe_retained_device_access(retained_device_access, image, control.project)
             control.write(operation["root"] + "/retained-containers.json", actual)
             if pre_activation_stop is not None:
@@ -8360,6 +8446,10 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
             operation["daemon_pending"] = False
             operation["receipt"].update(state="succeeded", removed_containers=list(ids.values()),
                                         retained_volumes=previous["backend_volumes"], retained_frontend_volume=previous["frontend_volume"])
+        if retire_only:
+            from docker_volume_cancelled_activation_guard import pin_archive
+            pin_archive(control)
+            return _retired_recreation_result(control, operation["receipt"], str(selected))
         if startup_diagnostic_stopped:
             args.completed_recreation_attempt = operation["receipt"]["attempt"]
             args.completed_recreation_sha256 = hashlib.sha256(
