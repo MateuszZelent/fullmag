@@ -2749,6 +2749,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     cancelled_activation.add_argument("--attempt", required=True)
     cancelled_activation.add_argument("--iteration-attempt", required=True)
+    cancelled_activation.add_argument(
+        "--runtime-phase",
+        choices=("iteration", "resume"),
+        default="iteration",
+        help="select the exact retained continuation terminal; defaults to legacy iteration",
+    )
     cancelled_activation.add_argument("--activation-attempt", required=True)
     cancelled_activation.add_argument("--config-sha256", required=True)
     cancelled_activation.add_argument("--source-root", type=Path, required=True)
@@ -2761,6 +2767,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     cancelled_activation.add_argument("--apply", action="store_true")
     cancelled_activation.add_argument("--expected-plan-sha256")
+    cancelled_activation.add_argument(
+        "--previous-recovery-sha256",
+        help="explicitly rotate the exact archived prior recovery (SHA-256 of its raw current bytes)",
+    )
     preowner_policy = subparsers.add_parser(
         "stop-preowner-policy-volume",
         help="preview or gracefully stop the exact startup-only diagnostic group after a refused budget",

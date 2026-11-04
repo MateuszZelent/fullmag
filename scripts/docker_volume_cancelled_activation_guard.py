@@ -10,6 +10,7 @@ from docker_volume_activate import _read_control_bytes
 
 RECORD = "cancelled-activation-recovery/current.json"
 SCHEMA = "fullmag.cancelled-activation-recovery.v1"
+SCHEMA_V2 = "fullmag.cancelled-activation-recovery.v2"
 TOKEN = re.compile(r"[0-9a-f]{32}\Z")
 
 
@@ -35,9 +36,15 @@ def read_record(control):
     raw = _read_control_bytes(control, RECORD, optional=True)
     if raw is None:
         return None
+    return _validate_record(control, raw)
+
+
+def _validate_record(control, raw, depth=0):
+    if depth > 32:
+        raise BuildControlError("Cancelled activation recovery history exceeds its bounded depth")
     record = _object(raw, "Cancelled activation recovery record")
     activation = record.get("activation_attempt")
-    if (record.get("schema") != SCHEMA
+    if (record.get("schema") not in {SCHEMA, SCHEMA_V2}
             or record.get("state") != "stopped-awaiting-fresh-archive"
             or not isinstance(activation, str) or TOKEN.fullmatch(activation) is None
             or record.get("restart_policy") != "fresh-state-only"
@@ -54,7 +61,117 @@ def read_record(control):
             or terminal.get("state") != "failed-confirmed"
             or terminal.get("activation_state") != "operator-cancelled-after-confirmed-drain"):
         raise BuildControlError("Cancelled activation recovery evidence changed")
+    if record["schema"] == SCHEMA_V2:
+        previous = record.get("previous_recovery")
+        retired = validate_retired(control, previous, depth=depth + 1)
+        if retired["activation_attempt"] == activation:
+            raise BuildControlError("Cancelled activation recovery history repeats its activation")
     return record
+
+
+def replay_index_path(kind, value):
+    if kind not in {"request", "state"} or not isinstance(value, str) or not value:
+        raise BuildControlError("Cancelled activation replay identity is invalid")
+    return "cancelled-activation-recovery/indexes/" + kind + "/" + hashlib.sha256(value.encode("utf-8")).hexdigest() + ".json"
+
+
+def _retired_pin(record, raw_sha, anchor_raw):
+    activation = record["activation_attempt"]
+    return {
+        "recovery_sha256": raw_sha,
+        "activation_attempt": activation,
+        "history_path": "cancelled-activation-recovery/history/" + raw_sha + ".json",
+        "request_index_path": replay_index_path("request", record.get("request_id")),
+        "state_index_path": replay_index_path("state", record.get("state_root")),
+        "archive_path": "cancelled-activation-recovery/archives/" + activation + ".json",
+        "archive_sha256": hashlib.sha256(anchor_raw).hexdigest(),
+    }
+
+
+def _index_record(pin, record, kind):
+    value = record["request_id" if kind == "request" else "state_root"]
+    return {"schema": "fullmag.cancelled-activation-replay-index.v1", "kind": kind,
+            "key_sha256": hashlib.sha256(value.encode("utf-8")).hexdigest(),
+            "previous_recovery": pin}
+
+
+def qualified_previous(control, raw_sha, activation_attempt):
+    """Qualify an explicit prior current, including its immutable archive anchor."""
+    if not isinstance(raw_sha, str) or re.fullmatch(r"[0-9a-f]{64}", raw_sha) is None:
+        raise BuildControlError("Previous recovery SHA-256 is invalid")
+    raw = _read_control_bytes(control, RECORD)
+    if hashlib.sha256(raw).hexdigest() != raw_sha:
+        raise BuildControlError("Previous recovery current SHA-256 differs")
+    record = read_record(control)
+    # Reserve one level for the successor before any Stop is authorized.
+    _validate_record(control, raw, depth=1)
+    if _read_control_bytes(control, RECORD) != raw:
+        raise BuildControlError("Previous recovery current changed during qualification")
+    if record is None or record["activation_attempt"] == activation_attempt:
+        raise BuildControlError("Previous recovery must belong to a different activation")
+    anchor_path = "cancelled-activation-recovery/archives/" + record["activation_attempt"] + ".json"
+    anchor_raw = _read_control_bytes(control, anchor_path)
+    if _object(anchor_raw, "Previous recovery archive anchor") != control.read(anchor_path):
+        raise BuildControlError("Previous recovery archive anchor bytes differ")
+    if not has_archive(control, record):
+        raise BuildControlError("Previous recovery has no verified immutable archive")
+    pin = _retired_pin(record, raw_sha, anchor_raw)
+    history = _read_control_bytes(control, pin["history_path"], optional=True)
+    if history is not None and history != raw:
+        raise BuildControlError("Existing retired recovery history differs")
+    for kind in ("request", "state"):
+        existing = _read_control_bytes(control, pin[kind + "_index_path"], optional=True)
+        if existing is not None and _object(existing, "Existing recovery replay index") != _index_record(pin, record, kind):
+            raise BuildControlError("Existing retired recovery replay index differs")
+    return pin
+
+
+def validate_retired(control, pin, *, depth=0):
+    if not isinstance(pin, dict) or re.fullmatch(r"[0-9a-f]{64}", str(pin.get("recovery_sha256"))) is None:
+        raise BuildControlError("Retired recovery pins are invalid")
+    history_path = "cancelled-activation-recovery/history/" + pin["recovery_sha256"] + ".json"
+    raw = _read_control_bytes(control, history_path)
+    if hashlib.sha256(raw).hexdigest() != pin["recovery_sha256"]:
+        raise BuildControlError("Retired recovery history SHA-256 differs")
+    record = _validate_record(control, raw, depth)
+    anchor_path = "cancelled-activation-recovery/archives/" + record["activation_attempt"] + ".json"
+    anchor_raw = _read_control_bytes(control, anchor_path)
+    if (_retired_pin(record, pin["recovery_sha256"], anchor_raw) != pin
+            or _object(anchor_raw, "Retired recovery archive anchor") != control.read(anchor_path)
+            or not has_archive(control, record)):
+        raise BuildControlError("Retired recovery archive pins differ")
+    for kind in ("request", "state"):
+        index_raw = _read_control_bytes(control, pin[kind + "_index_path"])
+        if _object(index_raw, "Retired recovery replay index") != _index_record(pin, record, kind):
+            raise BuildControlError("Retired recovery replay index differs")
+    return record
+
+
+def preserve_previous(control, pin):
+    """Idempotently preserve old raw bytes and direct replay indexes before Stop."""
+    from docker_volume_unclaimed_cancellation import _publish_immutable
+    qualified = qualified_previous(control, pin["recovery_sha256"], "rotation")
+    if qualified != pin:
+        raise BuildControlError("Previous recovery pins changed before preservation")
+    raw = _read_control_bytes(control, RECORD)
+    record = _object(raw, "Previous recovery")
+    _publish_immutable(control, pin["history_path"], raw)
+    for kind in ("request", "state"):
+        _publish_immutable(control, pin[kind + "_index_path"], canonical(_index_record(pin, record, kind)) + b"\n")
+    validate_retired(control, pin)
+
+
+def _assert_not_retired(control, kind, value):
+    path = replay_index_path(kind, value)
+    raw = _read_control_bytes(control, path, optional=True)
+    if raw is None:
+        return
+    index = _object(raw, "Cancelled activation replay index")
+    pin = index.get("previous_recovery")
+    record = validate_retired(control, pin)
+    if pin[kind + "_index_path"] != path or index != _index_record(pin, record, kind):
+        raise BuildControlError("Cancelled activation replay index identity differs")
+    raise BuildControlError("Retired cancelled activation " + kind + " cannot be replayed or resumed")
 
 
 def _archive_matches(control, record, generation):
@@ -94,6 +211,10 @@ def has_archive(control, record):
 
 
 def assert_start_allowed(control, request_id=None, *, reuse_state=None):
+    if request_id is not None:
+        _assert_not_retired(control, "request", request_id)
+    if reuse_state is not None:
+        _assert_not_retired(control, "state", str(reuse_state.get("state")))
     record = read_record(control)
     if record is None:
         return
