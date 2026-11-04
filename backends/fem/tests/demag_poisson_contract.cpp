@@ -2918,7 +2918,6 @@ void demag_boundary_operator_is_owned_by_poisson_boundary_module() {
         "double robin_reference_radius_for_mesh(",
         "if (!periodic_axis[axis])",
         "ctx.poisson_demag.robin_effective_beta = c / R_star;",
-        "A_robin->Add(ctx.poisson_demag.robin_effective_beta",
         "A_bc->EliminateRowCol",
     };
     for (const char *symbol : symbols) {
@@ -2929,6 +2928,15 @@ void demag_boundary_operator_is_owned_by_poisson_boundary_module() {
             boundary.find(symbol) != std::string::npos,
             "Poisson demag boundary operator must be defined in demag_poisson_boundary.cpp");
     }
+
+    const char *robin_operator_add =
+        "std::unique_ptr<mfem::SparseMatrix>(mfem::Add(";
+    check(
+        poisson.find(robin_operator_add) == std::string::npos,
+        "Poisson demag Robin operator addition must not be defined in demag_poisson.cpp");
+    check(
+        boundary.find(robin_operator_add) != std::string::npos,
+        "Poisson demag boundary owner must construct the Robin operator with MFEM sparse-matrix addition");
 }
 
 void demag_periodic_reduction_is_owned_by_poisson_periodic_module() {
