@@ -150,6 +150,9 @@ jobs:
         run: |
           cargo test -p fullmag-plan --lib preparation::tests::fdm_
           cargo test -p fullmag-api --bin fullmag-api docker_startup::tests
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_solver_profile:: --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-worker accepted_solver_profile:: --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api live_accepted_projection::operation_profile_projection_tests:: --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api live_retirement --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api session_output_target_tests --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api live_accepted_execution::tests
