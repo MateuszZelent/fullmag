@@ -12448,3 +12448,138 @@ pełne zatwierdzone limity oraz script/scene round-trip bez Solve;
 odmowy i wspólne bramki obu wersji. Dwie nowe regresje przed poprawką odtwarzały
 odmowę; po poprawce cały plik przechodzi 8/8 testów. Wykonanie nowego tokenu
 przez zbudowany Rust, publiczne Prepare/plan i H-only pozostaje **NOT VERIFIED**.
+
+(antenna-gsg-current-correction-analysis)=
+### Obliczenie istniejącej korekty weighted-L2 z zachowanych V i RT0
+
+Poniższy adapter analityczny realizuje istniejące równanie
+`antenna-loop-prereg-independent-h1-rt0`; nie rozwiązuje ponownie transportu,
+nie zastępuje niezależnej projekcji constrained RT0 i nie kwalifikuje źródła.
+Dla dodatniego Tet4 i skalarnej, stałej na elemencie przewodności, gradient
+P1 pochodzi z czterech **lokalnych potencjałów**, powiązanych przez stable ID.
+Rozdzielone ID na przekroju źródła zachowują skok V; nie sklejamy ich po XYZ.
+
+```{math}
+:label: antenna-gsg-current-correction-discrete
+\mathbf j_T=-\sigma_T\sum_{i=1}^{3}(V_{T,i}-V_{T,0})\mathbf b_{T,i},\qquad
+\mathbf b_{T,1}=\frac{\mathbf e_{T,2}\times\mathbf e_{T,3}}{d_T},\quad
+\mathbf b_{T,2}=\frac{\mathbf e_{T,3}\times\mathbf e_{T,1}}{d_T},\quad
+\mathbf b_{T,3}=\frac{\mathbf e_{T,1}\times\mathbf e_{T,2}}{d_T},\qquad
+ d_T=\mathbf e_{T,1}\cdot(\mathbf e_{T,2}\times\mathbf e_{T,3})>0.
+```
+
+RT0 jest afiniczne. Całka jego kwadratowej różnicy od stałego J_H1 jest
+zatem dokładna dla interpolanta, bez zastępowania go wartością w środku:
+
+```{math}
+:label: antenna-gsg-current-correction-exact-integral
+\mathbf q_{T,i}=\mathbf J_{T,i}^{\mathrm{RT0}}-\mathbf j_T,\qquad
+ N_\eta=\sum_T\frac{|T|}{20\sigma_T}
+ \left(\sum_{i=0}^{3}\|\mathbf q_{T,i}\|_2^2+
+ \left\|\sum_{i=0}^{3}\mathbf q_{T,i}\right\|_2^2\right),\qquad
+ D_\eta=\sum_T\frac{|T|}{\sigma_T}\|\mathbf j_T\|_2^2,\qquad
+ \eta=\sqrt{N_\eta/D_\eta}.
+```
+
+Współczynnik 1/20 wynika z dokładnych momentów barycentrycznych Tet4:
+średnia lambda_i² wynosi 1/10, a lambda_i lambda_j dla i != j wynosi 1/20.
+Dokładność dotyczy całki interpolanta, nie błędu względem rozwiązania ciągłego.
+Arytmetyka Decimal120 ogranicza utratę cyfr w różnicach, lecz nie zastępuje
+kwalifikacji geometrii. Dodatniość, scalar-slope RT0 i skończone dane
+sprawdza istniejący `fit_retained_rt0`; jego kod i tolerancje pozostają.
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $T,i$ | Komórka Tet4 i lokalny indeks wierzchołka. | $1$ |
+| $\mathbf e_{T,i}$ | Krawędź od lokalnego wierzchołka zerowego do i. | $\mathrm m$ |
+| $d_T,\lvert T\rvert$ | Dodatni wyznacznik krawędzi i objętość d_T/6. | $\mathrm{m^3}$ |
+| $\mathbf b_{T,i}$ | Gradient lokalnej funkcji P1 dla i od1 do3. | $\mathrm{m^{-1}}$ |
+| $V_{T,i}$ | Surowy potencjał o właściwym stable ID na elemencie. | $\mathrm V$ |
+| $\sigma_T$ | Dodatnia skalarna przewodność komórki. | $\mathrm{S\,m^{-1}}$ |
+| $\mathbf j_T$ | Stały prąd H1 odtworzony z gradientu potencjału. | $\mathrm{A\,m^{-2}}$ |
+| $\mathbf J_{T,i}^{\mathrm{RT0}},\mathbf q_{T,i}$ | Lokalny ślad RT0 i jego różnica względem H1. | $\mathrm{A\,m^{-2}}$ |
+| $N_\eta,D_\eta$ | Ważone całki kwadratu korekty i prądu H1. | $\mathrm W$ |
+| $\eta$ | Względna norma korekty; nie residual liniowego solve. | $1$ |
+
+| Parametr `weighted_rt0_h1_correction` | Typ; default; SI | Weryfikacja i semantyka |
+|---|---|---|
+| `cells` | iterator cells280; required; jak wyżej. | Pełne kolejne ordinale i cztery różne stable ID. Bez dodatkowych lub brakujących komórek. |
+| `electric_potential_v` | mapping ID→float; required; $\mathrm V$. | Dokładnie użyte ID, skończone surowe V; brak, nadmiar lub bool odmawia. |
+| `conductivity_spm` | iterator float; required; $\mathrm{S\,m^{-1}}$. | Po jednej dodatniej skończonej wartości na komórkę, zgodnie z ordinalem. |
+| `expected_cells` | int; required; $1$. | Pełna dodatnia liczba do72911 w tym eksperymencie. |
+
+Wynik zawiera eta, obie całki w W, liczbę komórek i jawne NOT VERIFIED.
+Zerowy D_eta odmawia; nie wolno z braku wymuszenia wywnioskować eta=0.
+Wywołujący uwierzytelnia owner/CAS/preparację, całość nośnika i surową skalę,
+kontroluje wspólny czas/RAM i dopiero przekazuje eta do porównania trzech siatek.
+Adapter nie zmienia Python DSL, ProblemIR, planera, runtime ani artefaktów.
+Dotyczy analizy FEM CPU/P1/double/strict; FEM GPU, FDM CPU i FDM GPU nie są
+kwalifikowane tym narzędziem i nie otrzymują nowej ścieżki wykonania.
+Indeks źródeł: `scripts/antenna_gsg_current_correction.py::weighted_rt0_h1_correction`,
+`scripts/antenna_rt0_surface_oracle.py::fit_retained_rt0` oraz
+`scripts/test_antenna_gsg_current_correction.py::GsgCurrentCorrectionTests`.
+Bibliografia i kontekst fizyczny pozostają w kanonicznej części tej noty.
+Historyczny status po pierwotnej implementacji adaptera: 12/12 małych testów
+PASS, przed nową serią V/J/H (wówczas 0/3 i referencje H 0/9). Aktualne
+sprawdzenie zachowanych wyników i rozkładu opisano poniżej; testy matematyczne
+same nie kwalifikują anteny.
+
+
+(antenna-gsg-current-correction-partition)=
+### Lokalizacja tej samej korekty po częściach obwodu
+
+`partitioned_weighted_rt0_h1_correction` rozdziela istniejące całki
+{eq}`antenna-gsg-current-correction-exact-integral` na kompletną, rozłączną
+partycję komórek. Nie jest nowym estymatorem błędu ani zmianą transportu.
+Dla dodatniego mianownika każdej części obowiązuje tożsamość:
+
+```{math}
+:label: antenna-gsg-current-correction-partition-identity
+N_\eta=\sum_p N_p,\qquad D_\eta=\sum_p D_p,\qquad
+\eta^2=\frac{\sum_p D_p\eta_p^2}{\sum_pD_p},\qquad
+\eta_p=\sqrt{N_p/D_p},\qquad f_p=N_p/N_\eta.
+```
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $p$ | Część jawnej partycji komórek źródła. | $1$ |
+| $N_p,D_p$ | Te same całki korekty i H1, ograniczone do części p. | $\mathrm W$ |
+| $\eta_p$ | Względna norma korekty na części; wymaga dodatniego D_p. | $1$ |
+| $f_p$ | Udział części w liczniku; niezdefiniowany dla N_eta=0. | $1$ |
+
+Cztery argumenty `cells`, `electric_potential_v`, `conductivity_spm`,
+`expected_cells` zachowują typy, SI, granicę 72 911 i walidację tabeli
+adaptera powyżej. Dodatkowy wymagany `parts` to mapping niepustego `str`
+na iterator ordinali `int` bez jednostki. Każda część musi być niepusta,
+każdy ordinal od 0 do expected_cells−1 występuje dokładnie raz, a wejściowy
+nośnik ma oryginalny pełny porządek ordinali. Nazwy części są etykietami,
+nie włączają fizyki. Nakładanie, brak, powtórzenie, bool, zmieniony porządek,
+zbędny potencjał lub nadmiar danych odmawiają. Iteratory odczytywane są
+z istniejącą granicą liczby komórek; caller nadal odpowiada za budżet czasu
+oraz RAM i uwierzytelnienie zachowanego wyniku.
+
+Adapter zmienia wyłącznie lokalny ordinal przekazywany dotychczasowemu
+integratorowi; zachowuje stable ID, lokalne V/J, oba ślady przekroju źródła,
+przewodność i współrzędne. Sumuje N_p i D_p w Decimal120, zamiast uśredniać
+eta_p. Część z zerowym D_p odmawia tak samo jak dotychczasowy integrator.
+Dla zerowego N_eta `correction_energy_fraction` ma wartość `None`, nie
+pozornie określony udział. Wynik zawiera obie sumy, eta, części oraz jawne
+`qualified_basis=False`, `continuum_error_bound=False`, `field_error_bound=False`.
+
+FEM CPU/P1/double/strict: diagnostyka matematyczna tych samych zachowanych
+wyników. FEM GPU, FDM CPU i FDM GPU nie były kwalifikowane tym adapterem.
+Python DSL, mapowanie do ProblemIR, planner, runtime i artefakty pozostają
+bez zmian; nie powstaje nowy producent źródła ani operator LLG. Podstawy
+fizyczne i bibliografia pozostają we wspólnej części tej noty.
+
+Indeks źródeł: `scripts/antenna_gsg_current_correction.py::partitioned_weighted_rt0_h1_correction`
+— walidacja partycji i sumy; `scripts/antenna_gsg_current_correction.py::weighted_rt0_h1_correction`
+— niezmieniona całka; `scripts/test_antenna_gsg_current_correction.py::PartitionedCurrentCorrectionTests`
+— niezależne małe przykłady, przekrój źródła i odmowy. Odczyt zachowanych
+wyników 100/75/50 nm potwierdził wszystkie pięć części, całki i udziały
+zgodne z wcześniejszym postprocessingiem oraz sumy zgodne z pełnym źródłem
+(do względnej różnicy grupowania Decimal120 poniżej 10⁻¹⁰⁰). Bez Solve
+i bez referencji H. Dowód: `verification/gsg-50nm-approved-20261104/repo-part-current-correction-verification.json`
+w prywatnym wolumenie grupy 3203. 20/20 testów estymatora (w tym osiem regresji partycji) i walidacja noty
+przechodzą. Tożsamość sum nie kwalifikuje źródła ani pola;
+niezaliczone kryterium kontrakcji η pozostaje niezaliczone.

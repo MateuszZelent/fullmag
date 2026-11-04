@@ -1918,6 +1918,90 @@
       "latex": "$C_p,\\operatorname{fl}_p,\\operatorname{fl}_{p,\\Sigma}$",
       "meaning": "Konwersja, zaokrąglenie najbliższe z ties-to-even i sekwencyjny iloczyn skalarny bez FMA.",
       "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-current-correction-symbol-1",
+      "latex": "$T,i$",
+      "meaning": "Komórka Tet4 i lokalny indeks wierzchołka.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-current-correction-symbol-2",
+      "latex": "$\\mathbf e_{T,i}$",
+      "meaning": "Krawędź od lokalnego wierzchołka zerowego do i.",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "gsg-current-correction-symbol-3",
+      "latex": "$d_T,\\lvert T\\rvert$",
+      "meaning": "Dodatni wyznacznik krawędzi i objętość d_T/6.",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "gsg-current-correction-symbol-4",
+      "latex": "$\\mathbf b_{T,i}$",
+      "meaning": "Gradient lokalnej funkcji P1 dla i od1 do3.",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "gsg-current-correction-symbol-5",
+      "latex": "$V_{T,i}$",
+      "meaning": "Surowy potencjał o właściwym stable ID na elemencie.",
+      "si_unit": "$\\mathrm V$"
+    },
+    {
+      "id": "gsg-current-correction-symbol-6",
+      "latex": "$\\sigma_T$",
+      "meaning": "Dodatnia skalarna przewodność komórki.",
+      "si_unit": "$\\mathrm{S\\,m^{-1}}$"
+    },
+    {
+      "id": "gsg-current-correction-symbol-7",
+      "latex": "$\\mathbf j_T$",
+      "meaning": "Stały prąd H1 odtworzony z gradientu potencjału.",
+      "si_unit": "$\\mathrm{A\\,m^{-2}}$"
+    },
+    {
+      "id": "gsg-current-correction-symbol-8",
+      "latex": "$\\mathbf J_{T,i}^{\\mathrm{RT0}},\\mathbf q_{T,i}$",
+      "meaning": "Lokalny ślad RT0 i jego różnica względem H1.",
+      "si_unit": "$\\mathrm{A\\,m^{-2}}$"
+    },
+    {
+      "id": "gsg-current-correction-symbol-9",
+      "latex": "$N_\\eta,D_\\eta$",
+      "meaning": "Ważone całki kwadratu korekty i prądu H1.",
+      "si_unit": "$\\mathrm W$"
+    },
+    {
+      "id": "gsg-current-correction-symbol-10",
+      "latex": "$\\eta$",
+      "meaning": "Względna norma korekty; nie residual liniowego solve.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-current-correction-partition-part",
+      "latex": "$p$",
+      "meaning": "Część jawnej partycji komórek źródła.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-current-correction-partition-energies",
+      "latex": "$N_p,D_p$",
+      "meaning": "Te same całki korekty i H1, ograniczone do części p.",
+      "si_unit": "$\\mathrm W$"
+    },
+    {
+      "id": "gsg-current-correction-partition-eta",
+      "latex": "$\\eta_p$",
+      "meaning": "Względna norma korekty na części; wymaga dodatniego D_p.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-current-correction-partition-fraction",
+      "latex": "$f_p$",
+      "meaning": "Udział części w liczniku; niezdefiniowany dla N_eta=0.",
+      "si_unit": "$1$"
     }
   ],
   "equations": [
@@ -3619,6 +3703,60 @@
         "antenna-mpfr-work-normalized-model",
         "antenna-mpfr-work-binary-model",
         "antenna-mpfr-work-face"
+      ]
+    },
+    {
+      "id": "antenna-gsg-current-correction-discrete",
+      "symbols": [
+        "gsg-current-correction-symbol-1",
+        "gsg-current-correction-symbol-2",
+        "gsg-current-correction-symbol-3",
+        "gsg-current-correction-symbol-4",
+        "gsg-current-correction-symbol-5",
+        "gsg-current-correction-symbol-6",
+        "gsg-current-correction-symbol-7",
+        "gsg-current-correction-symbol-8",
+        "gsg-current-correction-symbol-9",
+        "gsg-current-correction-symbol-10"
+      ],
+      "sources": [
+        "gsg-current-correction",
+        "gsg-current-correction-tests"
+      ]
+    },
+    {
+      "id": "antenna-gsg-current-correction-exact-integral",
+      "symbols": [
+        "gsg-current-correction-symbol-1",
+        "gsg-current-correction-symbol-2",
+        "gsg-current-correction-symbol-3",
+        "gsg-current-correction-symbol-4",
+        "gsg-current-correction-symbol-5",
+        "gsg-current-correction-symbol-6",
+        "gsg-current-correction-symbol-7",
+        "gsg-current-correction-symbol-8",
+        "gsg-current-correction-symbol-9",
+        "gsg-current-correction-symbol-10"
+      ],
+      "sources": [
+        "gsg-current-correction",
+        "gsg-current-correction-tests"
+      ]
+    },
+    {
+      "id": "antenna-gsg-current-correction-partition-identity",
+      "symbols": [
+        "gsg-current-correction-partition-part",
+        "gsg-current-correction-partition-energies",
+        "gsg-current-correction-partition-eta",
+        "gsg-current-correction-partition-fraction",
+        "gsg-current-correction-symbol-9",
+        "gsg-current-correction-symbol-10"
+      ],
+      "sources": [
+        "gsg-current-correction",
+        "gsg-current-correction-partition",
+        "gsg-current-correction-partition-tests"
       ]
     }
   ],
@@ -9022,6 +9160,34 @@
       "path": "packages/fullmag-py/tests/test_antenna_surface_policy.py",
       "symbol": "test_gsg_version_does_not_admit_unknown_versions_or_weaken_guards",
       "responsibility": "Nieznane tokeny i wspólne odmowy niewłaściwych limitów/tolerancji dla obu wersji; test interpretowany.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-current-correction",
+      "path": "scripts/antenna_gsg_current_correction.py",
+      "symbol": "weighted_rt0_h1_correction",
+      "responsibility": "Dokładna całka degree2 Tet4 ważonej różnicy RT0/H1 z surowego V i sigma; bez Solve lub kwalifikacji.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-current-correction-tests",
+      "path": "scripts/test_antenna_gsg_current_correction.py",
+      "symbol": "class GsgCurrentCorrectionTests",
+      "responsibility": "Analityczne testy i odmowy, pełny gradient, znaki, stable ID na przekroju, wagi i dokładna całka.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-current-correction-partition",
+      "path": "scripts/antenna_gsg_current_correction.py",
+      "symbol": "partitioned_weighted_rt0_h1_correction",
+      "responsibility": "Kompletna rozłączna partycja komórek, sumy N/D i udziały bez wygładzania śladów przekroju; bez Solve.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-current-correction-partition-tests",
+      "path": "scripts/test_antenna_gsg_current_correction.py",
+      "symbol": "class PartitionedCurrentCorrectionTests",
+      "responsibility": "Niezależne ważenie dwóch części, nieciągła partycja, lokalne sourcecut IDs, odmowy braków i nadmiaru oraz ograniczone iteratory.",
       "evidence_status": "interpreted_tests_passed"
     }
   ],
