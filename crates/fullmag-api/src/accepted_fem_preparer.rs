@@ -88,16 +88,24 @@ pub(crate) fn prepare_accepted_fem_task(
             )
         })
         .context("open host resource ledger for accepted FEM preparation")?;
-        if binding.policy.requires_runtime_readiness() {
-            let expected_generation = binding.require_runtime_generation_sha256()?;
-            retry_preparation_store_writer_busy(|| {
-                ledger.validate_runtime_generation(expected_generation)
-            })
-            .context("validate host runtime generation for accepted FEM preparation")?;
-        }
-        retry_preparation_store_writer_busy(|| {
-            ledger.validate_preparation_launch(store, &preparation_lease, &token)
-        })
+        let expected_generation = if binding.policy.requires_runtime_readiness() {
+            Some(binding.require_runtime_generation_sha256()?)
+        } else {
+            None
+        };
+        let started = std::time::Instant::now();
+        retry_preparation_launch_within(
+            std::time::Duration::from_secs(35),
+            || {
+                if let Some(expected_generation) = expected_generation {
+                    ledger.validate_runtime_generation(expected_generation)
+                        .context("validate host runtime generation for accepted FEM preparation")?;
+                }
+                ledger.validate_preparation_launch(store, &preparation_lease, &token)
+            },
+            || started.elapsed(),
+            std::thread::sleep,
+        )
         .context("validate host preparation launch for accepted FEM preparation")?;
     }
 
@@ -472,6 +480,42 @@ fn retry_preparation_store_writer_busy<T>(operation: impl FnMut() -> Result<T>) 
     fullmag_runtime_control::retry_store_writer_busy(operation)
 }
 
+/// Wait only before native preparation, validating the same consumed permit on
+/// every attempt. No lock is held while waiting and no native work is replayed.
+fn retry_preparation_launch_within<T>(
+    budget: std::time::Duration,
+    mut validate: impl FnMut() -> Result<T>,
+    mut elapsed: impl FnMut() -> std::time::Duration,
+    mut wait: impl FnMut(std::time::Duration),
+) -> Result<T> {
+    let mut previous_error: Option<anyhow::Error> = None;
+    loop {
+        if let Some(error) = previous_error.take() {
+            if elapsed() >= budget {
+                return Err(error.context("preparation launch validation deadline elapsed"));
+            }
+        }
+        match validate() {
+            Ok(value) => return Ok(value),
+            Err(error) => {
+                let retryable = error.chain().any(|cause| {
+                    cause.is::<fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent>()
+                        || cause.is::<fullmag_session::StoreWriterBusy>()
+                }) || fullmag_runtime_control::is_transient_store_io(&error);
+                if !retryable {
+                    return Err(error);
+                }
+                let remaining = budget.saturating_sub(elapsed());
+                if remaining.is_zero() {
+                    return Err(error.context("preparation launch validation deadline elapsed"));
+                }
+                previous_error = Some(error);
+                wait(remaining.min(std::time::Duration::from_millis(250)));
+            }
+        }
+    }
+}
+
 #[cfg(feature = "fem-native")]
 fn produce_native_fem_evidence(
     mesh: &fullmag_ir::MeshIR,
@@ -494,6 +538,98 @@ fn produce_native_fem_evidence(
 mod tests {
     use super::*;
     use anyhow::Error;
+
+    #[test]
+    fn preparation_launch_wait_revalidates_until_the_same_permit_is_current() {
+        use std::cell::Cell;
+        use std::time::Duration;
+        let elapsed = Cell::new(Duration::ZERO);
+        let mut checks = Vec::new();
+        let mut attempts = 0;
+        let value = retry_preparation_launch_within(
+            Duration::from_secs(1),
+            || {
+                attempts += 1;
+                checks.push("generation");
+                checks.push("same-launch-permit");
+                match attempts {
+                    1 => Err(Error::new(fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent)
+                        .context("sample expired")),
+                    2 => Err(Error::new(fullmag_session::StoreWriterBusy)),
+                    _ => Ok("validated"),
+                }
+            },
+            || elapsed.get(),
+            |delay| elapsed.set(elapsed.get() + delay),
+        ).unwrap();
+        assert_eq!(value, "validated");
+        assert_eq!(attempts, 3);
+        assert_eq!(checks, ["generation", "same-launch-permit"].repeat(3));
+    }
+
+    #[test]
+    fn preparation_launch_wait_times_out_closed_and_preserves_the_typed_cause() {
+        use std::cell::Cell;
+        use std::time::Duration;
+        let elapsed = Cell::new(Duration::ZERO);
+        let mut attempts = 0;
+        let error = retry_preparation_launch_within(
+            Duration::from_millis(300),
+            || {
+                attempts += 1;
+                if attempts < 3 {
+                    Err(Error::new(fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent))
+                } else {
+                    Ok(())
+                }
+            },
+            || elapsed.get(),
+            |delay| elapsed.set(elapsed.get() + delay),
+        ).unwrap_err();
+        assert_eq!(elapsed.get(), Duration::from_millis(300));
+        assert_eq!(attempts, 2);
+        assert!(error.to_string().contains("deadline"));
+        assert!(error.chain().any(|cause| cause.is::<fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent>()));
+    }
+
+    #[test]
+    fn preparation_launch_wait_never_retries_hard_fences() {
+        use std::time::Duration;
+        for message in ["different compute-node inventory owner", "runtime generation differs", "invalid launch token"] {
+            let mut attempts = 0;
+            let error = retry_preparation_launch_within(
+                Duration::from_secs(35),
+                || { attempts += 1; Err::<(), _>(anyhow::anyhow!(message.to_owned())) },
+                || Duration::ZERO,
+                |_| panic!("a hard fence must not wait"),
+            ).unwrap_err();
+            assert_eq!(attempts, 1);
+            assert_eq!(error.to_string(), message);
+        }
+    }
+
+    #[test]
+    fn preparation_launch_wait_stops_at_a_generation_fence_after_a_transient() {
+        use std::cell::Cell;
+        use std::time::Duration;
+        let elapsed = Cell::new(Duration::ZERO);
+        let mut checks = Vec::new();
+        let error = retry_preparation_launch_within(
+            Duration::from_secs(35),
+            || {
+                checks.push("generation");
+                if checks.len() > 1 {
+                    return Err::<(), _>(anyhow::anyhow!("runtime generation differs"));
+                }
+                checks.push("launch");
+                Err(Error::new(fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent))
+            },
+            || elapsed.get(),
+            |delay| elapsed.set(elapsed.get() + delay),
+        ).unwrap_err();
+        assert_eq!(checks, ["generation", "launch", "generation"]);
+        assert_eq!(error.to_string(), "runtime generation differs");
+    }
 
     #[test]
     fn mesh_selection_preserves_magnetic_mesh_order_and_rejects_fdm() {
