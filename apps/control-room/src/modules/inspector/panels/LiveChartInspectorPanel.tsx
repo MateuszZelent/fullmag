@@ -80,7 +80,7 @@ export function LiveChartInspectorPanel({
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <InspectorMetricStrip
         metrics={[
-          { label: "Preset", tone: "accent", value: presetId },
+          { label: "Preset", tone: "neutral", value: presetId },
           {
             label: "Mode",
             tone: descriptor?.liveMode === "paused" ? "warning" : "success",

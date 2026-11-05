@@ -97,7 +97,7 @@ export function CrossSectionInspectorPanel({
       <div className="fm-cross-section-inspector grid min-w-0 gap-fm-inspector-group">
         <InspectorMetricStrip
           metrics={[
-            { label: "Mode", tone: "accent", value: "draft" },
+            { label: "Mode", tone: "neutral", value: "draft" },
             { label: "Plane", value: (workspace.draft?.plane ?? query.plane).toUpperCase() },
             {
               label: "Position",
@@ -194,7 +194,7 @@ export function CrossSectionInspectorPanel({
     <div className="fm-cross-section-inspector grid min-w-0 gap-fm-inspector-group">
       <InspectorMetricStrip
         metrics={[
-          { label: "Plane", tone: "accent", value: query.plane.toUpperCase() },
+          { label: "Plane", tone: "neutral", value: query.plane.toUpperCase() },
           { label: "Position", value: `${formatValue(query.positionPercent)}%` },
           { label: "Polygons", value: formatCount(statistics.polygonCount) },
           { label: "Metric", value: metric },

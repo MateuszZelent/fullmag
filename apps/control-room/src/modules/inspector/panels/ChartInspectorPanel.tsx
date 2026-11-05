@@ -59,7 +59,7 @@ export function ChartInspectorPanel({
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <InspectorMetricStrip
         metrics={[
-          { label: "Surface", tone: "accent", value: activeSurface },
+          { label: "Surface", tone: "neutral", value: activeSurface },
           { label: "X Axis", value: xAxisId ?? "none" },
           { label: "Signals", value: String(activeDescriptorSelectedSeriesIds.length) },
           { label: "Focus", value: isPointScope ? "point" : "chart" },
