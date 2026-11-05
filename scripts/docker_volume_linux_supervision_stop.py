@@ -1032,9 +1032,17 @@ def assert_prepared_maintenance_allowed(control, operation, maintenance):
     require(record.get('schema') == PREPARED_QUARANTINE_SCHEMA and record.get('state') == 'cancellation-required'
             and witness.get('quarantine_sha256') == sha(raw) and witness.get('target') == record.get('target'),
             'maintenance has no exact qualified prepared quarantine admission')
-    request_raw = control.read_bytes(maintenance['request_path'])
+    from docker_volume_dev import _validate_cancellation_maintenance
+    maintenance = _validate_cancellation_maintenance(maintenance)
+    require(maintenance is not None, 'prepared quarantine requires an exact maintenance request')
+    # The backend command consumes an absolute guest path; BuildControl reads
+    # relative to its mounted namespace. Validate the exact UUID-bound path
+    # before translating it, retaining the control API's path restrictions.
+    request_relative = maintenance['request_path'][len('/opt/fullmag/control/'):]
+    request_raw = control.read_bytes(request_relative)
     request = decode(request_raw)
     require(sha(request_raw) == maintenance.get('request_sha256')
+            and request.get('request_id') == maintenance['request_id']
             and request.get('run_id') == record['target']['run_id']
             and request.get('task_id') == record['target']['task_id'], 'maintenance request differs from prepared quarantine task')
 

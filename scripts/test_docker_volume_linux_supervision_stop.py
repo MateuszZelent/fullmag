@@ -8,6 +8,7 @@ import tempfile
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import docker_volume_linux_supervision_stop as subject
+from docker_build_control import BuildControl as RealBuildControl, BuildControlError
 
 
 def write(path, value):
@@ -881,6 +882,54 @@ class PreparedConsumerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'another operation'):
             subject.prepared_quarantine_context(
                 f.control, f.previous, self.compose, f.rows, expected_sha256=self.quarantine_sha)
+
+    def _maintenance_request(self):
+        from docker_volume_unclaimed_cancellation import REQUEST_ROOT, _request_path
+        request_id = '3c815b4b-2e89-4b4c-9696-31af150bb21e'
+        request = {'request_id': request_id, 'run_id': self.fixture.target['run_id'],
+                   'task_id': self.fixture.target['task_id']}
+        raw = subject.canonical(request)
+        relative = REQUEST_ROOT + '/' + request_id + '.json'
+        self.fixture.docs[relative] = raw
+        operation = {'receipt': {'inputs': {'prepared_unclaimed_quarantine': {
+            'quarantine_sha256': self.quarantine_sha, 'target': self.fixture.target}}}}
+        maintenance = {'request_id': request_id, 'request_sha256': subject.sha(raw),
+                       'request_path': _request_path(request_id)}
+        return operation, maintenance, relative
+
+    def test_prepared_maintenance_reads_absolute_guest_request_through_relative_control_api(self):
+        from unittest.mock import patch
+        operation, maintenance, relative = self._maintenance_request()
+        read = self.fixture.control.read_bytes
+        reads = []
+
+        def read_relative(path, **kwargs):
+            RealBuildControl.path(path)
+            reads.append(path)
+            return read(path, **kwargs)
+
+        with patch.object(self.fixture.control, 'read_bytes', side_effect=read_relative):
+            subject.assert_prepared_maintenance_allowed(self.fixture.control, operation, maintenance)
+        self.assertEqual(reads, [subject.PREPARED_QUARANTINE, relative])
+
+    def test_prepared_maintenance_rejects_request_path_outside_its_exact_identity(self):
+        from unittest.mock import patch
+        operation, maintenance, _ = self._maintenance_request()
+        maintenance['request_path'] = '/opt/fullmag/control/runtime-control/OWNER.json'
+        with patch.object(self.fixture.control, 'read_bytes', wraps=self.fixture.control.read_bytes) as read:
+            with self.assertRaisesRegex(BuildControlError, 'request path differs'):
+                subject.assert_prepared_maintenance_allowed(self.fixture.control, operation, maintenance)
+        self.assertEqual([call.args[0] for call in read.call_args_list], [subject.PREPARED_QUARANTINE])
+
+    def test_prepared_maintenance_rejects_payload_with_another_request_id(self):
+        operation, maintenance, relative = self._maintenance_request()
+        request = subject.decode(self.fixture.docs[relative])
+        request['request_id'] = '4c815b4b-2e89-4b4c-9696-31af150bb21e'
+        raw = subject.canonical(request)
+        self.fixture.docs[relative] = raw
+        maintenance['request_sha256'] = subject.sha(raw)
+        with self.assertRaisesRegex(ValueError, 'maintenance request differs'):
+            subject.assert_prepared_maintenance_allowed(self.fixture.control, operation, maintenance)
 
     def test_render_preserves_40_cpu_budget_native_gate_and_all_44_sources(self):
         import docker_volume_dev as dev
