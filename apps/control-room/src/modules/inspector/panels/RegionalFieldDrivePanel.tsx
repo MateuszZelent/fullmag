@@ -30,6 +30,7 @@ import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { Button } from "@/shared/ui/Button";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { InspectorMetricStrip } from "../primitives/InspectorMetricStrip";
 import { Vector3Field } from "../primitives/Vector3Field";
 import { PhysicsInspectorOverview } from "./PhysicsInspectorOverview";
 import { buildPhysicsInspectorOverviewModel } from "./PhysicsInspectorOverviewModel";
@@ -275,7 +276,14 @@ function RawNumberField({
   );
 }
 
-export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
+export type RegionalFieldDriveSectionScope = "all" | "list" | "item";
+
+export function RegionalFieldDrivePanel({
+  selection,
+  sectionScope = "all",
+}: InspectorPanelProps & {
+  sectionScope?: RegionalFieldDriveSectionScope;
+}) {
   const kernel = useKernel();
   const { api, resources } = kernel;
   const sessionScopeKey = kernel.commands.getSessionScopeKey?.() ?? null;
@@ -526,6 +534,116 @@ export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
           stableRef: `object:${driveTarget.object_id}`,
         }
       : { kind: "global" as const, stableRef: "global:physics" };
+
+  const isCollectionView =
+    sectionScope === "list" ||
+    (selection.kind === "physics.field-drives" && model.mode === "unselected");
+
+  if (isCollectionView) {
+    const allDrives = resource.data?.drives ?? [];
+    const activeCount = allDrives.filter((item) => item.enabled !== false).length;
+    const scopedCount = allDrives.filter((item) => item.target.kind !== "global").length;
+    return (
+      <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+        <InspectorMetricStrip
+          metrics={[
+            { label: "Drives", tone: "accent", value: String(allDrives.length) },
+            {
+              label: "Active",
+              tone: activeCount > 0 ? "success" : "neutral",
+              value: String(activeCount),
+            },
+            { label: "Scoped", value: String(scopedCount) },
+            {
+              label: "Revision",
+              value: String(resource.data?.scene_revision ?? "—"),
+            },
+          ]}
+        />
+        <InspectorGroup title="Field Drives" collapsible defaultOpen>
+          {allDrives.length === 0 ? (
+            <FieldRow label="Drives" value="no field drives authored" />
+          ) : (
+            allDrives.map((item) => (
+              <div
+                key={item.id}
+                className="fm-region-override fm-section-separator"
+              >
+                <FieldRow
+                  label={item.name || item.id}
+                  value={`${item.waveform.kind} · ${teslaToMilliTesla(item.amplitude_B_T)} mT · ${item.enabled === false ? "disabled" : "active"}`}
+                />
+                <FieldRow
+                  label="Target"
+                  value={
+                    item.target.kind === "region"
+                      ? `${item.target.object_id} / ${item.target.region_id}`
+                      : item.target.kind === "object"
+                        ? item.target.object_id
+                        : "global"
+                  }
+                />
+                <div className="fm-inspector-toolbar fm-toolbar-top">
+                  <Button
+                    size="sm"
+                    type="button"
+                    variant="ghost"
+                    onClick={() => {
+                      const nodeId = `model:physics:field-drives:${item.id}`;
+                      kernel.selection.set(
+                        {
+                          kind: "physics.field-drive",
+                          label: item.name || item.id,
+                          nodeId,
+                          objectId: null,
+                          ref: {
+                            fieldDriveId: item.id,
+                            kind: "physics.field-drive",
+                            nodeId,
+                            type: "physics-field-drive",
+                          },
+                        },
+                        "inspector",
+                      );
+                    }}
+                  >
+                    Inspect Drive
+                  </Button>
+                </div>
+              </div>
+            ))
+          )}
+          <div className="fm-inspector-toolbar fm-toolbar-top-lg">
+            <Button
+              size="sm"
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                const nodeId = "model:physics:field-drive:draft";
+                kernel.selection.set(
+                  {
+                    kind: "physics.field-drive",
+                    label: "New field drive",
+                    nodeId,
+                    objectId: null,
+                    ref: {
+                      draft: true,
+                      kind: "physics.field-drive",
+                      nodeId,
+                      type: "physics-field-drive",
+                    },
+                  },
+                  "inspector",
+                );
+              }}
+            >
+              New Field Drive
+            </Button>
+          </div>
+        </InspectorGroup>
+      </div>
+    );
+  }
 
   return (
     <PhysicsInspectorOverview

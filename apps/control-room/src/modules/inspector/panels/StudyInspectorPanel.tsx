@@ -100,6 +100,7 @@ import { FieldRow } from "../primitives/FieldRow";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { InspectorMetricStrip } from "../primitives/InspectorMetricStrip";
 import { ProjectRunsSection } from "./ProjectRunsSection";
 import { ProjectBatchesSection } from "./ProjectBatchesSection";
 
@@ -1474,7 +1475,19 @@ export function useStudyInspectorPanelController(
   };
 }
 
-export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
+export type StudyInspectorSectionScope =
+  | "all"
+  | "overview"
+  | "stages"
+  | "execution"
+  | "recovery";
+
+export function StudyInspectorPanel({
+  selection,
+  sectionScope = "all",
+}: InspectorPanelProps & {
+  sectionScope?: StudyInspectorSectionScope;
+}) {
   const {
     activeStageIndex,
     checkpointCatalog,
@@ -1598,6 +1611,33 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
     },
   );
 
+  const showRuntime =
+    sectionScope === "all" ||
+    sectionScope === "overview" ||
+    sectionScope === "execution";
+  const showRunsAndBatches =
+    sectionScope === "all" || sectionScope === "execution";
+  const showSelectedStage =
+    sectionScope === "all" || sectionScope === "stages";
+  const showBoundaryAndProfile =
+    sectionScope === "all" ||
+    sectionScope === "overview" ||
+    sectionScope === "execution";
+  const showPipeline =
+    sectionScope === "all" ||
+    sectionScope === "overview" ||
+    sectionScope === "stages";
+  const showRecovery =
+    sectionScope === "all" || sectionScope === "recovery";
+  const showHistory =
+    sectionScope === "all" ||
+    sectionScope === "execution" ||
+    sectionScope === "recovery";
+  const resolvedDiscretization =
+    resolveSessionDiscretization(runtimeStatus) ??
+    snapshot.requested.backend ??
+    "auto";
+
   return (
     <>
       <div
@@ -1608,133 +1648,175 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
         data-scene-status={scene.status}
         data-stage-draft-count={state.stageDrafts.length}
       >
-        <StudyRuntimeSection
-          commandDisabledReason={commandDisabledReason}
-          model={model}
-          onOpenCommand={(commandId) =>
-            dispatch({ type: "setSelectedCommandId", commandId })
-          }
-          runCommand={runCommand}
-          stageExecution={stageExecution}
-          stepValue={
-            solverStatus.data?.step_index ?? currentRun.data?.total_steps ?? "n/a"
-          }
+        <InspectorMetricStrip
+          metrics={[
+            {
+              label: "Workflow",
+              value:
+                model.selectedStage?.kind ??
+                state.stageDrafts[0]?.kind ??
+                "authoring",
+            },
+            {
+              label: "Discretization",
+              value: resolvedDiscretization.toUpperCase(),
+            },
+            {
+              label: "Stages",
+              value: String(state.stageDrafts.length),
+            },
+            {
+              label: "State",
+              value: model.runtime.state,
+            },
+          ]}
         />
 
-        <ProjectRunsSection />
-        <ProjectBatchesSection />
+        {showRuntime ? (
+          <StudyRuntimeSection
+            commandDisabledReason={commandDisabledReason}
+            model={model}
+            onOpenCommand={(commandId) =>
+              dispatch({ type: "setSelectedCommandId", commandId })
+            }
+            runCommand={runCommand}
+            stageExecution={stageExecution}
+            stepValue={
+              solverStatus.data?.step_index ?? currentRun.data?.total_steps ?? "n/a"
+            }
+          />
+        ) : null}
 
-        <StudySelectedStageSection
-          model={model}
-          stageExecutionRevision={stageExecution.data?.revision ?? null}
-        />
+        {showRunsAndBatches ? (
+          <>
+            <ProjectRunsSection />
+            <ProjectBatchesSection />
+          </>
+        ) : null}
 
-        <StudyBoundarySection
-          activeLane={runtimeStatus?.capabilities.active_lane ?? null}
-          algorithmsAvailable={runtimeStatus?.capabilities.algorithms_available}
-          authoringBusy={state.authoringBusy}
-          authoringFeedback={
-            state.authoringFeedbackScope === "global"
-              ? state.authoringFeedback
-              : null
-          }
-          draft={state.globalDraft}
-          executionProfileBound={
-            hasStudyExecutionProfile(scene.data) || profileEditState.profileBound
-          }
-          executionProfileDraftDirty={profileEditState.dirty}
-          model={model}
-          magneticObjectCount={sceneMagneticObjectCount}
-          magneticObjectIds={sceneMagneticObjectIds}
-          scene={scene.data}
-          sceneRevision={sceneRevision}
-          sceneStatus={scene.status}
-          sessionDiscretization={resolveSessionDiscretization(runtimeStatus)}
-          snapshot={snapshot}
-          onCommit={() => void commitGlobalDraft()}
-          onUpdate={(patch) =>
-            dispatch({ type: "updateGlobalDraft", patch })
-          }
-        />
+        {showSelectedStage ? (
+          <StudySelectedStageSection
+            model={model}
+            stageExecutionRevision={stageExecution.data?.revision ?? null}
+          />
+        ) : null}
 
-        <StudyExecutionProfileSection
-          authoringBusy={state.authoringBusy}
-          otherAuthoringDirty={globalDirty || stagesDirty}
-          scene={scene.data}
-          sceneRevision={sceneRevision}
-          sceneStatus={scene.status}
-          sessionScopeKey={sessionScopeKey}
-          stages={[...rawStudyStages(scene.data), ...state.stageDrafts]}
-          onApply={commitExecutionProfile}
-          onEditSessionChange={onProfileEditSessionChange}
-        />
+        {showBoundaryAndProfile ? (
+          <>
+            <StudyBoundarySection
+              activeLane={runtimeStatus?.capabilities.active_lane ?? null}
+              algorithmsAvailable={runtimeStatus?.capabilities.algorithms_available}
+              authoringBusy={state.authoringBusy}
+              authoringFeedback={
+                state.authoringFeedbackScope === "global"
+                  ? state.authoringFeedback
+                  : null
+              }
+              draft={state.globalDraft}
+              executionProfileBound={
+                hasStudyExecutionProfile(scene.data) || profileEditState.profileBound
+              }
+              executionProfileDraftDirty={profileEditState.dirty}
+              model={model}
+              magneticObjectCount={sceneMagneticObjectCount}
+              magneticObjectIds={sceneMagneticObjectIds}
+              scene={scene.data}
+              sceneRevision={sceneRevision}
+              sceneStatus={scene.status}
+              sessionDiscretization={resolveSessionDiscretization(runtimeStatus)}
+              snapshot={snapshot}
+              onCommit={() => void commitGlobalDraft()}
+              onUpdate={(patch) =>
+                dispatch({ type: "updateGlobalDraft", patch })
+              }
+            />
 
-        <StudyPipelineSection
-          readOnlyReason={readStudyStageSource(asRecord(scene.data)?.study).kind !== "flat"
-            ? readStudyStageSource(asRecord(scene.data)?.study).error ?? "Canonical pipeline inspection is read-only. Flat-stage editing cannot preserve its groups and references."
-            : null}
-          activeStageIndex={activeStageIndex}
-          activeLane={runtimeStatus?.capabilities.active_lane ?? null}
-          algorithmsAvailable={runtimeStatus?.capabilities.algorithms_available}
-          authoringBusy={state.authoringBusy}
-          authoringFeedback={
-            state.authoringFeedbackScope === "stages"
-              ? state.authoringFeedback
-              : null
-          }
-          commandDisabledReason={commandDisabledReason}
-          demagEnabled={state.globalDraft.demagEnabled}
-          executionProfileBound={
-            hasStudyExecutionProfile(scene.data) || profileEditState.profileBound
-          }
-          executionProfileDraftDirty={profileEditState.dirty}
-          k0ModalReadinessFor={k0ModalReadinessFor}
-          draft={state.stageDrafts[state.selectedDraftIndex] ?? null}
-          draftIndex={state.selectedDraftIndex}
-          drafts={state.stageDrafts}
-          model={model}
-          onAddStage={(kind) => dispatch({ type: "addStageDraft", kind })}
-          onCommit={() => void commitStageDrafts()}
-          onDuplicateStage={(index) =>
-            dispatch({ type: "duplicateStageDraft", index })
-          }
-          onMoveStage={(index, direction) =>
-            dispatch({ type: "moveStageDraft", index, direction })
-          }
-          onRemoveStage={(index) => dispatch({ type: "removeStageDraft", index })}
-          onSelectDraft={(index) => dispatch({ type: "selectStageDraft", index })}
-          onUpdateDraft={(index, patch) =>
-            dispatch({ type: "updateStageDraft", index, patch })
-          }
-          runCommand={runCommand}
-          showDraftEditor={state.stageDrafts.length === 0 || stagesDirty}
-        />
+            <StudyExecutionProfileSection
+              authoringBusy={state.authoringBusy}
+              otherAuthoringDirty={globalDirty || stagesDirty}
+              scene={scene.data}
+              sceneRevision={sceneRevision}
+              sceneStatus={scene.status}
+              sessionScopeKey={sessionScopeKey}
+              stages={[...rawStudyStages(scene.data), ...state.stageDrafts]}
+              onApply={commitExecutionProfile}
+              onEditSessionChange={onProfileEditSessionChange}
+            />
+          </>
+        ) : null}
 
-        <StudyRecoverySection
-          checkpointCount={checkpointCatalog.data?.checkpoints.length ?? 0}
-          commandDisabledReason={commandDisabledReason}
-          latestCheckpoint={latestCheckpoint}
-          onImport={() => dispatch({ type: "setImportDialogOpen", open: true })}
-          onRestore={() => {
-            dispatch({
-              type: "setSelectedRestoreCheckpointId",
-              checkpointId: latestCheckpoint?.checkpoint_id ?? null,
-            });
-            dispatch({ type: "setRestoreDialogOpen", open: true });
-          }}
-          runCommand={runCommand}
-        />
+        {showPipeline ? (
+          <StudyPipelineSection
+            readOnlyReason={readStudyStageSource(asRecord(scene.data)?.study).kind !== "flat"
+              ? readStudyStageSource(asRecord(scene.data)?.study).error ?? "Canonical pipeline inspection is read-only. Flat-stage editing cannot preserve its groups and references."
+              : null}
+            activeStageIndex={activeStageIndex}
+            activeLane={runtimeStatus?.capabilities.active_lane ?? null}
+            algorithmsAvailable={runtimeStatus?.capabilities.algorithms_available}
+            authoringBusy={state.authoringBusy}
+            authoringFeedback={
+              state.authoringFeedbackScope === "stages"
+                ? state.authoringFeedback
+                : null
+            }
+            commandDisabledReason={commandDisabledReason}
+            demagEnabled={state.globalDraft.demagEnabled}
+            executionProfileBound={
+              hasStudyExecutionProfile(scene.data) || profileEditState.profileBound
+            }
+            executionProfileDraftDirty={profileEditState.dirty}
+            k0ModalReadinessFor={k0ModalReadinessFor}
+            draft={state.stageDrafts[state.selectedDraftIndex] ?? null}
+            draftIndex={state.selectedDraftIndex}
+            drafts={state.stageDrafts}
+            model={model}
+            onAddStage={(kind) => dispatch({ type: "addStageDraft", kind })}
+            onCommit={() => void commitStageDrafts()}
+            onDuplicateStage={(index) =>
+              dispatch({ type: "duplicateStageDraft", index })
+            }
+            onMoveStage={(index, direction) =>
+              dispatch({ type: "moveStageDraft", index, direction })
+            }
+            onRemoveStage={(index) => dispatch({ type: "removeStageDraft", index })}
+            onSelectDraft={(index) => dispatch({ type: "selectStageDraft", index })}
+            onUpdateDraft={(index, patch) =>
+              dispatch({ type: "updateStageDraft", index, patch })
+            }
+            runCommand={runCommand}
+            showDraftEditor={state.stageDrafts.length === 0 || stagesDirty}
+          />
+        ) : null}
 
-        <StudyHistorySection
-          energyStep={energyCurrent.data?.step ?? "not available"}
-          returnedRows={energyHistory.data?.returned_rows ?? "not available"}
-          totalEnergy={
-            typeof energyCurrent.data?.total === "number"
-              ? energyCurrent.data.total.toExponential(4)
-              : "not available"
-          }
-          totalRows={energyHistory.data?.total_rows ?? "not available"}
-        />
+        {showRecovery ? (
+          <StudyRecoverySection
+            checkpointCount={checkpointCatalog.data?.checkpoints.length ?? 0}
+            commandDisabledReason={commandDisabledReason}
+            latestCheckpoint={latestCheckpoint}
+            onImport={() => dispatch({ type: "setImportDialogOpen", open: true })}
+            onRestore={() => {
+              dispatch({
+                type: "setSelectedRestoreCheckpointId",
+                checkpointId: latestCheckpoint?.checkpoint_id ?? null,
+              });
+              dispatch({ type: "setRestoreDialogOpen", open: true });
+            }}
+            runCommand={runCommand}
+          />
+        ) : null}
+
+        {showHistory ? (
+          <StudyHistorySection
+            energyStep={energyCurrent.data?.step ?? "not available"}
+            returnedRows={energyHistory.data?.returned_rows ?? "not available"}
+            totalEnergy={
+              typeof energyCurrent.data?.total === "number"
+                ? energyCurrent.data.total.toExponential(4)
+                : "not available"
+            }
+            totalRows={energyHistory.data?.total_rows ?? "not available"}
+          />
+        ) : null}
       </div>
       <CommandDetailDialog
         commandId={state.selectedCommandId}
@@ -2398,6 +2480,7 @@ export function StudyBoundarySection({
         }
       />
       <FormField
+        disabled={explicitFdm}
         label="Independent k points"
         hint="Adaptive schedules independent k points for FEM CPU with soft CPU and memory targets; serial mode ignores these targets. Settings apply on the next run."
         type="select"
@@ -2421,6 +2504,7 @@ export function StudyBoundarySection({
         <option value="adaptive">Adaptive</option>
       </FormField>
       <FormField
+        disabled={draft.parallelExecution.mode !== "adaptive" || explicitFdm}
         label="Maximum CPU target (%)"
         hint="Adaptive only: target within the CPU allocation; brief peaks can exceed it. Serial mode ignores this field."
         value={draft.parallelExecution.maxCpuPercent}
@@ -2434,6 +2518,7 @@ export function StudyBoundarySection({
         }
       />
       <FormField
+        disabled={draft.parallelExecution.mode !== "adaptive" || explicitFdm}
         label="Maximum memory target (%)"
         hint="Adaptive only: target within allocated memory; the reserve is kept in addition. Serial mode ignores this field."
         value={draft.parallelExecution.maxMemoryPercent}
@@ -2447,6 +2532,7 @@ export function StudyBoundarySection({
         }
       />
       <FormField
+        disabled={draft.parallelExecution.mode !== "adaptive" || explicitFdm}
         label="Memory reserve (MiB)"
         hint="Adaptive only: the reserve is kept in addition to the memory target. Values must convert exactly to safe API bytes; serial mode ignores this field."
         value={draft.parallelExecution.memoryReserveMiB}
@@ -2460,6 +2546,7 @@ export function StudyBoundarySection({
         }
       />
       <FormField
+        disabled={draft.parallelExecution.mode !== "adaptive" || explicitFdm}
         label="Maximum workers"
         hint="Adaptive only: blank lets the scheduler choose from available capacity. Serial mode ignores this field."
         value={draft.parallelExecution.maxWorkers}
@@ -2473,6 +2560,7 @@ export function StudyBoundarySection({
         }
       />
       <FormField
+        disabled={draft.parallelExecution.mode !== "adaptive" || explicitFdm}
         label="Threads per worker"
         hint="Adaptive only: applies to each independent k worker. Serial mode ignores this field."
         value={draft.parallelExecution.threadsPerWorker}

@@ -33,6 +33,7 @@ import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { InspectorMetricStrip } from "../primitives/InspectorMetricStrip";
 import { Vector3Field } from "../primitives/Vector3Field";
 import {
   initialInspectorDraftState,
@@ -74,16 +75,18 @@ export type UpdateMagneticTextureDraft = (
 ) => void;
 
 function MagneticTextureSummarySection({
+  defaultOpen = true,
   model,
   regionsStatus,
   sceneStatus,
 }: {
+  defaultOpen?: boolean;
   model: MagneticTexturePanelModel;
   regionsStatus: string;
   sceneStatus: string;
 }) {
   return (
-    <InspectorGroup title="Magnetic Texture" collapsible defaultOpen>
+    <InspectorGroup title="Magnetic Texture" collapsible defaultOpen={defaultOpen}>
       <FieldRow label="Object ID" value={model.objectId} />
       <FieldRow label="Target" value={model.targetKind} />
       {model.regionId && <FieldRow label="Region ID" value={model.regionId} />}
@@ -784,9 +787,14 @@ export function MagneticTextureActionsSection({
   );
 }
 
+export interface ObjectMagneticTexturePanelProps extends InspectorPanelProps {
+  sectionScope?: "overview" | "asset" | "load" | "region" | "transform";
+}
+
 export function ObjectMagneticTexturePanel({
   selection,
-}: InspectorPanelProps) {
+  sectionScope,
+}: ObjectMagneticTexturePanelProps) {
   const kernel = useKernel();
   const { api, resources } = kernel;
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
@@ -852,7 +860,7 @@ export function ObjectMagneticTexturePanel({
   const textureCapability = textureCapabilityOperation
     ? resolveActiveLaneOperation(activeLane, textureCapabilityOperation)
     : null;
-  const inspectorView = magneticTextureInspectorView(selection.kind);
+  const inspectorView = sectionScope ?? magneticTextureInspectorView(selection.kind);
 
   function replaceDraftState(next: InspectorDraftState<ObjectMagneticTextureDraft>): void {
     draftStateRef.current = next;
@@ -1104,7 +1112,12 @@ export function ObjectMagneticTexturePanel({
   }
 
   let validationError: string | null = null;
-  if (inspectorView === "asset" || inspectorView === "region" || inspectorView === "transform") {
+  if (
+    inspectorView === "overview" ||
+    inspectorView === "asset" ||
+    inspectorView === "region" ||
+    inspectorView === "transform"
+  ) {
     try {
       buildObjectMagneticTextureAssetDraft(model, draft);
     } catch (error) {
@@ -1112,7 +1125,10 @@ export function ObjectMagneticTexturePanel({
     }
   }
   const editableTextureView =
-    inspectorView === "asset" || inspectorView === "region" || inspectorView === "transform";
+    inspectorView === "overview" ||
+    inspectorView === "asset" ||
+    inspectorView === "region" ||
+    inspectorView === "transform";
   const valid = model.mode === "committed" &&
     validationError === null &&
     (!textureCapability || textureCapability.enabled) &&
@@ -1141,11 +1157,35 @@ export function ObjectMagneticTexturePanel({
 
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
-      <MagneticTextureSummarySection
-        model={model}
-        regionsStatus={regions.status}
-        sceneStatus={scene.status}
+      <InspectorMetricStrip
+        metrics={[
+          { label: "Target", value: model.regionId ?? model.objectId },
+          { label: "Preset", value: draft.presetKind },
+          { label: "Asset", value: model.assetId },
+          {
+            label: "State",
+            tone: dirty ? "warning" : "neutral",
+            value: dirty ? "modified" : model.assignment,
+          },
+        ]}
       />
+      {inspectorView === "overview" ? (
+        <>
+          <MagneticTextureAssignmentSection
+            draft={draft}
+            model={model}
+            updateDraft={updateDraft}
+          />
+          <MagneticTexturePresetParametersSection draft={draft} updateDraft={updateDraft} />
+          <MagneticTextureSummarySection
+            defaultOpen={false}
+            model={model}
+            regionsStatus={regions.status}
+            sceneStatus={scene.status}
+          />
+          <MagneticTextureRawAssetSection model={model} />
+        </>
+      ) : null}
       {inspectorView === "asset" || inspectorView === "region" ? (
         <>
           <MagneticTextureAssignmentSection
@@ -1161,11 +1201,7 @@ export function ObjectMagneticTexturePanel({
         <>
           <MagneticTextureTransformSection draft={draft} model={model} updateDraft={updateDraft} />
           <MagneticTextureMappingSection draft={draft} updateDraft={updateDraft} />
-          <MagneticTextureRawAssetSection model={model} />
         </>
-      ) : null}
-      {inspectorView === "overview" ? (
-        <MagneticTextureRawAssetSection model={model} />
       ) : null}
       {inspectorView === "load" ? (
         <MagneticTextureLoadFileSection

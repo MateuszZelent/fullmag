@@ -13,8 +13,16 @@ import type { ChartRangePreference } from "@/kernel/workspace/liveChartPreferenc
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FieldRow } from "../primitives/FieldRow";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { InspectorMetricStrip } from "../primitives/InspectorMetricStrip";
 
-export function LiveChartInspectorPanel({ selection }: InspectorPanelProps) {
+export type LiveChartInspectorSectionScope = "all" | "chart" | "point";
+
+export function LiveChartInspectorPanel({
+  selection,
+  sectionScope = "all",
+}: InspectorPanelProps & {
+  sectionScope?: LiveChartInspectorSectionScope;
+}) {
   const kernel = useContext(KernelContext);
   const ref =
     selection.ref?.type === "live-chart" ||
@@ -22,6 +30,10 @@ export function LiveChartInspectorPanel({ selection }: InspectorPanelProps) {
       ? selection.ref
       : null;
   const point = ref?.type === "live-chart-point" ? ref : null;
+  const isPointScope =
+    sectionScope === "point" ||
+    selection.kind === "live.chart-point" ||
+    Boolean(point);
   const descriptorId = ref?.descriptorId ?? "magnetization";
   const presetId: LiveChartPresetId = isLiveChartPresetId(descriptorId) ? descriptorId : "custom";
   const preset = liveChartPreset(presetId);
@@ -56,12 +68,38 @@ export function LiveChartInspectorPanel({ selection }: InspectorPanelProps) {
     execute("live-charts.set-range", { descriptorId: presetId, range });
   };
 
+  const pointSection = point ? (
+    <InspectorGroup title="Selected Point" collapsible defaultOpen>
+      <FieldRow label="Series" value={point.seriesId} />
+      <FieldRow label="Point" value={String(point.pointIndex)} />
+      <FieldRow label="Revision" value={String(point.revision)} />
+    </InspectorGroup>
+  ) : null;
+
   return (
-    <div className="fm-inspector-panel">
-      <InspectorGroup title="Live Chart">
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+      <InspectorMetricStrip
+        metrics={[
+          { label: "Preset", tone: "accent", value: presetId },
+          {
+            label: "Mode",
+            tone: descriptor?.liveMode === "paused" ? "warning" : "success",
+            value: descriptor?.liveMode === "paused" ? "paused" : "following",
+          },
+          { label: "Window", value: descriptor?.range.mode ?? "follow" },
+          { label: "Signals", value: String(selectedSeriesIds.length) },
+        ]}
+      />
+      <InspectorGroup title="Live Chart" collapsible defaultOpen>
         <FieldRow label="Descriptor" value={ref?.descriptorId ?? "not available"} />
       </InspectorGroup>
-      <InspectorGroup title="Display" description="Choose the live signals and window shown in the chart.">
+      {isPointScope ? pointSection : null}
+      <InspectorGroup
+        title="Display"
+        description="Choose the live signals and window shown in the chart."
+        collapsible
+        defaultOpen
+      >
         <div className="fm-inspector-field-row">
           <label className="fm-inspector-field-row__label" htmlFor="fm-live-chart-preset">Preset</label>
           <Select value={presetId} onValueChange={(value) => execute("live-charts.set-preset", { descriptorId: value })}>
@@ -134,13 +172,7 @@ export function LiveChartInspectorPanel({ selection }: InspectorPanelProps) {
           <p className="fm-live-chart-inspector__hint">Select signals from the chart legend.</p>
         )}
       </InspectorGroup>
-      {point ? (
-        <InspectorGroup title="Selected Point">
-          <FieldRow label="Series" value={point.seriesId} />
-          <FieldRow label="Point" value={String(point.pointIndex)} />
-          <FieldRow label="Revision" value={String(point.revision)} />
-        </InspectorGroup>
-      ) : null}
+      {!isPointScope ? pointSection : null}
     </div>
   );
 }
