@@ -23,6 +23,8 @@ BASE_IMPLEMENTATIONS = ('docker_build_control', 'docker_volume_dev', 'docker_vol
                         'docker_volume_cache_maintenance', 'docker_cache_retirement', 'docker_worktree_finish')
 OPTIONAL_IMPLEMENTATIONS = ('docker_group_storage', 'docker_helper_source', 'docker_volume_activation_reconcile', 'docker_volume_accepted_reattach',
                             'docker_activation_history_policy', 'docker_activation_history_reader', 'docker_activation_history_storage',
+                            'docker_activation_history', 'docker_activation_history_inventory',
+                            'docker_activation_history_admission', 'docker_activation_history_output',
                             'docker_volume_pre_admission_recreate', 'docker_volume_pre_admission_selector',
                             'docker_volume_pending_continuation', 'docker_volume_native_init_successor',
                             'docker_volume_drained_successor', 'docker_volume_reconcile',
@@ -843,12 +845,21 @@ command=[sys.executable,'-B','-m','unittest','test_docker_dev_defaults','test_do
 if sys.argv[1] == 'frontend-tools':
     command = [sys.executable, '-B', '-m', 'unittest', 'test_docker_dev_codegen', 'test_docker_volume_checks', 'test_docker_volume_frontend_recovery', 'test_docker_volume_dev_runtime_state', 'test_docker_volume_receipts', 'test_docker_dev_browser_qa']
 if sys.argv[1] in ('all', 'activation-history'):
-    history_modules = ['test_docker_activation_history_policy', 'test_docker_activation_history_reader', 'test_docker_activation_history_storage']
+    history_modules = ['test_docker_activation_history_policy', 'test_docker_activation_history_reader',
+        'test_docker_activation_history_storage', 'test_docker_activation_history_inventory', 'test_docker_activation_history_cli',
+        'test_docker_activation_history_admission', 'test_docker_activation_history_output', 'test_docker_activation_history_references']
     if sys.argv[1] == 'activation-history':
         command = [sys.executable, '-B', '-m', 'unittest', *history_modules,
             'test_docker_volume_activate', 'test_docker_volume_activation_reconcile',
             'test_docker_volume_receipts', 'test_docker_volume_pre_admission_selector',
-            'test_docker_build_control_cache_admission', 'test_docker_volume_checks']
+            'test_docker_build_control_cache_admission', 'test_docker_volume_checks', 'test_docker_helper_source',
+            'test_docker_activation_preflight', 'test_docker_isolated_snapshot_namespace',
+            'test_docker_dev_reconcile_helper_output_failure', 'test_docker_dev_release_unknown_activation',
+            'test_docker_volume_accepted_reattach', 'test_docker_live_retirement', 'test_docker_retirement_refusal',
+            'test_docker_volume_cancelled_activation', 'test_docker_volume_cancelled_activation_guard',
+            'test_docker_volume_dev_cancelled_activation', 'test_docker_volume_empty_quarantine',
+            'test_docker_volume_interrupted_fresh_archive', 'test_docker_volume_linux_supervision_stop',
+            'test_docker_volume_preparation_abort_archive']
     else:
         command.extend(history_modules)
 if sys.argv[1] == 'network-failure':

@@ -47,7 +47,17 @@ Przekroczenie odmawia archiwizacji i wymaga kolejnej decyzji o zachowaniu danych
 Preview jest tylko do odczytu. Apply wymaga hasha planu oraz świeżej kontroli
 referencji, procesów, zadań, lease i tożsamości grupy. Używa istniejącej blokady
 `operation.lock`, tego samego inode i namespace. Nie zmienia ownerów ani
-markerów operacji. Publikuje niezmienne metadane i indeks, fsync, a następnie
+markerów operacji. Od zebrania dowodów do zakończenia publikacji utrzymuje
+również współdzielone blokady istniejących `WRITER.lock` SessionStore i ledgeru.
+Aktywny writer powoduje odmowę; sam JSON o zwolnionym ownerze nie wyklucza
+nowego zapisu. `HOST_INVENTORY_OWNER.lock` może pozostać w posiadaniu zdrowego
+API: chroni czas życia właściciela, a publikacja jego pomiarów oraz zmiany
+rezerwacji wymagają osobnej, wykluczonej tutaj blokady writer ledgeru.
+Archiwizacja nie wycofuje ani nie zastępuje tego właściciela. Pin ledgeru
+obejmuje cały dokument poza `runtime_state.snapshot_sha256`, czyli hashem
+próbki telemetrycznej aktualizowanej co pięć sekund. Readiness, polityki,
+rezerwacje i wszystkie pozostałe pola nadal unieważniają zmieniony plan.
+Publikuje niezmienne metadane i indeks, fsync, a następnie
 atomowo przenosi cały katalog w obrębie tego samego filesystemu i synchronizuje
 oba katalogi nadrzędne. Żaden istniejący rekord nie jest przepisywany.
 
@@ -66,6 +76,43 @@ zapisu odmawia przed skutkami ubocznymi. Nie wystarcza zmienić samo `read()`.
 
 Implementacja obejmuje `docker_activation_history_reader`, kwalifikator
 historii, wspólny `docker_build_control` i zarządzaną receptę preview/apply.
+Recepta `just docker-dev-archive-activation <source-root> <activation>` wybiera
+istniejącą, zdrową parę usług, również po zweryfikowanym resume/iteration.
+Preview montuje control tylko do odczytu od pierwszego odczytu namespace;
+`... true <plan_sha256>` może zmienić wyłącznie historię w tym samym wolumenie.
+Oba tryby montują źródła, historyczny SessionStore i katalog wyników jako RO
+przez bind odmawiający przy braku katalogu źródłowego. Historyczne bindy
+`/state`, `/user-data`, źródeł, control i ledgeru są uwierzytelnione hashem
+Compose z aktywacji i jej terminalnym receiptem development. Dokładne rekordy
+kwalifikacji są ponownie sprawdzane pod blokadą przed publikacją.
+V1 wymaga Linux/WSL, jawnego literalnego celu `.zarr` pod `/user-data/`
+(także w podkatalogu), sąsiedniego
+skryptu o oryginalnym hashu oraz eksportu oryginalnych rekordów aktywacji.
+Pusty katalog runu nie wystarcza: wymagane są metadane Zarr, terminalny manifest
+runu i zachowane artefakty wskazane przez jego deklarację output storage.
+Brak pól przestrzennych jest dozwolony dla zapisu wyłącznie tabelarycznego.
+Pierwsza kwalifikowana postać wyniku to pojedynczy leaf `reversal-attempt-1`
+z tabelarycznym lub polowym autosave Zarr. Inne nazwy lub wiele leafów
+wymagają rozszerzenia walidatora; nie są pomijane podczas kontroli.
+Nie uzupełnia tych danych jako ukrytego skutku preview. Zmiana źródeł,
+instancji usług, pinów, ledgeru albo zachowanych danych unieważnia plan.
+
+Inwentarz obejmuje dokumenty bieżące i niezamknięte próby wszystkich
+rozpoznanych korzeni control. Nieznany korzeń lub konsument odmawia operacji.
+Historyczne markery aktywacji/retirement przestają być żywymi pinami wyłącznie
+po powiązaniu z pasującym succeeded terminalem. Wyłączenie obejmuje tylko
+uwierzytelniony plik markera; dodatkowe rekordy w jego katalogu pozostają
+objęte kontrolą referencji. Bieżące wskaźniki zachowują
+bezpośredniego poprzednika; dalsze domknięcie obejmuje jawne piny attempt/path,
+a nie cały łańcuch historycznych `retirement.run_id`. Root-owned marker
+własności wolumenu jest odczytywany osobno, bez zmiany uprawnień, walidowany
+według dokładnego schematu i kontrolowany przez pin inode/stat w helperze.
+W jedynym bieżącym `runtime-control/runtime-services/OWNER.json` pin pomija
+`heartbeat_at` po potwierdzeniu zdrowego schematu, czasu UTC i zgodności
+wszystkich pozostałych pól z niezmiennym `docker-client-<owner_token>.json`.
+Pełny dokument nadal podlega wykrywaniu referencji, a niezmienny rekord Ready
+jest pinowany w całości. Zmiana ownera, procesu, dzieci lub stanu unieważnia plan.
+
 Wymagane są wykonywalne regresje czytnika, planu/CAS, ochrony referencji,
 limitów, wyścigów i awarii. Próba 64 wpisy → archiwizacja → nowa aktywacja
 musi zachować bajty i dostęp po starym ID. Test źródeł nie jest dowodem

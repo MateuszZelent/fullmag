@@ -920,6 +920,11 @@ jobs:
           python -B scripts/test_docker_activation_history_policy.py -v
           python -B scripts/test_docker_activation_history_reader.py -v
           python -B scripts/test_docker_activation_history_storage.py -v
+          python -B scripts/test_docker_activation_history_inventory.py -v
+          python -B scripts/test_docker_activation_history_cli.py -v
+          python -B scripts/test_docker_activation_history_admission.py -v
+          python -B scripts/test_docker_activation_history_output.py -v
+          python -B scripts/test_docker_activation_history_references.py -v
           python -B scripts/test_docker_container_runtime_recovery.py -v
           python -B scripts/test_docker_volume_container_recovery.py -v
           python -B scripts/test_linux_native_device_preparation.py -v
