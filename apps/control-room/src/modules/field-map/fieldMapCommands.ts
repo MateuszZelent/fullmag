@@ -282,7 +282,8 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
       context.layout?.setFocusedSlot("viewport-main");
     }
     if (id === "field-map.export-png") {
-      const visibleCapture = sessionScopeKey
+      const explicitMonitorExport = typeof input?.monitorId === "string";
+      const visibleCapture = !explicitMonitorExport && sessionScopeKey
         ? getRegisteredFieldMapCapture(sessionScopeKey)
         : null;
       if (visibleCapture) {
@@ -320,7 +321,7 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
       const visibleOverlays = planar.field_overlays?.filter(
         (overlay) => overlay.raster_visible || overlay.vectors_visible,
       ) ?? [];
-      if (visibleOverlays.length > 0) {
+      if (!explicitMonitorExport && visibleOverlays.length > 0) {
         return {
           message: "The current 2D view has visible field overlays. Open the 2D view to export the displayed composition.",
           status: "failed",

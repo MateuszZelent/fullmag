@@ -28,6 +28,14 @@ OBSERVER_RETRIES = 2
 MAX_OBSERVER_OUTPUT_BYTES = 256 * 1024
 CANCEL_TIMEOUT_SECONDS = 30
 
+
+def _activation_error_message(error: BaseException) -> str:
+    # Retain the concrete admission/transport cause while keeping an unknown
+    # outcome unknown. Diagnostics never authorize a retry or cancellation.
+    detail = " ".join(str(error).split())[:2048]
+    return ("Activation outcome is unknown; services remain running and no retry was attempted. "
+            + "Cause: " + type(error).__name__ + ": " + detail)
+
 # Fixed image-side observer and exact-run Stop client. Identity inputs are passed as argv
 # environment values to a validated backend container; no shell or user source
 # is interpolated into this program.
@@ -577,9 +585,9 @@ def run_script(
             attempt=pins.attempt,
             config_sha256=pins.config_sha256,
             api_instance_id=api_instance_id,
-            message="Activation outcome is unknown; services remain running and no retry was attempted.",
+            message=_activation_error_message(error),
         )
-    except (ControlOutcomeUnknown, OSError, ValueError):
+    except (ControlOutcomeUnknown, OSError, ValueError) as error:
         return _result(
             "unknown",
             "activation_outcome_unknown",
@@ -588,7 +596,7 @@ def run_script(
             attempt=pins.attempt,
             config_sha256=pins.config_sha256,
             api_instance_id=api_instance_id,
-            message="Activation outcome is unknown; services remain running and no retry was attempted.",
+            message=_activation_error_message(error),
         )
 
     response = activation.get("response") if isinstance(activation, Mapping) else None

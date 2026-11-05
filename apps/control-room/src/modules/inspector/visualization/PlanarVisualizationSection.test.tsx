@@ -3,8 +3,14 @@ import { createRoot, hydrateRoot } from "react-dom/client";
 import { renderToString, renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { QuantityCatalogResource, VisualizationStateResource } from "@/kernel/api/apiTypes";
+import type {
+  PlanarFieldMetaResource,
+  QuantityCatalogResource,
+  VisualizationStateResource,
+} from "@/kernel/api/apiTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
+import { fieldMapSurfaceStore } from "@/kernel/visualization/fieldMapSurfaceStore";
+import { resolvePlanarSectionGeometryFromMeta } from "@/kernel/visualization/planarSectionModel";
 import type { PlanarTargetFieldProfile } from "./planarTargetFieldProfile";
 
 import { PlanarVisualizationSection } from "./PlanarVisualizationSection";
@@ -21,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   discretization: "fem",
   metaCalls: 0,
   maskCalls: 0,
+  section: null as PlanarFieldMetaResource["section"] | null,
   optimisticPlanar: null as (NonNullable<VisualizationStateResource["planar"]> & { field_overlays?: PlanarTargetFieldProfile[] }) | null,
   queuePatch: vi.fn(),
   queuePlanarFieldOverlayPatch: vi.fn(),
@@ -147,6 +154,7 @@ vi.mock("@/kernel/resources/planarFieldResources", () => ({
       mesh_overlay_descriptor: mocks.overlay,
       occupancy: { occupied_measure: 1 },
       operator: { kind: "plane_sample" },
+      section: mocks.section,
       source: {
         kind: "monitor",
         monitor_hash: "sha256:monitor",
@@ -303,6 +311,7 @@ const regionSelection: Selection = {
 };
 describe("PlanarVisualizationSection", () => {
   beforeEach(() => {
+    fieldMapSurfaceStore.reset();
     mocks.queuePatch.mockClear();
     mocks.queuePlanarFieldOverlayPatch.mockClear();
     mocks.overlay.available = true;
@@ -319,6 +328,7 @@ describe("PlanarVisualizationSection", () => {
     mocks.optimisticPlanar = null;
     mocks.metaCalls = 0;
     mocks.maskCalls = 0;
+    mocks.section = null;
     mocks.targets.airbox = { scope: "airbox", scope_id: "airbox" };
     mocks.targets.objects = [
       { scope: "object", scope_id: "free-layer" },
@@ -636,6 +646,104 @@ describe("PlanarVisualizationSection", () => {
     expect(html).toContain('aria-label="Coordinate (z)"');
     expect(html).toContain('aria-label="Sampling"');
     expect(html).not.toContain("Select monitor");
+  });
+
+  it("uses the base Airbox section for global controls, not selected-object metadata", async () => {
+    mocks.planar.source = { kind: "default" };
+    mocks.planar.view_scope = { kind: "airbox" };
+    mocks.planar.default_slice = {
+      operator: { kind: "plane_sample" },
+      plane: "xy",
+      position_fraction: 0.5,
+    };
+    mocks.section = {
+      cut_element_count: null,
+      layer_count: 12,
+      layer_index: 5,
+      layer_spacing_m: 2.5e-9,
+      layer_stops_m: [],
+      navigation_step_kind: "fdm_cell",
+      navigation_step_m: 2.5e-9,
+      normal_axis: "z",
+      normal_max_m: 40e-9,
+      normal_min_m: 10e-9,
+      plane: "xy",
+      requested_coordinate_m: 25e-9,
+      requested_fraction: 0.5,
+      resolved_coordinate_m: 23.75e-9,
+      stops_kind: "fdm_cell_layers",
+    };
+    const baseAirbox = {
+      cut_element_count: null,
+      layer_count: 26,
+      layer_index: 12,
+      layer_spacing_m: 2.5e-9,
+      layer_stops_m: [],
+      navigation_step_kind: "fdm_cell",
+      navigation_step_m: 2.5e-9,
+      normal_axis: "z",
+      normal_max_m: 60e-9,
+      normal_min_m: -5e-9,
+      plane: "xy",
+      requested_coordinate_m: 27.5e-9,
+      requested_fraction: 0.5,
+      resolved_coordinate_m: 26.25e-9,
+      stops_kind: "fdm_cell_layers",
+    } as NonNullable<PlanarFieldMetaResource["section"]>;
+    fieldMapSurfaceStore.set({
+      sectionGeometry: resolvePlanarSectionGeometryFromMeta(baseAirbox, "xy"),
+    });
+
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<PlanarVisualizationSection selection={selection} />));
+
+      const layer = findControl(container, "Layer");
+      expect(layer.getAttribute("max")).toBe("25");
+      expect(layer.getAttribute("aria-valuetext")).toBe("Layer 12 of 26");
+      expect(container.textContent).toContain("z 27.5 nm → 26.2 nm (cell layer 12 / 25)");
+      expect(container.textContent).not.toContain("23.8 nm");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("keeps common section coordinates unavailable when only object metadata exists", async () => {
+    mocks.planar.source = { kind: "default" };
+    mocks.planar.view_scope = { kind: "airbox" };
+    mocks.section = {
+      cut_element_count: null,
+      layer_count: 12,
+      layer_index: 5,
+      layer_spacing_m: 2.5e-9,
+      layer_stops_m: [],
+      navigation_step_kind: "fdm_cell",
+      navigation_step_m: 2.5e-9,
+      normal_axis: "z",
+      normal_max_m: 40e-9,
+      normal_min_m: 10e-9,
+      plane: "xy",
+      requested_coordinate_m: 25e-9,
+      requested_fraction: 0.5,
+      resolved_coordinate_m: 23.75e-9,
+      stops_kind: "fdm_cell_layers",
+    };
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<PlanarVisualizationSection selection={selection} />));
+
+      expect(findControl(container, "Coordinate (z)").disabled).toBe(true);
+      expect(container.textContent).not.toContain("Requested → resolved");
+      expect(container.textContent).not.toContain("23.8 nm");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
   });
 
   it("keeps source and slice controls global while Airbox quantity belongs to its base profile", () => {

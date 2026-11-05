@@ -1,31 +1,57 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import type { DomainMetaResource } from "@/kernel/api/apiTypes";
+import type { PlanarFieldMetaResource } from "@/kernel/api/apiTypes";
 
 import { PlanarSectionStrip } from "./PlanarSectionStrip";
 
-const fdmDomain = {
-  bounds: { min: [0, 0, 0], max: [512e-9, 256e-9, 4e-9] },
-  discretization: "fdm",
-  grid: { origin: [0, 0, 0], shape: [128, 64, 4], spacing: [4e-9, 4e-9, 1e-9] },
-} as unknown as DomainMetaResource;
+const fdmSection = {
+  cut_element_count: null,
+  layer_count: 4,
+  layer_index: 1,
+  layer_spacing_m: 1e-9,
+  layer_stops_m: [],
+  navigation_step_kind: "fdm_cell",
+  navigation_step_m: 1e-9,
+  normal_axis: "z",
+  normal_max_m: 4e-9,
+  normal_min_m: 0,
+  plane: "xy",
+  requested_coordinate_m: 1.5e-9,
+  requested_fraction: 0.5,
+  resolved_coordinate_m: 1.5e-9,
+  stops_kind: "fdm_cell_layers",
+} as unknown as NonNullable<PlanarFieldMetaResource["section"]>;
 
-const femDomain = {
-  bounds: { min: [0, 0, 0], max: [100e-9, 50e-9, 10e-9] },
-  discretization: "fem",
-  grid: null,
-} as unknown as DomainMetaResource;
+const femSection = {
+  cut_element_count: 8,
+  layer_count: null,
+  layer_index: null,
+  layer_spacing_m: null,
+  layer_stops_m: [],
+  navigation_step_kind: "extent_fraction",
+  navigation_step_m: 1e-11,
+  normal_axis: "z",
+  normal_max_m: 10e-9,
+  normal_min_m: 0,
+  plane: "xy",
+  requested_coordinate_m: 2.5e-9,
+  requested_fraction: 0.25,
+  resolved_coordinate_m: 2.5e-9,
+  stops_kind: "continuous",
+} as unknown as NonNullable<PlanarFieldMetaResource["section"]>;
+
+const averageOperator = { kind: "slab_average", thickness_m: 8e-9 } as const;
 
 function render(
-  domain: DomainMetaResource,
+  section: NonNullable<PlanarFieldMetaResource["section"]>,
   operator: { kind: "plane_sample" } | { kind: "slab_average"; thickness_m: number },
   positionFraction = 0.5,
 ) {
   return renderToStaticMarkup(
     <PlanarSectionStrip
       defaultSlice={{ operator, plane: "xy", position_fraction: positionFraction }}
-      domain={domain}
+      section={section}
       onChange={() => undefined}
     />,
   );
@@ -33,7 +59,7 @@ function render(
 
 describe("PlanarSectionStrip", () => {
   it("offers a discrete FDM layer slider with the snapped coordinate", () => {
-    const html = render(fdmDomain, { kind: "plane_sample" });
+    const html = render(fdmSection, { kind: "plane_sample" });
     expect(html).toContain('aria-label="Section plane"');
     expect(html).toContain('aria-label="Layer along z"');
     expect(html).toContain('max="3"');
@@ -42,15 +68,30 @@ describe("PlanarSectionStrip", () => {
   });
 
   it("describes the full-thickness average instead of a slider", () => {
-    const html = render(fdmDomain, { kind: "slab_average", thickness_m: 8e-9 });
+    const html = render(fdmSection, averageOperator);
     expect(html).toContain("Mean over Z · 4 layers");
     expect(html).not.toContain('type="range"');
   });
 
   it("keeps a continuous position for unstructured meshes", () => {
-    const html = render(femDomain, { kind: "plane_sample" }, 0.25);
+    const html = render(femSection, { kind: "plane_sample" }, 0.25);
     expect(html).toContain('aria-label="Position along z"');
     expect(html).toContain("z: 2.50 nm");
     expect(html).not.toContain("· layer");
+  });
+
+  it("uses the published Airbox bounds and FDM layer count", () => {
+    const airbox = {
+      ...fdmSection,
+      layer_count: 26,
+      layer_spacing_m: 2.5e-9,
+      normal_max_m: 60e-9,
+      normal_min_m: -5e-9,
+      resolved_coordinate_m: 26.25e-9,
+    } as NonNullable<PlanarFieldMetaResource["section"]>;
+    const html = render(airbox, { kind: "plane_sample" });
+
+    expect(html).toContain('max="25"');
+    expect(html).toContain("z: 26.25 nm · layer 12 / 25");
   });
 });

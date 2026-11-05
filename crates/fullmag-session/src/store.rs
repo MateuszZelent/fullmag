@@ -36,6 +36,8 @@ use crate::solution_set_catalog::SolutionSetCatalog;
 use crate::types::*;
 use crate::writer::{ReadTransaction, WriteTransaction, Writer};
 
+mod claimed_worker_interruption;
+
 const MAX_TASK_ADMISSION_RECORD_BYTES: usize = 1024 * 1024;
 const MAX_PROVIDER_JOB_SUBMISSION_BYTES: usize = 64 * 1024;
 

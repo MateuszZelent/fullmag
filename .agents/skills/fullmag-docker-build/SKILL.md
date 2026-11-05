@@ -24,6 +24,14 @@ współdzielone dane zgodnie z ich retencją. Aplikację buduje i uruchamia ten 
   ext4/xfs/btrfs; oba profile mają osobne dowody storage. WSL używa bieżącego
   endpointu Docker, a Windows contextu `desktop-linux`. Szczegóły i granice:
   [ADR 0064](../../../docs/adr/0064-docker-development-linux-wsl-host.md).
+- W Linux/WSL każda symulacja ma własny `<stem>.py`, a sąsiedni `<stem>.zarr` i potrzebne PNG/PPTX,
+  checkpointy oraz provenance przechowuj na ext4 hoście WSL albo w samowystarczalnym Zarr. Wymagane dane do
+  interpretacji/wznowienia nie mogą mieć jedynej kopii w Dockerze; Windows tylko dla raportu jawnie wybranego
+  przez użytkownika.
+- `FULLMAG_SCRIPT_OUTPUT_DIRECTORY` z `.env` głównego checkoutu może udostępnić RW tylko wskazany istniejący
+  podkatalog przez `/opt/fullmag/script-output`; bind źródeł pozostaje RO. Nie udostępniaj całego checkoutu
+  RW.
+
 - Współdzielone cache zależności i pakiet current/rollback zachowują własną
   retencję; prywatne compiler outputs podlegają ADR 0076. Usunięcie kontenera
   nie usuwa named volumes ani obrazów/BuildKit.
@@ -42,9 +50,14 @@ bez rootu control, backendu i ledgeru. Shared Cargo/pnpm/packages oraz obrazy i
 BuildKit pozostają współdzielone poza prywatnym volume. Fingerprint ABI/toolchain
 nadal warunkuje zgodność cache, nie tożsamość volume. Compiler outputs, cache-hit,
 failed generation i retencję pakietu opisuje sekcja 7 ADR 0076.
-Migracja dotyczy jednej zatrzymanej/drained grupy naraz; stare wolumeny zostają
-do archiwizacji i kontroli referencji. Ten kontrakt nie potwierdza implementacji:
-Compose, launcher, mounty i runtime pozostają **NOT VERIFIED** do sprawdzenia.
+Migracja dotyczy jednej zatrzymanej/drained grupy naraz; stare wolumeny zostają do archiwizacji i
+kontroli referencji. Root `BuildControl.volume` i ledger mogą zawierać unikalne rekordy
+control/owner/lock, więc nie uznawaj całego wolumenu za odtwarzalny cache. Przed retencją
+zinwentaryzuj i wyeksportuj wymagane rekordy; sprawdź, że dane i provenance potrzebne do
+interpretacji lub wznowienia są na WSL albo w samowystarczalnym Zarr, oraz potwierdź brak aktywnych
+zadań, konsumentów, lease i referencji. Zachowaj kwalifikowany receipt; nie usuwaj aktywnego
+lock/ledger, a receipt ani metadane nie omijają tej blokady. Ten kontrakt nie potwierdza
+implementacji: Compose, launcher, mounty i runtime pozostają **NOT VERIFIED** do sprawdzenia.
 Szczegóły i zakres supersession: [ADR 0076](../../../docs/adr/0076-single-private-volume-per-dev-group.md).
 
 ## Lokalizacja nowych obrazów ext4 na tym hoście
