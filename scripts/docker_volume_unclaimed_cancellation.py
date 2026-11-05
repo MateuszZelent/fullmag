@@ -60,6 +60,7 @@ PRESTART_RESUME_ERROR = (
     "only the exact active build-control helper may be retained"
 )
 PINNED_LAYOUT_RESUME_ERROR = "Single-volume group cannot fall back to legacy volume allocation; resume its pinned layout"
+PREPARED_PATH_RESUME_ERROR = "Invalid control-volume relative path"
 NATIVE_FAILURE_RESUME_ERROR = "Unclaimed cancellation backend has no clean terminal container outcome"
 NATIVE_FAILURE_LOG_MARKER = "runtime generation differs from the execution pin"
 
@@ -1167,7 +1168,9 @@ def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, con
             or (control.namespace and failed.get("control_namespace") != control.namespace)
             or (control.namespace and failed.get("namespace_registry_sha256")
                 != control.namespace_registry_sha256)
-            or failed.get("error") not in {PRESTART_RESUME_ERROR, PINNED_LAYOUT_RESUME_ERROR}
+            or failed.get("error") not in {
+                PRESTART_RESUME_ERROR, PINNED_LAYOUT_RESUME_ERROR, PREPARED_PATH_RESUME_ERROR
+            }
             or not isinstance(maintenance, Mapping)
             or set(maintenance) != {"request_id", "request_sha256", "request_path"}
             or maintenance.get("request_id") != expected_maintenance_shape["request_id"]
@@ -1193,9 +1196,26 @@ def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, con
             or before.get("prior_attempt") != args.attempt
             or before.get("prior_compose_sha256") != args.config_sha256):
         _fail("Failed maintenance preflight does not bind the original request and Compose pins")
-    # Newer attempts persist these checkpoints. The current failed attempt
-    # predates that addition, so its exact pre-start failure is instead bound
-    # by the preserved preflight plus the authoritative absence checks below.
+    prepared_path_resume = failed.get("error") == PREPARED_PATH_RESUME_ERROR
+    if prepared_path_resume:
+        witness = before.get("prepared_unclaimed_quarantine")
+        if (not isinstance(witness, Mapping)
+                or witness != inputs.get("prepared_unclaimed_quarantine")
+                or witness.get("schema") != "fullmag.docker-prepared-unclaimed-quarantine.v1"
+                or any(not isinstance(witness.get(key), str)
+                       or SHA256_RE.fullmatch(witness[key]) is None
+                       for key in ("quarantine_sha256", "stop_journal_sha256"))
+                or witness.get("quarantine_sha256")
+                != getattr(args, "prepared_quarantine_sha256", None)
+                or not isinstance(witness.get("target"), Mapping)):
+            _fail("Prepared-path continuation requires the exact witnessed quarantine and CLI digest")
+        target = witness["target"]
+        for field in ("run_id", "task_id"):
+            if _safe_id(target.get(field), "prepared quarantine " + field) != getattr(args, field, None):
+                _fail("Prepared-path continuation differs from the exact prepared quarantine task")
+    # Legacy pre-start failures may predate these checkpoints and instead rely
+    # on preserved preflight plus authoritative absence checks below. The newer
+    # pinned-layout and prepared-path boundaries always require both records.
     stopped_checkpoint = _control_raw(
         control, failed_root + "/unclaimed-cancellation-stopped.json", optional=True
     )
@@ -1206,6 +1226,8 @@ def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, con
         _fail("Maintenance stop/removal checkpoints are incomplete")
     if failed.get("error") == PINNED_LAYOUT_RESUME_ERROR and stopped_checkpoint is None:
         _fail("Pinned-layout continuation requires durable exact stop/removal checkpoints")
+    if prepared_path_resume and stopped_checkpoint is None:
+        _fail("Prepared-path continuation requires durable exact stop/removal checkpoints")
 
     previous_root = "development/attempts/" + args.attempt
     previous_raw = _control_raw(control, previous_root + "/terminal.json")
@@ -1323,7 +1345,7 @@ def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, con
         _fail("Compose project or control volume has consumers; maintenance resume is withheld")
 
     # Validate any newer stop/removal checkpoints and the exact Docker log
-    # archives they bind. The original failed attempt has neither checkpoint.
+    # archives they bind. Legacy pre-start attempts may have neither checkpoint.
     if stopped_checkpoint is not None:
         stopped = _json_object(stopped_checkpoint, "stopped cancellation checkpoint")
         removed = _json_object(removed_checkpoint, "removed cancellation checkpoint")
@@ -1462,6 +1484,7 @@ def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, con
             "failed_terminal_sha256": _sha256(terminal_raw),
             "preflight_sha256": _sha256(before_raw),
         }
+        control.write_bytes(operation["root"] + "/unclaimed-cancellation-before.json", before_raw)
         control.write(operation["root"] + "/receipt.json", operation["receipt"])
         host = volume_dev._session_host()
         reuse = {

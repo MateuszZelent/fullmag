@@ -1024,11 +1024,14 @@ def assert_prepared_start_allowed(control, request_id=None, *, reuse_state=None)
 
 
 def assert_prepared_maintenance_allowed(control, operation, maintenance):
+    inputs = (operation or {}).get('receipt', {}).get('inputs', {})
     raw = control.read_bytes(PREPARED_QUARANTINE, optional=True)
     if raw is None:
+        require('prepared_unclaimed_quarantine' not in inputs,
+                'maintenance requires its live prepared quarantine before start')
         return
     record = decode(raw)
-    witness = (operation or {}).get('receipt', {}).get('inputs', {}).get('prepared_unclaimed_quarantine', {})
+    witness = inputs.get('prepared_unclaimed_quarantine', {})
     require(record.get('schema') == PREPARED_QUARANTINE_SCHEMA and record.get('state') == 'cancellation-required'
             and witness.get('quarantine_sha256') == sha(raw) and witness.get('target') == record.get('target'),
             'maintenance has no exact qualified prepared quarantine admission')

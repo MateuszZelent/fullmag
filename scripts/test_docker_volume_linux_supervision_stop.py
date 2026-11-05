@@ -931,6 +931,16 @@ class PreparedConsumerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'maintenance request differs'):
             subject.assert_prepared_maintenance_allowed(self.fixture.control, operation, maintenance)
 
+    def test_prepared_maintenance_requires_its_live_quarantine_before_start(self):
+        operation, maintenance, _ = self._maintenance_request()
+        del self.fixture.docs[subject.PREPARED_QUARANTINE]
+        with self.assertRaisesRegex(ValueError, 'live prepared quarantine'):
+            subject.assert_prepared_maintenance_allowed(self.fixture.control, operation, maintenance)
+
+    def test_legacy_maintenance_without_prepared_witness_keeps_optional_quarantine(self):
+        del self.fixture.docs[subject.PREPARED_QUARANTINE]
+        subject.assert_prepared_maintenance_allowed(self.fixture.control, {'receipt': {'inputs': {}}}, None)
+
     def test_render_preserves_40_cpu_budget_native_gate_and_all_44_sources(self):
         import docker_volume_dev as dev
         included = sorted('examples/fixture-' + str(i) + '.py' for i in range(44))
