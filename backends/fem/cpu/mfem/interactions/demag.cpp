@@ -172,12 +172,10 @@ bool compute_demag_field_for_magnetization(
 {
     demag_energy = 0.0;
 
-    if (!demag_poisson_operator_dependencies_current(ctx, error)) {
-        return false;
-    }
-
     DemagFieldUpdateDecision decision{};
     if (!plan_demag_field_update(ctx, decision, error)) {
+        // Preserve the dependency diagnostic for a previously invalidated operator.
+        demag_poisson_operator_dependencies_current(ctx, error);
         return false;
     }
 
@@ -189,12 +187,16 @@ bool compute_demag_field_for_magnetization(
             }
             break;
         case DemagFieldUpdateAction::FreshPoissonSolve:
+            // The Poisson solve validates operator dependencies before using them.
             if (!context_compute_demag_poisson(
                     ctx, m_xyz, h_demag_xyz, demag_energy, allow_interrupt, timings, error)) {
                 return false;
             }
             break;
         case DemagFieldUpdateAction::UseCachedField:
+            if (!demag_poisson_operator_dependencies_current(ctx, error)) {
+                return false;
+            }
             if (demag_poisson_try_load_cached_field(ctx, h_demag_xyz)) {
                 demag_energy = demag_poisson_cached_energy_from_field(
                     ctx,
