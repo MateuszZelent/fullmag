@@ -1128,11 +1128,24 @@ def _reuse_prepared_images(selected: Path, control, helper_image: str,
     return {"toolchain": toolchain, "images": images}
 
 
+def _resume_backend_image_pin(args):
+    """Allow one explicit current-image pin only for pre-start maintenance resume."""
+    value = getattr(args, "resume_backend_image_id", None)
+    if value is not None:
+        if (getattr(args, "resume_maintenance_attempt", None) is None
+                or getattr(args, "resume_native_failure_attempt", None) is not None):
+            _fail("--resume-backend-image-id requires only --resume-maintenance-attempt")
+        if not isinstance(value, str) or IMAGE_RE.fullmatch(value) is None:
+            _fail("--resume-backend-image-id must be a full immutable sha256 image ID")
+    return value
+
+
 def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, control):
     """Resume only the observed failure before the first replacement container."""
     from docker_dev import _resolve_gpu_access, _verify_docker_gpu_access
     import docker_volume_dev as volume_dev
 
+    resume_backend_image = _resume_backend_image_pin(args)
     resume_attempt = getattr(args, "resume_maintenance_attempt", None)
     if not isinstance(resume_attempt, str) or ATTEMPT_RE.fullmatch(resume_attempt) is None:
         _fail("--resume-maintenance-attempt must name one exact prior maintenance attempt")
@@ -1401,8 +1414,11 @@ def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, con
             or failed_inputs.get("gpu_access_requested") != policy
             or failed_inputs.get("device_access") != old_access):
         _fail("Failed maintenance and original runtime have different device-access pins")
+    failed_image = failed_inputs.get("image_id")
+    if not isinstance(failed_image, str) or IMAGE_RE.fullmatch(failed_image) is None:
+        _fail("Failed maintenance has no immutable original backend image pin")
     prepared = _reuse_prepared_images(
-        selected, control, helper_image, failed_inputs.get("image_id")
+        selected, control, helper_image, resume_backend_image or failed_image
     )
     backend_image = prepared["images"]["backend"].get("image_id")
     device_access = _verify_docker_gpu_access(
@@ -1427,6 +1443,14 @@ def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, con
         **({'prepared_unclaimed_quarantine': before['prepared_unclaimed_quarantine']}
            if 'prepared_unclaimed_quarantine' in before else {}),
     }
+    if resume_backend_image is not None:
+        backend_receipt = prepared["images"]["backend"]
+        operation_inputs["unclaimed_cancellation_image_transition"] = {
+            "previous_backend_image_id": failed_image,
+            "backend_image_id": backend_image,
+            "backend_image_attempt": backend_receipt["attempt"],
+            "backend_source_digest": backend_receipt["source_digest"],
+        }
     if 'prepared_unclaimed_quarantine' in before:
         args.native_contract = list(before['prepared_unclaimed_quarantine']['retained_native_contracts'])
     args.profile = "dev"
@@ -2100,6 +2124,7 @@ def cancel_unclaimed(args) -> dict[str, Any]:
     )
     import docker_volume_dev as volume_dev
 
+    _resume_backend_image_pin(args)
     require_host()
     if not re.fullmatch(r"[0-9a-f]{32}", str(getattr(args, "attempt", ""))):
         _fail("--attempt must identify one exact prior volume DEV operation")

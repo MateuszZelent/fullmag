@@ -2889,6 +2889,11 @@ def _parser() -> argparse.ArgumentParser:
             "after its pinned old services are already absent"
         ),
     )
+    cancel_unclaimed.add_argument(
+        "--resume-backend-image-id",
+        help=("explicit immutable backend image ID from the current verified same-group "
+              "image receipt; valid only with --resume-maintenance-attempt"),
+    )
     cancellation_resume.add_argument(
         "--resume-native-failure-attempt",
         metavar="OPERATION_UUID",

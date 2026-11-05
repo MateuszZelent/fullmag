@@ -477,6 +477,60 @@ def _validate_existing_development_operation(control, operation, selected, ident
     return dict(receipt)
 
 
+def _validated_cancellation_image_transition(args, control, operation, reuse_state, maintenance, images):
+    """Bind an explicit resume image change to current and historical receipts."""
+    key = "unclaimed_cancellation_image_transition"
+    receipt = operation.get("receipt", {}) if isinstance(operation, Mapping) else {}
+    inputs = receipt.get("inputs", {})
+    transition = inputs.get(key) if isinstance(inputs, Mapping) else None
+    pin = getattr(args, "resume_backend_image_id", None)
+    if transition is None and pin is None:
+        return None
+    if (maintenance is None or operation is None or reuse_state is None
+            or getattr(args, "resume_maintenance_attempt", None) is None
+            or getattr(args, "resume_native_failure_attempt", None) is not None
+            or not isinstance(transition, Mapping)
+            or set(transition) != {"previous_backend_image_id", "backend_image_id",
+                                   "backend_image_attempt", "backend_source_digest"}):
+        raise BuildControlError("Image transition requires an explicit owned maintenance resume")
+    for field in ("previous_backend_image_id", "backend_image_id"):
+        if not isinstance(transition[field], str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", transition[field]):
+            raise BuildControlError("Image transition has an invalid immutable image ID")
+    if (not isinstance(transition["backend_image_attempt"], str)
+            or _RECOVERY_ATTEMPT.fullmatch(transition["backend_image_attempt"]) is None
+            or not isinstance(transition["backend_source_digest"], str)
+            or _SHA256.fullmatch(transition["backend_source_digest"]) is None
+            or transition["backend_image_id"] != pin
+            or inputs.get("image_id") != pin):
+        raise BuildControlError("Image transition differs from its explicit image/receipt pins")
+    from docker_volume_unclaimed_cancellation import _control_raw, _verified_image_receipt
+    backend = images.get("backend") if isinstance(images, Mapping) else None
+    current = _verified_image_receipt(control, "image-backend")
+    if (not isinstance(backend, Mapping) or backend != current
+            or current.get("image_id") != transition["backend_image_id"]
+            or current.get("attempt") != transition["backend_image_attempt"]
+            or current.get("source_digest") != transition["backend_source_digest"]):
+        raise BuildControlError("Image transition differs from the verified prepared backend receipt")
+    link = receipt.get("unclaimed_cancellation_resume")
+    attempt = args.resume_maintenance_attempt
+    if (not isinstance(link, Mapping) or link.get("failed_attempt") != attempt
+            or not isinstance(attempt, str) or _RECOVERY_ATTEMPT.fullmatch(attempt) is None):
+        raise BuildControlError("Image transition has no pinned historical maintenance receipt")
+    raw = _control_raw(control, "development/attempts/" + attempt + "/terminal.json")
+    if (raw is None or hashlib.sha256(raw).hexdigest() != link.get("failed_terminal_sha256")):
+        raise BuildControlError("Image transition lost its exact historical maintenance receipt")
+    try:
+        historical = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise BuildControlError("Image transition historical receipt is invalid") from error
+    historical_inputs = historical.get("inputs") if isinstance(historical, Mapping) else None
+    if (not isinstance(historical_inputs, Mapping)
+            or historical_inputs.get("image_id") != transition["previous_backend_image_id"]
+            or historical_inputs.get("unclaimed_cancellation") != maintenance):
+        raise BuildControlError("Image transition differs from the original maintenance image/request")
+    return dict(transition)
+
+
 def _validate_existing_operation_inputs(receipt, expected):
     """Keep the ordinary DEV input contract immutable on a reused lease.
 
@@ -502,6 +556,8 @@ def _validate_existing_operation_inputs(receipt, expected):
             )
     if actual.get("unclaimed_cancellation") != expected.get("unclaimed_cancellation"):
         raise BuildControlError("Existing development operation input differs: unclaimed_cancellation")
+    if actual.get("unclaimed_cancellation_image_transition") != expected.get("unclaimed_cancellation_image_transition"):
+        raise BuildControlError("Existing development operation input differs: unclaimed_cancellation_image_transition")
     if "post_build_generation" in expected and actual.get("post_build_generation") != expected.get(
         "post_build_generation"
     ):
@@ -2095,6 +2151,15 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
     if helper_source_binding is not None:
         _revalidate_helper_source_binding(helper_source_binding, getattr(args, "source_root", None))
     maintenance = _validate_cancellation_maintenance(maintenance)
+    declared_receipt = provided_operation.get("receipt", {}) if isinstance(provided_operation, Mapping) else {}
+    declared_inputs = declared_receipt.get("inputs", {}) if isinstance(declared_receipt, Mapping) else {}
+    if (getattr(args, "resume_backend_image_id", None) is not None
+            or (isinstance(declared_inputs, Mapping)
+                and "unclaimed_cancellation_image_transition" in declared_inputs)):
+        if (maintenance is None or provided_operation is None or reuse_state is None
+                or getattr(args, "resume_maintenance_attempt", None) is None
+                or getattr(args, "resume_native_failure_attempt", None) is not None):
+            raise BuildControlError("Image transition requires an explicit owned maintenance resume")
     from docker_volume_terminal_observation import validate_context
     terminal_observation = validate_context(terminal_observation)
     if terminal_observation is not None and (reuse_state is None or args.script is not None
@@ -2305,6 +2370,11 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         operation_inputs["recreation_resume"]["proof_sha256"] = hashlib.sha256(
             canonical(recreation_resume_proof)
         ).hexdigest()
+    image_transition = _validated_cancellation_image_transition(
+        args, control, provided_operation, reuse_state, maintenance, images
+    )
+    if image_transition is not None:
+        operation_inputs["unclaimed_cancellation_image_transition"] = image_transition
     if provided_operation is not None:
         _validate_existing_operation_inputs(provided_operation.get("receipt", {}), operation_inputs)
     operation_context = (control.operation("development", operation_inputs)

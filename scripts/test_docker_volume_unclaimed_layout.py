@@ -1,6 +1,7 @@
 """Cancellation preserves the pinned private group layout before allocation."""
 import ast
 import copy
+import json
 from contextlib import ExitStack, contextmanager
 from unittest.mock import Mock
 import sys
@@ -117,9 +118,10 @@ class PreparedPathResumeTests(unittest.TestCase):
         with self.assertRaisesRegex(BuildControlError, 'exact current terminal receipt'):
             self.invoke(current_matches=False)
 
-    def full_resume(self, corrupt=None):
+    def full_resume(self, corrupt=None, *, backend_pin=None):
         """Exercise durable proof copying through the real resume orchestration."""
         self.args.port = 3197
+        self.args.resume_backend_image_id = backend_pin
         image = 'sha256:' + '1' * 64
         ids = {'backend': '2' * 64, 'frontend': '3' * 64}
         document = {'name': self.control.project, 'services': {
@@ -145,7 +147,7 @@ class PreparedPathResumeTests(unittest.TestCase):
         request_sha = cancellation._sha256(request_raw)
         maintenance = self.failed['inputs']['unclaimed_cancellation']
         maintenance['request_sha256'] = request_sha
-        self.failed['inputs'].update(source_root='/checkout', image_id=image,
+        self.failed['inputs'].update(source_root='/checkout', image_id='bad' if corrupt == 'failed-image' else image,
                                      gpu_access_requested='disabled', device_access='cpu')
         self.before.update(
             request_sha256=request_sha, prior_compose_sha256=self.args.config_sha256,
@@ -235,7 +237,8 @@ class PreparedPathResumeTests(unittest.TestCase):
             mock(cancellation, '_project_container_ids', side_effect=[{'foreign'} if corrupt == 'consumer' else set(), {'helper'}])
             mock(cancellation, '_volume_consumer_ids', side_effect=[set(), {'helper'}])
             mock(cancellation, '_operation_helper_id', return_value='helper')
-            mock(cancellation, '_reuse_prepared_images', return_value={'images': {'backend': {'image_id': image}}})
+            image_reuse = mock(cancellation, '_reuse_prepared_images', return_value={'images': {'backend': {
+                'image_id': backend_pin or image, 'attempt': '7' * 32, 'source_digest': '8' * 64}}})
             import docker_dev
             mock(docker_dev, '_resolve_gpu_access', return_value='disabled')
             mock(docker_dev, '_verify_docker_gpu_access', return_value='cpu')
@@ -253,6 +256,7 @@ class PreparedPathResumeTests(unittest.TestCase):
             finally:
                 for path, raw in original.items():
                     self.assertEqual(files[path], raw, path)
+        image_reuse.assert_called_once_with(Path('/checkout'), self.control, 'helper-image', backend_pin or image)
         return files, original, operation, before_raw
 
     def test_resume_persists_original_before_bytes_with_historical_link(self):
@@ -261,17 +265,31 @@ class PreparedPathResumeTests(unittest.TestCase):
         self.control.write_bytes.assert_called_once_with(path, before_raw)
         self.assertEqual(files[path], before_raw)
         self.assertEqual(operation['receipt']['unclaimed_cancellation_preflight'], self.before)
+        self.assertNotIn('unclaimed_cancellation_image_transition', operation['receipt']['inputs'])
         link = operation['receipt']['unclaimed_cancellation_resume']
         self.assertEqual(link['failed_attempt'], self.args.resume_maintenance_attempt)
         self.assertEqual(link['preflight_sha256'], cancellation._sha256(before_raw))
         failed_raw = original['development/attempts/' + self.args.resume_maintenance_attempt + '/terminal.json']
         self.assertEqual(link['failed_terminal_sha256'], cancellation._sha256(failed_raw))
 
+    def test_resume_backend_image_pin_is_explicit_and_preserves_history(self):
+        new_image = 'sha256:' + '9' * 64
+        _, original, operation, _ = self.full_resume(backend_pin=new_image)
+        transition = operation['receipt']['inputs']['unclaimed_cancellation_image_transition']
+        self.assertEqual(transition, {
+            'previous_backend_image_id': 'sha256:' + '1' * 64,
+            'backend_image_id': new_image, 'backend_image_attempt': '7' * 32,
+            'backend_source_digest': '8' * 64})
+        failed = json.loads(original['development/attempts/' + self.args.resume_maintenance_attempt + '/terminal.json'])
+        self.assertEqual(failed['inputs']['image_id'], transition['previous_backend_image_id'])
+        self.assertEqual(operation['receipt']['inputs']['image_id'], new_image)
+
     def test_prepared_resume_still_rejects_broken_checkpoint_hash_chain(self):
-        for corruption in ('stop-hash', 'removal-hash', 'consumer'):
+        for corruption in ('stop-hash', 'removal-hash', 'consumer', 'failed-image'):
             with self.subTest(corruption=corruption):
                 self.setUp()
-                message = 'has consumers' if corruption == 'consumer' else 'Persisted stop/removal checkpoints'
+                message = {'consumer': 'has consumers', 'failed-image': 'immutable original backend image pin'}.get(
+                    corruption, 'Persisted stop/removal checkpoints')
                 with self.assertRaisesRegex(BuildControlError, message):
                     self.full_resume(corruption)
                 self.control.operation.assert_not_called()
@@ -314,6 +332,190 @@ class PreparedPathResumeTests(unittest.TestCase):
                     self.failed['error'] = 'Invalid control-volume relative path: anything' if case == 'generic-error' else 'unknown'
                 with self.assertRaises(BuildControlError):
                     self.invoke()
+
+
+class ResumeImagePinTests(unittest.TestCase):
+    def setUp(self):
+        self.helper = 'sha256:' + 'a' * 64
+        self.backend = 'sha256:' + 'b' * 64
+        self.control = SimpleNamespace(project='project', volume='volume', identity={})
+        self.files = {}
+        self.inspections = {}
+        self.configuration = {'name': 'project', 'services': {'fem-gpu-toolchain': {'build': {
+            'args': {'FULLMAG_CUDA_BASE_IMAGE': self.helper}, 'target': 'development'}}}}
+        build = self.configuration['services']['fem-gpu-toolchain']['build']
+        toolchain_inputs = {'source_inputs': [{'path': 'dep', 'sha256': cancellation._sha256(b'dep')}],
+                            'build_args': build['args'], 'target': 'development'}
+        self.receipts = {}
+        self.install('toolchain', toolchain_inputs, 'sha256:' + 'c' * 64, '1' * 32)
+        parent = self.receipts['toolchain']['image_id']
+        import docker_dev
+        for kind, inventory in (('dev', docker_dev.BASE_CONTEXT_FILES),
+                                ('backend', docker_dev.RUNTIME_IMAGE_CONTEXT_FILES)):
+            names = sorted({relative for _, relative in inventory}
+                           | {'docker/all-in-one/Dockerfile.' + kind + '.dockerignore'})
+            inputs = {'parent_image_id': parent, 'files': [
+                {'path': name, 'sha256': cancellation._sha256(name.encode())} for name in names]}
+            image = self.backend if kind == 'backend' else 'sha256:' + 'd' * 64
+            self.install('image-' + kind, inputs, image, ('2' if kind == 'dev' else '3') * 32)
+            parent = image
+
+    def install(self, phase, inputs, image, attempt):
+        receipt = {'schema': 'fullmag.docker-build-operation.v1', 'phase': phase,
+                   'state': 'succeeded', 'compose_project': 'project', 'control_volume': 'volume',
+                   'attempt': attempt, 'inputs': inputs, 'source_digest': cancellation._sha256(cancellation.canonical(inputs)),
+                   'image_id': image}
+        self.receipts[phase] = receipt
+        self.persist(phase)
+        self.inspections[image] = [{'Id': image, 'Config': {'Labels': {
+            'org.fullmag.compose.project': 'project',
+            'org.fullmag.build.input-digest': receipt['source_digest']}}}]
+
+    def persist(self, phase):
+        receipt = self.receipts[phase]
+        raw = cancellation.canonical(receipt) + b'\n'
+        self.files[phase + '/verified.json'] = raw
+        self.files[phase + '/attempts/' + receipt['attempt'] + '/terminal.json'] = raw
+
+    def reuse(self, expected):
+        import bootstrap_docker_toolchain as bootstrap
+        with ExitStack() as stack:
+            def mock(obj, name, **kwargs):
+                return stack.enter_context(patch.object(obj, name, **kwargs))
+            mock(cancellation, 'toolchain_configuration', return_value=self.configuration)
+            mock(bootstrap, 'tracked_input_files', return_value=[Path('dep')])
+            mock(bootstrap, 'input_files', return_value=[Path('dep')])
+            mock(bootstrap, 'read_input', side_effect=lambda root, name: str(name).encode())
+            mock(cancellation, '_control_raw', side_effect=lambda control, path: self.files.get(path))
+            def inspect(*args, **kwargs):
+                self.assertEqual(args[:2], ('image', 'inspect'))
+                return SimpleNamespace(stdout=json.dumps(self.inspections.get(args[2], [])).encode())
+            mock(cancellation, 'docker_capture', side_effect=inspect)
+            build = mock(cancellation, 'build_volume_runtime_images')
+            toolchain = mock(cancellation, 'build_volume_toolchain')
+            try:
+                return cancellation._reuse_prepared_images(Path('/checkout'), self.control, self.helper, expected)
+            finally:
+                build.assert_not_called()
+                toolchain.assert_not_called()
+
+    def test_full_image_validation_accepts_only_current_verified_backend_pin(self):
+        prepared = self.reuse(self.backend)
+        self.assertEqual(prepared['images']['backend'], self.receipts['image-backend'])
+
+    def test_full_image_validation_rejects_changed_pins_or_missing_proof(self):
+        for case in ('id', 'digest', 'inputs', 'labels', 'missing-verified', 'different-terminal', 'missing-image'):
+            with self.subTest(case=case):
+                self.setUp()
+                expected = self.backend
+                if case == 'id': expected = 'sha256:' + '0' * 64
+                if case == 'digest':
+                    self.receipts['image-backend']['source_digest'] = '0' * 64
+                    self.persist('image-backend')
+                if case == 'inputs':
+                    self.receipts['image-dev']['inputs']['files'][0]['sha256'] = '0' * 64
+                    self.persist('image-dev')
+                if case == 'labels':
+                    self.inspections[self.backend][0]['Config']['Labels']['org.fullmag.build.input-digest'] = '0' * 64
+                if case == 'missing-verified': del self.files['image-backend/verified.json']
+                if case == 'different-terminal': self.files['image-backend/attempts/' + '3' * 32 + '/terminal.json'] = b'changed'
+                if case == 'missing-image': del self.inspections[self.backend]
+                with self.assertRaises(BuildControlError): self.reuse(expected)
+
+    def transition_context(self):
+        old_image = 'sha256:' + 'e' * 64
+        attempt = '4' * 32
+        args = SimpleNamespace(resume_backend_image_id=self.backend,
+                               resume_maintenance_attempt=attempt, resume_native_failure_attempt=None)
+        maintenance = {'request_id': '12345678-1234-4234-8234-123456789abc',
+                       'request_sha256': 'f' * 64, 'request_path': '/request'}
+        historical = {'inputs': {'image_id': old_image, 'unclaimed_cancellation': maintenance}}
+        raw = cancellation.canonical(historical) + b'\n'
+        self.files['development/attempts/' + attempt + '/terminal.json'] = raw
+        operation = {'receipt': {'inputs': {'image_id': self.backend,
+            'unclaimed_cancellation_image_transition': {
+                'previous_backend_image_id': old_image, 'backend_image_id': self.backend,
+                'backend_image_attempt': '3' * 32,
+                'backend_source_digest': self.receipts['image-backend']['source_digest']}},
+            'unclaimed_cancellation_resume': {'failed_attempt': attempt,
+                'failed_terminal_sha256': cancellation._sha256(raw)}}}
+        return args, operation, {'state': Path('/state')}, maintenance, {'backend': self.receipts['image-backend']}
+
+    def validate_transition(self, context):
+        with patch.object(cancellation, '_control_raw', side_effect=lambda control, path: self.files.get(path)):
+            args, operation, reuse, maintenance, images = context
+            return volume_dev._validated_cancellation_image_transition(
+                args, self.control, operation, reuse, maintenance, images)
+
+    def test_start_transition_binds_verified_current_and_immutable_history(self):
+        context = self.transition_context()
+        transition = self.validate_transition(context)
+        self.assertEqual(transition, context[1]['receipt']['inputs']['unclaimed_cancellation_image_transition'])
+        self.assertIsNot(transition, context[1]['receipt']['inputs']['unclaimed_cancellation_image_transition'])
+        inputs = {'unclaimed_cancellation_image_transition': transition, 'image_id': self.backend}
+        volume_dev._validate_existing_operation_inputs({'inputs': inputs}, inputs)
+        with self.assertRaisesRegex(BuildControlError, 'unclaimed_cancellation_image_transition'):
+            volume_dev._validate_existing_operation_inputs({'inputs': inputs}, {'image_id': self.backend})
+        with self.assertRaisesRegex(BuildControlError, 'input differs: image_id'):
+            volume_dev._validate_existing_operation_inputs({'inputs': inputs}, {**inputs, 'image_id': 'different'})
+
+    def test_start_rejects_transition_mode_image_receipt_and_history_mismatches(self):
+        cases = ('no-maintenance', 'no-operation', 'no-reuse', 'no-pin', 'native-mode',
+                 'bad-old-id', 'bad-new-id', 'wrong-id', 'wrong-attempt', 'bad-attempt',
+                 'wrong-digest', 'bad-digest', 'missing-current', 'history', 'wrong-history-id')
+        for case in cases:
+            with self.subTest(case=case):
+                self.setUp()
+                args, operation, reuse, maintenance, images = self.transition_context()
+                transition = operation['receipt']['inputs']['unclaimed_cancellation_image_transition']
+                if case == 'no-maintenance': maintenance = None
+                if case == 'no-operation': operation = None
+                if case == 'no-reuse': reuse = None
+                if case == 'no-pin': args.resume_backend_image_id = None
+                if case == 'native-mode': args.resume_native_failure_attempt = '5' * 32
+                if case == 'bad-old-id': transition['previous_backend_image_id'] = 'bad'
+                if case == 'bad-new-id': transition['backend_image_id'] = 'bad'
+                if case == 'wrong-id': transition['backend_image_id'] = 'sha256:' + '0' * 64
+                if case == 'wrong-attempt': transition['backend_image_attempt'] = '0' * 32
+                if case == 'bad-attempt': transition['backend_image_attempt'] = 'bad'
+                if case == 'wrong-digest': transition['backend_source_digest'] = '0' * 64
+                if case == 'bad-digest': transition['backend_source_digest'] = 'bad'
+                if case == 'missing-current': del self.files['image-backend/verified.json']
+                if case == 'history': self.files['development/attempts/' + '4' * 32 + '/terminal.json'] = b'changed'
+                if case == 'wrong-history-id': transition['previous_backend_image_id'] = 'sha256:' + '0' * 64
+                with self.assertRaises(BuildControlError):
+                    self.validate_transition((args, operation, reuse, maintenance, images))
+
+    def test_start_rejects_unowned_pin_before_host_or_build_access(self):
+        args = SimpleNamespace(resume_backend_image_id=self.backend,
+                               resume_maintenance_attempt='4' * 32,
+                               resume_native_failure_attempt=None)
+        with patch.object(volume_dev, 'require_host') as host, \
+                patch.object(volume_dev, 'build_volume_toolchain') as build:
+            with self.assertRaisesRegex(BuildControlError, 'explicit owned maintenance resume'):
+                volume_dev.start(args)
+            host.assert_not_called()
+            build.assert_not_called()
+
+    def test_parser_exposes_explicit_maintenance_image_pin(self):
+        import docker_dev
+        args = docker_dev._parser().parse_args([
+            'cancel-unclaimed-volume', '--attempt', '1' * 32, '--config-sha256', '2' * 64,
+            '--source-root', '/checkout', '--port', '3197',
+            '--request-id', '12345678-1234-4234-8234-123456789abc',
+            '--run-id', 'run', '--task-id', 'task', '--reason', 'cancel',
+            '--resume-maintenance-attempt', '3' * 32, '--resume-backend-image-id', self.backend])
+        self.assertEqual(cancellation._resume_backend_image_pin(args), self.backend)
+
+    def test_backend_pin_wrong_mode_or_malformed_fails_before_host_access(self):
+        for mode, pin in ((None, self.backend), ('native', self.backend), ('maintenance', 'sha256:bad')):
+            with self.subTest(mode=mode):
+                args = SimpleNamespace(resume_backend_image_id=pin,
+                    resume_maintenance_attempt='1' * 32 if mode == 'maintenance' else None,
+                    resume_native_failure_attempt='2' * 32 if mode == 'native' else None)
+                with patch.object(cancellation, 'require_host') as host:
+                    with self.assertRaises(BuildControlError): cancellation.cancel_unclaimed(args)
+                    host.assert_not_called()
 
 if __name__=='__main__':
     unittest.main()

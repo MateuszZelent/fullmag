@@ -439,6 +439,20 @@ Failed oraz `healthy_drain=false`.
 
 Quarantine dopuszcza następnie tylko dopasowane natywne maintenance
 `cancel-unclaimed-volume --prepared-quarantine-sha256 <sha>` bez API/Solve.
+Jeśli dokładne `--resume-maintenance-attempt <attempt>` blokuje nieaktualny
+cache obrazów po zmianie wejść helperów, operator najpierw przygotowuje je przez
+zarządzane `just docker-dev-images` w tym samym checkoutcie i projekcie Compose.
+Następnie odczytuje pełny immutable ID backendu z aktualnego, zweryfikowanego
+receiptu `image-backend` i podaje `--resume-backend-image-id sha256:<64 hex>`.
+Bez tego opcjonalnego pinu resume nadal wymaga obrazu historycznego maintenance;
+pin nie wybiera dowolnego obrazu ani nie uruchamia automatycznego rebuilda.
+Pełna walidacja bieżących źródeł, toolchaina, receiptów i etykiet pozostaje
+obowiązkowa. Inputs nowej operacji zachowują przejście obrazu, attempt i source
+digest zweryfikowanego receiptu oraz odnośnik do niezmienionej historii requestu;
+stary store i jego certyfikat pozostają związane z oryginalnym obrazem runtime.
+Ta kontynuacja nadal nie uruchamia API ani solvera. Faktyczny runtime z nowym
+pinem pozostaje **NOT VERIFIED** do odrębnej próby i kontroli jej receiptów.
+
 Dopiero po potwierdzonym Cancelled osobny
 `recreate-volume --fresh-state --prepared-quarantine-sha256 <sha>` może
 zarchiwizować stary runtime-control/ledger i uruchomić nową generację przez
