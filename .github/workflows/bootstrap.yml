@@ -249,6 +249,13 @@ jobs:
           cargo test --locked -p fullmag-fdm-demag --test periodic_xy_kernel
           cargo test --locked -p fullmag-plan --lib fdm_multilayer_periodic_xy_
 
+      - name: Check periodic Airbox observation contracts
+        # cargo check type-checks the CUDA Rust path without linking a native
+        # library. The actual cuFFT operator is qualified on the managed GPU.
+        run: |
+          cargo test --locked -p fullmag-runner --lib periodic_airbox_provenance
+          FULLMAG_FDM_LIB_DIR=/usr/lib cargo check --locked -p fullmag-runner --features cuda --tests
+
       - name: Run local material coefficient regressions
         run: |
           cargo test --locked -p fullmag-engine --lib spatial_ms_anisotropy_tests

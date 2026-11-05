@@ -847,6 +847,13 @@ H_eff, bez odebrania H_demag. Manifest v2 ma wspólny carrier topologii i osobne
 generacje obu pól; czytnik zachowuje v1. FEM zachowuje własne natywne mapy oraz
 metody demag; ta kompozycja FDM nie rozszerza capability FEM.
 
+Okresowy Airbox w ścieżce wielowarstwowej FP64 CUDA PG-BB zachowuje pełen
+okres w X i Y oraz otwartą oś Z. Wymaga zgodnego kroku siatki i zawarcia
+wyrównanych obiektów źródłowych w siatce obserwacyjnej. Obserwacja używa
+rozwiązanej liczby obrazów z planu źródłowego. Niezgodna geometria pozostawia
+Airbox niedostępny z diagnostyką. Zakres i bramki numeryczne opisuje
+[dokument PG-BB](../physics/0501-fdm-multilayer-projected-gradient-bb.md#airbox-observation-on-the-periodic-cell).
+
 Dowód: analiza źródeł, bez buildów/testów/symulacji/browser. Runtime/UI/WebGL,
 parytet CPU/GPU i kwalifikacja naukowa: **NOT VERIFIED**. Szczegóły i hashe:
 [checkpoint dużych domen](../reports/2026-10-20/mx3-large-domains-airbox-heff.md).

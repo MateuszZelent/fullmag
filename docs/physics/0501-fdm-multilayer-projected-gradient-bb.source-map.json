@@ -392,6 +392,12 @@
       "path": "backends/fdm/api/c_api.cpp",
       "symbol": "fullmag_fdm_backend_set_multilayer_xy_periodic_v1",
       "responsibility": "Validate the XY-periodic FFT shape and wrap local operators only on axes spanned by a native layer."
+    },
+    {
+      "id": "periodic-airbox-observation",
+      "path": "crates/fullmag-runner/src/fdm/gpu/cuda/multilayer.rs",
+      "symbol": "materialize_airbox_observation_snapshot_gpu",
+      "responsibility": "Evaluate the aligned target lattice with the accepted FP64 CUDA XY periodic demagnetization policy and publish a separate Airbox carrier."
     }
   ],
   "public_api": {

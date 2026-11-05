@@ -244,7 +244,7 @@ pub(crate) fn materialize_airbox_observation(
         "run_status": executed.result.status,
         "build_identity": build_identity,
     });
-    build_airbox_observation_artifacts(problem, plan, &target, &field, source_runtime_identity)
+    build_airbox_observation_artifacts(problem, plan, &target, &field, source_runtime_identity, None)
 }
 
 /// Resolve the immutable target-only Airbox descriptor shared by CPU and GPU
@@ -295,6 +295,7 @@ pub(crate) fn build_airbox_observation_artifacts(
     target: &AirboxObservationTarget,
     h_demag: &[[f64; 3]],
     mut source_runtime_identity: Value,
+    periodic_workspace: Option<&fullmag_ir::ResolvedPeriodicImagesIR>,
 ) -> Result<Vec<AuxiliaryArtifact>, String> {
     validate_grid("target", target.shape, target.spacing_m, target.origin_m)?;
     let expected_samples = target
@@ -325,7 +326,14 @@ pub(crate) fn build_airbox_observation_artifacts(
     } else {
         identity.insert("problem_source_hash_origin".into(), json!("authored_source"));
     }
-    identity.insert("observation_boundary_policy".into(), json!("open"));
+    if let Some(workspace) = periodic_workspace {
+        identity.insert("observation_boundary_policy".into(), json!("periodic_xy_truncated_images"));
+        identity.insert("observation_requested_image_counts".into(), json!(workspace.requested_image_counts));
+        identity.insert("observation_resolved_image_counts".into(), json!(workspace.resolved_image_counts));
+        identity.insert("observation_fft_shape".into(), json!(workspace.padded_counts));
+    } else {
+        identity.insert("observation_boundary_policy".into(), json!("open"));
+    }
     let source_grid_fingerprints = plan
         .layers
         .iter()
@@ -1043,6 +1051,41 @@ mod tests {
             sha256_hex_revision(&carrier_a).unwrap(),
             sha256_hex_revision(&carrier_b).unwrap()
         );
+    }
+
+    #[test]
+    fn periodic_airbox_provenance_identifies_boundary_images_and_fft_shape() {
+        use fullmag_ir::{AxisBoundary, ExecutionPrecision, FdmDemagPeriodicityIR, FdmPeriodicityIR};
+
+        let plan = tiny_plan();
+        let problem = ProblemIR::bootstrap_example();
+        let target = AirboxObservationTarget::from_support(
+            [4, 4, 1], [1e-9; 3], [0.0; 3], [1, 1],
+        ).unwrap();
+        let workspace = FdmPeriodicityIR {
+            axes: [AxisBoundary::Periodic, AxisBoundary::Periodic, AxisBoundary::Open],
+            demag: FdmDemagPeriodicityIR::TruncatedImages,
+            image_counts: Some([2, 3, 0]),
+        }
+        .resolve_periodic_images([4, 4, 3], ExecutionPrecision::Double)
+        .unwrap().unwrap();
+        let manifest = |periodic| {
+            let artifacts = build_airbox_observation_artifacts(
+                &problem, &plan, &target, &[[0.0; 3]; 48], json!({}), periodic,
+            ).unwrap();
+            let artifact = artifacts.iter().find(|artifact| {
+                artifact.relative_path == "fields/H_demag/airbox/manifest.json"
+            }).unwrap();
+            serde_json::from_slice::<Value>(&artifact.bytes).unwrap()
+        };
+        let periodic = manifest(Some(&workspace));
+        let open = manifest(None);
+        let identity = &periodic["source_runtime_identity"];
+        assert_eq!(identity["observation_boundary_policy"], "periodic_xy_truncated_images");
+        assert_eq!(identity["observation_resolved_image_counts"], json!([2, 3, 0]));
+        assert_eq!(identity["observation_fft_shape"], json!([4, 4, 6]));
+        assert_eq!(open["source_runtime_identity"]["observation_boundary_policy"], "open");
+        assert_ne!(periodic["carrier_fingerprint"], open["carrier_fingerprint"]);
     }
 
     #[test]
