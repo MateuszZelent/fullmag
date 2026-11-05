@@ -230,14 +230,27 @@ class UnknownActivationTests(unittest.TestCase):
 
     def test_control_read_authenticates_parent_chain_before_optional_absence(self) -> None:
         script = control_read_script("/control/activation/attempts/" + ATTEMPT + "/receipt.json")
-        self.assertLess(script.index("check_parent /control"), script.index("check_parent /control/activation"))
-        self.assertLess(script.index("check_parent /control/activation"), script.index("test ! -L /control/activation/attempts/" + ATTEMPT + "/receipt.json"))
-        self.assertLess(
-            script.index("test ! -L /control/activation/attempts/" + ATTEMPT + "/receipt.json"),
-            script.index("test -e /control/activation/attempts/" + ATTEMPT + "/receipt.json || exit 44"),
-        )
         with self.assertRaises(BuildControlError):
             control_read_script("/control/activation/../receipt.json")
+        if os.name != "posix":
+            self.skipTest("Image-owned control probes execute on Linux")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve() / "control"
+            root.mkdir()
+            command = ["/bin/bash", "-euo", "pipefail", "-c", script.replace("/control", str(root))]
+            self.assertEqual(subprocess.run(command, capture_output=True).returncode, 44)
+            # A dangling parent must not be misclassified as optional absence.
+            (root / "activation").symlink_to(root / "missing")
+            rejected = subprocess.run(command, capture_output=True)
+            self.assertNotIn(rejected.returncode, (0, 44))
+            (root / "activation").unlink()
+            target = root / "activation/attempts" / ATTEMPT
+            target.mkdir(parents=True)
+            self.assertEqual(subprocess.run(command, capture_output=True).returncode, 44)
+            (target / "receipt.json").write_bytes(b"receipt bytes\n")
+            observed = subprocess.run(command, capture_output=True)
+            self.assertEqual(observed.returncode, 0, observed.stderr)
+            self.assertEqual(observed.stdout, b"receipt bytes\n")
 
     def test_reconciling_finalization_is_locked_and_replayable(self) -> None:
         script = module._reconciliation_finalization_script(

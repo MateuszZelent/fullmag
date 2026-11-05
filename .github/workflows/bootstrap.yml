@@ -917,6 +917,9 @@ jobs:
           python -B scripts/test_docker_candidate_retirement.py -v
           python -B scripts/test_docker_operator_capability.py -v
           python -B scripts/test_docker_build_control_cache_admission.py -v
+          python -B scripts/test_docker_activation_history_policy.py -v
+          python -B scripts/test_docker_activation_history_reader.py -v
+          python -B scripts/test_docker_activation_history_storage.py -v
           python -B scripts/test_docker_container_runtime_recovery.py -v
           python -B scripts/test_docker_volume_container_recovery.py -v
           python -B scripts/test_linux_native_device_preparation.py -v

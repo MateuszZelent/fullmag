@@ -22,6 +22,7 @@ BASE_IMPLEMENTATIONS = ('docker_build_control', 'docker_volume_dev', 'docker_vol
                         'docker_shared_build_storage', 'docker_backend_volume_cache',
                         'docker_volume_cache_maintenance', 'docker_cache_retirement', 'docker_worktree_finish')
 OPTIONAL_IMPLEMENTATIONS = ('docker_group_storage', 'docker_helper_source', 'docker_volume_activation_reconcile', 'docker_volume_accepted_reattach',
+                            'docker_activation_history_policy', 'docker_activation_history_reader', 'docker_activation_history_storage',
                             'docker_volume_pre_admission_recreate', 'docker_volume_pre_admission_selector',
                             'docker_volume_pending_continuation', 'docker_volume_native_init_successor',
                             'docker_volume_drained_successor', 'docker_volume_reconcile',
@@ -783,7 +784,7 @@ def main():
     parser.add_argument('--offline', action='store_true', help='Run interpreted checks in a private group helper when backend is stopped')
     parser.add_argument('--initial-attempt', help='Pinned pre-service development attempt for offline checks')
     parser.add_argument('--modules', nargs='+', help='Explicit unittest modules (offline mode only)')
-    parser.add_argument('--scope', choices=('all', 'source-capture', 'frontend-import', 'frontend-antenna', 'frontend-field-map', FIELD_MAP_SOURCE_SCOPE, 'frontend-airbox', 'frontend-camera', 'frontend-visualization', 'frontend-tools', 'field-only', 'network-failure', 'empty-authoring', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'), default='all')
+    parser.add_argument('--scope', choices=('all', 'source-capture', 'activation-history', 'frontend-import', 'frontend-antenna', 'frontend-field-map', FIELD_MAP_SOURCE_SCOPE, 'frontend-airbox', 'frontend-camera', 'frontend-visualization', 'frontend-tools', 'field-only', 'network-failure', 'empty-authoring', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'), default='all')
     args = parser.parse_args()
     if args.initial_attempt is not None and not args.offline:
         raise BuildControlError('--initial-attempt requires --offline')
@@ -841,6 +842,15 @@ if oracle_binding is not None:
 command=[sys.executable,'-B','-m','unittest','test_docker_dev_defaults','test_docker_dev_up','test_docker_dev_owned_control','test_docker_dev_codegen','test_docker_volume_activate','test_docker_volume_reconcile','test_docker_volume_network_failure_reconcile','test_docker_activation_preflight','test_antenna_rt0_surface_oracle','test_docker_volume_container_recovery','test_docker_volume_stop_unadmitted','test_docker_volume_dev_runtime_state','test_docker_runtime_control_volume','test_docker_container_runtime_recovery','test_runtime_service_recovery_busy_retry','test_docker_backend_volume_cache','test_bootstrap_docker_toolchain','test_docker_toolchain_host_inputs','test_docker_compose_identity','test_docker_host_ledger','test_docker_group_ledger','test_docker_volume_receipts','test_docker_volume_device_access','test_docker_volume_retained_device_lifecycle','test_docker_volume_native_init_successor','test_docker_dev_host','test_docker_volume_wsl','test_docker_wsl_bind','test_linux_native_host','test_linux_native_probe','test_docker_python_no_test_build','test_mfem_cuda_fast_compile','test_docker_frontend_dev','test_docker_dev_browser_qa','test_docker_development_inputs_linux','test_docker_backend_dev','test_docker_dev_fast_loop','test_docker_backend_live_source','test_docker_candidate_retirement','test_docker_startup_script','test_backend_volume_cache_maintenance','test_docker_cpu_access','test_docker_dev_storage','test_docker_dev_image_context','test_docker_dev_recreate','test_docker_volume_pre_admission_recreate','test_docker_volume_pre_admission_selector','test_docker_volume_pre_admission_integration','test_docker_volume_post_build_generation','test_docker_volume_post_build_integration','test_docker_volume_pending_continuation','test_docker_volume_pending_resume','test_docker_native_failed_recreate','test_docker_prestart_resume','test_docker_frontend_cache','test_docker_frontend_cache_named_volume','test_fullmag_docker_runtime','test_docker_orphan_recovery','test_recover_docker_orphan','test_just_orphan_recovery_shell','test_docker_volume_checks','test_docker_shared_build_storage','test_backend_shared_store','test_backend_shared_integration','test_backend_shared_recovery','test_backend_group_retirement','test_backend_compiler_cache','test_docker_cache_retirement','test_docker_worktree_finish','test_backend_auto_maintenance','test_docker_helper_source','test_backend_package_backup_retirement']
 if sys.argv[1] == 'frontend-tools':
     command = [sys.executable, '-B', '-m', 'unittest', 'test_docker_dev_codegen', 'test_docker_volume_checks', 'test_docker_volume_frontend_recovery', 'test_docker_volume_dev_runtime_state', 'test_docker_volume_receipts', 'test_docker_dev_browser_qa']
+if sys.argv[1] in ('all', 'activation-history'):
+    history_modules = ['test_docker_activation_history_policy', 'test_docker_activation_history_reader', 'test_docker_activation_history_storage']
+    if sys.argv[1] == 'activation-history':
+        command = [sys.executable, '-B', '-m', 'unittest', *history_modules,
+            'test_docker_volume_activate', 'test_docker_volume_activation_reconcile',
+            'test_docker_volume_receipts', 'test_docker_volume_pre_admission_selector',
+            'test_docker_build_control_cache_admission', 'test_docker_volume_checks']
+    else:
+        command.extend(history_modules)
 if sys.argv[1] == 'network-failure':
     command = [sys.executable, '-B', '-m', 'unittest', 'test_docker_volume_network_failure_reconcile', 'test_docker_volume_checks']
 if sys.argv[1] == 'empty-authoring':
@@ -851,8 +861,8 @@ if sys.argv[1] == 'field-only':
         '-s', '/opt/fullmag/source/packages/fullmag-py/tests', '-p', 'test_antenna_field_only_nonmagnetic.py', '-v'],
         cwd='/opt/fullmag/source', env=environment)
 else:
-    result = subprocess.call(command,cwd='/opt/fullmag/source/scripts',env=environment) if sys.argv[1] in ('all', 'frontend-tools', 'network-failure', 'empty-authoring') else 0
-if result == 0 and sys.argv[1] not in ('field-only', 'frontend-tools', 'network-failure', 'empty-authoring'):
+    result = subprocess.call(command,cwd='/opt/fullmag/source/scripts',env=environment) if sys.argv[1] in ('all', 'activation-history', 'frontend-tools', 'network-failure', 'empty-authoring') else 0
+if result == 0 and sys.argv[1] not in ('field-only', 'activation-history', 'frontend-tools', 'network-failure', 'empty-authoring'):
     result = subprocess.call([sys.executable, '-B', '/opt/fullmag/source/scripts/verify_accepted_source_scene_capture.py',
                               '--fullmag-root', '/opt/fullmag/source/packages/fullmag-py/src/fullmag',
                               '--output-dir', '/build/verification-tmp'], env=environment)
@@ -869,7 +879,8 @@ sys.exit(result)
              'stdout':result.stdout.decode('utf-8','replace'), 'stderr':result.stderr.decode('utf-8','replace')}
     if oracle_dependency is not None:
         receipt['oracle_dependency'] = oracle_dependency
-    control.write('verification/interpreted-empty-authoring-checks.json' if args.scope == 'empty-authoring' else
+    control.write('verification/interpreted-activation-history-checks.json' if args.scope == 'activation-history' else
+                  'verification/interpreted-empty-authoring-checks.json' if args.scope == 'empty-authoring' else
                   'verification/interpreted-network-failure-checks.json' if args.scope == 'network-failure' else
                   'verification/interpreted-frontend-tools-checks.json' if args.scope == 'frontend-tools' else
                   'verification/interpreted-checks.json' if args.scope == 'all' else
